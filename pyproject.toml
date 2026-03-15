@@ -1,0 +1,15 @@
+[project]
+name = "ouroboros"
+version = "0.1.0"
+description = "Flow-driven autonomous coding agent backed by LLMVP local inference"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "black>=26.3.1",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "pydantic>=2.12.5",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "pyyaml>=6.0.3",
+]

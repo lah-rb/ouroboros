@@ -1,0 +1,192 @@
+flow: mission_control
+version: 1
+description: >
+  Top-level agent routing flow. Loads mission state, processes events,
+  assesses progress, selects next task, dispatches to appropriate flow.
+  All child flows tail-call back here on completion.
+
+input:
+  required:
+    - mission_id
+  optional:
+    - last_result
+    - last_status
+    - last_task_id
+
+defaults:
+  config:
+    temperature: 0.1
+
+steps:
+
+  # ── Phase 1: Load persistent state ──────────────────────────
+
+  load_state:
+    action: load_mission_state
+    description: "Read mission state and event queue from persistence"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.mission.status == 'active'"
+          transition: apply_last_result
+        - condition: "result.mission.status == 'paused'"
+          transition: idle
+        - condition: "result.mission.status == 'completed'"
+          transition: completed
+        - condition: "result.mission.status == 'aborted'"
+          transition: aborted
+        - condition: "true"
+          transition: aborted
+    publishes:
+      - mission
+      - events
+      - frustration
+
+  # ── Phase 2: Integrate results from previous cycle ──────────
+
+  apply_last_result:
+    action: update_task_status
+    description: "Apply the previous flow's outcome to mission state"
+    context:
+      required: [mission, frustration]
+      optional: [events, last_result, last_status, last_task_id]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.events_pending == true"
+          transition: process_events
+        - condition: "true"
+          transition: assess
+    publishes:
+      - mission
+      - frustration
+
+  # ── Phase 3: Process external events ────────────────────────
+
+  process_events:
+    action: handle_events
+    description: "Process user messages, abort/pause signals"
+    context:
+      required: [mission, events]
+      optional: [frustration]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.abort_requested == true"
+          transition: aborted
+        - condition: "result.pause_requested == true"
+          transition: idle
+        - condition: "true"
+          transition: assess
+    publishes:
+      - mission
+      - unblocked_tasks
+
+  # ── Phase 4: Assess and select ──────────────────────────────
+
+  assess:
+    action: assess_mission_progress
+    description: "Determine what to work on next"
+    context:
+      required: [mission, frustration]
+      optional: [unblocked_tasks]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.needs_plan == true"
+          transition: dispatch_planning
+        - condition: "result.all_tasks_complete == true"
+          transition: completed
+        - condition: "result.all_remaining_blocked == true"
+          transition: idle
+        - condition: "result.obvious_next_task != null"
+          transition: prepare_dispatch
+        - condition: "true"
+          transition: idle
+    publishes:
+      - assessment
+      - obvious_next_task
+
+  # ── Phase 5: Configure and dispatch ─────────────────────────
+
+  prepare_dispatch:
+    action: configure_task_dispatch
+    description: "Build input map for selected task"
+    context:
+      required: [mission, frustration]
+      optional: [obvious_next_task, selected_task]
+    params:
+      frustration_thresholds:
+        review: 2
+        instructions: 4
+        direct_fix: 5
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: dispatch
+    publishes:
+      - dispatch_config
+
+  dispatch:
+    action: noop
+    description: "Tail-call to the selected task flow"
+    context:
+      required: [dispatch_config, mission]
+    tail_call:
+      flow: "{{ context.dispatch_config.flow }}"
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        task_id: "{{ context.dispatch_config.task_id }}"
+        task_description: "{{ context.dispatch_config.input_map.task_description }}"
+        mission_objective: "{{ context.dispatch_config.input_map.mission_objective }}"
+        working_directory: "{{ context.dispatch_config.input_map.working_directory }}"
+        target_file_path: "{{ context.dispatch_config.input_map.target_file_path }}"
+        reason: "{{ context.dispatch_config.input_map.reason }}"
+
+  # ── Dispatch to planning ────────────────────────────────────
+
+  dispatch_planning:
+    action: noop
+    description: "No plan exists — dispatch to create_plan flow"
+    context:
+      required: [mission]
+    tail_call:
+      flow: create_plan
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+
+  # ── Terminal / parking states ───────────────────────────────
+
+  completed:
+    action: finalize_mission
+    description: "Mark mission complete"
+    context:
+      optional: [mission, assessment, completion_assessment]
+    terminal: true
+    status: completed
+
+  idle:
+    action: enter_idle
+    description: "Nothing to do — wait for events"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+      delay: 5
+
+  aborted:
+    action: finalize_mission
+    description: "Mission aborted"
+    context:
+      optional: [mission]
+    params:
+      abort: true
+    terminal: true
+    status: aborted
+
+entry: load_state
+
+overflow:
+  strategy: split
+  fallback: reorganize
