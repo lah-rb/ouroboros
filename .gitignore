@@ -1,1 +1,32 @@
 llmvp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Agent state (created at runtime)
+.agent/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

@@ -1,0 +1,126 @@
+flow: test_branching
+version: 1
+description: "Test flow with multiple branch paths and context accumulation"
+
+input:
+  required:
+    - mode
+  optional:
+    - extra_data
+
+defaults:
+  config:
+    temperature: 0.0
+
+steps:
+  check_mode:
+    action: noop
+    description: "Entry point — routes based on input mode"
+    context:
+      required: []
+      optional: []
+    resolver:
+      type: rule
+      rules:
+        - condition: "context.mode == 'fast'"
+          transition: fast_path
+        - condition: "context.mode == 'slow'"
+          transition: slow_path
+        - condition: "true"
+          transition: default_path
+    publishes: []
+
+  fast_path:
+    action: transform
+    description: "Fast path — minimal processing"
+    context:
+      required: []
+      optional: [extra_data]
+    params:
+      set_values:
+        route_taken: "fast"
+        result_data: "fast path result"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.transformed == true"
+          transition: finalize
+    publishes:
+      - route_taken
+      - result_data
+
+  slow_path:
+    action: transform
+    description: "Slow path — step 1 of 2"
+    context:
+      required: []
+      optional: [extra_data]
+    params:
+      set_values:
+        route_taken: "slow"
+        intermediate: "slow path intermediate"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.transformed == true"
+          transition: slow_path_2
+    publishes:
+      - route_taken
+      - intermediate
+
+  slow_path_2:
+    action: transform
+    description: "Slow path — step 2 of 2"
+    context:
+      required: [intermediate]
+      optional: []
+    params:
+      pass_through:
+        - intermediate
+      set_values:
+        result_data: "slow path complete"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.transformed == true"
+          transition: finalize
+    publishes:
+      - result_data
+
+  default_path:
+    action: transform
+    description: "Default path — unknown mode"
+    context:
+      required: []
+      optional: []
+    params:
+      set_values:
+        route_taken: "default"
+        result_data: "default fallback"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: finalize
+    publishes:
+      - route_taken
+      - result_data
+
+  finalize:
+    action: log_completion
+    description: "Finalize and report the route taken"
+    context:
+      required: [result_data]
+      optional: [route_taken]
+    params:
+      message: "Branching flow completed"
+    terminal: true
+    status: success
+    publishes:
+      - summary
+
+entry: check_mode
+
+overflow:
+  strategy: split
+  fallback: reorganize

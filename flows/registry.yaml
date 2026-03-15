@@ -1,0 +1,51 @@
+# Flow Registry — discovery mechanism for all available flows.
+# Lists each flow with metadata. Loaded at startup by the runtime.
+
+flows:
+  mission_control:
+    description: "Top-level agent routing — load state, assess, dispatch tasks"
+    file: mission_control.yaml
+    inputs:
+      required: [mission_id]
+      optional: [last_result, last_status, last_task_id]
+    terminal_statuses: [completed, aborted]
+
+  create_plan:
+    description: "LLM-powered task planning from mission objective"
+    file: create_plan.yaml
+    inputs:
+      required: [mission_id]
+      optional: [existing_progress]
+    terminal_statuses: [failed]
+
+  create_file:
+    description: "Generate and write a file using inference"
+    file: create_file.yaml
+    inputs:
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, target_file_path, reason]
+    terminal_statuses: []
+
+  test_simple:
+    description: "A simple test flow: read a file → check condition → branch → terminal"
+    file: test_simple.yaml
+    inputs:
+      required: [target_file_path]
+      optional: [reason]
+    terminal_statuses: [success, failed]
+
+  test_branching:
+    description: "Test flow with multiple branch paths and context accumulation"
+    file: test_branching.yaml
+    inputs:
+      required: [mode]
+      optional: [extra_data]
+    terminal_statuses: [success]
+
+  test_inference:
+    description: "Test flow exercising inference action and LLM menu resolver"
+    file: test_inference.yaml
+    inputs:
+      required: [target_file_path]
+      optional: []
+    terminal_statuses: [success, failed]
