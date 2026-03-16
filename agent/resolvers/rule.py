@@ -92,6 +92,7 @@ def _build_namespace(result: dict, context: dict, meta: dict) -> dict:
     return {
         "result": _DotDict(result),
         "context": _DotDict(context),
+        "input": _DotDict(context),  # Flow inputs live in the accumulator
         "meta": _DotDict(meta),
         # Convenience aliases for YAML-friendly conditions
         "null": None,
