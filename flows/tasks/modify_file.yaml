@@ -95,20 +95,20 @@ steps:
         abandon:
           description: "This approach won't work — return to mission_control"
     publishes:
-      - plan
+      - inference_response
 
   execute_change:
     action: inference
     description: "Produce the modified file content"
     context:
-      required: [target_file, plan]
+      required: [target_file, inference_response]
       optional: [context_bundle]
     prompt: |
       Apply the following change plan to this file.
       Return the COMPLETE modified file content — not a diff, the whole file.
 
       Plan:
-      {{ context.plan }}
+      {{ context.inference_response }}
 
       Original file ({{ context.target_file.path }}):
       {{ context.target_file.content }}

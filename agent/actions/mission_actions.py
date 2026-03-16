@@ -205,20 +205,45 @@ async def action_assess_mission_progress(step_input: StepInput) -> StepOutput:
     blocked = [t for t in mission.plan if t.status == "blocked"]
     failed = [t for t in mission.plan if t.status == "failed"]
 
-    # Check if all tasks are done
-    if len(completed) == len(mission.plan) and len(mission.plan) > 0:
+    # Safety net: recover stale in_progress tasks.
+    # When we're back in mission_control, no child flow is running —
+    # any in_progress task is leftover from a previous dispatch.
+    effects = step_input.effects
+    if in_progress:
+        for task in in_progress:
+            logger.warning(
+                "Recovering stale in_progress task %s (%s) — marking pending",
+                task.id,
+                task.description[:40],
+            )
+            task.status = "pending"
+        if effects:
+            await effects.save_mission(mission)
+        # Recalculate after recovery
+        completed = [t for t in mission.plan if t.status == "complete"]
+        pending = [t for t in mission.plan if t.status == "pending"]
+        in_progress = []
+        blocked = [t for t in mission.plan if t.status == "blocked"]
+        failed = [t for t in mission.plan if t.status == "failed"]
+
+    # Check if all tasks are done (complete or blocked, nothing actionable left)
+    actionable = pending + failed
+    if not actionable and len(mission.plan) > 0:
         return StepOutput(
             result={
                 "all_tasks_complete": True,
-                "all_remaining_blocked": False,
+                "all_remaining_blocked": len(blocked) > 0,
                 "obvious_next_task": None,
                 "needs_plan": False,
             },
-            observations=f"All {len(completed)} tasks complete!",
+            observations=(
+                f"Mission done: {len(completed)} complete, {len(blocked)} blocked"
+            ),
             context_updates={
                 "assessment": {
                     "ready_tasks": [],
-                    "summary": f"{len(completed)} tasks completed",
+                    "summary": f"{len(completed)}/{len(mission.plan)} complete"
+                    + (f", {len(blocked)} blocked" if blocked else ""),
                 },
             },
         )
