@@ -31,6 +31,8 @@ uv run pytest tests/test_runtime.py -v  # run a specific test file
 uv run pytest tests/ -v -k "test_name" # run a specific test by name
 ```
 
+4. IMPORTANT: Always run the final product for real and test it for feature additions and possible breaks.
+
 ## LLMVP BACKEND SERVER
 Ouroboros requires a running LLMVP server for inference. The LLMVP project is located
 in the sibling directory `../llmvp/` (gitignored from this repo).

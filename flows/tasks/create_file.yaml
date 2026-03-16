@@ -100,8 +100,49 @@ steps:
     resolver:
       type: rule
       rules:
+        - condition: "result.status == 'success'"
+          transition: capture_learnings
+        - condition: "meta.step_count < 8"
+          transition: regenerate
         - condition: "true"
           transition: capture_learnings
+
+  regenerate:
+    action: inference
+    description: "Re-generate file content after validation failure"
+    context:
+      required: [inference_response, validation_results]
+      optional: [context_bundle, project_manifest]
+    prompt: |
+      Your previous code for {{ input.target_file_path }} failed validation.
+
+      Validation results:
+      {% if context.validation_results %}
+      {% for check in context.validation_results %}
+      - {{ check.name }}: {{ "PASS" if check.passed else "FAIL" }}
+        {% if not check.passed %}stdout: {{ check.stdout }}
+        stderr: {{ check.stderr }}{% endif %}
+      {% endfor %}
+      {% endif %}
+
+      Task: {{ input.task_description }}
+
+      Fix the issues and produce the COMPLETE corrected file.
+      Respond with ONLY the code in code markers:
+      ```
+      # corrected code here
+      ```
+    config:
+      temperature: 0.2
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: write_file
+        - condition: "true"
+          transition: failed
+    publishes:
+      - inference_response
 
   capture_learnings:
     use: capture_learnings
