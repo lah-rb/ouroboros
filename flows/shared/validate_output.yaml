@@ -1,0 +1,123 @@
+flow: validate_output
+version: 1
+description: >
+  Validate a created or modified file using LLM-determined strategy.
+  The model inspects the file and project to decide appropriate checks.
+
+input:
+  required:
+    - file_path
+    - working_directory
+  optional:
+    - project_manifest
+    - validation_hint
+    - test_path
+    - max_attempts
+
+defaults:
+  config:
+    temperature: 0.0
+
+steps:
+
+  determine_strategy:
+    action: inference
+    description: "LLM decides what validation to run"
+    context:
+      optional: [project_manifest]
+    prompt: |
+      You need to validate a file that was just created or modified.
+
+      File: {{ input.file_path }}
+      Working directory: {{ input.working_directory }}
+      {% if input.validation_hint %}
+      Suggested approach: {{ input.validation_hint }}
+      {% endif %}
+
+      {% if context.project_manifest %}
+      Project files:
+      {% for filepath in context.project_manifest.keys() %}
+      - {{ filepath }}
+      {% endfor %}
+      {% endif %}
+
+      Determine the appropriate validation commands for this file.
+      Consider the file extension, available tooling, and project structure.
+
+      Return ONLY a JSON object in this exact format:
+      {
+        "language": "python",
+        "checks": [
+          {
+            "name": "syntax check",
+            "command": ["python", "-c", "import py_compile; py_compile.compile('path/to/file.py', doraise=True)"],
+            "timeout": 30,
+            "required": true
+          }
+        ]
+      }
+
+      Rules:
+      - Always include a syntax/compile check first.
+      - Only include test commands if test files are visible in the project.
+      - Use project-appropriate tooling (uv run pytest for Python, npm test for JS, cargo check for Rust, etc).
+      - Mark checks as required (failure = validation failed) or optional (failure = warning).
+      - Keep timeout values reasonable (30s for syntax, 120s for tests).
+      - Use paths relative to the working directory.
+    config:
+      temperature: 0.0
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: execute_checks
+        - condition: "true"
+          transition: fallback_check
+    publishes:
+      - inference_response
+
+  execute_checks:
+    action: run_validation_checks
+    description: "Execute the LLM-determined validation commands"
+    context:
+      required: [inference_response]
+    params:
+      max_checks: 5
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.all_required_passing == true"
+          transition: complete_pass
+        - condition: "result.all_required_passing == false"
+          transition: complete_fail
+    publishes:
+      - validation_results
+
+  fallback_check:
+    action: run_tests
+    description: "Fallback: verify file exists and is readable"
+    params:
+      command: ["test", "-f", "{{ input.file_path }}"]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.all_passing == true"
+          transition: complete_pass
+        - condition: "true"
+          transition: complete_fail
+    publishes:
+      - validation_results
+
+  complete_pass:
+    action: noop
+    description: "Validation passed"
+    terminal: true
+    status: success
+
+  complete_fail:
+    action: noop
+    description: "Validation failed"
+    terminal: true
+    status: failed
+
+entry: determine_strategy

@@ -1,0 +1,122 @@
+flow: revise_plan
+version: 1
+description: >
+  Revise the mission plan based on new observations.
+  Can add tasks, reorder priorities, or mark tasks obsoleted.
+  Writes changes to persistence; mission_control picks them up.
+
+input:
+  required:
+    - mission_id
+    - observation
+  optional:
+    - discovered_requirement
+    - affected_task_id
+
+defaults:
+  config:
+    temperature: 0.3
+
+steps:
+
+  load_current_plan:
+    action: load_mission_state
+    description: "Load current mission state to see existing plan"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.mission.status == 'active'"
+          transition: evaluate_revision
+        - condition: "true"
+          transition: skip
+    publishes:
+      - mission
+
+  evaluate_revision:
+    action: inference
+    description: "Determine what plan changes are needed"
+    context:
+      required: [mission]
+    prompt: |
+      You are managing a coding project and have received new information
+      that may require changes to the plan.
+
+      Mission objective: {{ context.mission.objective }}
+
+      Current plan:
+      {% for task in context.mission.plan %}
+      - [{{ task.status }}] {{ task.id }}: {{ task.description }}
+        Flow: {{ task.flow }} | Priority: {{ task.priority }}
+        {% if task.summary %}Result: {{ task.summary }}{% endif %}
+      {% endfor %}
+
+      New observation: {{ input.observation }}
+      {% if input.discovered_requirement %}
+      Discovered requirement: {{ input.discovered_requirement }}
+      {% endif %}
+
+      Evaluate whether the plan needs revision. Return a JSON object:
+      {
+        "revision_needed": true/false,
+        "reasoning": "why or why not",
+        "add_tasks": [
+          {
+            "description": "what to do",
+            "flow": "create_file|modify_file",
+            "priority": 0,
+            "inputs": {"target_file_path": "...", "reason": "..."},
+            "depends_on": []
+          }
+        ],
+        "reprioritize": [
+          {"task_id": "...", "new_priority": 0}
+        ],
+        "obsolete": ["task_id_1"]
+      }
+
+      Rules:
+      - Do not modify completed tasks.
+      - Do not modify in_progress tasks.
+      - New tasks should specify their flow (create_file or modify_file).
+      - Dependencies should reference existing task IDs.
+      - Only mark tasks obsolete if the observation genuinely invalidates them.
+    config:
+      temperature: 0.3
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: apply_revision
+        - condition: "true"
+          transition: skip
+    publishes:
+      - revision_plan
+
+  apply_revision:
+    action: apply_plan_revision
+    description: "Apply the revision to mission state"
+    context:
+      required: [mission, revision_plan]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.revision_applied == true"
+          transition: complete
+        - condition: "true"
+          transition: skip
+    publishes:
+      - mission
+
+  skip:
+    action: noop
+    description: "No revision needed or possible"
+    terminal: true
+    status: success
+
+  complete:
+    action: noop
+    description: "Plan revised successfully"
+    terminal: true
+    status: success
+
+entry: load_current_plan

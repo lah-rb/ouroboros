@@ -3,6 +3,7 @@
 
 flows:
   mission_control:
+    type: orchestrator
     description: "Top-level agent routing — load state, assess, dispatch tasks"
     file: mission_control.yaml
     inputs:
@@ -11,6 +12,7 @@ flows:
     terminal_statuses: [completed, aborted]
 
   create_plan:
+    type: orchestrator
     description: "LLM-powered task planning from mission objective"
     file: create_plan.yaml
     inputs:
@@ -19,14 +21,65 @@ flows:
     terminal_statuses: [failed]
 
   create_file:
-    description: "Generate and write a file using inference"
-    file: create_file.yaml
+    type: task
+    description: "Create a new file with project context awareness"
+    file: tasks/create_file.yaml
     inputs:
       required: [mission_id, task_id]
-      optional: [task_description, mission_objective, working_directory, target_file_path, reason]
+      optional: [task_description, mission_objective, working_directory, target_file_path, reason, temperature_multiplier, frustration_level, frustration_history]
     terminal_statuses: []
 
+  modify_file:
+    type: task
+    description: "Modify an existing file to address an issue"
+    file: tasks/modify_file.yaml
+    inputs:
+      required: [mission_id, task_id, target_file_path, reason]
+      optional: [task_description, mission_objective, working_directory, temperature_multiplier, frustration_level, frustration_history]
+    terminal_statuses: []
+
+  prepare_context:
+    type: shared
+    description: "Scan workspace and curate relevant context for a task"
+    file: shared/prepare_context.yaml
+    inputs:
+      required: [working_directory, task_description]
+      optional: [mission_objective, target_file_path, frustration_history, frustration_level, context_budget, relevant_notes]
+
+  validate_output:
+    type: shared
+    description: "LLM-driven file validation"
+    file: shared/validate_output.yaml
+    inputs:
+      required: [file_path, working_directory]
+      optional: [project_manifest, validation_hint, test_path, max_attempts]
+
+  capture_learnings:
+    type: shared
+    description: "Reflect on completed work and persist observations"
+    file: shared/capture_learnings.yaml
+    inputs:
+      required: [task_description]
+      optional: [target_file_path, task_outcome, learning_focus, category, tags]
+
+  research_context:
+    type: shared
+    description: "Web research via curl for problem-solving context"
+    file: shared/research_context.yaml
+    inputs:
+      required: [problem_description]
+      optional: [error_output, search_hints, max_queries]
+
+  revise_plan:
+    type: shared
+    description: "Mid-mission plan revision based on new observations"
+    file: shared/revise_plan.yaml
+    inputs:
+      required: [mission_id, observation]
+      optional: [discovered_requirement, affected_task_id]
+
   test_simple:
+    type: test
     description: "A simple test flow: read a file → check condition → branch → terminal"
     file: test_simple.yaml
     inputs:
@@ -35,6 +88,7 @@ flows:
     terminal_statuses: [success, failed]
 
   test_branching:
+    type: test
     description: "Test flow with multiple branch paths and context accumulation"
     file: test_branching.yaml
     inputs:
@@ -43,6 +97,7 @@ flows:
     terminal_statuses: [success]
 
   test_inference:
+    type: test
     description: "Test flow exercising inference action and LLM menu resolver"
     file: test_inference.yaml
     inputs:

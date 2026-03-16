@@ -38,7 +38,7 @@ in the sibling directory `../llmvp/` (gitignored from this repo).
 ### Starting the LLMVP Backend
 ```bash
 # From the llmvp directory
-cd ../llmvp
+cd ouroborous/llmvp
 
 # Start GraphQL API (default) - waits for pool ready
 uv run llmvp.py --backend
@@ -55,7 +55,7 @@ uv run llmvp.py --rest --backend
 
 ### Stopping the LLMVP Backend
 ```bash
-cd ../llmvp
+cd ouroboros/llmvp
 uv run llmvp.py --stop
 ```
 

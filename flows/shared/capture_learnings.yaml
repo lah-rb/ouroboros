@@ -1,0 +1,97 @@
+flow: capture_learnings
+version: 1
+description: >
+  Reflect on completed work and persist observations as notes.
+  Adjusts reflection prompt based on learning_focus parameter.
+
+input:
+  required:
+    - task_description
+  optional:
+    - target_file_path
+    - task_outcome
+    - learning_focus
+    - category
+    - tags
+
+defaults:
+  config:
+    temperature: 0.2
+
+steps:
+
+  reflect:
+    action: inference
+    description: "Generate a reflection on what was learned"
+    prompt: |
+      You just completed a coding task. Reflect briefly on what you learned.
+
+      Task: {{ input.task_description }}
+      {% if input.target_file_path %}
+      File: {{ input.target_file_path }}
+      {% endif %}
+      {% if input.task_outcome %}
+      Outcome: {{ input.task_outcome }}
+      {% endif %}
+
+      {% if input.learning_focus == "file_creation" %}
+      Focus on: What patterns did you establish? What dependencies does this
+      file introduce? What should other files know about this one?
+      {% elif input.learning_focus == "file_modification" %}
+      Focus on: What was the root cause? What assumptions were wrong?
+      What could break if this area is changed again?
+      {% elif input.learning_focus == "bug_fix" %}
+      Focus on: What caused the bug? Is the fix complete or a workaround?
+      Are there similar patterns elsewhere that might have the same issue?
+      {% elif input.learning_focus == "test_failure" %}
+      Focus on: Why did the test fail? Was the test wrong or the code?
+      What does this reveal about the system's behavior?
+      {% else %}
+      Focus on: dependencies discovered, patterns in the codebase,
+      assumptions that proved wrong, integration points to remember.
+      {% endif %}
+
+      Be concise — 2-4 sentences. Focus on information that would help
+      a future task working on related code.
+    config:
+      temperature: 0.2
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: save_note
+        - condition: "true"
+          transition: skip
+    publishes:
+      - inference_response
+
+  save_note:
+    action: push_note
+    description: "Persist the reflection as a note"
+    context:
+      required: [inference_response]
+    params:
+      category: "{{ input.category | default('task_learning') }}"
+      content_key: "inference_response"
+      tags: []
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: complete
+    publishes:
+      - note_saved
+
+  skip:
+    action: noop
+    description: "No reflection generated — skip note"
+    terminal: true
+    status: success
+
+  complete:
+    action: noop
+    description: "Learning captured"
+    terminal: true
+    status: success
+
+entry: reflect

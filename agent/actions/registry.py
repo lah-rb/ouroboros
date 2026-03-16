@@ -285,6 +285,14 @@ def build_action_registry() -> ActionRegistry:
         action_execute_file_creation,
         action_run_tests,
     )
+    from agent.actions.refinement_actions import (
+        action_push_note,
+        action_scan_project,
+        action_curl_search,
+        action_run_validation_checks,
+        action_load_file_contents,
+        action_apply_plan_revision,
+    )
 
     registry = ActionRegistry()
     # Core actions
@@ -306,4 +314,11 @@ def build_action_registry() -> ActionRegistry:
     registry.register("create_plan_from_objective", action_create_plan_from_objective)
     registry.register("execute_file_creation", action_execute_file_creation)
     registry.register("run_tests", action_run_tests)
+    # Refinement phase actions
+    registry.register("push_note", action_push_note)
+    registry.register("scan_project", action_scan_project)
+    registry.register("curl_search", action_curl_search)
+    registry.register("run_validation_checks", action_run_validation_checks)
+    registry.register("load_file_contents", action_load_file_contents)
+    registry.register("apply_plan_revision", action_apply_plan_revision)
     return registry
