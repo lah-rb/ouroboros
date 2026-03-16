@@ -1,0 +1,176 @@
+# flows/shared/step_templates.yaml
+
+version: 1
+description: "Reusable step templates for Ouroboros flows"
+
+templates:
+
+  # ── Note Persistence ──────────────────────────────────────
+
+  push_note:
+    action: push_note
+    description: "Record a durable observation for future context"
+    context:
+      required: []
+      optional:
+        - inference_response
+        - test_results
+        - context_bundle
+        - diagnosis
+        - plan
+        - reflection
+    params:
+      category: "general"
+      source_flow: "{{ meta.flow_name }}"
+      source_task: "{{ meta.task_id }}"
+      content_key: "reflection"
+    publishes:
+      - note_saved
+    param_schema:
+      category:
+        type: string
+        required: false
+        default: "general"
+        enum:
+          - general
+          - task_learning
+          - codebase_observation
+          - failure_analysis
+          - requirement_discovered
+          - approach_rejected
+          - dependency_identified
+        description: "Classification for retrieval filtering"
+      content_key:
+        type: string
+        required: false
+        default: "reflection"
+        description: "Context key containing the note content"
+      tags:
+        type: list
+        required: false
+        items:
+          type: string
+        description: "Freeform tags for cross-referencing"
+
+  # ── File Operations ───────────────────────────────────────
+
+  write_file:
+    action: execute_file_creation
+    description: "Extract code from inference response and write to disk"
+    context:
+      required:
+        - inference_response
+    params:
+      target_file_path: "{{ input.target_file_path }}"
+    publishes:
+      - created_file
+    param_schema:
+      target_file_path:
+        type: string
+        required: true
+        description: "Destination path relative to working directory"
+
+  read_target_file:
+    action: read_files
+    description: "Read a single target file into context"
+    params:
+      target: "{{ input.target_file_path }}"
+      discover_imports: false
+    publishes:
+      - target_file
+    param_schema:
+      target:
+        type: string
+        required: true
+        description: "File to read"
+      discover_imports:
+        type: boolean
+        required: false
+        default: false
+        description: "Follow import statements and load referenced files"
+
+  # ── Context Gathering ─────────────────────────────────────
+
+  gather_project_context:
+    action: flow
+    description: "Invoke prepare_context sub-flow for workspace awareness"
+    flow: prepare_context
+    input_map:
+      working_directory: "{{ input.working_directory }}"
+      task_description: "{{ input.task_description }}"
+      mission_objective: "{{ input.mission_objective }}"
+      target_file_path: "{{ input.target_file_path }}"
+    publishes:
+      - context_bundle
+      - project_manifest
+    param_schema:
+      context_budget:
+        type: integer
+        required: false
+        default: 8
+        min: 1
+        max: 20
+        description: "Maximum files to include in context bundle"
+      frustration_history:
+        type: string
+        required: false
+        description: "Previous failure context for adaptive selection"
+
+  # ── Validation ────────────────────────────────────────────
+
+  validate_file:
+    action: flow
+    description: "Invoke validate_output sub-flow for file validation"
+    flow: validate_output
+    input_map:
+      file_path: "{{ input.target_file_path }}"
+      working_directory: "{{ input.working_directory }}"
+    publishes:
+      - validation_results
+    param_schema:
+      validation_hint:
+        type: string
+        required: false
+        enum:
+          - syntax
+          - execute
+          - test
+          - all
+        description: "Suggested validation strategy"
+      test_path:
+        type: string
+        required: false
+        description: "Path to test file or directory"
+
+  # ── Learning Capture ──────────────────────────────────────
+
+  capture_learnings:
+    action: flow
+    description: "Reflect on completed work and persist observations"
+    flow: capture_learnings
+    input_map:
+      task_description: "{{ input.task_description }}"
+      target_file_path: "{{ input.target_file_path }}"
+    publishes:
+      - learnings_saved
+    param_schema:
+      task_outcome:
+        type: string
+        required: false
+        description: "Short summary of what happened for reflection prompt"
+      category:
+        type: string
+        required: false
+        default: "task_learning"
+        description: "Note category override"
+      learning_focus:
+        type: string
+        required: false
+        default: "general"
+        enum:
+          - general
+          - file_creation
+          - file_modification
+          - bug_fix
+          - test_failure
+        description: "Selects reflection prompt variant"

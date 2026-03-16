@@ -1,0 +1,142 @@
+flow: create_file
+version: 1
+description: >
+  Create a new file with project context awareness,
+  LLM-driven validation, and learning capture.
+
+input:
+  required:
+    - mission_id
+    - task_id
+  optional:
+    - task_description
+    - mission_objective
+    - working_directory
+    - target_file_path
+    - reason
+    - temperature_multiplier
+    - frustration_level
+    - frustration_history
+
+defaults:
+  config:
+    temperature: 0.3
+    max_tokens: 4096
+
+steps:
+
+  gather_context:
+    use: gather_project_context
+    params:
+      context_budget: 6
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: generate_content
+
+  generate_content:
+    action: inference
+    description: "Generate the file content with project awareness"
+    context:
+      optional: [context_bundle, project_manifest]
+    prompt: |
+      You are a skilled developer building a project.
+
+      Project objective: {{ input.mission_objective }}
+      Task: {{ input.task_description }}
+      Target file: {{ input.target_file_path }}
+
+      {% if context.context_bundle and context.context_bundle.files %}
+      Existing project files for reference:
+      {% for file in context.context_bundle.files %}
+      === {{ file.path }} ===
+      {{ file.content }}
+      {% endfor %}
+
+      Your code MUST integrate with these existing files.
+      Import from existing modules rather than reimplementing functionality.
+      Maintain consistent code style and patterns.
+      {% endif %}
+
+      {% if context.context_bundle and context.context_bundle.research_findings %}
+      Research context (from web search):
+      {{ context.context_bundle.research_findings }}
+      {% endif %}
+
+      Write the complete file content for {{ input.target_file_path }}.
+      Include docstrings, type annotations, and clear structure.
+
+      Respond with ONLY the code wrapped in appropriate markers:
+      ```
+      # your code here
+      ```
+    config:
+      temperature: 0.3
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: write_file
+        - condition: "true"
+          transition: failed
+    publishes:
+      - inference_response
+
+  write_file:
+    use: write_file
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.write_success == true"
+          transition: validate
+        - condition: "true"
+          transition: failed
+
+  validate:
+    use: validate_file
+    params:
+      validation_hint: "syntax"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: capture_learnings
+
+  capture_learnings:
+    use: capture_learnings
+    params:
+      learning_focus: "file_creation"
+      category: "codebase_observation"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: complete
+
+  complete:
+    action: noop
+    description: "File created — return to mission_control"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Created {{ input.target_file_path }}"
+
+  failed:
+    action: noop
+    description: "File creation failed"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "abandoned"
+
+entry: gather_context
+
+overflow:
+  strategy: split
+  fallback: reorganize

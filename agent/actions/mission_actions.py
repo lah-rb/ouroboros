@@ -246,10 +246,20 @@ async def action_assess_mission_progress(step_input: StepInput) -> StepOutput:
         if deps_met:
             ready_tasks.append(task)
 
-    # Also consider failed tasks for retry
+    # Also consider failed tasks for retry, with frustration cap
+    effects = step_input.effects
     for task in failed:
-        if task.frustration < 5:  # Not yet exhausted
+        if task.frustration < 5:
             ready_tasks.append(task)
+        elif task.frustration >= 5 and task.status != "blocked":
+            # Cap: mark as blocked, stop retrying
+            task.status = "blocked"
+            task.summary = (
+                f"Blocked after {task.frustration} failed attempts. "
+                f"Awaiting escalation capability (Phase 6)."
+            )
+            if effects:
+                await effects.save_mission(mission)
 
     # Sort by priority
     ready_tasks.sort(key=lambda t: t.priority)
@@ -310,8 +320,13 @@ async def action_assess_mission_progress(step_input: StepInput) -> StepOutput:
 async def action_configure_task_dispatch(step_input: StepInput) -> StepOutput:
     """Build input map and determine flow config for the selected task.
 
+    Includes temperature perturbation at frustration 2+ and relevant
+    notes injection for child flow context awareness.
+
     Publishes: dispatch_config
     """
+    import random
+
     effects = step_input.effects
     mission = step_input.context.get("mission")
     selected = step_input.context.get("selected_task") or step_input.context.get(
@@ -360,16 +375,58 @@ async def action_configure_task_dispatch(step_input: StepInput) -> StepOutput:
     if task_frustration >= thresholds.get("direct_fix", 5):
         escalation_permissions.append("direct_fix")
 
+    # Temperature perturbation at frustration 2+
+    temperature_multiplier = 1.0
+    strategies = step_input.params.get("frustration_strategies", {})
+    temp_config = strategies.get("temperature_perturb", {})
+
+    if task_frustration >= temp_config.get("min_frustration", 2):
+        offset_range = temp_config.get("offset_range", [0.15, 0.4])
+        offset = random.uniform(*offset_range)
+        # Alternate: even frustration = hotter, odd = cooler
+        if task_frustration % 2 == 0:
+            temperature_multiplier = 1.0 + offset
+        else:
+            temperature_multiplier = max(0.3, 1.0 - offset)
+
+    input_map["temperature_multiplier"] = str(temperature_multiplier)
+
+    # Pass frustration info to child flows
+    input_map["frustration_level"] = str(task_frustration)
+
+    # Build frustration history from last attempt
+    if task_frustration >= 3:
+        last_attempt_summary = None
+        for task in mission.plan:
+            if task.id == task_id and task.summary:
+                last_attempt_summary = task.summary
+                break
+        if last_attempt_summary:
+            input_map["frustration_history"] = (
+                f"Attempt {task_frustration}: {last_attempt_summary}"
+            )
+
+    # Gather relevant notes for context
+    relevant_notes = ""
+    if hasattr(mission, "notes") and mission.notes:
+        recent_notes = sorted(mission.notes, key=lambda n: n.timestamp, reverse=True)[
+            :10
+        ]
+        relevant_notes = "\n".join(f"[{n.category}] {n.content}" for n in recent_notes)
+    input_map["relevant_notes"] = relevant_notes
+
     dispatch_config = {
         "flow": task_flow,
         "task_id": task_id,
         "input_map": input_map,
         "escalation_permissions": escalation_permissions,
+        "temperature_multiplier": temperature_multiplier,
     }
 
     return StepOutput(
         result={},
-        observations=f"Dispatching task {task_id} to flow {task_flow}",
+        observations=f"Dispatching task {task_id} to flow {task_flow} "
+        f"(frustration={task_frustration}, temp_mult={temperature_multiplier:.2f})",
         context_updates={"dispatch_config": dispatch_config},
     )
 

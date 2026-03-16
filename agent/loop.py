@@ -134,6 +134,7 @@ async def run_agent(
             inputs=current_inputs,
             action_registry=actions,
             effects=effects,
+            flow_registry=registry,
         )
 
         outcome = _resolve_tail_call(flow_result)

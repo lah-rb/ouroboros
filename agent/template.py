@@ -9,6 +9,7 @@ from typing import Any
 
 from jinja2 import (
     BaseLoader,
+    ChainableUndefined,
     Environment,
     StrictUndefined,
     TemplateSyntaxError,
@@ -17,10 +18,12 @@ from jinja2 import (
 
 # Shared Jinja2 environment — no filesystem loader needed since
 # all templates are inline strings from YAML definitions.
-# StrictUndefined gives clear errors when templates reference missing variables.
+# ChainableUndefined allows safe access to optional variables in templates:
+#   {% if input.optional_var %} works without raising when the key is missing.
+# This is necessary because flow prompts frequently reference optional inputs.
 _jinja_env = Environment(
     loader=BaseLoader(),
-    undefined=StrictUndefined,
+    undefined=ChainableUndefined,
     keep_trailing_newline=True,
 )
 

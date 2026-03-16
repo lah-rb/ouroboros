@@ -1,0 +1,179 @@
+flow: prepare_context
+version: 1
+description: >
+  Sub-flow that scans the workspace, asks the model which files
+  are relevant to a given task, and returns a curated context bundle.
+  Integrates web research when frustration indicates repeated failures.
+
+input:
+  required:
+    - working_directory
+    - task_description
+  optional:
+    - mission_objective
+    - target_file_path
+    - frustration_history
+    - frustration_level
+    - context_budget
+    - relevant_notes
+
+defaults:
+  config:
+    temperature: 0.1
+    context_budget: 8
+
+steps:
+
+  scan_workspace:
+    action: scan_project
+    description: "Walk directory tree, extract file signatures"
+    params:
+      root: "{{ input.working_directory }}"
+      include_patterns: ["*.py", "*.yaml", "*.yml", "*.md", "*.toml", "*.json", "*.js", "*.ts", "*.rs"]
+      signature_depth: "imports_and_exports"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_count > 0"
+          transition: check_research_needed
+        - condition: "result.file_count == 0"
+          transition: empty_project
+    publishes:
+      - project_manifest
+
+  check_research_needed:
+    action: noop
+    description: "Determine if web research should supplement context"
+    resolver:
+      type: rule
+      rules:
+        - condition: "input.get('frustration_level', '0') in ('3', '4', '5', '6', '7', '8', '9', '10') and input.get('frustration_history', '')"
+          transition: research
+        - condition: "true"
+          transition: select_relevant
+
+  research:
+    action: flow
+    description: "Fetch web research to help with repeated failures"
+    flow: research_context
+    input_map:
+      problem_description: "{{ input.task_description }}"
+      error_output: "{{ input.frustration_history }}"
+      max_queries: "2"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: select_relevant
+    publishes:
+      - research_findings
+
+  select_relevant:
+    action: inference
+    description: "LLM decides which files matter for this task"
+    context:
+      required: [project_manifest]
+      optional: [research_findings]
+    prompt: |
+      You are preparing context for a coding task.
+
+      Task: {{ input.task_description }}
+      {% if input.mission_objective %}
+      Project objective: {{ input.mission_objective }}
+      {% endif %}
+      {% if input.target_file_path %}
+      Primary target file: {{ input.target_file_path }}
+      {% endif %}
+
+      Available files in the project:
+      {% for filepath, sig in context.project_manifest.items() %}
+      --- {{ filepath }} ---
+      {{ sig }}
+      {% endfor %}
+
+      {% if input.relevant_notes %}
+      Relevant notes from previous work:
+      {{ input.relevant_notes }}
+      {% endif %}
+
+      {% if context.research_findings %}
+      Research findings (from web search due to previous failures):
+      {{ context.research_findings }}
+      {% endif %}
+
+      {% if input.frustration_history %}
+      Previous attempts at this task failed:
+      {{ input.frustration_history }}
+      Consider what additional context might prevent the same failure.
+      {% endif %}
+
+      Select the files this task needs to see. Return a JSON array:
+      [{"file": "path/to/file.py", "reason": "why needed", "priority": 1}]
+
+      Budget: at most {{ input.context_budget | default(8) }} files.
+      Prioritize: target file (if exists), direct imports/dependencies,
+      interfaces the target depends on, test files if modifying code.
+    config:
+      temperature: 0.1
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: load_selected
+        - condition: "true"
+          transition: load_fallback
+    publishes:
+      - inference_response
+
+  load_selected:
+    action: load_file_contents
+    description: "Read full content of LLM-selected files"
+    context:
+      required: [inference_response, project_manifest]
+      optional: [research_findings]
+    params:
+      budget: "{{ input.context_budget | default(8) }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.files_loaded > 0"
+          transition: complete
+        - condition: "true"
+          transition: load_fallback
+    publishes:
+      - context_bundle
+
+  load_fallback:
+    action: load_file_contents
+    description: "Fallback: load target file and immediate neighbors"
+    context:
+      optional: [project_manifest]
+    params:
+      strategy: "target_plus_neighbors"
+      target: "{{ input.target_file_path }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: complete
+    publishes:
+      - context_bundle
+
+  empty_project:
+    action: noop
+    description: "No files exist yet — return empty context bundle"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: complete
+    publishes:
+      - context_bundle
+
+  complete:
+    action: noop
+    description: "Return curated context to caller"
+    terminal: true
+    status: success
+
+entry: scan_workspace

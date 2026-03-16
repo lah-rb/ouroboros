@@ -63,6 +63,7 @@ async def execute_flow(
     action_registry: ActionRegistry,
     max_steps: int = 100,
     effects: Any = None,
+    flow_registry: dict[str, FlowDefinition] | None = None,
 ) -> FlowResult:
     """Execute a flow definition to completion.
 
@@ -129,7 +130,7 @@ async def execute_flow(
             effects=effects,
         )
 
-        # Execute the action — special handling for 'inference' action type
+        # Execute the action — special handling for 'inference' and 'flow'
         if step_def.action == "inference":
             step_output = await _execute_inference_action(
                 step_def=step_def,
@@ -137,6 +138,17 @@ async def execute_flow(
                 flow_def=flow_def,
                 inputs=inputs,
                 effects=effects,
+            )
+        elif step_def.action == "flow":
+            step_output = await _execute_subflow_action(
+                step_def=step_def,
+                step_name=step_name,
+                flow_def=flow_def,
+                accumulator=execution.accumulator,
+                inputs=inputs,
+                action_registry=action_registry,
+                effects=effects,
+                flow_registry=flow_registry,
             )
         else:
             try:
@@ -243,6 +255,114 @@ async def execute_flow(
         f"Steps executed: {execution.steps_executed}. "
         f"Last step: {execution.current_step!r}. "
         f"This likely indicates an infinite loop."
+    )
+
+
+async def _execute_subflow_action(
+    step_def: StepDefinition,
+    step_name: str,
+    flow_def: FlowDefinition,
+    accumulator: dict[str, Any],
+    inputs: dict[str, Any],
+    action_registry: ActionRegistry,
+    effects: Any,
+    flow_registry: dict[str, FlowDefinition] | None,
+) -> StepOutput:
+    """Execute a sub-flow invocation (action='flow').
+
+    Looks up the target sub-flow from the registry, resolves the input_map
+    templates, recursively calls execute_flow, and converts the sub-flow
+    result into a StepOutput for the parent flow.
+
+    The sub-flow's terminal context keys that match the parent step's
+    'publishes' list are propagated back as context_updates.
+    """
+    target_flow_name = step_def.flow
+    if not target_flow_name:
+        raise FlowRuntimeError(
+            f"Step {step_name!r}: action='flow' requires a 'flow' field "
+            f"naming the target sub-flow."
+        )
+
+    if flow_registry is None:
+        raise FlowRuntimeError(
+            f"Step {step_name!r}: action='flow' requires a flow_registry "
+            f"but none was provided to execute_flow."
+        )
+
+    if target_flow_name not in flow_registry:
+        raise FlowRuntimeError(
+            f"Step {step_name!r}: target sub-flow {target_flow_name!r} "
+            f"not found in registry. Available: {list(flow_registry.keys())}"
+        )
+
+    target_flow_def = flow_registry[target_flow_name]
+
+    # Build sub-flow inputs from input_map templates
+    template_vars = {
+        "input": inputs,
+        "context": accumulator,
+        "meta": {
+            "flow_name": flow_def.flow,
+            "step_id": step_name,
+        },
+    }
+
+    sub_inputs: dict[str, Any] = {}
+    if step_def.input_map:
+        for key, value_template in step_def.input_map.items():
+            if isinstance(value_template, str) and "{{" in value_template:
+                try:
+                    resolved = render_template(value_template, template_vars)
+                    sub_inputs[key] = resolved
+                except Exception:
+                    sub_inputs[key] = value_template
+            else:
+                sub_inputs[key] = value_template
+
+    # Also pass through any params as additional inputs
+    rendered_params = render_params(step_def.params, template_vars)
+    for key, value in rendered_params.items():
+        if key not in sub_inputs:
+            sub_inputs[key] = value
+
+    logger.info(
+        "Sub-flow invocation: %s → %s (inputs: %s)",
+        flow_def.flow,
+        target_flow_name,
+        list(sub_inputs.keys()),
+    )
+
+    # Execute the sub-flow recursively
+    try:
+        sub_result = await execute_flow(
+            flow_def=target_flow_def,
+            inputs=sub_inputs,
+            action_registry=action_registry,
+            effects=effects,
+            flow_registry=flow_registry,
+            max_steps=50,  # Sub-flows get a reduced step budget
+        )
+    except Exception as e:
+        logger.warning("Sub-flow %s failed: %s", target_flow_name, e)
+        return StepOutput(
+            result={"status": "failed", "error": str(e)},
+            observations=f"Sub-flow {target_flow_name} failed: {e}",
+        )
+
+    # Extract published context keys from sub-flow result
+    context_updates: dict[str, Any] = {}
+    for key in step_def.publishes:
+        if key in sub_result.context:
+            context_updates[key] = sub_result.context[key]
+        elif key in sub_result.result:
+            context_updates[key] = sub_result.result[key]
+
+    return StepOutput(
+        result={"status": sub_result.status, **sub_result.result},
+        observations=f"Sub-flow {target_flow_name}: {sub_result.status} "
+        f"({len(sub_result.steps_executed)} steps)",
+        context_updates=context_updates,
     )
 
 

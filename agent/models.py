@@ -43,6 +43,9 @@ class StepDefinition(BaseModel):
     Steps are the nodes in the flow graph. Each step has an action to execute,
     context requirements, a resolver for determining the next step, and
     declarations of what context keys it publishes.
+
+    For action='flow' (sub-flow invocation), the 'flow' field names the
+    target sub-flow and 'input_map' maps parent context to sub-flow inputs.
     """
 
     action: str
@@ -57,6 +60,9 @@ class StepDefinition(BaseModel):
     terminal: bool = False
     status: str | None = None
     tail_call: dict[str, Any] | None = None
+    # Sub-flow invocation fields (action='flow')
+    flow: str | None = None
+    input_map: dict[str, str] | None = None
 
     @model_validator(mode="after")
     def terminal_requires_status(self) -> "StepDefinition":
@@ -109,6 +115,92 @@ class FlowDefinition(BaseModel):
                 f"{list(self.steps.keys())}"
             )
         return self
+
+
+# ── Step Template Models ──────────────────────────────────────────────
+
+
+class ParamSchemaEntry(BaseModel):
+    """Schema definition for a single template parameter."""
+
+    type: Literal["string", "integer", "float", "boolean", "list", "dict"]
+    required: bool = False
+    default: Any = None
+    description: str = ""
+
+    # String constraints
+    enum: list[str] | None = None
+    pattern: str | None = None
+
+    # Numeric constraints
+    min: float | None = None
+    max: float | None = None
+
+    # List constraints
+    items: dict | None = None  # {"type": "string", "enum": [...]}
+    min_items: int | None = None
+    max_items: int | None = None
+
+    @model_validator(mode="after")
+    def validate_constraints(self) -> "ParamSchemaEntry":
+        """Ensure constraints match declared type."""
+        if self.enum is not None and self.type != "string":
+            raise ValueError("enum is only valid for type 'string'")
+        if self.pattern is not None and self.type != "string":
+            raise ValueError("pattern is only valid for type 'string'")
+        if (self.min is not None or self.max is not None) and self.type not in (
+            "integer",
+            "float",
+        ):
+            raise ValueError("min/max are only valid for numeric types")
+        if (
+            self.items is not None or self.min_items is not None
+        ) and self.type != "list":
+            raise ValueError("items/min_items/max_items are only valid for type 'list'")
+        return self
+
+    @model_validator(mode="after")
+    def validate_default_type(self) -> "ParamSchemaEntry":
+        """Ensure default value matches declared type when present."""
+        if self.default is None:
+            return self
+        if isinstance(self.default, str) and "{{" in self.default:
+            return self  # Jinja2 template — skip type check
+        expected = {
+            "string": str,
+            "integer": int,
+            "float": (int, float),
+            "boolean": bool,
+            "list": list,
+            "dict": dict,
+        }
+        if self.type in expected and not isinstance(self.default, expected[self.type]):
+            raise ValueError(
+                f"Default {self.default!r} doesn't match type '{self.type}'"
+            )
+        return self
+
+
+class StepTemplate(BaseModel):
+    """A reusable, pre-configured step definition."""
+
+    action: str
+    description: str = ""
+    context: dict[str, list[str]] | None = None
+    params: dict[str, Any] | None = None
+    config: dict[str, Any] | None = None
+    flow: str | None = None
+    input_map: dict[str, str] | None = None
+    publishes: list[str] | None = None
+    param_schema: dict[str, ParamSchemaEntry] | None = None
+
+
+class StepTemplateRegistry(BaseModel):
+    """Top-level container for step_templates.yaml."""
+
+    version: int = 1
+    description: str = ""
+    templates: dict[str, StepTemplate] = Field(default_factory=dict)
 
 
 # ── Step I/O Models ───────────────────────────────────────────────────

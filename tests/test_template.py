@@ -31,13 +31,23 @@ class TestRenderTemplate:
         )
         assert result == "Content: hello world"
 
-    def test_undefined_variable_raises(self):
-        with pytest.raises(TemplateError, match="undefined"):
-            render_template("{{ missing_var }}", {})
+    def test_undefined_variable_renders_empty(self):
+        """ChainableUndefined renders missing vars as empty strings."""
+        result = render_template("{{ missing_var }}", {})
+        assert result == ""
 
-    def test_undefined_nested_raises(self):
-        with pytest.raises(TemplateError, match="undefined"):
-            render_template("{{ input.missing }}", {"input": {}})
+    def test_undefined_nested_renders_empty(self):
+        """ChainableUndefined renders missing nested attrs as empty strings."""
+        result = render_template("{{ input.missing }}", {"input": {}})
+        assert result == ""
+
+    def test_undefined_in_conditional_is_falsy(self):
+        """ChainableUndefined is falsy in {% if %} blocks."""
+        result = render_template(
+            "{% if input.optional %}YES{% endif %}",
+            {"input": {}},
+        )
+        assert result == ""
 
     def test_plain_string_no_template(self):
         result = render_template("just a plain string", {})

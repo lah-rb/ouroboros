@@ -68,11 +68,27 @@ class TaskRecord(BaseModel):
 
 
 class NoteRecord(BaseModel):
-    """A note attached to a mission (user messages, agent observations)."""
+    """A persistent observation recorded by the agent.
 
-    timestamp: str = Field(default_factory=_now_iso)
+    Notes capture learnings, observations, discovered requirements, and
+    other durable information that should inform future tasks.
+    """
+
+    id: str = Field(default_factory=lambda: _new_id()[:8])
     content: str
-    source: Literal["user", "agent", "system"] = "system"
+    category: Literal[
+        "general",
+        "task_learning",
+        "codebase_observation",
+        "failure_analysis",
+        "requirement_discovered",
+        "approach_rejected",
+        "dependency_identified",
+    ] = "general"
+    tags: list[str] = Field(default_factory=list)
+    source_flow: str = "unknown"
+    source_task: str = "unknown"
+    timestamp: str = Field(default_factory=_now_iso)
 
 
 # ── Mission State ─────────────────────────────────────────────────────

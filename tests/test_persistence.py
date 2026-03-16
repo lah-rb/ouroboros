@@ -86,8 +86,16 @@ class TestPersistenceModels:
         assert a.schema_version == 1
 
     def test_note_record(self):
-        n = NoteRecord(content="Focus on persistence", source="user")
-        assert n.source == "user"
+        n = NoteRecord(content="Focus on persistence", category="task_learning")
+        assert n.category == "task_learning"
+        assert n.source_flow == "unknown"
+        assert n.source_task == "unknown"
+        assert len(n.id) > 0
+        assert n.tags == []
+
+    def test_note_record_defaults(self):
+        n = NoteRecord(content="Simple note")
+        assert n.category == "general"
 
     def test_mission_config_defaults(self):
         c = MissionConfig(working_directory="/tmp")

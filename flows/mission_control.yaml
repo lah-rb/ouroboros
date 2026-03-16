@@ -111,7 +111,7 @@ steps:
 
   prepare_dispatch:
     action: configure_task_dispatch
-    description: "Build input map for selected task"
+    description: "Build input map and determine flow config for selected task"
     context:
       required: [mission, frustration]
       optional: [obvious_next_task, selected_task]
@@ -120,6 +120,12 @@ steps:
         review: 2
         instructions: 4
         direct_fix: 5
+      frustration_strategies:
+        temperature_perturb:
+          min_frustration: 2
+          offset_range: [0.15, 0.4]
+        research:
+          min_frustration: 3
     resolver:
       type: rule
       rules:
@@ -143,6 +149,10 @@ steps:
         working_directory: "{{ context.dispatch_config.input_map.working_directory }}"
         target_file_path: "{{ context.dispatch_config.input_map.target_file_path }}"
         reason: "{{ context.dispatch_config.input_map.reason }}"
+        temperature_multiplier: "{{ context.dispatch_config.input_map.temperature_multiplier }}"
+        frustration_level: "{{ context.dispatch_config.input_map.frustration_level }}"
+        frustration_history: "{{ context.dispatch_config.input_map.frustration_history }}"
+        relevant_notes: "{{ context.dispatch_config.input_map.relevant_notes }}"
 
   # ── Dispatch to planning ────────────────────────────────────
 

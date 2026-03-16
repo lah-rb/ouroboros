@@ -1,0 +1,201 @@
+flow: modify_file
+version: 1
+description: >
+  Modify an existing file to address a specific issue.
+  Uses project context, LLM-driven planning with confidence gating,
+  validation, and learning capture.
+
+input:
+  required:
+    - mission_id
+    - task_id
+    - target_file_path
+    - reason
+  optional:
+    - task_description
+    - mission_objective
+    - working_directory
+    - temperature_multiplier
+    - frustration_level
+    - frustration_history
+
+defaults:
+  config:
+    temperature: 0.2
+    max_tokens: 4096
+
+steps:
+
+  gather_context:
+    use: gather_project_context
+    params:
+      context_budget: 8
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: read_target
+
+  read_target:
+    use: read_target_file
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_found == true"
+          transition: plan_change
+        - condition: "true"
+          transition: failed
+
+  plan_change:
+    action: inference
+    description: "Analyze the issue and produce a change plan"
+    context:
+      required: [target_file]
+      optional: [context_bundle, project_manifest]
+    prompt: |
+      You are analyzing a file to plan a specific change.
+
+      File: {{ context.target_file.path }}
+      Content:
+      {{ context.target_file.content }}
+
+      Issue to address: {{ input.reason }}
+
+      {% if context.context_bundle and context.context_bundle.files %}
+      Related files for reference:
+      {% for file in context.context_bundle.files %}
+      {% if file.path != context.target_file.path %}
+      === {{ file.path }} ===
+      {{ file.content }}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+
+      {% if context.context_bundle and context.context_bundle.research_findings %}
+      Research findings:
+      {{ context.context_bundle.research_findings }}
+      {% endif %}
+
+      Produce a change plan:
+      1. What specifically needs to change and where
+      2. Why this change addresses the issue
+      3. What could go wrong
+      4. Your confidence level (high/medium/low)
+    config:
+      temperature: 0.2
+    resolver:
+      type: llm_menu
+      prompt: "Given your analysis, what should happen next?"
+      options:
+        execute_change:
+          description: "Confidence is high — proceed with the change"
+        gather_context:
+          description: "Need to see additional files before proceeding"
+          target: gather_context
+        abandon:
+          description: "This approach won't work — return to mission_control"
+    publishes:
+      - plan
+
+  execute_change:
+    action: inference
+    description: "Produce the modified file content"
+    context:
+      required: [target_file, plan]
+      optional: [context_bundle]
+    prompt: |
+      Apply the following change plan to this file.
+      Return the COMPLETE modified file content — not a diff, the whole file.
+
+      Plan:
+      {{ context.plan }}
+
+      Original file ({{ context.target_file.path }}):
+      {{ context.target_file.content }}
+
+      Respond with ONLY the complete modified file in code markers:
+      ```
+      # complete file content here
+      ```
+    config:
+      temperature: 0.3
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: write_modified
+        - condition: "true"
+          transition: failed
+    publishes:
+      - inference_response
+
+  write_modified:
+    use: write_file
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.write_success == true"
+          transition: validate
+        - condition: "true"
+          transition: failed
+
+  validate:
+    use: validate_file
+    params:
+      validation_hint: "test"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.status == 'success'"
+          transition: capture_learnings
+        - condition: "true"
+          transition: capture_learnings
+
+  capture_learnings:
+    use: capture_learnings
+    params:
+      learning_focus: "file_modification"
+      category: "codebase_observation"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: complete
+
+  complete:
+    action: noop
+    description: "File modified — return to mission_control"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Modified {{ input.target_file_path }}"
+
+  failed:
+    action: noop
+    description: "Modification failed"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "abandoned"
+        last_result: "Failed to modify {{ input.target_file_path }}"
+
+  abandon:
+    action: noop
+    description: "LLM chose to abandon the approach"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "abandoned"
+
+entry: gather_context
+
+overflow:
+  strategy: split
+  fallback: reorganize
