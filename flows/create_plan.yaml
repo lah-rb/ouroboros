@@ -13,7 +13,7 @@ input:
 
 defaults:
   config:
-    temperature: 0.4
+    temperature: "t*1"
     max_tokens: 4096
 
 steps:
@@ -48,7 +48,9 @@ steps:
       required: [mission]
       optional: [context_bundle, project_manifest]
     prompt: |
-      You are planning a coding project.
+      You are a planning module in an automated coding pipeline.
+      Your output will be parsed by a JSON extractor. Do NOT include any text
+      outside the JSON array — no markdown, no explanation, no commentary.
 
       Objective: {{ context.mission.objective }}
       Working directory: {{ context.mission.config.working_directory }}
@@ -71,30 +73,42 @@ steps:
       {% endfor %}
       {% endif %}
 
-      Create a task plan. Return ONLY a JSON array with this exact format:
+      Create a task plan as a JSON array. Each task produces or modifies exactly one file.
+      Order tasks so dependencies come first (lower index = higher priority).
+      Include 3-8 tasks depending on complexity.
+
+      ✅ CORRECT output (raw JSON array, nothing else):
       [
         {
-          "description": "Clear description of what to build/do",
-          "file": "path/to/target_file.py",
+          "description": "Create the data models module with User and Session classes",
+          "file": "models/data.py",
           "flow": "create_file",
           "depends_on": []
         },
         {
-          "description": "Modify X to integrate with Y",
-          "file": "path/to/existing_file.py",
+          "description": "Modify the main entry point to import and use new models",
+          "file": "main.py",
           "flow": "modify_file",
-          "depends_on": ["description of dependency task"]
+          "depends_on": ["Create the data models module with User and Session classes"]
         }
       ]
 
+      ❌ WRONG — do not wrap in markdown code blocks:
+      ```json
+      [{"description": "..."}]
+      ```
+
+      ❌ WRONG — do not add explanation before or after:
+      Here is the plan:
+      [{"description": "..."}]
+
       Rules:
       - Use "create_file" for new files, "modify_file" for changes to existing files.
-      - Each task should produce or modify exactly one file.
-      - Order tasks so dependencies come first (lower index = higher priority).
-      - Include 3-8 tasks. Fewer if the objective is simple, more if complex.
-      - File paths should be relative to the working directory.
+      - File paths must be relative to the working directory.
       - If existing files are present, plan tasks that integrate with them.
       - Do NOT include tasks for files that already exist unless they need changes.
+
+      Return ONLY the raw JSON array.
     config:
       temperature: 0.4
     resolver:
@@ -117,12 +131,10 @@ steps:
       rules:
         - condition: "result.plan_created == true and result.task_count >= 2"
           transition: complete
-        - condition: "result.plan_created == true and result.task_count == 1 and meta.attempt < 3"
-          transition: retry_plan
-        - condition: "result.plan_created == false and meta.attempt < 3"
-          transition: retry_plan
-        - condition: "true"
+        - condition: "result.plan_created == true"
           transition: complete
+        - condition: "true"
+          transition: failed
     publishes:
       - mission
 
@@ -133,20 +145,46 @@ steps:
       required: [mission, inference_response]
       optional: [context_bundle, project_manifest]
     prompt: |
-      Your previous plan response could not be parsed correctly, or produced
-      only a single generic task. Here is what you returned:
+      You are a planning module in an automated coding pipeline.
+      Your previous response could not be parsed. Here is what you returned:
 
       {{ context.inference_response[:500] }}
 
-      Please try again. Return ONLY a valid JSON array of task objects.
-      Each object MUST have these fields:
-      - "description": string (what to do)
-      - "file": string (target file path)
-      - "flow": "create_file" or "modify_file"
+      The JSON extractor failed. You MUST return a raw JSON array with no
+      surrounding text, no markdown code blocks, no explanation.
 
       The objective is: {{ context.mission.objective }}
 
-      Produce 3-8 specific, actionable tasks. Do not wrap in markdown code blocks.
+      ✅ CORRECT — raw JSON, nothing else:
+      [
+        {
+          "description": "Create the CLI argument parser",
+          "file": "cli.py",
+          "flow": "create_file",
+          "depends_on": []
+        },
+        {
+          "description": "Create the core processing module",
+          "file": "core/processor.py",
+          "flow": "create_file",
+          "depends_on": []
+        },
+        {
+          "description": "Wire CLI to processor in main entry point",
+          "file": "main.py",
+          "flow": "create_file",
+          "depends_on": ["Create the CLI argument parser", "Create the core processing module"]
+        }
+      ]
+
+      ❌ WRONG — no markdown wrapping:
+      ```json
+      [...]
+      ```
+
+      Produce 3-8 specific, actionable tasks. Each MUST have "description", "file", and "flow" fields.
+
+      Return ONLY the raw JSON array.
     config:
       temperature: 0.5
     resolver:

@@ -102,6 +102,9 @@ async def execute_flow(
         max_steps=max_steps,
     )
 
+    # Track per-step visit counts for retry-with-limit patterns
+    step_visits: dict[str, int] = {}
+
     logger.info(
         "Starting flow %r at entry step %r",
         flow_def.flow,
@@ -113,11 +116,15 @@ async def execute_flow(
         step_name = execution.current_step
         step_def = flow_def.steps[step_name]
 
+        # Increment visit count for this step
+        step_visits[step_name] = step_visits.get(step_name, 0) + 1
+
         logger.debug(
-            "Flow %r: executing step %r (step #%d)",
+            "Flow %r: executing step %r (step #%d, visit #%d)",
             flow_def.flow,
             step_name,
             execution.step_count + 1,
+            step_visits[step_name],
         )
 
         # Build StepInput with filtered context and effects
@@ -225,8 +232,9 @@ async def execute_flow(
                 meta={
                     "flow_name": flow_def.flow,
                     "step_id": step_name,
-                    "attempt": 1,
+                    "attempt": step_visits[step_name],
                     "step_count": execution.step_count,
+                    "step_visits": dict(step_visits),
                 },
                 effects=effects,
             )

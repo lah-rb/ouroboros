@@ -1,9 +1,11 @@
 flow: modify_file
-version: 1
+version: 2
 description: >
   Modify an existing file to address a specific issue.
   Uses project context, LLM-driven planning with confidence gating,
   validation, and learning capture.
+  Handles three validation outcomes: success, issues (fixable), failed (syntax broken).
+  Correction loop allows the agent to fix flagged issues before giving up.
 
 input:
   required:
@@ -18,10 +20,11 @@ input:
     - temperature_multiplier
     - frustration_level
     - frustration_history
+    - relevant_notes
 
 defaults:
   config:
-    temperature: 0.2
+    temperature: "t*0.8"
     max_tokens: 4096
 
 steps:
@@ -44,7 +47,7 @@ steps:
         - condition: "result.file_found == true"
           transition: plan_change
         - condition: "true"
-          transition: failed
+          transition: create_fallback
 
   plan_change:
     action: inference
@@ -53,10 +56,12 @@ steps:
       required: [target_file]
       optional: [context_bundle, project_manifest]
     prompt: |
-      You are analyzing a file to plan a specific change.
+      You are an analysis module in an automated coding pipeline.
+      Your task is to produce a change plan that another module will execute.
+      Write your plan as clear, specific instructions — not code.
 
-      File: {{ context.target_file.path }}
-      Content:
+      File to modify: {{ context.target_file.path }}
+      Current content:
       {{ context.target_file.content }}
 
       Issue to address: {{ input.reason }}
@@ -76,19 +81,27 @@ steps:
       {{ context.context_bundle.research_findings }}
       {% endif %}
 
-      Produce a change plan:
-      1. What specifically needs to change and where
-      2. Why this change addresses the issue
-      3. What could go wrong
-      4. Your confidence level (high/medium/low)
+      {% if input.frustration_history %}
+      ⚠️ Previous attempts at this task FAILED:
+      {{ input.frustration_history }}
+      You MUST take a different approach than what was tried before.
+      {% endif %}
+
+      Produce a change plan with these sections:
+      1. WHAT: What specifically needs to change (function names, line ranges, imports)
+      2. WHY: Why this change addresses the issue
+      3. RISK: What could break as a side effect
+      4. CONFIDENCE: high, medium, or low
+
+      Write the plan as structured prose. Do NOT write code yet — that happens next.
     config:
       temperature: 0.2
     resolver:
       type: llm_menu
-      prompt: "Given your analysis, what should happen next?"
+      prompt: "Based on your confidence in the change plan, what should happen next?"
       options:
         execute_change:
-          description: "Confidence is high — proceed with the change"
+          description: "Confidence is high — proceed with implementing the change"
         gather_context:
           description: "Need to see additional files before proceeding"
           target: gather_context
@@ -104,28 +117,57 @@ steps:
       required: [target_file, inference_response]
       optional: [context_bundle]
     prompt: |
-      Apply the following change plan to this file.
-      Return the COMPLETE modified file content — not a diff, the whole file.
+      You are a code generation module in an automated pipeline.
+      Your output will be extracted from code markers and written directly to a file.
+      Do NOT include any text outside the code block.
 
-      Plan:
+      Apply the following change plan to the file.
+      Return the COMPLETE modified file — not a diff, not a partial update, the entire file.
+
+      Change plan:
       {{ context.inference_response }}
 
       Original file ({{ context.target_file.path }}):
       {{ context.target_file.content }}
 
-      Respond with ONLY the complete modified file in code markers:
+      Respond with ONLY the complete modified file inside triple-backtick markers:
+
+      ✅ CORRECT format (complete file, nothing outside markers):
       ```
-      # complete file content here
+      # entire file content with changes applied
+      import os
+      
+      def modified_function():
+          # changed implementation
+          pass
       ```
+
+      ❌ WRONG — no explanation outside the markers:
+      I changed the function to fix the bug:
+      ```
+      def modified_function():
+          pass
+      ```
+
+      ❌ WRONG — do not return only the changed portion:
+      ```
+      def modified_function():
+          pass
+      ```
+
+      ---DO NOT GENERATE EXTRA CHARACTERS---
+      ---DO NOT USE FENCED CODE BLOCKS (```)---
+      ---END RESPONSE IMMEDIATELY AFTER CODE---
+      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
     config:
-      temperature: 0.3
+      temperature: "t*0.3"
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
           transition: write_modified
         - condition: "true"
-          transition: failed
+          transition: capture_failure_note
     publishes:
       - inference_response
 
@@ -137,7 +179,7 @@ steps:
         - condition: "result.write_success == true"
           transition: validate
         - condition: "true"
-          transition: failed
+          transition: capture_failure_note
 
   validate:
     use: validate_file
@@ -148,8 +190,136 @@ steps:
       rules:
         - condition: "result.status == 'success'"
           transition: capture_learnings
+        - condition: "result.status == 'issues'"
+          transition: capture_learnings
+        - condition: "result.status == 'failed' and meta.step_count < 12"
+          transition: regenerate_modified
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - validation_results
+
+  correct_issues:
+    action: inference
+    description: "Fix execution/lint issues flagged by validation"
+    context:
+      required: [inference_response]
+      optional: [validation_results, target_file, context_bundle, project_manifest]
+    prompt: |
+      You are a code correction module in an automated pipeline.
+      Your modified version of {{ input.target_file_path }} passed syntax checking
+      but has execution or quality issues that need fixing.
+      Your output will be extracted from code markers and written directly to a file.
+
+      Issues found:
+      {% if context.validation_results %}
+      {% for check in context.validation_results %}
+      {% if not check.passed %}
+      - {{ check.name }}: FAILED
+        stdout: {{ check.stdout }}
+        stderr: {{ check.stderr }}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+
+      Modification reason: {{ input.reason }}
+      Target file: {{ input.target_file_path }}
+
+      Fix the flagged issues and produce the COMPLETE corrected file.
+      Only fix what's broken — preserve everything that was working.
+
+      Common fixes:
+      - If imports fail because a module doesn't exist yet, add try/except or conditional imports.
+      - If a linter flags issues, fix the specific warnings.
+      - If tests fail, fix the code to pass them.
+
+      Respond with ONLY the corrected code inside triple-backtick markers:
+
+      ✅ CORRECT format:
+      ```
+      # complete corrected file content
+      ```
+
+      ❌ WRONG — no explanation outside the markers:
+      I fixed the import error:
+      ```
+      # code here
+      ```
+
+      ---DO NOT GENERATE EXTRA CHARACTERS---
+      ---DO NOT USE FENCED CODE BLOCKS (```)---
+      ---END RESPONSE IMMEDIATELY AFTER CODE---
+      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+    config:
+      temperature: 0.2
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: write_modified
         - condition: "true"
           transition: capture_learnings
+    publishes:
+      - inference_response
+
+  regenerate_modified:
+    action: inference
+    description: "Re-generate modified file content after syntax validation failure"
+    context:
+      required: [inference_response]
+      optional: [validation_results, target_file, context_bundle, project_manifest]
+    prompt: |
+      You are a code generation module in an automated pipeline.
+      Your modified version of {{ input.target_file_path }} failed syntax validation.
+      Your output will be extracted from code markers and written directly to a file.
+
+      Validation results:
+      {% if context.validation_results %}
+      {% for check in context.validation_results %}
+      - {{ check.name }}: {{ "PASS" if check.passed else "FAIL" }}
+        {% if not check.passed %}stdout: {{ check.stdout }}
+        stderr: {{ check.stderr }}{% endif %}
+      {% endfor %}
+      {% endif %}
+
+      {% if context.target_file %}
+      Original file before modification:
+      {{ context.target_file.content }}
+      {% endif %}
+
+      Modification reason: {{ input.reason }}
+
+      Fix the specific syntax errors and produce the COMPLETE corrected file.
+      Do NOT change parts of the code that were working — only fix what failed.
+
+      Respond with ONLY the corrected code inside triple-backtick markers:
+
+      ✅ CORRECT format:
+      ```
+      # complete corrected file content
+      ```
+
+      ❌ WRONG — no explanation outside the markers:
+      I fixed the syntax error:
+      ```
+      # code here
+      ```
+
+      ---DO NOT GENERATE EXTRA CHARACTERS---
+      ---DO NOT USE FENCED CODE BLOCKS (```)---
+      ---END RESPONSE IMMEDIATELY AFTER CODE---
+      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+    config:
+      temperature: 0.2
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: write_modified
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - inference_response
 
   capture_learnings:
     use: capture_learnings
@@ -162,6 +332,29 @@ steps:
         - condition: "true"
           transition: complete
 
+  create_fallback:
+    action: flow
+    description: "Target file doesn't exist — create it instead of modifying"
+    flow: create_file
+    input_map:
+      mission_id: "{{ input.mission_id }}"
+      task_id: "{{ input.task_id }}"
+      task_description: "{{ input.task_description | default(input.reason) }}"
+      mission_objective: "{{ input.mission_objective }}"
+      working_directory: "{{ input.working_directory }}"
+      target_file_path: "{{ input.target_file_path }}"
+      reason: "{{ input.reason }}"
+      relevant_notes: "{{ input.relevant_notes }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.status == 'success'"
+          transition: capture_learnings
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - created_file
+
   complete:
     action: noop
     description: "File modified — return to mission_control"
@@ -172,6 +365,18 @@ steps:
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
         last_result: "Modified {{ input.target_file_path }}"
+
+  capture_failure_note:
+    use: capture_learnings
+    params:
+      learning_focus: "failure_analysis"
+      category: "failure_analysis"
+      task_outcome: "FAILED to modify {{ input.target_file_path }}: {{ input.reason }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: failed
 
   failed:
     action: noop

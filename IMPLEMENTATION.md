@@ -1414,4 +1414,94 @@ A record of every key architectural decision made during the design process, wit
 | Temperature | Relative (t*multiplier) and absolute supported | Cross-model portability. Flow intent (more/less creative) decoupled from model baseline. |
 | Condition evaluation | Restricted eval() | Flow authors are trusted. Simple, expressive. Revisit when agent-authored flows are possible. |
 | Self-modification | Dedicated lifecycle flow (duplicate → modify → validate → promote/rollback) | Safety from procedure, not from effects interface restrictions. Effects interface stays simple. |
+| Control paradigm | Flow-as-controller (not LLM-as-controller) | Local models lack reasoning bandwidth for full ReAct loops. Structured workflows + constrained prompts maximize output quality from smaller models. |
+| Context awareness | AST-based repo map with PageRank ranking | Inspired by Aider's repo map. tree-sitter parsing gives structural code awareness without consuming full-file tokens. Graph ranking surfaces the most important files. |
+| Flow auditing | Mermaid/DOT visualization export from YAML | Flows are data — they should be visually inspectable. Cross-flow view shows all possible execution paths for auditing and planning. |
+
+---
+
+## 5. Future Architecture
+
+### 5.1 WASM-Based Execution Sandbox (Deferred)
+
+The effects interface's `run_command` currently executes real subprocesses with path scoping as the only safety mechanism. A WASM-based sandbox will provide proper process isolation for autonomous command execution.
+
+**Plan:**
+- Implement `WasmEffects` wrapping `LocalEffects` — sandboxed `run_command`, pass-through for file ops and inference.
+- The effects interface remains swappable. Existing `LocalEffects`, `MockEffects`, and future `GitManagedEffects` continue to work unchanged.
+- WASM sandbox intercepts command execution, providing resource limits, filesystem isolation, and network restrictions.
+
+**Why deferred:** The agent is not yet producing projects that require protection from accidental damage. Current safety measures (path scoping, atomic writes, planned GitManagedEffects) are sufficient for the development phase. Sandboxing will be prioritized when the agent begins working on real external projects.
+
+### 5.2 Inference Observability (Phase 9+)
+
+Inference call logging is currently handled by the LLMVP backend (`llmvp/logs/interactions.jsonl`). Ouroboros-side inference observability will be added as a later phase to enable flow-aware analytics.
+
+**Planned capabilities:**
+- Per-call logging with flow context: which flow, which step, prompt hash, tokens consumed, latency, model response quality signals.
+- Per-flow token cost aggregation — understand which flows are expensive.
+- Prompt effectiveness tracking — correlate prompt variants with task outcomes.
+- Anomaly detection — flag unusually expensive or slow inference calls.
+
+**Integration point:** The `InferenceEffect` class in `agent/effects/inference.py` will gain an optional `InferenceLogger` that captures structured records alongside the existing LLMVP-side logging.
+
+### 5.3 Prompt Profiles & Effectiveness Tracking (Phase 9+)
+
+Prompts should be refinable based on empirical data, not just intuition. This system tracks which prompt formulations work best.
+
+**Design:**
+- **Prompt tiers:** `default` → `escalated` (not per-model). A prompt tier is selected based on context — first attempt uses default, retries after failure may use an escalated variant with more explicit instructions.
+- **Effectiveness tracking schema:** `{ prompt_id, model_id, flow, step, outcome (success/fail/abandoned), tokens_consumed, timestamp }`.
+- **Success/fail graph:** Per model-prompt combination, track success rate over time. This enables data-driven prompt refinement and A/B testing of prompt variants.
+
+**What this is NOT:** This is not Cline-style per-model prompt switching. Our prompts are designed universally for constrained local models — we don't adjust verbosity or instruction style per model. The relative temperature system (`t*0.5`) handles the mechanical model differences. Prompt profiles handle the *strategic* differences (first try vs. retry, simple task vs. complex task).
+
+**Why deferred:** Adds significant testing variability. The current prompt conventions (see `PROMPTING_CONVENTIONS.md`) are working. This becomes valuable when the agent has enough execution history to make data-driven prompt decisions.
+
+### 5.4 AST-Based Repo Map (Current Phase)
+
+Replaces the regex-based `_extract_python_signature()` in `scan_project` with tree-sitter AST parsing and graph-based file ranking. Inspired by Aider's repo map approach.
+
+**Components:**
+- `agent/repomap.py` — tree-sitter parsing, definition/reference extraction, networkx graph with PageRank ranking, token-budgeted map formatting.
+- Enhanced `action_scan_project` — uses tree-sitter when available, falls back to regex for unsupported languages.
+- Repo map cached in `.agent/repo_map.json` with mtime-based invalidation.
+
+**Language support:** Python (tree-sitter-python) initially. Architecture supports adding JavaScript, TypeScript, Rust via additional tree-sitter grammars. YAML and Markdown continue using the existing signature extractors.
+
+See `agent/repomap.py` for implementation details.
+
+### 5.5 Flow Visualizer (Current Phase)
+
+Generates human-readable visual diagrams from flow YAML definitions. Supports both single-flow and cross-flow system views.
+
+**Output formats:**
+- **Mermaid** (primary) — renders in GitHub, VS Code, any markdown viewer. Text-based, version-controllable.
+- **Graphviz DOT** (secondary) — for high-quality SVG/PNG rendering via `dot` CLI.
+
+**CLI integration:**
+```bash
+uv run ouroboros.py visualize                        # all flows → stdout (mermaid)
+uv run ouroboros.py visualize mission_control         # single flow
+uv run ouroboros.py visualize --format dot            # Graphviz DOT format
+uv run ouroboros.py visualize --output flows.md       # write to file
+uv run ouroboros.py visualize --all --output flows.md # all flows + inter-flow edges
+```
+
+See `agent/visualize.py` for implementation details.
+
+### 5.6 Competitive Landscape & Design Rationale
+
+Ouroboros's architecture was validated against the major coding agents of 2025-2026: SWE-agent, OpenHands/CodeAct, Aider, Cline, and Claude Code. Key findings:
+
+**Ouroboros is the only flow-driven agent.** Every other agent uses a ReAct loop (LLM decides every action). Our YAML flow graphs are more deterministic, debuggable, and cheaper to run — critical for local model deployment.
+
+**The frustration system is novel.** No other agent has a cost-escalation ladder gating access to expensive resources. Most agents either always escalate (ask user) or never do (keep retrying).
+
+**The dual-model approach is validated by industry trends.** The 2026 Anthropic Agentic Coding Trends Report confirms the industry is moving toward multi-agent orchestration and coordinated teams — exactly what mission_control + parallel dispatch provides.
+
+**Key features adopted from other agents:**
+- AST-based repo map (from Aider) — §5.4
+- Flow visualization for auditing (inspired by Cline's observability focus) — §5.5
+- Prompt effectiveness tracking (inspired by Cline's model-specific prompts, adapted for our architecture) — §5.3
 ```

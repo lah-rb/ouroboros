@@ -2,7 +2,8 @@
 """Ouroboros CLI — mission management and agent execution.
 
 Usage:
-    uv run ouroboros.py mission create --objective "..." --working-dir /path [options]
+    uv run ouroboros.py mission create --mission_config test        # from test.yaml
+    uv run ouroboros.py mission create --objective "..." [options]   # from CLI flags
     uv run ouroboros.py mission status [--working-dir /path]
     uv run ouroboros.py mission pause [--working-dir /path]
     uv run ouroboros.py mission resume [--working-dir /path]
@@ -31,12 +32,84 @@ from agent.persistence.models import (
 
 
 def cmd_mission_create(args: argparse.Namespace) -> None:
-    """Create a new mission."""
-    working_dir = os.path.realpath(args.working_dir or os.getcwd())
+    """Create a new mission.
+
+    Supports two modes:
+    1. CLI flags: --objective, --principles, --tasks, etc.
+    2. YAML config: --mission_config <name_or_path>
+
+    When --mission_config is used, YAML values are loaded first, then
+    any explicit CLI flags override them.
+    """
+    # ── Load from YAML config if provided ─────────────────────
+    yaml_config = None
+    if args.mission_config:
+        from agent.mission_config import (
+            load_mission_config,
+            run_lifecycle_commands,
+        )
+
+        try:
+            yaml_config = load_mission_config(args.mission_config)
+        except FileNotFoundError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error loading mission config: {e}")
+            sys.exit(1)
+
+        # Run pre_create commands before mission creation
+        if yaml_config.pre_create:
+            dry_run = (
+                args.effects_profile == "dry_run"
+                or yaml_config.effects_profile == "dry_run"
+            )
+            try:
+                run_lifecycle_commands(
+                    yaml_config.pre_create,
+                    phase="pre_create",
+                    dry_run=dry_run,
+                )
+            except RuntimeError as e:
+                print(f"Error: {e}")
+                sys.exit(1)
+
+    # ── Resolve parameters (CLI flags override YAML) ──────────
+    objective = args.objective or (yaml_config.objective if yaml_config else None)
+    if not objective:
+        print("Error: --objective is required (via CLI flag or YAML config)")
+        sys.exit(1)
+
+    working_dir_raw = (
+        args.working_dir
+        or (yaml_config.working_dir if yaml_config else None)
+        or os.getcwd()
+    )
+    working_dir = os.path.realpath(working_dir_raw)
+
     if not os.path.isdir(working_dir):
         print(f"Error: Working directory does not exist: {working_dir}")
         sys.exit(1)
 
+    effects_profile = (
+        args.effects_profile
+        or (yaml_config.effects_profile if yaml_config else None)
+        or "local"
+    )
+
+    llmvp_endpoint = (
+        args.llmvp_endpoint
+        or (yaml_config.llmvp_endpoint if yaml_config else None)
+        or "http://localhost:8000/graphql"
+    )
+
+    principles = (
+        args.principles or (yaml_config.principles if yaml_config else None) or []
+    )
+
+    tasks_list = args.tasks or (yaml_config.tasks if yaml_config else None) or []
+
+    # ── Create the mission ────────────────────────────────────
     pm = PersistenceManager(working_dir)
 
     if pm.mission_exists():
@@ -48,28 +121,29 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
 
     config = MissionConfig(
         working_directory=working_dir,
-        effects_profile=args.effects_profile or "local",
-        llmvp_endpoint=args.llmvp_endpoint or "http://localhost:8000/graphql",
+        effects_profile=effects_profile,
+        llmvp_endpoint=llmvp_endpoint,
     )
 
-    principles = args.principles or []
-    mission = MissionState(
-        objective=args.objective, principles=principles, config=config
-    )
+    mission = MissionState(objective=objective, principles=principles, config=config)
 
     # Add initial tasks if provided
-    if args.tasks:
-        for i, task_desc in enumerate(args.tasks):
+    if tasks_list:
+        for i, task_desc in enumerate(tasks_list):
             task = TaskRecord(
                 description=task_desc,
                 flow="modify_file",  # default flow, can be changed later
                 priority=i,
+                inputs={
+                    "reason": task_desc,
+                },
             )
             mission.plan.append(task)
 
     pm.save_mission(mission)
 
-    print(f"✅ Mission created: {mission.id}")
+    source = "YAML config" if yaml_config else "CLI flags"
+    print(f"✅ Mission created: {mission.id} (from {source})")
     print(f"   Objective: {mission.objective}")
     print(f"   Working dir: {working_dir}")
     print(f"   Effects: {config.effects_profile}")
@@ -80,6 +154,23 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         for t in mission.plan:
             print(f"     - [{t.status}] {t.description}")
     print(f"   State: {pm.agent_dir}/mission.json")
+
+    # ── Run post_create commands after mission creation ───────
+    if yaml_config and yaml_config.post_create:
+        from agent.mission_config import run_lifecycle_commands
+
+        print()
+        dry_run = effects_profile == "dry_run"
+        try:
+            run_lifecycle_commands(
+                yaml_config.post_create,
+                phase="post_create",
+                dry_run=dry_run,
+                stream_output=True,
+            )
+        except RuntimeError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
 
 
 def cmd_mission_status(args: argparse.Namespace) -> None:
@@ -228,6 +319,56 @@ def cmd_mission_history(args: argparse.Namespace) -> None:
             print(f"  {filename}")
 
 
+def cmd_visualize(args: argparse.Namespace) -> None:
+    """Visualize flow definitions as Mermaid or DOT diagrams."""
+    from agent.loader import load_all_flows
+    from agent.visualize import (
+        flow_to_mermaid,
+        flow_to_dot,
+        all_flows_to_mermaid,
+        all_flows_to_dot,
+    )
+
+    flows_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flows")
+    registry = load_all_flows(flows_dir)
+
+    fmt = args.format or "mermaid"
+    flow_name = args.flow_name
+
+    if flow_name and flow_name != "--all":
+        # Single flow
+        if flow_name not in registry:
+            print(f"Error: Flow '{flow_name}' not found.")
+            print(f"Available flows: {', '.join(sorted(registry.keys()))}")
+            sys.exit(1)
+        flow_def = registry[flow_name]
+        if fmt == "dot":
+            output = flow_to_dot(flow_def)
+        else:
+            output = flow_to_mermaid(flow_def)
+    else:
+        # All flows (system view)
+        if fmt == "dot":
+            output = all_flows_to_dot(registry)
+        else:
+            output = all_flows_to_mermaid(registry, show_internal_steps=args.detailed)
+
+    if args.output:
+        with open(args.output, "w") as f:
+            if fmt == "mermaid" and args.output.endswith(".md"):
+                f.write(f"# Ouroboros Flow Diagrams\n\n")
+                if flow_name and flow_name != "--all":
+                    f.write(f"## {flow_name}\n\n")
+                else:
+                    f.write(f"## System View\n\n")
+                f.write(f"```mermaid\n{output}\n```\n")
+            else:
+                f.write(output)
+        print(f"✅ Wrote {fmt} diagram to {args.output}")
+    else:
+        print(output)
+
+
 def cmd_start(args: argparse.Namespace) -> None:
     """Start the agent on an active mission."""
     working_dir = os.path.realpath(args.working_dir or os.getcwd())
@@ -320,13 +461,31 @@ def main() -> None:
     )
     start_p.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
 
+    # ── visualize subcommand ──────────────────────────────────────
+    viz_p = subparsers.add_parser("visualize", help="Visualize flow definitions")
+    viz_p.add_argument("flow_name", nargs="?", help="Flow name (omit for all flows)")
+    viz_p.add_argument(
+        "--format", choices=["mermaid", "dot"], default="mermaid", help="Output format"
+    )
+    viz_p.add_argument("--output", help="Write to file instead of stdout")
+    viz_p.add_argument(
+        "--detailed", action="store_true", help="Show internal steps in system view"
+    )
+
     # ── mission subcommand ────────────────────────────────────────
     mission_parser = subparsers.add_parser("mission", help="Mission management")
     mission_sub = mission_parser.add_subparsers(dest="mission_command")
 
     # mission create
     create_p = mission_sub.add_parser("create", help="Create a new mission")
-    create_p.add_argument("--objective", required=True, help="Mission objective")
+    create_p.add_argument(
+        "--mission_config",
+        help="Load mission from YAML config (name or path, e.g. 'test' loads test.yaml)",
+    )
+    create_p.add_argument(
+        "--objective",
+        help="Mission objective (required unless provided by --mission_config)",
+    )
     create_p.add_argument("--working-dir", help="Working directory (default: cwd)")
     create_p.add_argument("--principles", nargs="*", help="Guiding principles")
     create_p.add_argument(
@@ -364,6 +523,8 @@ def main() -> None:
 
     if args.command == "start":
         cmd_start(args)
+    elif args.command == "visualize":
+        cmd_visualize(args)
     elif args.command == "mission":
         dispatch = {
             "create": cmd_mission_create,

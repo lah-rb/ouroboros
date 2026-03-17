@@ -26,7 +26,7 @@ flows:
     file: tasks/create_file.yaml
     inputs:
       required: [mission_id, task_id]
-      optional: [task_description, mission_objective, working_directory, target_file_path, reason, temperature_multiplier, frustration_level, frustration_history]
+      optional: [task_description, mission_objective, working_directory, target_file_path, reason, temperature_multiplier, frustration_level, frustration_history, relevant_notes]
     terminal_statuses: []
 
   modify_file:
@@ -35,7 +35,25 @@ flows:
     file: tasks/modify_file.yaml
     inputs:
       required: [mission_id, task_id, target_file_path, reason]
-      optional: [task_description, mission_objective, working_directory, temperature_multiplier, frustration_level, frustration_history]
+      optional: [task_description, mission_objective, working_directory, temperature_multiplier, frustration_level, frustration_history, relevant_notes]
+    terminal_statuses: []
+
+  create_tests:
+    type: task
+    description: "Create test files for existing project modules"
+    file: tasks/create_tests.yaml
+    inputs:
+      required: [mission_id, task_id, target_file_path]
+      optional: [task_description, mission_objective, working_directory, test_file_path, reason, temperature_multiplier, frustration_level, frustration_history, relevant_notes]
+    terminal_statuses: []
+
+  setup_project:
+    type: task
+    description: "Initialize and configure project tooling (language agnostic)"
+    file: tasks/setup_project.yaml
+    inputs:
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, setup_focus, relevant_notes, frustration_level, frustration_history]
     terminal_statuses: []
 
   prepare_context:
@@ -52,7 +70,7 @@ flows:
     file: shared/validate_output.yaml
     inputs:
       required: [file_path, working_directory]
-      optional: [project_manifest, validation_hint, test_path, max_attempts]
+      optional: [project_manifest, validation_hint, relevant_notes, test_path, max_attempts]
 
   capture_learnings:
     type: shared
@@ -77,6 +95,14 @@ flows:
     inputs:
       required: [mission_id, observation]
       optional: [discovered_requirement, affected_task_id]
+
+  quality_gate:
+    type: shared
+    description: "End-of-mission project-wide quality validation"
+    file: shared/quality_gate.yaml
+    inputs:
+      required: [working_directory, mission_id]
+      optional: [mission_objective]
 
   test_simple:
     type: test

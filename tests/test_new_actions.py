@@ -507,7 +507,7 @@ class TestApplyPlanRevision:
         )
         si = _make_input(
             effects=effects,
-            context={"mission": mission, "revision_plan": revision},
+            context={"mission": mission, "inference_response": revision},
         )
         result = await action_apply_plan_revision(si)
         assert result.result["revision_applied"] is True
@@ -530,7 +530,7 @@ class TestApplyPlanRevision:
         )
         si = _make_input(
             effects=effects,
-            context={"mission": mission, "revision_plan": revision},
+            context={"mission": mission, "inference_response": revision},
         )
         result = await action_apply_plan_revision(si)
         assert result.result["revision_applied"] is True
@@ -542,14 +542,14 @@ class TestApplyPlanRevision:
         mission = _make_mission()
         revision = json.dumps({"revision_needed": False})
         si = _make_input(
-            context={"mission": mission, "revision_plan": revision},
+            context={"mission": mission, "inference_response": revision},
         )
         result = await action_apply_plan_revision(si)
         assert result.result["revision_applied"] is False
 
     @pytest.mark.asyncio
     async def test_no_mission(self):
-        si = _make_input(context={"revision_plan": '{"revision_needed": true}'})
+        si = _make_input(context={"inference_response": '{"revision_needed": true}'})
         result = await action_apply_plan_revision(si)
         assert result.result["revision_applied"] is False
 
