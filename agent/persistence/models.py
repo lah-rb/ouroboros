@@ -84,6 +84,7 @@ class NoteRecord(BaseModel):
         "requirement_discovered",
         "approach_rejected",
         "dependency_identified",
+        "lint_warning",
     ] = "general"
     tags: list[str] = Field(default_factory=list)
     source_flow: str = "unknown"
@@ -106,6 +107,7 @@ class MissionState(BaseModel):
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)
     config: MissionConfig
+    quality_gate_attempts: int = 0
     schema_version: int = 1
 
 

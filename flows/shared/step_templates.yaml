@@ -123,8 +123,9 @@ templates:
     description: "Invoke validate_output sub-flow for file validation"
     flow: validate_output
     input_map:
-      file_path: "{{ input.target_file_path }}"
+      file_path: "{{ input.target_file_path or context.created_file.path }}"
       working_directory: "{{ input.working_directory }}"
+      relevant_notes: "{{ input.relevant_notes }}"
     publishes:
       - validation_results
     param_schema:
@@ -173,4 +174,5 @@ templates:
           - file_modification
           - bug_fix
           - test_failure
+          - failure_analysis
         description: "Selects reflection prompt variant"

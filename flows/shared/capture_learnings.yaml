@@ -16,7 +16,7 @@ input:
 
 defaults:
   config:
-    temperature: 0.2
+    temperature: "t*1"
 
 steps:
 
@@ -24,9 +24,11 @@ steps:
     action: inference
     description: "Generate a reflection on what was learned"
     prompt: |
-      You just completed a coding task. Reflect briefly on what you learned.
+      You are a learning capture module in an automated coding pipeline.
+      Your output will be stored as a note for future tasks to reference.
+      Write concise, factual observations — not a summary of what you did.
 
-      Task: {{ input.task_description }}
+      Task completed: {{ input.task_description }}
       {% if input.target_file_path %}
       File: {{ input.target_file_path }}
       {% endif %}
@@ -38,21 +40,28 @@ steps:
       Focus on: What patterns did you establish? What dependencies does this
       file introduce? What should other files know about this one?
       {% elif input.learning_focus == "file_modification" %}
-      Focus on: What was the root cause? What assumptions were wrong?
-      What could break if this area is changed again?
+      Focus on: What was the root cause of the change? What assumptions were
+      wrong? What could break if this area is changed again?
       {% elif input.learning_focus == "bug_fix" %}
       Focus on: What caused the bug? Is the fix complete or a workaround?
       Are there similar patterns elsewhere that might have the same issue?
       {% elif input.learning_focus == "test_failure" %}
       Focus on: Why did the test fail? Was the test wrong or the code?
       What does this reveal about the system's behavior?
+      {% elif input.learning_focus == "failure_analysis" %}
+      Focus on: What specifically went wrong? What tool, command, or resource
+      was unavailable or produced an error? What should future tasks avoid
+      or do differently? What assumption proved incorrect?
       {% else %}
       Focus on: dependencies discovered, patterns in the codebase,
       assumptions that proved wrong, integration points to remember.
       {% endif %}
 
-      Be concise — 2-4 sentences. Focus on information that would help
-      a future task working on related code.
+      Write 2-4 sentences of plain prose. Do NOT use bullet points, headers,
+      or numbered lists. Do NOT restate the task description. Focus only on
+      information that would help a future task working on related code.
+
+      Return ONLY the reflection text, nothing else.
     config:
       temperature: 0.2
     resolver:

@@ -288,10 +288,15 @@ def build_action_registry() -> ActionRegistry:
     from agent.actions.refinement_actions import (
         action_push_note,
         action_scan_project,
+        action_extract_search_queries,
         action_curl_search,
         action_run_validation_checks,
         action_load_file_contents,
         action_apply_plan_revision,
+        action_log_validation_notes,
+        action_run_fallback_validation,
+        action_execute_project_setup,
+        action_apply_quality_gate_results,
     )
 
     registry = ActionRegistry()
@@ -317,8 +322,13 @@ def build_action_registry() -> ActionRegistry:
     # Refinement phase actions
     registry.register("push_note", action_push_note)
     registry.register("scan_project", action_scan_project)
+    registry.register("extract_search_queries", action_extract_search_queries)
     registry.register("curl_search", action_curl_search)
     registry.register("run_validation_checks", action_run_validation_checks)
     registry.register("load_file_contents", action_load_file_contents)
     registry.register("apply_plan_revision", action_apply_plan_revision)
+    registry.register("log_validation_notes", action_log_validation_notes)
+    registry.register("run_fallback_validation", action_run_fallback_validation)
+    registry.register("execute_project_setup", action_execute_project_setup)
+    registry.register("apply_quality_gate_results", action_apply_quality_gate_results)
     return registry

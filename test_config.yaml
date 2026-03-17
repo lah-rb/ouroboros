@@ -1,0 +1,24 @@
+# This config is set to auto clean logs and auto start the agent.
+# uv run ouroboros.py mission create --mission_config test_config
+# Upon completion give an assessment of the agents performance by reviewing the agent's final product, the logs at ouroboros/llmvp/logs/interactions.jsonl, and the debugging output in the terminal.
+# mission: test
+# version: 1
+
+objective: "Build a python app. It does not matter what it does just make it interesting and somewhat complex. At somepoint you must modify a file you created. At somepoint you must research using curl. At somepoint you must extend the mission."  
+
+working_dir: "/tmp/ouroboros-test-mission"
+effects_profile: local
+llmvp_endpoint: "http://localhost:8008/graphql"
+
+#principles:
+#  - "KISS"
+
+#tasks:
+#  - ""
+
+pre_create:
+  - "rm -rf /tmp/ouroboros-test-mission && mkdir /tmp/ouroboros-test-mission"
+  - "touch ~/Repos/ouroboros/llmvp/logs/interactions.jsonl && rm ~/Repos/ouroboros/llmvp/logs/interactions.jsonl"
+
+post_create:
+  - "cd ~/Repos/ouroboros && uv run ouroboros.py start --working-dir /tmp/ouroboros-test-mission"

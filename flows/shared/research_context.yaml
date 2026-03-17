@@ -14,7 +14,7 @@ input:
 
 defaults:
   config:
-    temperature: 0.2
+    temperature: "t*1"
 
 steps:
 
@@ -22,7 +22,9 @@ steps:
     action: inference
     description: "Turn the problem into effective search queries"
     prompt: |
-      You are debugging a coding problem and need to search the web for help.
+      You are a search query formulation module in an automated coding pipeline.
+      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
+      array of query strings — no markdown, no explanation, no surrounding text.
 
       Problem: {{ input.problem_description }}
       {% if input.error_output %}
@@ -33,19 +35,47 @@ steps:
       Hints: {{ input.search_hints }}
       {% endif %}
 
-      Formulate 1-3 focused search queries that would help solve this.
-      Return ONLY a JSON array of query strings:
-      ["query one", "query two"]
+      Formulate 1-3 focused search queries that would help solve this problem.
 
-      Good queries: specific error messages, library API references,
-      known issue patterns.
-      Bad queries: generic tutorials, broad topic overviews.
+      Good queries: specific error messages, library API references, known issue patterns.
+      Bad queries: generic tutorials, broad topic overviews, single-word searches.
+
+      ✅ CORRECT output (raw JSON array, nothing else):
+      ["python asyncio.gather timeout handling", "httpx ConnectError retry pattern"]
+
+      ❌ WRONG — do not wrap in markdown:
+      ```json
+      ["python asyncio"]
+      ```
+
+      ❌ WRONG — do not add explanation:
+      Here are some queries to try:
+      ["python asyncio"]
+
+      Return ONLY the raw JSON array of query strings.
     config:
       temperature: 0.2
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
+          transition: parse_queries
+        - condition: "true"
+          transition: empty_result
+    publishes:
+      - inference_response
+
+  parse_queries:
+    action: extract_search_queries
+    description: "Parse JSON array from inference response into search_queries"
+    context:
+      required: [inference_response]
+    params:
+      max_queries: "{{ input.max_queries | default(3) }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.query_count > 0"
           transition: execute_search
         - condition: "true"
           transition: empty_result
@@ -76,7 +106,12 @@ steps:
     context:
       required: [raw_search_results]
     prompt: |
-      You searched for help with this problem:
+      You are an information extraction module in an automated coding pipeline.
+      Your output will be stored as context for a code generation task.
+      Extract ONLY facts directly useful for solving the problem — no opinions,
+      no summaries of what you searched for.
+
+      Problem being solved:
       {{ input.problem_description }}
 
       Search results:
@@ -85,11 +120,15 @@ steps:
       {{ result.content[:2000] }}
       {% endfor %}
 
-      Extract ONLY information directly relevant to solving the problem.
-      Be specific: code patterns, API signatures, configuration values,
-      known fixes for the error.
+      Extract actionable information: code patterns, API signatures,
+      configuration values, known fixes, version-specific behavior.
 
-      If nothing useful was found, respond with: "No relevant results found."
+      If nothing useful was found, respond with exactly: "No relevant results found."
+
+      Write concise, factual findings as plain prose. Do NOT use headers or
+      bullet points. Do NOT restate the problem description.
+
+      Return ONLY the extracted findings.
     config:
       temperature: 0.1
     resolver:

@@ -1,0 +1,246 @@
+flow: create_tests
+version: 1
+description: >
+  Create test files for existing project modules.
+  Reads the target module, generates pytest-style tests,
+  writes the test file, and validates by running the tests.
+  Available but not enforced — the planner may include test
+  tasks when appropriate.
+
+input:
+  required:
+    - mission_id
+    - task_id
+    - target_file_path
+  optional:
+    - task_description
+    - mission_objective
+    - working_directory
+    - test_file_path
+    - reason
+    - temperature_multiplier
+    - frustration_level
+    - frustration_history
+    - relevant_notes
+
+defaults:
+  config:
+    temperature: "t*0.5"
+    max_tokens: 4096
+
+steps:
+
+  gather_context:
+    use: gather_project_context
+    params:
+      context_budget: 6
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: read_target
+
+  read_target:
+    use: read_target_file
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_found == true"
+          transition: generate_tests
+        - condition: "true"
+          transition: capture_failure_note
+
+  generate_tests:
+    action: inference
+    description: "Generate test code for the target module"
+    context:
+      required: [target_file]
+      optional: [context_bundle, project_manifest]
+    prompt: |
+      You are a test generation module in an automated coding pipeline.
+      Your output will be extracted from code markers and written directly to a file.
+      Do NOT include any text outside the code block.
+
+      Generate comprehensive tests for the following module.
+
+      Target module: {{ context.target_file.path }}
+      Module content:
+      {{ context.target_file.content }}
+
+      {% if context.context_bundle and context.context_bundle.files %}
+      Related project files for understanding context:
+      {% for file in context.context_bundle.files %}
+      {% if file.path != context.target_file.path %}
+      === {{ file.path }} ===
+      {{ file.content[:1000] }}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+
+      {% if input.reason %}
+      Focus areas: {{ input.reason }}
+      {% endif %}
+
+      {% if input.frustration_history %}
+      ⚠️ Previous test generation attempts FAILED:
+      {{ input.frustration_history }}
+      Take a different approach.
+      {% endif %}
+
+      Requirements:
+      - Use pytest (import pytest at the top)
+      - Test each public function/class/method
+      - Include both happy path and edge case tests
+      - Use descriptive test names (test_<function>_<scenario>)
+      - Add brief docstrings to test functions
+      - Mock external dependencies if needed (use unittest.mock)
+      - Keep tests focused and independent
+
+      Respond with ONLY the test code inside triple-backtick markers:
+
+      ✅ CORRECT format:
+      ```
+      import pytest
+      from module_name import function_to_test
+
+      def test_function_happy_path():
+          """Test normal operation."""
+          assert function_to_test(input) == expected
+      ```
+
+      ❌ WRONG — no explanation outside the code block.
+
+      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+    config:
+      temperature: 0.3
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: write_test_file
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - inference_response
+
+  write_test_file:
+    action: execute_file_creation
+    description: "Write the generated test file"
+    context:
+      required: [inference_response]
+    params:
+      target_file_path: "{{ input.test_file_path | default('tests/test_' + input.target_file_path.split('/')[-1]) }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.write_success == true"
+          transition: run_tests
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - created_file
+
+  run_tests:
+    action: run_tests
+    description: "Run the generated tests to validate them"
+    params:
+      test_path: "{{ input.test_file_path | default('tests/test_' + input.target_file_path.split('/')[-1]) }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.all_passing == true"
+          transition: capture_learnings
+        - condition: "meta.step_count < 10"
+          transition: fix_tests
+        - condition: "true"
+          transition: capture_learnings
+    publishes:
+      - test_results
+
+  fix_tests:
+    action: inference
+    description: "Fix failing tests based on error output"
+    context:
+      required: [inference_response, test_results, target_file]
+    prompt: |
+      You are a test generation module in an automated pipeline.
+      Your previous tests for {{ context.target_file.path }} had failures.
+
+      Test results:
+      {% if context.test_results %}
+      stdout: {{ context.test_results.stdout[:1500] }}
+      stderr: {{ context.test_results.stderr[:500] }}
+      {% endif %}
+
+      Original module being tested:
+      {{ context.target_file.content }}
+
+      Fix ONLY the failing tests. Return the COMPLETE test file.
+
+      Respond with ONLY the corrected code inside triple-backtick markers:
+      ```
+      # complete corrected test file
+      ```
+
+      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+    config:
+      temperature: 0.2
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: write_test_file
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - inference_response
+
+  capture_learnings:
+    use: capture_learnings
+    params:
+      learning_focus: "general"
+      category: "codebase_observation"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: complete
+
+  complete:
+    action: noop
+    description: "Tests created — return to mission_control"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Created tests for {{ input.target_file_path }}"
+
+  capture_failure_note:
+    use: capture_learnings
+    params:
+      learning_focus: "failure_analysis"
+      category: "failure_analysis"
+      task_outcome: "FAILED to create tests for {{ input.target_file_path }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: failed
+
+  failed:
+    action: noop
+    description: "Test creation failed"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "abandoned"
+
+entry: gather_context
+
+overflow:
+  strategy: split
+  fallback: reorganize

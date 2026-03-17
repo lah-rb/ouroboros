@@ -34,6 +34,7 @@ class TestSharedFlowsLoad:
         assert flow.entry == "determine_strategy"
         assert "complete_pass" in flow.steps
         assert "complete_fail" in flow.steps
+        assert "complete_with_issues" in flow.steps
 
     def test_capture_learnings_loads(self):
         flow = load_flow("flows/shared/capture_learnings.yaml")
@@ -92,6 +93,11 @@ class TestTaskFlowsLoad:
         # Tail calls
         assert flow.steps["complete"].tail_call is not None
         assert flow.steps["abandon"].tail_call is not None
+        # create_fallback sub-flow when file doesn't exist
+        assert "create_fallback" in flow.steps
+        assert flow.steps["create_fallback"].action == "flow"
+        # capture_failure_note before failed
+        assert "capture_failure_note" in flow.steps
 
     def test_create_file_template_expansion_inherits_context(self):
         flow = self._load_with_templates("flows/tasks/create_file.yaml")
@@ -174,18 +180,64 @@ class TestFlowStructure:
 
     def test_prepare_context_has_research_branch(self):
         flow = load_flow("flows/shared/prepare_context.yaml")
-        # check_research_needed should have path to research step
+        # check_research_needed uses frustration-graduated research gating:
+        # high frustration → mandatory research, medium → recommended, low → optional
         check_step = flow.steps["check_research_needed"]
         transitions = [r.transition for r in check_step.resolver.rules]
-        assert "research" in transitions
-        assert "select_relevant" in transitions
+        assert "research" in transitions  # high frustration: mandatory
+        assert "decide_research_recommended" in transitions  # medium frustration
+        assert "decide_research_optional" in transitions  # low frustration
+        # Both decide steps must have paths to both research and select_relevant
+        for decide_step_name in [
+            "decide_research_recommended",
+            "decide_research_optional",
+        ]:
+            decide_step = flow.steps[decide_step_name]
+            decide_transitions = [r.transition for r in decide_step.resolver.rules]
+            assert "research" in decide_transitions
+            assert "select_relevant" in decide_transitions
 
-    def test_validate_output_has_pass_and_fail_terminals(self):
+    def test_validate_output_has_pass_fail_and_issues_terminals(self):
         flow = load_flow("flows/shared/validate_output.yaml")
         assert flow.steps["complete_pass"].terminal is True
         assert flow.steps["complete_pass"].status == "success"
         assert flow.steps["complete_fail"].terminal is True
         assert flow.steps["complete_fail"].status == "failed"
+        assert flow.steps["complete_with_issues"].terminal is True
+        assert flow.steps["complete_with_issues"].status == "issues"
+
+    def test_validate_output_routes_issues_through_log_warnings(self):
+        flow = load_flow("flows/shared/validate_output.yaml")
+        # log_lint_warnings should route to complete_with_issues when notes logged
+        lw_transitions = [
+            r.transition for r in flow.steps["log_lint_warnings"].resolver.rules
+        ]
+        assert "complete_with_issues" in lw_transitions
+        assert "complete_pass" in lw_transitions
+
+    def test_create_file_has_correct_issues_step(self):
+        reg = load_template_registry("flows")
+        flow = load_flow_with_templates("flows/tasks/create_file.yaml", reg)
+        assert "correct_issues" in flow.steps
+        assert flow.steps["correct_issues"].action == "inference"
+        # validate routes "issues" to capture_learnings (deferred to quality gate)
+        v_transitions = [r.transition for r in flow.steps["validate"].resolver.rules]
+        assert "capture_learnings" in v_transitions
+        assert "regenerate" in v_transitions
+        assert "capture_failure_note" in v_transitions
+
+    def test_modify_file_has_correction_and_regeneration_steps(self):
+        reg = load_template_registry("flows")
+        flow = load_flow_with_templates("flows/tasks/modify_file.yaml", reg)
+        assert "correct_issues" in flow.steps
+        assert flow.steps["correct_issues"].action == "inference"
+        assert "regenerate_modified" in flow.steps
+        assert flow.steps["regenerate_modified"].action == "inference"
+        # validate routes "issues" to capture_learnings (deferred to quality gate)
+        v_transitions = [r.transition for r in flow.steps["validate"].resolver.rules]
+        assert "capture_learnings" in v_transitions
+        assert "regenerate_modified" in v_transitions
+        assert "capture_failure_note" in v_transitions
 
     def test_capture_learnings_uses_push_note_action(self):
         flow = load_flow("flows/shared/capture_learnings.yaml")
@@ -194,3 +246,45 @@ class TestFlowStructure:
     def test_research_context_uses_curl_search(self):
         flow = load_flow("flows/shared/research_context.yaml")
         assert flow.steps["execute_search"].action == "curl_search"
+
+    def test_research_context_has_parse_queries_step(self):
+        flow = load_flow("flows/shared/research_context.yaml")
+        # formulate_query → parse_queries → execute_search
+        assert "parse_queries" in flow.steps
+        assert flow.steps["parse_queries"].action == "extract_search_queries"
+        # formulate_query transitions to parse_queries, not directly to execute_search
+        fq_transitions = [
+            r.transition for r in flow.steps["formulate_query"].resolver.rules
+        ]
+        assert "parse_queries" in fq_transitions
+        assert "execute_search" not in fq_transitions
+        # parse_queries transitions to execute_search
+        pq_transitions = [
+            r.transition for r in flow.steps["parse_queries"].resolver.rules
+        ]
+        assert "execute_search" in pq_transitions
+
+    def test_modify_file_routes_missing_file_to_create_fallback(self):
+        reg = load_template_registry("flows")
+        flow = load_flow_with_templates("flows/tasks/modify_file.yaml", reg)
+        # read_target should route to create_fallback (not failed) when file not found
+        rt_transitions = [
+            r.transition for r in flow.steps["read_target"].resolver.rules
+        ]
+        assert "create_fallback" in rt_transitions
+        assert "failed" not in rt_transitions
+        # create_fallback is a sub-flow into create_file
+        assert flow.steps["create_fallback"].action == "flow"
+
+    def test_task_flows_have_capture_failure_note(self):
+        reg = load_template_registry("flows")
+        for path in ["flows/tasks/create_file.yaml", "flows/tasks/modify_file.yaml"]:
+            flow = load_flow_with_templates(path, reg)
+            assert (
+                "capture_failure_note" in flow.steps
+            ), f"{path} missing capture_failure_note"
+            # capture_failure_note should transition to failed
+            cfn_transitions = [
+                r.transition for r in flow.steps["capture_failure_note"].resolver.rules
+            ]
+            assert "failed" in cfn_transitions

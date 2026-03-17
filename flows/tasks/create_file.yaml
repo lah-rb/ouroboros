@@ -1,8 +1,10 @@
 flow: create_file
-version: 1
+version: 2
 description: >
   Create a new file with project context awareness,
   LLM-driven validation, and learning capture.
+  Handles three validation outcomes: success, issues (fixable), failed (syntax broken).
+  Correction loop allows the agent to fix flagged issues before giving up.
 
 input:
   required:
@@ -17,10 +19,11 @@ input:
     - temperature_multiplier
     - frustration_level
     - frustration_history
+    - relevant_notes
 
 defaults:
   config:
-    temperature: 0.3
+    temperature: "t*0.8"
     max_tokens: 4096
 
 steps:
@@ -41,7 +44,9 @@ steps:
     context:
       optional: [context_bundle, project_manifest]
     prompt: |
-      You are a skilled developer building a project.
+      You are a code generation module in an automated pipeline.
+      Your output will be extracted from code markers and written directly to a file.
+      Do NOT include any text outside the code block — no explanation, no commentary.
 
       Project objective: {{ input.mission_objective }}
       Task: {{ input.task_description }}
@@ -54,9 +59,10 @@ steps:
       {{ file.content }}
       {% endfor %}
 
-      Your code MUST integrate with these existing files.
-      Import from existing modules rather than reimplementing functionality.
-      Maintain consistent code style and patterns.
+      Your code MUST integrate with these existing files:
+      - Import from existing modules rather than reimplementing functionality.
+      - Maintain consistent code style, naming conventions, and patterns.
+      - Use the same libraries and dependency patterns already established.
       {% endif %}
 
       {% if context.context_bundle and context.context_bundle.research_findings %}
@@ -64,22 +70,46 @@ steps:
       {{ context.context_bundle.research_findings }}
       {% endif %}
 
+      {% if input.frustration_history %}
+      ⚠️ Previous attempts at this task FAILED:
+      {{ input.frustration_history }}
+      You MUST take a different approach than what was tried before.
+      {% endif %}
+
       Write the complete file content for {{ input.target_file_path }}.
       Include docstrings, type annotations, and clear structure.
 
-      Respond with ONLY the code wrapped in appropriate markers:
+      Respond with ONLY the code inside triple-backtick markers:
+
+      ✅ CORRECT format:
       ```
-      # your code here
+      # complete file content here
+      import os
+
+      def main():
+          pass
       ```
+
+      ❌ WRONG — no text outside the code block:
+      Here is the implementation:
+      ```
+      import os
+      ```
+      I structured it this way because...
+
+      ---DO NOT GENERATE EXTRA CHARACTERS---
+      ---DO NOT USE FENCED CODE BLOCKS (```)---
+      ---END RESPONSE IMMEDIATELY AFTER CODE---
+      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
     config:
-      temperature: 0.3
+      temperature: 0.7
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
           transition: write_file
         - condition: "true"
-          transition: failed
+          transition: capture_failure_note
     publishes:
       - inference_response
 
@@ -91,7 +121,7 @@ steps:
         - condition: "result.write_success == true"
           transition: validate
         - condition: "true"
-          transition: failed
+          transition: capture_failure_note
 
   validate:
     use: validate_file
@@ -102,19 +132,88 @@ steps:
       rules:
         - condition: "result.status == 'success'"
           transition: capture_learnings
-        - condition: "meta.step_count < 8"
+        - condition: "result.status == 'issues'"
+          transition: capture_learnings
+        - condition: "result.status == 'failed' and meta.step_count < 10"
           transition: regenerate
         - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - validation_results
+
+  correct_issues:
+    action: inference
+    description: "Fix execution/lint issues flagged by validation"
+    context:
+      required: [inference_response]
+      optional: [validation_results, context_bundle, project_manifest]
+    prompt: |
+      You are a code correction module in an automated pipeline.
+      Your code for {{ input.target_file_path }} passed syntax checking
+      but has execution or quality issues that need fixing.
+      Your output will be extracted from code markers and written directly to a file.
+
+      Issues found:
+      {% if context.validation_results %}
+      {% for check in context.validation_results %}
+      {% if not check.passed %}
+      - {{ check.name }}: FAILED
+        stdout: {{ check.stdout }}
+        stderr: {{ check.stderr }}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+
+      Task: {{ input.task_description }}
+      Target file: {{ input.target_file_path }}
+
+      Fix the flagged issues and produce the COMPLETE corrected file.
+      Only fix what's broken — preserve everything that was working.
+
+      Common fixes:
+      - If imports fail because a module doesn't exist yet, add try/except or conditional imports.
+      - If a linter flags issues, fix the specific warnings.
+      - If tests fail, fix the code to pass them.
+
+      Respond with ONLY the corrected code inside triple-backtick markers:
+
+      ✅ CORRECT format:
+      ```
+      # complete corrected file content
+      ```
+
+      ❌ WRONG — no explanation outside the markers:
+      I fixed the import error:
+      ```
+      # code here
+      ```
+
+      ---DO NOT GENERATE EXTRA CHARACTERS---
+      ---DO NOT USE FENCED CODE BLOCKS (```)---
+      ---END RESPONSE IMMEDIATELY AFTER CODE---
+      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+    config:
+      temperature: 0.2
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: write_file
+        - condition: "true"
           transition: capture_learnings
+    publishes:
+      - inference_response
 
   regenerate:
     action: inference
-    description: "Re-generate file content after validation failure"
+    description: "Re-generate file content after syntax validation failure"
     context:
-      required: [inference_response, validation_results]
-      optional: [context_bundle, project_manifest]
+      required: [inference_response]
+      optional: [validation_results, context_bundle, project_manifest]
     prompt: |
-      Your previous code for {{ input.target_file_path }} failed validation.
+      You are a code generation module in an automated pipeline.
+      Your previous code for {{ input.target_file_path }} failed syntax validation.
+      Your output will be extracted from code markers and written directly to a file.
 
       Validation results:
       {% if context.validation_results %}
@@ -127,11 +226,26 @@ steps:
 
       Task: {{ input.task_description }}
 
-      Fix the issues and produce the COMPLETE corrected file.
-      Respond with ONLY the code in code markers:
+      Fix the specific validation errors and produce the COMPLETE corrected file.
+      Do NOT change parts of the code that were working — only fix what failed.
+
+      Respond with ONLY the corrected code inside triple-backtick markers:
+
+      ✅ CORRECT format:
       ```
-      # corrected code here
+      # complete corrected file content
       ```
+
+      ❌ WRONG — no explanation outside the markers:
+      I fixed the import error:
+      ```
+      # code here
+      ```
+
+      ---DO NOT GENERATE EXTRA CHARACTERS---
+      ---DO NOT USE FENCED CODE BLOCKS (```)---
+      ---END RESPONSE IMMEDIATELY AFTER CODE---
+      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
     config:
       temperature: 0.2
     resolver:
@@ -140,7 +254,7 @@ steps:
         - condition: "result.tokens_generated > 0"
           transition: write_file
         - condition: "true"
-          transition: failed
+          transition: capture_failure_note
     publishes:
       - inference_response
 
@@ -165,6 +279,18 @@ steps:
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
         last_result: "Created {{ input.target_file_path }}"
+
+  capture_failure_note:
+    use: capture_learnings
+    params:
+      learning_focus: "failure_analysis"
+      category: "failure_analysis"
+      task_outcome: "FAILED to create {{ input.target_file_path }}: {{ input.task_description }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: failed
 
   failed:
     action: noop

@@ -1,0 +1,57 @@
+# Ouroboros Flow Diagrams
+
+## mission_control
+
+```mermaid
+flowchart TD
+    %% Flow: mission_control (v1)
+    %% Top-level agent routing flow. Loads mission state, processes events, assesses pr
+
+    load_state["🔵 load_state\nRead mission state and event queue from "]
+    apply_last_result["🔵 apply_last_result\nApply the previous flow's outcome to mis"]
+    process_events["🔵 process_events\nProcess user messages, abort/pause signa"]
+    check_extension{{"🧠 check_extension\nEvaluate whether the mission plan needs "}}
+    invoke_revise_plan[["📦 invoke_revise_plan\nTrigger plan revision based on new obser"]]
+    assess["🔵 assess\nDetermine what to work on next"]
+    prepare_dispatch["🔵 prepare_dispatch\nBuild input map and determine flow confi"]
+    dispatch[/"🚀 dispatch\nTail-call to the selected task flow"\]
+    dispatch_planning[/"🚀 dispatch_planning\nNo plan exists — dispatch to create_plan"\]
+    completed(["🏁 completed\nMark mission complete"])
+    idle[/"🚀 idle\nNothing to do — wait for events"\]
+    aborted(["🏁 aborted\nMission aborted"])
+
+    style load_state stroke-width:3px
+
+    load_state -->|result.mission.status == 'active'| apply_last_result
+    load_state -->|result.mission.status == 'paused'| idle
+    load_state -->|result.mission.status == 'completed'| completed
+    load_state -->|result.mission.status == 'aborted'| aborted
+    load_state -->|always| aborted
+    apply_last_result -->|result.events_pending == true| process_events
+    apply_last_result -->|result.task_completed == true| check_extension
+    apply_last_result -->|always| assess
+    process_events -->|result.abort_requested == true| aborted
+    process_events -->|result.pause_requested == true| idle
+    process_events -->|always| assess
+    check_extension -->|'extend': true' in result.text| invoke_revise_plan
+    check_extension -->|'extend':true' in result.text| invoke_revise_plan
+    check_extension -->|always| assess
+    invoke_revise_plan -->|always| assess
+    assess -->|result.needs_plan == true| dispatch_planning
+    assess -->|result.all_tasks_complete == true| completed
+    assess -->|result.all_remaining_blocked == true| idle
+    assess -->|result.obvious_next_task != null| prepare_dispatch
+    assess -->|always| idle
+    prepare_dispatch -->|always| dispatch
+    tc_dispatch(("dynamic"))
+    style tc_dispatch fill:#f9f,stroke:#333
+    dispatch -..->|tail-call| tc_dispatch
+    tc_dispatch_planning(("create_plan"))
+    style tc_dispatch_planning fill:#f9f,stroke:#333
+    dispatch_planning -..->|tail-call| tc_dispatch_planning
+    tc_idle(("mission_control"))
+    style tc_idle fill:#f9f,stroke:#333
+    idle -..->|tail-call| tc_idle
+    style completed fill:#9f9,stroke:#393
+    style aborted fill:#f99,stroke:#933
+```

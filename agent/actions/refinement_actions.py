@@ -17,6 +17,92 @@ from typing import Any
 
 from agent.models import StepInput, StepOutput
 
+# ── shared utilities ──────────────────────────────────────────────────
+
+
+def strip_markdown_wrapper(text: str) -> str:
+    """Strip markdown code block wrappers from LLM responses.
+
+    Handles ```json ... ```, ```python ... ```, and plain ``` ... ```
+    wrappers that models add despite instructions not to.
+    Returns the inner content, or the original text if no wrapper found.
+    """
+    text = str(text).strip()
+
+    # Strip model ending tokens that leak into output
+    for token in ("<|im_end|>", "<|im_end|", "<|endoftext|>", "<|end|>"):
+        text = text.replace(token, "").strip()
+
+    # Match ```lang\n...\n``` or ```\n...\n```
+    match = re.match(r"^```(?:\w+)?\s*\n([\s\S]*?)```\s*$", text)
+    if match:
+        return match.group(1).strip()
+    return text
+
+
+def extract_code_from_response(text: str) -> str:
+    """Extract code from an LLM response, handling multiple wrapper formats.
+
+    Tries multiple extraction strategies in priority order:
+    1. Strip markdown wrapper (single fenced block)
+    2. Find the largest fenced code block if multiple exist
+    3. Remove obvious non-code lines (explanations, commentary)
+    4. Fall back to raw response
+
+    Returns the best-effort extracted code.
+    """
+    text = str(text).strip()
+
+    # Strip model ending tokens
+    for token in ("<|im_end|>", "<|im_end|", "<|endoftext|>", "<|end|>"):
+        text = text.replace(token, "").strip()
+
+    # Strategy 1: Single clean fenced block
+    single_match = re.match(r"^```(?:\w+)?\s*\n([\s\S]*?)```\s*$", text)
+    if single_match:
+        return single_match.group(1).strip()
+
+    # Strategy 2: Find the largest fenced code block
+    blocks = re.findall(r"```(?:\w+)?\s*\n([\s\S]*?)```", text)
+    if blocks:
+        largest = max(blocks, key=len)
+        return largest.strip()
+
+    # Strategy 3: Remove obvious non-code lines
+    lines = text.splitlines()
+    code_lines = []
+    skip_prefixes = (
+        "here is",
+        "here's",
+        "i've ",
+        "i have ",
+        "the following",
+        "this code",
+        "this implementation",
+        "below is",
+        "note:",
+        "explanation:",
+        "i changed",
+        "i fixed",
+        "i modified",
+        "i added",
+        "i updated",
+        "i structured",
+    )
+    for line in lines:
+        stripped_lower = line.strip().lower()
+        if stripped_lower and any(stripped_lower.startswith(p) for p in skip_prefixes):
+            continue
+        code_lines.append(line)
+
+    # If we stripped lines, return the cleaned version
+    if len(code_lines) < len(lines):
+        return "\n".join(code_lines).strip()
+
+    # Strategy 4: Return as-is
+    return text
+
+
 # ── push_note ─────────────────────────────────────────────────────────
 
 
@@ -200,6 +286,34 @@ def _extract_markdown_signature(lines: list[str]) -> str:
     return "\n".join(headings[:10]) if headings else "(empty)"
 
 
+# ── extract_search_queries ────────────────────────────────────────────
+
+
+async def action_extract_search_queries(step_input: StepInput) -> StepOutput:
+    """Parse search queries from inference response into structured list.
+
+    Reformatting step: reads inference_response (raw LLM text containing
+    a JSON array of query strings), parses it, and publishes search_queries.
+    """
+    raw = step_input.context.get("inference_response", "")
+    max_queries = int(step_input.params.get("max_queries", 3))
+
+    parsed = _parse_search_queries(str(raw), max_queries)
+
+    if not parsed:
+        return StepOutput(
+            result={"query_count": 0},
+            observations="Could not parse search queries from inference response",
+            context_updates={"search_queries": []},
+        )
+
+    return StepOutput(
+        result={"query_count": len(parsed)},
+        observations=f"Extracted {len(parsed)} search queries: {parsed}",
+        context_updates={"search_queries": parsed},
+    )
+
+
 # ── curl_search ───────────────────────────────────────────────────────
 
 
@@ -266,8 +380,9 @@ async def action_curl_search(step_input: StepInput) -> StepOutput:
 
 def _parse_search_queries(raw: str, max_queries: int) -> list[str]:
     """Extract search query strings from inference response."""
-    # Try JSON array extraction
-    json_match = re.search(r"\[[\s\S]*?\]", str(raw))
+    raw = strip_markdown_wrapper(str(raw))
+    # Try JSON array extraction — greedy to find outermost brackets
+    json_match = re.search(r"\[[\s\S]*\]", str(raw))
     if json_match:
         try:
             items = json.loads(json_match.group())
@@ -376,7 +491,8 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
 
 def _parse_validation_strategy(raw: str, max_checks: int) -> list[dict]:
     """Extract validation checks from LLM response (JSON object)."""
-    json_match = re.search(r"\{[\s\S]*\}", str(raw))
+    raw = strip_markdown_wrapper(str(raw))
+    json_match = re.search(r"\{[\s\S]*\}", raw)
     if json_match:
         try:
             strategy = json.loads(json_match.group())
@@ -466,7 +582,9 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
 
 def _parse_file_selection(raw: str, budget: int) -> list[dict]:
     """Parse LLM file selection response into structured list."""
-    json_match = re.search(r"\[[\s\S]*?\]", str(raw))
+    raw = strip_markdown_wrapper(str(raw))
+    # CRITICAL: Use greedy match to find outermost brackets
+    json_match = re.search(r"\[[\s\S]*\]", raw)
     if json_match:
         try:
             items = json.loads(json_match.group())
@@ -491,7 +609,7 @@ async def action_apply_plan_revision(step_input: StepInput) -> StepOutput:
     """
     effects = step_input.effects
     mission = step_input.context.get("mission")
-    revision_raw = step_input.context.get("revision_plan", "")
+    revision_raw = step_input.context.get("inference_response", "")
 
     if not mission:
         return StepOutput(
@@ -560,10 +678,478 @@ async def action_apply_plan_revision(step_input: StepInput) -> StepOutput:
 
 def _parse_revision(raw: str) -> dict:
     """Parse revision plan from LLM response."""
-    json_match = re.search(r"\{[\s\S]*\}", str(raw))
+    raw = strip_markdown_wrapper(str(raw))
+    json_match = re.search(r"\{[\s\S]*\}", raw)
     if json_match:
         try:
             return json.loads(json_match.group())
         except json.JSONDecodeError:
             pass
     return {}
+
+
+# ── log_validation_notes ──────────────────────────────────────────────
+
+
+async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
+    """Capture lint warnings and non-blocking check failures as mission notes.
+
+    Reads validation_results from context, filters for non-blocking failures
+    (required: false checks that didn't pass), and persists them as notes
+    with category 'lint_warning' so the agent can fix them in future tasks.
+    """
+    effects = step_input.effects
+    validation_results = step_input.context.get("validation_results", [])
+
+    if not isinstance(validation_results, list):
+        return StepOutput(
+            result={"notes_logged": 0},
+            observations="No validation results to log",
+            context_updates={"lint_notes_saved": False},
+        )
+
+    # Collect non-blocking failures (lint warnings, optional test failures)
+    warnings = []
+    for check in validation_results:
+        if not isinstance(check, dict):
+            continue
+        if not check.get("passed", True) and not check.get("required", True):
+            warning_text = (
+                f"[{check.get('name', 'unnamed')}] "
+                f"rc={check.get('return_code', '?')}\n"
+            )
+            stdout = check.get("stdout", "").strip()
+            stderr = check.get("stderr", "").strip()
+            if stdout:
+                warning_text += f"stdout: {stdout[:300]}\n"
+            if stderr:
+                warning_text += f"stderr: {stderr[:300]}\n"
+            warnings.append(warning_text)
+
+    if not warnings or not effects:
+        return StepOutput(
+            result={"notes_logged": 0},
+            observations=(
+                "No lint warnings to log" if not warnings else "No effects interface"
+            ),
+            context_updates={"lint_notes_saved": len(warnings) == 0},
+        )
+
+    from agent.persistence.models import NoteRecord
+
+    note_content = "Lint/quality warnings to fix:\n" + "\n".join(warnings)
+    note = NoteRecord(
+        content=note_content,
+        category="lint_warning",
+        tags=["lint", "quality", "auto-captured"],
+        source_flow="validate_output",
+        source_task="unknown",
+    )
+
+    mission = await effects.load_mission()
+    if mission:
+        mission.notes.append(note)
+        await effects.save_mission(mission)
+
+    return StepOutput(
+        result={"notes_logged": len(warnings)},
+        observations=f"Logged {len(warnings)} lint warnings as mission notes",
+        context_updates={"lint_notes_saved": True},
+    )
+
+
+# ── run_fallback_validation ───────────────────────────────────────────
+
+
+async def action_run_fallback_validation(step_input: StepInput) -> StepOutput:
+    """Fallback validation when LLM strategy fails to parse.
+
+    Runs language-appropriate syntax and import checks based on file extension.
+    No LLM involved — purely heuristic.
+    """
+    effects = step_input.effects
+    file_path = step_input.params.get(
+        "file_path", step_input.flow_inputs.get("file_path", "")
+    )
+
+    if not effects or not file_path:
+        return StepOutput(
+            result={"all_required_passing": True, "checks_run": 0},
+            observations="No effects or file_path — skipping fallback validation",
+            context_updates={"validation_results": []},
+        )
+
+    results = []
+    all_required_passing = True
+
+    if file_path.endswith(".py"):
+        # Tier 1: Syntax check
+        syntax_result = await effects.run_command(
+            [
+                "python",
+                "-c",
+                f"import py_compile; py_compile.compile('{file_path}', doraise=True)",
+            ],
+            timeout=30,
+        )
+        syntax_passed = syntax_result.return_code == 0
+        results.append(
+            {
+                "name": "syntax check (fallback)",
+                "passed": syntax_passed,
+                "required": True,
+                "tier": "syntax",
+                "stdout": syntax_result.stdout[:500],
+                "stderr": syntax_result.stderr[:500],
+                "return_code": syntax_result.return_code,
+            }
+        )
+        if not syntax_passed:
+            all_required_passing = False
+
+        # Tier 2: Import check (only if syntax passed)
+        if syntax_passed:
+            module_name = _filepath_to_module(file_path)
+            if module_name:
+                import_result = await effects.run_command(
+                    ["python", "-c", f"import {module_name}"],
+                    timeout=30,
+                )
+                import_passed = import_result.return_code == 0
+                results.append(
+                    {
+                        "name": "import check (fallback)",
+                        "passed": import_passed,
+                        "required": True,
+                        "tier": "execution",
+                        "stdout": import_result.stdout[:500],
+                        "stderr": import_result.stderr[:500],
+                        "return_code": import_result.return_code,
+                    }
+                )
+                if not import_passed:
+                    all_required_passing = False
+
+    elif file_path.endswith((".js", ".jsx", ".ts", ".tsx")):
+        # Basic syntax check for JS/TS
+        check_result = await effects.run_command(
+            ["node", "--check", file_path],
+            timeout=30,
+        )
+        passed = check_result.return_code == 0
+        results.append(
+            {
+                "name": "syntax check (fallback)",
+                "passed": passed,
+                "required": True,
+                "tier": "syntax",
+                "stdout": check_result.stdout[:500],
+                "stderr": check_result.stderr[:500],
+                "return_code": check_result.return_code,
+            }
+        )
+        if not passed:
+            all_required_passing = False
+
+    elif file_path.endswith((".yaml", ".yml")):
+        # YAML syntax check
+        yaml_result = await effects.run_command(
+            [
+                "python",
+                "-c",
+                f"import yaml; yaml.safe_load(open('{file_path}'))",
+            ],
+            timeout=30,
+        )
+        passed = yaml_result.return_code == 0
+        results.append(
+            {
+                "name": "yaml syntax check (fallback)",
+                "passed": passed,
+                "required": True,
+                "tier": "syntax",
+                "stdout": yaml_result.stdout[:500],
+                "stderr": yaml_result.stderr[:500],
+                "return_code": yaml_result.return_code,
+            }
+        )
+        if not passed:
+            all_required_passing = False
+
+    else:
+        # Unknown file type — just check it exists
+        exists = await effects.file_exists(file_path)
+        results.append(
+            {
+                "name": "file exists check (fallback)",
+                "passed": exists,
+                "required": True,
+                "tier": "syntax",
+                "stdout": "",
+                "stderr": "" if exists else f"File not found: {file_path}",
+                "return_code": 0 if exists else 1,
+            }
+        )
+        if not exists:
+            all_required_passing = False
+
+    return StepOutput(
+        result={
+            "all_required_passing": all_required_passing,
+            "checks_run": len(results),
+            "checks_passed": sum(1 for r in results if r["passed"]),
+        },
+        observations="Fallback validation: {}".format(
+            ", ".join(
+                f"{r['name']}={'PASS' if r['passed'] else 'FAIL'}" for r in results
+            ),
+        ),
+        context_updates={"validation_results": results},
+    )
+
+
+# ── execute_project_setup ─────────────────────────────────────────────
+
+
+async def action_execute_project_setup(step_input: StepInput) -> StepOutput:
+    """Execute project setup actions from LLM analysis.
+
+    Parses setup_actions from inference response, runs commands,
+    creates directories, and reports results. Language agnostic —
+    the LLM decides what to set up.
+    """
+    effects = step_input.effects
+    raw = step_input.context.get("inference_response", "")
+
+    if not effects:
+        return StepOutput(
+            result={"setup_complete": False, "actions_run": 0},
+            observations="No effects interface",
+            context_updates={"setup_results": []},
+        )
+
+    # Parse the setup plan
+    setup_plan = _parse_setup_plan(str(raw))
+    if not setup_plan:
+        return StepOutput(
+            result={"setup_complete": False, "actions_run": 0},
+            observations="Could not parse setup plan from inference response",
+            context_updates={"setup_results": []},
+        )
+
+    actions = setup_plan.get("setup_actions", setup_plan.get("scaffold", []))
+    results = []
+    all_required_ok = True
+
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+
+        action_type = action.get("type", "command")
+        name = action.get("name", action_type)
+        required = action.get("required", True)
+
+        # Check skip_if_exists
+        skip_path = action.get("skip_if_exists")
+        if skip_path:
+            exists = await effects.file_exists(skip_path)
+            if exists:
+                results.append(
+                    {"name": name, "skipped": True, "reason": f"{skip_path} exists"}
+                )
+                continue
+
+        if action_type == "command":
+            cmd = action.get("command", [])
+            if isinstance(cmd, str):
+                cmd = cmd.split()
+            if not cmd:
+                continue
+            timeout = action.get("timeout", 60)
+            cmd_result = await effects.run_command(cmd, timeout=timeout)
+            passed = cmd_result.return_code == 0
+            results.append(
+                {
+                    "name": name,
+                    "passed": passed,
+                    "required": required,
+                    "stdout": cmd_result.stdout[:300],
+                    "stderr": cmd_result.stderr[:300],
+                }
+            )
+            if not passed and required:
+                all_required_ok = False
+
+        elif action_type == "directory":
+            path = action.get("path", "")
+            if path:
+                # Create directory by writing a .gitkeep file
+                await effects.write_file(f"{path}/.gitkeep", "")
+                results.append({"name": name, "passed": True, "path": path})
+
+        elif action_type in ("file", "create_file"):
+            path = action.get("file_path", action.get("path", ""))
+            desc = action.get("description", "")
+            if path:
+                # For now, create a placeholder — the content will be
+                # generated by a separate create_file task if needed
+                results.append(
+                    {
+                        "name": name,
+                        "passed": True,
+                        "note": f"File {path} flagged for creation: {desc}",
+                    }
+                )
+
+    return StepOutput(
+        result={
+            "setup_complete": all_required_ok,
+            "actions_run": len(results),
+            "language": setup_plan.get("language", "unknown"),
+        },
+        observations="Setup: {}".format(
+            ", ".join(
+                r.get("name", "?")
+                + (
+                    "=SKIP"
+                    if r.get("skipped")
+                    else "=OK" if r.get("passed", False) else "=FAIL"
+                )
+                for r in results
+            ),
+        ),
+        context_updates={"setup_results": results},
+    )
+
+
+def _parse_setup_plan(raw: str) -> dict:
+    """Parse setup plan from LLM response."""
+    raw = strip_markdown_wrapper(raw)
+    json_match = re.search(r"\{[\s\S]*\}", raw)
+    if json_match:
+        try:
+            return json.loads(json_match.group())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+# ── apply_quality_gate_results ────────────────────────────────────────
+
+
+async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput:
+    """Parse quality gate summary and create fix tasks if needed.
+
+    Reads the LLM summary of project-wide validation, extracts fix_tasks,
+    adds them to the mission plan, and returns pass/fail status.
+    """
+    effects = step_input.effects
+    raw = step_input.context.get("inference_response", "")
+    validation_results = step_input.context.get("validation_results", [])
+
+    # Parse the quality summary
+    summary = _parse_quality_summary(str(raw))
+
+    if not summary:
+        # Fallback: check validation_results directly
+        failed_checks = [r for r in validation_results if not r.get("passed", True)]
+        all_passing = len(failed_checks) == 0
+        return StepOutput(
+            result={
+                "all_passing": all_passing,
+                "issues_found": len(failed_checks),
+            },
+            observations=f"Quality gate: {'PASS' if all_passing else 'FAIL'} "
+            f"({len(failed_checks)} failures, could not parse LLM summary)",
+            context_updates={
+                "quality_results": {
+                    "all_passing": all_passing,
+                    "summary": f"{len(failed_checks)} check failures",
+                    "fix_tasks": [],
+                },
+            },
+        )
+
+    all_passing = summary.get("all_passing", True)
+    fix_tasks = summary.get("fix_tasks", [])
+
+    # If quality gate failed, increment attempts counter and add fix tasks
+    if not all_passing and effects:
+        from agent.persistence.models import TaskRecord
+
+        mission = await effects.load_mission()
+        if mission:
+            mission.quality_gate_attempts += 1
+            existing_descriptions = {t.description for t in mission.plan}
+            added = 0
+            for ft in fix_tasks or []:
+                if not isinstance(ft, dict) or "description" not in ft:
+                    continue
+                # Skip if an identical task already exists
+                if ft["description"] in existing_descriptions:
+                    continue
+                task = TaskRecord(
+                    description=ft["description"],
+                    flow=ft.get("flow", "modify_file"),
+                    priority=len(mission.plan),
+                    inputs={
+                        "target_file_path": ft.get("file", ""),
+                        "reason": ft.get("issue", ft["description"]),
+                    },
+                )
+                mission.plan.append(task)
+                added += 1
+
+            # Always save — at minimum the quality_gate_attempts counter changed
+            await effects.save_mission(mission)
+
+    return StepOutput(
+        result={
+            "all_passing": all_passing,
+            "issues_found": summary.get("failed", 0),
+            "fix_tasks_added": len(fix_tasks) if not all_passing else 0,
+        },
+        observations=f"Quality gate: {'PASS' if all_passing else 'FAIL'} — "
+        f"{summary.get('summary', 'no summary')}",
+        context_updates={
+            "quality_results": {
+                "all_passing": all_passing,
+                "summary": summary.get("summary", ""),
+                "fix_tasks": fix_tasks,
+            },
+        },
+    )
+
+
+def _parse_quality_summary(raw: str) -> dict:
+    """Parse quality gate summary from LLM response."""
+    raw = strip_markdown_wrapper(raw)
+    json_match = re.search(r"\{[\s\S]*\}", raw)
+    if json_match:
+        try:
+            return json.loads(json_match.group())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _filepath_to_module(filepath: str) -> str | None:
+    """Convert a file path to a Python module name.
+
+    app/main.py → app.main
+    src/utils/helpers.py → src.utils.helpers
+    script.py → script
+    __init__.py → (None — can't import directly)
+    """
+    if not filepath.endswith(".py"):
+        return None
+    # Strip .py extension
+    module = filepath[:-3]
+    # Skip __init__ files
+    if module.endswith("__init__"):
+        return None
+    # Convert path separators to dots
+    module = module.replace("/", ".").replace("\\", ".")
+    # Strip leading dots
+    module = module.lstrip(".")
+    return module if module else None
