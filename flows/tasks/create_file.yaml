@@ -31,7 +31,7 @@ steps:
   gather_context:
     use: gather_project_context
     params:
-      context_budget: 6
+      context_budget: 10
     resolver:
       type: rule
       rules:
@@ -42,7 +42,7 @@ steps:
     action: inference
     description: "Generate the file content with project awareness"
     context:
-      optional: [context_bundle, project_manifest]
+      optional: [context_bundle, project_manifest, repo_map_formatted, related_files]
     prompt: |
       You are a code generation module in an automated pipeline.
       Your output will be extracted from code markers and written directly to a file.
@@ -51,6 +51,16 @@ steps:
       Project objective: {{ input.mission_objective }}
       Task: {{ input.task_description }}
       Target file: {{ input.target_file_path }}
+
+      {% if context.repo_map_formatted %}
+      ## Project Structure (AST-based dependency map)
+      {{ context.repo_map_formatted }}
+      {% endif %}
+
+      {% if context.related_files %}
+      ## Files Most Connected to Target (by import/reference graph)
+      {{ context.related_files | join(', ') }}
+      {% endif %}
 
       {% if context.context_bundle and context.context_bundle.files %}
       Existing project files for reference:
@@ -61,8 +71,16 @@ steps:
 
       Your code MUST integrate with these existing files:
       - Import from existing modules rather than reimplementing functionality.
+      - Match EXACT function/class signatures from the existing code — use the same
+        parameter names, types, and return types you see above.
+      - If the existing code defines `new_task(title, priority)`, you call `new_task(title, priority)` —
+        not `Task()` directly, not `create_task()`, not some other name you imagined.
       - Maintain consistent code style, naming conventions, and patterns.
       - Use the same libraries and dependency patterns already established.
+      - CRITICAL: Only import packages that are in the standard library OR already listed in pyproject.toml/requirements.txt. If you need a third-party package not yet installed, use stdlib alternatives instead or note the missing dependency in a comment.
+      - If this file is a CLI entry point or main module, it MUST import and actually
+        CALL functions from the modules shown above. Stub/print-only implementations
+        are NOT acceptable — wire real functionality.
       {% endif %}
 
       {% if context.context_bundle and context.context_bundle.research_findings %}
@@ -76,13 +94,19 @@ steps:
       You MUST take a different approach than what was tried before.
       {% endif %}
 
+      {% if input.relevant_notes %}
+      ⚠️ IMPORTANT — observations from previous tasks:
+      {{ input.relevant_notes }}
+      Use these observations to avoid repeating known mistakes.
+      {% endif %}
+
       Write the complete file content for {{ input.target_file_path }}.
       Include docstrings, type annotations, and clear structure.
 
-      Respond with ONLY the code inside triple-backtick markers:
+      Respond with ONLY the complete file inside a fenced code block:
 
-      ✅ CORRECT format:
-      ```
+      ✅ CORRECT — one fenced block, nothing else:
+      ```python
       # complete file content here
       import os
 
@@ -92,15 +116,15 @@ steps:
 
       ❌ WRONG — no text outside the code block:
       Here is the implementation:
-      ```
+      ```python
       import os
       ```
       I structured it this way because...
 
-      ---DO NOT GENERATE EXTRA CHARACTERS---
-      ---DO NOT USE FENCED CODE BLOCKS (```)---
-      ---END RESPONSE IMMEDIATELY AFTER CODE---
-      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+      RULES:
+      - One fenced code block containing the COMPLETE file.
+      - NOTHING before or after the code block — no commentary, no explanation.
+      - The code block is the ENTIRE response.
     config:
       temperature: 0.7
     resolver:
@@ -132,9 +156,11 @@ steps:
       rules:
         - condition: "result.status == 'success'"
           transition: capture_learnings
+        - condition: "result.status == 'issues' and meta.step_count < 8"
+          transition: correct_issues
         - condition: "result.status == 'issues'"
           transition: capture_learnings
-        - condition: "result.status == 'failed' and meta.step_count < 10"
+        - condition: "result.status == 'failed' and meta.step_count < 8"
           transition: regenerate
         - condition: "true"
           transition: capture_failure_note
@@ -167,31 +193,38 @@ steps:
       Task: {{ input.task_description }}
       Target file: {{ input.target_file_path }}
 
-      Fix the flagged issues and produce the COMPLETE corrected file.
-      Only fix what's broken — preserve everything that was working.
+      ⚠️ CORRECTION DISCIPLINE — READ CAREFULLY:
+      You are a surgeon, not a demolition crew. Fix ONLY the specific errors listed above.
+      - NEVER simplify, shorten, or rewrite the file. Preserve ALL existing functionality.
+      - NEVER remove working code to satisfy a lint warning. Remove only the specific flagged item.
+      - If your corrected version is shorter than the original, you are doing it WRONG.
+      - If an import fails because a module doesn't exist yet, add try/except — do NOT delete the code.
+      - Remove ONLY the unused imports the linter explicitly flagged — not other imports.
+      - If a linter flags multiple issues, fix every single one but change NOTHING else.
+      - LINE COUNT CHECK: Your corrected file MUST have the same number of lines ± 5 as the original.
+        If you can't fix an issue without removing more than 5 lines, leave that issue unfixed.
+      - If a lint warning is about an import used by OTHER files that import THIS file, do NOT remove it.
+        When in doubt about whether an import is used externally, KEEP IT.
 
-      Common fixes:
-      - If imports fail because a module doesn't exist yet, add try/except or conditional imports.
-      - If a linter flags issues, fix the specific warnings.
-      - If tests fail, fix the code to pass them.
+      The original task was: {{ input.task_description }}
+      Your file must still fully implement that task after corrections.
 
-      Respond with ONLY the corrected code inside triple-backtick markers:
+      Respond with ONLY the corrected code inside a fenced code block:
 
-      ✅ CORRECT format:
-      ```
+      ✅ CORRECT — one fenced block, nothing else:
+      ```python
       # complete corrected file content
       ```
 
-      ❌ WRONG — no explanation outside the markers:
+      ❌ WRONG — no text outside the code block:
       I fixed the import error:
-      ```
+      ```python
       # code here
       ```
 
-      ---DO NOT GENERATE EXTRA CHARACTERS---
-      ---DO NOT USE FENCED CODE BLOCKS (```)---
-      ---END RESPONSE IMMEDIATELY AFTER CODE---
-      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+      RULES:
+      - One fenced code block containing the COMPLETE corrected file.
+      - NOTHING before or after the code block.
     config:
       temperature: 0.2
     resolver:
@@ -229,23 +262,22 @@ steps:
       Fix the specific validation errors and produce the COMPLETE corrected file.
       Do NOT change parts of the code that were working — only fix what failed.
 
-      Respond with ONLY the corrected code inside triple-backtick markers:
+      Respond with ONLY the corrected code inside a fenced code block:
 
-      ✅ CORRECT format:
-      ```
+      ✅ CORRECT — one fenced block, nothing else:
+      ```python
       # complete corrected file content
       ```
 
-      ❌ WRONG — no explanation outside the markers:
-      I fixed the import error:
-      ```
+      ❌ WRONG — no text outside the code block:
+      I fixed the syntax error:
+      ```python
       # code here
       ```
 
-      ---DO NOT GENERATE EXTRA CHARACTERS---
-      ---DO NOT USE FENCED CODE BLOCKS (```)---
-      ---END RESPONSE IMMEDIATELY AFTER CODE---
-      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+      RULES:
+      - One fenced code block containing the COMPLETE corrected file.
+      - NOTHING before or after the code block.
     config:
       temperature: 0.2
     resolver:

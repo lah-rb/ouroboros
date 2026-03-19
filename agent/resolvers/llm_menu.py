@@ -92,17 +92,28 @@ def _build_options_list(
 def _build_menu_prompt(
     resolver_prompt: str | None,
     options: dict[str, str],
+    step_output_text: str | None = None,
 ) -> str:
     """Build the prompt that asks the model to choose an option.
 
     Args:
         resolver_prompt: The resolver's prompt string (optional context).
         options: Dict mapping option name to description.
+        step_output_text: Optional text from the step's action output to
+            include as context for the decision. When provided, the model
+            can see what just happened before choosing.
 
     Returns:
         A prompt string instructing the model to pick exactly one option.
     """
     lines = []
+
+    # Include step output as decision context when available
+    if step_output_text:
+        lines.append("Here is what just happened:")
+        lines.append(step_output_text[:1500])
+        lines.append("")
+
     if resolver_prompt:
         lines.append(resolver_prompt)
         lines.append("")
@@ -203,9 +214,18 @@ async def resolve_llm_menu(
 
     valid_option_names = set(options.keys())
 
-    # Build the prompt
+    # Build the prompt, optionally including step output as context
     resolver_prompt = resolver_def.get("prompt")
-    menu_prompt = _build_menu_prompt(resolver_prompt, options)
+    step_output_text = None
+    if resolver_def.get("include_step_output", False) and step_output is not None:
+        # Extract text from step output — try observations first, then result
+        if hasattr(step_output, "observations") and step_output.observations:
+            step_output_text = str(step_output.observations)
+        elif hasattr(step_output, "result") and step_output.result:
+            step_output_text = str(step_output.result)
+        elif isinstance(step_output, str):
+            step_output_text = step_output
+    menu_prompt = _build_menu_prompt(resolver_prompt, options, step_output_text)
 
     # First attempt
     config = {"temperature": 0.1, "max_tokens": 50}

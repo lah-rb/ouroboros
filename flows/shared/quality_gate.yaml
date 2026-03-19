@@ -13,10 +13,11 @@ input:
     - mission_id
   optional:
     - mission_objective
+    - relevant_notes
 
 defaults:
   config:
-    temperature: 0.0
+    temperature: 0.1
 
 steps:
 
@@ -29,17 +30,32 @@ steps:
       type: rule
       rules:
         - condition: "result.file_count > 0"
-          transition: plan_checks
+          transition: cross_file_check
         - condition: "true"
           transition: pass_empty
     publishes:
       - project_manifest
+
+  cross_file_check:
+    action: validate_cross_file_consistency
+    description: "Deterministic AST-based cross-file consistency check (no LLM needed)"
+    params:
+      root: "."
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: plan_checks
+    publishes:
+      - cross_file_results
+      - cross_file_summary
 
   plan_checks:
     action: inference
     description: "LLM plans comprehensive project-wide validation"
     context:
       required: [project_manifest]
+      optional: [cross_file_summary]
     prompt: |
       You are a project quality gate in an automated coding pipeline.
       Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
@@ -60,11 +76,17 @@ steps:
          Convert file paths to module names (app/main.py → app.main).
          Skip __init__.py files.
 
-      2. INTEGRATION CHECK: Run the main entry point (if one exists) with --help or minimal args.
+      2. ENTRY POINT CHECK: If main.py or a CLI entry point exists, run it with --help
+         or a safe flag to verify it starts without errors:
+         ["python", "main.py", "--help"]
 
-      3. TEST SUITE: Run pytest if tests/ directory exists.
+      3. CROSS-MODULE CHECK: For the main/entry module, test that its key imports
+         actually resolve at runtime by importing specific names:
+         ["python", "-c", "from main import main; print('OK')"]
 
-      4. LINT: Run ruff or flake8 on the entire project.
+      4. TEST SUITE: Run pytest if tests/ directory exists.
+
+      5. LINT: Run ruff or flake8 on the entire project.
 
       Mark ALL checks as required: false — we want to collect ALL issues, not stop at the first.
 
@@ -145,10 +167,21 @@ steps:
     description: "Summarize quality gate results into actionable fix tasks"
     context:
       required: [validation_results, project_manifest]
+      optional: [cross_file_summary]
     prompt: |
       You are a quality assessment module in an automated coding pipeline.
       Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
       object — no markdown, no explanation, no surrounding text.
+
+      ## Files That Exist in This Project (authoritative — from disk scan)
+      {% for filepath in context.project_manifest.keys() %}
+      - {{ filepath }}
+      {% endfor %}
+
+      {% if context.cross_file_summary %}
+      ## Structural Analysis (AST-based, deterministic — high confidence)
+      {{ context.cross_file_summary }}
+      {% endif %}
 
       Project quality gate results:
       {% for check in context.validation_results %}
@@ -187,11 +220,22 @@ steps:
       If all checks pass:
       {"all_passing": true, "total_checks": 6, "passed": 6, "failed": 0, "summary": "All quality checks pass", "fix_tasks": []}
 
-      Rules:
+      CRITICAL Rules:
+      - ONLY create fix_tasks for files listed in "Files That Exist" above.
+        Do NOT invent file paths from error messages. If an error mentions a module
+        path like "clients.api", check whether "clients/api.py" actually exists in
+        the file list. If it doesn't exist, the fix target should be the file that
+        IMPORTS it (which does exist), not the missing file.
       - Each fix_task must target exactly one file.
-      - Use "modify_file" flow for fixes to existing files.
+      - Choose the correct flow for each fix:
+        - "modify_file": fix an existing file (import errors, logic bugs, missing methods)
+        - "create_file": create a missing file that other modules expect
+        - "integrate_modules": wire modules together (missing cross-imports, interface mismatches)
+        - "manage_packages": install missing dependencies
       - Group related import errors — if module A fails because module B is broken, fix B first.
+      - Order fix_tasks so dependencies are resolved before dependents.
       - Be specific about what's wrong in the "issue" field.
+      - Limit to at most 5 fix_tasks. Consolidate related issues into single tasks.
 
       Return ONLY the raw JSON object.
     config:
@@ -211,6 +255,7 @@ steps:
     description: "Parse quality summary and determine pass/fail"
     context:
       required: [inference_response, validation_results]
+      optional: [project_manifest]
     resolver:
       type: rule
       rules:

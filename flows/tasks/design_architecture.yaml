@@ -1,0 +1,252 @@
+flow: design_architecture
+version: 1
+description: >
+  Model-led holistic project design flow. Scans the current workspace,
+  builds an AST-based dependency map, and produces a structured blueprint
+  defining: directory layout, module responsibilities, cross-module interfaces,
+  and creation order. The blueprint is persisted as a mission note so all
+  subsequent create_file and integrate_modules flows can reference it.
+  This flow should run early — after create_plan but before file creation.
+
+input:
+  required:
+    - mission_id
+    - task_id
+  optional:
+    - task_description
+    - mission_objective
+    - working_directory
+    - relevant_notes
+
+defaults:
+  config:
+    temperature: "t*0.6"
+    max_tokens: 8192
+
+steps:
+
+  # ── Phase 1: Gather current state ──────────────────────────
+
+  load_mission:
+    action: load_mission_state
+    description: "Load mission to get objective and plan"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.mission.status == 'active'"
+          transition: scan_workspace
+        - condition: "true"
+          transition: failed
+    publishes:
+      - mission
+
+  scan_workspace:
+    action: scan_project
+    description: "Discover existing files and structure"
+    params:
+      root: "."
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: build_repomap
+    publishes:
+      - project_manifest
+
+  build_repomap:
+    action: build_and_query_repomap
+    description: "Build AST-based dependency map of existing code"
+    params:
+      root: "."
+      include_patterns: ["*.py", "*.js", "*.ts", "*.rs"]
+      max_chars: 4000
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: design_structure
+    publishes:
+      - repo_map_formatted
+
+  # ── Phase 2: LLM designs the architecture ──────────────────
+
+  design_structure:
+    action: inference
+    description: "Design holistic project structure — directory layout, module boundaries, interfaces"
+    context:
+      required: [mission]
+      optional: [project_manifest, repo_map_formatted]
+    prompt: |
+      You are a software architect module in an automated coding pipeline.
+      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
+      object — no markdown, no explanation, no surrounding text.
+
+      ## Mission Objective
+      {{ context.mission.objective }}
+
+      ## Current Plan
+      {% for task in context.mission.plan %}
+      - [{{ task.status }}] {{ task.description }} (flow: {{ task.flow }}, file: {{ task.inputs.get('target_file_path', 'N/A') }})
+      {% endfor %}
+
+      {% if context.repo_map_formatted %}
+      ## Existing Code Structure (AST-based)
+      {{ context.repo_map_formatted }}
+      {% endif %}
+
+      {% if context.project_manifest %}
+      ## Existing Files
+      {% for filepath, sig in context.project_manifest.items() %}
+      - {{ filepath }}: {{ sig[:100] }}
+      {% endfor %}
+      {% endif %}
+
+      {% if input.relevant_notes %}
+      ## Observations from Previous Work
+      {{ input.relevant_notes }}
+      {% endif %}
+
+      ## Design a Project Architecture
+
+      Produce a SINGLE authoritative blueprint that defines:
+
+      1. **Directory Layout**: Flat or nested? Which directories exist and why?
+         - CRITICAL: Choose ONE layout. If files already exist, the layout MUST be
+           compatible with them. Do NOT propose a layout that conflicts with existing files.
+
+      2. **Module Responsibilities**: For each file in the plan, specify:
+         - What it defines (classes, functions, constants)
+         - What it imports from other project modules (exact names)
+         - What it exports (public API)
+
+      3. **Interface Contracts**: For each cross-module dependency:
+         - Caller file → callee file
+         - Exact function/class name being imported
+         - Expected signature (parameters and return type)
+
+      4. **Creation Order**: Dependency-sorted order for creating files.
+         Files with no project imports come first. Entry points come last.
+
+      5. **Entry Point Wiring**: How the main/CLI module connects to everything.
+         List every import it needs and every function it calls.
+
+      ✅ CORRECT output (raw JSON object):
+      {
+        "layout": "flat",
+        "directories": ["."],
+        "modules": [
+          {
+            "file": "models.py",
+            "responsibility": "Data classes for rooms, items, NPCs",
+            "defines": ["Room", "Item", "NPC", "GameState"],
+            "imports_from": {},
+            "creation_order": 1
+          },
+          {
+            "file": "engine.py",
+            "responsibility": "Core game loop and command dispatch",
+            "defines": ["GameEngine", "run_game"],
+            "imports_from": {"models.py": ["Room", "Item", "GameState"], "parser.py": ["parse_command"]},
+            "creation_order": 3
+          },
+          {
+            "file": "parser.py",
+            "responsibility": "Natural language command parsing",
+            "defines": ["parse_command", "CommandType"],
+            "imports_from": {"models.py": ["GameState"]},
+            "creation_order": 2
+          },
+          {
+            "file": "main.py",
+            "responsibility": "CLI entry point",
+            "defines": ["main"],
+            "imports_from": {"engine.py": ["GameEngine", "run_game"], "models.py": ["GameState"]},
+            "creation_order": 4
+          }
+        ],
+        "interfaces": [
+          {
+            "caller": "engine.py",
+            "callee": "parser.py",
+            "symbol": "parse_command",
+            "signature": "parse_command(raw_input: str, state: GameState) -> CommandType"
+          },
+          {
+            "caller": "main.py",
+            "callee": "engine.py",
+            "symbol": "run_game",
+            "signature": "run_game(initial_state: GameState) -> None"
+          }
+        ],
+        "creation_order": ["models.py", "parser.py", "engine.py", "main.py"],
+        "notes": "Flat layout chosen for simplicity. All modules at top level."
+      }
+
+      ❌ WRONG — do not wrap in markdown or add explanation.
+      ❌ WRONG — do not propose conflicting layouts (e.g. src/ when files already exist at top level).
+
+      Return ONLY the raw JSON object.
+    config:
+      temperature: 0.4
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: persist_blueprint
+        - condition: "true"
+          transition: failed
+    publishes:
+      - inference_response
+
+  # ── Phase 3: Persist blueprint ─────────────────────────────
+
+  persist_blueprint:
+    action: push_note
+    description: "Save architecture blueprint as a durable mission note"
+    context:
+      required: [inference_response]
+    params:
+      category: "architecture_blueprint"
+      source_flow: "design_architecture"
+      source_task: "{{ input.task_id }}"
+      content_key: "inference_response"
+      tags: ["blueprint", "architecture", "module_layout"]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.note_saved == true"
+          transition: complete
+        - condition: "true"
+          transition: complete
+    publishes:
+      - note_saved
+
+  # ── Terminal paths ─────────────────────────────────────────
+
+  complete:
+    action: noop
+    description: "Architecture designed — return to mission_control"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Architecture blueprint created and persisted"
+
+  failed:
+    action: noop
+    description: "Architecture design failed"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "abandoned"
+        last_result: "Failed to design architecture"
+
+entry: load_mission
+
+overflow:
+  strategy: split
+  fallback: reorganize

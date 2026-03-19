@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import logging
 import os
 import re
 import urllib.parse
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from agent.models import StepInput, StepOutput
 
@@ -30,7 +33,19 @@ def strip_markdown_wrapper(text: str) -> str:
     text = str(text).strip()
 
     # Strip model ending tokens that leak into output
-    for token in ("<|im_end|>", "<|im_end|", "<|endoftext|>", "<|end|>"):
+    for token in (
+        "<|im_end|>",
+        "<|im_end|",
+        "<|im_end",
+        "<|endoftext|>",
+        "<|endoftext|",
+        "<|endoftext",
+        "<|end|>",
+        "<|end|",
+        "<|end",
+        "<|eot_id|>",
+        "<|eot_id|",
+    ):
         text = text.replace(token, "").strip()
 
     # Match ```lang\n...\n``` or ```\n...\n```
@@ -54,7 +69,19 @@ def extract_code_from_response(text: str) -> str:
     text = str(text).strip()
 
     # Strip model ending tokens
-    for token in ("<|im_end|>", "<|im_end|", "<|endoftext|>", "<|end|>"):
+    for token in (
+        "<|im_end|>",
+        "<|im_end|",
+        "<|im_end",
+        "<|endoftext|>",
+        "<|endoftext|",
+        "<|endoftext",
+        "<|end|>",
+        "<|end|",
+        "<|end",
+        "<|eot_id|>",
+        "<|eot_id|",
+    ):
         text = text.replace(token, "").strip()
 
     # Strategy 1: Single clean fenced block
@@ -511,6 +538,9 @@ def _parse_validation_strategy(raw: str, max_checks: int) -> list[dict]:
 async def action_load_file_contents(step_input: StepInput) -> StepOutput:
     """Load full file contents for selected files.
 
+    Uses hybrid selection: deterministic repomap-related files first,
+    then LLM-selected files to fill remaining budget.
+
     Reads file_selection from context (JSON array of {file, reason, priority}),
     loads each file via effects.read_file(), returns context_bundle.
     """
@@ -524,6 +554,9 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
     strategy = step_input.params.get("strategy")
     target = step_input.params.get("target")
 
+    # Get repomap-determined related files for hybrid selection
+    related_files = step_input.context.get("related_files", [])
+
     if not effects:
         return StepOutput(
             result={"files_loaded": 0},
@@ -531,19 +564,39 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
         )
 
     files_to_load: list[str] = []
+    seen: set[str] = set()
 
     if strategy == "target_plus_neighbors":
         if target and target in manifest:
             files_to_load.append(target)
+            seen.add(target)
         target_dir = os.path.dirname(target) if target else ""
         for fp in manifest:
-            if fp != target and os.path.dirname(fp) == target_dir:
+            if fp not in seen and os.path.dirname(fp) == target_dir:
                 files_to_load.append(fp)
+                seen.add(fp)
                 if len(files_to_load) >= budget:
                     break
     else:
+        # ── Hybrid selection: deterministic repomap files first ───
+        # Phase 1: Include repomap-related files (actual dependency graph)
+        if related_files and isinstance(related_files, list):
+            for fp in related_files:
+                if fp in manifest and fp not in seen:
+                    files_to_load.append(fp)
+                    seen.add(fp)
+                    if len(files_to_load) >= budget:
+                        break
+
+        # Phase 2: Fill remaining budget with LLM-selected files
         selected = _parse_file_selection(selection_raw, budget)
-        files_to_load = [s["file"] for s in selected]
+        for s in selected:
+            fp = s["file"]
+            if fp not in seen:
+                files_to_load.append(fp)
+                seen.add(fp)
+                if len(files_to_load) >= budget:
+                    break
 
     loaded = []
     research_findings = step_input.context.get("research_findings")
@@ -629,15 +682,26 @@ async def action_apply_plan_revision(step_input: StepInput) -> StepOutput:
 
     changes: list[str] = []
 
-    # Add new tasks
+    # Add new tasks (with deduplication)
+    from agent.actions.mission_actions import _is_duplicate_task
+
     for new_task in revision.get("add_tasks", []):
         if not isinstance(new_task, dict) or "description" not in new_task:
             continue
+        desc = new_task["description"]
+        flow = new_task.get("flow", "create_file")
+        inputs = new_task.get("inputs", {})
+        target_file = inputs.get("target_file_path", "")
+
+        if _is_duplicate_task(mission, desc, flow, target_file):
+            changes.append(f"Skipped duplicate task: {desc[:60]}")
+            continue
+
         task = TaskRecord(
-            description=new_task["description"],
-            flow=new_task.get("flow", "create_file"),
+            description=desc,
+            flow=flow,
             priority=new_task.get("priority", len(mission.plan)),
-            inputs=new_task.get("inputs", {}),
+            inputs=inputs,
             depends_on=new_task.get("depends_on", []),
         )
         mission.plan.append(task)
@@ -768,9 +832,7 @@ async def action_run_fallback_validation(step_input: StepInput) -> StepOutput:
     No LLM involved — purely heuristic.
     """
     effects = step_input.effects
-    file_path = step_input.params.get(
-        "file_path", step_input.flow_inputs.get("file_path", "")
-    )
+    file_path = step_input.params.get("file_path", "")
 
     if not effects or not file_path:
         return StepOutput(
@@ -1078,26 +1140,58 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
         from agent.persistence.models import TaskRecord
 
         mission = await effects.load_mission()
+        # Build set of known files from project_manifest for existence check
+        known_files = set()
+        manifest = step_input.context.get("project_manifest", {})
+        if isinstance(manifest, dict):
+            known_files = set(manifest.keys())
+
         if mission:
             mission.quality_gate_attempts += 1
             existing_descriptions = {t.description for t in mission.plan}
+            # Also check semantic duplicates: same flow + same target file
+            existing_targets = {
+                (t.flow, t.inputs.get("target_file_path", ""))
+                for t in mission.plan
+                if t.status != "complete"
+            }
             added = 0
+            skipped = 0
             for ft in fix_tasks or []:
                 if not isinstance(ft, dict) or "description" not in ft:
                     continue
                 # Skip if an identical task already exists
                 if ft["description"] in existing_descriptions:
+                    skipped += 1
                     continue
+                # Skip semantic duplicates (same flow + same file)
+                target_file = ft.get("file", "")
+                flow = ft.get("flow", "modify_file")
+                if (flow, target_file) in existing_targets:
+                    skipped += 1
+                    continue
+                # Skip fix tasks targeting non-existent files
+                if target_file and known_files and target_file not in known_files:
+                    logger.warning(
+                        "Quality gate: skipping fix task for non-existent file %s",
+                        target_file,
+                    )
+                    skipped += 1
+                    continue
+                # Cap at 5 new tasks per gate run
+                if added >= 5:
+                    break
                 task = TaskRecord(
                     description=ft["description"],
-                    flow=ft.get("flow", "modify_file"),
+                    flow=flow,
                     priority=len(mission.plan),
                     inputs={
-                        "target_file_path": ft.get("file", ""),
+                        "target_file_path": target_file,
                         "reason": ft.get("issue", ft["description"]),
                     },
                 )
                 mission.plan.append(task)
+                existing_targets.add((flow, target_file))
                 added += 1
 
             # Always save — at minimum the quality_gate_attempts counter changed

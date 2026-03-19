@@ -1,0 +1,193 @@
+flow: run_in_terminal
+version: 1
+description: >
+  Multi-turn persistent terminal session. Starts a shell subprocess,
+  sends commands, observes output, and loops via LLM menu until the
+  session goal is achieved or max turns exhausted.
+  Used as a sub-flow by validate_behavior, manage_packages, etc.
+
+input:
+  required:
+    - session_goal
+    - working_directory
+  optional:
+    - initial_commands
+    - max_turns
+    - session_context
+    - environment_vars
+
+defaults:
+  config:
+    temperature: "t*0.8"
+
+steps:
+
+  start_session:
+    action: start_terminal_session
+    description: "Start persistent shell and run optional setup commands"
+    params:
+      working_directory: "{{ input.working_directory }}"
+      initial_commands: "{{ input.initial_commands }}"
+      environment_vars: "{{ input.environment_vars }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.session_started == true"
+          transition: plan_next_command
+        - condition: "true"
+          transition: close_failure
+    publishes:
+      - session_id
+      - session_history
+
+  plan_next_command:
+    action: inference
+    description: "LLM decides what command to run next"
+    context:
+      required: [session_id, session_history]
+    prompt: |
+      You are a terminal interaction module in an automated coding pipeline.
+      You have a persistent shell session open in the project directory.
+      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
+      object — no markdown, no explanation, no surrounding text.
+
+      SESSION GOAL: {{ input.session_goal }}
+      {% if input.session_context %}
+      CONTEXT: {{ input.session_context }}
+      {% endif %}
+
+      {% if context.session_history %}
+      SESSION HISTORY (previous commands and output):
+      {% for entry in context.session_history %}
+      [Turn {{ entry.turn }}] $ {{ entry.command }}
+      {{ entry.output }}
+      {% if entry.return_code != 0 %}(exit code: {{ entry.return_code }}){% endif %}
+      {% if entry.timed_out %}⚠️ TIMED OUT{% endif %}
+      {% endfor %}
+      {% else %}
+      No commands have been run yet. This is the first interaction.
+      {% endif %}
+
+      What command should run next to make progress toward the session goal?
+
+      ✅ CORRECT output (raw JSON, nothing else):
+      {"command": "python cli.py add 'Buy groceries'", "rationale": "Testing the add subcommand"}
+
+      ❌ WRONG — no explanation outside JSON:
+      Let me test the add command:
+      {"command": "python cli.py add 'Buy groceries'", "rationale": "Testing add"}
+
+      Rules:
+      - Return ONLY the JSON object.
+      - The command runs in a persistent bash shell (state like cd, env vars carry over).
+      - If a previous command failed, diagnose and try a different approach.
+      - For interactive programs that wait for input, use echo with pipe: echo "input" | command
+      - Keep commands focused — one thing at a time.
+    config:
+      temperature: "t*0.6"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: execute_command
+        - condition: "true"
+          transition: close_failure
+    publishes:
+      - inference_response
+
+  execute_command:
+    action: send_terminal_command
+    description: "Send LLM-planned command to the terminal session"
+    context:
+      required: [session_id, session_history, inference_response]
+    params:
+      max_turns: "{{ input.max_turns | default(10) }}"
+      command_timeout: 30
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.stuck_detected == true"
+          transition: close_success
+        - condition: "result.max_turns_exceeded == true"
+          transition: close_max_turns
+        - condition: "result.command_sent == true"
+          transition: evaluate
+        - condition: "true"
+          transition: close_failure
+    publishes:
+      - session_id
+      - session_history
+
+  evaluate:
+    action: inference
+    description: "LLM evaluates session progress and decides next action"
+    context:
+      required: [session_id, session_history]
+    prompt: |
+      You are evaluating a terminal session in an automated coding pipeline.
+
+      SESSION GOAL: {{ input.session_goal }}
+
+      FULL SESSION HISTORY:
+      {% for entry in context.session_history %}
+      [Turn {{ entry.turn }}] $ {{ entry.command }}
+      {{ entry.output }}
+      {% if entry.return_code != 0 %}(exit code: {{ entry.return_code }}){% endif %}
+      {% if entry.timed_out %}⚠️ TIMED OUT{% endif %}
+      {% endfor %}
+
+      Assess: Has the session goal been achieved? Are there errors to investigate?
+      Is there more testing or verification needed?
+    config:
+      temperature: "t*0.4"
+    resolver:
+      type: llm_menu
+      include_step_output: true
+      prompt: "Should this terminal session continue or close? Pick one:"
+      options:
+        exit_success:
+          description: "CLOSE terminal — the session goal IS achieved, no more commands needed"
+          target: close_success
+        continue_interaction:
+          description: "KEEP OPEN — the session goal is NOT yet achieved, more commands required"
+          target: plan_next_command
+        exit_failure:
+          description: "CLOSE terminal — a fundamental blocker prevents achieving the goal"
+          target: close_failure
+    publishes:
+      - inference_response
+
+  close_success:
+    action: close_terminal_session
+    description: "Close terminal — session goal achieved"
+    context:
+      required: [session_id, session_history]
+    terminal: true
+    status: success
+    publishes:
+      - session_summary
+      - session_history
+
+  close_failure:
+    action: close_terminal_session
+    description: "Close terminal — session failed"
+    context:
+      optional: [session_id, session_history]
+    terminal: true
+    status: failed
+    publishes:
+      - session_summary
+      - session_history
+
+  close_max_turns:
+    action: close_terminal_session
+    description: "Close terminal — max turns exceeded"
+    context:
+      required: [session_id, session_history]
+    terminal: true
+    status: issues
+    publishes:
+      - session_summary
+      - session_history
+
+entry: start_session

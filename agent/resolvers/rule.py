@@ -103,6 +103,7 @@ def _build_namespace(result: dict, context: dict, meta: dict) -> dict:
         "False": False,
         # Safe builtins
         "len": len,
+        "sum": sum,
     }
 
 

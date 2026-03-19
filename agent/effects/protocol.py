@@ -96,6 +96,17 @@ class InferenceResult:
 
 
 @dataclass
+class TerminalOutput:
+    """Result of sending a command to a persistent terminal session."""
+
+    command: str
+    output: str
+    return_code: int  # -1 if still running or timed out
+    turn: int
+    timed_out: bool = False
+
+
+@dataclass
 class EffectsLogEntry:
     """A single logged effects operation."""
 
@@ -296,6 +307,56 @@ class Effects(Protocol):
 
         Returns:
             True on success.
+        """
+        ...
+
+    # ── Terminal sessions ─────────────────────────────────────────
+
+    async def start_terminal(
+        self,
+        working_dir: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        """Start a persistent shell subprocess.
+
+        Args:
+            working_dir: Working directory for the shell (relative to effects working_dir).
+            env: Additional environment variables.
+
+        Returns:
+            A session_id string identifying the running terminal.
+        """
+        ...
+
+    async def send_to_terminal(
+        self,
+        session_id: str,
+        command: str,
+        timeout: int = 30,
+    ) -> TerminalOutput:
+        """Send a command to a running terminal session and wait for output.
+
+        The command runs in the persistent shell subprocess. Output is captured
+        until a completion marker is detected or timeout is reached.
+
+        Args:
+            session_id: The session ID from start_terminal().
+            command: The shell command to execute.
+            timeout: Seconds to wait for command completion.
+
+        Returns:
+            TerminalOutput with command, output, return_code, and turn number.
+        """
+        ...
+
+    async def close_terminal(self, session_id: str) -> bool:
+        """Close a terminal session and clean up the subprocess.
+
+        Args:
+            session_id: The session ID to close.
+
+        Returns:
+            True if the session was found and closed.
         """
         ...
 

@@ -85,6 +85,7 @@ class NoteRecord(BaseModel):
         "approach_rejected",
         "dependency_identified",
         "lint_warning",
+        "architecture_blueprint",
     ] = "general"
     tags: list[str] = Field(default_factory=list)
     source_flow: str = "unknown"

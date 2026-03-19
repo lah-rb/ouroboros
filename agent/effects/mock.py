@@ -19,6 +19,7 @@ from agent.effects.protocol import (
     InferenceResult,
     SearchMatch,
     SearchResults,
+    TerminalOutput,
     WriteResult,
 )
 
@@ -327,3 +328,79 @@ class MockEffects:
         self._state[f"kv:{key}"] = value
         self._record("write_state", {"key": key}, True)
         return True
+
+    # ── Terminal sessions ─────────────────────────────────────────
+
+    async def start_terminal(
+        self,
+        working_dir: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        """Start a mock terminal session."""
+        session_id = f"mock_session_{len(self._state.get('terminals', {}))}"
+        terminals = self._state.setdefault("terminals", {})
+        terminals[session_id] = {
+            "turn_count": 0,
+            "history": [],
+            "working_dir": working_dir,
+        }
+        self._record(
+            "start_terminal", {"working_dir": working_dir, "env": env}, session_id
+        )
+        return session_id
+
+    async def send_to_terminal(
+        self,
+        session_id: str,
+        command: str,
+        timeout: int = 30,
+    ) -> TerminalOutput:
+        """Return canned terminal output based on command lookup."""
+        terminals = self._state.get("terminals", {})
+        session = terminals.get(session_id)
+        if session is None:
+            result = TerminalOutput(
+                command=command,
+                output="ERROR: Mock terminal session not found",
+                return_code=-1,
+                turn=-1,
+            )
+            self._record("send_to_terminal", {"session_id": session_id}, result)
+            return result
+
+        turn = session["turn_count"]
+        session["turn_count"] += 1
+
+        # Look up canned command result
+        cmd_result = self._commands.get(command)
+        if cmd_result is not None:
+            output = cmd_result.stdout + cmd_result.stderr
+            rc = cmd_result.return_code
+        else:
+            output = f"mock output for: {command}"
+            rc = 0
+
+        result = TerminalOutput(
+            command=command,
+            output=output,
+            return_code=rc,
+            turn=turn,
+        )
+        session["history"].append(
+            {"command": command, "output": output, "return_code": rc, "turn": turn}
+        )
+        self._record(
+            "send_to_terminal",
+            {"session_id": session_id, "command": command},
+            result,
+        )
+        return result
+
+    async def close_terminal(self, session_id: str) -> bool:
+        """Close a mock terminal session."""
+        terminals = self._state.get("terminals", {})
+        found = session_id in terminals
+        if found:
+            del terminals[session_id]
+        self._record("close_terminal", {"session_id": session_id}, found)
+        return found

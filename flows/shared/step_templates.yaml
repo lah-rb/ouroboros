@@ -93,7 +93,7 @@ templates:
 
   gather_project_context:
     action: flow
-    description: "Invoke prepare_context sub-flow for workspace awareness"
+    description: "Invoke prepare_context sub-flow for workspace awareness with AST dependency mapping"
     flow: prepare_context
     input_map:
       working_directory: "{{ input.working_directory }}"
@@ -103,6 +103,8 @@ templates:
     publishes:
       - context_bundle
       - project_manifest
+      - repo_map_formatted
+      - related_files
     param_schema:
       context_budget:
         type: integer

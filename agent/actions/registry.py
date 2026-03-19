@@ -285,6 +285,35 @@ def build_action_registry() -> ActionRegistry:
         action_execute_file_creation,
         action_run_tests,
     )
+    from agent.actions.diagnostic_actions import (
+        action_compile_diagnosis,
+        action_create_fix_task_from_diagnosis,
+        action_read_investigation_targets,
+    )
+    from agent.actions.integration_actions import (
+        action_apply_multi_file_changes,
+        action_run_project_tests,
+        action_check_remaining_smells,
+        action_restore_file_from_context,
+        action_check_remaining_doc_tasks,
+    )
+    from agent.actions.retrospective_actions import (
+        action_load_retrospective_data,
+        action_apply_retrospective_recommendations,
+        action_compose_director_report,
+        action_submit_review_to_api,
+    )
+    from agent.actions.research_actions import (
+        action_build_and_query_repomap,
+        action_run_git_investigation,
+        action_format_technical_query,
+        action_validate_cross_file_consistency,
+    )
+    from agent.actions.terminal_actions import (
+        action_start_terminal_session,
+        action_send_terminal_command,
+        action_close_terminal_session,
+    )
     from agent.actions.refinement_actions import (
         action_push_note,
         action_scan_project,
@@ -331,4 +360,35 @@ def build_action_registry() -> ActionRegistry:
     registry.register("run_fallback_validation", action_run_fallback_validation)
     registry.register("execute_project_setup", action_execute_project_setup)
     registry.register("apply_quality_gate_results", action_apply_quality_gate_results)
+    # Diagnostic actions (diagnose_issue, explore_spike)
+    registry.register("compile_diagnosis", action_compile_diagnosis)
+    registry.register(
+        "create_fix_task_from_diagnosis", action_create_fix_task_from_diagnosis
+    )
+    registry.register("read_investigation_targets", action_read_investigation_targets)
+    # Integration actions (integrate_modules, refactor, document_project)
+    registry.register("apply_multi_file_changes", action_apply_multi_file_changes)
+    registry.register("run_project_tests", action_run_project_tests)
+    registry.register("check_remaining_smells", action_check_remaining_smells)
+    registry.register("restore_file_from_context", action_restore_file_from_context)
+    registry.register("check_remaining_doc_tasks", action_check_remaining_doc_tasks)
+    # Retrospective actions (retrospective, request_review)
+    registry.register("load_retrospective_data", action_load_retrospective_data)
+    registry.register(
+        "apply_retrospective_recommendations",
+        action_apply_retrospective_recommendations,
+    )
+    registry.register("compose_director_report", action_compose_director_report)
+    registry.register("submit_review_to_api", action_submit_review_to_api)
+    # Research actions (research_repomap, research_codebase_history, research_technical)
+    registry.register("build_and_query_repomap", action_build_and_query_repomap)
+    registry.register("run_git_investigation", action_run_git_investigation)
+    registry.register("format_technical_query", action_format_technical_query)
+    registry.register(
+        "validate_cross_file_consistency", action_validate_cross_file_consistency
+    )
+    # Terminal session actions (run_in_terminal, manage_packages, validate_behavior)
+    registry.register("start_terminal_session", action_start_terminal_session)
+    registry.register("send_terminal_command", action_send_terminal_command)
+    registry.register("close_terminal_session", action_close_terminal_session)
     return registry

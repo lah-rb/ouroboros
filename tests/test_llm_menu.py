@@ -135,6 +135,26 @@ class TestBuildMenuPrompt:
         prompt = _build_menu_prompt(None, {"a": "Option A"})
         assert "a: Option A" in prompt
 
+    def test_include_step_output_text(self):
+        prompt = _build_menu_prompt(
+            "Which option?",
+            {"opt_a": "Do A", "opt_b": "Do B"},
+            step_output_text="The task completed successfully with 3 files created.",
+        )
+        assert "Here is what just happened:" in prompt
+        assert "The task completed successfully" in prompt
+        assert "Which option?" in prompt
+        assert "opt_a" in prompt
+
+    def test_step_output_text_none_excluded(self):
+        prompt = _build_menu_prompt(
+            "Which option?",
+            {"opt_a": "Do A"},
+            step_output_text=None,
+        )
+        assert "Here is what just happened:" not in prompt
+        assert "Which option?" in prompt
+
 
 # ── Full LLM Menu Resolver Tests ─────────────────────────────────────
 

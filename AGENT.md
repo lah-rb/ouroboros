@@ -165,20 +165,26 @@ uv run black .            # format code
 
 ## Development Cycle
 
-**ALWAYS follow this sequence after making changes:**
+**ALWAYS follow this sequence when making changes:**
+1. **Test** → `uv run pytest tests/ -v`
+   - Run the full suite first. Only narrow with `-k "test_name"` after full suite passes.
+   - CRITICAL: If any tests fail, stop the current object, investigate the issues, then plan and execute the fix. Only after all the tests pass should the origina objective be resumed.
 
-1. **Format** → `uv run black .`
+2. **Code**
+
+3. **Format** → `uv run black .`
    - ⚠️ Do NOT skip this — Black reformatting can change line numbers that affect test assertions.
 
-2. **Test** → `uv run pytest tests/ -v`
+4. **Test** → `uv run pytest tests/ -v`
    - Run the full suite first. Only narrow with `-k "test_name"` after full suite passes.
    - Specific file: `uv run pytest tests/test_runtime.py -v`
    - Specific test: `uv run pytest tests/ -v -k "test_name"`
 
-3. **Verify live** → Run the actual product for feature additions and possible breaks.
-   - `uv run ouroboros.py start --working-dir /tmp/test -v`
+5. **Verify live** → `uv run ouroboros.py mission create --mission_config test_config`
+   - Run the actual product for feature additions and possible breaks.
+   - The above command is an all in one. It cleans, creates, and starts the test. It requires no additional commands to deliver test the agent live.
 
-4. **If tests fail** → Read the error output, fix the specific failure, return to step 1.
+6. **If tests fail** → Read the error output, fix the specific failure, return to step 1.
 
 **IMPORTANT:** Step 3 is not optional for feature work. Unit tests passing does not guarantee the agent cycle works end-to-end.
 
@@ -220,60 +226,6 @@ curl -X POST http://localhost:8000/graphql \
 
 ### Model Context
 **IMPORTANT** While context is dependant to the specific running model, modern local models frequently support 128k, 256k and 1M context lengths natively. This being said, context management is still important as large contexts can slow models and long contexts often have poorer understanding for both local and API models.
-
----
-
-## Project Structure
-
-```
-ouroboros/
-├── pyproject.toml              # project config and dependencies
-├── ouroboros.py                 # CLI entry point (mission management)
-├── PROMPTING_CONVENTIONS.md    # Standards for runtime LLM prompts
-├── agent/
-│   ├── models.py               # Pydantic models for flows, steps, I/O
-│   ├── loader.py               # YAML parser + validator for flow definitions
-│   ├── runtime.py              # Flow executor (handles action: inference natively)
-│   ├── template.py             # Jinja2 prompt/param rendering
-│   ├── loop.py                 # Thin outer process: follow tail calls
-│   ├── tail_call.py            # Tail-call mechanics
-│   ├── resolvers/              # Transition resolvers
-│   │   ├── __init__.py         # Resolver dispatch (async)
-│   │   ├── rule.py             # Rule-based resolver
-│   │   └── llm_menu.py         # LLM-driven menu resolver
-│   ├── actions/                # Action registry and implementations
-│   │   ├── __init__.py
-│   │   ├── registry.py         # Action registry + built-in actions
-│   │   ├── mission_actions.py  # Mission lifecycle actions
-│   │   └── refinement_actions.py # Refinement phase actions
-│   ├── effects/                # Swappable side-effect layer
-│   │   ├── __init__.py
-│   │   ├── protocol.py         # Effects Protocol + return type dataclasses
-│   │   ├── inference.py        # InferenceEffect — GraphQL client for LLMVP
-│   │   ├── local.py            # LocalEffects (filesystem, subprocess, inference, persistence)
-│   │   └── mock.py             # MockEffects (canned responses for testing)
-│   └── persistence/            # File-backed JSON persistence
-│       ├── __init__.py
-│       ├── models.py           # MissionState, TaskRecord, Event, etc.
-│       ├── manager.py          # PersistenceManager (atomic writes)
-│       └── migrations.py       # Schema version handling
-├── flows/                      # YAML flow definitions
-│   ├── registry.yaml           # Discovery manifest for all flows
-│   ├── mission_control.yaml    # Top-level orchestrator
-│   ├── create_plan.yaml        # Plan generation from objective
-│   ├── shared/                 # Reusable sub-flows and templates
-│   │   ├── step_templates.yaml # Step template definitions
-│   │   ├── prepare_context.yaml
-│   │   ├── validate_output.yaml
-│   │   ├── capture_learnings.yaml
-│   │   ├── research_context.yaml
-│   │   └── revise_plan.yaml
-│   └── tasks/                  # Task flows dispatched by mission_control
-│       ├── create_file.yaml
-│       └── modify_file.yaml
-└── tests/                      # Test suite (211+ tests)
-    └── test_*.py
-```
 
 ---
 

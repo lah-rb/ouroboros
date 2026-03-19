@@ -1,5 +1,9 @@
 """Tests for agent/visualize.py — flow visualization."""
 
+import os
+import tempfile
+from unittest.mock import patch, MagicMock
+
 import pytest
 
 from agent.loader import load_flow_from_dict
@@ -8,8 +12,11 @@ from agent.visualize import (
     flow_to_dot,
     all_flows_to_mermaid,
     all_flows_to_dot,
+    render_to_svg,
     _step_type,
     _step_icon,
+    _sanitize_mermaid_text,
+    _mermaid_edge,
 )
 
 # ── Test fixtures ─────────────────────────────────────────────────────
@@ -338,3 +345,152 @@ class TestDotSystemView:
         assert "task_flow" in output
         assert "mission_control" in output
         assert "dashed" in output
+
+
+# ── Mermaid sanitization tests ────────────────────────────────────────
+
+
+class TestSanitizeMermaidText:
+    def test_brackets_replaced(self):
+        result = _sanitize_mermaid_text("len([x for x in items])")
+        assert "[" not in result
+        assert "]" not in result
+
+    def test_braces_replaced(self):
+        result = _sanitize_mermaid_text("context.get('mission', {})")
+        assert "{" not in result
+        assert "}" not in result
+
+    def test_parens_replaced(self):
+        result = _sanitize_mermaid_text("len(items)")
+        assert "(" not in result
+        assert ")" not in result
+
+    def test_pipes_replaced(self):
+        result = _sanitize_mermaid_text("a | b")
+        assert "|" not in result
+
+    def test_angle_brackets_replaced(self):
+        result = _sanitize_mermaid_text("a > b and c < d")
+        assert ">" not in result
+        assert "<" not in result
+
+    def test_hash_replaced(self):
+        result = _sanitize_mermaid_text("item #5")
+        assert "#" not in result
+
+    def test_whitespace_normalized(self):
+        result = _sanitize_mermaid_text("line one\n  line two\n  line three")
+        assert "\n" not in result
+        assert "  " not in result
+        assert "line one line two line three" in result
+
+    def test_plain_text_unchanged(self):
+        result = _sanitize_mermaid_text("result.status == 'active'")
+        assert result == "result.status == 'active'"
+
+    def test_complex_condition_sanitized(self):
+        """The exact condition that caused the original parse error."""
+        cond = (
+            "len([t for t in context.get('mission', {}).plan "
+            "if t.status == 'complete']) % 5 == 0"
+        )
+        result = _sanitize_mermaid_text(cond)
+        # No Mermaid-special characters remain
+        for char in "[]{}()|<>#":
+            assert char not in result, f"Character {char!r} still present in: {result}"
+
+
+class TestMermaidEdgeSanitization:
+    def test_edge_label_with_brackets_is_safe(self):
+        edge = _mermaid_edge("a", "b", label="len([x]) > 0")
+        # The output should NOT contain raw [ or ]
+        # (The edge format is: "    a -->|label| b")
+        label_part = edge.split("|")[1]
+        assert "[" not in label_part
+        assert "]" not in label_part
+
+    def test_edge_with_multiline_condition_collapsed(self):
+        cond = "result.x == true\nand result.y == false"
+        edge = _mermaid_edge("step_a", "step_b", label=cond)
+        assert "\n" not in edge
+
+    def test_edge_truncation_still_works(self):
+        long_label = "a" * 100
+        edge = _mermaid_edge("x", "y", label=long_label)
+        label_part = edge.split("|")[1]
+        assert len(label_part) <= 50
+        assert label_part.endswith("...")
+
+
+# ── SVG export tests ─────────────────────────────────────────────────
+
+
+class TestRenderToSvg:
+    def test_invalid_format_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unsupported source_format"):
+            render_to_svg(
+                "graph TD; A-->B", source_format="png", output_path="/tmp/out.svg"
+            )
+
+    @patch("agent.visualize.shutil.which", return_value=None)
+    def test_mermaid_missing_mmdc_raises(self, mock_which):
+        with pytest.raises(RuntimeError, match="mmdc"):
+            render_to_svg(
+                "flowchart TD\n    A-->B",
+                source_format="mermaid",
+                output_path="/tmp/out.svg",
+            )
+
+    @patch("agent.visualize.shutil.which", return_value=None)
+    def test_dot_missing_graphviz_raises(self, mock_which):
+        with pytest.raises(RuntimeError, match="dot"):
+            render_to_svg(
+                "digraph { A -> B }",
+                source_format="dot",
+                output_path="/tmp/out.svg",
+            )
+
+    @patch("agent.visualize.subprocess.run")
+    @patch("agent.visualize.shutil.which", return_value="/usr/local/bin/mmdc")
+    def test_mermaid_svg_calls_mmdc(self, mock_which, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = os.path.join(tmpdir, "test.svg")
+            render_to_svg(
+                "flowchart TD\n    A-->B",
+                source_format="mermaid",
+                output_path=out_path,
+            )
+        # mmdc should have been called
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+        assert call_args[0][0][0] == "/usr/local/bin/mmdc"
+
+    @patch("agent.visualize.subprocess.run")
+    @patch("agent.visualize.shutil.which", return_value="/usr/local/bin/dot")
+    def test_dot_svg_calls_dot(self, mock_which, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = os.path.join(tmpdir, "test.svg")
+            render_to_svg(
+                "digraph { A -> B }",
+                source_format="dot",
+                output_path=out_path,
+            )
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+        assert call_args[0][0][0] == "/usr/local/bin/dot"
+
+    @patch("agent.visualize.subprocess.run")
+    @patch("agent.visualize.shutil.which", return_value="/usr/local/bin/dot")
+    def test_dot_nonzero_exit_raises(self, mock_which, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=1, stderr="syntax error", stdout=""
+        )
+        with pytest.raises(RuntimeError, match="dot exited with code 1"):
+            render_to_svg(
+                "bad dot source",
+                source_format="dot",
+                output_path="/tmp/out.svg",
+            )

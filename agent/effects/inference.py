@@ -226,8 +226,14 @@ class InferenceEffect:
                 )
 
             completion = data["data"]["completion"]
+            # Strip trailing partial stop tokens (e.g. "<" from truncated "<|im_end|>")
+            text = completion["text"]
+            if text.endswith("\n<"):
+                text = text[:-2]
+            elif text.endswith("<"):
+                text = text[:-1]
             return InferenceResult(
-                text=completion["text"],
+                text=text,
                 tokens_generated=completion["tokensGenerated"],
                 finished=completion["finished"],
             )

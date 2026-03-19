@@ -11,8 +11,8 @@ input:
   required:
     - mission_id
     - task_id
-    - target_file_path
   optional:
+    - target_file_path
     - task_description
     - mission_objective
     - working_directory
@@ -37,8 +37,62 @@ steps:
     resolver:
       type: rule
       rules:
-        - condition: "true"
+        - condition: "input.get('target_file_path', '') != ''"
           transition: read_target
+        - condition: "true"
+          transition: select_target
+
+  select_target:
+    action: inference
+    description: "No target_file_path provided — select the best file to test from project context"
+    context:
+      optional: [project_manifest, context_bundle]
+    prompt: |
+      You are a file selection module in an automated coding pipeline.
+      Return ONLY a single filename — no explanation, no quotes, no markdown.
+
+      A test creation task needs to select which project file to test.
+      Task: {{ input.task_description }}
+
+      {% if context.project_manifest %}
+      Project files:
+      {% for filepath in context.project_manifest.keys() %}
+      - {{ filepath }}
+      {% endfor %}
+      {% endif %}
+
+      Select the SINGLE most important Python source file to generate tests for.
+      Do NOT select test files, __init__.py, or config files.
+
+      Return ONLY the filename (e.g. card.py), nothing else.
+    config:
+      temperature: 0.0
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: read_selected_target
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - selected_file_response
+
+  read_selected_target:
+    action: read_files
+    description: "Read the file selected by inference"
+    context:
+      required: [selected_file_response]
+    params:
+      target: "{{ context.selected_file_response.text | default(context.selected_file_response) }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_found == true"
+          transition: generate_tests
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - target_file
 
   read_target:
     use: read_target_file
@@ -55,7 +109,7 @@ steps:
     description: "Generate test code for the target module"
     context:
       required: [target_file]
-      optional: [context_bundle, project_manifest]
+      optional: [context_bundle, project_manifest, repo_map_formatted, related_files]
     prompt: |
       You are a test generation module in an automated coding pipeline.
       Your output will be extracted from code markers and written directly to a file.
@@ -66,6 +120,20 @@ steps:
       Target module: {{ context.target_file.path }}
       Module content:
       {{ context.target_file.content }}
+
+      {% if context.repo_map_formatted %}
+      ## Project Structure (AST-based — use this for CORRECT import paths)
+      {{ context.repo_map_formatted }}
+
+      ⚠️ CRITICAL: Use the EXACT module paths shown above for imports in your tests.
+      Convert file paths to Python module names: app/main.py → app.main, utils.py → utils.
+      Do NOT guess import paths — they must match the actual project structure above.
+      {% endif %}
+
+      {% if context.related_files %}
+      ## Files Most Connected to Target (dependencies and dependents)
+      {{ context.related_files | join(', ') }}
+      {% endif %}
 
       {% if context.context_bundle and context.context_bundle.files %}
       Related project files for understanding context:
@@ -85,6 +153,12 @@ steps:
       ⚠️ Previous test generation attempts FAILED:
       {{ input.frustration_history }}
       Take a different approach.
+      {% endif %}
+
+      {% if input.relevant_notes %}
+      ⚠️ IMPORTANT — observations from previous tasks:
+      {{ input.relevant_notes }}
+      Use these observations to avoid repeating known mistakes.
       {% endif %}
 
       Requirements:
@@ -128,8 +202,9 @@ steps:
     description: "Write the generated test file"
     context:
       required: [inference_response]
+      optional: [target_file]
     params:
-      target_file_path: "{{ input.test_file_path | default('tests/test_' + input.target_file_path.split('/')[-1]) }}"
+      target_file_path: "{{ input.test_file_path | default('tests/test_' + (input.get('target_file_path', '') or context.get('target_file', {}).get('path', 'module.py')).split('/')[-1]) }}"
     resolver:
       type: rule
       rules:
@@ -143,8 +218,10 @@ steps:
   run_tests:
     action: run_tests
     description: "Run the generated tests to validate them"
+    context:
+      optional: [target_file]
     params:
-      test_path: "{{ input.test_file_path | default('tests/test_' + input.target_file_path.split('/')[-1]) }}"
+      test_path: "{{ input.test_file_path | default('tests/test_' + (input.get('target_file_path', '') or context.get('target_file', {}).get('path', 'module.py')).split('/')[-1]) }}"
     resolver:
       type: rule
       rules:

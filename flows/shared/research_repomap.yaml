@@ -1,0 +1,87 @@
+flow: research_repomap
+version: 1
+description: >
+  Build an AST-based repository map using tree-sitter and PageRank,
+  then query it for structural context relevant to a research question.
+  Returns symbol definitions, file rankings, and related file lists.
+
+input:
+  required:
+    - research_query
+  optional:
+    - working_directory
+    - target_file_path
+    - focus_files
+
+defaults:
+  config:
+    temperature: "t*0.3"
+
+steps:
+
+  build_map:
+    action: build_and_query_repomap
+    description: "Build repo map from workspace files using tree-sitter + PageRank"
+    params:
+      root: "{{ input.working_directory | default('.') }}"
+      include_patterns: ["*.py", "*.yaml", "*.yml", "*.js", "*.ts", "*.rs"]
+      max_chars: 4000
+      focus_files: "{{ input.focus_files | default('[]') }}"
+    context:
+      optional: [target_file_path]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.files_mapped > 0"
+          transition: analyze_structure
+        - condition: "true"
+          transition: no_results
+    publishes:
+      - repo_map_formatted
+      - related_files
+      - raw_results
+
+  analyze_structure:
+    action: inference
+    description: "Analyze the repo map to answer the research query"
+    context:
+      required: [repo_map_formatted, research_query]
+      optional: [related_files]
+    prompt: |
+      You are analyzing a codebase structure to answer a research question.
+
+      ## Research Question
+      {{ context.research_query }}
+
+      ## Repository Structure (AST-based, ranked by importance)
+      {{ context.repo_map_formatted }}
+
+      {% if context.related_files %}
+      ## Most Related Files
+      {{ context.related_files | join(', ') }}
+      {% endif %}
+
+      ## Analyze
+
+      Based on the repository structure above, answer the research question.
+      Focus on:
+      1. Which files and symbols are most relevant to the question
+      2. How the relevant components connect (imports, function calls, class hierarchies)
+      3. The architectural pattern visible in the file and symbol organization
+      4. Any observations about code organization quality or potential issues
+
+      Be specific — reference file names, class names, and function signatures.
+    config:
+      temperature: "t*0.3"
+    terminal: true
+    status: success
+    publishes:
+      - raw_results
+
+  no_results:
+    action: noop
+    description: "No source files found to build repo map"
+    terminal: true
+    status: failed
+
+entry: build_map

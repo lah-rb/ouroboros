@@ -29,6 +29,27 @@ defaults:
 
 steps:
 
+  check_file_type:
+    action: noop
+    description: "Quick file type check — skip LLM validation for non-code files"
+    resolver:
+      type: rule
+      rules:
+        - condition: >
+            input.get('file_path', '').endswith('.md')
+            or input.get('file_path', '').endswith('.txt')
+            or input.get('file_path', '').endswith('.json')
+            or input.get('file_path', '').endswith('.toml')
+            or input.get('file_path', '').endswith('.cfg')
+            or input.get('file_path', '').endswith('.ini')
+            or input.get('file_path', '').endswith('.env')
+            or input.get('file_path', '').endswith('.csv')
+          transition: complete_pass
+        - condition: "true"
+          transition: determine_strategy
+    publishes:
+      - validation_results
+
   determine_strategy:
     action: inference
     description: "LLM decides what validation to run across all three tiers"
@@ -69,7 +90,8 @@ steps:
         Use whatever linter is likely available or standard for the language.
         If unsure, use the most common/lightweight option.
 
-      Tier 4 — TESTS (required: false): Run tests if test files exist.
+      Tier 4 — TESTS (required: false): Run tests ONLY if test files are visible in the project files listing above.
+        If NO tests/ directory or test_*.py files appear in the project files, DO NOT include a test check at all.
         Python: uv run pytest tests/ -v --tb=short  |  JS: npm test  |  Rust: cargo test
 
       ✅ CORRECT output (raw JSON object, nothing else):
@@ -209,4 +231,4 @@ steps:
     terminal: true
     status: failed
 
-entry: determine_strategy
+entry: check_file_type
