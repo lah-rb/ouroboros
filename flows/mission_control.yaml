@@ -57,12 +57,51 @@ steps:
         - condition: "result.events_pending == true"
           transition: process_events
         - condition: "result.task_completed == true"
+          transition: check_retrospective
+        - condition: "context.get('last_status') == 'abandoned'"
           transition: check_extension
         - condition: "true"
           transition: assess
     publishes:
       - mission
       - frustration
+
+  # ── Phase 2b: Periodic retrospective check ─────────────────
+
+  check_retrospective:
+    action: noop
+    description: >
+      Check if a retrospective is due. Triggers every 5 completed tasks,
+      when total frustration exceeds 8, or when 3+ tasks are blocked/failed.
+    context:
+      required: [mission, frustration]
+    resolver:
+      type: rule
+      rules:
+        - condition: >
+            len([t for t in context.get('mission', {}).plan if t.status == 'complete']) % 5 == 0
+            and len([t for t in context.get('mission', {}).plan if t.status == 'complete']) > 0
+          transition: dispatch_retrospective
+        - condition: >
+            sum(context.get('frustration', {}).values()) >= 8
+          transition: dispatch_retrospective
+        - condition: >
+            len([t for t in context.get('mission', {}).plan if t.status in ('blocked', 'failed')]) >= 3
+          transition: dispatch_retrospective
+        - condition: "true"
+          transition: check_extension
+    publishes: []
+
+  dispatch_retrospective:
+    action: noop
+    description: "Dispatch to retrospective flow"
+    context:
+      required: [mission]
+    tail_call:
+      flow: retrospective
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        trigger_reason: "Periodic trigger: milestone reached"
 
   # ── Phase 3: Process external events ────────────────────────
 
@@ -113,24 +152,32 @@ steps:
       {% endfor %}
       {% endif %}
 
-      Does the completed work reveal any NEW requirements, missing tasks,
-      or needed extensions to achieve the mission objective?
+      Cross-check the objective against the plan:
+      For EACH requirement in the objective, identify which task covers it.
+      If any requirement has NO corresponding task, that is a gap that needs extension.
 
-      Only suggest extensions if:
-      - The objective explicitly calls for expansion/extension
+      Common gaps to check:
+      - Does the objective mention tests? Is there a task that creates tests?
+      - Does the objective mention integration between modules? Is there an integration task?
+      - Does the objective specify a number of test cases? Will the test task produce that many?
+      - Does the objective require CLI interfaces? Is there a task for each CLI tool?
+      - Does the objective require modules to share code? Is there a task verifying they do?
+
+      Suggest extensions if:
+      - A numbered requirement in the objective has no task covering it
       - Completed work revealed a clearly missing component
       - A dependency was discovered that no existing task covers
+      - The objective specifies integration but no integrate_modules task exists
 
       Do NOT suggest extensions if:
-      - The existing plan already covers the objective
-      - Extensions are nice-to-have but not required
+      - Every requirement in the objective has a corresponding task
       - All remaining tasks are sufficient to complete the objective
 
-      ✅ CORRECT output:
-      {"extend": false, "reason": "existing plan covers the objective"}
+      ✅ CORRECT output when gaps exist:
+      {"extend": true, "reason": "objective requires integration between pomodoro and tasks modules but no integrate_modules task exists", "observation": "Need to add integration verification task"}
 
-      OR:
-      {"extend": true, "reason": "discovered that module X needs a config file", "observation": "The new crypto module requires settings that aren't configured anywhere"}
+      ✅ CORRECT output when plan is complete:
+      {"extend": false, "reason": "every requirement in the objective has a corresponding task"}
 
       Return ONLY the raw JSON object.
     config:
@@ -176,6 +223,8 @@ steps:
       rules:
         - condition: "result.needs_plan == true"
           transition: dispatch_planning
+        - condition: "result.all_tasks_complete == true and result.all_remaining_blocked == true"
+          transition: completed
         - condition: "result.all_tasks_complete == true and result.get('quality_gate_exhausted', false) == true"
           transition: completed
         - condition: "result.all_tasks_complete == true"

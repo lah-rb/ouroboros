@@ -1,0 +1,229 @@
+flow: request_review
+version: 1
+description: >
+  Proactively submit completed work for senior dev review. The agent is
+  confident in the work but seeks verification, feedback, and learning.
+  Stub: review submission returns unavailable until Phase 6 escalation.
+
+input:
+  required:
+    - mission_id
+    - task_id
+  optional:
+    - task_description
+    - mission_objective
+    - working_directory
+    - work_summary
+    - files_to_review
+    - design_decisions
+    - specific_concerns
+    - quality_gate_observations
+    - frustration_level
+    - frustration_history
+    - relevant_notes
+
+defaults:
+  config:
+    temperature: "t*0.3"
+    max_tokens: 4096
+
+steps:
+
+  # ── Phase 1: Gather context ────────────────────────────────
+
+  gather_review_context:
+    use: gather_project_context
+    params:
+      context_budget: 10
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: compose_review_request
+
+  # ── Phase 2: Compose review request ────────────────────────
+
+  compose_review_request:
+    action: inference
+    description: "Compose a clear, focused review request"
+    context:
+      optional: [context_bundle, work_summary, design_decisions, specific_concerns, quality_gate_observations]
+    prompt: |
+      You are a review composition module in an automated coding pipeline.
+      Your output will be sent to a senior developer for code review.
+      Be clear, focused, and respectful of their time.
+
+      ## What Was Done
+      {{ input.work_summary or input.task_description }}
+
+      {% if input.design_decisions %}
+      ## Design Decisions Made
+      {{ input.design_decisions }}
+      {% endif %}
+
+      {% if input.specific_concerns %}
+      ## Areas Where You Want Particular Attention
+      {{ input.specific_concerns }}
+      {% endif %}
+
+      {% if input.quality_gate_observations %}
+      ## Quality Gate Notes
+      {{ input.quality_gate_observations }}
+      {% endif %}
+
+      {% if context.context_bundle and context.context_bundle.files %}
+      ## Files for Review
+      {% for file in context.context_bundle.files %}
+      ### {{ file.path }}
+      ```
+      {{ file.content[:2000] }}
+      ```
+      {% endfor %}
+      {% endif %}
+
+      ## Compose the Review Request
+
+      Write a concise review request:
+
+      1. **Summary**: 2-3 sentences on what was built and why
+      2. **Key decisions**: the most important design choices and reasoning
+      3. **What to focus on**: specific areas where review is most valuable
+      4. **Self-assessment**: honest evaluation of work quality
+
+      Be direct. Don't be falsely humble or falsely confident.
+    config:
+      temperature: "t*0.4"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: submit_review
+        - condition: "true"
+          transition: review_unavailable
+    publishes:
+      - review_request
+
+  # ── Phase 3: Submit review ─────────────────────────────────
+
+  submit_review:
+    action: submit_review_to_api
+    description: "Send the review request via escalation API (stub until Phase 6)"
+    context:
+      required: [review_request]
+      optional: [context_bundle]
+    params:
+      request_type: "code_review"
+      system_prompt_override: |
+        You are a senior developer reviewing work from a junior developer.
+        They are NOT stuck — they completed the work and are requesting feedback.
+        Provide constructive review: approve/request changes/reject, specific feedback,
+        suggestions, and what was done well.
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.response_received == true"
+          transition: process_review_feedback
+        - condition: "true"
+          transition: review_unavailable
+    publishes:
+      - review_response
+
+  # ── Phase 4: Process feedback ──────────────────────────────
+
+  process_review_feedback:
+    action: inference
+    description: "Analyze the senior dev's review feedback"
+    context:
+      required: [review_response, review_request]
+      optional: [context_bundle, work_summary]
+    prompt: |
+      You received this code review from the senior developer:
+
+      {{ context.review_response }}
+
+      ## Analyze the Feedback
+
+      Categorize each piece of feedback:
+
+      1. **Must fix**: Issues that need to be addressed before moving on
+      2. **Should fix**: Improvements worth making but not blocking
+      3. **Consider for future**: Good advice to remember but not actionable now
+      4. **Positive feedback**: What was done well — record for reinforcement
+
+      For each "must fix" and "should fix" item:
+      - What specifically needs to change
+      - In which file and approximately where
+      - How confident are you in implementing the fix
+
+      Also extract any general principles the senior dev communicated.
+    config:
+      temperature: "t*0.3"
+    resolver:
+      type: llm_menu
+      prompt: "How should the review feedback be handled?"
+      options:
+        approved:
+          description: "Review approved — no changes needed or only minor suggestions"
+        changes_needed:
+          description: "Changes requested — need to modify code before proceeding"
+        major_rework:
+          description: "Significant issues found — task needs substantial rework"
+    publishes:
+      - feedback_analysis
+      - required_changes
+      - learnings_from_review
+
+  # ── Terminal paths ─────────────────────────────────────────
+
+  approved:
+    action: flow
+    description: "Record review feedback and learnings"
+    flow: capture_learnings
+    input_map:
+      task_description: "Code review feedback for {{ input.task_description }}"
+      learning_focus: "general"
+      category: "task_learning"
+    terminal: true
+    status: success
+
+  changes_needed:
+    action: noop
+    description: "Route back to mission_control for modification tasks"
+    status: success
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Review feedback received — changes requested"
+
+  major_rework:
+    action: noop
+    description: "Review found significant issues — re-plan the task"
+    status: success
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "abandoned"
+        last_result: "Review found major issues — rework needed"
+
+  review_unavailable:
+    action: noop
+    description: "Senior dev review not available — proceed without review"
+    status: success
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Review unavailable — proceeding without review"
+
+entry: gather_review_context
+
+overflow:
+  strategy: split
+  fallback: reorganize

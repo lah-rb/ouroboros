@@ -35,15 +35,32 @@ steps:
       type: rule
       rules:
         - condition: "result.file_count > 0"
-          transition: check_research_needed
+          transition: build_repomap
         - condition: "result.file_count == 0"
           transition: empty_project
     publishes:
       - project_manifest
 
+  build_repomap:
+    action: build_and_query_repomap
+    description: "Build AST-based dependency map for intelligent file selection"
+    params:
+      root: "{{ input.working_directory | default('.') }}"
+      include_patterns: ["*.py", "*.js", "*.ts", "*.rs"]
+      max_chars: 3000
+      focus_files: "{{ input.target_file_path | default('') }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: check_research_needed
+    publishes:
+      - repo_map_formatted
+      - related_files
+
   check_research_needed:
     action: noop
-    description: "Determine if web research should supplement context — always available, frustration-graduated"
+    description: "Determine if web research should supplement context — frustration-graduated, skip at low frustration"
     resolver:
       type: rule
       rules:
@@ -53,9 +70,12 @@ steps:
         # Medium frustration (3-5): research is strongly recommended — let LLM decide
         - condition: "input.get('frustration_level', '0') in ('3', '4', '5')"
           transition: decide_research_recommended
-        # Low/no frustration: research is optional — let LLM decide
-        - condition: "true"
+        # Low frustration (1-2): research is optional — let LLM decide
+        - condition: "input.get('frustration_level', '0') in ('1', '2')"
           transition: decide_research_optional
+        # No frustration (0): skip research entirely — save the inference call
+        - condition: "true"
+          transition: select_relevant
 
   decide_research_recommended:
     action: inference
@@ -133,10 +153,10 @@ steps:
 
   select_relevant:
     action: inference
-    description: "LLM decides which files matter for this task"
+    description: "LLM decides which files matter for this task, guided by AST dependency map"
     context:
       required: [project_manifest]
-      optional: [research_findings]
+      optional: [research_findings, repo_map_formatted, related_files]
     prompt: |
       You are a context selection module in an automated coding pipeline.
       Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
@@ -148,6 +168,17 @@ steps:
       {% endif %}
       {% if input.target_file_path %}
       Primary target file: {{ input.target_file_path }}
+      {% endif %}
+
+      {% if context.repo_map_formatted %}
+      ## Project Structure (AST-based dependency map, ranked by importance)
+      {{ context.repo_map_formatted }}
+      {% endif %}
+
+      {% if context.related_files %}
+      ## Files Most Connected to Target (by actual import/reference graph)
+      These files share the most symbol references with the target — include them preferentially:
+      {{ context.related_files | join(', ') }}
       {% endif %}
 
       Available files in the project:
@@ -173,8 +204,12 @@ steps:
       {% endif %}
 
       Select the files this task needs to see. Budget: at most {{ input.context_budget | default(8) }} files.
-      Prioritize: target file (if any), direct imports/dependencies, interfaces
-      the target depends on, test files if modifying code.
+      Prioritize in this order:
+      1. Target file (if it exists)
+      2. Files from the "Most Connected" list above — these are actual dependencies
+      3. Direct imports/dependencies visible in the AST map
+      4. Test files if modifying code
+      5. Additional files relevant to the task description
 
       ✅ CORRECT output (raw JSON array, nothing else):
       [
@@ -206,10 +241,10 @@ steps:
 
   load_selected:
     action: load_file_contents
-    description: "Read full content of LLM-selected files"
+    description: "Read full content of selected files (hybrid: repomap-related + LLM-selected)"
     context:
       required: [inference_response, project_manifest]
-      optional: [research_findings]
+      optional: [research_findings, related_files]
     params:
       budget: "{{ input.context_budget | default(8) }}"
     resolver:

@@ -1,0 +1,25 @@
+# Challenge mission: Model performance eval on Ouroboros, where does the framework struggle and shine?
+# uv run ouroboros.py mission create --mission_config models_challenge
+# version: 1
+
+objective: >
+  Build a text adventure game engine in Python. 
+  The engine should load game world data from YAML files defining 
+  rooms, items, NPCs, and connections. Implement a command parser that handles:
+  movement (go north/south/east/west), inventory management (take, drop, use, examine), 
+  NPC interaction (talk to), and look/help/quit. Manage game state including player location,
+  inventory, room state changes, and NPC dialogue progression. Support save and load of game
+  state to JSON. Create a playable demo adventure with at least
+  6 rooms, 4 items, and 2 NPCs with branching dialogue. The game should be runnable from 
+  the command line and produce engaging descriptive text.
+
+working_dir: "/tmp/ouroboros-challenge-QWEN3.5-35B-a3"
+effects_profile: local
+llmvp_endpoint: "http://localhost:8008/graphql"
+
+pre_create:
+  - "rm -rf /tmp/ouroboros-challenge-QWEN3.5-35B-a3 && mkdir /tmp/ouroboros-challenge-QWEN3.5-35B-a3"
+  - "touch ~/Repos/ouroboros/llmvp/logs/interactions.jsonl && rm ~/Repos/ouroboros/llmvp/logs/interactions.jsonl"
+
+post_create:
+  - "cd ~/Repos/ouroboros && uv run ouroboros.py start --working-dir /tmp/ouroboros-challenge-QWEN3.5-35B-a3"

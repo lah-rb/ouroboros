@@ -4,7 +4,7 @@
 # mission: test
 # version: 1
 
-objective: "Build a python app. It does not matter what it does just make it interesting and somewhat complex. At somepoint you must modify a file you created. At somepoint you must research using curl. At somepoint you must extend the mission."  
+objective: "Build a python app unrelated to Ouroboros. It does not matter what it does just make it interesting and complex enough to test your skill."  
 
 working_dir: "/tmp/ouroboros-test-mission"
 effects_profile: local

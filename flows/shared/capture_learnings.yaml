@@ -20,9 +20,26 @@ defaults:
 
 steps:
 
+  read_source:
+    action: read_files
+    description: "Read the actual file content for grounded reflection"
+    params:
+      target: "{{ input.target_file_path | default('') }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_found == true"
+          transition: reflect
+        - condition: "true"
+          transition: reflect
+    publishes:
+      - target_file
+
   reflect:
     action: inference
     description: "Generate a reflection on what was learned"
+    context:
+      optional: [target_file]
     prompt: |
       You are a learning capture module in an automated coding pipeline.
       Your output will be stored as a note for future tasks to reference.
@@ -35,6 +52,17 @@ steps:
       {% if input.task_outcome %}
       Outcome: {{ input.task_outcome }}
       {% endif %}
+
+      {% if context.target_file and context.target_file.content %}
+      ACTUAL FILE CONTENT (ground your observations in THIS code only):
+      {{ context.target_file.content[:2000] }}
+      {% endif %}
+
+      IMPORTANT: Base your observations ONLY on what you can see in the actual
+      file content above. Do NOT invent details about frameworks, libraries,
+      or patterns that are not explicitly present in the code. If the file
+      uses standard library @dataclass, say "dataclass" — not "Pydantic v2".
+      If functions are synchronous, do not claim they are async.
 
       {% if input.learning_focus == "file_creation" %}
       Focus on: What patterns did you establish? What dependencies does this
@@ -103,4 +131,4 @@ steps:
     terminal: true
     status: success
 
-entry: reflect
+entry: read_source

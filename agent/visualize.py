@@ -8,10 +8,15 @@ Supports:
 - Cross-flow system view (all flows + tail-call/sub-flow edges)
 - Mermaid output (GitHub/VS Code compatible)
 - Graphviz DOT output (for SVG/PNG via `dot` CLI)
+- SVG export via mmdc (Mermaid CLI) or dot (Graphviz)
 """
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import tempfile
 from typing import Any
 
 from agent.models import FlowDefinition, StepDefinition
@@ -41,6 +46,43 @@ def _step_icon(step_type: str) -> str:
         "terminal": "🏁",
         "tail_call": "🚀",
     }.get(step_type, "⬜")
+
+
+# ── Mermaid Text Sanitization ─────────────────────────────────────────
+
+# Characters that Mermaid interprets as syntax when they appear in labels.
+# Brackets, braces, parens, pipes, angle-brackets, and hash are all
+# shape/link/comment delimiters in the Mermaid grammar.
+_MERMAID_SPECIAL_CHARS: dict[str, str] = {
+    "[": "⟦",
+    "]": "⟧",
+    "{": "⦃",
+    "}": "⦄",
+    "(": "⟮",
+    ")": "⟯",
+    "|": "¦",
+    "<": "‹",
+    ">": "›",
+    "#": "♯",
+}
+
+
+def _sanitize_mermaid_text(text: str) -> str:
+    """Replace characters that break Mermaid parsing with safe equivalents.
+
+    Mermaid uses ``[ ] { } ( ) | < > #`` as syntax delimiters for node
+    shapes, edge labels, comments, and directives. When these characters
+    appear inside label text they cause parse errors. This function
+    replaces each one with a visually similar Unicode character that
+    Mermaid treats as plain text.
+
+    Also normalises internal whitespace (newlines → spaces, collapse runs).
+    """
+    # Normalise whitespace first (multi-line YAML conditions)
+    text = " ".join(text.split())
+    for char, replacement in _MERMAID_SPECIAL_CHARS.items():
+        text = text.replace(char, replacement)
+    return text
 
 
 # ── Mermaid Generation ────────────────────────────────────────────────
@@ -80,6 +122,8 @@ def _mermaid_edge(
         arrow = "-->"
 
     if safe_label:
+        # Sanitize Mermaid-special characters before truncating
+        safe_label = _sanitize_mermaid_text(safe_label)
         # Truncate long conditions
         if len(safe_label) > 50:
             safe_label = safe_label[:47] + "..."
@@ -365,6 +409,90 @@ def flow_to_dot(flow_def: FlowDefinition) -> str:
 
     lines.append("}")
     return "\n".join(lines)
+
+
+# ── SVG Export ────────────────────────────────────────────────────────
+
+
+def render_to_svg(
+    source: str,
+    source_format: str,
+    output_path: str,
+) -> None:
+    """Render a Mermaid or DOT diagram source to an SVG file.
+
+    For Mermaid sources, uses ``mmdc`` (Mermaid CLI / @mermaid-js/mermaid-cli).
+    For DOT sources, uses ``dot`` (Graphviz).
+
+    Args:
+        source: The diagram source text (Mermaid or DOT).
+        source_format: ``"mermaid"`` or ``"dot"``.
+        output_path: Filesystem path for the output SVG.
+
+    Raises:
+        RuntimeError: If the required CLI tool is not installed or the
+            render subprocess exits with a non-zero code.
+    """
+    output_path = os.path.realpath(output_path)
+
+    if source_format == "mermaid":
+        _render_mermaid_svg(source, output_path)
+    elif source_format == "dot":
+        _render_dot_svg(source, output_path)
+    else:
+        raise ValueError(f"Unsupported source_format: {source_format!r}")
+
+
+def _render_mermaid_svg(source: str, output_path: str) -> None:
+    """Render Mermaid source to SVG via ``mmdc``."""
+    mmdc = shutil.which("mmdc")
+    if mmdc is None:
+        raise RuntimeError(
+            "mmdc (Mermaid CLI) not found on PATH.\n"
+            "Install it with:  npm install -g @mermaid-js/mermaid-cli"
+        )
+
+    tmpdir = tempfile.mkdtemp(prefix="ouroboros_viz_")
+    try:
+        input_file = os.path.join(tmpdir, "input.mmd")
+        with open(input_file, "w", encoding="utf-8") as f:
+            f.write(source)
+
+        result = subprocess.run(
+            [mmdc, "-i", input_file, "-o", output_path, "-b", "transparent"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise RuntimeError(f"mmdc exited with code {result.returncode}: {detail}")
+    finally:
+        # Clean up temp directory
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _render_dot_svg(source: str, output_path: str) -> None:
+    """Render DOT source to SVG via ``dot``."""
+    dot = shutil.which("dot")
+    if dot is None:
+        raise RuntimeError(
+            "dot (Graphviz) not found on PATH.\n"
+            "Install it with:  brew install graphviz  (macOS)"
+        )
+
+    result = subprocess.run(
+        [dot, "-Tsvg", "-o", output_path],
+        input=source,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"dot exited with code {result.returncode}: {detail}")
 
 
 def all_flows_to_dot(registry: dict[str, FlowDefinition]) -> str:

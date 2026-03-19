@@ -31,7 +31,7 @@ class TestSharedFlowsLoad:
     def test_validate_output_loads(self):
         flow = load_flow("flows/shared/validate_output.yaml")
         assert flow.flow == "validate_output"
-        assert flow.entry == "determine_strategy"
+        assert flow.entry == "check_file_type"
         assert "complete_pass" in flow.steps
         assert "complete_fail" in flow.steps
         assert "complete_with_issues" in flow.steps
@@ -39,14 +39,14 @@ class TestSharedFlowsLoad:
     def test_capture_learnings_loads(self):
         flow = load_flow("flows/shared/capture_learnings.yaml")
         assert flow.flow == "capture_learnings"
-        assert flow.entry == "reflect"
+        assert flow.entry == "read_source"
         assert "save_note" in flow.steps
         assert "complete" in flow.steps
 
     def test_research_context_loads(self):
         flow = load_flow("flows/shared/research_context.yaml")
         assert flow.flow == "research_context"
-        assert flow.entry == "formulate_query"
+        assert flow.entry == "classify_query"
         assert "execute_search" in flow.steps
         assert "complete" in flow.steps
 
@@ -127,11 +127,13 @@ class TestRecursiveLoading:
         assert "validate_output" in flows  # shared/
         assert "research_context" in flows  # shared/
         assert "revise_plan" in flows  # shared/
+        assert "diagnose_issue" in flows  # tasks/ (Wave 1)
+        assert "explore_spike" in flows  # tasks/ (Wave 1)
 
     def test_no_duplicate_flow_names(self):
         flows = load_all_flows("flows")
         # This would raise FlowLoadError if duplicates exist
-        assert len(flows) >= 11  # at least 11 flows total
+        assert len(flows) >= 20  # 15 original + 2 Wave 1 + 3 Wave 2 flows
 
     def test_test_flows_still_load(self):
         flows = load_all_flows("flows")
@@ -181,12 +183,13 @@ class TestFlowStructure:
     def test_prepare_context_has_research_branch(self):
         flow = load_flow("flows/shared/prepare_context.yaml")
         # check_research_needed uses frustration-graduated research gating:
-        # high frustration → mandatory research, medium → recommended, low → optional
+        # high frustration → mandatory research, medium → recommended, low → optional, none → skip
         check_step = flow.steps["check_research_needed"]
         transitions = [r.transition for r in check_step.resolver.rules]
         assert "research" in transitions  # high frustration: mandatory
         assert "decide_research_recommended" in transitions  # medium frustration
-        assert "decide_research_optional" in transitions  # low frustration
+        assert "decide_research_optional" in transitions  # low frustration (1-2)
+        assert "select_relevant" in transitions  # no frustration (0): skip research
         # Both decide steps must have paths to both research and select_relevant
         for decide_step_name in [
             "decide_research_recommended",

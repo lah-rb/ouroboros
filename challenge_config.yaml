@@ -1,0 +1,31 @@
+# Challenge mission: Stress-test for flow system evaluation
+# uv run ouroboros.py mission create --mission_config challenge_config
+# version: 1
+
+objective: >
+  Build a working command-line Pomodoro timer application in Python.
+  The app must support: (1) starting a configurable work session (default 25 min)
+  with a configurable break (default 5 min), (2) persistent session history
+  stored in a SQLite database tracking start time, end time, task label,
+  and whether the session was completed or interrupted, (3) a 'stats' command
+  that queries the database and prints total sessions, completion rate, and
+  total focused minutes for the current day and all-time, (4) a 'history'
+  command that prints the last N sessions in a formatted table.
+  The CLI must use argparse with subcommands: start, stats, history.
+  All modules must import from each other where appropriate — no isolated files.
+  Include a README.md explaining usage. The app must actually run.
+
+working_dir: "/tmp/ouroboros-challenge"
+effects_profile: local
+llmvp_endpoint: "http://localhost:8008/graphql"
+
+principles:
+  - "Every Python file must import from at least one other project module"
+  - "No stub implementations — all functions must contain real logic"
+  - "Use type hints on all function signatures"
+
+pre_create:
+  - "rm -rf /tmp/ouroboros-challenge && mkdir /tmp/ouroboros-challenge"
+  - "touch ~/Repos/ouroboros/llmvp/logs/interactions.jsonl && rm ~/Repos/ouroboros/llmvp/logs/interactions.jsonl"
+
+post_create:

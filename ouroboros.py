@@ -129,14 +129,40 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
 
     # Add initial tasks if provided
     if tasks_list:
+        from agent.actions.mission_actions import (
+            _infer_flow_from_description,
+            _derive_source_for_tests,
+        )
+
         for i, task_desc in enumerate(tasks_list):
+            inferred_flow = _infer_flow_from_description(task_desc)
+
+            # Extract target_file_path from description
+            import re as _re
+
+            file_match = _re.search(
+                r"(?:in|for|to|create|modify|update|fix)\s+[`'\"]*([a-zA-Z0-9_/.-]+\.(?:py|js|ts|yaml|yml|md|toml|json|rs|cfg|txt))[`'\"]*",
+                task_desc,
+                _re.IGNORECASE,
+            )
+            target_file = file_match.group(1) if file_match else ""
+
+            task_inputs = {
+                "reason": task_desc,
+                "target_file_path": target_file,
+            }
+
+            # For create_tests: target = source file, test_file_path = output
+            if inferred_flow == "create_tests" and target_file:
+                source_file = _derive_source_for_tests(target_file, task_desc)
+                task_inputs["target_file_path"] = source_file
+                task_inputs["test_file_path"] = target_file
+
             task = TaskRecord(
                 description=task_desc,
-                flow="modify_file",  # default flow, can be changed later
+                flow=inferred_flow,
                 priority=i,
-                inputs={
-                    "reason": task_desc,
-                },
+                inputs=task_inputs,
             )
             mission.plan.append(task)
 
@@ -327,6 +353,7 @@ def cmd_visualize(args: argparse.Namespace) -> None:
         flow_to_dot,
         all_flows_to_mermaid,
         all_flows_to_dot,
+        render_to_svg,
     )
 
     flows_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flows")
@@ -353,6 +380,22 @@ def cmd_visualize(args: argparse.Namespace) -> None:
         else:
             output = all_flows_to_mermaid(registry, show_internal_steps=args.detailed)
 
+    # ── SVG export ────────────────────────────────────────────
+    svg_path = args.svg
+    # Auto-detect: if --output ends in .svg, treat it as SVG export
+    if not svg_path and args.output and args.output.endswith(".svg"):
+        svg_path = args.output
+
+    if svg_path:
+        try:
+            render_to_svg(output, source_format=fmt, output_path=svg_path)
+            print(f"✅ Rendered SVG to {svg_path}")
+        except RuntimeError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        return
+
+    # ── Text output (Mermaid / DOT source) ────────────────────
     if args.output:
         with open(args.output, "w") as f:
             if fmt == "mermaid" and args.output.endswith(".md"):
@@ -468,6 +511,10 @@ def main() -> None:
         "--format", choices=["mermaid", "dot"], default="mermaid", help="Output format"
     )
     viz_p.add_argument("--output", help="Write to file instead of stdout")
+    viz_p.add_argument(
+        "--svg",
+        help="Export as SVG image (requires mmdc for Mermaid, dot for Graphviz)",
+    )
     viz_p.add_argument(
         "--detailed", action="store_true", help="Show internal steps in system view"
     )

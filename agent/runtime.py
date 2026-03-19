@@ -435,6 +435,14 @@ async def _execute_inference_action(
     )
 
     if result.error:
+        context_updates: dict[str, Any] = {
+            "inference_response": result.text,
+            "inference_error": result.error,
+        }
+        # Also publish under declared key names so downstream steps
+        # can reference context by the semantic name in the YAML.
+        for key in step_def.publishes:
+            context_updates[key] = result.text
         return StepOutput(
             result={
                 "text": "",
@@ -442,12 +450,17 @@ async def _execute_inference_action(
                 "tokens_generated": 0,
             },
             observations=f"Inference error: {result.error}",
-            context_updates={
-                "inference_response": result.text,
-                "inference_error": result.error,
-            },
+            context_updates=context_updates,
         )
 
+    context_updates = {
+        "inference_response": result.text,
+    }
+    # Map inference response to each declared 'publishes' key so that
+    # downstream steps can require the semantic name (e.g. 'connection_analysis')
+    # instead of the generic 'inference_response'.
+    for key in step_def.publishes:
+        context_updates[key] = result.text
     return StepOutput(
         result={
             "text": result.text,
@@ -455,9 +468,7 @@ async def _execute_inference_action(
             "finished": result.finished,
         },
         observations=f"Inference completed: {result.tokens_generated} tokens generated",
-        context_updates={
-            "inference_response": result.text,
-        },
+        context_updates=context_updates,
     )
 
 

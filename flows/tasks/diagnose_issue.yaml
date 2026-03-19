@@ -1,0 +1,358 @@
+flow: diagnose_issue
+version: 1
+description: >
+  Methodical diagnosis of a code issue. Reads error output, gathers context,
+  forms hypotheses, evaluates them against the code, and produces a structured
+  diagnosis with root cause analysis and fix recommendations. Does NOT modify code.
+  Can be invoked as a task (tail-calls to mission_control) or as a sub-flow
+  (parent reads terminal status and diagnosis from context).
+
+input:
+  required:
+    - target_file_path
+  optional:
+    - error_description
+    - mission_id
+    - task_id
+    - task_description
+    - mission_objective
+    - error_output
+    - previous_attempt
+    - working_directory
+    - frustration_level
+    - frustration_history
+    - relevant_notes
+
+defaults:
+  config:
+    temperature: "t*0.6"
+    max_tokens: 4096
+
+steps:
+
+  # ── Phase 1: Gather context ────────────────────────────────
+
+  gather_context:
+    use: gather_project_context
+    params:
+      context_budget: 6
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: read_target
+
+  read_target:
+    use: read_target_file
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_found == true"
+          transition: reproduce_mentally
+        - condition: "true"
+          transition: diagnosis_failed
+
+  # ── Phase 2: Understand the problem ────────────────────────
+
+  reproduce_mentally:
+    action: inference
+    description: "Trace the error execution path mentally — understand before fixing"
+    context:
+      required: [target_file]
+      optional: [context_bundle, project_manifest]
+    prompt: |
+      You are a diagnostic analysis module in an automated coding pipeline.
+      Your output will be consumed by a hypothesis generation step.
+      Write structured analysis — not a fix, not code, just understanding.
+
+      ## The Error
+      {{ input.error_description }}
+
+      {% if input.error_output %}
+      ## Raw Error Output
+      ```
+      {{ input.error_output }}
+      ```
+      {% endif %}
+
+      ## The File Where It Manifests
+      **{{ context.target_file.path }}**
+      ```
+      {{ context.target_file.content }}
+      ```
+
+      {% if context.context_bundle and context.context_bundle.files %}
+      ## Related Files
+      {% for file in context.context_bundle.files %}
+      {% if file.path != context.target_file.path %}
+      **{{ file.path }}** (excerpt):
+      ```
+      {{ file.content[:800] }}
+      ```
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+
+      {% if input.previous_attempt %}
+      ## What Was Already Tried
+      {{ input.previous_attempt }}
+      (This approach did not resolve the issue.)
+      {% endif %}
+
+      ## Your Task
+      1. Trace the execution path that leads to this error.
+      2. Identify the EXACT line(s) where the problem originates (not just where it surfaces).
+      3. Explain WHY the error occurs — what assumption is violated, what state is unexpected.
+      4. Do NOT suggest fixes yet. Just understand the problem.
+
+      Respond with these sections:
+      - **Error location**: file and line(s) where the root cause is
+      - **Execution trace**: how control flow reaches the error
+      - **Root cause**: the underlying reason, not just the symptom
+      - **Violated assumption**: what the code expected vs what actually happened
+
+      Write concise, structured prose. Do NOT write code.
+    config:
+      temperature: "t*0.4"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: form_hypotheses
+        - condition: "true"
+          transition: diagnosis_failed
+    publishes:
+      - error_analysis
+
+  # ── Phase 3: Generate hypotheses ───────────────────────────
+
+  form_hypotheses:
+    action: inference
+    description: "Generate 2-3 distinct fix hypotheses based on the error analysis"
+    context:
+      required: [target_file, error_analysis]
+      optional: [context_bundle, project_manifest]
+    prompt: |
+      You are a hypothesis generation module in an automated coding pipeline.
+      Your output will be evaluated against the codebase in the next step.
+      Propose distinct fix approaches — not code, just strategies.
+
+      ## Error Analysis
+      {{ context.error_analysis }}
+
+      ## Target File
+      **{{ context.target_file.path }}**
+      ```
+      {{ context.target_file.content }}
+      ```
+
+      {% if input.previous_attempt %}
+      A previous fix attempt failed: {{ input.previous_attempt }}
+      Do NOT re-suggest the same approach.
+      {% endif %}
+
+      ## Generate Fix Hypotheses
+      Propose 2-3 DISTINCT approaches to fix this issue. For each:
+
+      1. **Hypothesis**: What specific change would fix it
+      2. **Reasoning**: Why this would address the root cause identified above
+      3. **Risk**: What could go wrong or what else might break
+      4. **Scope**: Which file(s) need to change and roughly how
+      5. **Confidence**: low / medium / high
+
+      Order them from most likely to succeed to least likely.
+      Prefer minimal, focused changes over large refactors.
+
+      Write as a numbered list of hypotheses with the fields above.
+    config:
+      temperature: "t*0.8"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: evaluate_hypotheses
+        - condition: "true"
+          transition: diagnosis_failed
+    publishes:
+      - hypotheses
+
+  # ── Phase 4: Evaluate and select ───────────────────────────
+
+  evaluate_hypotheses:
+    action: inference
+    description: "Evaluate hypotheses against the code and select the best approach"
+    context:
+      required: [target_file, error_analysis, hypotheses]
+      optional: [context_bundle, project_manifest]
+    prompt: |
+      You are a hypothesis evaluation module in an automated coding pipeline.
+      Your output will determine whether this diagnosis is complete, needs more
+      information, or should be escalated.
+
+      ## Error Analysis
+      {{ context.error_analysis }}
+
+      ## Hypotheses
+      {{ context.hypotheses }}
+
+      ## Target File
+      **{{ context.target_file.path }}**
+      ```
+      {{ context.target_file.content }}
+      ```
+
+      {% if context.context_bundle and context.context_bundle.files %}
+      ## Related Files
+      {% for file in context.context_bundle.files %}
+      {% if file.path != context.target_file.path %}
+      - **{{ file.path }}**: {{ file.content[:200] }}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+
+      ## Evaluate Each Hypothesis
+      For each hypothesis:
+      1. Is it actually implementable given the code structure?
+      2. Would it introduce new issues?
+      3. Does it address the ROOT cause or just the symptom?
+
+      Then select the BEST hypothesis and explain why.
+
+      Respond with:
+      - **Selected approach**: which hypothesis number and name
+      - **Justification**: why this one over the others
+      - **Implementation plan**: specific lines to change and how
+      - **Files to modify**: list of files that need changes
+      - **Verification**: how to confirm the fix works
+
+      Write structured prose. Be specific about line numbers and function names.
+    config:
+      temperature: "t*0.3"
+    resolver:
+      type: llm_menu
+      prompt: "Is the diagnosis complete enough to act on?"
+      options:
+        compile_complete:
+          description: "The diagnosis is clear and actionable — ready to produce a fix recommendation"
+        gather_additional_context:
+          description: "Need to read additional files to evaluate hypotheses properly"
+        compile_intractable:
+          description: "The issue is too complex for confident diagnosis — should escalate"
+    publishes:
+      - evaluation
+
+  # ── Optional: gather more context ──────────────────────────
+
+  gather_additional_context:
+    use: gather_project_context
+    params:
+      context_budget: 4
+    resolver:
+      type: rule
+      rules:
+        - condition: "meta.attempt < 3"
+          transition: evaluate_hypotheses
+        - condition: "true"
+          transition: compile_complete
+
+  # ── Terminal paths ─────────────────────────────────────────
+
+  compile_complete:
+    action: compile_diagnosis
+    description: "Assemble the final structured diagnosis"
+    context:
+      required: [error_analysis, hypotheses]
+      optional: [evaluation, target_file]
+    params:
+      include_rejected_hypotheses: true
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: create_fix_task
+    publishes:
+      - diagnosis
+
+  create_fix_task:
+    action: create_fix_task_from_diagnosis
+    description: "Create a follow-up fix task in the mission plan from the diagnosis"
+    context:
+      required: [diagnosis]
+      optional: [target_file, error_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: capture_diagnosis_learnings
+    publishes:
+      - fix_task_created
+
+  compile_intractable:
+    action: compile_diagnosis
+    description: "Issue is beyond confident diagnosis — package what we know"
+    context:
+      required: [error_analysis]
+      optional: [hypotheses, evaluation]
+    params:
+      include_rejected_hypotheses: true
+      mark_as_intractable: true
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: capture_diagnosis_learnings
+    publishes:
+      - diagnosis
+
+  capture_diagnosis_learnings:
+    use: capture_learnings
+    params:
+      learning_focus: "bug_fix"
+      category: "failure_analysis"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: complete
+
+  complete:
+    action: noop
+    description: "Diagnosis complete — return to mission_control"
+    status: success
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Diagnosed issue in {{ input.target_file_path }}"
+
+  capture_failure_note:
+    use: capture_learnings
+    params:
+      learning_focus: "failure_analysis"
+      category: "failure_analysis"
+      task_outcome: "FAILED to diagnose issue in {{ input.target_file_path }}: {{ input.error_description }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: diagnosis_failed
+
+  diagnosis_failed:
+    action: noop
+    description: "Diagnosis could not be completed"
+    status: failed
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "abandoned"
+        last_result: "Failed to diagnose issue in {{ input.target_file_path }}"
+
+entry: gather_context
+
+overflow:
+  strategy: split
+  fallback: reorganize

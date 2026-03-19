@@ -1,0 +1,233 @@
+flow: validate_behavior
+version: 1
+description: >
+  Run the project code and verify actual behavior matches expectations.
+  Uses run_in_terminal for multi-turn interactive CLI testing.
+  Produces a behavioral assessment with pass/fail and issue descriptions.
+
+input:
+  required:
+    - mission_id
+    - task_id
+  optional:
+    - task_description
+    - mission_objective
+    - working_directory
+    - target_file_path
+    - entry_point
+    - test_scenarios
+    - reason
+    - temperature_multiplier
+    - frustration_level
+    - frustration_history
+    - relevant_notes
+
+defaults:
+  config:
+    temperature: "t*0.8"
+
+steps:
+
+  gather_context:
+    use: gather_project_context
+    params:
+      context_budget: 8
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: plan_test_scenarios
+
+  plan_test_scenarios:
+    action: inference
+    description: "LLM reads project code and plans interactive test scenarios"
+    context:
+      optional: [context_bundle, project_manifest]
+    prompt: |
+      You are a behavioral testing module in an automated coding pipeline.
+      Your job is to plan interactive test scenarios for a project.
+
+      Project objective: {{ input.mission_objective }}
+      Task: {{ input.task_description }}
+      {% if input.entry_point %}Entry point: {{ input.entry_point }}{% endif %}
+      {% if input.target_file_path %}Target file: {{ input.target_file_path }}{% endif %}
+
+      {% if context.context_bundle and context.context_bundle.files %}
+      Project files:
+      {% for file in context.context_bundle.files %}
+      === {{ file.path }} ===
+      {{ file.content }}
+      {% endfor %}
+      {% endif %}
+
+      {% if input.test_scenarios %}
+      Suggested test scenarios: {{ input.test_scenarios }}
+      {% endif %}
+
+      Plan a session goal that describes what to test interactively.
+      Think about: Does the code have a CLI? A main() function? Can it be imported and tested?
+
+      Return ONLY a JSON object:
+      {
+        "session_goal": "Run the task tracker CLI and verify: add a task, list tasks, mark complete, check stats",
+        "entry_point": "python cli.py",
+        "initial_commands": [],
+        "test_ready": true,
+        "reason_not_ready": ""
+      }
+
+      If the code is NOT ready for testing (e.g., it's a library module with no entry point,
+      or critical dependencies are missing), set test_ready to false and explain why.
+    config:
+      temperature: 0.2
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: check_readiness
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - inference_response
+
+  check_readiness:
+    action: noop
+    description: "Route based on whether code is ready for behavioral testing"
+    context:
+      required: [inference_response]
+    resolver:
+      type: rule
+      rules:
+        - condition: "'test_ready' in context.get('inference_response', '') and 'true' in context.get('inference_response', '').lower()"
+          transition: run_tests
+        - condition: "true"
+          transition: skip_not_ready
+
+  run_tests:
+    action: flow
+    description: "Run interactive tests in a persistent terminal session"
+    flow: run_in_terminal
+    input_map:
+      session_goal: "Test the application behavior interactively"
+      working_directory: "{{ input.working_directory }}"
+      max_turns: "12"
+      session_context: "{{ context.inference_response }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.status == 'success'"
+          transition: analyze_results
+        - condition: "result.status == 'issues'"
+          transition: analyze_results
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - session_history
+      - session_summary
+
+  analyze_results:
+    action: inference
+    description: "LLM reviews test session and produces behavioral assessment"
+    context:
+      required: [session_history]
+      optional: [session_summary]
+    prompt: |
+      You are a behavioral test analysis module in an automated coding pipeline.
+      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON object.
+
+      A terminal session was run to test the project's behavior.
+
+      Session history:
+      {% for entry in context.session_history %}
+      [Turn {{ entry.turn }}] $ {{ entry.command }}
+      {{ entry.output }}
+      {% if entry.return_code != 0 %}(exit code: {{ entry.return_code }}){% endif %}
+      {% endfor %}
+
+      Analyze the results and return:
+      {
+        "passed": true,
+        "issues": [],
+        "summary": "All 4 test scenarios passed: add, list, complete, stats all work correctly",
+        "fix_needed": false,
+        "fix_description": ""
+      }
+
+      If issues were found:
+      {
+        "passed": false,
+        "issues": ["stats command shows wrong percentage", "delete command not found"],
+        "summary": "2 of 4 tests failed",
+        "fix_needed": true,
+        "fix_description": "Fix stats calculation and add delete subcommand"
+      }
+    config:
+      temperature: 0.1
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: capture_learnings
+        - condition: "true"
+          transition: capture_learnings
+    publishes:
+      - inference_response
+
+  skip_not_ready:
+    action: noop
+    description: "Code not ready for behavioral testing — skip gracefully"
+    terminal: true
+    status: success
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Behavioral testing skipped — code not yet ready for interactive testing"
+
+  capture_learnings:
+    use: capture_learnings
+    params:
+      learning_focus: "general"
+      category: "task_learning"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: complete
+
+  complete:
+    action: noop
+    description: "Behavioral validation completed"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Behavioral testing completed"
+
+  capture_failure_note:
+    use: capture_learnings
+    params:
+      learning_focus: "failure_analysis"
+      category: "failure_analysis"
+      task_outcome: "FAILED behavioral validation: {{ input.task_description }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: failed
+
+  failed:
+    action: noop
+    description: "Behavioral validation failed"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "abandoned"
+
+entry: gather_context

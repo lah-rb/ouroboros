@@ -27,6 +27,7 @@ from agent.effects.protocol import (
     InferenceResult,
     SearchMatch,
     SearchResults,
+    TerminalOutput,
     WriteResult,
 )
 
@@ -37,6 +38,116 @@ class PathTraversalError(Exception):
     """Raised when a path attempts to escape the working directory."""
 
     pass
+
+
+class _TerminalSession:
+    """A persistent shell subprocess for multi-turn terminal interactions.
+
+    Uses a unique marker echoed after each command to detect completion
+    and extract the return code. Output is captured line-by-line until
+    the marker appears or timeout is reached.
+    """
+
+    def __init__(self, proc: asyncio.subprocess.Process, working_dir: str) -> None:
+        self.proc = proc
+        self.working_dir = working_dir
+        self.history: list[dict] = []
+        self.turn_count: int = 0
+
+    async def send(self, command: str, timeout: int = 30) -> TerminalOutput:
+        """Send a command and wait for completion marker."""
+        if self.proc.stdin is None or self.proc.stdout is None:
+            return TerminalOutput(
+                command=command,
+                output="ERROR: Terminal process has no stdin/stdout",
+                return_code=-1,
+                turn=self.turn_count,
+            )
+
+        marker = f"__OURO_DONE_{self.turn_count}__"
+        # Send command, then echo marker with exit code of previous command
+        full_cmd = f"{command}\necho '{marker}' $?\n"
+        try:
+            self.proc.stdin.write(full_cmd.encode("utf-8"))
+            await self.proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            return TerminalOutput(
+                command=command,
+                output="ERROR: Terminal process terminated unexpectedly",
+                return_code=-1,
+                turn=self.turn_count,
+            )
+
+        # Read output until marker appears
+        output_lines: list[str] = []
+        return_code = -1
+        timed_out = False
+
+        try:
+            while True:
+                line_bytes = await asyncio.wait_for(
+                    self.proc.stdout.readline(), timeout=timeout
+                )
+                if not line_bytes:
+                    # EOF — process terminated
+                    break
+                text = line_bytes.decode("utf-8", errors="replace").rstrip("\n")
+
+                if marker in text:
+                    # Extract return code from "marker RC" format
+                    parts = text.split(marker)
+                    rc_str = parts[-1].strip() if len(parts) > 1 else ""
+                    try:
+                        return_code = int(rc_str)
+                    except ValueError:
+                        return_code = 0
+                    break
+                else:
+                    output_lines.append(text)
+        except asyncio.TimeoutError:
+            timed_out = True
+            output_lines.append(
+                f"[TIMEOUT after {timeout}s — process may be waiting for input]"
+            )
+
+        output = "\n".join(output_lines)
+        # Truncate very long output to prevent context explosion
+        if len(output) > 8000:
+            output = output[:4000] + "\n... [truncated] ...\n" + output[-4000:]
+
+        entry = TerminalOutput(
+            command=command,
+            output=output,
+            return_code=return_code,
+            turn=self.turn_count,
+            timed_out=timed_out,
+        )
+        self.history.append(
+            {
+                "command": command,
+                "output": output[:2000],  # Compact for history
+                "return_code": return_code,
+                "turn": self.turn_count,
+                "timed_out": timed_out,
+            }
+        )
+        self.turn_count += 1
+        return entry
+
+    async def close(self) -> None:
+        """Terminate the shell subprocess."""
+        try:
+            if self.proc.stdin:
+                self.proc.stdin.write(b"exit\n")
+                await self.proc.stdin.drain()
+            # Give it a moment to exit gracefully
+            try:
+                await asyncio.wait_for(self.proc.wait(), timeout=3)
+            except asyncio.TimeoutError:
+                self.proc.kill()
+                await self.proc.wait()
+        except (BrokenPipeError, ProcessLookupError, ConnectionResetError):
+            pass  # Already dead
 
 
 class LocalEffects:
@@ -408,6 +519,124 @@ class LocalEffects:
                 stderr=str(e),
                 command=cmd_str,
             )
+
+    # ── Terminal sessions ─────────────────────────────────────────
+
+    _terminals: dict[str, "_TerminalSession"] = {}
+
+    async def start_terminal(
+        self,
+        working_dir: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        """Start a persistent shell subprocess."""
+        start = time.monotonic()
+        try:
+            if working_dir:
+                cwd = self._resolve_path(working_dir)
+            else:
+                cwd = self._working_dir
+
+            shell_env = os.environ.copy()
+            if env:
+                shell_env.update(env)
+
+            proc = await asyncio.create_subprocess_exec(
+                "/bin/bash",
+                "--norc",
+                "--noprofile",
+                "-i",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=cwd,
+                env=shell_env,
+            )
+
+            import uuid
+
+            session_id = uuid.uuid4().hex[:12]
+            session = _TerminalSession(proc=proc, working_dir=cwd)
+
+            # Ensure the class-level dict exists on this instance
+            if (
+                not hasattr(self, "_terminals")
+                or self._terminals is LocalEffects._terminals
+            ):
+                self._terminals = {}
+            self._terminals[session_id] = session
+
+            # Wait briefly for shell to initialize, then drain any startup output
+            await asyncio.sleep(0.1)
+
+            self._log_entry(
+                "start_terminal",
+                f"cwd={cwd!r}",
+                f"session={session_id}",
+                start,
+            )
+            return session_id
+
+        except Exception as e:
+            self._log_entry(
+                "start_terminal", f"cwd={working_dir!r}", f"error: {e}", start
+            )
+            raise
+
+    async def send_to_terminal(
+        self,
+        session_id: str,
+        command: str,
+        timeout: int = 30,
+    ) -> TerminalOutput:
+        """Send a command to a running terminal and wait for output."""
+        start = time.monotonic()
+        session = self._terminals.get(session_id)
+        if session is None:
+            self._log_entry(
+                "send_to_terminal",
+                f"session={session_id!r}",
+                "session not found",
+                start,
+            )
+            return TerminalOutput(
+                command=command,
+                output="ERROR: Terminal session not found",
+                return_code=-1,
+                turn=-1,
+            )
+
+        result = await session.send(command, timeout=timeout)
+        self._log_entry(
+            "send_to_terminal",
+            f"session={session_id!r}, cmd={command[:60]!r}",
+            f"rc={result.return_code}, turn={result.turn}, "
+            f"output={len(result.output)} chars",
+            start,
+        )
+        return result
+
+    async def close_terminal(self, session_id: str) -> bool:
+        """Close a terminal session and clean up."""
+        start = time.monotonic()
+        session = self._terminals.pop(session_id, None)
+        if session is None:
+            self._log_entry(
+                "close_terminal",
+                f"session={session_id!r}",
+                "not found",
+                start,
+            )
+            return False
+
+        await session.close()
+        self._log_entry(
+            "close_terminal",
+            f"session={session_id!r}",
+            f"closed after {session.turn_count} turns",
+            start,
+        )
+        return True
 
     # ── Inference (via LLMVP GraphQL API) ─────────────────────────
 

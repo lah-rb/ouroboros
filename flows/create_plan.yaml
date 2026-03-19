@@ -46,7 +46,7 @@ steps:
     description: "Generate task plan from objective"
     context:
       required: [mission]
-      optional: [context_bundle, project_manifest]
+      optional: [context_bundle, project_manifest, repo_map_formatted]
     prompt: |
       You are a planning module in an automated coding pipeline.
       Your output will be parsed by a JSON extractor. Do NOT include any text
@@ -57,6 +57,11 @@ steps:
 
       {% if input.existing_progress %}
       Previous progress: {{ input.existing_progress }}
+      {% endif %}
+
+      {% if context.repo_map_formatted %}
+      ## Existing Project Structure (AST-based — symbols, classes, functions)
+      {{ context.repo_map_formatted }}
       {% endif %}
 
       {% if context.project_manifest %}
@@ -77,19 +82,64 @@ steps:
       Order tasks so dependencies come first (lower index = higher priority).
       Include 3-8 tasks depending on complexity.
 
-      ✅ CORRECT output (raw JSON array, nothing else):
+      CRITICAL ORDERING RULES:
+      - Library/utility modules FIRST (no imports from other project files).
+      - Domain/logic modules NEXT (import from utility modules).
+      - Entry points and CLI modules LAST (import from everything else).
+      - Use "depends_on" to reference descriptions of tasks that must complete first.
+      - The entry point / main module should ALWAYS depend on all other modules
+        so it is created last with full context of their actual APIs.
+
+      FLOW SELECTION — choose the right flow for each task:
+      - "design_architecture" — FIRST task for any multi-file project. Designs directory layout,
+        module boundaries, and interface contracts BEFORE any files are created. This prevents
+        conflicting module structures and ensures all files integrate cleanly.
+      - "create_file" — New source files (modules, scripts, configs). NOT for test files.
+      - "modify_file" — Changes to existing files.
+      - "create_tests" — Test files (pytest, unittest). ALWAYS use this for test_*.py files.
+      - "setup_project" — Project initialization (directories, pyproject.toml, configs).
+      - "manage_packages" — Installing/removing dependencies.
+      - "integrate_modules" — Wiring modules together, ensuring cross-module imports work.
+      - "validate_behavior" — End-to-end verification that the project works as specified.
+
+      A good plan uses 3-4 different flow types. If every task uses "create_file", the plan is wrong.
+      For projects with 3+ files, the FIRST task MUST be "design_architecture" to establish
+      the module layout before any code is written. This prevents duplicate/conflicting structures.
+      If the objective mentions integration, include an "integrate_modules" task.
+      If the objective mentions tests, use "create_tests" (not "create_file") for test files.
+      ALWAYS include a "validate_behavior" task as the final step to verify the system works.
+
+      ✅ CORRECT output (raw JSON array, nothing else — note the varied flow types):
       [
         {
-          "description": "Create the data models module with User and Session classes",
-          "file": "models/data.py",
+          "description": "Create the shared database module with schema and query functions",
+          "file": "database.py",
           "flow": "create_file",
           "depends_on": []
         },
         {
-          "description": "Modify the main entry point to import and use new models",
-          "file": "main.py",
-          "flow": "modify_file",
-          "depends_on": ["Create the data models module with User and Session classes"]
+          "description": "Create the task tracker CLI using the shared database module",
+          "file": "tasks.py",
+          "flow": "create_file",
+          "depends_on": ["Create the shared database module with schema and query functions"]
+        },
+        {
+          "description": "Create pytest test suite for the database layer with 8+ test cases",
+          "file": "tests/test_database.py",
+          "flow": "create_tests",
+          "depends_on": ["Create the shared database module with schema and query functions"]
+        },
+        {
+          "description": "Wire modules together — verify tasks.py imports from database.py correctly",
+          "file": "tasks.py",
+          "flow": "integrate_modules",
+          "depends_on": ["Create the task tracker CLI using the shared database module"]
+        },
+        {
+          "description": "Verify end-to-end behavior: CLI tools work, tests pass, modules integrated",
+          "file": "",
+          "flow": "validate_behavior",
+          "depends_on": ["Wire modules together — verify tasks.py imports from database.py correctly"]
         }
       ]
 
@@ -102,11 +152,16 @@ steps:
       Here is the plan:
       [{"description": "..."}]
 
+      ❌ WRONG — every task uses "create_file":
+      [{"flow": "create_file"}, {"flow": "create_file"}, {"flow": "create_file"}]
+
       Rules:
-      - Use "create_file" for new files, "modify_file" for changes to existing files.
+      - Select the MOST SPECIFIC flow for each task (see flow selection above).
       - File paths must be relative to the working directory.
       - If existing files are present, plan tasks that integrate with them.
       - Do NOT include tasks for files that already exist unless they need changes.
+      - Entry points / main modules must be the LAST task with depends_on listing all others.
+      - Test files MUST use "create_tests" flow, not "create_file".
 
       Return ONLY the raw JSON array.
     config:

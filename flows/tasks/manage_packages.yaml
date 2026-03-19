@@ -1,0 +1,164 @@
+flow: manage_packages
+version: 1
+description: >
+  Detect, create, and manage project virtual environment and packages.
+  Analyzes the project for dependency management tools and required
+  packages, then uses run_in_terminal for multi-turn package operations.
+
+input:
+  required:
+    - mission_id
+    - task_id
+  optional:
+    - task_description
+    - mission_objective
+    - working_directory
+    - packages_to_install
+    - target_file_path
+    - reason
+    - temperature_multiplier
+    - frustration_level
+    - frustration_history
+    - relevant_notes
+
+defaults:
+  config:
+    temperature: "t*0.6"
+
+steps:
+
+  gather_context:
+    use: gather_project_context
+    params:
+      context_budget: 6
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: analyze_environment
+
+  analyze_environment:
+    action: inference
+    description: "Analyze project for package manager, venv, and required dependencies"
+    context:
+      optional: [context_bundle, project_manifest]
+    prompt: |
+      You are a project environment analysis module in an automated coding pipeline.
+      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
+      object — no markdown, no explanation.
+
+      Task: {{ input.task_description }}
+      Working directory: {{ input.working_directory }}
+
+      {% if input.packages_to_install %}
+      Packages explicitly requested: {{ input.packages_to_install }}
+      {% endif %}
+
+      {% if context.project_manifest %}
+      Project files:
+      {% for filepath, sig in context.project_manifest.items() %}
+      - {{ filepath }}: {{ sig[:80] }}
+      {% endfor %}
+      {% endif %}
+
+      {% if context.context_bundle and context.context_bundle.files %}
+      File contents:
+      {% for file in context.context_bundle.files %}
+      === {{ file.path }} ===
+      {{ file.content[:500] }}
+      {% endfor %}
+      {% endif %}
+
+      Analyze the project and return a JSON object describing:
+      1. What package manager to use (pip, uv, poetry, conda, npm, cargo)
+      2. Whether a virtual environment exists or needs creation
+      3. What commands to run to set up the environment
+
+      ✅ CORRECT output:
+      {
+        "package_manager": "pip",
+        "venv_exists": false,
+        "venv_command": "python3 -m venv .venv",
+        "activate_command": "source .venv/bin/activate",
+        "install_commands": ["pip install pytest httpx"],
+        "session_goal": "Create virtual environment and install dependencies for the task tracker project"
+      }
+    config:
+      temperature: 0.1
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.tokens_generated > 0"
+          transition: run_setup
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - inference_response
+
+  run_setup:
+    action: flow
+    description: "Run package setup in a persistent terminal session"
+    flow: run_in_terminal
+    input_map:
+      session_goal: "Set up project environment and install all required packages"
+      working_directory: "{{ input.working_directory }}"
+      max_turns: "8"
+      session_context: "{{ context.inference_response }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.status == 'success'"
+          transition: capture_learnings
+        - condition: "result.status == 'issues'"
+          transition: capture_learnings
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - session_history
+      - session_summary
+
+  capture_learnings:
+    use: capture_learnings
+    params:
+      learning_focus: "general"
+      category: "codebase_observation"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: complete
+
+  complete:
+    action: noop
+    description: "Package management completed"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Environment set up and packages installed"
+
+  capture_failure_note:
+    use: capture_learnings
+    params:
+      learning_focus: "failure_analysis"
+      category: "failure_analysis"
+      task_outcome: "FAILED to manage packages: {{ input.task_description }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: failed
+
+  failed:
+    action: noop
+    description: "Package management failed"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "abandoned"
+
+entry: gather_context

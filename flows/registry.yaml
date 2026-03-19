@@ -56,6 +56,78 @@ flows:
       optional: [task_description, mission_objective, working_directory, setup_focus, relevant_notes, frustration_level, frustration_history]
     terminal_statuses: []
 
+  diagnose_issue:
+    type: task
+    description: "Methodical diagnosis of code issues — separate from fixing"
+    file: tasks/diagnose_issue.yaml
+    inputs:
+      required: [target_file_path]
+      optional: [error_description, mission_id, task_id, task_description, mission_objective, error_output, previous_attempt, working_directory, frustration_level, frustration_history, relevant_notes]
+    terminal_statuses: [success, failed]
+
+  explore_spike:
+    type: task
+    description: "Time-boxed investigation producing findings, not code changes"
+    file: tasks/explore_spike.yaml
+    inputs:
+      required: [investigation_goal]
+      optional: [mission_id, task_id, task_description, mission_objective, scope_hint, working_directory, specific_questions, frustration_level, frustration_history, relevant_notes]
+    terminal_statuses: [success]
+
+  design_architecture:
+    type: task
+    description: "Model-led holistic project design — directory layout, module boundaries, interfaces"
+    file: tasks/design_architecture.yaml
+    inputs:
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, relevant_notes]
+    terminal_statuses: []
+
+  integrate_modules:
+    type: task
+    description: "Analyze multi-file project and produce integration glue code"
+    file: tasks/integrate_modules.yaml
+    inputs:
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, target_file_path, reason, expected_entry_point, integration_hints, frustration_level, frustration_history, relevant_notes]
+    terminal_statuses: []
+
+  refactor:
+    type: task
+    description: "Deliberate structural improvement using Fowler's vocabulary"
+    file: tasks/refactor.yaml
+    inputs:
+      required: [mission_id, task_id, target_file_path]
+      optional: [task_description, mission_objective, working_directory, reason, specific_smells, refactoring_budget, findings, frustration_level, frustration_history, relevant_notes]
+    terminal_statuses: []
+
+  document_project:
+    type: task
+    description: "Produce or update README, docstrings, and architecture docs"
+    file: tasks/document_project.yaml
+    inputs:
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, target_file_path, reason, doc_scope, findings, frustration_level, frustration_history, relevant_notes]
+    terminal_statuses: []
+
+  retrospective:
+    type: task
+    description: "Periodic self-assessment — analyze patterns, produce actionable recommendations"
+    file: tasks/retrospective.yaml
+    inputs:
+      required: [mission_id]
+      optional: [task_id, task_description, working_directory, trigger_reason, scope]
+    terminal_statuses: [success]
+
+  request_review:
+    type: task
+    description: "Proactive code review submission to senior dev (stub until Phase 6)"
+    file: tasks/request_review.yaml
+    inputs:
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, work_summary, files_to_review, design_decisions, specific_concerns, quality_gate_observations, frustration_level, frustration_history, relevant_notes]
+    terminal_statuses: [success]
+
   prepare_context:
     type: shared
     description: "Scan workspace and curate relevant context for a task"
@@ -82,11 +154,35 @@ flows:
 
   research_context:
     type: shared
-    description: "Web research via curl for problem-solving context"
+    description: "Research dispatcher — routes to web search, repomap, git history, or technical docs"
     file: shared/research_context.yaml
     inputs:
       required: [problem_description]
-      optional: [error_output, search_hints, max_queries]
+      optional: [error_output, search_hints, max_queries, working_directory, target_file_path, research_type_hint]
+
+  research_repomap:
+    type: shared
+    description: "AST-based repo map with tree-sitter + PageRank for structural understanding"
+    file: shared/research_repomap.yaml
+    inputs:
+      required: [research_query]
+      optional: [working_directory, target_file_path, focus_files]
+
+  research_codebase_history:
+    type: shared
+    description: "Git archaeology — plan and execute git commands to answer history questions"
+    file: shared/research_codebase_history.yaml
+    inputs:
+      required: [research_query]
+      optional: [working_directory, target_file, time_range]
+
+  research_technical:
+    type: shared
+    description: "Technical literature search targeting authoritative sources"
+    file: shared/research_technical.yaml
+    inputs:
+      required: [research_query]
+      optional: [domain_hint]
 
   revise_plan:
     type: shared
@@ -95,6 +191,32 @@ flows:
     inputs:
       required: [mission_id, observation]
       optional: [discovered_requirement, affected_task_id]
+
+  run_in_terminal:
+    type: shared
+    description: "Multi-turn persistent terminal session for interactive command execution"
+    file: shared/run_in_terminal.yaml
+    inputs:
+      required: [session_goal, working_directory]
+      optional: [initial_commands, max_turns, session_context, environment_vars]
+
+  manage_packages:
+    type: task
+    description: "Detect, create, and manage project virtual environment and packages"
+    file: tasks/manage_packages.yaml
+    inputs:
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, packages_to_install, target_file_path, reason, temperature_multiplier, frustration_level, frustration_history, relevant_notes]
+    terminal_statuses: []
+
+  validate_behavior:
+    type: task
+    description: "Run the project code interactively to verify behavior"
+    file: tasks/validate_behavior.yaml
+    inputs:
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, target_file_path, entry_point, test_scenarios, reason, temperature_multiplier, frustration_level, frustration_history, relevant_notes]
+    terminal_statuses: []
 
   quality_gate:
     type: shared

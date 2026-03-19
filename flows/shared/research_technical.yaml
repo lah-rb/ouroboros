@@ -1,0 +1,99 @@
+flow: research_technical
+version: 1
+description: >
+  Research technical concepts from authoritative sources. Adds site-specific
+  filters to search queries targeting official documentation, academic papers,
+  and authoritative tutorials. Reuses existing curl_search infrastructure.
+
+input:
+  required:
+    - research_query
+  optional:
+    - domain_hint
+
+defaults:
+  config:
+    temperature: "t*0.2"
+
+steps:
+
+  format_query:
+    action: format_technical_query
+    description: "Add technical site filters to the search query"
+    context:
+      required: [research_query]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.query_count > 0"
+          transition: execute_search
+        - condition: "true"
+          transition: no_results
+    publishes:
+      - search_queries
+
+  execute_search:
+    action: curl_search
+    description: "Execute site-filtered search queries via curl"
+    context:
+      required: [search_queries]
+    params:
+      max_queries: 2
+      timeout: 15
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.results_found > 0"
+          transition: filter_and_format
+        - condition: "true"
+          transition: no_results
+    publishes:
+      - raw_search_results
+
+  filter_and_format:
+    action: inference
+    description: "Filter search results for technical quality and relevance"
+    context:
+      required: [research_query, raw_search_results]
+      optional: [domain_hint]
+    prompt: |
+      You searched for technical information on: {{ context.research_query }}
+
+      {% if context.domain_hint %}
+      Domain context: {{ context.domain_hint }}
+      {% endif %}
+
+      ## Search Results
+      {% for result in context.raw_search_results %}
+      --- Source: {{ result.url }} ---
+      {{ result.content[:2000] }}
+      {% endfor %}
+
+      Filter these results:
+      1. Keep only results from authoritative technical sources
+      2. Discard blog posts, forums, and opinion pieces unless they contain
+         concrete technical content (code examples, API signatures, specifications)
+      3. Prioritize: official documentation > academic papers > authoritative tutorials
+      4. Summarize each kept result's relevant content
+
+      Produce a focused technical answer to the query. Include:
+      - Direct answer to the question
+      - Key technical details (API signatures, parameters, return types)
+      - Source attribution for each fact
+      - Confidence level (high/medium/low) based on source quality
+
+      If nothing useful was found, respond with: "No relevant technical results found."
+    config:
+      temperature: "t*0.2"
+    terminal: true
+    status: success
+    publishes:
+      - raw_results
+
+  no_results:
+    action: noop
+    description: "No technical search results found"
+    terminal: true
+    status: failed
+
+entry: format_query

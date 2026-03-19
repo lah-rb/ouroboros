@@ -54,7 +54,7 @@ steps:
     description: "Analyze the issue and produce a change plan"
     context:
       required: [target_file]
-      optional: [context_bundle, project_manifest]
+      optional: [context_bundle, project_manifest, repo_map_formatted, related_files]
     prompt: |
       You are an analysis module in an automated coding pipeline.
       Your task is to produce a change plan that another module will execute.
@@ -65,6 +65,17 @@ steps:
       {{ context.target_file.content }}
 
       Issue to address: {{ input.reason }}
+
+      {% if context.repo_map_formatted %}
+      ## Project Structure (AST-based dependency map)
+      {{ context.repo_map_formatted }}
+      {% endif %}
+
+      {% if context.related_files %}
+      ## Files Most Connected to This File (by import/reference graph)
+      {{ context.related_files | join(', ') }}
+      Changes to this file may affect these files. Ensure interface compatibility.
+      {% endif %}
 
       {% if context.context_bundle and context.context_bundle.files %}
       Related files for reference:
@@ -115,7 +126,7 @@ steps:
     description: "Produce the modified file content"
     context:
       required: [target_file, inference_response]
-      optional: [context_bundle]
+      optional: [context_bundle, diagnosis]
     prompt: |
       You are a code generation module in an automated pipeline.
       Your output will be extracted from code markers and written directly to a file.
@@ -130,35 +141,35 @@ steps:
       Original file ({{ context.target_file.path }}):
       {{ context.target_file.content }}
 
-      Respond with ONLY the complete modified file inside triple-backtick markers:
+      Respond with ONLY the complete modified file inside a fenced code block:
 
-      ✅ CORRECT format (complete file, nothing outside markers):
-      ```
+      ✅ CORRECT — one fenced block containing the COMPLETE file:
+      ```python
       # entire file content with changes applied
       import os
-      
+
       def modified_function():
           # changed implementation
           pass
       ```
 
-      ❌ WRONG — no explanation outside the markers:
+      ❌ WRONG — no explanation outside the code block:
       I changed the function to fix the bug:
-      ```
+      ```python
       def modified_function():
           pass
       ```
 
       ❌ WRONG — do not return only the changed portion:
-      ```
+      ```python
       def modified_function():
           pass
       ```
 
-      ---DO NOT GENERATE EXTRA CHARACTERS---
-      ---DO NOT USE FENCED CODE BLOCKS (```)---
-      ---END RESPONSE IMMEDIATELY AFTER CODE---
-      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+      RULES:
+      - One fenced code block containing the COMPLETE modified file.
+      - NOTHING before or after the code block — no commentary, no explanation.
+      - The code block is the ENTIRE response.
     config:
       temperature: "t*0.3"
     resolver:
@@ -190,14 +201,39 @@ steps:
       rules:
         - condition: "result.status == 'success'"
           transition: capture_learnings
+        - condition: "result.status == 'issues' and meta.step_count < 10"
+          transition: correct_issues
         - condition: "result.status == 'issues'"
           transition: capture_learnings
-        - condition: "result.status == 'failed' and meta.step_count < 12"
+        - condition: "result.status == 'failed' and meta.step_count < 8"
           transition: regenerate_modified
+        - condition: "result.status == 'failed' and meta.step_count < 16"
+          transition: diagnose_before_retry
         - condition: "true"
           transition: capture_failure_note
     publishes:
       - validation_results
+
+  diagnose_before_retry:
+    action: flow
+    description: "Validation failed after retries — diagnose before trying again"
+    flow: diagnose_issue
+    input_map:
+      error_description: "Modification of {{ input.target_file_path }} failed validation: {{ input.reason }}"
+      target_file_path: "{{ input.target_file_path }}"
+      error_output: "{{ context.validation_results }}"
+      working_directory: "{{ input.working_directory }}"
+      task_description: "{{ input.task_description }}"
+      mission_objective: "{{ input.mission_objective }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.status == 'success'"
+          transition: execute_change
+        - condition: "true"
+          transition: capture_failure_note
+    publishes:
+      - diagnosis
 
   correct_issues:
     action: inference
@@ -225,31 +261,31 @@ steps:
       Modification reason: {{ input.reason }}
       Target file: {{ input.target_file_path }}
 
-      Fix the flagged issues and produce the COMPLETE corrected file.
+      Fix ALL flagged issues in a SINGLE pass and produce the COMPLETE corrected file.
       Only fix what's broken — preserve everything that was working.
 
       Common fixes:
+      - Remove ALL unused imports at once (don't leave any behind).
       - If imports fail because a module doesn't exist yet, add try/except or conditional imports.
-      - If a linter flags issues, fix the specific warnings.
+      - If a linter flags multiple issues, fix every single one in this pass.
       - If tests fail, fix the code to pass them.
 
-      Respond with ONLY the corrected code inside triple-backtick markers:
+      Respond with ONLY the corrected code inside a fenced code block:
 
-      ✅ CORRECT format:
-      ```
+      ✅ CORRECT — one fenced block, nothing else:
+      ```python
       # complete corrected file content
       ```
 
-      ❌ WRONG — no explanation outside the markers:
+      ❌ WRONG — no text outside the code block:
       I fixed the import error:
-      ```
+      ```python
       # code here
       ```
 
-      ---DO NOT GENERATE EXTRA CHARACTERS---
-      ---DO NOT USE FENCED CODE BLOCKS (```)---
-      ---END RESPONSE IMMEDIATELY AFTER CODE---
-      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+      RULES:
+      - One fenced code block containing the COMPLETE corrected file.
+      - NOTHING before or after the code block.
     config:
       temperature: 0.2
     resolver:
@@ -292,23 +328,22 @@ steps:
       Fix the specific syntax errors and produce the COMPLETE corrected file.
       Do NOT change parts of the code that were working — only fix what failed.
 
-      Respond with ONLY the corrected code inside triple-backtick markers:
+      Respond with ONLY the corrected code inside a fenced code block:
 
-      ✅ CORRECT format:
-      ```
+      ✅ CORRECT — one fenced block, nothing else:
+      ```python
       # complete corrected file content
       ```
 
-      ❌ WRONG — no explanation outside the markers:
+      ❌ WRONG — no text outside the code block:
       I fixed the syntax error:
-      ```
+      ```python
       # code here
       ```
 
-      ---DO NOT GENERATE EXTRA CHARACTERS---
-      ---DO NOT USE FENCED CODE BLOCKS (```)---
-      ---END RESPONSE IMMEDIATELY AFTER CODE---
-      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+      RULES:
+      - One fenced code block containing the COMPLETE corrected file.
+      - NOTHING before or after the code block.
     config:
       temperature: 0.2
     resolver:
