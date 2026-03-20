@@ -50,6 +50,7 @@ flowchart TD
     check_extension -->|always| assess
     invoke_revise_plan -->|always| assess
     assess -->|result.needs_plan == true| dispatch_planning
+    assess -->|result.all_tasks_complete == true and result.al...| completed
     assess -->|result.all_tasks_complete == true and result.ge...| completed
     assess -->|result.all_tasks_complete == true| quality_check
     assess -->|result.all_remaining_blocked == true| idle

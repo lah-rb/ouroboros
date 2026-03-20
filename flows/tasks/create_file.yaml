@@ -48,13 +48,20 @@ steps:
       Your output will be extracted from code markers and written directly to a file.
       Do NOT include any text outside the code block — no explanation, no commentary.
 
-      Project objective: {{ input.mission_objective }}
+      Project objective: {{ input.mission_objective }}{% if context.context_bundle and context.context_bundle.mission_objective and not input.mission_objective %}
+      Project objective: {{ context.context_bundle.mission_objective }}{% endif %}
       Task: {{ input.task_description }}
       Target file: {{ input.target_file_path }}
 
       {% if context.repo_map_formatted %}
       ## Project Structure (AST-based dependency map)
       {{ context.repo_map_formatted }}
+      {% endif %}
+
+      {% if context.context_bundle and context.context_bundle.import_graph %}
+      ## Import Dependency Graph (what imports what)
+      {{ context.context_bundle.import_graph }}
+      ⚠️ Use EXACT import paths shown above — do not guess or invent module paths.
       {% endif %}
 
       {% if context.related_files %}

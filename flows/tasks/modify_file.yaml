@@ -71,6 +71,12 @@ steps:
       {{ context.repo_map_formatted }}
       {% endif %}
 
+      {% if context.context_bundle and context.context_bundle.import_graph %}
+      ## Import Dependency Graph (what imports what)
+      {{ context.context_bundle.import_graph }}
+      ⚠️ Use EXACT import paths shown above — do not guess or invent module paths.
+      {% endif %}
+
       {% if context.related_files %}
       ## Files Most Connected to This File (by import/reference graph)
       {{ context.related_files | join(', ') }}
