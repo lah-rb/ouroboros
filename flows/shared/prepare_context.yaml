@@ -247,6 +247,7 @@ steps:
       optional: [research_findings, related_files]
     params:
       budget: "{{ input.context_budget | default(8) }}"
+      mission_objective: "{{ input.mission_objective | default('') }}"
     resolver:
       type: rule
       rules:
@@ -265,6 +266,7 @@ steps:
     params:
       strategy: "target_plus_neighbors"
       target: "{{ input.target_file_path }}"
+      mission_objective: "{{ input.mission_objective | default('') }}"
     resolver:
       type: rule
       rules:

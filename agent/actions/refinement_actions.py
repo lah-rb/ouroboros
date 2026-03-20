@@ -209,12 +209,18 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
     # Get recursive directory listing
     listing = await effects.list_directory(root, recursive=True)
 
+    # Directories that are agent infrastructure — not project code
+    infrastructure_prefixes = (".agent/", ".agent\\")
+
     # Filter to matching patterns — adapt to DirListing.entries protocol
     matched_files = []
     for entry in listing.entries:
         if not entry.is_file:
             continue
         filepath = entry.path
+        # Skip agent infrastructure files (e.g. .agent/mission.json)
+        if any(filepath.startswith(prefix) for prefix in infrastructure_prefixes):
+            continue
         if any(fnmatch.fnmatch(filepath, pat) for pat in include_patterns):
             matched_files.append(filepath)
 
@@ -543,6 +549,9 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
 
     Reads file_selection from context (JSON array of {file, reason, priority}),
     loads each file via effects.read_file(), returns context_bundle.
+
+    The context_bundle always includes the mission_objective (when available)
+    so downstream steps retain awareness of the overall goal.
     """
     effects = step_input.effects
     selection_raw = step_input.context.get(
@@ -553,6 +562,7 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
     budget = int(step_input.params.get("budget", 8))
     strategy = step_input.params.get("strategy")
     target = step_input.params.get("target")
+    mission_objective = step_input.params.get("mission_objective", "")
 
     # Get repomap-determined related files for hybrid selection
     related_files = step_input.context.get("related_files", [])
@@ -560,7 +570,13 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
     if not effects:
         return StepOutput(
             result={"files_loaded": 0},
-            context_updates={"context_bundle": {"files": [], "manifest_summary": {}}},
+            context_updates={
+                "context_bundle": {
+                    "files": [],
+                    "manifest_summary": {},
+                    "mission_objective": mission_objective,
+                }
+            },
         )
 
     files_to_load: list[str] = []
@@ -617,10 +633,21 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
         except Exception as e:
             loaded.append({"path": filepath, "content": f"(error: {e})", "size": 0})
 
+    # Build import graph from loaded files for cross-module awareness
+    import_graph = _extract_import_graph(loaded)
+
     context_bundle: dict[str, Any] = {
         "files": loaded,
         "manifest_summary": {fp: sig[:100] for fp, sig in list(manifest.items())[:20]},
     }
+
+    # Always include mission_objective so downstream steps retain the goal
+    if mission_objective:
+        context_bundle["mission_objective"] = mission_objective
+
+    # Include import graph so models understand cross-module dependencies
+    if import_graph:
+        context_bundle["import_graph"] = import_graph
 
     if research_findings:
         context_bundle["research_findings"] = research_findings
@@ -631,6 +658,53 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
         + ", ".join(f["path"] for f in loaded),
         context_updates={"context_bundle": context_bundle},
     )
+
+
+def _extract_import_graph(loaded_files: list[dict]) -> str:
+    """Extract import relationships from loaded Python files.
+
+    Produces a compact summary like:
+        game/engine.py imports → game.models, game.parser, yaml, json
+        game/parser.py imports → game.models, re
+        game/models.py imports → dataclasses
+
+    This helps models understand cross-module dependencies at a glance
+    without reading full file contents.
+    """
+    lines = []
+    for file_info in loaded_files:
+        path = file_info.get("path", "")
+        content = file_info.get("content", "")
+        if not path.endswith(".py") or not content or content.startswith("("):
+            continue
+        imports = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("import "):
+                # import foo, bar → [foo, bar]
+                modules = stripped[7:].split(",")
+                for m in modules:
+                    m = m.strip().split(" as ")[0].strip()
+                    if m:
+                        imports.append(m)
+            elif stripped.startswith("from ") and " import " in stripped:
+                # from foo.bar import baz → foo.bar
+                module = stripped[5:].split(" import ")[0].strip()
+                if module and not module.startswith("."):
+                    imports.append(module)
+                elif module.startswith("."):
+                    # Relative import — resolve to approximate module path
+                    imports.append(f"(relative) {module}")
+        if imports:
+            # Deduplicate while preserving order
+            seen = set()
+            unique = []
+            for imp in imports:
+                if imp not in seen:
+                    seen.add(imp)
+                    unique.append(imp)
+            lines.append(f"{path} imports → {', '.join(unique)}")
+    return "\n".join(lines)
 
 
 def _parse_file_selection(raw: str, budget: int) -> list[dict]:

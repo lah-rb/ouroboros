@@ -124,11 +124,17 @@ steps:
       {% if context.repo_map_formatted %}
       ## Project Structure (AST-based — use this for CORRECT import paths)
       {{ context.repo_map_formatted }}
+      {% endif %}
 
-      ⚠️ CRITICAL: Use the EXACT module paths shown above for imports in your tests.
+      {% if context.context_bundle and context.context_bundle.import_graph %}
+      ## Import Dependency Graph (what imports what)
+      {{ context.context_bundle.import_graph }}
+      ⚠️ Use EXACT import paths shown above — do not guess or invent module paths.
+      {% endif %}
+
+      ⚠️ CRITICAL: Use the EXACT module paths shown in the project structure for imports in your tests.
       Convert file paths to Python module names: app/main.py → app.main, utils.py → utils.
       Do NOT guess import paths — they must match the actual project structure above.
-      {% endif %}
 
       {% if context.related_files %}
       ## Files Most Connected to Target (dependencies and dependents)

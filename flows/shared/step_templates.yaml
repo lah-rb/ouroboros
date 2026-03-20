@@ -100,6 +100,9 @@ templates:
       task_description: "{{ input.task_description }}"
       mission_objective: "{{ input.mission_objective }}"
       target_file_path: "{{ input.target_file_path }}"
+      frustration_level: "{{ input.frustration_level | default('0') }}"
+      frustration_history: "{{ input.frustration_history | default('') }}"
+      relevant_notes: "{{ input.relevant_notes | default('') }}"
     publishes:
       - context_bundle
       - project_manifest

@@ -230,7 +230,7 @@ steps:
         - condition: "result.all_tasks_complete == true"
           transition: quality_check
         - condition: "result.all_remaining_blocked == true"
-          transition: idle
+          transition: completed
         - condition: "result.obvious_next_task != null"
           transition: prepare_dispatch
         - condition: "true"
@@ -350,6 +350,8 @@ steps:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.last_task_id }}"
+        last_status: "{{ input.last_status }}"
       delay: 5
 
   aborted:
