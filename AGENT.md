@@ -38,6 +38,7 @@ All inference requests go through LLMVP's GraphQL API over HTTP.
 | The agent loop / tail calls | `agent/loop.py`, `agent/tail_call.py` | `tests/test_runtime.py` |
 | Mission CLI commands | `ouroboros.py` | — |
 | Mission YAML config | `agent/mission_config.py` | `ouroboros.py`, `tests/test_mission_config.py` |
+| Runtime tracing / trace events | `agent/trace.py`, `agent/trace_cli.py` | `tests/test_trace.py` |
 | Architecture / design decisions | `IMPLEMENTATION.md` | `REFINEMENT.md`, `greenfield.md` |
 | Prompt quality / conventions | `PROMPTING_CONVENTIONS.md` | `claude-skill-writing-patterns.md` |
 

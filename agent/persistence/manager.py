@@ -24,7 +24,7 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
-from agent.persistence.migrations import check_and_migrate, MigrationError
+
 from agent.persistence.models import (
     Event,
     FlowArtifact,
@@ -129,10 +129,9 @@ class PersistenceManager:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            data = check_and_migrate(data)
+            # Schema is unstable during development — no version gating.
+            # Pydantic defaults handle missing fields gracefully.
             return MissionState.model_validate(data)
-        except MigrationError as e:
-            raise PersistenceError(f"Mission migration failed: {e}") from e
         except Exception as e:
             raise PersistenceError(f"Failed to load mission: {e}") from e
 

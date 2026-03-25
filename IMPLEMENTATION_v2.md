@@ -450,7 +450,7 @@ sufficient execution history exists for data-driven decisions.
 
 ### Active Phases
 
-**Phase 1 — Blueprint System (Static Analysis & Documentation)**
+**Phase 1 — Blueprint System (Static Analysis & Documentation)** ✅
 
 Deliverable: `ouroboros.py blueprint` command producing a comprehensive plan set in both
 Markdown (for AI developer context) and PDF via WeasyPrint (for human architectural review).
@@ -462,18 +462,28 @@ See `BLUEPRINT_DESIGN.md` for full specification including:
 - Custom symbology set with Egyptian hieroglyphic effect symbols
 - Analyzer, renderer, and CLI integration design
 
-**Phase 2 — Runtime Tracing (Default Level)**
+**Phase 2 — Runtime Tracing (Default Level)** ✅
 
 Deliverable: Lightweight always-on trace instrumentation producing structured trace events
 for post-run analysis. Token counting (whitespace-split), wall-clock timing, resolver
 decisions, flow/step lifecycle events.
 
-See `BLUEPRINT_DESIGN.md` §Phase 2 for full specification including:
-- TraceEvent dataclass family (6 event types)
-- Effects protocol extension (`emit_trace`, `flush_traces`)
-- Instrumentation placement in `runtime.py` and `loop.py`
-- `ouroboros.py trace` command with summary and detail formats
-- JSONL trace file format and cycle-boundary flush strategy
+Implementation:
+- `agent/trace.py` — TraceEvent dataclass family (8 event types: CycleStart, CycleEnd,
+  StepStart, StepEnd, InferenceCall, FlowInvoke, FlowReturn, base TraceEvent).
+  `count_tokens()` for client-side whitespace-split approximation.
+- Effects protocol extension — `emit_trace()` and `flush_traces()` added to protocol,
+  `LocalEffects` (buffer + JSONL flush), and `MockEffects` (public list for assertions).
+- Instrumentation in `runtime.py` — StepStart/StepEnd around every step, InferenceCall
+  around inference actions, FlowInvoke/FlowReturn around sub-flow invocations.
+- Instrumentation in `loop.py` — CycleStart/CycleEnd at cycle boundaries, flush_traces
+  before following tail calls. `_trace_cycle` synthetic input for cycle propagation.
+- Instrumentation in `resolvers/llm_menu.py` — InferenceCall with purpose="llm_menu_resolve".
+- `agent/trace_cli.py` — `ouroboros.py trace` command with summary and detail formats.
+  Summary shows flow breakdown, token totals, resolver decisions, and audit warnings.
+- JSONL trace files in `.agent/traces/{mission_id}_{timestamp}.jsonl`.
+- Tests in `tests/test_trace.py` — 22 tests covering serialization, token counting,
+  MockEffects tracing, LocalEffects flush to disk, and runtime instrumentation.
 
 **Phase 3+ — To Be Determined After Phase 2**
 

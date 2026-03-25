@@ -194,7 +194,7 @@ class TestInferenceActionInRuntime:
             files={"test.txt": "Some code content"},
             inference_responses=[
                 "Initial summary of the code.",
-                "analyze_deeper",  # LLM menu picks deeper analysis
+                "b",  # LLM menu picks deeper analysis (b = analyze_deeper)
                 "Detailed analysis of patterns and structure.",
             ],
         )

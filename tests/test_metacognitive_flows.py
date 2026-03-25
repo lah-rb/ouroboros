@@ -673,8 +673,8 @@ class TestFlowRegistryIncludes:
     def test_total_flow_count(self):
         flows = load_all_flows("flows")
         assert (
-            len(flows) == 29
-        ), f"Expected 29 flows, got {len(flows)}: {list(flows.keys())}"
+            len(flows) == 30
+        ), f"Expected 30 flows, got {len(flows)}: {list(flows.keys())}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -699,12 +699,12 @@ class TestMissionControlRetrospectiveWiring:
         assert step.tail_call is not None
         assert step.tail_call["flow"] == "retrospective"
 
-    def test_check_retrospective_can_reach_check_extension(self):
-        """When retrospective isn't due, flow continues to check_extension."""
+    def test_check_retrospective_can_reach_reason(self):
+        """When retrospective isn't due, flow continues to reason (v2)."""
         flow = _load("flows/mission_control.yaml")
         step = flow.steps["check_retrospective"]
         transitions = [r.transition for r in step.resolver.rules]
-        assert "check_extension" in transitions
+        assert "reason" in transitions
 
     def test_apply_last_result_routes_to_check_retrospective(self):
         """Task completion now routes through retrospective check."""

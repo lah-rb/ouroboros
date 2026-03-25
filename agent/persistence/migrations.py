@@ -11,7 +11,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 class MigrationError(Exception):
@@ -65,3 +65,20 @@ def check_and_migrate(
 # Migration registry: version N → version N+1
 # Add entries as: MIGRATIONS[1] = migrate_v1_to_v2
 MIGRATIONS: dict[int, callable] = {}
+
+
+def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate schema v1 → v2.
+
+    Adds:
+    - architecture: null (ArchitectureState, populated by design_and_plan)
+    - dispatch_history: [] (list of DispatchRecord)
+    """
+    if "architecture" not in data:
+        data["architecture"] = None
+    if "dispatch_history" not in data:
+        data["dispatch_history"] = []
+    return data
+
+
+MIGRATIONS[1] = _migrate_v1_to_v2

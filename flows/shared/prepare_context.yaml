@@ -60,10 +60,16 @@ steps:
 
   check_research_needed:
     action: noop
-    description: "Determine if web research should supplement context — frustration-graduated, skip at low frustration"
+    description: "Determine if web research should supplement context — frustration-graduated with mechanical-failure guard"
     resolver:
       type: rule
       rules:
+        # Mechanical failures — never research (file not found, path issues)
+        - condition: >
+            'file not found' in str(input.get('frustration_history', '')).lower()
+            or 'does not exist' in str(input.get('frustration_history', '')).lower()
+            or 'write_success == false' in str(input.get('frustration_history', '')).lower()
+          transition: select_relevant
         # High frustration (6+): ALWAYS research before proceeding — mandatory
         - condition: "input.get('frustration_level', '0') in ('6', '7', '8', '9', '10')"
           transition: research
@@ -79,41 +85,38 @@ steps:
 
   decide_research_recommended:
     action: inference
-    description: "LLM decides whether to research — research is RECOMMENDED at this frustration level"
+    description: "LLM decides whether to research — frustration elevated"
     context:
-      required: [project_manifest]
+      optional: [project_manifest, repo_map_formatted]
     prompt: |
-      You are deciding whether web research would help with a coding task.
-      Previous attempts have FAILED. Research is STRONGLY RECOMMENDED.
+      You are a context preparation module. A coding task has failed
+      multiple times (frustration level: elevated).
 
       Task: {{ input.task_description }}
       {% if input.frustration_history %}
       Previous failures: {{ input.frustration_history }}
       {% endif %}
 
-      Should we search the web for solutions before proceeding?
-      Answer with ONLY "yes" or "no".
-    config:
-      temperature: 0.1
-      max_tokens: 8
+      Research can look up documentation, patterns, or solutions online.
+      Given the repeated failures, would external research help?
     resolver:
-      type: rule
-      rules:
-        - condition: "'yes' in result.text.lower()"
-          transition: research
-        - condition: "true"
-          transition: select_relevant
-    publishes:
-      - inference_response
+      type: llm_menu
+      prompt: "Should we research this problem externally?"
+      options:
+        research:
+          description: "Yes — failures suggest missing knowledge"
+        select_relevant:
+          description: "No — issue is likely mechanical (wrong file, bad path)"
+    publishes: []
 
   decide_research_optional:
     action: inference
-    description: "LLM decides whether to research — research is available but optional"
+    description: "LLM decides whether to research — first attempt, optional"
     context:
-      required: [project_manifest]
+      optional: [project_manifest, repo_map_formatted]
     prompt: |
-      You are deciding whether web research would help with a coding task.
-      This is a first attempt — research is optional but available.
+      You are a context preparation module. This is a first attempt
+      at a coding task — research is optional but available.
 
       Task: {{ input.task_description }}
       {% if input.mission_objective %}
@@ -121,19 +124,15 @@ steps:
       {% endif %}
 
       Would web research help with this specific task?
-      Answer with ONLY "yes" or "no".
-    config:
-      temperature: 0.1
-      max_tokens: 8
     resolver:
-      type: rule
-      rules:
-        - condition: "'yes' in result.text.lower()"
-          transition: research
-        - condition: "true"
-          transition: select_relevant
-    publishes:
-      - inference_response
+      type: llm_menu
+      prompt: "Would web research help with this task?"
+      options:
+        research:
+          description: "Yes — task involves unfamiliar APIs or patterns"
+        select_relevant:
+          description: "No — task is straightforward with available context"
+    publishes: []
 
   research:
     action: flow
@@ -152,98 +151,30 @@ steps:
       - research_findings
 
   select_relevant:
-    action: inference
-    description: "LLM decides which files matter for this task, guided by AST dependency map"
+    action: select_relevant_files
+    description: "Deterministically select relevant files via AST graph + heuristics (zero inference calls)"
     context:
       required: [project_manifest]
-      optional: [research_findings, repo_map_formatted, related_files]
-    prompt: |
-      You are a context selection module in an automated coding pipeline.
-      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
-      array — no markdown, no explanation, no surrounding text.
-
-      Task: {{ input.task_description }}
-      {% if input.mission_objective %}
-      Project objective: {{ input.mission_objective }}
-      {% endif %}
-      {% if input.target_file_path %}
-      Primary target file: {{ input.target_file_path }}
-      {% endif %}
-
-      {% if context.repo_map_formatted %}
-      ## Project Structure (AST-based dependency map, ranked by importance)
-      {{ context.repo_map_formatted }}
-      {% endif %}
-
-      {% if context.related_files %}
-      ## Files Most Connected to Target (by actual import/reference graph)
-      These files share the most symbol references with the target — include them preferentially:
-      {{ context.related_files | join(', ') }}
-      {% endif %}
-
-      Available files in the project:
-      {% for filepath, sig in context.project_manifest.items() %}
-      --- {{ filepath }} ---
-      {{ sig }}
-      {% endfor %}
-
-      {% if input.relevant_notes %}
-      Relevant notes from previous work:
-      {{ input.relevant_notes }}
-      {% endif %}
-
-      {% if context.research_findings %}
-      Research findings (from web search due to previous failures):
-      {{ context.research_findings }}
-      {% endif %}
-
-      {% if input.frustration_history %}
-      ⚠️ Previous attempts at this task FAILED:
-      {{ input.frustration_history }}
-      Consider what additional context might prevent the same failure.
-      {% endif %}
-
-      Select the files this task needs to see. Budget: at most {{ input.context_budget | default(8) }} files.
-      Prioritize in this order:
-      1. Target file (if it exists)
-      2. Files from the "Most Connected" list above — these are actual dependencies
-      3. Direct imports/dependencies visible in the AST map
-      4. Test files if modifying code
-      5. Additional files relevant to the task description
-
-      ✅ CORRECT output (raw JSON array, nothing else):
-      [
-        {"file": "src/models.py", "reason": "defines data classes used by target", "priority": 1},
-        {"file": "tests/test_models.py", "reason": "tests for the module being modified", "priority": 2}
-      ]
-
-      ❌ WRONG — do not wrap in markdown:
-      ```json
-      [{"file": "src/models.py", "reason": "needed", "priority": 1}]
-      ```
-
-      ❌ WRONG — do not add explanation:
-      Based on the task, these files are relevant:
-      [{"file": "src/models.py"}]
-
-      Return ONLY the raw JSON array.
-    config:
-      temperature: 0.1
+      optional: [repo_map_formatted, related_files, research_findings]
+    params:
+      target_file_path: "{{ input.target_file_path }}"
+      task_description: "{{ input.task_description }}"
+      context_budget: "{{ input.context_budget | default(10) }}"
     resolver:
       type: rule
       rules:
-        - condition: "result.tokens_generated > 0"
+        - condition: "result.files_selected > 0"
           transition: load_selected
         - condition: "true"
           transition: load_fallback
     publishes:
-      - inference_response
+      - selected_files
 
   load_selected:
     action: load_file_contents
-    description: "Read full content of selected files (hybrid: repomap-related + LLM-selected)"
+    description: "Read full content of selected files (deterministic AST-based selection)"
     context:
-      required: [inference_response, project_manifest]
+      required: [selected_files, project_manifest]
       optional: [research_findings, related_files]
     params:
       budget: "{{ input.context_budget | default(8) }}"

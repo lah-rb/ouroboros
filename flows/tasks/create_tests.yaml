@@ -1,316 +1,139 @@
 flow: create_tests
-version: 1
+version: 2
 description: >
-  Create test files for existing project modules.
-  Reads the target module, generates pytest-style tests,
-  writes the test file, and validates by running the tests.
-  Available but not enforced — the planner may include test
-  tasks when appropriate.
+  Create test files to verify module behavior. Reads the target source
+  file(s) to understand the API, then generates comprehensive tests.
 
 input:
   required:
     - mission_id
     - task_id
   optional:
-    - target_file_path
     - task_description
     - mission_objective
     - working_directory
-    - test_file_path
+    - target_file_path
     - reason
-    - temperature_multiplier
-    - frustration_level
-    - frustration_history
     - relevant_notes
 
 defaults:
   config:
-    temperature: "t*0.5"
-    max_tokens: 4096
+    temperature: "t*0.6"
 
 steps:
 
   gather_context:
     use: gather_project_context
     params:
-      context_budget: 6
+      context_budget: 10
     resolver:
       type: rule
       rules:
-        - condition: "input.get('target_file_path', '') != ''"
-          transition: read_target
         - condition: "true"
-          transition: select_target
-
-  select_target:
-    action: inference
-    description: "No target_file_path provided — select the best file to test from project context"
-    context:
-      optional: [project_manifest, context_bundle]
-    prompt: |
-      You are a file selection module in an automated coding pipeline.
-      Return ONLY a single filename — no explanation, no quotes, no markdown.
-
-      A test creation task needs to select which project file to test.
-      Task: {{ input.task_description }}
-
-      {% if context.project_manifest %}
-      Project files:
-      {% for filepath in context.project_manifest.keys() %}
-      - {{ filepath }}
-      {% endfor %}
-      {% endif %}
-
-      Select the SINGLE most important Python source file to generate tests for.
-      Do NOT select test files, __init__.py, or config files.
-
-      Return ONLY the filename (e.g. card.py), nothing else.
-    config:
-      temperature: 0.0
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.tokens_generated > 0"
-          transition: read_selected_target
-        - condition: "true"
-          transition: capture_failure_note
-    publishes:
-      - selected_file_response
-
-  read_selected_target:
-    action: read_files
-    description: "Read the file selected by inference"
-    context:
-      required: [selected_file_response]
-    params:
-      target: "{{ context.selected_file_response.text | default(context.selected_file_response) }}"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.file_found == true"
           transition: generate_tests
-        - condition: "true"
-          transition: capture_failure_note
-    publishes:
-      - target_file
-
-  read_target:
-    use: read_target_file
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.file_found == true"
-          transition: generate_tests
-        - condition: "true"
-          transition: capture_failure_note
 
   generate_tests:
     action: inference
-    description: "Generate test code for the target module"
+    description: "Generate test files based on project source code"
     context:
-      required: [target_file]
-      optional: [context_bundle, project_manifest, repo_map_formatted, related_files]
+      optional: [context_bundle, project_manifest, repo_map_formatted]
     prompt: |
-      You are a test generation module in an automated coding pipeline.
-      Your output will be extracted from code markers and written directly to a file.
-      Do NOT include any text outside the code block.
+      You are a test generation module in an automated pipeline.
+      Your output will be parsed for file blocks and written to disk.
 
-      Generate comprehensive tests for the following module.
+      ## Task
+      {{ input.task_description }}
 
-      Target module: {{ context.target_file.path }}
-      Module content:
-      {{ context.target_file.content }}
+      {% if input.target_file_path %}
+      Primary source file to test: {{ input.target_file_path }}
+      {% endif %}
+
+      Project objective: {{ input.mission_objective }}
+
+      {% if input.relevant_notes %}
+      ## Architecture & Notes
+      {{ input.relevant_notes }}
+      {% endif %}
 
       {% if context.repo_map_formatted %}
-      ## Project Structure (AST-based — use this for CORRECT import paths)
+      ## Project Structure (AST-based)
       {{ context.repo_map_formatted }}
       {% endif %}
 
-      {% if context.context_bundle and context.context_bundle.import_graph %}
-      ## Import Dependency Graph (what imports what)
-      {{ context.context_bundle.import_graph }}
-      ⚠️ Use EXACT import paths shown above — do not guess or invent module paths.
-      {% endif %}
-
-      ⚠️ CRITICAL: Use the EXACT module paths shown in the project structure for imports in your tests.
-      Convert file paths to Python module names: app/main.py → app.main, utils.py → utils.
-      Do NOT guess import paths — they must match the actual project structure above.
-
-      {% if context.related_files %}
-      ## Files Most Connected to Target (dependencies and dependents)
-      {{ context.related_files | join(', ') }}
-      {% endif %}
-
       {% if context.context_bundle and context.context_bundle.files %}
-      Related project files for understanding context:
+      ## Source Files
       {% for file in context.context_bundle.files %}
-      {% if file.path != context.target_file.path %}
       === {{ file.path }} ===
-      {{ file.content[:1000] }}
-      {% endif %}
+      {{ file.content[:2000] }}
       {% endfor %}
       {% endif %}
 
-      {% if input.reason %}
-      Focus areas: {{ input.reason }}
-      {% endif %}
+      Generate comprehensive test file(s). For each test file:
+      - Import the module under test
+      - Test the public API: constructors, methods, edge cases
+      - Test error handling paths
+      - Use descriptive test names
 
-      {% if input.frustration_history %}
-      ⚠️ Previous test generation attempts FAILED:
-      {{ input.frustration_history }}
-      Take a different approach.
-      {% endif %}
-
-      {% if input.relevant_notes %}
-      ⚠️ IMPORTANT — observations from previous tasks:
-      {{ input.relevant_notes }}
-      Use these observations to avoid repeating known mistakes.
-      {% endif %}
-
-      Requirements:
-      - Use pytest (import pytest at the top)
-      - Test each public function/class/method
-      - Include both happy path and edge case tests
-      - Use descriptive test names (test_<function>_<scenario>)
-      - Add brief docstrings to test functions
-      - Mock external dependencies if needed (use unittest.mock)
-      - Keep tests focused and independent
-
-      Respond with ONLY the test code inside triple-backtick markers:
-
-      ✅ CORRECT format:
-      ```
-      import pytest
-      from module_name import function_to_test
-
-      def test_function_happy_path():
-          """Test normal operation."""
-          assert function_to_test(input) == expected
+      === FILE: tests/test_example.py ===
+      ```python
+      # complete test file
       ```
 
-      ❌ WRONG — no explanation outside the code block.
-
-      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
+      Create ALL test files needed. NOTHING outside the file blocks.
     config:
       temperature: 0.3
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
-          transition: write_test_file
+          transition: write_tests
         - condition: "true"
-          transition: capture_failure_note
+          transition: failed
     publishes:
       - inference_response
 
-  write_test_file:
-    action: execute_file_creation
-    description: "Write the generated test file"
+  write_tests:
+    action: apply_multi_file_changes
+    description: "Write test files to disk"
     context:
       required: [inference_response]
-      optional: [target_file]
     params:
-      target_file_path: "{{ input.test_file_path | default('tests/test_' + (input.get('target_file_path', '') or context.get('target_file', {}).get('path', 'module.py')).split('/')[-1]) }}"
+      content_key: "inference_response"
     resolver:
       type: rule
       rules:
-        - condition: "result.write_success == true"
-          transition: run_tests
+        - condition: "result.files_written > 0"
+          transition: validate
         - condition: "true"
-          transition: capture_failure_note
+          transition: failed
     publishes:
-      - created_file
+      - files_changed
 
-  run_tests:
-    action: run_tests
-    description: "Run the generated tests to validate them"
+  validate:
+    action: validate_created_files
+    description: "Validate test files — syntax check"
     context:
-      optional: [target_file]
-    params:
-      test_path: "{{ input.test_file_path | default('tests/test_' + (input.get('target_file_path', '') or context.get('target_file', {}).get('path', 'module.py')).split('/')[-1]) }}"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.all_passing == true"
-          transition: capture_learnings
-        - condition: "meta.step_count < 10"
-          transition: fix_tests
-        - condition: "true"
-          transition: capture_learnings
-    publishes:
-      - test_results
-
-  fix_tests:
-    action: inference
-    description: "Fix failing tests based on error output"
-    context:
-      required: [inference_response, test_results, target_file]
-    prompt: |
-      You are a test generation module in an automated pipeline.
-      Your previous tests for {{ context.target_file.path }} had failures.
-
-      Test results:
-      {% if context.test_results %}
-      stdout: {{ context.test_results.stdout[:1500] }}
-      stderr: {{ context.test_results.stderr[:500] }}
-      {% endif %}
-
-      Original module being tested:
-      {{ context.target_file.content }}
-
-      Fix ONLY the failing tests. Return the COMPLETE test file.
-
-      Respond with ONLY the corrected code inside triple-backtick markers:
-      ```
-      # complete corrected test file
-      ```
-
-      ---ONLY CODE EXECUTABLE SYNTAX BELOW---
-    config:
-      temperature: 0.2
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.tokens_generated > 0"
-          transition: write_test_file
-        - condition: "true"
-          transition: capture_failure_note
-    publishes:
-      - inference_response
-
-  capture_learnings:
-    use: capture_learnings
-    params:
-      learning_focus: "general"
-      category: "codebase_observation"
+      required: [files_changed]
     resolver:
       type: rule
       rules:
         - condition: "true"
           transition: complete
+    publishes:
+      - validation_results
 
   complete:
     action: noop
-    description: "Tests created — return to mission_control"
+    description: "Tests created"
+    context:
+      optional: [files_changed]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
-        last_result: "Created tests for {{ input.target_file_path }}"
-
-  capture_failure_note:
-    use: capture_learnings
-    params:
-      learning_focus: "failure_analysis"
-      category: "failure_analysis"
-      task_outcome: "FAILED to create tests for {{ input.target_file_path }}"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: failed
+        last_result: "Created test files: {{ context.files_changed | join(', ') if context.files_changed else 'tests' }}"
 
   failed:
     action: noop
@@ -320,7 +143,8 @@ steps:
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
-        last_status: "abandoned"
+        last_status: "failed"
+        last_result: "Failed to create tests"
 
 entry: gather_context
 

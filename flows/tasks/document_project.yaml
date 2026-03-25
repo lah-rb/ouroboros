@@ -1,9 +1,7 @@
 flow: document_project
-version: 1
+version: 2
 description: >
-  Produce or update project documentation: README, module docstrings,
-  architecture notes. Reads actual code and produces documentation that
-  accurately reflects the current state of the project.
+  Write or update project documentation.
 
 input:
   required:
@@ -15,412 +13,133 @@ input:
     - working_directory
     - target_file_path
     - reason
-    - doc_scope
-    - findings
-    - frustration_level
-    - frustration_history
     - relevant_notes
 
 defaults:
   config:
-    temperature: "t*0.5"
-    max_tokens: 8192
+    temperature: "t*0.6"
 
 steps:
-
-  # ── Phase 1: Read project ──────────────────────────────────
 
   gather_context:
     use: gather_project_context
     params:
-      context_budget: 15
+      context_budget: 8
     resolver:
       type: rule
       rules:
         - condition: "true"
-          transition: scan_project
+          transition: execute
 
-  scan_project:
-    action: scan_project
-    description: "Get full file inventory for documentation"
-    params:
-      root: "."
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.file_count > 0"
-          transition: assess_documentation_state
-        - condition: "true"
-          transition: failed
-    publishes:
-      - project_manifest
-
-  # ── Phase 2: Assess what exists ────────────────────────────
-
-  assess_documentation_state:
+  execute:
     action: inference
-    description: "Survey existing documentation and identify gaps"
+    description: "Execute the task via inference"
     context:
-      required: [project_manifest]
-      optional: [context_bundle]
+      optional: [context_bundle, project_manifest, repo_map_formatted]
     prompt: |
-      You are a documentation assessment module in an automated coding pipeline.
-      Your output will determine which documentation tasks to perform.
-      Write a structured assessment of the project's documentation state.
+      You are a documentation module. Produce clear, accurate documentation.
 
-      ## Project Objective
-      {{ input.mission_objective }}
+      ## Documentation Task
+      {{ input.task_description }}
 
-      ## Project Files
-      {% for filepath, sig in context.project_manifest.items() %}
-      - **{{ filepath }}**: {{ sig[:100] }}
-      {% endfor %}
+      {% if input.reason %}
+      ## Context
+      {{ input.reason }}
+      {% endif %}
+
+      Project objective: {{ input.mission_objective }}
+
+      {% if input.relevant_notes %}
+      ## Architecture & Notes
+      {{ input.relevant_notes }}
+      {% endif %}
+
+      {% if context.repo_map_formatted %}
+      ## Project Structure
+      {{ context.repo_map_formatted }}
+      {% endif %}
 
       {% if context.context_bundle and context.context_bundle.files %}
-      ## File Contents (first 500 chars each)
-      {% for file in context.context_bundle.files %}
-      ### {{ file.path }}
-      ```
-      {{ file.content[:500] }}
-      ```
-      {% endfor %}
-      {% endif %}
-
-      {% if input.findings %}
-      ## Existing Analysis
-      {{ input.findings }}
-      {% endif %}
-
-      ## Assess Documentation State
-
-      Evaluate each category: missing / incomplete / adequate / good
-
-      1. **README**: Does one exist? Is it accurate?
-      2. **Module docstrings**: Do source files have module-level docstrings?
-      3. **Function/class docstrings**: Are public interfaces documented?
-      4. **Architecture notes**: Is the system design documented?
-      5. **Usage examples**: Can someone figure out how to use this?
-      6. **Setup instructions**: Are dependencies and installation documented?
-
-      List the HIGHEST PRIORITY documentation tasks (max 3), ordered by impact.
-    config:
-      temperature: "t*0.3"
-    resolver:
-      type: llm_menu
-      prompt: "What documentation work is most needed?"
-      options:
-        write_readme:
-          description: "README is missing or inadequate — highest priority"
-        update_docstrings:
-          description: "Source files lack proper docstrings"
-        write_architecture:
-          description: "System design needs documentation"
-        documentation_adequate:
-          description: "Documentation is already adequate — no changes needed"
-    publishes:
-      - doc_assessment
-
-  # ── Phase 3: Write documentation ───────────────────────────
-
-  write_readme:
-    action: inference
-    description: "Produce a comprehensive README for the project"
-    context:
-      required: [project_manifest, doc_assessment]
-      optional: [context_bundle]
-    prompt: |
-      You are a documentation generation module in an automated pipeline.
-      Your output will be written directly to README.md.
-      Produce the complete file content.
-
-      ## Project Objective
-      {{ input.mission_objective }}
-
       ## Project Files
-      {% for filepath in context.project_manifest.keys() %}
-      - {{ filepath }}
-      {% endfor %}
-
-      {% if context.context_bundle and context.context_bundle.files %}
-      ## Code (for understanding)
       {% for file in context.context_bundle.files %}
-      ### {{ file.path }}
-      ```
-      {{ file.content[:1000] }}
-      ```
+      === {{ file.path }} ===
+      {{ file.content[:1500] }}
       {% endfor %}
       {% endif %}
 
-      ## Write README.md
+      If you need to create or update files, use this format:
 
-      Include:
-      - **Title and description**: what it does, why it exists
-      - **Features**: key capabilities
-      - **Installation**: how to set up
-      - **Usage**: how to run, with concrete examples
-      - **Project structure**: each file/module's role
-      - **Development**: how to run tests, contribute
+      === FILE: path/to/file ===
+      ```
+      content
+      ```
 
-      Write for someone who has never seen this project.
-      Don't document aspirational features — only what exists in the code.
-
-      Produce the complete README.md content — nothing else.
+      Create ALL files needed. If no files need creating, provide analysis as plain text.
     config:
-      temperature: "t*0.5"
+      temperature: 0.4
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
-          transition: save_readme
+          transition: process_output
         - condition: "true"
-          transition: check_more_docs
+          transition: failed
     publishes:
       - inference_response
 
-  save_readme:
-    action: write_file
-    description: "Write README.md to disk"
+  process_output:
+    action: apply_multi_file_changes
+    description: "Write any file blocks to disk"
     context:
       required: [inference_response]
     params:
-      path: "README.md"
       content_key: "inference_response"
     resolver:
       type: rule
       rules:
-        - condition: "result.write_success == true"
-          transition: check_more_docs
+        - condition: "result.files_written > 0"
+          transition: complete
         - condition: "true"
-          transition: check_more_docs
-    publishes:
-      - readme_written
-
-  update_docstrings:
-    action: inference
-    description: "Add or improve docstrings across the project"
-    context:
-      required: [project_manifest, doc_assessment]
-      optional: [context_bundle]
-    prompt: |
-      You are a documentation module in an automated pipeline.
-      Your output will be parsed for file blocks and written to disk.
-      Add/improve docstrings — do NOT change any code logic.
-
-      ## Assessment
-      {{ context.doc_assessment }}
-
-      {% if context.context_bundle and context.context_bundle.files %}
-      ## Files to Document
-      {% for file in context.context_bundle.files %}
-      {% if file.path.endswith('.py') %}
-      ### {{ file.path }}
-      ```python
-      {{ file.content }}
-      ```
-      {% endif %}
-      {% endfor %}
-      {% endif %}
-
-      ## Rules
-      - Add module-level docstrings if missing
-      - Add class and function docstrings (Google style)
-      - Include type info in docstrings
-      - Do NOT modify any code logic
-
-      Format as multi-file output:
-
-      === FILE: path/to/file.py ===
-      ```python
-      [complete file with docstrings added]
-      ```
-    config:
-      temperature: "t*0.3"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.tokens_generated > 0"
-          transition: apply_docstrings
-        - condition: "true"
-          transition: check_more_docs
-    publishes:
-      - docstring_changes
-
-  apply_docstrings:
-    action: apply_multi_file_changes
-    description: "Write the docstring-improved files"
-    context:
-      required: [docstring_changes]
-    params:
-      content_key: "docstring_changes"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.all_written == true"
-          transition: verify_no_behavior_change
-        - condition: "true"
-          transition: check_more_docs
+          transition: complete_no_files
     publishes:
       - files_changed
 
-  verify_no_behavior_change:
-    action: flow
-    description: "Verify adding docstrings didn't break anything"
-    flow: validate_output
-    input_map:
-      file_path: "{{ input.target_file_path or '.' }}"
-      working_directory: "{{ input.working_directory }}"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.status == 'success' or result.status == 'issues'"
-          transition: check_more_docs
-        - condition: "true"
-          transition: check_more_docs
-    publishes:
-      - validation_results
-
-  write_architecture:
-    action: inference
-    description: "Produce architecture documentation"
-    context:
-      required: [project_manifest, doc_assessment]
-      optional: [context_bundle]
-    prompt: |
-      You are a documentation module in an automated pipeline.
-      Your output will be written directly to ARCHITECTURE.md.
-      Produce the complete file content.
-
-      ## Project
-      {{ input.mission_objective }}
-
-      {% if context.context_bundle and context.context_bundle.files %}
-      ## Code
-      {% for file in context.context_bundle.files %}
-      ### {{ file.path }}
-      ```
-      {{ file.content[:800] }}
-      ```
-      {% endfor %}
-      {% endif %}
-
-      ## Write ARCHITECTURE.md
-
-      Include:
-      - **Overview**: what the system does
-      - **Components**: main modules and interactions
-      - **Data flow**: how data moves through the system
-      - **Key decisions**: why things are structured this way
-      - **Extension points**: where to add new functionality
-      - **Dependencies**: external libraries and their purpose
-
-      Write for a developer joining the project.
-      Produce the complete ARCHITECTURE.md content — nothing else.
-    config:
-      temperature: "t*0.5"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.tokens_generated > 0"
-          transition: save_architecture
-        - condition: "true"
-          transition: check_more_docs
-    publishes:
-      - inference_response
-
-  save_architecture:
-    action: write_file
-    description: "Write ARCHITECTURE.md to disk"
-    context:
-      required: [inference_response]
-    params:
-      path: "ARCHITECTURE.md"
-      content_key: "inference_response"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: check_more_docs
-    publishes:
-      - architecture_written
-
-  # ── Phase 4: Check for more work ───────────────────────────
-
-  check_more_docs:
-    action: check_remaining_doc_tasks
-    description: "Are there more documentation tasks?"
-    context:
-      required: [doc_assessment]
-      optional: [readme_written, docstring_changes, architecture_written]
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.remaining > 0 and meta.attempt < 3"
-          transition: assess_documentation_state
-        - condition: "true"
-          transition: capture_learnings
-    publishes:
-      - docs_completed
-
-  # ── Terminal paths ─────────────────────────────────────────
-
-  capture_learnings:
-    use: capture_learnings
-    params:
-      learning_focus: "general"
-      category: "codebase_observation"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: complete
-
   complete:
     action: noop
-    description: "Documentation complete — return to mission_control"
-    status: success
+    description: "Task complete with files"
+    context:
+      optional: [files_changed]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
-        last_result: "Documented project"
+        last_result: "Completed: {{ input.task_description[:100] }}. Files: {{ context.files_changed | join(', ') if context.files_changed else 'none' }}"
 
-  documentation_adequate:
+  complete_no_files:
     action: noop
-    description: "Documentation reviewed and found adequate"
-    status: success
+    description: "Task complete — analysis only"
+    context:
+      optional: [inference_response]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
-        last_result: "Documentation already adequate"
-
-  capture_failure_note:
-    use: capture_learnings
-    params:
-      learning_focus: "failure_analysis"
-      category: "failure_analysis"
-      task_outcome: "FAILED to document project"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: failed
+        last_result: "{{ context.inference_response[:200] if context.inference_response else 'Completed' }}"
 
   failed:
     action: noop
-    description: "Documentation failed"
-    status: failed
+    description: "Task failed"
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
-        last_status: "abandoned"
-        last_result: "Failed to document project"
+        last_status: "failed"
+        last_result: "Failed: {{ input.task_description[:100] }}"
 
 entry: gather_context
 

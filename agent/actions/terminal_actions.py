@@ -20,9 +20,11 @@ from agent.models import StepInput, StepOutput
 async def action_start_terminal_session(step_input: StepInput) -> StepOutput:
     """Start a persistent terminal session and run optional setup commands.
 
-    Reads initial_commands from flow input (list of setup commands like
-    venv activation, cd, env setup) and runs them in the new session.
-    Publishes session_id and initial session_history.
+    Also starts a memoryful inference session so subsequent LLM calls
+    (plan_next_command, evaluate) can use KV-cache memory instead of
+    re-serializing the full session history every turn.
+
+    Publishes session_id, inference_session_id, and initial session_history.
     """
     effects = step_input.effects
     params = step_input.params
@@ -30,6 +32,8 @@ async def action_start_terminal_session(step_input: StepInput) -> StepOutput:
     working_dir = params.get("working_directory") or "."
     initial_commands = params.get("initial_commands", [])
     env_vars = params.get("environment_vars")
+    session_goal = params.get("session_goal", "")
+    session_context = params.get("session_context", "")
 
     if not effects:
         return StepOutput(
@@ -37,6 +41,7 @@ async def action_start_terminal_session(step_input: StepInput) -> StepOutput:
             observations="No effects interface — cannot start terminal",
             context_updates={
                 "session_id": "",
+                "inference_session_id": "",
                 "session_history": [],
             },
         )
@@ -60,6 +65,32 @@ async def action_start_terminal_session(step_input: StepInput) -> StepOutput:
         env=env_vars if isinstance(env_vars, dict) else None,
     )
 
+    # Start memoryful inference session (if supported)
+    inference_session_id = ""
+    if hasattr(effects, "start_inference_session"):
+        try:
+            inference_session_id = await effects.start_inference_session(
+                {"ttl_seconds": 300}
+            )
+            # Send initial context prompt so KV cache has the goal
+            initial_prompt = (
+                "You are operating a terminal session to achieve a specific goal.\n\n"
+                f"Goal: {session_goal}\n"
+                f"Working directory: {working_dir}\n"
+            )
+            if session_context:
+                initial_prompt += f"Context: {session_context}\n"
+            initial_prompt += (
+                "\nYou will receive command output after each command you suggest.\n"
+                "Suggest one command at a time. Be precise and targeted."
+            )
+            await effects.session_inference(
+                inference_session_id, initial_prompt, {"temperature": 0.1}
+            )
+        except Exception:
+            # Graceful degradation — fall back to stateless inference
+            inference_session_id = ""
+
     # Run initial setup commands
     session_history: list[dict] = []
     for cmd in initial_commands:
@@ -80,12 +111,15 @@ async def action_start_terminal_session(step_input: StepInput) -> StepOutput:
         result={
             "session_started": True,
             "session_id": session_id,
+            "inference_session_id": inference_session_id,
             "setup_commands_run": len(session_history),
         },
-        observations=f"Terminal session {session_id} started, "
-        f"ran {len(session_history)} setup commands",
+        observations=f"Terminal session {session_id} started"
+        + (f" (memoryful: {inference_session_id})" if inference_session_id else "")
+        + f", ran {len(session_history)} setup commands",
         context_updates={
             "session_id": session_id,
+            "inference_session_id": inference_session_id,
             "session_history": session_history,
         },
     )
@@ -262,15 +296,24 @@ def _parse_terminal_command(raw: str) -> str:
 async def action_close_terminal_session(step_input: StepInput) -> StepOutput:
     """Close a persistent terminal session and produce a summary.
 
-    Closes the shell subprocess and produces a session_summary from
-    the accumulated session_history.
+    Closes both the shell subprocess and the memoryful inference session
+    (if one was started). Produces a session_summary from the accumulated
+    session_history.
     """
     effects = step_input.effects
     session_id = step_input.context.get("session_id", "")
+    inference_session_id = step_input.context.get("inference_session_id", "")
     session_history = step_input.context.get("session_history", [])
 
     if effects and session_id:
         await effects.close_terminal(session_id)
+
+    # End memoryful inference session if one exists
+    if effects and inference_session_id and hasattr(effects, "end_inference_session"):
+        try:
+            await effects.end_inference_session(inference_session_id)
+        except Exception:
+            pass  # Best-effort cleanup
 
     # Build summary
     total_turns = len(session_history)

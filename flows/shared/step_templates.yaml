@@ -70,6 +70,17 @@ templates:
         required: true
         description: "Destination path relative to working directory"
 
+  write_files:
+    action: apply_multi_file_changes
+    description: "Parse file blocks from inference response and write all to disk"
+    context:
+      required:
+        - inference_response
+    params:
+      content_key: "inference_response"
+    publishes:
+      - files_changed
+
   read_target_file:
     action: read_files
     description: "Read a single target file into context"
@@ -99,7 +110,7 @@ templates:
       working_directory: "{{ input.working_directory }}"
       task_description: "{{ input.task_description }}"
       mission_objective: "{{ input.mission_objective }}"
-      target_file_path: "{{ input.target_file_path }}"
+      target_file_path: "{{ input.target_file_path | default('') }}"
       frustration_level: "{{ input.frustration_level | default('0') }}"
       frustration_history: "{{ input.frustration_history | default('') }}"
       relevant_notes: "{{ input.relevant_notes | default('') }}"

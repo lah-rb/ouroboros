@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from agent.actions.registry import build_action_registry
@@ -19,7 +20,8 @@ from agent.loader import load_all_flows
 from agent.models import FlowResult
 from agent.runtime import execute_flow
 from agent.tail_call import FlowOutcome, FlowTailCall, FlowTermination
-from agent.template import render_template, render_params
+from agent.template import render_template
+from agent.trace import CycleStart, CycleEnd
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +124,19 @@ async def run_agent(
             )
 
         flow_def = registry[current_flow]
+
+        # ── Trace: CycleStart ────────────────────────────────────
+        cycle_start_time = time.monotonic()
+        if effects and hasattr(effects, "emit_trace"):
+            await effects.emit_trace(
+                CycleStart(
+                    mission_id=mission_id,
+                    cycle=cycle,
+                    flow=current_flow,
+                    entry_inputs=list(current_inputs.keys()),
+                )
+            )
+
         logger.info(
             "Agent cycle %d: executing flow %r with inputs %s",
             cycle,
@@ -129,15 +144,43 @@ async def run_agent(
             list(current_inputs.keys()),
         )
 
-        flow_result = await execute_flow(
-            flow_def=flow_def,
-            inputs=current_inputs,
-            action_registry=actions,
-            effects=effects,
-            flow_registry=registry,
-        )
+        # Pass synthetic inputs for runtime instrumentation.
+        instrumented_inputs = {
+            **current_inputs,
+            "_trace_cycle": cycle,
+        }
+
+        try:
+            flow_result = await execute_flow(
+                flow_def=flow_def,
+                inputs=instrumented_inputs,
+                action_registry=actions,
+                effects=effects,
+                flow_registry=registry,
+            )
+        except Exception:
+            # Flush traces on failure so partial trace is inspectable
+            if effects and hasattr(effects, "flush_traces"):
+                await effects.flush_traces()
+            raise
 
         outcome = _resolve_tail_call(flow_result)
+
+        # ── Trace: CycleEnd + flush ──────────────────────────────
+        if effects and hasattr(effects, "emit_trace"):
+            is_tail_call = isinstance(outcome, FlowTailCall)
+            await effects.emit_trace(
+                CycleEnd(
+                    mission_id=mission_id,
+                    cycle=cycle,
+                    flow=current_flow,
+                    outcome="tail_call" if is_tail_call else "termination",
+                    target_flow=(outcome.target_flow if is_tail_call else None),
+                    status=(None if is_tail_call else outcome.result.status),
+                    cycle_duration_ms=((time.monotonic() - cycle_start_time) * 1000),
+                )
+            )
+            await effects.flush_traces()
 
         if isinstance(outcome, FlowTermination):
             logger.info(

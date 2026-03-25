@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.resolvers.rule import resolve_rule
-from agent.resolvers.llm_menu import resolve_llm_menu
+from agent.resolvers.llm_menu import resolve_llm_menu, resolve_llm_multi_select
 
 
 class ResolverError(Exception):
@@ -56,8 +56,16 @@ async def resolve(
             resolver_def, step_output, context, meta, effects=effects
         )
 
+    elif resolver_type == "llm_multi_select":
+        # Multi-select resolver — uses memoryful sessions
+        if effects is None:
+            raise ResolverError("LLM multi-select resolver requires effects interface.")
+        return await resolve_llm_multi_select(
+            resolver_def, step_output, context, meta, effects=effects
+        )
+
     else:
         raise ResolverError(
             f"Unknown resolver type: {resolver_type!r}. "
-            f"Available: ['rule', 'llm_menu']"
+            f"Available: ['rule', 'llm_menu', 'llm_multi_select']"
         )

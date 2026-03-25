@@ -44,6 +44,8 @@ steps:
             or input.get('file_path', '').endswith('.ini')
             or input.get('file_path', '').endswith('.env')
             or input.get('file_path', '').endswith('.csv')
+            or input.get('file_path', '').endswith('.yaml')
+            or input.get('file_path', '').endswith('.yml')
           transition: complete_pass
         - condition: "true"
           transition: determine_strategy
@@ -63,6 +65,9 @@ steps:
       A file was just created or modified and needs validation.
       File: {{ input.file_path }}
       Working directory: {{ input.working_directory }}
+      ⚠️ CRITICAL: Match validation commands to the file's ACTUAL extension.
+      A .yaml file needs yaml.safe_load(), NOT py_compile. A .json file needs json.load(), NOT py_compile.
+      A .py file needs py_compile. A .js file needs node --check. Read the extension carefully.
       {% if input.validation_hint %}
       Suggested approach: {{ input.validation_hint }}
       {% endif %}

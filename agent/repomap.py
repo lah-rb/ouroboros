@@ -28,7 +28,10 @@ class SymbolDef:
     kind: Literal["class", "function", "method", "variable", "import", "module"]
     file_path: str
     line: int
-    signature: str  # e.g. "def process(items: list[str]) -> Result:"
+    end_line: int = 0  # last line of the symbol (1-indexed)
+    start_byte: int = 0  # byte offset of symbol start in file content
+    end_byte: int = 0  # byte offset of symbol end in file content
+    signature: str = ""  # e.g. "def process(items: list[str]) -> Result:"
     parent: str | None = None  # for methods: the class name
 
 
@@ -210,6 +213,9 @@ def _extract_python_tree_sitter(
                         kind="class",
                         file_path=file_path,
                         line=node.start_point[0] + 1,
+                        end_line=node.end_point[0] + 1,
+                        start_byte=node.start_byte,
+                        end_byte=node.end_byte,
                         signature=sig,
                         parent=parent_class,
                     )
@@ -234,6 +240,9 @@ def _extract_python_tree_sitter(
                         kind=kind,
                         file_path=file_path,
                         line=node.start_point[0] + 1,
+                        end_line=node.end_point[0] + 1,
+                        start_byte=node.start_byte,
+                        end_byte=node.end_byte,
                         signature=sig,
                         parent=parent_class,
                     )

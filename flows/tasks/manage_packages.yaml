@@ -1,9 +1,7 @@
 flow: manage_packages
-version: 1
+version: 2
 description: >
-  Detect, create, and manage project virtual environment and packages.
-  Analyzes the project for dependency management tools and required
-  packages, then uses run_in_terminal for multi-turn package operations.
+  Install, remove, or update project dependencies.
 
 input:
   required:
@@ -13,12 +11,8 @@ input:
     - task_description
     - mission_objective
     - working_directory
-    - packages_to_install
     - target_file_path
     - reason
-    - temperature_multiplier
-    - frustration_level
-    - frustration_history
     - relevant_notes
 
 defaults:
@@ -30,135 +24,120 @@ steps:
   gather_context:
     use: gather_project_context
     params:
-      context_budget: 6
+      context_budget: 8
     resolver:
       type: rule
       rules:
         - condition: "true"
-          transition: analyze_environment
+          transition: execute
 
-  analyze_environment:
+  execute:
     action: inference
-    description: "Analyze project for package manager, venv, and required dependencies"
+    description: "Execute the task via inference"
     context:
-      optional: [context_bundle, project_manifest]
+      optional: [context_bundle, project_manifest, repo_map_formatted]
     prompt: |
-      You are a project environment analysis module in an automated coding pipeline.
-      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
-      object — no markdown, no explanation.
+      You are a package management module. Determine which packages need to be installed or updated, and produce the commands or config changes needed.
 
-      Task: {{ input.task_description }}
-      Working directory: {{ input.working_directory }}
+      ## Package Task
+      {{ input.task_description }}
 
-      {% if input.packages_to_install %}
-      Packages explicitly requested: {{ input.packages_to_install }}
+      Project objective: {{ input.mission_objective }}
+
+      {% if input.relevant_notes %}
+      ## Architecture & Notes
+      {{ input.relevant_notes }}
       {% endif %}
 
-      {% if context.project_manifest %}
-      Project files:
-      {% for filepath, sig in context.project_manifest.items() %}
-      - {{ filepath }}: {{ sig[:80] }}
-      {% endfor %}
+      {% if context.repo_map_formatted %}
+      ## Project Structure
+      {{ context.repo_map_formatted }}
       {% endif %}
 
       {% if context.context_bundle and context.context_bundle.files %}
-      File contents:
+      ## Project Files
       {% for file in context.context_bundle.files %}
       === {{ file.path }} ===
-      {{ file.content[:500] }}
+      {{ file.content[:1500] }}
       {% endfor %}
       {% endif %}
 
-      Analyze the project and return a JSON object describing:
-      1. What package manager to use (pip, uv, poetry, conda, npm, cargo)
-      2. Whether a virtual environment exists or needs creation
-      3. What commands to run to set up the environment
+      If you need to create or update files, use this format:
 
-      ✅ CORRECT output:
-      {
-        "package_manager": "pip",
-        "venv_exists": false,
-        "venv_command": "python3 -m venv .venv",
-        "activate_command": "source .venv/bin/activate",
-        "install_commands": ["pip install pytest httpx"],
-        "session_goal": "Create virtual environment and install dependencies for the task tracker project"
-      }
+      === FILE: path/to/file ===
+      ```
+      content
+      ```
+
+      Create ALL files needed. If no files need creating, provide analysis as plain text.
     config:
-      temperature: 0.1
+      temperature: 0.4
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
-          transition: run_setup
+          transition: process_output
         - condition: "true"
-          transition: capture_failure_note
+          transition: failed
     publishes:
       - inference_response
 
-  run_setup:
-    action: flow
-    description: "Run package setup in a persistent terminal session"
-    flow: run_in_terminal
-    input_map:
-      session_goal: "Set up project environment and install all required packages"
-      working_directory: "{{ input.working_directory }}"
-      max_turns: "8"
-      session_context: "{{ context.inference_response }}"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.status == 'success'"
-          transition: capture_learnings
-        - condition: "result.status == 'issues'"
-          transition: capture_learnings
-        - condition: "true"
-          transition: capture_failure_note
-    publishes:
-      - session_history
-      - session_summary
-
-  capture_learnings:
-    use: capture_learnings
+  process_output:
+    action: apply_multi_file_changes
+    description: "Write any file blocks to disk"
+    context:
+      required: [inference_response]
     params:
-      learning_focus: "general"
-      category: "codebase_observation"
+      content_key: "inference_response"
     resolver:
       type: rule
       rules:
-        - condition: "true"
+        - condition: "result.files_written > 0"
           transition: complete
+        - condition: "true"
+          transition: complete_no_files
+    publishes:
+      - files_changed
 
   complete:
     action: noop
-    description: "Package management completed"
+    description: "Task complete with files"
+    context:
+      optional: [files_changed]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
-        last_result: "Environment set up and packages installed"
+        last_result: "Completed: {{ input.task_description[:100] }}. Files: {{ context.files_changed | join(', ') if context.files_changed else 'none' }}"
 
-  capture_failure_note:
-    use: capture_learnings
-    params:
-      learning_focus: "failure_analysis"
-      category: "failure_analysis"
-      task_outcome: "FAILED to manage packages: {{ input.task_description }}"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: failed
-
-  failed:
+  complete_no_files:
     action: noop
-    description: "Package management failed"
+    description: "Task complete — analysis only"
+    context:
+      optional: [inference_response]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
-        last_status: "abandoned"
+        last_status: "success"
+        last_result: "{{ context.inference_response[:200] if context.inference_response else 'Completed' }}"
+
+  failed:
+    action: noop
+    description: "Task failed"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "failed"
+        last_result: "Failed: {{ input.task_description[:100] }}"
 
 entry: gather_context
+
+overflow:
+  strategy: split
+  fallback: reorganize

@@ -1,9 +1,9 @@
 flow: integrate_modules
-version: 1
+version: 2
 description: >
-  Analyzes a multi-file project holistically, identifies disconnected components,
-  missing imports, absent entry points, and produces glue code that makes
-  individual files into a working system.
+  Inspect project cohesion — check imports, interfaces, and module
+  connections. Uses structural analysis + inference to identify issues.
+  Reports findings back to mission_control.
 
 input:
   required:
@@ -13,381 +13,97 @@ input:
     - task_description
     - mission_objective
     - working_directory
-    - target_file_path
-    - reason
-    - expected_entry_point
-    - integration_hints
-    - frustration_level
-    - frustration_history
     - relevant_notes
 
 defaults:
   config:
-    temperature: "t*0.4"
-    max_tokens: 8192
+    temperature: "t*0.6"
 
 steps:
-
-  # ── Phase 1: Full project inventory ────────────────────────
 
   gather_context:
     use: gather_project_context
     params:
-      context_budget: 15
+      context_budget: 12
     resolver:
       type: rule
       rules:
         - condition: "true"
-          transition: check_project_size
+          transition: structural_check
 
-  check_project_size:
-    action: scan_project
-    description: "Get complete file inventory for integration analysis"
-    params:
-      root: "."
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.file_count > 1"
-          transition: analyze_connections
-        - condition: "true"
-          transition: nothing_to_integrate
-    publishes:
-      - project_manifest
-
-  # ── Phase 2: Analyze connections ───────────────────────────
-
-  analyze_connections:
-    action: inference
-    description: "Map dependency graph and identify disconnected components"
+  structural_check:
+    action: validate_cross_file_consistency
+    description: "Run cross-file structural analysis"
     context:
-      required: [project_manifest]
-      optional: [context_bundle, repo_map_formatted, related_files]
-    prompt: |
-      You are a systems integration module in an automated coding pipeline.
-      Your output will guide an integration planning step.
-      Write structured analysis of how project files connect.
+      optional: [context_bundle, project_manifest, repo_map_formatted]
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: analyze_cohesion
+    publishes:
+      - cross_file_results
+      - cross_file_summary
 
-      ## Project Objective
-      {{ input.mission_objective }}
+  analyze_cohesion:
+    action: inference
+    description: "Analyze project cohesion and identify integration issues"
+    context:
+      optional: [cross_file_results, cross_file_summary, context_bundle, project_manifest, repo_map_formatted]
+    prompt: |
+      You are a project integration inspector.
+      Analyze the project's cross-module cohesion and identify any issues.
+
+      Objective: {{ input.mission_objective }}
+
+      {% if context.cross_file_summary %}
+      ## Structural Analysis
+      {{ context.cross_file_summary }}
+      {% endif %}
 
       {% if context.repo_map_formatted %}
-      ## AST-Based Dependency Map (tree-sitter parsed, PageRank ranked)
-      This map shows actual symbol definitions and their relationships — use it
-      as the authoritative source for what exists and what connects to what:
+      ## Project Structure (AST-based)
       {{ context.repo_map_formatted }}
       {% endif %}
 
-      {% if context.related_files %}
-      ## Most Connected Files (by reference graph)
-      {{ context.related_files | join(', ') }}
-      {% endif %}
-
-      {% if input.integration_hints %}
-      ## Integration Notes
-      {{ input.integration_hints }}
-      {% endif %}
-
-      {% if input.relevant_notes %}
-      ## Observations from Previous Tasks
-      {{ input.relevant_notes }}
-      These observations may reveal integration issues, missing dependencies, or interface mismatches.
-      {% endif %}
-
-      ## Project Files
-      {% for filepath, sig in context.project_manifest.items() %}
-      ### {{ filepath }}
-      {{ sig }}
-      {% endfor %}
-
       {% if context.context_bundle and context.context_bundle.files %}
-      ## File Contents
+      ## Source Files
       {% for file in context.context_bundle.files %}
-      ### {{ file.path }}
-      ```
-      {{ file.content[:1500] }}
-      ```
+      === {{ file.path }} ===
+      {{ file.content[:1200] }}
       {% endfor %}
       {% endif %}
 
-      ## Analyze the Integration State
+      Identify:
+      1. Missing or incorrect imports
+      2. Interface mismatches (function signatures don't match caller expectations)
+      3. Circular dependencies
+      4. Dead code or unused modules
+      5. Integration issues that would prevent the project from running
 
-      ### 1. Dependency Map
-      For each file: what it imports, what it exports, what it SHOULD import but doesn't.
-
-      ### 2. Disconnected Components
-      Files that exist in isolation — define functionality nothing uses, or reference things that don't exist.
-
-      ### 3. Missing Glue
-      What's needed for a working system:
-      - Missing __init__.py files?
-      - Missing entry point / main script?
-      - Missing import statements?
-      - Missing adapter code between incompatible interfaces?
-
-      ### 4. Interface Mismatches
-      Where do modules think they connect but interfaces don't match?
-
-      ### 5. Execution Path
-      If someone ran the entry point, what would happen step by step?
-
-      Be specific — reference file names, function names, line numbers.
+      Write a concise integration report. For each issue, specify the file and line.
     config:
-      temperature: "t*0.3"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.tokens_generated > 0"
-          transition: plan_integration
-        - condition: "true"
-          transition: failed
-    publishes:
-      - connection_analysis
-
-  # ── Phase 3: Plan integration ──────────────────────────────
-
-  plan_integration:
-    action: inference
-    description: "Produce ordered list of specific integration tasks"
-    context:
-      required: [connection_analysis, project_manifest]
-      optional: [context_bundle]
-    prompt: |
-      You are an integration planning module in an automated coding pipeline.
-      Your output will determine whether to proceed with automated integration.
-      Write a clear, ordered list of integration tasks.
-
-      ## Connection Analysis
-      {{ context.connection_analysis }}
-
-      ## Plan the Integration
-      Produce an ORDERED list of integration tasks. Each task = one file change.
-      Order: foundational work (__init__.py, config) before wiring (imports, entry points).
-
-      For each task:
-      1. **File**: which file to create or modify
-      2. **Action**: create / modify
-      3. **Description**: what specifically to do
-      4. **Rationale**: why this integration step is needed
-
-      Keep tasks minimal. One import fix = one task. One __init__.py = one task.
-
-      After listing tasks, assess:
-      - **Confidence**: how confident all tasks will produce a working system?
-      - **Remaining risks**: what might still not work?
-    config:
-      temperature: "t*0.3"
-    resolver:
-      type: llm_menu
-      prompt: "Review the integration plan. Is it actionable?"
-      options:
-        execute_integration:
-          description: "Plan is clear and actionable — proceed with integration"
-        already_integrated:
-          description: "The modules are already properly connected — no changes needed"
-        too_complex:
-          description: "Integration requires changes too complex for automated application"
-    publishes:
-      - integration_plan
-
-  # ── Phase 4: Execute integration ───────────────────────────
-
-  execute_integration:
-    action: inference
-    description: "Produce file changes for each integration task"
-    context:
-      required: [integration_plan, project_manifest]
-      optional: [connection_analysis, context_bundle, diagnosis]
-    prompt: |
-      You are a code generation module in an automated pipeline.
-      Your output will be parsed for file blocks and written to disk.
-      Produce COMPLETE file contents for each change.
-
-      ## Integration Plan
-      {{ context.integration_plan }}
-
-      {% if context.context_bundle and context.context_bundle.files %}
-      ## Current File Contents
-      {% for file in context.context_bundle.files %}
-      ### {{ file.path }}
-      ```
-      {{ file.content }}
-      ```
-      {% endfor %}
-      {% endif %}
-
-      ## Produce Changes
-
-      For NEW files: provide the complete file.
-      For MODIFIED files: provide the complete modified file (not a diff).
-
-      Format as a series of file blocks:
-
-      === FILE: path/to/file.py ===
-      ```python
-      [complete file content]
-      ```
-
-      === FILE: path/to/other.py ===
-      ```python
-      [complete file content]
-      ```
-
-      Include EVERY file that needs to change. Do not skip files.
-    config:
-      temperature: "t*0.2"
-      max_tokens: 12288
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.tokens_generated > 0"
-          transition: apply_changes
-        - condition: "true"
-          transition: failed
-    publishes:
-      - integration_code
-
-  apply_changes:
-    action: apply_multi_file_changes
-    description: "Parse integration output and write each file"
-    context:
-      required: [integration_code]
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.all_written == true"
-          transition: validate
-        - condition: "true"
-          transition: failed
-    publishes:
-      - files_changed
-
-  # ── Phase 5: Validate ──────────────────────────────────────
-
-  validate:
-    action: flow
-    description: "Run quality gate on the integrated project"
-    flow: quality_gate
-    input_map:
-      working_directory: "{{ input.working_directory }}"
-      mission_id: "{{ input.mission_id }}"
-      mission_objective: "{{ input.mission_objective }}"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.status == 'success'"
-          transition: capture_learnings
-        - condition: "result.status == 'failed' and meta.attempt < 2"
-          transition: diagnose_integration_failure
-        - condition: "true"
-          transition: capture_failure_note
-    publishes:
-      - quality_results
-
-  diagnose_integration_failure:
-    action: flow
-    description: "Integration validation failed — diagnose before retrying"
-    flow: diagnose_issue
-    input_map:
-      error_description: "Integration validation failed after applying multi-file changes"
-      target_file_path: "."
-      working_directory: "{{ input.working_directory }}"
-      task_description: "{{ input.task_description }}"
-      mission_objective: "{{ input.mission_objective }}"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.status == 'success'"
-          transition: execute_integration
-        - condition: "true"
-          transition: capture_failure_note
-    publishes:
-      - diagnosis
-
-  # ── Terminal paths ─────────────────────────────────────────
-
-  capture_learnings:
-    use: capture_learnings
-    params:
-      learning_focus: "general"
-      category: "codebase_observation"
+      temperature: "t*0.4"
     resolver:
       type: rule
       rules:
         - condition: "true"
           transition: complete
+    publishes:
+      - integration_report
 
   complete:
     action: noop
-    description: "Integration complete — return to mission_control"
-    status: success
+    description: "Integration check complete"
+    context:
+      optional: [integration_report]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
-        last_result: "Integrated project modules"
-
-  already_integrated:
-    action: noop
-    description: "Modules already properly connected"
-    status: success
-    tail_call:
-      flow: mission_control
-      input_map:
-        mission_id: "{{ input.mission_id }}"
-        last_task_id: "{{ input.task_id }}"
-        last_status: "success"
-        last_result: "Modules already integrated — no changes needed"
-
-  nothing_to_integrate:
-    action: noop
-    description: "Only one file in project — nothing to integrate"
-    status: success
-    tail_call:
-      flow: mission_control
-      input_map:
-        mission_id: "{{ input.mission_id }}"
-        last_task_id: "{{ input.task_id }}"
-        last_status: "success"
-        last_result: "Single-file project — nothing to integrate"
-
-  too_complex:
-    action: noop
-    description: "Integration too complex for automated application"
-    status: escalate_recommended
-    tail_call:
-      flow: mission_control
-      input_map:
-        mission_id: "{{ input.mission_id }}"
-        last_task_id: "{{ input.task_id }}"
-        last_status: "abandoned"
-        last_result: "Integration too complex — needs manual review"
-
-  capture_failure_note:
-    use: capture_learnings
-    params:
-      learning_focus: "failure_analysis"
-      category: "failure_analysis"
-      task_outcome: "FAILED to integrate project modules"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: failed
-
-  failed:
-    action: noop
-    description: "Integration failed"
-    status: failed
-    tail_call:
-      flow: mission_control
-      input_map:
-        mission_id: "{{ input.mission_id }}"
-        last_task_id: "{{ input.task_id }}"
-        last_status: "abandoned"
-        last_result: "Failed to integrate project modules"
+        last_result: "{{ context.integration_report[:200] if context.integration_report else 'Integration check completed' }}"
 
 entry: gather_context
 

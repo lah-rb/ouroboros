@@ -54,38 +54,31 @@ class TestIntegrateModulesLoads:
         tail_call_steps = [
             name for name, step in flow.steps.items() if step.tail_call is not None
         ]
-        assert (
-            len(tail_call_steps) >= 4
-        )  # complete, already_integrated, nothing_to_integrate, too_complex, failed
+        assert len(tail_call_steps) >= 3  # complete, nothing_to_inspect, failed
 
-    def test_has_llm_menu_on_plan_integration(self):
+    def test_uses_structural_check(self):
         flow = _load("flows/tasks/integrate_modules.yaml")
-        step = flow.steps["plan_integration"]
-        assert step.resolver.type == "llm_menu"
-        option_names = list(step.resolver.options.keys())
-        assert "execute_integration" in option_names
-        assert "already_integrated" in option_names
-        assert "too_complex" in option_names
+        step = flow.steps["structural_check"]
+        assert step.action == "validate_cross_file_consistency"
+        assert "cross_file_results" in step.publishes
 
     def test_composes_prepare_context(self):
         flow = _load("flows/tasks/integrate_modules.yaml")
         assert flow.steps["gather_context"].action == "flow"
         assert flow.steps["gather_context"].flow == "prepare_context"
 
-    def test_uses_apply_multi_file_changes(self):
+    def test_uses_compile_integration_report(self):
         flow = _load("flows/tasks/integrate_modules.yaml")
-        assert flow.steps["apply_changes"].action == "apply_multi_file_changes"
-        assert "files_changed" in flow.steps["apply_changes"].publishes
+        step = flow.steps["compile_report"]
+        assert step.action == "compile_integration_report"
+        assert "integration_report" in step.publishes
 
-    def test_composes_quality_gate(self):
+    def test_no_quality_gate_or_diagnose(self):
+        """v2 inspector does not compose quality_gate or diagnose_issue."""
         flow = _load("flows/tasks/integrate_modules.yaml")
-        assert flow.steps["validate"].action == "flow"
-        assert flow.steps["validate"].flow == "quality_gate"
-
-    def test_composes_diagnose_issue(self):
-        flow = _load("flows/tasks/integrate_modules.yaml")
-        assert flow.steps["diagnose_integration_failure"].action == "flow"
-        assert flow.steps["diagnose_integration_failure"].flow == "diagnose_issue"
+        for step in flow.steps.values():
+            assert step.flow != "quality_gate"
+            assert step.flow != "diagnose_issue"
 
     def test_composes_capture_learnings(self):
         flow = _load("flows/tasks/integrate_modules.yaml")
@@ -94,15 +87,10 @@ class TestIntegrateModulesLoads:
 
     def test_inference_steps_have_prompts(self):
         flow = _load("flows/tasks/integrate_modules.yaml")
-        for step_name in [
-            "analyze_connections",
-            "plan_integration",
-            "execute_integration",
-        ]:
-            step = flow.steps[step_name]
-            assert step.action == "inference"
-            assert step.prompt is not None
-            assert len(step.prompt) > 50
+        step = flow.steps["analyze_cohesion"]
+        assert step.action == "inference"
+        assert step.prompt is not None
+        assert len(step.prompt) > 50
 
 
 # ═══════════════════════════════════════════════════════════════════════

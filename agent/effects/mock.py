@@ -64,6 +64,8 @@ class MockEffects:
         self._calls: list[CallRecord] = []
         self._log: list[EffectsLogEntry] = []
         self._state: dict[str, Any] = {}  # In-memory persistence store
+        # Trace events — public for test assertions
+        self.trace_events: list[Any] = []
 
     # ── Call recording ────────────────────────────────────────────
 
@@ -204,6 +206,10 @@ class MockEffects:
         )
         return result
 
+    async def makedirs(self, path: str, exist_ok: bool = True) -> None:
+        """Record a makedirs call (no-op in mock filesystem)."""
+        self._record("makedirs", {"path": path, "exist_ok": exist_ok}, None)
+
     async def file_exists(self, path: str) -> bool:
         """Check if a path exists in the mock filesystem."""
         exists = path in self._files
@@ -271,6 +277,81 @@ class MockEffects:
             result,
         )
         return result
+
+    # ── Memoryful inference sessions ──────────────────────────────
+
+    _session_counter: int = 0
+    _session_turns: dict[str, list[dict]] = {}
+    _active_sessions: set[str] = set()
+
+    def _next_inference_response(self) -> str:
+        """Get the next canned inference response."""
+        if self._inference_index < len(self._inference_responses):
+            text = self._inference_responses[self._inference_index]
+            self._inference_index += 1
+        else:
+            text = "Mock inference response"
+        return text
+
+    async def start_inference_session(self, config: dict | None = None) -> str:
+        """Start a mock session — returns a sequential session ID."""
+        # Ensure instance-level state
+        if not hasattr(self, "_mock_sessions"):
+            self._mock_sessions: dict[str, list[dict]] = {}
+            self._mock_active_sessions: set[str] = set()
+            self._mock_session_counter = 0
+
+        self._mock_session_counter += 1
+        session_id = f"mock-session-{self._mock_session_counter}"
+        self._mock_sessions[session_id] = []
+        self._mock_active_sessions.add(session_id)
+        self._record("start_inference_session", {"config": config}, session_id)
+        return session_id
+
+    async def session_inference(
+        self,
+        session_id: str,
+        prompt: str,
+        config_overrides: dict | None = None,
+    ) -> InferenceResult:
+        """Mock session inference — returns canned response, records the turn."""
+        if not hasattr(self, "_mock_sessions"):
+            self._mock_sessions = {}
+            self._mock_active_sessions = set()
+
+        # Record the turn
+        if session_id in self._mock_sessions:
+            self._mock_sessions[session_id].append(
+                {"prompt": prompt, "config": config_overrides}
+            )
+
+        text = self._next_inference_response()
+        result = InferenceResult(
+            text=text,
+            tokens_generated=max(1, len(text.split())),
+            finished=True,
+        )
+        self._record(
+            "session_inference",
+            {
+                "session_id": session_id,
+                "prompt": prompt[:100],
+                "config_overrides": config_overrides,
+            },
+            result,
+        )
+        return result
+
+    async def end_inference_session(self, session_id: str) -> bool:
+        """End a mock session."""
+        if not hasattr(self, "_mock_active_sessions"):
+            self._mock_active_sessions = set()
+
+        found = session_id in getattr(self, "_mock_active_sessions", set())
+        if found:
+            self._mock_active_sessions.discard(session_id)
+        self._record("end_inference_session", {"session_id": session_id}, found)
+        return found
 
     # ── Persistence ───────────────────────────────────────────────
 
@@ -404,3 +485,13 @@ class MockEffects:
             del terminals[session_id]
         self._record("close_terminal", {"session_id": session_id}, found)
         return found
+
+    # ── Tracing ───────────────────────────────────────────────────
+
+    async def emit_trace(self, event: Any) -> None:
+        """Append a trace event to the public trace_events list for assertions."""
+        self.trace_events.append(event)
+
+    async def flush_traces(self) -> None:
+        """No-op — tests inspect trace_events directly."""
+        pass

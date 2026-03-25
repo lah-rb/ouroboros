@@ -169,6 +169,67 @@ class TestRuleResolver:
         result = resolve_rule(resolver_def, output, {}, {})
         assert result == "yes"
 
+    def test_str_builtin_in_condition(self):
+        """str() is available for type conversion in conditions."""
+        resolver_def = {
+            "type": "rule",
+            "rules": [
+                {
+                    "condition": "'hello' in str(input.get('msg', '')).lower()",
+                    "transition": "found",
+                },
+                {"condition": "true", "transition": "not_found"},
+            ],
+        }
+        output = StepOutput()
+        result = resolve_rule(resolver_def, output, {"msg": "Hello World"}, {})
+        assert result == "found"
+
+    def test_str_builtin_with_none_value(self):
+        """str() works on None values (the prepare_context use case)."""
+        resolver_def = {
+            "type": "rule",
+            "rules": [
+                {
+                    "condition": "'error' in str(input.get('history', '')).lower()",
+                    "transition": "has_error",
+                },
+                {"condition": "true", "transition": "no_error"},
+            ],
+        }
+        output = StepOutput()
+        result = resolve_rule(resolver_def, output, {}, {})
+        assert result == "no_error"
+
+    def test_int_builtin_in_condition(self):
+        """int() is available for numeric conversion."""
+        resolver_def = {
+            "type": "rule",
+            "rules": [
+                {"condition": "int(input.get('level', '0')) > 3", "transition": "high"},
+                {"condition": "true", "transition": "low"},
+            ],
+        }
+        output = StepOutput()
+        result = resolve_rule(resolver_def, output, {"level": "5"}, {})
+        assert result == "high"
+
+    def test_isinstance_builtin_in_condition(self):
+        """isinstance() is available for type checking."""
+        resolver_def = {
+            "type": "rule",
+            "rules": [
+                {
+                    "condition": "isinstance(input.get('items', []), list)",
+                    "transition": "is_list",
+                },
+                {"condition": "true", "transition": "not_list"},
+            ],
+        }
+        output = StepOutput()
+        result = resolve_rule(resolver_def, output, {"items": [1, 2]}, {})
+        assert result == "is_list"
+
 
 # ── DotDict Tests ─────────────────────────────────────────────────────
 

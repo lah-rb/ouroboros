@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent.effects.inference import InferenceEffect
+from agent.trace import TraceEvent
 from agent.effects.protocol import (
     CommandResult,
     DirEntry,
@@ -174,6 +175,9 @@ class LocalEffects:
         self._persistence = None
         self._llmvp_endpoint = llmvp_endpoint or "http://localhost:8000/graphql"
         self._model_default_temperature = model_default_temperature
+        # Trace buffer — flushed to JSONL at cycle boundaries
+        self._trace_buffer: list[TraceEvent] = []
+        self._trace_file_path: str | None = None
 
     @property
     def working_directory(self) -> str:
@@ -434,6 +438,20 @@ class LocalEffects:
             )
             return SearchResults(pattern=pattern, matches=[], files_searched=0)
 
+    async def makedirs(self, path: str, exist_ok: bool = True) -> None:
+        """Create directory and all parent directories within working directory."""
+        start = time.monotonic()
+        try:
+            resolved = self._resolve_path(path)
+            os.makedirs(resolved, exist_ok=exist_ok)
+            self._log_entry("makedirs", f"path={path!r}", "success", start)
+        except PathTraversalError:
+            self._log_entry(
+                "makedirs", f"path={path!r}", "BLOCKED: path traversal", start
+            )
+        except Exception as e:
+            self._log_entry("makedirs", f"path={path!r}", f"error: {e}", start)
+
     async def file_exists(self, path: str) -> bool:
         """Check whether a file exists within the working directory."""
         start = time.monotonic()
@@ -678,6 +696,62 @@ class LocalEffects:
 
         return result
 
+    # ── Memoryful inference sessions ──────────────────────────────
+
+    async def start_inference_session(self, config: dict | None = None) -> str:
+        """Start a memoryful session via LLMVP GraphQL."""
+        start = time.monotonic()
+        inference = self._get_inference()
+        session_id = await inference.start_session(config)
+        self._log_entry(
+            "start_inference_session",
+            f"config={config!r}",
+            f"session={session_id}",
+            start,
+        )
+        return session_id
+
+    async def session_inference(
+        self,
+        session_id: str,
+        prompt: str,
+        config_overrides: dict | None = None,
+    ) -> InferenceResult:
+        """Run inference within a memoryful session."""
+        start = time.monotonic()
+        prompt_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
+        inference = self._get_inference()
+        result = await inference.session_turn(session_id, prompt, config_overrides)
+
+        if result.error:
+            self._log_entry(
+                "session_inference",
+                f"session={session_id}, prompt={prompt_preview!r}",
+                f"error: {result.error}",
+                start,
+            )
+        else:
+            self._log_entry(
+                "session_inference",
+                f"session={session_id}, prompt={prompt_preview!r}",
+                f"{result.tokens_generated} tokens",
+                start,
+            )
+        return result
+
+    async def end_inference_session(self, session_id: str) -> bool:
+        """End a memoryful session via LLMVP GraphQL."""
+        start = time.monotonic()
+        inference = self._get_inference()
+        success = await inference.end_session(session_id)
+        self._log_entry(
+            "end_inference_session",
+            f"session={session_id}",
+            str(success),
+            start,
+        )
+        return success
+
     # ── Persistence ───────────────────────────────────────────────
 
     def _get_persistence(self):
@@ -770,3 +844,40 @@ class LocalEffects:
         success = pm.write_state(key, value)
         self._log_entry("write_state", f"key={key!r}", str(success), start)
         return success
+
+    # ── Tracing ───────────────────────────────────────────────────
+
+    async def emit_trace(self, event: TraceEvent) -> None:
+        """Append a trace event to the in-memory buffer."""
+        self._trace_buffer.append(event)
+
+    async def flush_traces(self) -> None:
+        """Write buffered trace events to JSONL and clear the buffer.
+
+        File path is .agent/traces/{mission_id}_{timestamp}.jsonl.
+        Uses append mode so multiple flushes write to the same file per run.
+        """
+        import json
+
+        if not self._trace_buffer:
+            return
+
+        # Determine file path on first flush
+        if self._trace_file_path is None:
+            traces_dir = os.path.join(self._working_dir, ".agent", "traces")
+            os.makedirs(traces_dir, exist_ok=True)
+            # Use mission_id from first event, or "unknown"
+            mission_id = self._trace_buffer[0].mission_id or "unknown"
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            self._trace_file_path = os.path.join(traces_dir, f"{mission_id}_{ts}.jsonl")
+
+        with open(self._trace_file_path, "a", encoding="utf-8") as f:
+            for event in self._trace_buffer:
+                f.write(json.dumps(event.to_dict()) + "\n")
+
+        logger.debug(
+            "Flushed %d trace events to %s",
+            len(self._trace_buffer),
+            self._trace_file_path,
+        )
+        self._trace_buffer.clear()

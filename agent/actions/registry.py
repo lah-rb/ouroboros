@@ -270,50 +270,85 @@ async def action_check_condition(step_input: StepInput) -> StepOutput:
 def build_action_registry() -> ActionRegistry:
     """Create an ActionRegistry pre-loaded with built-in actions.
 
+    v2: Adds new LLM menu-based dispatch actions, removes dead heuristic
+    matchers. Keeps all working actions from research, integration,
+    diagnostic, terminal, and AST modules.
+
     Returns:
         An ActionRegistry with all built-in actions registered.
     """
+    # ── Mission control v2 actions ────────────────────────────────
     from agent.actions.mission_actions import (
         action_load_mission_state,
         action_update_task_status,
         action_handle_events,
-        action_assess_mission_progress,
-        action_configure_task_dispatch,
         action_finalize_mission,
         action_enter_idle,
-        action_create_plan_from_objective,
         action_execute_file_creation,
         action_run_tests,
+        # NEW v2 actions
+        action_select_task_for_dispatch,
+        action_select_target_file,
+        action_start_director_session,
+        action_end_director_session,
+        action_record_dispatch,
+        action_parse_and_store_architecture,
+        action_create_plan_from_architecture,
     )
+
+    # ── Diagnostic actions ────────────────────────────────────────
     from agent.actions.diagnostic_actions import (
         action_compile_diagnosis,
         action_create_fix_task_from_diagnosis,
         action_read_investigation_targets,
     )
+
+    # ── Integration actions ───────────────────────────────────────
     from agent.actions.integration_actions import (
         action_apply_multi_file_changes,
         action_run_project_tests,
         action_check_remaining_smells,
         action_restore_file_from_context,
         action_check_remaining_doc_tasks,
+        action_compile_integration_report,
     )
+
+    # ── Retrospective actions ─────────────────────────────────────
     from agent.actions.retrospective_actions import (
         action_load_retrospective_data,
         action_apply_retrospective_recommendations,
         action_compose_director_report,
         action_submit_review_to_api,
     )
+
+    # ── Research actions ──────────────────────────────────────────
     from agent.actions.research_actions import (
         action_build_and_query_repomap,
         action_run_git_investigation,
         action_format_technical_query,
         action_validate_cross_file_consistency,
+        action_select_relevant_files,
     )
+
+    # ── Terminal session actions ───────────────────────────────────
     from agent.actions.terminal_actions import (
         action_start_terminal_session,
         action_send_terminal_command,
         action_close_terminal_session,
     )
+
+    # ── AST-aware editing actions ─────────────────────────────────
+    from agent.actions.ast_actions import (
+        action_extract_symbol_bodies,
+        action_start_edit_session,
+        action_select_symbol_turn,
+        action_prepare_next_rewrite,
+        action_rewrite_symbol_turn,
+        action_finalize_edit_session,
+        action_close_edit_session,
+    )
+
+    # ── Refinement actions (trimmed — removed fallback validation) ─
     from agent.actions.refinement_actions import (
         action_push_note,
         action_scan_project,
@@ -323,32 +358,47 @@ def build_action_registry() -> ActionRegistry:
         action_load_file_contents,
         action_apply_plan_revision,
         action_log_validation_notes,
-        action_run_fallback_validation,
         action_execute_project_setup,
         action_apply_quality_gate_results,
+        action_validate_created_files,
     )
 
     registry = ActionRegistry()
-    # Core actions
+
+    # ── Core built-in actions ─────────────────────────────────────
     registry.register("read_files", action_read_files)
     registry.register("write_file", action_write_file)
     registry.register("transform", action_transform)
     registry.register("log_completion", action_log_completion)
     registry.register("noop", action_noop)
     registry.register("check_condition", action_check_condition)
-    # Mission control actions
+
+    # ── Mission control v2 ────────────────────────────────────────
     registry.register("load_mission_state", action_load_mission_state)
     registry.register("update_task_status", action_update_task_status)
     registry.register("handle_events", action_handle_events)
-    registry.register("assess_mission_progress", action_assess_mission_progress)
-    registry.register("configure_task_dispatch", action_configure_task_dispatch)
     registry.register("finalize_mission", action_finalize_mission)
     registry.register("enter_idle", action_enter_idle)
-    # Plan and file creation actions
-    registry.register("create_plan_from_objective", action_create_plan_from_objective)
+    # NEW: memoryful director session
+    registry.register("start_director_session", action_start_director_session)
+    registry.register("end_director_session", action_end_director_session)
+    # NEW: LLM menu-based dispatch (replaces configure_task_dispatch)
+    registry.register("select_task_for_dispatch", action_select_task_for_dispatch)
+    registry.register("select_target_file", action_select_target_file)
+    registry.register("record_dispatch", action_record_dispatch)
+    # NEW: architecture state management
+    registry.register(
+        "parse_and_store_architecture", action_parse_and_store_architecture
+    )
+    registry.register(
+        "create_plan_from_architecture", action_create_plan_from_architecture
+    )
+
+    # ── File operations ───────────────────────────────────────────
     registry.register("execute_file_creation", action_execute_file_creation)
     registry.register("run_tests", action_run_tests)
-    # Refinement phase actions
+
+    # ── Refinement (trimmed) ──────────────────────────────────────
     registry.register("push_note", action_push_note)
     registry.register("scan_project", action_scan_project)
     registry.register("extract_search_queries", action_extract_search_queries)
@@ -357,22 +407,28 @@ def build_action_registry() -> ActionRegistry:
     registry.register("load_file_contents", action_load_file_contents)
     registry.register("apply_plan_revision", action_apply_plan_revision)
     registry.register("log_validation_notes", action_log_validation_notes)
-    registry.register("run_fallback_validation", action_run_fallback_validation)
     registry.register("execute_project_setup", action_execute_project_setup)
     registry.register("apply_quality_gate_results", action_apply_quality_gate_results)
-    # Diagnostic actions (diagnose_issue, explore_spike)
+    registry.register("validate_created_files", action_validate_created_files)
+    # NOTE: run_fallback_validation REMOVED — use validate_created_files instead
+    # NOTE: accumulate_correction_history REMOVED — create_file no longer has correction loop
+
+    # ── Diagnostic actions ────────────────────────────────────────
     registry.register("compile_diagnosis", action_compile_diagnosis)
     registry.register(
         "create_fix_task_from_diagnosis", action_create_fix_task_from_diagnosis
     )
     registry.register("read_investigation_targets", action_read_investigation_targets)
-    # Integration actions (integrate_modules, refactor, document_project)
+
+    # ── Integration actions ───────────────────────────────────────
     registry.register("apply_multi_file_changes", action_apply_multi_file_changes)
     registry.register("run_project_tests", action_run_project_tests)
     registry.register("check_remaining_smells", action_check_remaining_smells)
     registry.register("restore_file_from_context", action_restore_file_from_context)
     registry.register("check_remaining_doc_tasks", action_check_remaining_doc_tasks)
-    # Retrospective actions (retrospective, request_review)
+    registry.register("compile_integration_report", action_compile_integration_report)
+
+    # ── Retrospective actions ─────────────────────────────────────
     registry.register("load_retrospective_data", action_load_retrospective_data)
     registry.register(
         "apply_retrospective_recommendations",
@@ -380,15 +436,28 @@ def build_action_registry() -> ActionRegistry:
     )
     registry.register("compose_director_report", action_compose_director_report)
     registry.register("submit_review_to_api", action_submit_review_to_api)
-    # Research actions (research_repomap, research_codebase_history, research_technical)
+
+    # ── Research actions ──────────────────────────────────────────
     registry.register("build_and_query_repomap", action_build_and_query_repomap)
     registry.register("run_git_investigation", action_run_git_investigation)
     registry.register("format_technical_query", action_format_technical_query)
     registry.register(
         "validate_cross_file_consistency", action_validate_cross_file_consistency
     )
-    # Terminal session actions (run_in_terminal, manage_packages, validate_behavior)
+    registry.register("select_relevant_files", action_select_relevant_files)
+
+    # ── Terminal session actions ───────────────────────────────────
     registry.register("start_terminal_session", action_start_terminal_session)
     registry.register("send_terminal_command", action_send_terminal_command)
     registry.register("close_terminal_session", action_close_terminal_session)
+
+    # ── AST-aware editing actions ─────────────────────────────────
+    registry.register("extract_symbol_bodies", action_extract_symbol_bodies)
+    registry.register("start_edit_session", action_start_edit_session)
+    registry.register("select_symbol_turn", action_select_symbol_turn)
+    registry.register("prepare_next_rewrite", action_prepare_next_rewrite)
+    registry.register("rewrite_symbol_turn", action_rewrite_symbol_turn)
+    registry.register("finalize_edit_session", action_finalize_edit_session)
+    registry.register("close_edit_session", action_close_edit_session)
+
     return registry
