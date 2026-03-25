@@ -365,33 +365,34 @@ class TestInferFlowFromDescription:
 
 
 class TestModifyFileDiagnosisBranch:
-    """Test that modify_file has the diagnosis wiring."""
+    """Test that modify_file v3 has AST-aware editing and full-rewrite fallback."""
 
     def _load_modify_file(self):
         reg = load_template_registry("flows")
         return load_flow_with_templates("flows/tasks/modify_file.yaml", reg)
 
-    def test_has_diagnose_before_retry_step(self):
+    def test_has_extract_symbols_step(self):
         flow = self._load_modify_file()
-        assert "diagnose_before_retry" in flow.steps
-        step = flow.steps["diagnose_before_retry"]
-        assert step.action == "flow"
-        assert step.flow == "diagnose_issue"
+        assert "extract_symbols" in flow.steps
+        step = flow.steps["extract_symbols"]
+        assert step.action == "extract_symbol_bodies"
 
-    def test_validate_routes_to_diagnosis(self):
+    def test_has_ast_edit_session(self):
+        flow = self._load_modify_file()
+        step = flow.steps["ast_edit"]
+        assert step.action == "flow"
+        assert step.flow == "ast_edit_session"
+
+    def test_validate_routes_to_full_rewrite_on_failure(self):
         flow = self._load_modify_file()
         validate_transitions = [
             r.transition for r in flow.steps["validate"].resolver.rules
         ]
-        assert "diagnose_before_retry" in validate_transitions
+        assert "full_rewrite" in validate_transitions
 
-    def test_diagnosis_publishes_diagnosis(self):
+    def test_full_rewrite_is_inference_fallback(self):
         flow = self._load_modify_file()
-        assert "diagnosis" in flow.steps["diagnose_before_retry"].publishes
-
-    def test_execute_change_accepts_diagnosis(self):
-        flow = self._load_modify_file()
-        assert "diagnosis" in flow.steps["execute_change"].context.optional
+        assert flow.steps["full_rewrite"].action == "inference"
 
 
 # ── All Flows Load Test ───────────────────────────────────────────────

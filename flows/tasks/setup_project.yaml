@@ -1,10 +1,10 @@
 flow: setup_project
-version: 1
+version: 2
 description: >
-  Project management flow for initializing and configuring a target project.
-  Scans the project to determine language/framework, then sets up appropriate
-  tooling: package managers, linters, formatters, test frameworks, config files.
-  The LLM decides what's needed based on the project — language agnostic.
+  Initialize project tooling and structure. Creates directories,
+  pyproject.toml, __init__.py files, and installs dependencies.
+  Uses the terminal for shell commands (mkdir, pip install, etc.)
+  and inference for generating config files.
 
 input:
   required:
@@ -14,211 +14,141 @@ input:
     - task_description
     - mission_objective
     - working_directory
-    - setup_focus
+    - target_file_path
+    - reason
     - relevant_notes
-    - frustration_level
-    - frustration_history
+    - setup_focus
 
 defaults:
   config:
-    temperature: "t*1"
-    max_tokens: 4096
+    temperature: "t*0.4"
 
 steps:
 
-  scan_project:
-    action: scan_project
-    description: "Scan workspace to understand project structure and language"
+  gather_context:
+    use: gather_project_context
     params:
-      root: "{{ input.working_directory | default('.') }}"
+      context_budget: 6
     resolver:
       type: rule
       rules:
-        - condition: "result.file_count > 0"
-          transition: analyze_needs
         - condition: "true"
-          transition: init_empty_project
-    publishes:
-      - project_manifest
+          transition: plan_setup
 
-  analyze_needs:
+  plan_setup:
     action: inference
-    description: "LLM analyzes project and determines what setup is needed"
+    description: "Determine what setup actions are needed"
     context:
-      required: [project_manifest]
+      optional: [project_manifest, repo_map_formatted, context_bundle]
     prompt: |
-      You are a project setup module in an automated coding pipeline.
-      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
-      object — no markdown, no explanation, no surrounding text.
+      You are a project setup module in an automated pipeline.
+      Your output will be parsed for file blocks and written to disk.
 
-      Analyze this project and determine what development tooling setup is needed.
+      ## Task
+      {{ input.task_description }}
 
-      {% if input.setup_focus %}
-      Setup focus: {{ input.setup_focus }}
-      {% endif %}
-
-      {% if input.mission_objective %}
       Project objective: {{ input.mission_objective }}
-      {% endif %}
 
-      Project files:
-      {% for filepath, sig in context.project_manifest.items() %}
-      --- {{ filepath }} ---
-      {{ sig }}
-      {% endfor %}
-
-      Determine:
-      1. Primary language(s) and framework(s)
-      2. What tooling is missing or should be configured
-      3. Specific setup commands to run
-
-      ✅ CORRECT output (raw JSON object, nothing else):
-      {
-        "language": "python",
-        "framework": "fastapi",
-        "existing_tools": ["pytest"],
-        "setup_actions": [
-          {
-            "name": "Initialize virtual environment",
-            "type": "command",
-            "command": ["python", "-m", "venv", ".venv"],
-            "skip_if_exists": ".venv",
-            "required": true
-          },
-          {
-            "name": "Install dependencies",
-            "type": "command",
-            "command": ["pip", "install", "-r", "requirements.txt"],
-            "skip_if_exists": null,
-            "required": true
-          },
-          {
-            "name": "Create linter config",
-            "type": "create_file",
-            "file_path": "pyproject.toml",
-            "description": "Add ruff configuration section",
-            "skip_if_exists": "pyproject.toml",
-            "required": false
-          }
-        ]
-      }
-
-      Rules:
-      - Only suggest tools appropriate for the detected language/framework.
-      - Don't duplicate existing tooling (check project_manifest for configs).
-      - Mark setup as "required": true for essentials, false for nice-to-have.
-      - Use "skip_if_exists" to avoid overwriting existing configs.
-      - For Python: prefer ruff (linter), black (formatter), pytest (tests).
-      - For JS/TS: prefer eslint, prettier, jest/vitest.
-      - For Rust: cargo tools (clippy, fmt) are built-in.
-      - Keep it minimal — only suggest what's clearly needed.
-
-      Return ONLY the raw JSON object.
-    config:
-      temperature: 0.2
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.tokens_generated > 0"
-          transition: execute_setup
-        - condition: "true"
-          transition: capture_failure_note
-    publishes:
-      - inference_response
-
-  execute_setup:
-    action: execute_project_setup
-    description: "Run setup commands and create config files"
-    context:
-      required: [inference_response]
-      optional: [project_manifest]
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.setup_complete == true"
-          transition: capture_learnings
-        - condition: "true"
-          transition: capture_learnings
-    publishes:
-      - setup_results
-
-  init_empty_project:
-    action: inference
-    description: "No files found — generate project scaffold"
-    prompt: |
-      You are a project initialization module in an automated coding pipeline.
-      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
-      object — no markdown, no explanation, no surrounding text.
-
-      The working directory is empty. Create a basic project scaffold.
-
-      {% if input.mission_objective %}
-      Project objective: {{ input.mission_objective }}
-      {% endif %}
       {% if input.setup_focus %}
       Focus: {{ input.setup_focus }}
       {% endif %}
 
-      Suggest the minimal set of files and directories to initialize.
+      {% if input.relevant_notes %}
+      ## Architecture & Notes
+      {{ input.relevant_notes }}
+      {% endif %}
 
-      ✅ CORRECT output:
-      {
-        "language": "python",
-        "scaffold": [
-          {"type": "directory", "path": "src"},
-          {"type": "directory", "path": "tests"},
-          {"type": "file", "path": "pyproject.toml", "template": "python_pyproject"},
-          {"type": "file", "path": "README.md", "template": "readme"},
-          {"type": "command", "command": ["python", "-m", "venv", ".venv"]}
-        ]
-      }
+      {% if context.project_manifest %}
+      ## Existing Files
+      {% for filepath in context.project_manifest.keys() %}
+      - {{ filepath }}
+      {% endfor %}
+      {% endif %}
 
-      Return ONLY the raw JSON object.
+      Generate ALL configuration and setup files needed. This includes:
+      - pyproject.toml with dependencies
+      - __init__.py files if the architecture uses package imports
+      - README.md skeleton
+      - Any other configuration files
+
+      Use this format for each file:
+
+      === FILE: pyproject.toml ===
+      ```toml
+      [project]
+      name = "project-name"
+      ...
+      ```
+
+      === FILE: src/__init__.py ===
+      ```python
+      ```
+
+      Create ALL setup files needed. NOTHING outside the file blocks.
     config:
-      temperature: 0.2
+      temperature: 0.3
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
-          transition: execute_setup
+          transition: write_files
         - condition: "true"
-          transition: capture_failure_note
+          transition: failed
     publishes:
       - inference_response
 
-  capture_learnings:
-    use: capture_learnings
+  write_files:
+    action: apply_multi_file_changes
+    description: "Write setup files to disk"
+    context:
+      required: [inference_response]
     params:
-      learning_focus: "general"
-      category: "codebase_observation"
+      content_key: "inference_response"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.files_written > 0"
+          transition: run_setup_commands
+        - condition: "true"
+          transition: complete_no_files
+    publishes:
+      - files_changed
+
+  run_setup_commands:
+    action: execute_project_setup
+    description: "Run setup commands (pip install, etc.)"
+    context:
+      optional: [files_changed, inference_response]
     resolver:
       type: rule
       rules:
         - condition: "true"
           transition: complete
+    publishes: []
 
   complete:
     action: noop
-    description: "Project setup complete — return to mission_control"
+    description: "Setup complete"
+    context:
+      optional: [files_changed]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
-        last_result: "Project setup completed"
+        last_result: "Project setup complete. Files: {{ context.files_changed | join(', ') if context.files_changed else 'configured' }}"
 
-  capture_failure_note:
-    use: capture_learnings
-    params:
-      learning_focus: "failure_analysis"
-      category: "failure_analysis"
-      task_outcome: "FAILED project setup"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: failed
+  complete_no_files:
+    action: noop
+    description: "Setup produced no file output"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Setup task completed — no files generated"
 
   failed:
     action: noop
@@ -228,9 +158,10 @@ steps:
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
-        last_status: "abandoned"
+        last_status: "failed"
+        last_result: "Failed to set up project"
 
-entry: scan_project
+entry: gather_context
 
 overflow:
   strategy: split

@@ -412,6 +412,40 @@ def cmd_visualize(args: argparse.Namespace) -> None:
         print(output)
 
 
+def cmd_lint(args: argparse.Namespace) -> None:
+    """Run flow contract validation."""
+    from agent.blueprint.analyzer import analyze
+    from agent.blueprint.lint import lint_flows
+
+    try:
+        ir = analyze()
+    except Exception as e:
+        print(f"Error analyzing flows: {e}")
+        sys.exit(1)
+
+    results = lint_flows(ir, verbose=args.verbose)
+
+    # Filter by flow if specified
+    if args.flow:
+        results = [r for r in results if r.flow == args.flow]
+
+    for r in results:
+        print(str(r))
+
+    errors = [r for r in results if r.level == "ERROR"]
+    warnings = [r for r in results if r.level == "WARNING"]
+    infos = [r for r in results if r.level == "INFO"]
+
+    print(f"\n{len(errors)} errors, {len(warnings)} warnings", end="")
+    if args.verbose:
+        print(f", {len(infos)} info")
+    else:
+        print()
+
+    if errors:
+        sys.exit(1)
+
+
 def cmd_start(args: argparse.Namespace) -> None:
     """Start the agent on an active mission."""
     working_dir = os.path.realpath(args.working_dir or os.getcwd())
@@ -504,6 +538,42 @@ def main() -> None:
     )
     start_p.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
 
+    # ── blueprint subcommand ──────────────────────────────────────
+    bp_p = subparsers.add_parser("blueprint", help="Generate architectural blueprint")
+    bp_p.add_argument(
+        "--format",
+        choices=["pdf", "md"],
+        default=None,
+        help="Output format (default: both PDF and Markdown)",
+    )
+    bp_p.add_argument(
+        "--output",
+        help="Output directory (default: current working directory)",
+    )
+
+    # ── trace subcommand ──────────────────────────────────────────
+    trace_p = subparsers.add_parser("trace", help="View runtime trace summaries")
+    trace_p.add_argument("--mission", help="Filter by mission ID")
+    trace_p.add_argument(
+        "--format",
+        choices=["summary", "detail"],
+        default="summary",
+        help="Output format (default: summary)",
+    )
+    trace_p.add_argument(
+        "--output",
+        help="Output file path (default: trace_{mission_id}.md in cwd)",
+    )
+    trace_p.add_argument("--working-dir", help="Working directory (default: cwd)")
+
+    # ── lint subcommand ───────────────────────────────────────────
+    lint_p = subparsers.add_parser("lint", help="Run flow contract validation")
+    lint_p.add_argument("--flow", help="Lint a specific flow (default: all)")
+    lint_p.add_argument(
+        "--verbose", action="store_true", help="Show all checks, not just warnings"
+    )
+    lint_p.set_defaults(func=cmd_lint)
+
     # ── visualize subcommand ──────────────────────────────────────
     viz_p = subparsers.add_parser("visualize", help="Visualize flow definitions")
     viz_p.add_argument("flow_name", nargs="?", help="Flow name (omit for all flows)")
@@ -570,6 +640,16 @@ def main() -> None:
 
     if args.command == "start":
         cmd_start(args)
+    elif args.command == "blueprint":
+        from agent.blueprint.cli import cmd_blueprint
+
+        cmd_blueprint(args)
+    elif args.command == "trace":
+        from agent.trace_cli import cmd_trace
+
+        cmd_trace(args)
+    elif args.command == "lint":
+        cmd_lint(args)
     elif args.command == "visualize":
         cmd_visualize(args)
     elif args.command == "mission":

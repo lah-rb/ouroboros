@@ -1,9 +1,7 @@
 flow: retrospective
-version: 1
+version: 2
 description: >
-  Periodic self-assessment of agent performance. Reviews completed work,
-  analyzes patterns in successes and failures, evaluates effort distribution,
-  and produces actionable recommendations that modify mission state.
+  Capture learnings from frustration recovery — what worked after struggling.
 
 input:
   required:
@@ -11,283 +9,135 @@ input:
   optional:
     - task_id
     - task_description
+    - mission_objective
     - working_directory
+    - target_file_path
+    - reason
+    - relevant_notes
     - trigger_reason
-    - scope
 
 defaults:
   config:
     temperature: "t*0.6"
-    max_tokens: 4096
 
 steps:
 
-  # ── Phase 1: Gather history ────────────────────────────────
-
-  gather_history:
-    action: load_retrospective_data
-    description: "Load mission state, task outcomes, timing, and learnings"
+  gather_context:
+    use: gather_project_context
     params:
-      include_artifacts: true
-      include_learnings: true
+      context_budget: 8
     resolver:
       type: rule
       rules:
-        - condition: "result.completed_tasks > 0"
-          transition: analyze_patterns
         - condition: "true"
-          transition: too_early
-    publishes:
-      - mission_history
-      - task_outcomes
-      - learnings_archive
-      - timing_data
+          transition: execute
 
-  # ── Phase 2: Analyze patterns ──────────────────────────────
-
-  analyze_patterns:
+  execute:
     action: inference
-    description: "Review performance record and identify patterns"
+    description: "Execute the task via inference"
     context:
-      required: [mission_history, task_outcomes]
-      optional: [learnings_archive, timing_data, trigger_reason]
+      optional: [context_bundle, project_manifest, repo_map_formatted]
     prompt: |
-      You are a performance analysis module in an automated coding pipeline.
-      Your output will feed into a recommendation generation step.
-      Be honest and specific — this analysis drives self-improvement.
+      You are a retrospective analysis module. Analyze what was tried, what failed, and what ultimately worked. Extract reusable lessons.
 
-      ## Mission
-      {{ context.mission_history.objective }}
+      ## Trigger
+      {{ input.reason or input.task_description }}
 
-      ## Task Outcomes
-      {% for task in context.task_outcomes %}
-      - **{{ task.id }}** ({{ task.flow }}): {{ task.status }}
-        Attempts: {{ task.attempts }} | Frustration: {{ task.frustration }}
-        {% if task.summary %}Summary: {{ task.summary }}{% endif %}
-        {% if task.failure_reason %}Failure: {{ task.failure_reason }}{% endif %}
-      {% endfor %}
+      Project objective: {{ input.mission_objective }}
 
-      {% if context.timing_data %}
-      ## Flow Invocation Counts
-      {% for flow_name, data in context.timing_data.items() %}
-      - {{ flow_name }}: {{ data.invocations }} invocations, {{ data.total_steps }} total steps
-      {% endfor %}
+      {% if input.relevant_notes %}
+      ## Architecture & Notes
+      {{ input.relevant_notes }}
       {% endif %}
 
-      {% if context.learnings_archive %}
-      ## Captured Learnings (most recent 10)
-      {% for learning in context.learnings_archive[-10:] %}
-      - [{{ learning.type }}] {{ learning.content[:200] }}
+      {% if context.repo_map_formatted %}
+      ## Project Structure
+      {{ context.repo_map_formatted }}
+      {% endif %}
+
+      {% if context.context_bundle and context.context_bundle.files %}
+      ## Project Files
+      {% for file in context.context_bundle.files %}
+      === {{ file.path }} ===
+      {{ file.content[:1500] }}
       {% endfor %}
       {% endif %}
 
-      {% if input.trigger_reason %}
-      ## Why This Retrospective Was Triggered
-      {{ input.trigger_reason }}
-      {% endif %}
+      If you need to create or update files, use this format:
 
-      ## Analyze
+      === FILE: path/to/file ===
+      ```
+      content
+      ```
 
-      ### Success Patterns
-      What types of tasks consistently succeed? What do they have in common?
-
-      ### Failure Patterns
-      What types of tasks fail or require multiple attempts? What's the common thread?
-
-      ### Effort Distribution
-      Where is time being spent? Is the ratio of planning/coding/testing/debugging healthy?
-
-      ### Trend Analysis
-      Is performance improving, degrading, or flat over the mission?
-
-      ### Blind Spots
-      What AREN'T you doing that you should be?
-
-      Be specific. Reference task IDs and concrete observations.
+      Create ALL files needed. If no files need creating, provide analysis as plain text.
     config:
-      temperature: "t*0.6"
+      temperature: 0.4
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
-          transition: snapshot_analysis
+          transition: process_output
         - condition: "true"
-          transition: no_changes_needed
+          transition: failed
     publishes:
       - inference_response
 
-  # Snapshot inference_response as performance_analysis before
-  # the next inference step overwrites it.
-  snapshot_analysis:
-    action: transform
-    description: "Preserve analysis text under a named key"
+  process_output:
+    action: apply_multi_file_changes
+    description: "Write any file blocks to disk"
     context:
       required: [inference_response]
     params:
-      set_values:
-        performance_analysis: "{{ context.inference_response }}"
+      content_key: "inference_response"
     resolver:
       type: rule
       rules:
-        - condition: "true"
-          transition: generate_recommendations
-    publishes:
-      - performance_analysis
-
-  # ── Phase 3: Generate recommendations ──────────────────────
-
-  generate_recommendations:
-    action: inference
-    description: "Produce specific, actionable recommendations"
-    context:
-      required: [performance_analysis, mission_history]
-      optional: [task_outcomes, learnings_archive]
-    prompt: |
-      You are a recommendation module in an automated coding pipeline.
-      Your output will be parsed for typed recommendations and applied to mission state.
-      Use the exact action type keywords listed below.
-
-      ## Your Performance Analysis
-      {{ context.performance_analysis }}
-
-      ## Remaining Work
-      {% for task in context.mission_history.plan %}
-      {% if task.status == 'pending' %}
-      - {{ task.id }}: {{ task.description }}
-      {% endif %}
-      {% endfor %}
-
-      ## Generate Recommendations (3-5)
-
-      For each recommendation, use this format:
-
-      **Action type**: [one of: adjust_approach, add_task, reprioritize, revise_plan, note_for_knowledge_base]
-      **Recommendation**: [what to change]
-      **Based on**: [which pattern from the analysis]
-      **Specifics**: [exact details]
-
-      Be concrete. "Write more tests" is too vague. "Add task: Write unit tests for
-      the validation logic in models/user.py that has failed twice during modification"
-      is actionable.
-
-      Also assess overall **mission health**:
-      - **on_track**: the mission is progressing well
-      - **at_risk**: patterns suggest the mission may not complete successfully
-      - **needs_intervention**: systemic issues require attention
-
-      End your response with:
-      Mission health: [on_track / at_risk / needs_intervention]
-    config:
-      temperature: "t*0.5"
-    resolver:
-      type: llm_menu
-      prompt: "How should these recommendations be applied?"
-      options:
-        apply_recommendations:
-          description: "Recommendations are actionable — apply them to the mission"
-        flag_for_director:
-          description: "Issues found that need the shop director's attention"
-        no_changes_needed:
-          description: "Performance is healthy — no adjustments needed"
-    publishes:
-      - inference_response
-
-  # ── Phase 4: Apply or report ───────────────────────────────
-
-  apply_recommendations:
-    action: apply_retrospective_recommendations
-    description: "Translate recommendations into mission state changes"
-    context:
-      required: [inference_response, mission_history]
-      optional: [performance_analysis]
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: capture_learnings
-    publishes:
-      - changes_applied
-
-  flag_for_director:
-    action: compose_director_report
-    description: "Package findings into a report for the shop director"
-    context:
-      required: [inference_response]
-      optional: [performance_analysis, mission_history]
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: capture_learnings
-    publishes:
-      - director_report
-
-  # ── Terminal paths ─────────────────────────────────────────
-
-  capture_learnings:
-    action: flow
-    description: "Record retrospective findings"
-    flow: capture_learnings
-    input_map:
-      task_description: "Retrospective self-assessment"
-      learning_focus: "general"
-      category: "task_learning"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
+        - condition: "result.files_written > 0"
           transition: complete
+        - condition: "true"
+          transition: complete_no_files
+    publishes:
+      - files_changed
 
   complete:
     action: noop
-    description: "Retrospective complete — return to mission_control"
-    status: success
+    description: "Task complete with files"
+    context:
+      optional: [files_changed]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
-        last_result: "Retrospective completed"
+        last_result: "Completed: {{ input.task_description[:100] }}. Files: {{ context.files_changed | join(', ') if context.files_changed else 'none' }}"
 
-  too_early:
+  complete_no_files:
     action: noop
-    description: "Not enough completed work to retrospect on"
-    status: success
+    description: "Task complete — analysis only"
+    context:
+      optional: [inference_response]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
-        last_result: "Retrospective skipped — too early"
+        last_result: "{{ context.inference_response[:200] if context.inference_response else 'Completed' }}"
 
-  no_changes_needed:
-    action: flow
-    description: "Record that retrospective found no issues"
-    flow: capture_learnings
-    input_map:
-      task_description: "Retrospective — no adjustments needed"
-      learning_focus: "general"
-      category: "task_learning"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: return_to_mission
-
-  return_to_mission:
+  failed:
     action: noop
-    description: "Retrospective found no issues — return to mission_control"
+    description: "Task failed"
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
-        last_status: "success"
-        last_result: "Retrospective completed — no changes needed"
+        last_status: "failed"
+        last_result: "Failed: {{ input.task_description[:100] }}"
 
-entry: gather_history
+entry: gather_context
 
 overflow:
   strategy: split

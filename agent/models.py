@@ -24,10 +24,11 @@ class ResolverDefinition(BaseModel):
 
     type: str
     rules: list[RuleCondition] = Field(default_factory=list)
-    # Future: LLM menu fields
+    # LLM menu fields
     prompt: str | None = None
     options: dict[str, Any] | None = None
     options_from: str | None = None
+    include_step_output: bool = False
 
 
 class ContextRequirements(BaseModel):

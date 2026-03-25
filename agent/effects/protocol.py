@@ -179,6 +179,15 @@ class Effects(Protocol):
         """
         ...
 
+    async def makedirs(self, path: str, exist_ok: bool = True) -> None:
+        """Create directory and all parent directories.
+
+        Args:
+            path: Directory path relative to the working directory.
+            exist_ok: If True, don't raise if directory already exists.
+        """
+        ...
+
     async def file_exists(self, path: str) -> bool:
         """Check whether a file exists.
 
@@ -225,6 +234,51 @@ class Effects(Protocol):
 
         Returns:
             InferenceResult with the model's response text.
+        """
+        ...
+
+    # ── Memoryful inference sessions ──────────────────────────────
+
+    async def start_inference_session(self, config: dict | None = None) -> str:
+        """Start a memoryful inference session. Pins a pool instance.
+
+        Args:
+            config: Optional dict with 'ttl_seconds' (default 300).
+
+        Returns:
+            session_id string identifying the session.
+        """
+        ...
+
+    async def session_inference(
+        self,
+        session_id: str,
+        prompt: str,
+        config_overrides: dict | None = None,
+    ) -> InferenceResult:
+        """Run inference within a memoryful session.
+
+        The pinned instance retains KV cache state between turns.
+        Each turn's prompt contains only NEW content.
+
+        Args:
+            session_id: The session ID from start_inference_session().
+            prompt: The new turn content (not full history).
+            config_overrides: Optional overrides for temperature, max_tokens, etc.
+
+        Returns:
+            InferenceResult with the model's response text.
+        """
+        ...
+
+    async def end_inference_session(self, session_id: str) -> bool:
+        """End a memoryful session and release the pinned instance.
+
+        Args:
+            session_id: The session ID to end.
+
+        Returns:
+            True if the session was found and ended.
         """
         ...
 
@@ -357,6 +411,24 @@ class Effects(Protocol):
 
         Returns:
             True if the session was found and closed.
+        """
+        ...
+
+    # ── Tracing ───────────────────────────────────────────────────
+
+    async def emit_trace(self, event: Any) -> None:
+        """Record a trace event. Appends to in-memory buffer.
+
+        Args:
+            event: A TraceEvent dataclass instance.
+        """
+        ...
+
+    async def flush_traces(self) -> None:
+        """Persist buffered trace events to disk (JSONL).
+
+        Called at cycle boundaries by loop.py. Implementations may
+        no-op (MockEffects) or write to .agent/traces/ (LocalEffects).
         """
         ...
 

@@ -1,19 +1,23 @@
 # Flow Registry — discovery mechanism for all available flows.
 # Lists each flow with metadata. Loaded at startup by the runtime.
+#
+# v2: Removed frustration_level, temperature_multiplier, frustration_history
+# from task flow optionals — these are no longer dispatched by mission_control.
+# Task descriptions are intent-based; flow field on TaskRecord is optional.
 
 flows:
   mission_control:
     type: orchestrator
-    description: "Top-level agent routing — load state, assess, dispatch tasks"
+    description: "Core director — reasons about mission state and dispatches to best action"
     file: mission_control.yaml
     inputs:
       required: [mission_id]
-      optional: [last_result, last_status, last_task_id]
-    terminal_statuses: [completed, aborted]
+      optional: [last_result, last_status, last_task_id, quality_gate_retries]
+    terminal_statuses: [completed, deadlocked, aborted]
 
   create_plan:
     type: orchestrator
-    description: "LLM-powered task planning from mission objective"
+    description: "Generate intent-based task plan from mission objective"
     file: create_plan.yaml
     inputs:
       required: [mission_id]
@@ -22,20 +26,20 @@ flows:
 
   create_file:
     type: task
-    description: "Create a new file with project context awareness"
+    description: "Create one or more new source files with project context awareness"
     file: tasks/create_file.yaml
     inputs:
       required: [mission_id, task_id]
-      optional: [task_description, mission_objective, working_directory, target_file_path, reason, temperature_multiplier, frustration_level, frustration_history, relevant_notes]
+      optional: [task_description, mission_objective, working_directory, target_file_path, relevant_notes]
     terminal_statuses: []
 
   modify_file:
     type: task
-    description: "Modify an existing file to address an issue"
+    description: "AST-aware file modification — symbol-level or full rewrite"
     file: tasks/modify_file.yaml
     inputs:
-      required: [mission_id, task_id, target_file_path, reason]
-      optional: [task_description, mission_objective, working_directory, temperature_multiplier, frustration_level, frustration_history, relevant_notes]
+      required: [mission_id, task_id, target_file_path]
+      optional: [task_description, mission_objective, working_directory, reason, relevant_notes, mode]
     terminal_statuses: []
 
   create_tests:
@@ -43,8 +47,8 @@ flows:
     description: "Create test files for existing project modules"
     file: tasks/create_tests.yaml
     inputs:
-      required: [mission_id, task_id, target_file_path]
-      optional: [task_description, mission_objective, working_directory, test_file_path, reason, temperature_multiplier, frustration_level, frustration_history, relevant_notes]
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, target_file_path, test_file_path, reason, relevant_notes]
     terminal_statuses: []
 
   setup_project:
@@ -53,7 +57,7 @@ flows:
     file: tasks/setup_project.yaml
     inputs:
       required: [mission_id, task_id]
-      optional: [task_description, mission_objective, working_directory, setup_focus, relevant_notes, frustration_level, frustration_history]
+      optional: [task_description, mission_objective, working_directory, setup_focus, relevant_notes]
     terminal_statuses: []
 
   diagnose_issue:
@@ -62,7 +66,7 @@ flows:
     file: tasks/diagnose_issue.yaml
     inputs:
       required: [target_file_path]
-      optional: [error_description, mission_id, task_id, task_description, mission_objective, error_output, previous_attempt, working_directory, frustration_level, frustration_history, relevant_notes]
+      optional: [error_description, mission_id, task_id, task_description, mission_objective, error_output, previous_attempt, working_directory, relevant_notes]
     terminal_statuses: [success, failed]
 
   explore_spike:
@@ -71,12 +75,12 @@ flows:
     file: tasks/explore_spike.yaml
     inputs:
       required: [investigation_goal]
-      optional: [mission_id, task_id, task_description, mission_objective, scope_hint, working_directory, specific_questions, frustration_level, frustration_history, relevant_notes]
+      optional: [mission_id, task_id, task_description, mission_objective, scope_hint, working_directory, specific_questions, relevant_notes]
     terminal_statuses: [success]
 
   design_architecture:
     type: task
-    description: "Model-led holistic project design — directory layout, module boundaries, interfaces"
+    description: "Holistic project design — layout, modules, interfaces, execution conventions"
     file: tasks/design_architecture.yaml
     inputs:
       required: [mission_id, task_id]
@@ -85,11 +89,11 @@ flows:
 
   integrate_modules:
     type: task
-    description: "Analyze multi-file project and produce integration glue code"
+    description: "Project cohesion inspector — checks imports, names, interfaces, reports issues"
     file: tasks/integrate_modules.yaml
     inputs:
       required: [mission_id, task_id]
-      optional: [task_description, mission_objective, working_directory, target_file_path, reason, expected_entry_point, integration_hints, frustration_level, frustration_history, relevant_notes]
+      optional: [task_description, mission_objective, working_directory, relevant_notes, integration_hints]
     terminal_statuses: []
 
   refactor:
@@ -98,7 +102,7 @@ flows:
     file: tasks/refactor.yaml
     inputs:
       required: [mission_id, task_id, target_file_path]
-      optional: [task_description, mission_objective, working_directory, reason, specific_smells, refactoring_budget, findings, frustration_level, frustration_history, relevant_notes]
+      optional: [task_description, mission_objective, working_directory, reason, specific_smells, refactoring_budget, findings, relevant_notes]
     terminal_statuses: []
 
   document_project:
@@ -107,12 +111,12 @@ flows:
     file: tasks/document_project.yaml
     inputs:
       required: [mission_id, task_id]
-      optional: [task_description, mission_objective, working_directory, target_file_path, reason, doc_scope, findings, frustration_level, frustration_history, relevant_notes]
+      optional: [task_description, mission_objective, working_directory, target_file_path, reason, doc_scope, findings, relevant_notes]
     terminal_statuses: []
 
   retrospective:
     type: task
-    description: "Periodic self-assessment — analyze patterns, produce actionable recommendations"
+    description: "Post-completion learning capture — reflect on what worked and what to remember"
     file: tasks/retrospective.yaml
     inputs:
       required: [mission_id]
@@ -125,8 +129,28 @@ flows:
     file: tasks/request_review.yaml
     inputs:
       required: [mission_id, task_id]
-      optional: [task_description, mission_objective, working_directory, work_summary, files_to_review, design_decisions, specific_concerns, quality_gate_observations, frustration_level, frustration_history, relevant_notes]
+      optional: [task_description, mission_objective, working_directory, work_summary, files_to_review, design_decisions, specific_concerns, quality_gate_observations, relevant_notes]
     terminal_statuses: [success]
+
+  validate_behavior:
+    type: task
+    description: "Run the project code interactively to verify behavior"
+    file: tasks/validate_behavior.yaml
+    inputs:
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, target_file_path, entry_point, test_scenarios, reason, relevant_notes]
+    terminal_statuses: []
+
+  manage_packages:
+    type: task
+    description: "Detect, create, and manage project virtual environment and packages"
+    file: tasks/manage_packages.yaml
+    inputs:
+      required: [mission_id, task_id]
+      optional: [task_description, mission_objective, working_directory, packages_to_install, target_file_path, reason, relevant_notes]
+    terminal_statuses: []
+
+  # ── Shared sub-flows ────────────────────────────────────────
 
   prepare_context:
     type: shared
@@ -134,7 +158,7 @@ flows:
     file: shared/prepare_context.yaml
     inputs:
       required: [working_directory, task_description]
-      optional: [mission_objective, target_file_path, frustration_history, frustration_level, context_budget, relevant_notes]
+      optional: [mission_objective, target_file_path, frustration_history, context_budget, relevant_notes]
 
   validate_output:
     type: shared
@@ -150,7 +174,7 @@ flows:
     file: shared/capture_learnings.yaml
     inputs:
       required: [task_description]
-      optional: [target_file_path, task_outcome, learning_focus, category, tags]
+      optional: [target_file_path, task_outcome, learning_focus, category]
 
   research_context:
     type: shared
@@ -158,7 +182,7 @@ flows:
     file: shared/research_context.yaml
     inputs:
       required: [problem_description]
-      optional: [error_output, search_hints, max_queries, working_directory, target_file_path, research_type_hint]
+      optional: [error_output, search_hints, max_queries, working_directory, target_file_path]
 
   research_repomap:
     type: shared
@@ -200,31 +224,23 @@ flows:
       required: [session_goal, working_directory]
       optional: [initial_commands, max_turns, session_context, environment_vars]
 
-  manage_packages:
-    type: task
-    description: "Detect, create, and manage project virtual environment and packages"
-    file: tasks/manage_packages.yaml
-    inputs:
-      required: [mission_id, task_id]
-      optional: [task_description, mission_objective, working_directory, packages_to_install, target_file_path, reason, temperature_multiplier, frustration_level, frustration_history, relevant_notes]
-    terminal_statuses: []
-
-  validate_behavior:
-    type: task
-    description: "Run the project code interactively to verify behavior"
-    file: tasks/validate_behavior.yaml
-    inputs:
-      required: [mission_id, task_id]
-      optional: [task_description, mission_objective, working_directory, target_file_path, entry_point, test_scenarios, reason, temperature_multiplier, frustration_level, frustration_history, relevant_notes]
-    terminal_statuses: []
-
   quality_gate:
     type: shared
-    description: "End-of-mission project-wide quality validation"
+    description: "Project-wide quality validation — checkpoint or completion mode"
     file: shared/quality_gate.yaml
     inputs:
       required: [working_directory, mission_id]
-      optional: [mission_objective]
+      optional: [mission_objective, relevant_notes, mode]
+
+  ast_edit_session:
+    type: shared
+    description: "Memoryful AST-aware symbol selection and sequential rewrite session"
+    file: shared/ast_edit_session.yaml
+    inputs:
+      required: [file_path, file_content, symbol_table, symbol_menu_options, task_description]
+      optional: [reason, mode, relevant_notes, working_directory]
+
+  # ── Test flows ──────────────────────────────────────────────
 
   test_simple:
     type: test

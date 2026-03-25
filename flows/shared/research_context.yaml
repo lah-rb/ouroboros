@@ -25,43 +25,11 @@ defaults:
 steps:
 
   classify_query:
-    action: inference
-    description: >
-      Classify the research query to determine the best research strategy.
-      Routes to specialized sub-flows for better results.
-    prompt: |
-      Classify this research query to determine the best research strategy.
-
-      Query: {{ input.problem_description }}
-      {% if input.error_output %}
-      Error context: {{ input.error_output }}
-      {% endif %}
-      {% if input.search_hints %}
-      Hints: {{ input.search_hints }}
-      {% endif %}
-      {% if input.research_type_hint %}
-      Suggested strategy: {{ input.research_type_hint }}
-      {% endif %}
-
-      Categories:
-      1. **web_search**: Error messages, library API usage, common patterns,
-         Stack Overflow-type questions, configuration issues, general how-to
-      2. **codebase_structure**: Understanding how code is organized, finding
-         related files, understanding dependencies, navigating a codebase,
-         "where is X defined?", "what uses Y?"
-      3. **codebase_history**: Understanding why code changed, recent modifications,
-         who changed what, evolution of a module, "why was this done this way?"
-      4. **technical_docs**: Algorithms, formal specifications, official API
-         documentation, language features, academic concepts
-
-      Which single category best fits? Respond with ONLY the category name.
-    config:
-      temperature: "t*0.1"
-      max_tokens: 16
+    action: noop
+    description: "Fast-path when research type is already known"
     resolver:
       type: rule
       rules:
-        # Direct hint bypass — skip classification if caller specified
         - condition: "input.get('research_type_hint', '') == 'web_search'"
           transition: formulate_query
         - condition: "input.get('research_type_hint', '') == 'codebase_structure'"
@@ -70,16 +38,29 @@ steps:
           transition: route_history
         - condition: "input.get('research_type_hint', '') == 'technical_docs'"
           transition: route_technical
-        # LLM classification routing
-        - condition: "'codebase_structure' in result.text.lower() or 'repomap' in result.text.lower()"
-          transition: route_repomap
-        - condition: "'codebase_history' in result.text.lower() or 'history' in result.text.lower()"
-          transition: route_history
-        - condition: "'technical_docs' in result.text.lower() or 'technical' in result.text.lower()"
-          transition: route_technical
-        # Default: web search (most common, safest fallback)
         - condition: "true"
-          transition: formulate_query
+          transition: classify_query_menu
+
+  classify_query_menu:
+    action: inference
+    description: "LLM classifies research query"
+    prompt: |
+      You are a research routing module. Classify this research need:
+
+      Problem: {{ input.problem_description }}
+      {% if input.error_output %}Error: {{ input.error_output[:500] }}{% endif %}
+    resolver:
+      type: llm_menu
+      prompt: "What type of research is needed?"
+      options:
+        formulate_query:
+          description: "Web search — documentation, tutorials, solutions"
+        route_repomap:
+          description: "Codebase structure — file relationships, dependencies"
+        route_history:
+          description: "Code history — git history for change context"
+        route_technical:
+          description: "Technical docs — authoritative APIs or specs"
     publishes:
       - query_classification
 

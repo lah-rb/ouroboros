@@ -74,8 +74,9 @@ class TestTaskFlowsLoad:
         assert flow.entry == "gather_context"
         # Template-expanded steps should have actions
         assert flow.steps["gather_context"].action == "flow"
-        assert flow.steps["write_file"].action == "execute_file_creation"
-        assert flow.steps["validate"].action == "flow"
+        # v3: multi-file write + direct validation action
+        assert flow.steps["write_files"].action == "apply_multi_file_changes"
+        assert flow.steps["validate"].action == "validate_created_files"
         assert flow.steps["capture_learnings"].action == "flow"
         # Should have tail_calls for completion
         assert flow.steps["complete"].tail_call is not None
@@ -86,13 +87,14 @@ class TestTaskFlowsLoad:
         assert flow.flow == "modify_file"
         assert flow.entry == "gather_context"
         assert flow.steps["read_target"].action == "read_files"
-        assert flow.steps["plan_change"].action == "inference"
-        assert flow.steps["execute_change"].action == "inference"
-        # LLM menu on plan_change
-        assert flow.steps["plan_change"].resolver.type == "llm_menu"
+        # v3: AST extraction + edit session + full rewrite fallback
+        assert flow.steps["extract_symbols"].action == "extract_symbol_bodies"
+        assert flow.steps["ast_edit"].action == "flow"
+        assert flow.steps["ast_edit"].flow == "ast_edit_session"
+        assert flow.steps["full_rewrite"].action == "inference"
         # Tail calls
         assert flow.steps["complete"].tail_call is not None
-        assert flow.steps["abandon"].tail_call is not None
+        assert flow.steps["failed"].tail_call is not None
         # create_fallback sub-flow when file doesn't exist
         assert "create_fallback" in flow.steps
         assert flow.steps["create_fallback"].action == "flow"
@@ -101,8 +103,8 @@ class TestTaskFlowsLoad:
 
     def test_create_file_template_expansion_inherits_context(self):
         flow = self._load_with_templates("flows/tasks/create_file.yaml")
-        # write_file template requires inference_response in context
-        assert "inference_response" in flow.steps["write_file"].context.required
+        # write_files step requires inference_response in context
+        assert "inference_response" in flow.steps["write_files"].context.required
 
     def test_modify_file_template_expansion_inherits_publishes(self):
         flow = self._load_with_templates("flows/tasks/modify_file.yaml")
@@ -190,15 +192,16 @@ class TestFlowStructure:
         assert "decide_research_recommended" in transitions  # medium frustration
         assert "decide_research_optional" in transitions  # low frustration (1-2)
         assert "select_relevant" in transitions  # no frustration (0): skip research
-        # Both decide steps must have paths to both research and select_relevant
+        # Both decide steps now use llm_menu resolvers with constrained options
         for decide_step_name in [
             "decide_research_recommended",
             "decide_research_optional",
         ]:
             decide_step = flow.steps[decide_step_name]
-            decide_transitions = [r.transition for r in decide_step.resolver.rules]
-            assert "research" in decide_transitions
-            assert "select_relevant" in decide_transitions
+            assert decide_step.resolver.type == "llm_menu"
+            option_names = list(decide_step.resolver.options.keys())
+            assert "research" in option_names
+            assert "select_relevant" in option_names
 
     def test_validate_output_has_pass_fail_and_issues_terminals(self):
         flow = load_flow("flows/shared/validate_output.yaml")
@@ -229,17 +232,19 @@ class TestFlowStructure:
         assert "regenerate" in v_transitions
         assert "capture_failure_note" in v_transitions
 
-    def test_modify_file_has_correction_and_regeneration_steps(self):
+    def test_modify_file_v3_has_ast_edit_and_full_rewrite_paths(self):
         reg = load_template_registry("flows")
         flow = load_flow_with_templates("flows/tasks/modify_file.yaml", reg)
-        assert "correct_issues" in flow.steps
-        assert flow.steps["correct_issues"].action == "inference"
-        assert "regenerate_modified" in flow.steps
-        assert flow.steps["regenerate_modified"].action == "inference"
-        # validate routes "issues" to capture_learnings (deferred to quality gate)
+        # v3: AST edit session is the primary path
+        assert "ast_edit" in flow.steps
+        assert flow.steps["ast_edit"].flow == "ast_edit_session"
+        # full_rewrite is the fallback path
+        assert "full_rewrite" in flow.steps
+        assert flow.steps["full_rewrite"].action == "inference"
+        # validate routes to capture_learnings on success, full_rewrite on deep failure
         v_transitions = [r.transition for r in flow.steps["validate"].resolver.rules]
         assert "capture_learnings" in v_transitions
-        assert "regenerate_modified" in v_transitions
+        assert "full_rewrite" in v_transitions
         assert "capture_failure_note" in v_transitions
 
     def test_capture_learnings_uses_push_note_action(self):

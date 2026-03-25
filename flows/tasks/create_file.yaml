@@ -1,10 +1,12 @@
 flow: create_file
 version: 2
 description: >
-  Create a new file with project context awareness,
-  LLM-driven validation, and learning capture.
-  Handles three validation outcomes: success, issues (fixable), failed (syntax broken).
-  Correction loop allows the agent to fix flagged issues before giving up.
+  Create one or more source files. Gathers project context, generates
+  file content via inference, writes to disk, validates, and reports
+  results. No correction loop — if validation finds issues, they are
+  reported back to mission_control for the director to decide next steps.
+  The prompt encourages the model to create ALL files needed for the task,
+  not just a single file.
 
 input:
   required:
@@ -16,17 +18,15 @@ input:
     - working_directory
     - target_file_path
     - reason
-    - temperature_multiplier
-    - frustration_level
-    - frustration_history
     - relevant_notes
 
 defaults:
   config:
-    temperature: "t*0.8"
-    max_tokens: 4096
+    temperature: "t*0.6"
 
 steps:
+
+  # ── Phase 1: Context gathering ──────────────────────────────
 
   gather_context:
     use: gather_project_context
@@ -38,298 +38,168 @@ steps:
         - condition: "true"
           transition: generate_content
 
+  # ── Phase 2: Generate file content ──────────────────────────
+
   generate_content:
     action: inference
-    description: "Generate the file content with project awareness"
+    description: "Generate complete file content for the task"
     context:
       optional: [context_bundle, project_manifest, repo_map_formatted, related_files]
     prompt: |
       You are a code generation module in an automated pipeline.
-      Your output will be extracted from code markers and written directly to a file.
-      Do NOT include any text outside the code block — no explanation, no commentary.
+      Your output will be parsed for file blocks and written directly to disk.
+      Do NOT include any text outside the file blocks — no explanation, no commentary.
 
-      Project objective: {{ input.mission_objective }}{% if context.context_bundle and context.context_bundle.mission_objective and not input.mission_objective %}
-      Project objective: {{ context.context_bundle.mission_objective }}{% endif %}
-      Task: {{ input.task_description }}
-      Target file: {{ input.target_file_path }}
+      ## Task
+      {{ input.task_description }}
+
+      {% if input.target_file_path %}
+      Primary target file: {{ input.target_file_path }}
+      {% endif %}
+
+      {% if input.reason %}
+      ## Reason
+      {{ input.reason }}
+      {% endif %}
+
+      Project objective: {{ input.mission_objective }}
+
+      {% if input.relevant_notes %}
+      ## Architecture & Import Conventions (AUTHORITATIVE)
+      {{ input.relevant_notes }}
+
+      CRITICAL IMPORT RULES:
+      - Import types and functions from existing project modules. Do NOT
+        redefine classes, enums, or dataclasses that already exist in other files.
+      - Follow the import scheme specified above exactly (flat, package, or relative).
+      - If the architecture says "engine.py imports from models.py: [GameState, Room]",
+        then engine.py MUST contain "from models import GameState, Room" — not its
+        own copy of those classes.
+      {% endif %}
 
       {% if context.repo_map_formatted %}
-      ## Project Structure (AST-based dependency map)
+      ## Existing Project Structure (AST-based)
       {{ context.repo_map_formatted }}
       {% endif %}
 
-      {% if context.context_bundle and context.context_bundle.import_graph %}
-      ## Import Dependency Graph (what imports what)
-      {{ context.context_bundle.import_graph }}
-      ⚠️ Use EXACT import paths shown above — do not guess or invent module paths.
-      {% endif %}
-
-      {% if context.related_files %}
-      ## Files Most Connected to Target (by import/reference graph)
-      {{ context.related_files | join(', ') }}
-      {% endif %}
-
       {% if context.context_bundle and context.context_bundle.files %}
-      Existing project files for reference:
+      ## Existing Files
       {% for file in context.context_bundle.files %}
       === {{ file.path }} ===
-      {{ file.content }}
+      {{ file.content[:1500] }}
       {% endfor %}
-
-      Your code MUST integrate with these existing files:
-      - Import from existing modules rather than reimplementing functionality.
-      - Match EXACT function/class signatures from the existing code — use the same
-        parameter names, types, and return types you see above.
-      - If the existing code defines `new_task(title, priority)`, you call `new_task(title, priority)` —
-        not `Task()` directly, not `create_task()`, not some other name you imagined.
-      - Maintain consistent code style, naming conventions, and patterns.
-      - Use the same libraries and dependency patterns already established.
-      - CRITICAL: Only import packages that are in the standard library OR already listed in pyproject.toml/requirements.txt. If you need a third-party package not yet installed, use stdlib alternatives instead or note the missing dependency in a comment.
-      - If this file is a CLI entry point or main module, it MUST import and actually
-        CALL functions from the modules shown above. Stub/print-only implementations
-        are NOT acceptable — wire real functionality.
       {% endif %}
 
-      {% if context.context_bundle and context.context_bundle.research_findings %}
-      Research context (from web search):
-      {{ context.context_bundle.research_findings }}
-      {% endif %}
+      Produce the complete content for each file needed. You may create
+      MULTIPLE files if the task requires it — do not limit yourself to
+      a single file. Create every file needed to complete this task well.
 
-      {% if input.frustration_history %}
-      ⚠️ Previous attempts at this task FAILED:
-      {{ input.frustration_history }}
-      You MUST take a different approach than what was tried before.
-      {% endif %}
+      Use this exact format for each file:
 
-      {% if input.relevant_notes %}
-      ⚠️ IMPORTANT — observations from previous tasks:
-      {{ input.relevant_notes }}
-      Use these observations to avoid repeating known mistakes.
-      {% endif %}
-
-      Write the complete file content for {{ input.target_file_path }}.
-      Include docstrings, type annotations, and clear structure.
-
-      Respond with ONLY the complete file inside a fenced code block:
-
-      ✅ CORRECT — one fenced block, nothing else:
+      === FILE: path/to/file.py ===
       ```python
       # complete file content here
-      import os
-
-      def main():
-          pass
       ```
 
-      ❌ WRONG — no text outside the code block:
-      Here is the implementation:
+      For multiple files, repeat the pattern:
+
+      === FILE: path/to/first.py ===
       ```python
-      import os
+      # first file
       ```
-      I structured it this way because...
+
+      === FILE: path/to/second.py ===
+      ```python
+      # second file
+      ```
 
       RULES:
-      - One fenced code block containing the COMPLETE file.
-      - NOTHING before or after the code block — no commentary, no explanation.
-      - The code block is the ENTIRE response.
+      - Every file block MUST have a === FILE: path === header.
+      - Each block contains the COMPLETE file content — no partial snippets.
+      - NOTHING before the first file block or after the last.
+      - Include docstrings, type annotations, and clear structure.
+      - Match import conventions from existing project files.
+      - Create ALL files needed for this task, not just one.
     config:
-      temperature: 0.7
+      temperature: 0.3
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
-          transition: write_file
+          transition: write_files
         - condition: "true"
-          transition: capture_failure_note
+          transition: failed
     publishes:
       - inference_response
 
-  write_file:
-    use: write_file
+  # ── Phase 3: Write files to disk ────────────────────────────
+
+  write_files:
+    action: apply_multi_file_changes
+    description: "Parse file blocks and write to disk"
+    context:
+      required: [inference_response]
+    params:
+      content_key: "inference_response"
     resolver:
       type: rule
       rules:
-        - condition: "result.write_success == true"
+        - condition: "result.files_written > 0"
           transition: validate
         - condition: "true"
-          transition: capture_failure_note
+          transition: failed
+    publishes:
+      - files_changed
+
+  # ── Phase 4: Validate (report only, no correction loop) ────
 
   validate:
-    use: validate_file
-    params:
-      validation_hint: "syntax"
+    action: validate_created_files
+    description: "Validate created files — syntax and imports"
+    context:
+      required: [files_changed]
+      optional: [project_manifest]
     resolver:
       type: rule
       rules:
         - condition: "result.status == 'success'"
-          transition: capture_learnings
-        - condition: "result.status == 'issues' and meta.step_count < 8"
-          transition: correct_issues
+          transition: complete
         - condition: "result.status == 'issues'"
-          transition: capture_learnings
-        - condition: "result.status == 'failed' and meta.step_count < 8"
-          transition: regenerate
+          transition: complete_with_issues
+        - condition: "result.status == 'skipped'"
+          transition: complete
         - condition: "true"
-          transition: capture_failure_note
+          transition: complete_with_issues
     publishes:
       - validation_results
 
-  correct_issues:
-    action: inference
-    description: "Fix execution/lint issues flagged by validation"
-    context:
-      required: [inference_response]
-      optional: [validation_results, context_bundle, project_manifest]
-    prompt: |
-      You are a code correction module in an automated pipeline.
-      Your code for {{ input.target_file_path }} passed syntax checking
-      but has execution or quality issues that need fixing.
-      Your output will be extracted from code markers and written directly to a file.
-
-      Issues found:
-      {% if context.validation_results %}
-      {% for check in context.validation_results %}
-      {% if not check.passed %}
-      - {{ check.name }}: FAILED
-        stdout: {{ check.stdout }}
-        stderr: {{ check.stderr }}
-      {% endif %}
-      {% endfor %}
-      {% endif %}
-
-      Task: {{ input.task_description }}
-      Target file: {{ input.target_file_path }}
-
-      ⚠️ CORRECTION DISCIPLINE — READ CAREFULLY:
-      You are a surgeon, not a demolition crew. Fix ONLY the specific errors listed above.
-      - NEVER simplify, shorten, or rewrite the file. Preserve ALL existing functionality.
-      - NEVER remove working code to satisfy a lint warning. Remove only the specific flagged item.
-      - If your corrected version is shorter than the original, you are doing it WRONG.
-      - If an import fails because a module doesn't exist yet, add try/except — do NOT delete the code.
-      - Remove ONLY the unused imports the linter explicitly flagged — not other imports.
-      - If a linter flags multiple issues, fix every single one but change NOTHING else.
-      - LINE COUNT CHECK: Your corrected file MUST have the same number of lines ± 5 as the original.
-        If you can't fix an issue without removing more than 5 lines, leave that issue unfixed.
-      - If a lint warning is about an import used by OTHER files that import THIS file, do NOT remove it.
-        When in doubt about whether an import is used externally, KEEP IT.
-
-      The original task was: {{ input.task_description }}
-      Your file must still fully implement that task after corrections.
-
-      Respond with ONLY the corrected code inside a fenced code block:
-
-      ✅ CORRECT — one fenced block, nothing else:
-      ```python
-      # complete corrected file content
-      ```
-
-      ❌ WRONG — no text outside the code block:
-      I fixed the import error:
-      ```python
-      # code here
-      ```
-
-      RULES:
-      - One fenced code block containing the COMPLETE corrected file.
-      - NOTHING before or after the code block.
-    config:
-      temperature: 0.2
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.tokens_generated > 0"
-          transition: write_file
-        - condition: "true"
-          transition: capture_learnings
-    publishes:
-      - inference_response
-
-  regenerate:
-    action: inference
-    description: "Re-generate file content after syntax validation failure"
-    context:
-      required: [inference_response]
-      optional: [validation_results, context_bundle, project_manifest]
-    prompt: |
-      You are a code generation module in an automated pipeline.
-      Your previous code for {{ input.target_file_path }} failed syntax validation.
-      Your output will be extracted from code markers and written directly to a file.
-
-      Validation results:
-      {% if context.validation_results %}
-      {% for check in context.validation_results %}
-      - {{ check.name }}: {{ "PASS" if check.passed else "FAIL" }}
-        {% if not check.passed %}stdout: {{ check.stdout }}
-        stderr: {{ check.stderr }}{% endif %}
-      {% endfor %}
-      {% endif %}
-
-      Task: {{ input.task_description }}
-
-      Fix the specific validation errors and produce the COMPLETE corrected file.
-      Do NOT change parts of the code that were working — only fix what failed.
-
-      Respond with ONLY the corrected code inside a fenced code block:
-
-      ✅ CORRECT — one fenced block, nothing else:
-      ```python
-      # complete corrected file content
-      ```
-
-      ❌ WRONG — no text outside the code block:
-      I fixed the syntax error:
-      ```python
-      # code here
-      ```
-
-      RULES:
-      - One fenced code block containing the COMPLETE corrected file.
-      - NOTHING before or after the code block.
-    config:
-      temperature: 0.2
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.tokens_generated > 0"
-          transition: write_file
-        - condition: "true"
-          transition: capture_failure_note
-    publishes:
-      - inference_response
-
-  capture_learnings:
-    use: capture_learnings
-    params:
-      learning_focus: "file_creation"
-      category: "codebase_observation"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: complete
+  # ── Terminal paths ──────────────────────────────────────────
 
   complete:
     action: noop
-    description: "File created — return to mission_control"
+    description: "Files created and validated — return to mission_control"
+    context:
+      optional: [files_changed]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
-        last_result: "Created {{ input.target_file_path }}"
+        last_result: "Created {{ context.files_changed | join(', ') if context.files_changed else input.target_file_path }}"
 
-  capture_failure_note:
-    use: capture_learnings
-    params:
-      learning_focus: "failure_analysis"
-      category: "failure_analysis"
-      task_outcome: "FAILED to create {{ input.target_file_path }}: {{ input.task_description }}"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: failed
+  complete_with_issues:
+    action: noop
+    description: "Files created but validation found issues — report to director"
+    context:
+      optional: [files_changed, validation_results]
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "Created files with validation issues. Files: {{ context.files_changed | join(', ') if context.files_changed else input.target_file_path }}. Director should review and decide if modifications are needed."
 
   failed:
     action: noop
@@ -339,7 +209,8 @@ steps:
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
-        last_status: "abandoned"
+        last_status: "failed"
+        last_result: "Failed to create {{ input.target_file_path or 'files' }}"
 
 entry: gather_context
 

@@ -6,61 +6,9 @@ from agent.resolvers.llm_menu import (
     LLMMenuResolverError,
     _build_menu_prompt,
     _build_options_list,
-    _parse_choice,
     resolve_llm_menu,
 )
 from agent.effects.mock import MockEffects
-
-# ── Option Parsing Tests ──────────────────────────────────────────────
-
-
-class TestParseChoice:
-    """Tests for _parse_choice()."""
-
-    def test_exact_match(self):
-        assert (
-            _parse_choice("execute_change", {"execute_change", "abandon"})
-            == "execute_change"
-        )
-
-    def test_case_insensitive(self):
-        assert (
-            _parse_choice("Execute_Change", {"execute_change", "abandon"})
-            == "execute_change"
-        )
-
-    def test_first_word_match(self):
-        assert (
-            _parse_choice(
-                "execute_change — proceed with confidence",
-                {"execute_change", "abandon"},
-            )
-            == "execute_change"
-        )
-
-    def test_substring_match(self):
-        assert (
-            _parse_choice(
-                "I think we should execute_change the file",
-                {"execute_change", "abandon"},
-            )
-            == "execute_change"
-        )
-
-    def test_no_match_returns_none(self):
-        assert (
-            _parse_choice(
-                "something completely different", {"execute_change", "abandon"}
-            )
-            is None
-        )
-
-    def test_empty_text(self):
-        assert _parse_choice("", {"execute_change", "abandon"}) is None
-
-    def test_first_word_with_punctuation(self):
-        assert _parse_choice("abandon.", {"execute_change", "abandon"}) == "abandon"
-
 
 # ── Options Building Tests ────────────────────────────────────────────
 
@@ -115,28 +63,67 @@ class TestBuildOptionsList:
             _build_options_list(resolver_def, {})
 
 
-# ── Menu Prompt Building ──────────────────────────────────────────────
+# ── Menu Prompt Building (Letter-Key + GBNF) ─────────────────────────
 
 
 class TestBuildMenuPrompt:
-    """Tests for _build_menu_prompt()."""
+    """Tests for _build_menu_prompt() — returns (prompt, gbnf, letter_map)."""
 
-    def test_includes_options(self):
-        prompt = _build_menu_prompt(
+    def test_returns_three_tuple(self):
+        result = _build_menu_prompt(
             "What should we do?",
             {"fix": "Fix the bug", "skip": "Skip it"},
         )
-        assert "fix: Fix the bug" in prompt
-        assert "skip: Skip it" in prompt
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+
+    def test_prompt_includes_letter_keys(self):
+        prompt, gbnf, letter_map = _build_menu_prompt(
+            "What should we do?",
+            {"fix": "Fix the bug", "skip": "Skip it"},
+        )
+        assert "[a]" in prompt
+        assert "[b]" in prompt
+        assert "Fix the bug" in prompt
+        assert "Skip it" in prompt
         assert "What should we do?" in prompt
-        assert "ONLY the option name" in prompt
+        assert "ONLY the letter" in prompt
+
+    def test_letter_map_correct(self):
+        _, _, letter_map = _build_menu_prompt(
+            None,
+            {"fix": "Fix the bug", "skip": "Skip it"},
+        )
+        assert letter_map == {"a": "fix", "b": "skip"}
+
+    def test_gbnf_grammar_two_options(self):
+        _, gbnf, _ = _build_menu_prompt(
+            None,
+            {"fix": "Fix", "skip": "Skip"},
+        )
+        assert gbnf == 'root ::= "a" | "b"'
+
+    def test_gbnf_grammar_three_options(self):
+        _, gbnf, _ = _build_menu_prompt(
+            None,
+            {"opt_a": "A", "opt_b": "B", "opt_c": "C"},
+        )
+        assert gbnf == 'root ::= "a" | "b" | "c"'
+
+    def test_gbnf_grammar_four_options(self):
+        _, gbnf, _ = _build_menu_prompt(
+            None,
+            {"w": "W", "x": "X", "y": "Y", "z": "Z"},
+        )
+        assert gbnf == 'root ::= "a" | "b" | "c" | "d"'
 
     def test_no_resolver_prompt(self):
-        prompt = _build_menu_prompt(None, {"a": "Option A"})
-        assert "a: Option A" in prompt
+        prompt, _, _ = _build_menu_prompt(None, {"a": "Option A"})
+        assert "[a]" in prompt
+        assert "Option A" in prompt
 
     def test_include_step_output_text(self):
-        prompt = _build_menu_prompt(
+        prompt, _, _ = _build_menu_prompt(
             "Which option?",
             {"opt_a": "Do A", "opt_b": "Do B"},
             step_output_text="The task completed successfully with 3 files created.",
@@ -144,10 +131,10 @@ class TestBuildMenuPrompt:
         assert "Here is what just happened:" in prompt
         assert "The task completed successfully" in prompt
         assert "Which option?" in prompt
-        assert "opt_a" in prompt
+        assert "[a]" in prompt
 
     def test_step_output_text_none_excluded(self):
-        prompt = _build_menu_prompt(
+        prompt, _, _ = _build_menu_prompt(
             "Which option?",
             {"opt_a": "Do A"},
             step_output_text=None,
@@ -155,17 +142,27 @@ class TestBuildMenuPrompt:
         assert "Here is what just happened:" not in prompt
         assert "Which option?" in prompt
 
+    def test_letter_map_preserves_order(self):
+        """Letter assignment follows insertion order of options dict."""
+        from collections import OrderedDict
+
+        options = OrderedDict(
+            [("alpha", "First"), ("beta", "Second"), ("gamma", "Third")]
+        )
+        _, _, letter_map = _build_menu_prompt(None, options)
+        assert letter_map == {"a": "alpha", "b": "beta", "c": "gamma"}
+
 
 # ── Full LLM Menu Resolver Tests ─────────────────────────────────────
 
 
 class TestResolveLLMMenu:
-    """Tests for resolve_llm_menu()."""
+    """Tests for resolve_llm_menu() — letter-key + grammar approach."""
 
     @pytest.mark.asyncio
-    async def test_first_attempt_success(self):
-        """Model picks a valid option on first try."""
-        effects = MockEffects(inference_responses=["fix"])
+    async def test_letter_a_selects_first_option(self):
+        """Model returns 'a' → selects first option."""
+        effects = MockEffects(inference_responses=["a"])
         resolver_def = {
             "type": "llm_menu",
             "prompt": "What next?",
@@ -178,11 +175,24 @@ class TestResolveLLMMenu:
         assert result == "fix"
 
     @pytest.mark.asyncio
-    async def test_retry_on_invalid_response(self):
-        """Model gives garbage first, valid option on retry."""
-        effects = MockEffects(
-            inference_responses=["I'm not sure what to do here", "skip"]
-        )
+    async def test_letter_b_selects_second_option(self):
+        """Model returns 'b' → selects second option."""
+        effects = MockEffects(inference_responses=["b"])
+        resolver_def = {
+            "type": "llm_menu",
+            "prompt": "What next?",
+            "options": {
+                "fix": {"description": "Fix the issue"},
+                "skip": {"description": "Skip it"},
+            },
+        }
+        result = await resolve_llm_menu(resolver_def, {}, {}, {}, effects=effects)
+        assert result == "skip"
+
+    @pytest.mark.asyncio
+    async def test_grammar_passed_in_config(self):
+        """Grammar string is passed via config to effects.run_inference."""
+        effects = MockEffects(inference_responses=["a"])
         resolver_def = {
             "type": "llm_menu",
             "prompt": "Choose",
@@ -191,13 +201,19 @@ class TestResolveLLMMenu:
                 "skip": {"description": "Skip"},
             },
         }
-        result = await resolve_llm_menu(resolver_def, {}, {}, {}, effects=effects)
-        assert result == "skip"
+        await resolve_llm_menu(resolver_def, {}, {}, {}, effects=effects)
+        # Check that grammar was included in config
+        inference_calls = effects.calls_to("run_inference")
+        assert len(inference_calls) == 1
+        call_config = inference_calls[0].args["config_overrides"]
+        assert "grammar" in call_config
+        assert '"a"' in call_config["grammar"]
+        assert '"b"' in call_config["grammar"]
 
     @pytest.mark.asyncio
-    async def test_fallback_on_double_failure(self):
-        """Model fails twice — falls back to first option."""
-        effects = MockEffects(inference_responses=["completely wrong", "still wrong"])
+    async def test_fallback_on_invalid_letter(self):
+        """Invalid letter falls back to first option (safety net)."""
+        effects = MockEffects(inference_responses=["z"])
         resolver_def = {
             "type": "llm_menu",
             "options": {
@@ -222,7 +238,7 @@ class TestResolveLLMMenu:
     @pytest.mark.asyncio
     async def test_option_with_explicit_target(self):
         """Options can have explicit target step names."""
-        effects = MockEffects(inference_responses=["gather_more"])
+        effects = MockEffects(inference_responses=["a"])
         resolver_def = {
             "type": "llm_menu",
             "options": {
@@ -239,7 +255,7 @@ class TestResolveLLMMenu:
     @pytest.mark.asyncio
     async def test_dynamic_options_from_context(self):
         """Resolver with options_from reads options from context."""
-        effects = MockEffects(inference_responses=["task_2"])
+        effects = MockEffects(inference_responses=["b"])
         resolver_def = {
             "type": "llm_menu",
             "options_from": "context.tasks",
@@ -254,9 +270,9 @@ class TestResolveLLMMenu:
         assert result == "task_2"
 
     @pytest.mark.asyncio
-    async def test_case_insensitive_model_response(self):
-        """Model responds with different casing — still matches."""
-        effects = MockEffects(inference_responses=["FIX"])
+    async def test_uppercase_letter_normalized(self):
+        """Model responds with uppercase letter — still matches."""
+        effects = MockEffects(inference_responses=["A"])
         resolver_def = {
             "type": "llm_menu",
             "options": {
@@ -266,3 +282,19 @@ class TestResolveLLMMenu:
         }
         result = await resolve_llm_menu(resolver_def, {}, {}, {}, effects=effects)
         assert result == "fix"
+
+    @pytest.mark.asyncio
+    async def test_max_tokens_is_5(self):
+        """Config uses max_tokens=5 for efficient grammar-constrained generation."""
+        effects = MockEffects(inference_responses=["a"])
+        resolver_def = {
+            "type": "llm_menu",
+            "options": {
+                "opt_a": {"description": "A"},
+                "opt_b": {"description": "B"},
+            },
+        }
+        await resolve_llm_menu(resolver_def, {}, {}, {}, effects=effects)
+        inference_calls = effects.calls_to("run_inference")
+        call_config = inference_calls[0].args["config_overrides"]
+        assert call_config["max_tokens"] == 5

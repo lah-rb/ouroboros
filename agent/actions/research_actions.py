@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
 from typing import Any
 
@@ -134,6 +135,13 @@ async def action_build_and_query_repomap(step_input: StepInput) -> StepOutput:
         if fp not in seen:
             seen.add(fp)
             unique_related.append(fp)
+
+    # Step 6: Build schema context (Level 1 + 2 — always on)
+    from agent.schema_extract import build_schema_context
+
+    schema_context = build_schema_context(file_contents, max_chars=1500)
+    if schema_context:
+        formatted += f"\n\n## Data Schemas\n{schema_context}"
 
     # Count total definitions
     total_defs = sum(
@@ -479,6 +487,171 @@ async def action_validate_cross_file_consistency(step_input: StepInput) -> StepO
             "cross_file_summary": summary_text,
         },
     )
+
+
+# ── select_relevant_files (deterministic) ─────────────────────────────
+
+
+async def action_select_relevant_files(step_input: StepInput) -> StepOutput:
+    """Deterministically select relevant files using AST graph + heuristics.
+
+    Selection strategy:
+    1. Direct dependencies: files that import or are imported by the target file.
+       Determined by tree-sitter AST graph traversal.
+    2. PageRank top-N: highest-ranked files from the repo map that aren't already
+       included. These are files with many incoming references (structurally
+       important regardless of direct connection to the target).
+    3. Non-code files: .yaml, .json, .md, .toml files in the project root or
+       config directories, filtered by keyword match against the task description.
+    4. Cold-start fallback: if the project has fewer than 3 Python files, include
+       all files (project is small enough that context bloat isn't a concern).
+
+    No inference calls. Deterministic, instant, bounded output.
+    """
+    import os
+
+    task_description = step_input.context.get(
+        "task_description", step_input.params.get("task_description", "")
+    )
+    target_file = step_input.params.get("target_file_path", "")
+    repo_map_formatted = step_input.context.get("repo_map_formatted", "")
+    related_files = step_input.context.get("related_files", [])
+    project_manifest = step_input.context.get("project_manifest", {})
+
+    file_list = (
+        list(project_manifest.keys()) if isinstance(project_manifest, dict) else []
+    )
+
+    # Cold-start: small project → include everything
+    code_extensions = {".py", ".js", ".ts", ".rs", ".go", ".java", ".rb"}
+    code_files = [
+        f for f in file_list if any(f.endswith(ext) for ext in code_extensions)
+    ]
+    if len(code_files) < 3:
+        selected = file_list[:]
+        return StepOutput(
+            result={"files_selected": len(selected), "strategy": "cold_start"},
+            observations=f"Cold-start: small project ({len(code_files)} code files), including all {len(selected)} files",
+            context_updates={"selected_files": selected},
+        )
+
+    selected: set[str] = set()
+
+    # 1. Always include target file
+    if target_file:
+        selected.add(target_file)
+
+    # 2. Direct dependencies from repomap related_files
+    if related_files:
+        for rf in related_files[:8]:
+            selected.add(rf)
+
+    # 3. Extract dependencies from repo_map_formatted text
+    if target_file and repo_map_formatted:
+        deps = _extract_dependencies_from_repomap(repo_map_formatted, target_file)
+        selected.update(deps)
+
+    # 4. PageRank top-N from the map (files ranked by structural importance)
+    if repo_map_formatted:
+        top_n = _extract_pagerank_top_n(repo_map_formatted, 5)
+        selected.update(top_n)
+
+    # 5. Non-code files matching task keywords
+    if task_description:
+        task_words = set(task_description.lower().split())
+        # Remove very common words
+        task_words -= {
+            "the",
+            "a",
+            "an",
+            "to",
+            "in",
+            "for",
+            "of",
+            "and",
+            "or",
+            "is",
+            "with",
+            "that",
+            "this",
+            "on",
+        }
+        non_code_extensions = {".yaml", ".yml", ".json", ".toml", ".md", ".cfg", ".ini"}
+        for f in file_list:
+            if any(f.endswith(ext) for ext in non_code_extensions):
+                filename_base = os.path.basename(f).lower()
+                # Strip extension and split on separators
+                name_parts = set(
+                    re.split(r"[_\-./]", os.path.splitext(filename_base)[0])
+                )
+                if task_words & name_parts:
+                    selected.add(f)
+
+    # Cap at context budget
+    budget = int(step_input.params.get("context_budget", 10))
+    selected_list = list(selected)[:budget]
+
+    return StepOutput(
+        result={"files_selected": len(selected_list), "strategy": "ast_graph"},
+        observations=f"Deterministic selection: {len(selected_list)} files via AST graph + heuristics",
+        context_updates={"selected_files": selected_list},
+    )
+
+
+def _extract_dependencies_from_repomap(
+    repo_map_text: str, target_file: str
+) -> list[str]:
+    """Extract file paths that appear near the target file in the repo map.
+
+    The repo map format lists files with their definitions and references.
+    We look for file paths that appear in import/reference lines near our target.
+    """
+    files_found: list[str] = []
+    # Find all file paths mentioned in the repo map
+    file_pattern = re.compile(r"([a-zA-Z0-9_/.-]+\.(?:py|js|ts|rs|go|java|rb))")
+    all_files_in_map = file_pattern.findall(repo_map_text)
+
+    # Look for files mentioned near the target
+    target_base = os.path.basename(target_file) if target_file else ""
+    if target_base:
+        # Find the section for our target file and extract nearby files
+        lines = repo_map_text.split("\n")
+        in_target_section = False
+        for line in lines:
+            if target_base in line or target_file in line:
+                in_target_section = True
+            elif in_target_section and line.strip() and not line.startswith(" "):
+                in_target_section = False
+
+            if in_target_section:
+                found = file_pattern.findall(line)
+                for f in found:
+                    if f != target_file and f != target_base:
+                        files_found.append(f)
+
+    return files_found[:10]
+
+
+def _extract_pagerank_top_n(repo_map_text: str, n: int) -> list[str]:
+    """Extract the top-N files from the repo map (they appear first due to PageRank).
+
+    The repo map is formatted with highest-ranked files first.
+    We extract the first N file paths that look like section headers.
+    """
+    files: list[str] = []
+    file_pattern = re.compile(
+        r"^([a-zA-Z0-9_/.-]+\.(?:py|js|ts|rs|go|java|rb))",
+        re.MULTILINE,
+    )
+    matches = file_pattern.findall(repo_map_text)
+    seen: set[str] = set()
+    for m in matches:
+        if m not in seen:
+            seen.add(m)
+            files.append(m)
+        if len(files) >= n:
+            break
+    return files
 
 
 # ── format_technical_query ────────────────────────────────────────────

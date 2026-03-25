@@ -1,13 +1,14 @@
-"""Mission control actions — load state, assess, dispatch, finalize.
+"""Mission actions — load state, dispatch tasks, manage lifecycle.
 
-These actions power the mission_control flow and the create_plan flow.
-They interact with persistence through the effects interface.
+Rebuild v2: Replaces heuristic task matching with LLM menu selection,
+adds structured architecture state, removes silent fallbacks.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Any
 
@@ -16,42 +17,41 @@ from agent.models import StepInput, StepOutput
 logger = logging.getLogger(__name__)
 
 
-async def action_load_mission_state(step_input: StepInput) -> StepOutput:
-    """Load mission state and events from persistence.
+# ══════════════════════════════════════════════════════════════════════
+# State Loading & Event Handling (kept from v1, lightly cleaned)
+# ══════════════════════════════════════════════════════════════════════
 
-    Reads mission.json and events.json via effects.
+
+async def action_load_mission_state(step_input: StepInput) -> StepOutput:
+    """Load mission state, event queue, and frustration map from persistence.
 
     Publishes: mission, events, frustration
-    Result: mission status fields for resolver branching
     """
     effects = step_input.effects
-    if effects is None:
+    if not effects:
         return StepOutput(
-            result={"mission": {"status": "aborted"}},
+            result={"mission": None},
             observations="No effects interface — cannot load state",
         )
 
     mission = await effects.load_mission()
     if mission is None:
         return StepOutput(
-            result={"mission": {"status": "aborted"}},
+            result={"mission": None},
             observations="No mission found in persistence",
         )
 
     events = await effects.read_events()
 
-    # Build frustration map from task records
+    # Build frustration map from tasks
     frustration = {}
     for task in mission.plan:
         frustration[task.id] = task.frustration
 
     return StepOutput(
-        result={
-            "mission": {"status": mission.status},
-            "events_pending": len(events) > 0,
-        },
-        observations=f"Loaded mission {mission.id}: status={mission.status}, "
-        f"{len(mission.plan)} tasks, {len(events)} pending events",
+        result={"mission": {"status": mission.status}},
+        observations=f"Loaded mission {mission.id}: {mission.status}, "
+        f"{len(mission.plan)} tasks, {len(events)} events",
         context_updates={
             "mission": mission,
             "events": events,
@@ -61,779 +61,821 @@ async def action_load_mission_state(step_input: StepInput) -> StepOutput:
 
 
 async def action_update_task_status(step_input: StepInput) -> StepOutput:
-    """Apply the previous flow's outcome to mission state.
+    """Apply the returning flow's outcome to mission state.
 
-    Reads last_result, last_status, last_task_id from context.
-    Updates the corresponding task record in the mission plan.
-
-    Publishes: mission, frustration (updated)
+    Reads last_result, last_status, last_task_id from input to update
+    the corresponding task's status and frustration level.
     """
     effects = step_input.effects
     mission = step_input.context.get("mission")
-    frustration = step_input.context.get("frustration", {})
-    last_status = step_input.context.get("last_status")
-    last_task_id = step_input.context.get("last_task_id")
-    last_result = step_input.context.get("last_result")
+    frustration = dict(step_input.context.get("frustration", {}))
 
-    if not last_task_id or not last_status:
-        # No previous result to apply (first cycle or restart)
-        events = step_input.context.get("events", [])
+    if not mission:
         return StepOutput(
-            result={"events_pending": len(events) > 0},
-            observations="No previous result to apply (first cycle)",
-            context_updates={
-                "mission": mission,
-                "frustration": frustration,
+            result={
+                "needs_plan": True,
+                "task_completed": False,
+                "events_pending": False,
             },
+            observations="No mission in context",
+            context_updates={"mission": mission, "frustration": frustration},
         )
 
-    # Find and update the task
-    completed_task = None
-    for task in mission.plan:
-        if task.id == last_task_id:
-            if last_status == "success":
-                task.status = "complete"
-                task.frustration = 0
-                task.summary = str(last_result)[:200] if last_result else "Completed"
-                completed_task = task
-            elif last_status == "escalated":
-                task.status = "blocked"
-                task.frustration += 1
-                frustration[task.id] = task.frustration
-            elif last_status == "abandoned":
-                task.status = "failed"
-                task.frustration += 1
-                frustration[task.id] = task.frustration
-            elif last_status == "in_progress":
-                task.status = "in_progress"
-            break
+    last_status = step_input.context.get("last_status", "")
+    last_task_id = step_input.context.get("last_task_id", "")
+    last_result = step_input.context.get("last_result", "")
 
-    # When a corrective task completes, unblock tasks stuck on the same root cause
-    unblocked_ids = []
-    if completed_task and last_status == "success":
-        unblocked_ids = _unblock_tasks_after_corrective(mission, completed_task)
-        for uid in unblocked_ids:
-            frustration[uid] = next(
-                (t.frustration for t in mission.plan if t.id == uid), 0
-            )
+    # Check if plan exists
+    if not mission.plan:
+        return StepOutput(
+            result={
+                "needs_plan": True,
+                "task_completed": False,
+                "events_pending": False,
+            },
+            observations="Mission has no plan — needs planning",
+            context_updates={"mission": mission, "frustration": frustration},
+        )
 
-    # Save updated mission
+    # Check for pending events
+    events = step_input.context.get("events", [])
+    if events:
+        return StepOutput(
+            result={
+                "needs_plan": False,
+                "task_completed": False,
+                "events_pending": True,
+            },
+            observations=f"{len(events)} events pending",
+            context_updates={"mission": mission, "frustration": frustration},
+        )
+
+    # Apply last result to task
+    task_completed = False
+    frustration_was_elevated = False
+
+    if last_task_id:
+        from agent.persistence.models import AttemptRecord
+
+        for task in mission.plan:
+            if task.id == last_task_id:
+                prev_frustration = task.frustration
+
+                if last_status in ("success", "completed"):
+                    task.status = "complete"
+                    task.summary = (
+                        str(last_result)[:200] if last_result else "Completed"
+                    )
+                    task.frustration = 0
+                    task_completed = True
+                    frustration_was_elevated = prev_frustration > 0
+                elif last_status in ("abandoned", "failed"):
+                    task.status = "failed"
+                    task.frustration = min(task.frustration + 1, 5)
+                    task.summary = str(last_result)[:200] if last_result else "Failed"
+
+                # Record the attempt
+                task.attempts.append(
+                    AttemptRecord(
+                        flow=task.flow,
+                        status=last_status or "unknown",
+                        summary=str(last_result)[:200] if last_result else "",
+                    )
+                )
+
+                frustration[task.id] = task.frustration
+                break
+
+    # Save updated state
     if effects:
         await effects.save_mission(mission)
 
-    events = step_input.context.get("events", [])
     return StepOutput(
         result={
-            "events_pending": len(events) > 0,
-            "task_completed": last_status == "success",
+            "needs_plan": False,
+            "task_completed": task_completed,
+            "events_pending": False,
+            "frustration_reset": frustration_was_elevated and task_completed,
         },
-        observations=f"Updated task {last_task_id}: status={last_status}"
-        + (f", unblocked {len(unblocked_ids)} tasks" if unblocked_ids else ""),
-        context_updates={
-            "mission": mission,
-            "frustration": frustration,
-        },
+        observations=f"Updated task {last_task_id[:8] if last_task_id else 'none'}: "
+        f"status={last_status}, completed={task_completed}",
+        context_updates={"mission": mission, "frustration": frustration},
     )
 
 
 async def action_handle_events(step_input: StepInput) -> StepOutput:
-    """Process pending events from the event queue.
-
-    Handles: abort, pause, resume, user_message, priority_change.
-    """
+    """Process user messages, abort/pause signals from the event queue."""
     effects = step_input.effects
     mission = step_input.context.get("mission")
     events = step_input.context.get("events", [])
 
-    abort_requested = False
-    pause_requested = False
-    task_unblocked = False
-
-    for event in events:
-        etype = event.type if hasattr(event, "type") else event.get("type", "")
-        payload = (
-            event.payload if hasattr(event, "payload") else event.get("payload", {})
+    if not mission or not effects:
+        return StepOutput(
+            result={"abort_requested": False, "pause_requested": False},
+            observations="No mission or effects",
         )
 
-        if etype == "abort":
+    abort_requested = False
+    pause_requested = False
+    user_messages = []
+
+    for event in events:
+        if event.type == "abort":
             abort_requested = True
-        elif etype == "pause":
+        elif event.type == "pause":
             pause_requested = True
-        elif etype == "resume":
-            pass  # Mission already active
-        elif etype == "user_message":
-            msg = payload.get("message", "")
-            logger.info("User message: %s", msg)
+            mission.status = "paused"
+        elif event.type == "user_message":
+            msg = event.payload.get("message", "")
+            if msg:
+                user_messages.append(msg)
+
+    # Append user messages as notes
+    if user_messages:
+        from agent.persistence.models import NoteRecord
+
+        for msg in user_messages:
+            mission.notes.append(
+                NoteRecord(
+                    content=msg,
+                    category="general",
+                    source_flow="user_message",
+                )
+            )
 
     # Clear processed events
-    if effects and events:
-        await effects.clear_events()
-
-    # Save mission if state changed
-    if effects:
-        await effects.save_mission(mission)
+    await effects.clear_events()
+    await effects.save_mission(mission)
 
     return StepOutput(
         result={
             "abort_requested": abort_requested,
             "pause_requested": pause_requested,
-            "task_unblocked": task_unblocked,
         },
-        observations=f"Processed {len(events)} events. "
-        f"abort={abort_requested}, pause={pause_requested}",
-        context_updates={
-            "mission": mission,
-            "unblocked_tasks": [],
-        },
+        observations=f"Processed {len(events)} events: "
+        f"abort={abort_requested}, pause={pause_requested}, "
+        f"messages={len(user_messages)}",
+        context_updates={"mission": mission},
     )
 
 
-async def action_assess_mission_progress(step_input: StepInput) -> StepOutput:
-    """Determine what to work on next — rule-based fast path.
+# ══════════════════════════════════════════════════════════════════════
+# NEW: LLM Menu Task Selection (replaces _find_best_task_for_flow)
+# ══════════════════════════════════════════════════════════════════════
 
-    Finds pending tasks with met dependencies. If there's exactly one
-    obvious next task, returns it directly. Otherwise signals for
-    LLM prioritization (or completion check).
 
-    Also scans failure notes for cross-task patterns and auto-inserts
-    prerequisite tasks (e.g. manage_packages when pytest is missing).
+async def action_select_task_for_dispatch(step_input: StepInput) -> StepOutput:
+    """Present actionable tasks as an LLM menu for selection.
 
-    Publishes: assessment, obvious_next_task
+    Uses the memoryful mission_control session. The model has already
+    seen the mission state and produced its analysis — now it picks
+    which specific task to work on.
+
+    Reads: context.mission, context.session_id, context.director_analysis
+    Publishes: selected_task (TaskRecord), dispatch_flow (str)
     """
-    mission = step_input.context.get("mission")
-    frustration = step_input.context.get("frustration", {})
-
-    if not mission or not hasattr(mission, "plan"):
-        return StepOutput(
-            result={
-                "all_tasks_complete": False,
-                "all_remaining_blocked": False,
-                "obvious_next_task": None,
-                "needs_plan": True,
-            },
-            observations="No mission plan found — need to create one",
-            context_updates={
-                "assessment": {"ready_tasks": [], "summary": "No plan exists"},
-            },
-        )
-
-    completed = [t for t in mission.plan if t.status == "complete"]
-    pending = [t for t in mission.plan if t.status == "pending"]
-    in_progress = [t for t in mission.plan if t.status == "in_progress"]
-    blocked = [t for t in mission.plan if t.status == "blocked"]
-    failed = [t for t in mission.plan if t.status == "failed"]
-
-    # Safety net: recover stale in_progress tasks.
-    # When we're back in mission_control, no child flow is running —
-    # any in_progress task is leftover from a previous dispatch.
     effects = step_input.effects
-    if in_progress:
-        for task in in_progress:
-            logger.warning(
-                "Recovering stale in_progress task %s (%s) — marking pending",
-                task.id,
-                task.description[:40],
-            )
-            task.status = "pending"
-        if effects:
-            await effects.save_mission(mission)
-        # Recalculate after recovery
-        completed = [t for t in mission.plan if t.status == "complete"]
-        pending = [t for t in mission.plan if t.status == "pending"]
-        in_progress = []
-        blocked = [t for t in mission.plan if t.status == "blocked"]
-        failed = [t for t in mission.plan if t.status == "failed"]
+    mission = step_input.context.get("mission")
+    session_id = step_input.context.get("session_id", "")
 
-    # Check if all tasks are done (complete or blocked, nothing actionable left)
-    actionable = pending + failed
-    gate_exhausted = getattr(mission, "quality_gate_attempts", 0) >= 2
-    if not actionable and len(mission.plan) > 0:
+    if not mission or not effects:
         return StepOutput(
-            result={
-                "all_tasks_complete": True,
-                "quality_gate_exhausted": gate_exhausted,
-                "all_remaining_blocked": len(blocked) > 0,
-                "obvious_next_task": None,
-                "needs_plan": False,
-            },
-            observations=(
-                f"Mission done: {len(completed)} complete, {len(blocked)} blocked"
-                + (
-                    f", quality gate exhausted ({mission.quality_gate_attempts} attempts)"
-                    if gate_exhausted
-                    else ""
-                )
-            ),
-            context_updates={
-                "assessment": {
-                    "ready_tasks": [],
-                    "summary": f"{len(completed)}/{len(mission.plan)} complete"
-                    + (f", {len(blocked)} blocked" if blocked else ""),
-                },
-            },
+            result={"task_selected": False},
+            observations="No mission or effects for task selection",
         )
 
-    # Check if we need to create a plan first
-    if len(mission.plan) == 0:
-        return StepOutput(
-            result={
-                "all_tasks_complete": False,
-                "all_remaining_blocked": False,
-                "obvious_next_task": None,
-                "needs_plan": True,
-            },
-            observations="Empty plan — need to create tasks from objective",
-            context_updates={
-                "assessment": {"ready_tasks": [], "summary": "No tasks yet"},
-            },
-        )
-
-    # ── Failure pattern detection ─────────────────────────────
-    # Scan recent failure notes for cross-task patterns.
-    # If multiple tasks fail for the same root cause (e.g. missing pytest),
-    # auto-insert a corrective task instead of retrying blindly.
-    corrective_inserted = _detect_and_correct_failure_patterns(mission, failed, effects)
-    if corrective_inserted and effects:
-        await effects.save_mission(mission)
-        # Recalculate after inserting corrective tasks
-        pending = [t for t in mission.plan if t.status == "pending"]
-        failed = [t for t in mission.plan if t.status == "failed"]
-
-    # ── Cross-task frustration acceleration ───────────────────
-    # If 2+ tasks of the same flow type are failing, boost frustration
-    # on the remaining ones so we don't burn cycles on identical failures.
-    _accelerate_cross_task_frustration(failed, frustration)
-
-    # Find tasks with met dependencies
-    completed_ids = {t.id for t in completed}
-    ready_tasks = []
-    for task in pending:
-        deps_met = all(dep in completed_ids for dep in task.depends_on)
-        if deps_met:
-            ready_tasks.append(task)
-
-    # Also consider failed tasks for retry, with frustration cap
-    for task in failed:
-        if task.frustration < 5:
-            ready_tasks.append(task)
-        elif task.frustration >= 5 and task.status != "blocked":
-            # Cap: mark as blocked, stop retrying
-            task.status = "blocked"
-            task.summary = (
-                f"Blocked after {task.frustration} failed attempts. "
-                f"Awaiting escalation capability (Phase 6)."
-            )
-            if effects:
-                await effects.save_mission(mission)
-
-    # Sort by priority
-    ready_tasks.sort(key=lambda t: t.priority)
-
-    if not ready_tasks:
-        all_blocked = len(pending) == 0 and len(in_progress) == 0
-        return StepOutput(
-            result={
-                "all_tasks_complete": False,
-                "all_remaining_blocked": all_blocked,
-                "obvious_next_task": None,
-                "needs_plan": False,
-            },
-            observations=f"No ready tasks. Pending: {len(pending)}, "
-            f"blocked: {len(blocked)}, failed: {len(failed)}",
-            context_updates={
-                "assessment": {
-                    "ready_tasks": [],
-                    "summary": f"Blocked: {len(blocked)}, failed: {len(failed)}",
-                },
-            },
-        )
-
-    # Fast path: one obvious next task
-    obvious = ready_tasks[0]
-    return StepOutput(
-        result={
-            "all_tasks_complete": False,
-            "all_remaining_blocked": False,
-            "obvious_next_task": {
-                "id": obvious.id,
-                "description": obvious.description,
-                "flow": obvious.flow,
-            },
-            "needs_plan": False,
-        },
-        observations=f"Found {len(ready_tasks)} ready tasks. "
-        f"Next: {obvious.description} (flow: {obvious.flow})",
-        context_updates={
-            "assessment": {
-                "ready_tasks": [
-                    {"id": t.id, "description": t.description, "flow": t.flow}
-                    for t in ready_tasks
-                ],
-                "summary": f"{len(completed)}/{len(mission.plan)} complete, "
-                f"{len(ready_tasks)} ready",
-            },
-            "obvious_next_task": {
-                "id": obvious.id,
-                "description": obvious.description,
-                "flow": obvious.flow,
-                "inputs": obvious.inputs,
-            },
-        },
-    )
-
-
-def _is_duplicate_task(
-    mission, description: str, flow: str, target_file: str = ""
-) -> bool:
-    """Check if a substantially similar task already exists in the plan.
-
-    Matches on:
-    - Same flow type AND same target_file_path (for file-targeting flows)
-    - OR near-identical description (same file mentioned + same action verb)
-
-    Skips completed tasks — re-creating a completed task is fine if context changed.
-    """
-    desc_lower = description.lower()
-    for task in mission.plan:
-        if task.status == "complete":
-            continue
-        # Same flow + same target file = duplicate
-        task_target = task.inputs.get("target_file_path", "")
-        if flow == task.flow and target_file and task_target == target_file:
-            return True
-        # Near-identical description (same file + similar intent)
-        existing_lower = task.description.lower()
-        if desc_lower == existing_lower:
-            return True
-        # Both mention the same file and same flow type
-        if target_file and target_file in existing_lower and flow == task.flow:
-            return True
-    return False
-
-
-def _unblock_tasks_after_corrective(mission, completed_task) -> list[str]:
-    """When a corrective task (manage_packages, etc.) completes, unblock
-    tasks that were blocked by the same root cause.
-
-    Returns list of unblocked task IDs.
-    """
-    corrective_flows = {"manage_packages", "setup_project"}
-    if completed_task.flow not in corrective_flows:
-        return []
-
-    completed_reason = (completed_task.inputs.get("reason", "") or "").lower()
-    unblocked = []
-
-    for task in mission.plan:
-        if task.status != "blocked":
-            continue
-
-        # Heuristic: if a manage_packages task completed for "pytest" and
-        # a create_tests task is blocked, unblock it.
-        task_flow = task.flow
-        task_summary = (task.summary or "").lower()
-
-        should_unblock = False
-
-        # manage_packages completion → unblock create_tests, validate_behavior
-        if completed_task.flow == "manage_packages":
-            if task_flow in ("create_tests", "validate_behavior"):
-                should_unblock = True
-            # Check for keyword overlap between the corrective reason and failure
-            if any(
-                kw in completed_reason and kw in task_summary
-                for kw in ["pytest", "dependency", "package", "install", "import"]
-            ):
-                should_unblock = True
-
-        # setup_project completion → unblock tasks that depend on project structure
-        if completed_task.flow == "setup_project":
-            if task_flow in ("create_file", "create_tests", "integrate_modules"):
-                should_unblock = True
-
-        if should_unblock:
-            task.status = "pending"
-            # Partial frustration reset — they did fail, but root cause is fixed
-            task.frustration = max(0, task.frustration - 2)
-            task.summary = (
-                f"Unblocked after {completed_task.flow} completed: "
-                f"{completed_task.summary or completed_task.description[:60]}"
-            )
-            unblocked.append(task.id)
-            logger.info(
-                "Unblocked task %s (%s) after corrective %s completed",
-                task.id[:8],
-                task.description[:40],
-                completed_task.flow,
-            )
-
-    return unblocked
-
-
-def _detect_and_correct_failure_patterns(mission, failed_tasks, effects) -> bool:
-    """Scan failure notes for recurring patterns and auto-insert corrective tasks.
-
-    Detects common failure signatures across notes:
-    - Missing packages (pytest, dependencies)
-    - Missing files or modules
-    - Schema/config mismatches
-
-    Returns True if a corrective task was inserted into the plan.
-    """
-    from agent.persistence.models import TaskRecord
-
-    if not hasattr(mission, "notes") or not mission.notes:
-        return False
-
-    # Only check failure_analysis notes from the last 10
-    failure_notes = [n for n in mission.notes if n.category == "failure_analysis"]
-    if len(failure_notes) < 2:
-        return False
-
-    recent_failures = failure_notes[-10:]
-    note_texts = [n.content.lower() for n in recent_failures]
-    combined = " ".join(note_texts)
-
-    # Check if a corrective task already exists to avoid duplicates
-    existing_descriptions = {t.description.lower() for t in mission.plan}
-
-    inserted = False
-
-    # ── Pattern: missing pytest / test framework ──────────────
-    pytest_keywords = ["pytest", "test runner", "testing framework"]
-    pytest_hits = sum(
-        1 for text in note_texts if any(kw in text for kw in pytest_keywords)
-    )
-    if pytest_hits >= 2:
-        corrective_desc = "Install pytest and testing dependencies"
-        if corrective_desc.lower() not in existing_descriptions:
-            # Find the highest priority among failed test tasks
-            test_tasks = [t for t in failed_tasks if t.flow == "create_tests"]
-            insert_priority = min(
-                (t.priority for t in test_tasks), default=len(mission.plan)
-            )
-            task = TaskRecord(
-                description=corrective_desc,
-                flow="manage_packages",
-                priority=max(0, insert_priority - 1),
-                inputs={
-                    "target_file_path": "",
-                    "reason": "Multiple test tasks failed due to missing pytest. "
-                    "Must install before retrying test creation.",
-                },
-            )
-            mission.plan.append(task)
-            inserted = True
-            logger.info(
-                "Failure pattern detected: missing pytest. "
-                "Auto-inserted manage_packages task."
-            )
-
-    # ── Pattern: missing package / import error ───────────────
-    import_keywords = [
-        "modulenotfounderror",
-        "no module named",
-        "import error",
-        "not installed",
-        "missing dependency",
-        "pip install",
-        "uv add",
+    # Build list of actionable tasks (pending or failed with frustration < 5)
+    actionable = [
+        t
+        for t in mission.plan
+        if t.status in ("pending", "failed")
+        and t.frustration < 5
+        and _dependencies_met(t, mission)
     ]
-    import_hits = sum(
-        1 for text in note_texts if any(kw in text for kw in import_keywords)
-    )
-    if import_hits >= 2 and not inserted:
-        # Try to extract the package name from notes
-        package_match = re.search(
-            r"(?:no module named|install|uv add|pip install)\s+['\"]?(\w+)",
-            combined,
-        )
-        pkg_name = package_match.group(1) if package_match else "required"
-        corrective_desc = f"Install missing dependency: {pkg_name}"
-        if corrective_desc.lower() not in existing_descriptions:
-            task = TaskRecord(
-                description=corrective_desc,
-                flow="manage_packages",
-                priority=0,  # High priority — unblocks other tasks
-                inputs={
-                    "target_file_path": "",
-                    "reason": f"Multiple tasks failed due to missing package '{pkg_name}'. "
-                    f"Must install before retrying dependent tasks.",
-                },
-            )
-            mission.plan.append(task)
-            inserted = True
-            logger.info(
-                "Failure pattern detected: missing package '%s'. "
-                "Auto-inserted manage_packages task.",
-                pkg_name,
-            )
 
-    # ── Pattern: lint / unused imports recurring ──────────────
-    lint_keywords = ["unused import", "f401", "lint error", "ruff", "flake8"]
-    lint_hits = sum(1 for text in note_texts if any(kw in text for kw in lint_keywords))
-    if lint_hits >= 3:
-        # Extract file paths mentioned in lint notes
-        file_matches = re.findall(
-            r"(?:in|fix|for)\s+[`'\"]?([a-zA-Z0-9_/.-]+\.py)[`'\"]?",
-            combined,
-        )
-        for filepath in set(file_matches[:3]):
-            corrective_desc = f"Fix lint errors in {filepath}"
-            if corrective_desc.lower() not in existing_descriptions:
-                task = TaskRecord(
-                    description=corrective_desc,
-                    flow="modify_file",
-                    priority=0,
-                    inputs={
-                        "target_file_path": filepath,
-                        "reason": f"Recurring lint failures in {filepath}. "
-                        f"Fix unused imports and other lint issues.",
-                    },
-                )
-                mission.plan.append(task)
-                inserted = True
-                logger.info(
-                    "Failure pattern detected: recurring lint in %s. "
-                    "Auto-inserted modify_file task.",
-                    filepath,
-                )
-
-    return inserted
-
-
-def _accelerate_cross_task_frustration(failed_tasks, frustration: dict) -> None:
-    """Boost frustration for tasks sharing a flow type when siblings are failing.
-
-    If 2+ tasks of the same flow type have failed, bump the frustration
-    of the remaining tasks in that group by 1 so they block sooner.
-    This prevents burning N × 5 cycles on N tasks with the same root cause.
-    """
-    from collections import Counter
-
-    flow_failures = Counter(t.flow for t in failed_tasks)
-    for flow_type, count in flow_failures.items():
-        if count >= 2:
-            for task in failed_tasks:
-                if task.flow == flow_type and task.frustration < 5:
-                    # Boost by 1 extra per cycle when siblings also failing
-                    task.frustration += 1
-                    frustration[task.id] = task.frustration
-                    logger.info(
-                        "Cross-task frustration boost: task %s (%s) → %d",
-                        task.id[:8],
-                        flow_type,
-                        task.frustration,
-                    )
-
-
-async def action_configure_task_dispatch(step_input: StepInput) -> StepOutput:
-    """Build input map and determine flow config for the selected task.
-
-    Includes temperature perturbation at frustration 2+ and relevant
-    notes injection for child flow context awareness.
-
-    Publishes: dispatch_config
-    """
-    import random
-
-    effects = step_input.effects
-    mission = step_input.context.get("mission")
-    selected = step_input.context.get("selected_task") or step_input.context.get(
-        "obvious_next_task"
-    )
-    frustration = step_input.context.get("frustration", {})
-
-    if not selected:
+    if not actionable:
         return StepOutput(
-            result={},
-            observations="No task selected for dispatch",
-            context_updates={"dispatch_config": None},
+            result={"task_selected": False, "no_actionable_tasks": True},
+            observations="No actionable tasks remaining",
         )
 
-    task_id = selected["id"]
-    task_flow = selected.get("flow", "create_file")
-    task_inputs = selected.get("inputs", {})
-    task_frustration = frustration.get(task_id, 0)
+    # Build the menu prompt
+    lines = ["Select the task to work on next:\n"]
+    for i, task in enumerate(actionable):
+        letter = chr(ord("a") + i)
+        frust = f" [frustration: {task.frustration}]" if task.frustration > 0 else ""
+        target = task.inputs.get("target_file_path", "")
+        target_str = f" → {target}" if target else ""
+        lines.append(f"{letter}) [{task.status}] {task.description}{target_str}{frust}")
 
-    # ── Frustration windowing ─────────────────────────────────
-    # At higher frustration levels, promote simple flows to more
-    # sophisticated ones and unlock advanced capabilities.
-    # This prevents the agent from repeating the same failing approach.
-    flow_promotions = {
-        # frustration >= 2: simple creation → modify (add context awareness)
-        2: {
-            "create_file": "modify_file",
-        },
-        # frustration >= 3: unlock diagnostic flows, promote to integration
-        3: {
-            "modify_file": "diagnose_issue",
-        },
-        # frustration >= 4: everything goes through diagnosis first
-        4: {
-            "create_file": "diagnose_issue",
-            "modify_file": "diagnose_issue",
-        },
-    }
+    lines.append("\nPick the letter of the most impactful task to work on.")
+    prompt = "\n".join(lines)
 
-    original_flow = task_flow
-    for threshold in sorted(flow_promotions.keys()):
-        if task_frustration >= threshold and task_flow in flow_promotions[threshold]:
-            task_flow = flow_promotions[threshold][task_flow]
+    # Grammar: constrain to valid letters
+    n = len(actionable)
+    last_letter = chr(ord("a") + n - 1)
+    grammar = f"root ::= [a-{last_letter}]"
 
-    if task_flow != original_flow:
-        logger.info(
-            "Frustration windowing: task %s promoted %s → %s (frustration=%d)",
-            task_id,
-            original_flow,
-            task_flow,
-            task_frustration,
+    try:
+        result = await effects.session_inference(
+            session_id,
+            prompt,
+            {"temperature": 0.1, "max_tokens": 5, "grammar": grammar},
         )
+        response = result.text.strip().lower()
+    except Exception as e:
+        logger.error("Task selection failed: %s", e)
+        # Fall back to first actionable task
+        response = "a"
 
-    # Mark task as in_progress
+    # Map letter to task
+    index = ord(response[0]) - ord("a") if response else 0
+    if index < 0 or index >= len(actionable):
+        index = 0
+
+    selected = actionable[index]
+
+    # Mark as in_progress
     for task in mission.plan:
-        if task.id == task_id:
+        if task.id == selected.id:
             task.status = "in_progress"
             break
 
     if effects:
         await effects.save_mission(mission)
 
-    # Build the input map for the child flow
-    input_map = {
-        "mission_id": mission.id,
-        "task_id": task_id,
-        "task_description": selected["description"],
-        "mission_objective": mission.objective,
-        "working_directory": mission.config.working_directory,
-        "target_file_path": "",  # default empty — task_inputs may override
-        **task_inputs,
+    return StepOutput(
+        result={"task_selected": True},
+        observations=f"Selected task: {selected.description[:60]}",
+        context_updates={
+            "selected_task": selected,
+            "selected_task_id": selected.id,
+        },
+    )
+
+
+def _dependencies_met(task, mission) -> bool:
+    """Check if all task dependencies are satisfied (complete)."""
+    if not task.depends_on:
+        return True
+    completed_ids = {t.id for t in mission.plan if t.status == "complete"}
+    return all(dep_id in completed_ids for dep_id in task.depends_on)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# NEW: LLM Menu File Selection (replaces _derive_file_path_from_description)
+# ══════════════════════════════════════════════════════════════════════
+
+
+async def action_select_target_file(step_input: StepInput) -> StepOutput:
+    """Present project files as an LLM menu for file-targeting flows.
+
+    Only fires when the selected task's target_file_path is empty or
+    doesn't exist on disk. Uses the memoryful session so the model
+    already has context from the reason and task selection steps.
+
+    Reads: context.selected_task, context.session_id, context.mission
+    Publishes: dispatch_config (complete dispatch configuration)
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    session_id = step_input.context.get("session_id", "")
+    selected_task = step_input.context.get("selected_task")
+    dispatch_flow = (
+        step_input.params.get("dispatch_flow", "")
+        or step_input.context.get("dispatch_flow", "")
+    )
+
+    if not mission or not effects or not selected_task:
+        return StepOutput(
+            result={"file_selected": False},
+            observations="Missing context for file selection",
+        )
+
+    task_inputs = selected_task.inputs or {}
+    target_path = task_inputs.get("target_file_path", "")
+    working_dir = mission.config.working_directory
+
+    # Determine the flow to dispatch
+    if not dispatch_flow:
+        dispatch_flow = selected_task.flow or "create_file"
+
+    # Check if we need file selection (only for flows that target existing files)
+    needs_existing_file = dispatch_flow in {
+        "modify_file",
+        "refactor",
+        "diagnose_issue",
     }
 
-    # Frustration-gated escalation permissions
-    task_frustration = frustration.get(task_id, 0)
-    escalation_permissions = []
-    thresholds = step_input.params.get("frustration_thresholds", {})
-    if task_frustration >= thresholds.get("review", 2):
-        escalation_permissions.append("review")
-    if task_frustration >= thresholds.get("instructions", 4):
-        escalation_permissions.append("instructions")
-    if task_frustration >= thresholds.get("direct_fix", 5):
-        escalation_permissions.append("direct_fix")
+    # If we have a valid path, or flow doesn't need an existing file, skip selection
+    if target_path and not needs_existing_file:
+        return _build_dispatch_config(
+            mission,
+            selected_task,
+            dispatch_flow,
+            target_path,
+        )
 
-    # Temperature perturbation at frustration 2+
-    temperature_multiplier = 1.0
-    strategies = step_input.params.get("frustration_strategies", {})
-    temp_config = strategies.get("temperature_perturb", {})
-
-    if task_frustration >= temp_config.get("min_frustration", 2):
-        offset_range = temp_config.get("offset_range", [0.15, 0.4])
-        offset = random.uniform(*offset_range)
-        # Alternate: even frustration = hotter, odd = cooler
-        if task_frustration % 2 == 0:
-            temperature_multiplier = 1.0 + offset
-        else:
-            temperature_multiplier = max(0.3, 1.0 - offset)
-
-    input_map["temperature_multiplier"] = str(temperature_multiplier)
-
-    # Pass frustration info to child flows
-    input_map["frustration_level"] = str(task_frustration)
-
-    # Build frustration history from last attempt
-    if task_frustration >= 3:
-        last_attempt_summary = None
-        for task in mission.plan:
-            if task.id == task_id and task.summary:
-                last_attempt_summary = task.summary
-                break
-        if last_attempt_summary:
-            input_map["frustration_history"] = (
-                f"Attempt {task_frustration}: {last_attempt_summary}"
+    # For existing-file flows, validate the path exists
+    if target_path and needs_existing_file:
+        full_path = os.path.join(working_dir, target_path)
+        if await effects.file_exists(full_path):
+            return _build_dispatch_config(
+                mission,
+                selected_task,
+                dispatch_flow,
+                target_path,
             )
+        # Path invalid — fall through to menu selection
 
-    # Gather relevant notes for context — always include architecture blueprint
+    # For create flows with a path from the architecture, use it directly
+    if target_path and not needs_existing_file:
+        return _build_dispatch_config(
+            mission,
+            selected_task,
+            dispatch_flow,
+            target_path,
+        )
+
+    # Scan project for available files
+    file_list = []
+    try:
+        listing = await effects.list_directory(".", recursive=True)
+        if listing.exists:
+            file_list = [
+                e.path
+                for e in listing.entries
+                if e.is_file
+                and not e.path.startswith(".")
+                and not e.name.startswith(".")
+                and "__pycache__" not in e.path
+                and e.name.endswith(
+                    (
+                        ".py",
+                        ".yaml",
+                        ".yml",
+                        ".json",
+                        ".toml",
+                        ".md",
+                        ".js",
+                        ".ts",
+                        ".rs",
+                        ".html",
+                        ".css",
+                        ".cfg",
+                        ".txt",
+                    )
+                )
+            ]
+    except Exception as e:
+        logger.warning("Failed to list project files: %s", e)
+
+    # Also include files from architecture if available
+    if mission.architecture:
+        for arch_file in mission.architecture.canonical_files():
+            if arch_file not in file_list:
+                file_list.append(arch_file)
+
+    if not file_list:
+        if not needs_existing_file:
+            return _build_dispatch_config(
+                mission,
+                selected_task,
+                dispatch_flow,
+                target_path,
+            )
+        return StepOutput(
+            result={"file_selected": False, "error": "no_project_files"},
+            observations=f"No project files found for {dispatch_flow}. "
+            f"The project may be empty — consider creating files first.",
+        )
+
+    # Present file menu via memoryful session
+    lines = [f"Select the target file for this {dispatch_flow} task:"]
+    lines.append(f"Task: {selected_task.description}\n")
+
+    for i, filepath in enumerate(file_list[:19]):  # Leave room for create option
+        letter = chr(ord("a") + i)
+        lines.append(f"{letter}) {filepath}")
+
+    # Add "create new file" escape hatch for flows that target existing files
+    n_files = min(len(file_list), 19)
+    if needs_existing_file and n_files > 0:
+        create_letter = chr(ord("a") + n_files)
+        lines.append(f"{create_letter}) [CREATE NEW FILE] The file I need doesn't exist yet")
+        n_options = n_files + 1
+    else:
+        create_letter = None
+        n_options = n_files
+
+    lines.append("\nPick the file that best matches the task.")
+    prompt = "\n".join(lines)
+
+    last_letter = chr(ord("a") + n_options - 1)
+    grammar = f"root ::= [a-{last_letter}]"
+
+    try:
+        result = await effects.session_inference(
+            session_id,
+            prompt,
+            {"temperature": 0.1, "max_tokens": 5, "grammar": grammar},
+        )
+        response = result.text.strip().lower()
+    except Exception as e:
+        logger.error("File selection failed: %s", e)
+        return StepOutput(
+            result={"file_selected": False, "error": "selection_failed"},
+            observations=f"File selection failed: {e}",
+        )
+
+    index = ord(response[0]) - ord("a") if response else 0
+    if index < 0 or index >= n_options:
+        index = 0
+
+    # Handle "create new file" selection
+    if create_letter and response and response[0] == create_letter:
+        # Follow-up prompt: ask what file path to create
+        create_prompt = (
+            f"You chose to create a new file instead of modifying an existing one.\n"
+            f"Task: {selected_task.description}\n\n"
+            f"What file path should be created? "
+            f"Reply with ONLY the file path (e.g., loader.py or src/utils.py), nothing else."
+        )
+        try:
+            create_result = await effects.session_inference(
+                session_id,
+                create_prompt,
+                {"temperature": 0.1, "max_tokens": 30},
+            )
+            new_path = create_result.text.strip().strip("'\"` \n")
+            # Basic sanitation — take first line, strip whitespace
+            new_path = new_path.splitlines()[0].strip() if new_path else ""
+        except Exception as e:
+            logger.error("Create file path prompt failed: %s", e)
+            new_path = ""
+
+        if new_path:
+            logger.info(
+                "File selection redirected: %s → create_file for %s",
+                dispatch_flow,
+                new_path,
+            )
+            return _build_dispatch_config(
+                mission,
+                selected_task,
+                "create_file",
+                new_path,
+            )
+        # Fallback: if no path given, fall through to first file in list
+        logger.warning("Create redirect failed — no path given, using first file")
+
+    selected_path = file_list[index] if index < n_files else file_list[0]
+
+    return _build_dispatch_config(
+        mission,
+        selected_task,
+        dispatch_flow,
+        selected_path,
+    )
+
+
+def _build_dispatch_config(
+    mission,
+    selected_task,
+    dispatch_flow: str,
+    target_file_path: str,
+) -> StepOutput:
+    """Build the flat dispatch_config for the tail-call to a task flow."""
+    task_inputs = selected_task.inputs or {}
+
+    # Gather relevant notes — architecture summary + recent observations
     relevant_notes = ""
     if hasattr(mission, "notes") and mission.notes:
-        # Partition: blueprint notes are always included, then fill with recent others
-        blueprint_notes = [
-            n for n in mission.notes if n.category == "architecture_blueprint"
+        recent = sorted(mission.notes, key=lambda n: n.timestamp, reverse=True)[:8]
+        relevant_notes = "\n".join(f"[{n.category}] {n.content[:200]}" for n in recent)
+
+    # Include architecture summary if available
+    if mission.architecture:
+        arch = mission.architecture
+        arch_summary = (
+            f"Import scheme: {arch.import_scheme}. "
+            f"Run command: {arch.run_command}. "
+            f"Modules: {', '.join(arch.canonical_files())}."
+        )
+
+        # Include interface contracts relevant to the target file
+        relevant_interfaces = [
+            f"  {i.caller} → {i.callee}: {i.symbol}({i.signature})"
+            for i in arch.interfaces
+            if target_file_path and (
+                i.caller == target_file_path or i.callee == target_file_path
+            )
         ]
-        other_notes = [
-            n for n in mission.notes if n.category != "architecture_blueprint"
+        if relevant_interfaces:
+            arch_summary += "\nInterfaces:\n" + "\n".join(relevant_interfaces)
+
+        # Include data shape contracts relevant to the target file
+        relevant_shapes = [
+            f"  {ds.file} → {ds.consumed_by}: {ds.structure}"
+            for ds in arch.data_shapes
+            if target_file_path and (
+                ds.file == target_file_path or ds.consumed_by == target_file_path
+            )
         ]
-        recent_others = sorted(other_notes, key=lambda n: n.timestamp, reverse=True)[
-            : max(5, 10 - len(blueprint_notes))
-        ]
-        combined = blueprint_notes + recent_others
-        relevant_notes = "\n".join(f"[{n.category}] {n.content}" for n in combined)
-    input_map["relevant_notes"] = relevant_notes
+        if relevant_shapes:
+            arch_summary += "\nData shapes (CRITICAL — match this format exactly):\n" + "\n".join(relevant_shapes)
+
+        if relevant_notes:
+            relevant_notes = f"[architecture] {arch_summary}\n{relevant_notes}"
+        else:
+            relevant_notes = f"[architecture] {arch_summary}"
 
     dispatch_config = {
-        "flow": task_flow,
-        "task_id": task_id,
-        "input_map": input_map,
-        "escalation_permissions": escalation_permissions,
-        "temperature_multiplier": temperature_multiplier,
+        "flow": dispatch_flow,
+        "task_id": selected_task.id,
+        "task_description": selected_task.description,
+        "mission_objective": mission.objective,
+        "working_directory": mission.config.working_directory,
+        "target_file_path": target_file_path,
+        "reason": task_inputs.get("reason", "") or selected_task.description,
+        "relevant_notes": relevant_notes,
+        "mission_id": mission.id,
     }
 
     return StepOutput(
-        result={},
-        observations=f"Dispatching task {task_id} to flow {task_flow} "
-        f"(frustration={task_frustration}, temp_mult={temperature_multiplier:.2f})",
+        result={"file_selected": True},
+        observations=f"Dispatch ready: {dispatch_flow} → {target_file_path or '(project-level)'}",
         context_updates={"dispatch_config": dispatch_config},
     )
 
 
-async def action_finalize_mission(step_input: StepInput) -> StepOutput:
-    """Mark mission complete or aborted and save."""
-    effects = step_input.effects
-    mission = step_input.context.get("mission")
+# ══════════════════════════════════════════════════════════════════════
+# NEW: Memoryful Session Management for mission_control
+# ══════════════════════════════════════════════════════════════════════
 
-    if not mission:
+
+async def action_start_director_session(step_input: StepInput) -> StepOutput:
+    """Start a memoryful inference session for the director cycle.
+
+    The session persists across reason → select_task → select_target_file,
+    giving the model conversational context for all three decisions.
+    """
+    effects = step_input.effects
+    if not effects:
         return StepOutput(
-            result={"finalized": False},
-            observations="No mission to finalize",
+            result={"session_started": False},
+            observations="No effects — cannot start director session",
         )
 
-    # Determine final status from context
-    completion = step_input.context.get("completion_assessment")
-    if completion:
-        mission.status = "completed"
-    elif step_input.params.get("abort", False):
-        mission.status = "aborted"
-    else:
-        mission.status = "completed"
+    try:
+        session_id = await effects.start_inference_session({"ttl_seconds": 300})
+    except Exception as e:
+        logger.error("Failed to start director session: %s", e)
+        return StepOutput(
+            result={"session_started": False},
+            observations=f"Failed to start director session: {e}",
+        )
+
+    return StepOutput(
+        result={"session_started": True},
+        observations=f"Director session started: {session_id}",
+        context_updates={"session_id": session_id},
+    )
+
+
+async def action_end_director_session(step_input: StepInput) -> StepOutput:
+    """End the memoryful director session before dispatching."""
+    effects = step_input.effects
+    session_id = step_input.context.get("session_id", "")
+
+    if effects and session_id:
+        try:
+            await effects.end_inference_session(session_id)
+        except Exception as e:
+            logger.warning("Failed to end director session: %s", e)
+
+    return StepOutput(
+        result={},
+        observations="Director session ended",
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# NEW: Dispatch History Tracking
+# ══════════════════════════════════════════════════════════════════════
+
+
+async def action_record_dispatch(step_input: StepInput) -> StepOutput:
+    """Record the current dispatch in history for deduplication.
+
+    Also checks for repeated dispatches and adds warnings to context.
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    dispatch_config = step_input.context.get("dispatch_config", {})
+
+    if not mission or not dispatch_config:
+        return StepOutput(result={}, observations="No dispatch to record")
+
+    from agent.persistence.models import DispatchRecord
+
+    record = DispatchRecord(
+        flow=dispatch_config.get("flow", ""),
+        task_id=dispatch_config.get("task_id", ""),
+        target_file_path=dispatch_config.get("target_file_path", ""),
+    )
+
+    # Check for repeated dispatches
+    recent = mission.dispatch_history[-5:] if mission.dispatch_history else []
+    repeat_count = sum(
+        1 for r in recent if r.flow == record.flow and r.task_id == record.task_id
+    )
+
+    mission.dispatch_history.append(record)
+
+    # Trim history to last 20
+    if len(mission.dispatch_history) > 20:
+        mission.dispatch_history = mission.dispatch_history[-20:]
+
+    if effects:
+        await effects.save_mission(mission)
+
+    dispatch_warning = ""
+    if repeat_count >= 2:
+        dispatch_warning = (
+            f"WARNING: This exact dispatch ({record.flow} on task "
+            f"{record.task_id[:8]}) has been attempted {repeat_count} times "
+            f"in recent cycles. Consider a different approach."
+        )
+
+    return StepOutput(
+        result={"repeat_count": repeat_count},
+        observations=dispatch_warning or "Dispatch recorded",
+        context_updates={
+            "mission": mission,
+            "dispatch_warning": dispatch_warning,
+        },
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Architecture State Management (NEW)
+# ══════════════════════════════════════════════════════════════════════
+
+
+async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutput:
+    """Parse the LLM's architecture JSON and store as structured mission state.
+
+    Reads: context.inference_response (raw JSON from design step)
+    Writes: mission.architecture (ArchitectureState)
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    response = step_input.context.get("inference_response", "")
+
+    if not mission or not response:
+        return StepOutput(
+            result={"architecture_parsed": False},
+            observations="No mission or inference response",
+        )
+
+    from agent.persistence.models import (
+        ArchitectureState,
+        ModuleSpec,
+        InterfaceContract,
+        DataShapeContract,
+    )
+    from agent.actions.refinement_actions import strip_markdown_wrapper
+
+    # Parse JSON from response
+    cleaned = strip_markdown_wrapper(response)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        # Try to extract JSON object
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        if match:
+            try:
+                data = json.loads(match.group())
+            except json.JSONDecodeError:
+                return StepOutput(
+                    result={"architecture_parsed": False},
+                    observations="Failed to parse architecture JSON",
+                )
+        else:
+            return StepOutput(
+                result={"architecture_parsed": False},
+                observations="No JSON object found in architecture response",
+            )
+
+    # Build ArchitectureState
+    execution = data.get("execution", {})
+    modules = []
+    for m in data.get("modules", []):
+        modules.append(
+            ModuleSpec(
+                file=m.get("file", ""),
+                responsibility=m.get("responsibility", ""),
+                defines=m.get("defines", []),
+                imports_from=m.get("imports_from", {}),
+            )
+        )
+
+    interfaces = []
+    for iface in data.get("interfaces", []):
+        interfaces.append(
+            InterfaceContract(
+                caller=iface.get("caller", ""),
+                callee=iface.get("callee", ""),
+                symbol=iface.get("symbol", ""),
+                signature=iface.get("signature", ""),
+            )
+        )
+
+    data_shapes = []
+    for ds in data.get("data_shapes", []):
+        data_shapes.append(
+            DataShapeContract(
+                file=ds.get("file", ""),
+                consumed_by=ds.get("consumed_by", ""),
+                structure=ds.get("structure", ""),
+            )
+        )
+
+    arch = ArchitectureState(
+        import_scheme=execution.get("import_scheme", "flat"),
+        run_command=execution.get("run_command", ""),
+        working_directory=execution.get("working_directory", "project root"),
+        init_files=execution.get("init_files", False),
+        modules=modules,
+        creation_order=data.get("creation_order", [m.file for m in modules]),
+        interfaces=interfaces,
+        data_shapes=data_shapes,
+        notes=data.get("notes", ""),
+    )
+
+    mission.architecture = arch
+
+    # Also save a brief note for prompt context
+    from agent.persistence.models import NoteRecord
+
+    arch_summary = (
+        f"Import scheme: {arch.import_scheme}. "
+        f"Run: {arch.run_command}. "
+        f"Files: {', '.join(arch.canonical_files())}."
+    )
+    if arch.data_shapes:
+        shape_lines = [
+            f"  {ds.file} → {ds.consumed_by}: {ds.structure}"
+            for ds in arch.data_shapes
+        ]
+        arch_summary += "\nData shapes:\n" + "\n".join(shape_lines)
+
+    mission.notes.append(
+        NoteRecord(
+            content=arch_summary,
+            category="architecture_blueprint",
+            source_flow="design_and_plan",
+        )
+    )
 
     if effects:
         await effects.save_mission(mission)
 
     return StepOutput(
-        result={"finalized": True, "status": mission.status},
-        observations=f"Mission {mission.id} finalized: {mission.status}",
+        result={
+            "architecture_parsed": True,
+            "module_count": len(modules),
+        },
+        observations=f"Architecture stored: {len(modules)} modules, "
+        f"scheme={arch.import_scheme}, "
+        f"order={', '.join(arch.creation_order)}",
+        context_updates={"mission": mission, "architecture": arch},
     )
 
 
-async def action_enter_idle(step_input: StepInput) -> StepOutput:
-    """Enter idle state — nothing to do, wait for events."""
-    return StepOutput(
-        result={"idle": True},
-        observations="Entering idle state — waiting for events",
-    )
+# ══════════════════════════════════════════════════════════════════════
+# Plan Creation (cleaned up, receives architecture as structured input)
+# ══════════════════════════════════════════════════════════════════════
 
 
-async def action_create_plan_from_objective(step_input: StepInput) -> StepOutput:
-    """Parse the LLM's response to create a task plan.
+async def action_create_plan_from_architecture(step_input: StepInput) -> StepOutput:
+    """Parse the LLM's plan response into TaskRecords.
 
-    The inference step before this has already asked the model to produce
-    a JSON task list. This action parses the response and updates the
-    mission plan.
+    Unlike v1, this version receives the architecture as structured state
+    and validates that task target_file_paths match the architecture's
+    canonical file list.
 
-    Expects context: mission, inference_response
+    Reads: context.mission, context.inference_response, context.architecture
+    Writes: mission.plan
     """
     effects = step_input.effects
     mission = step_input.context.get("mission")
     response = step_input.context.get("inference_response", "")
+    architecture = step_input.context.get(
+        "architecture",
+        getattr(mission, "architecture", None) if mission else None,
+    )
 
     if not mission:
         return StepOutput(
@@ -841,21 +883,16 @@ async def action_create_plan_from_objective(step_input: StepInput) -> StepOutput
             observations="No mission in context",
         )
 
-    # Parse the LLM response to extract tasks
-    tasks = _parse_task_list(response, mission.config.working_directory)
+    tasks = _parse_task_list(response, architecture)
 
     if not tasks:
-        # Fallback: create a single generic task
         from agent.persistence.models import TaskRecord
 
         tasks = [
             TaskRecord(
                 description=f"Implement: {mission.objective}",
                 flow="create_file",
-                inputs={
-                    "target_file_path": "app.py",
-                    "reason": mission.objective,
-                },
+                inputs={"target_file_path": "", "reason": mission.objective},
             )
         ]
 
@@ -872,414 +909,256 @@ async def action_create_plan_from_objective(step_input: StepInput) -> StepOutput
     )
 
 
-def _parse_task_list(response: str, working_dir: str) -> list:
+def _parse_task_list(
+    response: str,
+    architecture: Any | None = None,
+) -> list:
     """Parse an LLM response into TaskRecord objects.
 
-    Tries JSON parsing first, then falls back to line-based parsing.
+    If architecture is available, validates target_file_path against
+    the canonical file list.
     """
     from agent.persistence.models import TaskRecord
-
-    tasks = []
-
-    # Strip markdown wrappers (models often add ```json despite instructions)
     from agent.actions.refinement_actions import strip_markdown_wrapper
 
+    tasks = []
     response = strip_markdown_wrapper(response)
 
-    # Try to extract JSON array from the response
-    # CRITICAL: Use greedy match (not *?) to find outermost brackets.
-    # Non-greedy would match inner arrays like depends_on: [] instead
-    # of the full task list.
+    # Extract JSON array
     json_match = re.search(r"\[[\s\S]*\]", response)
-    if json_match:
-        try:
-            items = json.loads(json_match.group())
-            # First pass: create tasks and build description→id map
-            desc_to_id = {}
-            for i, item in enumerate(items):
-                if isinstance(item, dict):
-                    desc = item.get("description", item.get("task", str(item)))
-                    filename = item.get("file", item.get("filename", f"file_{i}.py"))
-                    flow = item.get("flow") or _infer_flow_from_description(desc)
+    if not json_match:
+        return tasks
 
-                    # For create_tests, target_file_path = source to test, not test file
-                    task_inputs = {
-                        "target_file_path": filename,
-                        "reason": desc,
-                    }
-                    if flow == "create_tests":
-                        # Derive source file from test path or description
-                        source_file = _derive_source_for_tests(filename, desc)
-                        task_inputs["target_file_path"] = source_file
-                        task_inputs["test_file_path"] = filename
+    try:
+        items = json.loads(json_match.group())
+    except json.JSONDecodeError:
+        return tasks
 
-                    task = TaskRecord(
-                        description=desc,
-                        flow=flow,
-                        priority=i,
-                        inputs=task_inputs,
+    # Get canonical file list from architecture
+    arch_files = set()
+    if architecture:
+        arch_files = set(
+            architecture.canonical_files()
+            if hasattr(architecture, "canonical_files")
+            else []
+        )
+
+    desc_to_id = {}
+
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+
+        desc = item.get("description", str(item))
+        item_inputs = item.get("inputs", {}) or {}
+        filename = item_inputs.get("target_file_path", "")
+
+        # Validate against architecture if available
+        if filename and arch_files and filename not in arch_files:
+            basename = os.path.basename(filename)
+            for arch_file in arch_files:
+                if os.path.basename(arch_file) == basename:
+                    logger.info(
+                        "Plan path %r corrected to architecture path %r",
+                        filename,
+                        arch_file,
                     )
-                    desc_to_id[desc] = task.id
-                    tasks.append(task)
-                elif isinstance(item, str):
-                    tasks.append(
-                        TaskRecord(
-                            description=item,
-                            flow="create_file",
-                            priority=i,
-                            inputs={
-                                "target_file_path": f"file_{i}.py",
-                                "reason": item,
-                            },
-                        )
-                    )
+                    filename = arch_file
+                    break
 
-            # Second pass: resolve depends_on descriptions to task IDs
-            if tasks:
-                for i, item in enumerate(items):
-                    if isinstance(item, dict) and i < len(tasks):
-                        raw_deps = item.get("depends_on", [])
-                        if isinstance(raw_deps, list):
-                            resolved = []
-                            for dep_desc in raw_deps:
-                                if isinstance(dep_desc, str):
-                                    # Try exact match first, then substring
-                                    dep_id = desc_to_id.get(dep_desc)
-                                    if not dep_id:
-                                        for d, tid in desc_to_id.items():
-                                            if dep_desc in d or d in dep_desc:
-                                                dep_id = tid
-                                                break
-                                    if dep_id:
-                                        resolved.append(dep_id)
-                            tasks[i].depends_on = resolved
-                return tasks
-        except json.JSONDecodeError:
-            pass
+        # Infer flow from description (lightweight hint)
+        flow = item.get("flow") or _infer_flow_hint(desc)
 
-    # Fallback: parse numbered lines like "1. Create main.py - ..."
-    lines = response.strip().splitlines()
-    for i, line in enumerate(lines):
-        line = line.strip()
-        # Match patterns like "1. Create main.py" or "- Create main.py"
-        match = re.match(r"^(?:\d+[\.\)]\s*|-\s*)(.*)", line)
-        if match:
-            desc = match.group(1).strip()
-            if desc and len(desc) > 5:
-                # Try to extract a filename
-                file_match = re.search(r"[`'\"]?(\w+\.py)[`'\"]?", desc)
-                filename = file_match.group(1) if file_match else f"file_{i}.py"
-                tasks.append(
-                    TaskRecord(
-                        description=desc,
-                        flow="create_file",
-                        priority=i,
-                        inputs={
-                            "target_file_path": filename,
-                            "reason": desc,
-                        },
-                    )
-                )
+        task_inputs = {
+            "target_file_path": filename or "",
+            "reason": desc,
+        }
+
+        for k, v in item_inputs.items():
+            if k not in task_inputs and v:
+                task_inputs[k] = v
+
+        task = TaskRecord(
+            description=desc,
+            flow=flow,
+            priority=i,
+            inputs=task_inputs,
+        )
+        desc_to_id[desc] = task.id
+        tasks.append(task)
+
+    # Resolve depends_on
+    for i, item in enumerate(items):
+        if isinstance(item, dict) and i < len(tasks):
+            raw_deps = item.get("depends_on", [])
+            if isinstance(raw_deps, list):
+                resolved = []
+                for dep_desc in raw_deps:
+                    if isinstance(dep_desc, str):
+                        dep_id = desc_to_id.get(dep_desc)
+                        if not dep_id:
+                            for d, tid in desc_to_id.items():
+                                if dep_desc in d or d in dep_desc:
+                                    dep_id = tid
+                                    break
+                        if dep_id:
+                            resolved.append(dep_id)
+                tasks[i].depends_on = resolved
 
     return tasks
 
 
-def _derive_source_for_tests(test_path: str, desc: str) -> str:
-    """Derive the source file path from a test file path or description.
+def _infer_flow_hint(desc: str) -> str:
+    """Lightweight flow hint from description. Used as a default that
+    mission_control can override at dispatch time."""
+    d = desc.lower()
 
-    Examples:
-        tests/test_calculator.py → calculator.py
-        test_game.py → game.py
-        "Write tests for calculator.py" → calculator.py
-    """
-    import os
-
-    # First: try to extract source file from the description
-    source_match = re.search(
-        r"(?:for|of|testing)\s+[`'\"]?([a-zA-Z0-9_/.-]+\.py)[`'\"]?",
-        desc,
-        re.IGNORECASE,
-    )
-    if source_match:
-        candidate = source_match.group(1)
-        # Don't return test files as source
-        basename = os.path.basename(candidate)
-        if not basename.startswith("test_"):
-            return candidate
-
-    # Second: derive from test path
-    basename = os.path.basename(test_path)
-    if basename.startswith("test_"):
-        source_name = basename[5:]  # strip "test_" prefix
-        return source_name
-
-    # Fallback: return the path as-is
-    return test_path
-
-
-def _infer_flow_from_description(desc: str) -> str:
-    """Infer the appropriate flow from a task description's keywords.
-
-    Maps common task verbs and keywords to flow names.
-    Falls back to 'create_file' for unrecognized descriptions.
-    """
-    desc_lower = desc.lower()
-
-    # Architecture design tasks (before generic "create" match)
     if any(
-        kw in desc_lower
-        for kw in [
-            "design architecture",
-            "design project structure",
-            "plan module layout",
-            "design module boundaries",
-            "architecture blueprint",
-            "design directory layout",
-        ]
+        kw in d for kw in ["design architecture", "design project", "directory layout"]
     ):
         return "design_architecture"
-
-    # Package management tasks (before generic "create" match)
-    if any(
-        kw in desc_lower
-        for kw in [
-            "install package",
-            "manage package",
-            "add dependency",
-            "pip install",
-            "create venv",
-            "virtual environment",
-            "requirements.txt",
-            "manage dependencies",
-        ]
-    ):
-        return "manage_packages"
-
-    # Behavioral testing / run-and-verify tasks (before generic "test" match)
-    if any(
-        kw in desc_lower
-        for kw in [
-            "run and verify",
-            "test behavior",
-            "validate behavior",
-            "run the app",
-            "test interactively",
-            "execute and test",
-            "behavioral test",
-            "run the program",
-        ]
-    ):
-        return "validate_behavior"
-
-    # Investigation / exploration tasks
-    if any(
-        kw in desc_lower
-        for kw in [
-            "investigate",
-            "explore",
-            "understand",
-            "research",
-            "spike",
-            "analyze codebase",
-            "study",
-        ]
-    ):
-        return "explore_spike"
-
-    # Diagnosis / debugging tasks
-    if any(
-        kw in desc_lower
-        for kw in ["diagnose", "debug", "find the bug", "root cause", "trace error"]
-    ):
-        return "diagnose_issue"
-
-    # Integration tasks
-    if any(
-        kw in desc_lower
-        for kw in [
-            "integrate",
-            "connect modules",
-            "glue code",
-            "wire up",
-            "link modules",
-            "missing imports",
-        ]
-    ):
+    if any(kw in d for kw in ["wire all", "integrate", "verify imports"]):
         return "integrate_modules"
-
-    # Refactoring tasks (dedicated flow, not modify_file)
-    if any(
-        kw in desc_lower
-        for kw in [
-            "refactor",
-            "restructure",
-            "code smell",
-            "clean up code",
-            "improve structure",
-        ]
-    ):
-        return "refactor"
-
-    # Documentation tasks
-    if any(
-        kw in desc_lower
-        for kw in [
-            "document",
-            "write readme",
-            "add docstring",
-            "write documentation",
-            "update readme",
-            "architecture doc",
-        ]
-    ):
-        return "document_project"
-
-    # Retrospective tasks
-    if any(
-        kw in desc_lower
-        for kw in [
-            "retrospective",
-            "self-assessment",
-            "review progress",
-            "analyze performance",
-            "mission health",
-        ]
-    ):
-        return "retrospective"
-
-    # Review tasks
-    if any(
-        kw in desc_lower
-        for kw in [
-            "request review",
-            "code review",
-            "submit for review",
-            "seek feedback",
-        ]
-    ):
-        return "request_review"
-
-    # Test creation tasks (before generic "create" — "create tests" must match create_tests)
-    if any(
-        kw in desc_lower
-        for kw in ["test", "write tests", "create tests", "add tests", "test_"]
-    ):
+    if any(kw in d for kw in ["run the", "verify", "end-to-end", "validate"]):
+        return "validate_behavior"
+    if any(kw in d for kw in ["test", "create tests"]):
         return "create_tests"
-
-    # Explicit file creation tasks (check before modify — "create X in file.py")
-    if desc_lower.startswith("create ") or desc_lower.startswith("build "):
-        return "create_file"
-
-    # Modification tasks (only match when the verb is clearly about modifying)
-    if any(
-        kw in desc_lower
-        for kw in [
-            "modify",
-            "change",
-            "fix",
-            "edit",
-            "patch",
-            "adjust",
-        ]
-    ):
+    if any(kw in d for kw in ["diagnose", "debug", "investigate"]):
+        return "diagnose_issue"
+    if any(kw in d for kw in ["refactor", "improve structure"]):
+        return "refactor"
+    if any(kw in d for kw in ["install", "dependency", "package"]):
+        return "manage_packages"
+    if any(kw in d for kw in ["document", "readme"]):
+        return "document_project"
+    if any(kw in d for kw in ["modify", "fix", "update", "change"]):
         return "modify_file"
 
-    # "update" only as leading verb — avoid matching "update functions" in descriptions
-    if desc_lower.startswith("update "):
-        return "modify_file"
-
-    # Setup tasks
-    if any(
-        kw in desc_lower
-        for kw in ["setup", "initialize", "configure", "scaffold", "bootstrap"]
-    ):
-        return "setup_project"
-
-    # Default: create file
     return "create_file"
 
 
-async def action_execute_file_creation(step_input: StepInput) -> StepOutput:
-    """Parse the LLM's file content response and write the file.
+# ══════════════════════════════════════════════════════════════════════
+# Mission Lifecycle (kept from v1)
+# ══════════════════════════════════════════════════════════════════════
 
-    Expects context: inference_response, task_description
-    Params: target_file_path
-    """
+
+async def action_finalize_mission(step_input: StepInput) -> StepOutput:
+    """Mark mission complete, deadlocked, or aborted and save."""
     effects = step_input.effects
-    response = step_input.context.get("inference_response", "")
-    target = step_input.params.get("target_file_path", "") or step_input.context.get(
-        "target_file_path", "app.py"
-    )
+    mission = step_input.context.get("mission")
 
-    if not effects:
+    if not mission:
         return StepOutput(
-            result={"write_success": False},
-            observations="No effects interface",
+            result={"finalized": False},
+            observations="No mission to finalize",
         )
 
-    # Extract code from the response (use improved multi-strategy extractor)
-    from agent.actions.refinement_actions import extract_code_from_response
+    if step_input.params.get("deadlock", False):
+        mission.status = "deadlocked"
+    elif step_input.params.get("abort", False):
+        mission.status = "aborted"
+    else:
+        mission.status = "completed"
 
-    code = extract_code_from_response(response)
-
-    if not code.strip():
-        code = "# Generated by Ouroboros\nprint('Hello, World!')\n"
-
-    result = await effects.write_file(target, code)
+    if effects:
+        await effects.save_mission(mission)
 
     return StepOutput(
-        result={
-            "write_success": result.success,
-            "file_path": target,
-        },
-        observations=(
-            f"Wrote {result.bytes_written} bytes to {target}"
-            if result.success
-            else f"Write failed: {result.error}"
-        ),
-        context_updates={
-            "created_file": {"path": target, "content": code},
-        },
+        result={"finalized": True, "status": mission.status},
+        observations=f"Mission {mission.id} finalized: {mission.status}",
+    )
+
+
+async def action_enter_idle(step_input: StepInput) -> StepOutput:
+    """Enter idle state — waiting for events."""
+    return StepOutput(
+        result={"idle": True},
+        observations="Entering idle state — waiting for events",
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# File Operations (fixed: no assumed-pass, clear errors)
+# ══════════════════════════════════════════════════════════════════════
+
+
+async def action_execute_file_creation(step_input: StepInput) -> StepOutput:
+    """Parse the LLM's file content response and write file(s) to disk.
+
+    Fails clearly if no target_file_path is available.
+    """
+    effects = step_input.effects
+    if not effects:
+        return StepOutput(
+            result={"write_success": False, "error": "no_effects"},
+            observations="No effects interface — cannot write files",
+        )
+
+    target = step_input.params.get("target_file_path", "") or step_input.context.get(
+        "target_file_path", ""
+    )
+    response = step_input.context.get("inference_response", "")
+
+    if not target and not response:
+        return StepOutput(
+            result={"write_success": False, "error": "no_target_or_content"},
+            observations="No target file path or content to write",
+        )
+
+    code = _extract_code(response)
+    if not code.strip():
+        return StepOutput(
+            result={"write_success": False, "error": "empty_content"},
+            observations="Inference produced empty content — nothing to write",
+        )
+
+    wr = await effects.write_file(target, code)
+
+    if not wr.success:
+        return StepOutput(
+            result={"write_success": False, "error": wr.error},
+            observations=f"Failed to write {target}: {wr.error}",
+        )
+
+    # Post-write verification
+    exists = await effects.file_exists(target)
+    if not exists:
+        return StepOutput(
+            result={"write_success": False, "error": "ghost_write"},
+            observations=f"Write reported success but {target} not found on disk",
+        )
+
+    return StepOutput(
+        result={"write_success": True, "path": target},
+        observations=f"Created {target} ({wr.bytes_written} bytes)",
+        context_updates={"files_changed": [target]},
     )
 
 
 def _extract_code(response: str) -> str:
-    """Extract code from an LLM response, handling markdown code blocks."""
-    # Look for ```python ... ``` blocks
-    match = re.search(r"```(?:python)?\s*\n([\s\S]*?)```", response)
-    if match:
-        return match.group(1).strip() + "\n"
+    """Extract code content from an LLM response, stripping markdown fences."""
+    if not response:
+        return ""
 
-    # Look for any ``` ... ``` block
-    match = re.search(r"```\s*\n([\s\S]*?)```", response)
-    if match:
-        return match.group(1).strip() + "\n"
-
-    # If the response looks like code (has def/class/import), use it directly
     lines = response.strip().splitlines()
-    code_lines = [
-        l
-        for l in lines
-        if l.strip() and not l.strip().startswith(("#", "Here", "This", "The", "I "))
-    ]
-    if any(
-        l.strip().startswith(("def ", "class ", "import ", "from ")) for l in code_lines
-    ):
-        return "\n".join(code_lines) + "\n"
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
 
-    return response
+    return "\n".join(lines) + "\n"
 
 
 async def action_run_tests(step_input: StepInput) -> StepOutput:
     """Run a test command and report results.
 
-    Params: command (list of str), scope
+    Returns explicit 'skipped' status when effects are unavailable.
     """
     effects = step_input.effects
     if not effects:
         return StepOutput(
-            result={"all_passing": True},
-            observations="No effects — skipping tests (assumed pass)",
+            result={"all_passing": False, "status": "skipped"},
+            observations="No effects — tests skipped (NOT assumed pass)",
         )
 
     cmd = step_input.params.get("command", ["python", "-c", "print('OK')"])
@@ -1292,16 +1171,40 @@ async def action_run_tests(step_input: StepInput) -> StepOutput:
     return StepOutput(
         result={
             "all_passing": all_passing,
+            "status": "passed" if all_passing else "failed",
             "return_code": result.return_code,
             "stdout": result.stdout[:500],
             "stderr": result.stderr[:500],
         },
-        observations=f"Tests {'PASSED' if all_passing else 'FAILED'} (rc={result.return_code})",
-        context_updates={
-            "test_results": {
-                "all_passing": all_passing,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            },
-        },
+        observations=f"Tests {'passed' if all_passing else 'failed'}: rc={result.return_code}",
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Helpers
+# ══════════════════════════════════════════════════════════════════════
+
+
+def _is_duplicate_task(
+    mission, description: str, flow: str, target_file: str = ""
+) -> bool:
+    """Check if a substantially similar task already exists."""
+    desc_lower = description.lower()
+    for task in mission.plan:
+        if task.status == "complete":
+            continue
+        task_target = task.inputs.get("target_file_path", "")
+        if flow == task.flow and target_file and task_target == target_file:
+            return True
+        if desc_lower == task.description.lower():
+            return True
+    return False
+
+
+# Backward compat stubs for ouroboros.py CLI
+def _infer_flow_from_description(desc: str) -> str:
+    return _infer_flow_hint(desc)
+
+
+def _derive_source_for_tests(test_path: str, desc: str) -> str:
+    return ""

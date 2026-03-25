@@ -101,9 +101,21 @@ def _build_namespace(result: dict, context: dict, meta: dict) -> dict:
         "false": False,
         "True": True,
         "False": False,
-        # Safe builtins
+        # Safe builtins — read-only, side-effect-free functions
         "len": len,
         "sum": sum,
+        "any": any,
+        "all": all,
+        "min": min,
+        "max": max,
+        "str": str,
+        "int": int,
+        "float": float,
+        "bool": bool,
+        "isinstance": isinstance,
+        "list": list,
+        "dict": dict,
+        "tuple": tuple,
     }
 
 
@@ -112,9 +124,13 @@ def _eval_condition(condition: str, namespace: dict) -> bool:
 
     No builtins are provided beyond what's in the namespace.
     This is safe because flow authors are trusted.
+
+    IMPORTANT: The namespace is passed as globals (not locals) so that
+    variables like `context`, `result`, and `meta` are visible inside
+    list comprehensions and generator expressions. In Python 3, eval()
+    locals are NOT accessible inside comprehension scopes, but globals are.
     """
-    # Completely disable builtins
-    return bool(eval(condition, {"__builtins__": {}}, namespace))
+    return bool(eval(condition, {"__builtins__": {}, **namespace}))
 
 
 class _DotDict(dict):

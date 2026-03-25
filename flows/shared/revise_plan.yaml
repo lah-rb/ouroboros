@@ -150,14 +150,22 @@ steps:
 
   skip:
     action: noop
-    description: "No revision needed or possible"
-    terminal: true
-    status: success
+    description: "No revision needed or possible — return to mission_control"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_status: "success"
+        last_result: "Plan revision evaluated — no changes needed"
 
   complete:
     action: noop
-    description: "Plan revised successfully"
-    terminal: true
-    status: success
+    description: "Plan revised successfully — return to mission_control"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_status: "success"
+        last_result: "Plan revised with new tasks"
 
 entry: load_current_plan

@@ -565,6 +565,328 @@ class TestParseRevision:
         assert result == {}
 
 
+# ── validate_created_files Tests ──────────────────────────────────────
+
+
+class TestValidateCreatedFiles:
+    @pytest.mark.asyncio
+    async def test_all_files_pass(self):
+        """All files pass syntax and import checks → 'success'."""
+        from agent.actions.refinement_actions import action_validate_created_files
+
+        effects = MockEffects(
+            commands={
+                "python": CommandResult(
+                    return_code=0, stdout="OK", stderr="", command="python"
+                ),
+            }
+        )
+        si = _make_input(
+            effects=effects,
+            context={"files_changed": ["src/models.py", "src/utils.py"]},
+        )
+        result = await action_validate_created_files(si)
+        assert result.result["status"] == "success"
+        assert result.result["all_required_passing"] is True
+        assert result.result["failed"] == 0
+
+    @pytest.mark.asyncio
+    async def test_syntax_failure(self):
+        """Syntax failure in one file → 'failed' status."""
+        from agent.actions.refinement_actions import action_validate_created_files
+
+        effects = MockEffects(
+            commands={
+                "python": CommandResult(
+                    return_code=1,
+                    stdout="",
+                    stderr="SyntaxError: invalid syntax",
+                    command="python",
+                ),
+            }
+        )
+        si = _make_input(
+            effects=effects,
+            context={"files_changed": ["src/broken.py"]},
+        )
+        result = await action_validate_created_files(si)
+        assert result.result["status"] == "failed"
+        assert result.result["all_required_passing"] is False
+
+    @pytest.mark.asyncio
+    async def test_import_issues(self):
+        """Import failure (non-blocking) → 'issues' status."""
+        from agent.actions.refinement_actions import action_validate_created_files
+
+        async def mock_run_command(command, **kwargs):
+            cmd_str = " ".join(command)
+            if "py_compile" in cmd_str:
+                return CommandResult(
+                    return_code=0, stdout="OK", stderr="", command=cmd_str
+                )
+            elif "import " in cmd_str:
+                return CommandResult(
+                    return_code=1,
+                    stdout="",
+                    stderr="ModuleNotFoundError",
+                    command=cmd_str,
+                )
+            return CommandResult(return_code=0, stdout="", stderr="", command=cmd_str)
+
+        effects = MockEffects()
+        effects.run_command = mock_run_command
+
+        si = _make_input(
+            effects=effects,
+            context={"files_changed": ["src/models.py"]},
+        )
+        result = await action_validate_created_files(si)
+        assert result.result["status"] == "issues"
+        assert result.result["all_required_passing"] is True
+
+    @pytest.mark.asyncio
+    async def test_skips_non_code_files(self):
+        """Non-code files (.md, .yaml, .json) are skipped."""
+        from agent.actions.refinement_actions import action_validate_created_files
+
+        effects = MockEffects()
+        si = _make_input(
+            effects=effects,
+            context={
+                "files_changed": [
+                    "README.md",
+                    "config.yaml",
+                    "data.json",
+                    "settings.toml",
+                ]
+            },
+        )
+        result = await action_validate_created_files(si)
+        assert result.result["status"] == "success"
+        assert result.result.get("total_checks", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_files_changed(self):
+        """No files to validate → 'success'."""
+        from agent.actions.refinement_actions import action_validate_created_files
+
+        effects = MockEffects()
+        si = _make_input(
+            effects=effects,
+            context={"files_changed": []},
+        )
+        result = await action_validate_created_files(si)
+        assert result.result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_no_effects(self):
+        """No effects interface → 'success' (skip validation)."""
+        from agent.actions.refinement_actions import action_validate_created_files
+
+        si = _make_input(
+            context={"files_changed": ["src/models.py"]},
+        )
+        result = await action_validate_created_files(si)
+        assert result.result["status"] == "success"
+
+
+# ── Multi-file parse fallback Tests ───────────────────────────────────
+
+
+class TestMultiFileParseFallback:
+    def test_bare_code_block_with_fallback(self):
+        """Bare code block without FILE header uses fallback_path."""
+        from agent.actions.integration_actions import _parse_multi_file_output
+
+        text = '```python\nprint("hello")\n```'
+        blocks = _parse_multi_file_output(text, fallback_path="src/main.py")
+        assert len(blocks) == 1
+        assert blocks[0][0] == "src/main.py"
+        assert 'print("hello")' in blocks[0][1]
+
+    def test_bare_code_block_without_fallback(self):
+        """Bare code block without fallback_path returns empty."""
+        from agent.actions.integration_actions import _parse_multi_file_output
+
+        text = '```python\nprint("hello")\n```'
+        blocks = _parse_multi_file_output(text)
+        assert len(blocks) == 0
+
+    def test_file_blocks_ignore_fallback(self):
+        """When FILE blocks exist, fallback_path is not used."""
+        from agent.actions.integration_actions import _parse_multi_file_output
+
+        text = '=== FILE: src/app.py ===\n```python\nprint("app")\n```'
+        blocks = _parse_multi_file_output(text, fallback_path="src/other.py")
+        assert len(blocks) == 1
+        assert blocks[0][0] == "src/app.py"
+
+    def test_empty_text_with_fallback(self):
+        """Empty text returns empty even with fallback."""
+        from agent.actions.integration_actions import _parse_multi_file_output
+
+        blocks = _parse_multi_file_output("", fallback_path="src/main.py")
+        assert len(blocks) == 0
+
+    def test_whitespace_only_with_fallback(self):
+        """Whitespace-only text returns empty even with fallback."""
+        from agent.actions.integration_actions import _parse_multi_file_output
+
+        blocks = _parse_multi_file_output("   \n\n  ", fallback_path="src/main.py")
+        assert len(blocks) == 0
+
+
+# ── compile_integration_report Tests ──────────────────────────────────
+
+
+class TestCompileIntegrationReport:
+    @pytest.mark.asyncio
+    async def test_clean_project(self):
+        """Clean project produces status='clean'."""
+        from agent.actions.integration_actions import (
+            action_compile_integration_report,
+        )
+
+        clean_json = json.dumps(
+            {
+                "status": "clean",
+                "summary": "All modules properly connected.",
+                "issues": [],
+                "healthy_connections": ["a.py → b.py"],
+            }
+        )
+        si = _make_input(
+            effects=MockEffects(),
+            context={"inference_response": clean_json, "cross_file_results": {}},
+        )
+        result = await action_compile_integration_report(si)
+        assert result.result["status"] == "clean"
+        assert result.result["issues_count"] == 0
+        assert "integration_report" in result.context_updates
+
+    @pytest.mark.asyncio
+    async def test_with_issues_merged(self):
+        """Issues in LLM response are merged with cross-file results."""
+        from agent.actions.integration_actions import (
+            action_compile_integration_report,
+        )
+
+        llm_json = json.dumps(
+            {
+                "status": "issues_found",
+                "summary": "1 import error",
+                "issues": [
+                    {
+                        "type": "import_error",
+                        "severity": "error",
+                        "file": "src/engine.py",
+                        "problem": "Missing import",
+                    }
+                ],
+            }
+        )
+        cross_file = {
+            "issues": [
+                {
+                    "type": "orphan_file",
+                    "severity": "warning",
+                    "files": ["src/unused.py"],
+                    "message": "File not imported anywhere",
+                }
+            ]
+        }
+        si = _make_input(
+            effects=MockEffects(),
+            context={
+                "inference_response": llm_json,
+                "cross_file_results": cross_file,
+            },
+        )
+        result = await action_compile_integration_report(si)
+        assert result.result["status"] == "issues_found"
+        assert result.result["issues_count"] == 2
+        report = result.context_updates["integration_report"]
+        types = [i["type"] for i in report["issues"]]
+        assert "import_error" in types
+        assert "orphan_file" in types
+
+    @pytest.mark.asyncio
+    async def test_parse_error(self):
+        """Bad JSON falls back to parse_error status."""
+        from agent.actions.integration_actions import (
+            action_compile_integration_report,
+        )
+
+        si = _make_input(
+            effects=MockEffects(),
+            context={
+                "inference_response": "This is not JSON at all.",
+                "cross_file_results": {},
+            },
+        )
+        result = await action_compile_integration_report(si)
+        assert result.result["status"] == "parse_error"
+        assert result.result["issues_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_persists_note(self):
+        """Report is saved as a mission note."""
+        from agent.actions.integration_actions import (
+            action_compile_integration_report,
+        )
+
+        mission = _make_mission()
+        effects = MockEffects()
+        await effects.save_mission(mission)
+
+        llm_json = json.dumps(
+            {
+                "status": "issues_found",
+                "summary": "2 issues found",
+                "issues": [
+                    {
+                        "type": "import_error",
+                        "severity": "error",
+                        "file": "a.py",
+                        "problem": "bad import",
+                    },
+                    {
+                        "type": "name_mismatch",
+                        "severity": "warning",
+                        "file": "b.py",
+                        "problem": "wrong name",
+                    },
+                ],
+            }
+        )
+        si = _make_input(
+            effects=effects,
+            context={"inference_response": llm_json, "cross_file_results": {}},
+        )
+        result = await action_compile_integration_report(si)
+        assert result.result["status"] == "issues_found"
+
+        loaded = await effects.load_mission()
+        assert len(loaded.notes) == 1
+        assert loaded.notes[0].category == "codebase_observation"
+        assert "Integration report" in loaded.notes[0].content
+
+    @pytest.mark.asyncio
+    async def test_markdown_wrapped_json(self):
+        """JSON wrapped in markdown code fences is still parsed."""
+        from agent.actions.integration_actions import (
+            action_compile_integration_report,
+        )
+
+        wrapped = '```json\n{"status": "clean", "summary": "OK", "issues": []}\n```'
+        si = _make_input(
+            effects=MockEffects(),
+            context={"inference_response": wrapped, "cross_file_results": {}},
+        )
+        result = await action_compile_integration_report(si)
+        assert result.result["status"] == "clean"
+
+
 # ── Registry Integration Test ─────────────────────────────────────────
 
 
@@ -579,3 +901,5 @@ class TestRegistryIntegration:
         assert registry.has("run_validation_checks")
         assert registry.has("load_file_contents")
         assert registry.has("apply_plan_revision")
+        assert registry.has("validate_created_files")
+        assert registry.has("compile_integration_report")

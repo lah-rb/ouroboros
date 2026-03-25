@@ -1,9 +1,11 @@
 flow: mission_control
-version: 1
+version: 3
 description: >
-  Top-level agent routing flow. Loads mission state, processes events,
-  assesses progress, selects next task, dispatches to appropriate flow.
-  All child flows tail-call back here on completion.
+  Core director flow v3. Uses a memoryful inference session across the
+  entire decision cycle: reason → select_task → select_target_file → dispatch.
+  The model sees the full mission state once, then makes three cheap
+  grammar-constrained decisions within the same session context.
+  Replaces word-overlap task matching with LLM menu selection.
 
 input:
   required:
@@ -12,7 +14,6 @@ input:
     - last_result
     - last_status
     - last_task_id
-    - quality_gate_retries
 
 defaults:
   config:
@@ -24,7 +25,7 @@ steps:
 
   load_state:
     action: load_mission_state
-    description: "Read mission state and event queue from persistence"
+    description: "Load mission state, event queue, and frustration map"
     resolver:
       type: rule
       rules:
@@ -34,8 +35,6 @@ steps:
           transition: idle
         - condition: "result.mission.status == 'completed'"
           transition: completed
-        - condition: "result.mission.status == 'aborted'"
-          transition: aborted
         - condition: "true"
           transition: aborted
     publishes:
@@ -43,11 +42,11 @@ steps:
       - events
       - frustration
 
-  # ── Phase 2: Integrate results from previous cycle ──────────
+  # ── Phase 2: Integrate previous cycle results ───────────────
 
   apply_last_result:
     action: update_task_status
-    description: "Apply the previous flow's outcome to mission state"
+    description: "Apply the returning flow's outcome to mission state"
     context:
       required: [mission, frustration]
       optional: [events, last_result, last_status, last_task_id]
@@ -56,52 +55,31 @@ steps:
       rules:
         - condition: "result.events_pending == true"
           transition: process_events
-        - condition: "result.task_completed == true"
-          transition: check_retrospective
-        - condition: "context.get('last_status') == 'abandoned'"
-          transition: check_extension
+        - condition: "result.needs_plan == true"
+          transition: dispatch_planning
+        - condition: "result.frustration_reset == true"
+          transition: dispatch_retrospective
         - condition: "true"
-          transition: assess
+          transition: start_session
     publishes:
       - mission
       - frustration
 
-  # ── Phase 2b: Periodic retrospective check ─────────────────
-
-  check_retrospective:
-    action: noop
-    description: >
-      Check if a retrospective is due. Triggers every 5 completed tasks,
-      when total frustration exceeds 8, or when 3+ tasks are blocked/failed.
-    context:
-      required: [mission, frustration]
-    resolver:
-      type: rule
-      rules:
-        - condition: >
-            len([t for t in context.get('mission', {}).plan if t.status == 'complete']) % 5 == 0
-            and len([t for t in context.get('mission', {}).plan if t.status == 'complete']) > 0
-          transition: dispatch_retrospective
-        - condition: >
-            sum(context.get('frustration', {}).values()) >= 8
-          transition: dispatch_retrospective
-        - condition: >
-            len([t for t in context.get('mission', {}).plan if t.status in ('blocked', 'failed')]) >= 3
-          transition: dispatch_retrospective
-        - condition: "true"
-          transition: check_extension
-    publishes: []
+  # ── Phase 2b: Retrospective on frustration reset ────────────
+  #    Only fires when a task succeeded after having elevated
+  #    frustration — "what worked after struggling?"
 
   dispatch_retrospective:
     action: noop
-    description: "Dispatch to retrospective flow"
+    description: "Dispatch retrospective — task succeeded after frustration"
     context:
       required: [mission]
     tail_call:
       flow: retrospective
       input_map:
         mission_id: "{{ input.mission_id }}"
-        trigger_reason: "Periodic trigger: milestone reached"
+        task_id: "{{ input.last_task_id | default('') }}"
+        trigger_reason: "Task completed after overcoming difficulty — capturing learnings"
 
   # ── Phase 3: Process external events ────────────────────────
 
@@ -119,187 +97,670 @@ steps:
         - condition: "result.pause_requested == true"
           transition: idle
         - condition: "true"
-          transition: assess
+          transition: start_session
     publishes:
       - mission
-      - unblocked_tasks
 
-  # ── Phase 3b: Check if mission should extend ────────────────
+  # ── Phase 4: Start memoryful director session ───────────────
+  #    One session persists across reason → select_task → select_file.
+  #    The model gets full context once, then makes cheap decisions.
 
-  check_extension:
+  start_session:
+    action: start_director_session
+    description: "Open memoryful inference session for the director cycle"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.session_started == true"
+          transition: reason
+        - condition: "true"
+          transition: reason_standalone
+    publishes:
+      - session_id
+
+  # ── Phase 5: The Brain — director reasoning ────────────────
+  #    Uses the memoryful session. The model sees the full project
+  #    state and produces analysis + action recommendation.
+
+  reason:
     action: inference
-    description: "Evaluate whether the mission plan needs extension based on progress"
+    description: "Analyze mission state and reason about next action (memoryful session)"
     context:
-      required: [mission]
-      optional: [frustration]
+      required: [mission, frustration, session_id]
+      optional: [last_result, last_status]
     prompt: |
-      You are a mission planning module in an automated coding pipeline.
-      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
-      object — no markdown, no explanation, no surrounding text.
+      You are the director of an autonomous coding project.
+      Your job is to look at the full picture and decide the single best next action.
 
-      Mission objective: {{ context.mission.objective }}
+      ## Mission
+      Objective: {{ context.mission.objective }}
+      Working directory: {{ context.mission.config.working_directory }}
 
-      Current plan status:
+      {% if context.mission.architecture %}
+      ## Architecture
+      Import scheme: {{ context.mission.architecture.import_scheme }}
+      Run command: {{ context.mission.architecture.run_command }}
+      Modules: {{ context.mission.architecture.canonical_files() | join(', ') }}
+      {% endif %}
+
+      ## Current Plan
       {% for task in context.mission.plan %}
-      - [{{ task.status }}] {{ task.id }}: {{ task.description }}
-        {% if task.summary %}Result: {{ task.summary }}{% endif %}
+      - [{{ task.status }}] {{ task.description }}
+        {%- if task.inputs.get('target_file_path') %} → {{ task.inputs.target_file_path }}{% endif %}
+        {%- if task.summary %} | {{ task.summary }}{% endif %}
+        {%- if task.frustration > 0 %} (frustration: {{ task.frustration }}){% endif %}
       {% endfor %}
 
+      ## Last Cycle
+      {% if context.get('last_status') %}
+      Status: {{ context.get('last_status') }}
+      Result: {{ context.get('last_result', 'No details') }}
+      {% else %}
+      This is the first cycle — no previous result.
+      {% endif %}
+
+      ## Frustration Landscape
+      {% for task_id, level in context.frustration.items() if level > 0 %}
+      - Task {{ task_id[:8] }}: frustration {{ level }}
+      {% endfor %}
+      {% if not context.frustration or (context.frustration.values() | reject('equalto', 0) | list | length == 0) %}
+      All tasks at zero frustration.
+      {% endif %}
+
+      {% if context.mission.dispatch_history %}
+      ## Recent Dispatch History (last 5)
+      {% for d in context.mission.dispatch_history[-5:] %}
+      - {{ d.flow }} → {{ d.target_file_path or '(project-level)' }} [{{ d.result_status or 'pending' }}]
+      {% endfor %}
+      {% endif %}
+
       {% if context.mission.notes %}
-      Recent observations:
+      ## Notes
       {% for note in context.mission.notes[-5:] %}
       - [{{ note.category }}] {{ note.content[:200] }}
       {% endfor %}
       {% endif %}
 
-      Cross-check the objective against the plan:
-      For EACH requirement in the objective, identify which task covers it.
-      If any requirement has NO corresponding task, that is a gap that needs extension.
+      ## Your Analysis
 
-      Common gaps to check:
-      - Does the objective mention tests? Is there a task that creates tests?
-      - Does the objective mention integration between modules? Is there an integration task?
-      - Does the objective specify a number of test cases? Will the test task produce that many?
-      - Does the objective require CLI interfaces? Is there a task for each CLI tool?
-      - Does the objective require modules to share code? Is there a task verifying they do?
+      Think step by step:
+      1. What is the current state of the project? What's built, what remains?
+      2. What happened last cycle? Did it succeed or fail?
+      3. What is the single most impactful action to take next?
 
-      Suggest extensions if:
-      - A numbered requirement in the objective has no task covering it
-      - Completed work revealed a clearly missing component
-      - A dependency was discovered that no existing task covers
-      - The objective specifies integration but no integrate_modules task exists
-
-      Do NOT suggest extensions if:
-      - Every requirement in the objective has a corresponding task
-      - All remaining tasks are sufficient to complete the objective
-
-      ✅ CORRECT output when gaps exist:
-      {"extend": true, "reason": "objective requires integration between pomodoro and tasks modules but no integrate_modules task exists", "observation": "Need to add integration verification task"}
-
-      ✅ CORRECT output when plan is complete:
-      {"extend": false, "reason": "every requirement in the objective has a corresponding task"}
-
-      Return ONLY the raw JSON object.
+      Provide 3-5 sentences of concise analysis ending with a clear recommendation.
     config:
-      temperature: 0.1
-      max_tokens: 200
-    resolver:
-      type: rule
-      rules:
-        - condition: "'extend\": true' in result.text"
-          transition: invoke_revise_plan
-        - condition: "'extend\":true' in result.text"
-          transition: invoke_revise_plan
-        - condition: "true"
-          transition: assess
-    publishes:
-      - extension_check
-
-  invoke_revise_plan:
-    action: flow
-    description: "Trigger plan revision based on new observations"
-    flow: revise_plan
-    input_map:
-      mission_id: "{{ input.mission_id }}"
-      observation: "{{ context.extension_check }}"
+      temperature: "t*0.8"
     resolver:
       type: rule
       rules:
         - condition: "true"
-          transition: assess
+          transition: decide_flow
     publishes:
-      - revision_result
+      - director_analysis
 
-  # ── Phase 4: Assess and select ──────────────────────────────
+  # ── Phase 5b: Standalone reasoning fallback (no session) ────
 
-  assess:
-    action: assess_mission_progress
-    description: "Determine what to work on next"
+  reason_standalone:
+    action: inference
+    description: "Director reasoning without memoryful session (fallback)"
     context:
       required: [mission, frustration]
-      optional: [unblocked_tasks]
+      optional: [last_result, last_status]
+    prompt: |
+      You are the director of an autonomous coding project.
+      Objective: {{ context.mission.objective }}
+
+      Plan:
+      {% for task in context.mission.plan %}
+      - [{{ task.status }}] {{ task.description }}{% if task.frustration > 0 %} (frustration: {{ task.frustration }}){% endif %}
+      {% endfor %}
+
+      {% if context.get('last_status') %}
+      Last cycle: {{ context.get('last_status') }} — {{ context.get('last_result', 'No details') }}
+      {% endif %}
+
+      Provide 3-5 sentences of concise analysis. What should happen next and why?
+    config:
+      temperature: "t*0.8"
     resolver:
       type: rule
       rules:
-        - condition: "result.needs_plan == true"
-          transition: dispatch_planning
-        - condition: "result.all_tasks_complete == true and result.all_remaining_blocked == true"
-          transition: completed
-        - condition: "result.all_tasks_complete == true and result.get('quality_gate_exhausted', false) == true"
-          transition: completed
-        - condition: "result.all_tasks_complete == true"
-          transition: quality_check
-        - condition: "result.all_remaining_blocked == true"
-          transition: completed
-        - condition: "result.obvious_next_task != null"
-          transition: prepare_dispatch
         - condition: "true"
-          transition: idle
+          transition: decide_flow
     publishes:
-      - assessment
-      - obvious_next_task
+      - director_analysis
 
-  # ── Phase 4b: Quality gate ──────────────────────────────────
+  # ── Phase 6: Choose the flow type (LLM menu) ───────────────
 
-  quality_check:
-    action: flow
-    description: "Run project-wide quality gate before completing"
-    flow: quality_gate
-    context:
-      required: [mission]
-    input_map:
-      working_directory: "{{ context.mission.config.working_directory }}"
-      mission_id: "{{ input.mission_id }}"
-      mission_objective: "{{ context.mission.objective }}"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.status == 'success'"
-          transition: completed
-        - condition: "result.status == 'failed' and input.get('quality_gate_retries', '0') in ('0', '1')"
-          transition: invoke_quality_fix
-        - condition: "true"
-          transition: completed
-    publishes:
-      - quality_results
-
-  invoke_quality_fix:
+  decide_flow:
     action: noop
-    description: "Quality gate failed — tail-call to reload state with new fix tasks"
+    description: "Select the best action type based on analysis"
     context:
-      optional: [mission, quality_results]
-    tail_call:
-      flow: mission_control
-      input_map:
-        mission_id: "{{ input.mission_id }}"
-        quality_gate_retries: "{{ (input.quality_gate_retries or 0)|int + 1 }}"
+      required: [mission, director_analysis, frustration]
+    prompt: |
+      Based on your analysis:
 
-  # ── Phase 5: Configure and dispatch ─────────────────────────
+      {{ context.director_analysis }}
 
-  prepare_dispatch:
-    action: configure_task_dispatch
-    description: "Build input map and determine flow config for selected task"
+      Plan: {{ context.mission.plan | selectattr('status', 'equalto', 'complete') | list | length }} completed, {{ context.mission.plan | selectattr('status', 'equalto', 'pending') | list | length }} pending, {{ context.mission.plan | selectattr('status', 'equalto', 'failed') | list | length }} failed.
+
+      Choose the single best action type.
+    resolver:
+      type: llm_menu
+      include_step_output: true
+      prompt: |
+        Director's analysis: {{ context.director_analysis }}
+
+        Choose the action that best matches the recommendation.
+      options:
+        select_and_dispatch_create:
+          description: "Create one or more new source files for the project"
+        select_and_dispatch_modify:
+          description: "Fix or enhance existing files — uses AST-aware symbol editing"
+        select_and_dispatch_integrate:
+          description: "Inspect project cohesion — check imports, interfaces, and connections"
+        select_and_dispatch_diagnose:
+          description: "Investigate a code issue methodically without modifying files"
+        select_and_dispatch_tests:
+          description: "Create test files to verify module behavior"
+        select_and_dispatch_validate:
+          description: "Run the project and verify end-to-end behavior"
+        select_and_dispatch_setup:
+          description: "Initialize or configure project tooling and dependencies"
+        select_and_dispatch_explore:
+          description: "Investigate a pattern or approach before committing"
+        select_and_dispatch_refactor:
+          description: "Improve code structure without changing behavior"
+        select_and_dispatch_document:
+          description: "Write or update project documentation"
+        select_and_dispatch_packages:
+          description: "Install, remove, or update project dependencies"
+        select_and_dispatch_review:
+          description: "Submit completed work for review"
+        dispatch_revise_plan:
+          description: "Extend or revise the mission plan"
+        quality_checkpoint:
+          description: "Run quality inspection on current project state"
+        quality_completion:
+          description: "All planned work done — run final quality gate"
+        mission_deadlocked:
+          description: "No viable path forward — remaining tasks blocked"
+    publishes: []
+
+  # ── Phase 7: Select task via LLM menu ──────────────────────
+  #    Each flow-type option routes here with the flow name set.
+  #    The model picks which specific task to work on.
+
+  select_and_dispatch_create:
+    action: select_task_for_dispatch
+    description: "Select task for create_file"
     context:
-      required: [mission, frustration]
-      optional: [obvious_next_task, selected_task]
-    params:
-      frustration_thresholds:
-        review: 2
-        instructions: 4
-        direct_fix: 5
-      frustration_strategies:
-        temperature_perturb:
-          min_frustration: 2
-          offset_range: [0.15, 0.4]
-        research:
-          min_frustration: 3
+      required: [mission, session_id]
+      optional: [director_analysis]
     resolver:
       type: rule
       rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_create
+        - condition: "result.no_actionable_tasks == true"
+          transition: quality_completion
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_modify:
+    action: select_task_for_dispatch
+    description: "Select task for modify_file"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_modify
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_integrate:
+    action: select_task_for_dispatch
+    description: "Select task for integrate_modules"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_integrate
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_diagnose:
+    action: select_task_for_dispatch
+    description: "Select task for diagnose_issue"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_diagnose
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_tests:
+    action: select_task_for_dispatch
+    description: "Select task for create_tests"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_create_tests
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_validate:
+    action: select_task_for_dispatch
+    description: "Select task for validate_behavior"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_validate
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_setup:
+    action: select_task_for_dispatch
+    description: "Select task for setup_project"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_setup
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_explore:
+    action: select_task_for_dispatch
+    description: "Select task for explore_spike"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_explore
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_refactor:
+    action: select_task_for_dispatch
+    description: "Select task for refactor"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_refactor
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_document:
+    action: select_task_for_dispatch
+    description: "Select task for document_project"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_document
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_packages:
+    action: select_task_for_dispatch
+    description: "Select task for manage_packages"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_packages
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  select_and_dispatch_review:
+    action: select_task_for_dispatch
+    description: "Select task for request_review"
+    context:
+      required: [mission, session_id]
+      optional: [director_analysis]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.task_selected == true"
+          transition: resolve_target_file_review
+        - condition: "true"
+          transition: quality_completion
+    publishes:
+      - selected_task
+      - selected_task_id
+
+  # ── Phase 8: Resolve target file ────────────────────────────
+  #    Each flow type gets its own resolve step that sets the correct
+  #    dispatch_flow param. Three categories of resolver behavior:
+  #    - create: uses architecture path, no disk validation needed
+  #    - existing: requires existing file, presents menu if path invalid
+  #    - project: project-level flow, no file selection needed
+
+  resolve_target_file_create:
+    action: select_target_file
+    description: "Resolve target file for create_file"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "create_file"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_selected == true"
+          transition: end_session_and_dispatch
+        - condition: "result.error == 'no_project_files'"
+          transition: end_session_and_dispatch
+        - condition: "true"
+          transition: end_session_and_reason
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_create_tests:
+    action: select_target_file
+    description: "Resolve target file for create_tests"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "create_tests"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_selected == true"
+          transition: end_session_and_dispatch
+        - condition: "true"
+          transition: end_session_and_dispatch
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_modify:
+    action: select_target_file
+    description: "Resolve target file for modify_file (requires existing file)"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "modify_file"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_selected == true"
+          transition: end_session_and_dispatch
+        - condition: "result.error == 'no_project_files'"
+          transition: end_session_error_no_files
+        - condition: "true"
+          transition: end_session_and_reason
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_diagnose:
+    action: select_target_file
+    description: "Resolve target file for diagnose_issue (requires existing file)"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "diagnose_issue"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_selected == true"
+          transition: end_session_and_dispatch
+        - condition: "result.error == 'no_project_files'"
+          transition: end_session_error_no_files
+        - condition: "true"
+          transition: end_session_and_reason
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_refactor:
+    action: select_target_file
+    description: "Resolve target file for refactor (requires existing file)"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "refactor"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_selected == true"
+          transition: end_session_and_dispatch
+        - condition: "result.error == 'no_project_files'"
+          transition: end_session_error_no_files
+        - condition: "true"
+          transition: end_session_and_reason
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_integrate:
+    action: select_target_file
+    description: "Resolve target for integrate_modules"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "integrate_modules"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: end_session_and_dispatch
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_validate:
+    action: select_target_file
+    description: "Resolve target for validate_behavior"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "validate_behavior"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: end_session_and_dispatch
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_setup:
+    action: select_target_file
+    description: "Resolve target for setup_project"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "setup_project"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: end_session_and_dispatch
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_explore:
+    action: select_target_file
+    description: "Resolve target for explore_spike"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "explore_spike"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: end_session_and_dispatch
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_document:
+    action: select_target_file
+    description: "Resolve target for document_project"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "document_project"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: end_session_and_dispatch
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_packages:
+    action: select_target_file
+    description: "Resolve target for manage_packages"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "manage_packages"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: end_session_and_dispatch
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_review:
+    action: select_target_file
+    description: "Resolve target for request_review"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "request_review"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: end_session_and_dispatch
+    publishes:
+      - dispatch_config
+
+  resolve_target_file_retrospective:
+    action: select_target_file
+    description: "Resolve target for retrospective"
+    context:
+      required: [mission, selected_task]
+      optional: [session_id]
+    params:
+      dispatch_flow: "retrospective"
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: end_session_and_dispatch
+    publishes:
+      - dispatch_config
+
+  # ── Phase 9: End session and dispatch ───────────────────────
+
+  end_session_and_dispatch:
+    action: end_director_session
+    description: "Close director session before dispatching to task flow"
+    context:
+      required: [dispatch_config, mission]
+      optional: [session_id]
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: record_and_dispatch
+    publishes: []
+
+  record_and_dispatch:
+    action: record_dispatch
+    description: "Record dispatch in history for deduplication, then tail-call"
+    context:
+      required: [dispatch_config, mission]
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.repeat_count >= 3"
+          transition: dispatch_revise_plan
         - condition: "true"
           transition: dispatch
     publishes:
-      - dispatch_config
+      - mission
+      - dispatch_warning
 
   dispatch:
     action: noop
@@ -311,27 +772,146 @@ steps:
       input_map:
         mission_id: "{{ input.mission_id }}"
         task_id: "{{ context.dispatch_config.task_id }}"
-        task_description: "{{ context.dispatch_config.input_map.task_description }}"
-        mission_objective: "{{ context.dispatch_config.input_map.mission_objective }}"
-        working_directory: "{{ context.dispatch_config.input_map.working_directory }}"
-        target_file_path: "{{ context.dispatch_config.input_map.target_file_path }}"
-        reason: "{{ context.dispatch_config.input_map.reason }}"
-        temperature_multiplier: "{{ context.dispatch_config.input_map.temperature_multiplier }}"
-        frustration_level: "{{ context.dispatch_config.input_map.frustration_level }}"
-        frustration_history: "{{ context.dispatch_config.input_map.frustration_history }}"
-        relevant_notes: "{{ context.dispatch_config.input_map.relevant_notes }}"
+        task_description: "{{ context.dispatch_config.task_description }}"
+        mission_objective: "{{ context.dispatch_config.mission_objective }}"
+        working_directory: "{{ context.dispatch_config.working_directory }}"
+        target_file_path: "{{ context.dispatch_config.target_file_path }}"
+        reason: "{{ context.dispatch_config.reason }}"
+        relevant_notes: "{{ context.dispatch_config.relevant_notes }}"
 
-  # ── Dispatch to planning ────────────────────────────────────
+  # ── Error recovery paths ────────────────────────────────────
+
+  end_session_and_reason:
+    action: end_director_session
+    description: "Close session — task/file selection failed, loop back to reason"
+    context:
+      optional: [session_id]
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: start_session
+    publishes: []
+
+  end_session_error_no_files:
+    action: end_director_session
+    description: "Close session — no files exist for modification flow"
+    context:
+      optional: [session_id, mission]
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: start_session
+    publishes: []
+
+  # ── Plan revision ───────────────────────────────────────────
+
+  dispatch_revise_plan:
+    action: noop
+    description: "Repeated dispatch detected or plan revision requested — revise plan"
+    context:
+      required: [mission]
+      optional: [director_analysis]
+    tail_call:
+      flow: revise_plan
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        observation: "{{ context.director_analysis or context.dispatch_warning or 'Plan revision needed' }}"
+
+  # ── Planning dispatch ───────────────────────────────────────
 
   dispatch_planning:
     action: noop
-    description: "No plan exists — dispatch to create_plan flow"
+    description: "No plan exists — dispatch to design_and_plan flow"
     context:
       required: [mission]
     tail_call:
-      flow: create_plan
+      flow: design_and_plan
       input_map:
         mission_id: "{{ input.mission_id }}"
+
+  # ── Quality paths ───────────────────────────────────────────
+
+  quality_checkpoint:
+    action: end_director_session
+    description: "Close director session, then run quality checkpoint"
+    context:
+      optional: [session_id, mission]
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: quality_checkpoint_run
+
+  quality_checkpoint_run:
+    action: flow
+    description: "Run quality inspection on current state"
+    flow: quality_gate
+    context:
+      required: [mission]
+    input_map:
+      working_directory: "{{ context.mission.config.working_directory }}"
+      mission_id: "{{ input.mission_id }}"
+      mission_objective: "{{ context.mission.objective }}"
+      mode: "checkpoint"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.status == 'success'"
+          transition: start_session
+        - condition: "true"
+          transition: quality_failed_restart
+    publishes:
+      - quality_results
+
+  quality_completion:
+    action: end_director_session
+    description: "Close director session, then run final quality gate"
+    context:
+      optional: [session_id, mission]
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: quality_completion_run
+
+  quality_completion_run:
+    action: flow
+    description: "Final quality gate for mission completion"
+    flow: quality_gate
+    context:
+      required: [mission]
+    input_map:
+      working_directory: "{{ context.mission.config.working_directory }}"
+      mission_id: "{{ input.mission_id }}"
+      mission_objective: "{{ context.mission.objective }}"
+      mode: "completion"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.status == 'success'"
+          transition: completed
+        - condition: "true"
+          transition: quality_failed_restart
+        - condition: "true"
+          transition: dispatch_revise_plan
+    publishes:
+      - quality_results
+
+  # ── Quality gate failure → restart mission_control ───────────
+
+  quality_failed_restart:
+    action: noop
+    description: "Quality gate failed — fix tasks added to plan. Restart mission_control to work them."
+    context:
+      optional: [mission, quality_results]
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_status: "failed"
+        last_result: "Quality gate failed. Fix tasks have been added to the plan."
 
   # ── Terminal / parking states ───────────────────────────────
 
@@ -339,20 +919,28 @@ steps:
     action: finalize_mission
     description: "Mark mission complete"
     context:
-      optional: [mission, assessment, completion_assessment]
+      optional: [mission, quality_results]
     terminal: true
     status: completed
 
   idle:
     action: enter_idle
-    description: "Nothing to do — wait for events"
+    description: "Wait for events"
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
-        last_task_id: "{{ input.last_task_id }}"
-        last_status: "{{ input.last_status }}"
       delay: 5
+
+  mission_deadlocked:
+    action: finalize_mission
+    description: "Mission deadlocked"
+    context:
+      optional: [mission, director_analysis]
+    params:
+      deadlock: true
+    terminal: true
+    status: deadlocked
 
   aborted:
     action: finalize_mission

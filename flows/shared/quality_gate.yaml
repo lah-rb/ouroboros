@@ -1,11 +1,17 @@
 flow: quality_gate
-version: 1
+version: 3
 description: >
-  End-of-mission quality gate. Runs after all tasks are complete.
-  Scans the project, uses LLM to plan comprehensive validation checks
-  (imports, tests, integration), executes them, and reports results.
-  If issues are found, returns with details so mission_control can
-  create fix tasks via revise_plan.
+  Project-wide quality validation. Three-phase gate:
+  1. Deterministic checks — file scan, cross-file AST consistency, import validation, lint
+  2. Behavioral validation — sub-flow to run_in_terminal, actually execute the project
+  3. Summary — LLM reviews all results and determines pass/fail
+
+  Receives clean context: working_directory and mission_objective.
+  Judges the product, not the process that built it.
+
+  Modes:
+  - "completion" (default): Final gate before declaring mission complete.
+  - "checkpoint": Mid-mission inspection. Terminal execution skipped.
 
 input:
   required:
@@ -14,12 +20,15 @@ input:
   optional:
     - mission_objective
     - relevant_notes
+    - mode  # "checkpoint" or "completion", default "completion"
 
 defaults:
   config:
     temperature: 0.1
 
 steps:
+
+  # ── Phase 1: Deterministic checks ──────────────────────────
 
   scan_project:
     action: scan_project
@@ -52,7 +61,7 @@ steps:
 
   plan_checks:
     action: inference
-    description: "LLM plans comprehensive project-wide validation"
+    description: "LLM plans deterministic validation checks (imports, lint)"
     context:
       required: [project_manifest]
       optional: [cross_file_summary]
@@ -61,7 +70,6 @@ steps:
       Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
       object — no markdown, no explanation, no surrounding text.
 
-      All individual tasks are complete. Now validate the ENTIRE project works together.
       Working directory: {{ input.working_directory }}
 
       Project files:
@@ -70,71 +78,39 @@ steps:
         {{ sig[:120] }}
       {% endfor %}
 
-      Plan validation checks that verify the project as a whole:
+      Plan validation checks that verify the project structure:
 
       1. IMPORT CHECKS: For each Python module, verify it can be imported.
          Convert file paths to module names (app/main.py → app.main).
          Skip __init__.py files.
 
-      2. ENTRY POINT CHECK: If main.py or a CLI entry point exists, run it with --help
-         or a safe flag to verify it starts without errors:
-         ["python", "main.py", "--help"]
-
-      3. CROSS-MODULE CHECK: For the main/entry module, test that its key imports
-         actually resolve at runtime by importing specific names:
+      2. CROSS-MODULE CHECK: For the main/entry module, test that its key imports
+         actually resolve at runtime:
          ["python", "-c", "from main import main; print('OK')"]
 
-      4. TEST SUITE: Run pytest if tests/ directory exists.
+      3. LINT: Run ruff or python -m py_compile on each source file.
 
-      5. LINT: Run ruff or flake8 on the entire project.
-
-      Mark ALL checks as required: false — we want to collect ALL issues, not stop at the first.
+      Mark ALL checks as required: false — collect ALL issues, don't stop early.
 
       ✅ CORRECT output (raw JSON object, nothing else):
       {
         "language": "python",
         "checks": [
           {
-            "name": "import models/data",
-            "command": ["python", "-c", "import models.data"],
+            "name": "import models",
+            "command": ["python", "-c", "import models"],
             "timeout": 30,
             "required": false,
             "tier": "execution"
-          },
-          {
-            "name": "import app",
-            "command": ["python", "-c", "import app"],
-            "timeout": 30,
-            "required": false,
-            "tier": "execution"
-          },
-          {
-            "name": "lint all",
-            "command": ["ruff", "check", "."],
-            "timeout": 60,
-            "required": false,
-            "tier": "lint"
-          },
-          {
-            "name": "run tests",
-            "command": ["python", "-m", "pytest", "tests/", "-v", "--tb=short"],
-            "timeout": 120,
-            "required": false,
-            "tier": "test"
           }
         ]
       }
 
-      ❌ WRONG — do not wrap in markdown or add explanation.
-
       Rules:
-      - ALL checks must be required: false — collect everything, don't stop early.
+      - ALL checks must be required: false.
       - Include an import check for EVERY .py file (except __init__.py).
-      - Convert file paths to module names (slashes → dots, strip .py).
-      - Include tests only if test files exist in the manifest.
-      - Include lint if any source files exist.
-
-      Return ONLY the raw JSON object.
+      - Do NOT include full application execution here — that happens separately.
+      - Return ONLY the raw JSON object.
     config:
       temperature: 0.0
     resolver:
@@ -143,13 +119,13 @@ steps:
         - condition: "result.tokens_generated > 0"
           transition: execute_checks
         - condition: "true"
-          transition: pass_empty
+          transition: check_mode_for_terminal
     publishes:
       - inference_response
 
   execute_checks:
     action: run_validation_checks
-    description: "Execute all project-wide quality checks"
+    description: "Execute all deterministic quality checks"
     context:
       required: [inference_response]
     params:
@@ -158,32 +134,81 @@ steps:
       type: rule
       rules:
         - condition: "true"
-          transition: summarize
+          transition: check_mode_for_terminal
     publishes:
       - validation_results
 
+  # ── Phase 2: Behavioral validation (completion mode only) ───
+
+  check_mode_for_terminal:
+    action: noop
+    description: "Route based on mode — completion runs terminal, checkpoint skips"
+    resolver:
+      type: rule
+      rules:
+        - condition: "input.get('mode', 'completion') == 'completion'"
+          transition: run_behavioral_check
+        - condition: "true"
+          transition: summarize
+
+  run_behavioral_check:
+    action: flow
+    description: "Execute the project in a terminal session and verify it works"
+    flow: run_in_terminal
+    input_map:
+      session_goal: "Run the project and verify it works correctly. Mission objective: {{ input.mission_objective or 'verify the project runs without errors' }}. Execute the main entry point, observe output, try basic interactions if applicable. Report whether the software functions as intended."
+      working_directory: "{{ input.working_directory }}"
+      initial_commands: ""
+      max_turns: "4"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.status == 'success'"
+          transition: summarize
+        - condition: "true"
+          transition: summarize
+    publishes:
+      - terminal_output
+      - terminal_status
+
+  # ── Phase 3: Summary and verdict ───────────────────────────
+
   summarize:
     action: inference
-    description: "Summarize quality gate results into actionable fix tasks"
+    description: "Summarize all quality results into actionable findings"
     context:
-      required: [validation_results, project_manifest]
-      optional: [cross_file_summary]
+      optional: [validation_results, project_manifest, cross_file_summary, terminal_output, terminal_status]
     prompt: |
       You are a quality assessment module in an automated coding pipeline.
       Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
       object — no markdown, no explanation, no surrounding text.
 
-      ## Files That Exist in This Project (authoritative — from disk scan)
+      {% if input.get('mode', 'completion') == 'checkpoint' %}
+      MODE: Checkpoint — report on current health. Issues found here will
+      be used to expand the mission plan with fix tasks.
+      {% else %}
+      MODE: Completion — this is the final gate. The project must be
+      structurally sound AND behaviorally correct to pass.
+      {% endif %}
+
+      Mission objective: {{ input.mission_objective or 'not specified' }}
+
+      ## Files in Project
+      {% if context.project_manifest %}
       {% for filepath in context.project_manifest.keys() %}
       - {{ filepath }}
       {% endfor %}
+      {% else %}
+      No project manifest available.
+      {% endif %}
 
       {% if context.cross_file_summary %}
-      ## Structural Analysis (AST-based, deterministic — high confidence)
+      ## Structural Analysis (AST-based)
       {{ context.cross_file_summary }}
       {% endif %}
 
-      Project quality gate results:
+      {% if context.validation_results %}
+      ## Deterministic Check Results
       {% for check in context.validation_results %}
       - {{ check.name }}: {{ "PASS" if check.passed else "FAIL" }}
         {% if not check.passed %}
@@ -191,53 +216,46 @@ steps:
         stderr: {{ check.stderr[:200] }}
         {% endif %}
       {% endfor %}
+      {% endif %}
 
-      Summarize the results:
+      {% if context.terminal_output %}
+      ## Behavioral Validation (Terminal Execution)
+      {{ context.terminal_output[:1000] }}
+      {% elif input.get('mode', 'completion') == 'completion' %}
+      ## Behavioral Validation
+      Terminal execution was not performed or produced no output.
+      {% endif %}
 
-      ✅ CORRECT output (raw JSON object, nothing else):
+      Produce a verdict:
+
+      ✅ CORRECT output:
       {
         "all_passing": false,
+        "structural_ok": true,
+        "behavioral_ok": false,
         "total_checks": 6,
         "passed": 4,
         "failed": 2,
-        "summary": "Import errors in clients/api.py (missing APIClient class) and app.py (depends on clients.api). Tests not passing due to missing fixtures.",
+        "summary": "Imports OK but main.py crashes on startup with ValueError",
         "fix_tasks": [
           {
-            "description": "Fix clients/api.py — add APIClient class implementation",
-            "file": "clients/api.py",
-            "flow": "modify_file",
-            "issue": "ImportError: cannot import name 'APIClient'"
-          },
-          {
-            "description": "Fix app.py — update imports after clients/api fix",
-            "file": "app.py",
-            "flow": "modify_file",
-            "issue": "ImportError: depends on clients.api.APIClient"
+            "description": "Fix engine.py — constructor validation prevents startup",
+            "file": "engine.py",
+            "issue": "GameEngine.__post_init__ raises ValueError before world data is loaded"
           }
         ]
       }
 
-      If all checks pass:
-      {"all_passing": true, "total_checks": 6, "passed": 6, "failed": 0, "summary": "All quality checks pass", "fix_tasks": []}
+      If all checks pass AND behavioral validation succeeded:
+      {"all_passing": true, "structural_ok": true, "behavioral_ok": true, "total_checks": 6, "passed": 6, "failed": 0, "summary": "All quality checks pass — project is functional", "fix_tasks": []}
 
-      CRITICAL Rules:
-      - ONLY create fix_tasks for files listed in "Files That Exist" above.
-        Do NOT invent file paths from error messages. If an error mentions a module
-        path like "clients.api", check whether "clients/api.py" actually exists in
-        the file list. If it doesn't exist, the fix target should be the file that
-        IMPORTS it (which does exist), not the missing file.
-      - Each fix_task must target exactly one file.
-      - Choose the correct flow for each fix:
-        - "modify_file": fix an existing file (import errors, logic bugs, missing methods)
-        - "create_file": create a missing file that other modules expect
-        - "integrate_modules": wire modules together (missing cross-imports, interface mismatches)
-        - "manage_packages": install missing dependencies
-      - Group related import errors — if module A fails because module B is broken, fix B first.
-      - Order fix_tasks so dependencies are resolved before dependents.
-      - Be specific about what's wrong in the "issue" field.
-      - Limit to at most 5 fix_tasks. Consolidate related issues into single tasks.
-
-      Return ONLY the raw JSON object.
+      Rules:
+      - ONLY create fix_tasks for files that exist in the project.
+      - Each fix_task targets exactly one file.
+      - Do NOT include a "flow" field — the director chooses the approach.
+      - Limit to at most 5 fix_tasks. Consolidate related issues.
+      - For completion mode: both structural AND behavioral must pass for all_passing=true.
+      - Return ONLY the raw JSON object.
     config:
       temperature: 0.1
     resolver:
@@ -254,8 +272,8 @@ steps:
     action: apply_quality_gate_results
     description: "Parse quality summary and determine pass/fail"
     context:
-      required: [inference_response, validation_results]
-      optional: [project_manifest]
+      required: [inference_response]
+      optional: [validation_results, project_manifest]
     resolver:
       type: rule
       rules:
@@ -268,6 +286,8 @@ steps:
     publishes:
       - quality_results
 
+  # ── Terminal states ────────────────────────────────────────
+
   gate_pass:
     action: noop
     description: "Project passes quality gate"
@@ -276,7 +296,7 @@ steps:
 
   gate_fail:
     action: noop
-    description: "Project has quality issues needing fix tasks"
+    description: "Project has quality issues needing attention"
     terminal: true
     status: failed
 

@@ -13,13 +13,13 @@ objective: >
   6 rooms, 4 items, and 2 NPCs with branching dialogue. The game should be runnable from 
   the command line and produce engaging descriptive text.
 
-working_dir: "/tmp/ouroboros-challenge-devstral-small-2-24b"
+working_dir: "/tmp/ouroboros-challenge"
 effects_profile: local
 llmvp_endpoint: "http://localhost:8008/graphql"
 
 pre_create:
-  - "rm -rf /tmp/ouroboros-challenge-devstral-small-2-24b && mkdir /tmp/ouroboros-challenge-devstral-small-2-24b"
+  - "rm -rf /tmp/ouroboros-challenge && mkdir /tmp/ouroboros-challenge"
   - "touch ~/Repos/ouroboros/llmvp/logs/interactions.jsonl && rm ~/Repos/ouroboros/llmvp/logs/interactions.jsonl"
 
 post_create:
-  - "cd ~/Repos/ouroboros && uv run ouroboros.py start --working-dir /tmp/ouroboros-challenge-devstral-small-2-24b"
+  - "cd ~/Repos/ouroboros && uv run ouroboros.py start --working-dir /tmp/ouroboros-challenge"

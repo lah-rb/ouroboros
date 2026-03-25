@@ -24,11 +24,13 @@ steps:
 
   start_session:
     action: start_terminal_session
-    description: "Start persistent shell and run optional setup commands"
+    description: "Start persistent shell, memoryful inference session, and run setup commands"
     params:
       working_directory: "{{ input.working_directory }}"
       initial_commands: "{{ input.initial_commands }}"
       environment_vars: "{{ input.environment_vars }}"
+      session_goal: "{{ input.session_goal }}"
+      session_context: "{{ input.session_context }}"
     resolver:
       type: rule
       rules:
@@ -38,6 +40,7 @@ steps:
           transition: close_failure
     publishes:
       - session_id
+      - inference_session_id
       - session_history
 
   plan_next_command:
@@ -159,9 +162,10 @@ steps:
 
   close_success:
     action: close_terminal_session
-    description: "Close terminal — session goal achieved"
+    description: "Close terminal and inference session — goal achieved"
     context:
       required: [session_id, session_history]
+      optional: [inference_session_id]
     terminal: true
     status: success
     publishes:
@@ -170,9 +174,9 @@ steps:
 
   close_failure:
     action: close_terminal_session
-    description: "Close terminal — session failed"
+    description: "Close terminal and inference session — session failed"
     context:
-      optional: [session_id, session_history]
+      optional: [session_id, session_history, inference_session_id]
     terminal: true
     status: failed
     publishes:
@@ -181,9 +185,10 @@ steps:
 
   close_max_turns:
     action: close_terminal_session
-    description: "Close terminal — max turns exceeded"
+    description: "Close terminal and inference session — max turns exceeded"
     context:
       required: [session_id, session_history]
+      optional: [inference_session_id]
     terminal: true
     status: issues
     publishes:

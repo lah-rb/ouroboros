@@ -57,7 +57,8 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
     if not raw_text:
         raw_text = step_input.context.get("docstring_changes", "")
 
-    file_blocks = _parse_multi_file_output(raw_text)
+    fallback_path = step_input.params.get("fallback_path", "")
+    file_blocks = _parse_multi_file_output(raw_text, fallback_path=fallback_path)
 
     if not file_blocks:
         return StepOutput(
@@ -101,47 +102,19 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
     )
 
 
-def _parse_multi_file_output(text: str) -> list[tuple[str, str]]:
+def _parse_multi_file_output(
+    text: str, fallback_path: str = ""
+) -> list[tuple[str, str]]:
     """Parse text containing multiple file blocks.
 
-    Supports formats:
-        === FILE: path/to/file.py ===
-        ```python
-        content
-        ```
-
-    And also:
-        === FILE: path/to/file.py ===
-        content (until next === FILE or end)
+    Delegates to agent.markdown_fence.parse_file_blocks which uses
+    markdown-it-py for CommonMark-compliant fence extraction.
 
     Returns list of (path, content) tuples.
     """
-    blocks: list[tuple[str, str]] = []
+    from agent.markdown_fence import parse_file_blocks
 
-    # Split on === FILE: ... === markers
-    pattern = r"===\s*FILE:\s*(.+?)\s*===\s*\n"
-    parts = re.split(pattern, text)
-
-    # parts[0] is text before first marker (discard)
-    # parts[1] = path, parts[2] = content, parts[3] = path, parts[4] = content, ...
-    i = 1
-    while i + 1 < len(parts):
-        file_path = parts[i].strip()
-        raw_content = parts[i + 1]
-
-        # Extract code from fenced block if present
-        code_match = re.search(r"```\w*\s*\n([\s\S]*?)```", raw_content)
-        if code_match:
-            content = code_match.group(1)
-        else:
-            # Use the raw content, stripping leading/trailing whitespace
-            content = raw_content.strip()
-
-        if file_path and content:
-            blocks.append((file_path, content))
-        i += 2
-
-    return blocks
+    return parse_file_blocks(text, fallback_path=fallback_path)
 
 
 # ── Project test runner ───────────────────────────────────────────────
@@ -303,6 +276,126 @@ async def action_restore_file_from_context(step_input: StepInput) -> StepOutput:
             "target_file": target_file,
             "failed_refactoring": refactoring_applied,
         },
+    )
+
+
+# ── Integration report ────────────────────────────────────────────────
+
+
+async def action_compile_integration_report(step_input: StepInput) -> StepOutput:
+    """Compile integration inspection results into a structured report.
+
+    Reads: context.inference_response (JSON from analyze_cohesion),
+           context.cross_file_results (from structural_check)
+    Persists: integration report as mission note
+    Publishes: integration_report
+
+    Result fields:
+        status: "clean" | "issues_found" | "parse_error"
+        issues_count: int
+        summary: str
+    """
+    import json
+    from agent.actions.refinement_actions import strip_markdown_wrapper
+
+    effects = step_input.effects
+    response = step_input.context.get("inference_response", "")
+    cross_file = step_input.context.get("cross_file_results", {})
+
+    # Parse LLM JSON response
+    report = None
+    try:
+        cleaned = strip_markdown_wrapper(response)
+        report = json.loads(cleaned)
+    except (json.JSONDecodeError, TypeError):
+        # Try to find JSON object in the response
+        match = re.search(r"\{[\s\S]*\}", cleaned if cleaned else response)
+        if match:
+            try:
+                report = json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+
+    if not report:
+        return StepOutput(
+            result={
+                "status": "parse_error",
+                "issues_count": 0,
+                "summary": "Could not parse integration analysis",
+            },
+            observations="Failed to parse LLM integration analysis as JSON",
+            context_updates={
+                "integration_report": {
+                    "status": "parse_error",
+                    "summary": "Parse error",
+                    "issues": [],
+                }
+            },
+        )
+
+    # Merge deterministic cross-file issues
+    issues = report.get("issues", [])
+    cross_issues = cross_file.get("issues", [])
+    for ci in cross_issues:
+        # Add deterministic issues that aren't already covered
+        if not any(
+            i.get("file") == ci.get("file") and i.get("type") == ci.get("type")
+            for i in issues
+        ):
+            issues.append(
+                {
+                    "type": ci.get("type", "structural"),
+                    "severity": ci.get("severity", "warning"),
+                    "file": ", ".join(ci.get("files", [])),
+                    "problem": ci.get("message", ""),
+                    "suggested_fix": "",
+                    "fix_target": ci.get("files", [None])[0],
+                    "source": "ast_analysis",
+                }
+            )
+
+    status = report.get("status", "issues_found" if issues else "clean")
+    summary = report.get("summary", f"{len(issues)} integration issues found")
+
+    integration_report = {
+        "status": status,
+        "summary": summary,
+        "issues": issues,
+        "healthy_connections": report.get("healthy_connections", []),
+        "issues_count": len(issues),
+    }
+
+    # Persist as mission note for mission_control's reason step
+    if effects:
+        try:
+            mission = await effects.load_mission()
+            if mission:
+                from agent.persistence.models import NoteRecord
+
+                note = NoteRecord(
+                    content=f"Integration report: {summary}\n"
+                    + "\n".join(
+                        f"- [{i.get('severity', '?')}] {i.get('type', '?')}: "
+                        f"{i.get('problem', '')}"
+                        for i in issues[:10]
+                    ),
+                    category="codebase_observation",
+                )
+                if not hasattr(mission, "notes") or mission.notes is None:
+                    mission.notes = []
+                mission.notes.append(note)
+                await effects.save_mission(mission)
+        except Exception as e:
+            logger.warning("Could not persist integration report as note: %s", e)
+
+    return StepOutput(
+        result={
+            "status": status,
+            "issues_count": len(issues),
+            "summary": summary,
+        },
+        observations=f"Integration report: {status} — {summary}",
+        context_updates={"integration_report": integration_report},
     )
 
 

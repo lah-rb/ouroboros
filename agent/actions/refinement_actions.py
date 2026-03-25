@@ -133,6 +133,51 @@ def extract_code_from_response(text: str) -> str:
 # ── push_note ─────────────────────────────────────────────────────────
 
 
+async def action_accumulate_correction_history(step_input: StepInput) -> StepOutput:
+    """Accumulate correction attempt history for retry loops.
+
+    Tracks what errors occurred and what fixes were attempted so the
+    correction step can avoid repeating the same failed approach.
+
+    Publishes: correction_history (list of dicts with error + fix_summary)
+    """
+    existing = step_input.context.get("correction_history", [])
+    validation = step_input.context.get("validation_results", {})
+
+    errors = []
+    if isinstance(validation, list):
+        for check in validation:
+            if isinstance(check, dict) and not check.get("passed"):
+                errors.append(
+                    f"{check.get('name', '?')}: "
+                    f"{check.get('stderr', check.get('stdout', ''))[:200]}"
+                )
+    elif isinstance(validation, dict):
+        for check in validation.get("checks", []):
+            if not check.get("passed"):
+                errors.append(
+                    f"{check.get('name', '?')}: "
+                    f"{check.get('stderr', check.get('stdout', ''))[:200]}"
+                )
+
+    last_response = step_input.context.get("inference_response", "")
+    fix_summary = (
+        last_response[:200]
+        if isinstance(last_response, str)
+        else str(last_response)[:200]
+    )
+
+    updated = list(existing) + [
+        {"error": "; ".join(errors), "fix_summary": fix_summary}
+    ]
+
+    return StepOutput(
+        result={"history_length": len(updated)},
+        observations=f"Correction history: {len(updated)} attempts recorded",
+        context_updates={"correction_history": updated},
+    )
+
+
 async def action_push_note(step_input: StepInput) -> StepOutput:
     """Persist an observation to mission state notes.
 
@@ -465,8 +510,12 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
 
     if not effects:
         return StepOutput(
-            result={"all_required_passing": True, "checks_run": 0},
-            observations="No effects — skipping validation",
+            result={
+                "all_required_passing": False,
+                "checks_run": 0,
+                "status": "skipped",
+            },
+            observations="No effects — validation skipped (NOT assumed pass)",
             context_updates={"validation_results": []},
         )
 
@@ -1299,6 +1348,129 @@ def _parse_quality_summary(raw: str) -> dict:
         except json.JSONDecodeError:
             pass
     return {}
+
+
+# ── validate_created_files ────────────────────────────────────────────
+
+
+async def action_validate_created_files(step_input: StepInput) -> StepOutput:
+    """Validate all files in context.files_changed.
+
+    For each file:
+    - Skip non-code files (.md, .yaml, .json, .toml, .txt, .csv, .cfg, .ini, .env)
+    - Run syntax check (required)
+    - Run import check (non-blocking)
+
+    Aggregates into a single status:
+    - 'success': all files pass all checks
+    - 'issues': all files pass syntax but some have import issues
+    - 'failed': any file fails syntax check
+
+    Publishes: validation_results (list of per-check results across all files)
+    """
+    effects = step_input.effects
+    files_changed = step_input.context.get("files_changed", [])
+
+    if not files_changed:
+        return StepOutput(
+            result={"status": "success"},
+            observations="No files to validate",
+            context_updates={"validation_results": []},
+        )
+
+    if not effects:
+        return StepOutput(
+            result={"status": "skipped"},
+            observations="No effects interface — validation skipped (NOT assumed pass)",
+            context_updates={"validation_results": []},
+        )
+
+    all_results = []
+    any_syntax_failed = False
+    any_issues = False
+
+    skip_extensions = {
+        "md",
+        "yaml",
+        "yml",
+        "json",
+        "toml",
+        "txt",
+        "csv",
+        "cfg",
+        "ini",
+        "env",
+    }
+
+    for file_path in files_changed:
+        # Skip non-code files
+        ext = file_path.rsplit(".", 1)[-1] if "." in file_path else ""
+        if ext in skip_extensions:
+            continue
+
+        # Syntax check
+        if ext == "py":
+            result = await effects.run_command(
+                [
+                    "python",
+                    "-c",
+                    f"import py_compile; py_compile.compile('{file_path}', doraise=True)",
+                ],
+                timeout=30,
+            )
+            check = {
+                "name": f"syntax: {file_path}",
+                "passed": result.return_code == 0,
+                "stdout": result.stdout[:500],
+                "stderr": result.stderr[:500],
+                "tier": "syntax",
+                "required": True,
+            }
+            all_results.append(check)
+            if not check["passed"]:
+                any_syntax_failed = True
+
+            # Import check (non-blocking)
+            module_name = _filepath_to_module(file_path)
+            if module_name:
+                result = await effects.run_command(
+                    ["python", "-c", f"import {module_name}"],
+                    timeout=30,
+                )
+                check = {
+                    "name": f"import: {file_path}",
+                    "passed": result.return_code == 0,
+                    "stdout": result.stdout[:500],
+                    "stderr": result.stderr[:500],
+                    "tier": "execution",
+                    "required": False,
+                }
+                all_results.append(check)
+                if not check["passed"]:
+                    any_issues = True
+
+    # Determine aggregate status
+    if any_syntax_failed:
+        status = "failed"
+    elif any_issues:
+        status = "issues"
+    else:
+        status = "success"
+
+    return StepOutput(
+        result={
+            "status": status,
+            "all_required_passing": not any_syntax_failed,
+            "total_checks": len(all_results),
+            "passed": sum(1 for r in all_results if r["passed"]),
+            "failed": sum(1 for r in all_results if not r["passed"]),
+        },
+        observations=f"Validated {len(files_changed)} files: {status}",
+        context_updates={"validation_results": all_results},
+    )
+
+
+# ── filepath_to_module helper ─────────────────────────────────────────
 
 
 def _filepath_to_module(filepath: str) -> str | None:

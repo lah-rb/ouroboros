@@ -1,334 +1,147 @@
 flow: explore_spike
-version: 1
+version: 2
 description: >
-  Time-boxed investigation of a codebase, module, pattern, or technology.
-  Produces a structured findings document without modifying any code.
-  Used to build understanding before planning or implementation.
+  Investigate a pattern, library, or approach before committing.
 
 input:
   required:
-    - investigation_goal
-  optional:
     - mission_id
     - task_id
+  optional:
     - task_description
     - mission_objective
-    - scope_hint
     - working_directory
-    - specific_questions
-    - frustration_level
-    - frustration_history
+    - target_file_path
+    - reason
     - relevant_notes
 
 defaults:
   config:
-    temperature: "t*0.5"
-    max_tokens: 4096
+    temperature: "t*0.6"
 
 steps:
 
-  # ── Phase 1: Plan the investigation ────────────────────────
+  gather_context:
+    use: gather_project_context
+    params:
+      context_budget: 8
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: execute
 
-  plan_investigation:
+  execute:
     action: inference
-    description: "Produce a focused investigation plan: what to look at, in what order"
+    description: "Execute the task via inference"
+    context:
+      optional: [context_bundle, project_manifest, repo_map_formatted]
     prompt: |
-      You are an investigation planning module in an automated coding pipeline.
-      Your output will guide a file-reading step that examines specific files.
-      Write a focused, actionable investigation plan.
+      You are a technical investigation module. Research the approach, evaluate tradeoffs, and produce a recommendation.
 
       ## Investigation Goal
-      {{ input.investigation_goal }}
+      {{ input.task_description }}
 
-      {% if input.scope_hint %}
-      ## Starting Point
-      Begin your investigation at: {{ input.scope_hint }}
+      {% if input.reason %}
+      ## Why This Investigation
+      {{ input.reason }}
       {% endif %}
 
-      {% if input.specific_questions %}
-      ## Specific Questions to Answer
-      {{ input.specific_questions }}
-      {% endif %}
+      Project objective: {{ input.mission_objective }}
 
       {% if input.relevant_notes %}
-      ## Notes from Previous Work
+      ## Architecture & Notes
       {{ input.relevant_notes }}
       {% endif %}
 
-      ## Plan Your Investigation
-      You have a limited budget of exploration steps, so prioritize.
+      {% if context.repo_map_formatted %}
+      ## Project Structure
+      {{ context.repo_map_formatted }}
+      {% endif %}
 
-      For each step (3-5 steps maximum):
-      1. **What to examine**: specific file path, directory, or concept
-      2. **What to look for**: specific patterns, interfaces, dependencies
-      3. **Why this matters**: how it connects to the investigation goal
+      {% if context.context_bundle and context.context_bundle.files %}
+      ## Project Files
+      {% for file in context.context_bundle.files %}
+      === {{ file.path }} ===
+      {{ file.content[:1500] }}
+      {% endfor %}
+      {% endif %}
 
-      Order steps from most critical to least critical.
-      Reference actual file paths where possible (e.g., src/models.py, app/main.py).
+      If you need to create or update files, use this format:
 
-      Write as a numbered list of investigation steps.
+      === FILE: path/to/file ===
+      ```
+      content
+      ```
+
+      Create ALL files needed. If no files need creating, provide analysis as plain text.
     config:
-      temperature: "t*0.6"
+      temperature: 0.4
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
-          transition: scan_structure
+          transition: process_output
         - condition: "true"
-          transition: synthesize
+          transition: failed
     publishes:
-      - investigation_plan
+      - inference_response
 
-  # ── Phase 2: Broad scan ────────────────────────────────────
-
-  scan_structure:
-    use: gather_project_context
+  process_output:
+    action: apply_multi_file_changes
+    description: "Write any file blocks to disk"
+    context:
+      required: [inference_response]
     params:
-      context_budget: 10
+      content_key: "inference_response"
     resolver:
       type: rule
       rules:
-        - condition: "true"
-          transition: deep_read
-
-  # ── Phase 3: Deep read targeted files ──────────────────────
-
-  deep_read:
-    action: read_investigation_targets
-    description: "Read full content of files identified in the investigation plan"
-    context:
-      required: [investigation_plan]
-      optional: [project_manifest]
-    params:
-      max_files: 5
-      max_bytes_per_file: 50000
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.files_read > 0"
-          transition: analyze
-        - condition: "true"
-          transition: synthesize
-    publishes:
-      - deep_context
-
-  # ── Phase 4: Analyze findings ──────────────────────────────
-
-  analyze:
-    action: inference
-    description: "Analyze code patterns, architecture, conventions, and risks"
-    context:
-      required: [investigation_plan, deep_context]
-      optional: [project_manifest, context_bundle]
-    prompt: |
-      You are a code analysis module in an automated coding pipeline.
-      Your output will be evaluated to determine if the investigation is complete.
-      Write thorough, specific analysis grounded in the actual code.
-
-      ## Investigation Goal
-      {{ input.investigation_goal }}
-
-      ## Investigation Plan
-      {{ context.investigation_plan }}
-
-      ## Code You've Read
-      {% for filepath, content in context.deep_context.items() %}
-      ### {{ filepath }}
-      ```
-      {{ content }}
-      ```
-      {% endfor %}
-
-      {% if context.project_manifest %}
-      ## Project Structure Overview
-      {% for filepath, sig in context.project_manifest.items() %}
-      {% if filepath not in context.deep_context %}
-      - **{{ filepath }}**: {{ sig[:100] }}
-      {% endif %}
-      {% endfor %}
-      {% endif %}
-
-      {% if input.specific_questions %}
-      ## Specific Questions to Answer
-      {{ input.specific_questions }}
-      {% endif %}
-
-      ## Analyze
-      Address each point from your investigation plan. For each:
-      1. **What you found**: concrete observations from the code
-      2. **Patterns identified**: recurring conventions, architectural patterns
-      3. **Dependencies**: what depends on what, coupling analysis
-      4. **Risks**: potential issues, fragile areas, technical debt
-      5. **Conventions**: naming patterns, file organization, import style
-
-      Be specific — reference file names, function names, and line numbers.
-      Distinguish between what you observed and what you're inferring.
-
-      Write structured prose with the sections above.
-    config:
-      temperature: "t*0.4"
-    resolver:
-      type: llm_menu
-      prompt: "Is the analysis sufficient to meet the investigation goal?"
-      options:
-        synthesize:
-          description: "The analysis addresses the investigation goal adequately"
-        deeper_look:
-          description: "There's a specific area that needs closer examination"
-        external_research:
-          description: "The investigation requires external knowledge (documentation, articles)"
-    publishes:
-      - analysis
-
-  # ── Optional: deeper look ──────────────────────────────────
-
-  deeper_look:
-    action: inference
-    description: "Identify what specific area needs closer examination"
-    context:
-      required: [analysis, investigation_plan]
-      optional: [deep_context, project_manifest]
-    prompt: |
-      You are an investigation refinement module in an automated coding pipeline.
-      Your output will guide another round of file reading.
-      Identify what specific files or code sections need closer examination.
-
-      ## Original Goal
-      {{ input.investigation_goal }}
-
-      ## Your Analysis So Far
-      {{ context.analysis }}
-
-      What specific file or code section needs closer examination?
-      What specific question does examining it answer?
-
-      Update the investigation plan: list the file paths to examine next.
-      Be precise — name the file and the function/class/section.
-
-      Write a brief updated investigation plan (2-3 steps).
-    config:
-      temperature: "t*0.3"
-    resolver:
-      type: rule
-      rules:
-        - condition: "meta.attempt < 3"
-          transition: deep_read
-        - condition: "true"
-          transition: synthesize
-    publishes:
-      - investigation_plan
-
-  # ── Optional: external research ────────────────────────────
-
-  external_research:
-    action: flow
-    description: "Research external sources for patterns or documentation"
-    flow: research_context
-    input_map:
-      problem_description: "{{ input.investigation_goal }}"
-      search_hints: "{{ context.analysis }}"
-      max_queries: "2"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
-          transition: synthesize
-    publishes:
-      - research_findings
-
-  # ── Phase 5: Synthesize findings ───────────────────────────
-
-  synthesize:
-    action: inference
-    description: "Produce the structured findings document"
-    context:
-      required: [analysis]
-      optional: [deep_context, project_manifest, research_findings, investigation_plan]
-    prompt: |
-      You are a research synthesis module in an automated coding pipeline.
-      Your output will be stored as a findings document consumed by other flows.
-      Write concise, actionable findings grounded in your actual analysis.
-
-      ## Investigation Goal
-      {{ input.investigation_goal }}
-
-      ## Your Analysis
-      {{ context.analysis }}
-
-      {% if context.research_findings %}
-      ## External Research
-      {{ context.research_findings }}
-      {% endif %}
-
-      ## Produce a Findings Document
-
-      Structure your findings as:
-
-      ### Summary
-      2-3 sentence overview of what you learned.
-
-      ### Architecture & Patterns
-      How the code is structured, what patterns it uses, what conventions it follows.
-
-      ### Key Interfaces
-      The most important functions, classes, or modules — what they do and how they connect.
-
-      ### Risks & Technical Debt
-      Issues you identified that could cause problems.
-
-      ### Recommendations
-      Concrete suggestions for how to approach work in this codebase.
-      What to be careful about. What patterns to follow. What to avoid.
-
-      {% if input.specific_questions %}
-      ### Answers to Specific Questions
-      {{ input.specific_questions }}
-      Answer each question specifically based on your analysis.
-      {% endif %}
-
-      ### Files Referenced
-      List every file you examined with a one-line note about its role.
-
-      Be concrete and actionable. This document will be used by other flows
-      that need to understand this codebase before making changes.
-    config:
-      temperature: "t*0.3"
-    resolver:
-      type: rule
-      rules:
-        - condition: "result.tokens_generated > 0"
-          transition: capture_findings
-        - condition: "true"
-          transition: capture_findings
-    publishes:
-      - findings
-
-  # ── Capture and complete ───────────────────────────────────
-
-  capture_findings:
-    use: capture_learnings
-    params:
-      learning_focus: "general"
-      category: "codebase_observation"
-    resolver:
-      type: rule
-      rules:
-        - condition: "true"
+        - condition: "result.files_written > 0"
           transition: complete
+        - condition: "true"
+          transition: complete_no_files
+    publishes:
+      - files_changed
 
   complete:
     action: noop
-    description: "Investigation complete — return to mission_control"
-    status: success
+    description: "Task complete with files"
+    context:
+      optional: [files_changed]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
         last_status: "success"
-        last_result: "Investigation complete: {{ input.investigation_goal }}"
+        last_result: "Completed: {{ input.task_description[:100] }}. Files: {{ context.files_changed | join(', ') if context.files_changed else 'none' }}"
 
-entry: plan_investigation
+  complete_no_files:
+    action: noop
+    description: "Task complete — analysis only"
+    context:
+      optional: [inference_response]
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "success"
+        last_result: "{{ context.inference_response[:200] if context.inference_response else 'Completed' }}"
+
+  failed:
+    action: noop
+    description: "Task failed"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "failed"
+        last_result: "Failed: {{ input.task_description[:100] }}"
+
+entry: gather_context
 
 overflow:
   strategy: split

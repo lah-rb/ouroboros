@@ -14,9 +14,18 @@ Phase 3 additions:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from agent.actions.registry import ActionNotFoundError, ActionRegistry
+from agent.trace import (
+    StepStart,
+    StepEnd,
+    InferenceCall,
+    FlowInvoke,
+    FlowReturn,
+    count_tokens,
+)
 from agent.models import (
     FlowDefinition,
     FlowExecution,
@@ -31,6 +40,23 @@ from agent.tail_call import FlowOutcome, FlowTailCall, FlowTermination
 from agent.template import render_template, render_params
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_float_temp(val: Any) -> float:
+    """Safely convert a temperature value to float, handling t* specifiers."""
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        if val.startswith("t*"):
+            try:
+                return float(val[2:])
+            except ValueError:
+                return 0.0
+        try:
+            return float(val)
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
 class FlowRuntimeError(Exception):
@@ -111,6 +137,20 @@ async def execute_flow(
         flow_def.entry,
     )
 
+    # Extract trace context from synthetic inputs (set by loop.py)
+    _trace_mission_id = inputs.get("mission_id", "")
+    _trace_cycle = inputs.get("_trace_cycle", 0)
+    _can_trace = effects is not None and hasattr(effects, "emit_trace")
+
+    def _action_type_for(action: str) -> str:
+        if action == "inference":
+            return "inference"
+        elif action == "flow":
+            return "flow"
+        elif action == "noop":
+            return "noop"
+        return "action"
+
     # Main execution loop
     while execution.step_count < execution.max_steps:
         step_name = execution.current_step
@@ -137,6 +177,22 @@ async def execute_flow(
             effects=effects,
         )
 
+        # ── Trace: StepStart ─────────────────────────────────────
+        step_start_time = time.monotonic()
+        if _can_trace:
+            await effects.emit_trace(
+                StepStart(
+                    mission_id=_trace_mission_id,
+                    cycle=_trace_cycle,
+                    flow=flow_def.flow,
+                    step=step_name,
+                    action_type=_action_type_for(step_def.action),
+                    action=step_def.action,
+                    context_consumed=list(step_input.context.keys()),
+                    context_required=list(step_def.context.required),
+                )
+            )
+
         # Execute the action — special handling for 'inference' and 'flow'
         if step_def.action == "inference":
             step_output = await _execute_inference_action(
@@ -145,6 +201,9 @@ async def execute_flow(
                 flow_def=flow_def,
                 inputs=inputs,
                 effects=effects,
+                _trace_mission_id=_trace_mission_id,
+                _trace_cycle=_trace_cycle,
+                _step_name=step_name,
             )
         elif step_def.action == "flow":
             step_output = await _execute_subflow_action(
@@ -156,6 +215,8 @@ async def execute_flow(
                 action_registry=action_registry,
                 effects=effects,
                 flow_registry=flow_registry,
+                _trace_mission_id=_trace_mission_id,
+                _trace_cycle=_trace_cycle,
             )
         else:
             try:
@@ -186,6 +247,20 @@ async def execute_flow(
 
         # Check for terminal step
         if step_def.terminal:
+            # ── Trace: StepEnd (terminal) ─────────────────────────
+            if _can_trace:
+                await effects.emit_trace(
+                    StepEnd(
+                        mission_id=_trace_mission_id,
+                        cycle=_trace_cycle,
+                        flow=flow_def.flow,
+                        step=step_name,
+                        published=list((step_output.context_updates or {}).keys()),
+                        resolver_type="terminal",
+                        resolver_decision=step_def.status or "completed",
+                        step_duration_ms=((time.monotonic() - step_start_time) * 1000),
+                    )
+                )
             logger.info(
                 "Flow %r reached terminal step %r with status %r",
                 flow_def.flow,
@@ -202,6 +277,20 @@ async def execute_flow(
 
         # Check for tail-call step (non-terminal step with tail_call block)
         if step_def.tail_call:
+            # ── Trace: StepEnd (tail_call) ────────────────────────
+            if _can_trace:
+                await effects.emit_trace(
+                    StepEnd(
+                        mission_id=_trace_mission_id,
+                        cycle=_trace_cycle,
+                        flow=flow_def.flow,
+                        step=step_name,
+                        published=list((step_output.context_updates or {}).keys()),
+                        resolver_type="tail_call",
+                        resolver_decision=step_def.tail_call.get("flow", "unknown"),
+                        step_duration_ms=((time.monotonic() - step_start_time) * 1000),
+                    )
+                )
             logger.info(
                 "Flow %r: step %r triggers tail call to %r",
                 flow_def.flow,
@@ -250,6 +339,31 @@ async def execute_flow(
                 f"{next_step!r} which doesn't exist in the flow."
             )
 
+        # ── Trace: StepEnd (transition) ───────────────────────────
+        if _can_trace:
+            resolver_type = step_def.resolver.type if step_def.resolver else ""
+            # Collect available transition options
+            options = []
+            if step_def.resolver:
+                rd = step_def.resolver.model_dump()
+                if rd.get("rules"):
+                    options = [r.get("transition", "") for r in rd["rules"]]
+                elif rd.get("options"):
+                    options = list(rd["options"].keys())
+            await effects.emit_trace(
+                StepEnd(
+                    mission_id=_trace_mission_id,
+                    cycle=_trace_cycle,
+                    flow=flow_def.flow,
+                    step=step_name,
+                    published=list((step_output.context_updates or {}).keys()),
+                    resolver_type=resolver_type,
+                    resolver_decision=next_step,
+                    options_available=options,
+                    step_duration_ms=((time.monotonic() - step_start_time) * 1000),
+                )
+            )
+
         logger.debug(
             "Step %r → transition to %r",
             step_name,
@@ -275,6 +389,8 @@ async def _execute_subflow_action(
     action_registry: ActionRegistry,
     effects: Any,
     flow_registry: dict[str, FlowDefinition] | None,
+    _trace_mission_id: str = "",
+    _trace_cycle: int = 0,
 ) -> StepOutput:
     """Execute a sub-flow invocation (action='flow').
 
@@ -341,6 +457,21 @@ async def _execute_subflow_action(
         list(sub_inputs.keys()),
     )
 
+    # ── Trace: FlowInvoke ─────────────────────────────────────
+    _can_trace = effects is not None and hasattr(effects, "emit_trace")
+    if _can_trace:
+        await effects.emit_trace(
+            FlowInvoke(
+                mission_id=_trace_mission_id,
+                cycle=_trace_cycle,
+                flow=flow_def.flow,
+                step=step_name,
+                child_flow=target_flow_name,
+                child_inputs=list(sub_inputs.keys()),
+            )
+        )
+    child_start = time.monotonic()
+
     # Execute the sub-flow recursively
     try:
         sub_result = await execute_flow(
@@ -353,9 +484,34 @@ async def _execute_subflow_action(
         )
     except Exception as e:
         logger.warning("Sub-flow %s failed: %s", target_flow_name, e)
+        # ── Trace: FlowReturn (failed) ───────────────────────
+        if _can_trace:
+            await effects.emit_trace(
+                FlowReturn(
+                    mission_id=_trace_mission_id,
+                    cycle=_trace_cycle,
+                    flow=flow_def.flow,
+                    child_flow=target_flow_name,
+                    return_status="failed",
+                    child_duration_ms=(time.monotonic() - child_start) * 1000,
+                )
+            )
         return StepOutput(
             result={"status": "failed", "error": str(e)},
             observations=f"Sub-flow {target_flow_name} failed: {e}",
+        )
+
+    # ── Trace: FlowReturn (success) ──────────────────────────
+    if _can_trace:
+        await effects.emit_trace(
+            FlowReturn(
+                mission_id=_trace_mission_id,
+                cycle=_trace_cycle,
+                flow=flow_def.flow,
+                child_flow=target_flow_name,
+                return_status=sub_result.status,
+                child_duration_ms=(time.monotonic() - child_start) * 1000,
+            )
         )
 
     # Extract published context keys from sub-flow result
@@ -380,6 +536,9 @@ async def _execute_inference_action(
     flow_def: FlowDefinition,
     inputs: dict[str, Any],
     effects: Any,
+    _trace_mission_id: str = "",
+    _trace_cycle: int = 0,
+    _step_name: str = "",
 ) -> StepOutput:
     """Execute the special 'inference' action type.
 
@@ -428,11 +587,48 @@ async def _execute_inference_action(
     if "max_tokens" in step_input.config:
         config_overrides["max_tokens"] = step_input.config["max_tokens"]
 
-    # Call inference
-    result = await effects.run_inference(
-        prompt=rendered_prompt,
-        config_overrides=config_overrides if config_overrides else None,
-    )
+    # Call inference with tracing
+    # Session-aware: if session_id is in the step's context, route through
+    # the memoryful session instead of making a stateless call.  This avoids
+    # deadlocking when the session has already pinned the only pool instance.
+    session_id = step_input.context.get("session_id")
+    tokens_in = count_tokens(rendered_prompt)
+    infer_start = time.monotonic()
+
+    if session_id and hasattr(effects, "session_inference"):
+        logger.debug(
+            "Inference step %r using memoryful session %s",
+            _step_name,
+            session_id,
+        )
+        result = await effects.session_inference(
+            session_id=session_id,
+            prompt=rendered_prompt,
+            config_overrides=config_overrides if config_overrides else None,
+        )
+    else:
+        result = await effects.run_inference(
+            prompt=rendered_prompt,
+            config_overrides=config_overrides if config_overrides else None,
+        )
+
+    tokens_out = count_tokens(result.text) if result.text else 0
+    _can_trace = hasattr(effects, "emit_trace")
+    if _can_trace:
+        await effects.emit_trace(
+            InferenceCall(
+                mission_id=_trace_mission_id,
+                cycle=_trace_cycle,
+                flow=flow_def.flow,
+                step=_step_name,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                wall_ms=(time.monotonic() - infer_start) * 1000,
+                temperature=_safe_float_temp(config_overrides.get("temperature", 0)),
+                max_tokens=int(config_overrides.get("max_tokens", 0) or 0),
+                purpose="session_inference" if session_id else "step_inference",
+            )
+        )
 
     if result.error:
         context_updates: dict[str, Any] = {
