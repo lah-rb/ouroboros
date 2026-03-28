@@ -92,11 +92,14 @@ steps:
           transition: validate
         - condition: "result.status == 'full_rewrite_requested'"
           transition: full_rewrite
+        - condition: "result.status == 'bail'"
+          transition: bail
         - condition: "true"
           transition: failed
     publishes:
       - files_changed
       - edit_summary
+      - bail_reason
 
   # ── Phase 3b: Full file rewrite fallback ────────────────────
 
@@ -124,10 +127,10 @@ steps:
       ```
 
       {% if context.context_bundle and context.context_bundle.files %}
-      ## Related Files
+      ## Related Files (READ-ONLY REFERENCE)
       {% for file in context.context_bundle.files %}
       {% if file.path != input.target_file_path %}
-      === {{ file.path }} ===
+      ──── {{ file.path }} ────
       {{ file.content[:1000] }}
       {% endif %}
       {% endfor %}
@@ -188,7 +191,7 @@ steps:
     action: validate_created_files
     description: "Validate modified files"
     context:
-      optional: [project_manifest, files_changed]
+      optional: [files_changed, project_manifest]
     resolver:
       type: rule
       rules:
@@ -241,6 +244,25 @@ steps:
         last_task_id: "{{ input.task_id }}"
         last_status: "failed"
         last_result: "File not found: {{ input.target_file_path }}. Cannot modify a file that does not exist. Use create_file to create it first, or select a different target."
+
+  bail:
+    action: push_note
+    description: "Model determined this file doesn't need changes or the task targets the wrong file — save observation and inform director"
+    context:
+      optional: [edit_summary, target_file, bail_reason]
+    params:
+      content_key: "bail_reason"
+      category: "approach_rejected"
+      tags: ["bail", "wrong_target"]
+      source_flow: "modify_file"
+      source_task: "{{ input.task_id }}"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "diagnosed"
+        last_result: "BAIL on {{ input.target_file_path }}: {{ context.bail_reason or 'File does not need the requested changes' }}. Original task: {{ input.task_description }}"
 
   failed:
     action: noop

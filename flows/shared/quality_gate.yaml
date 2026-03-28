@@ -20,6 +20,9 @@ input:
   optional:
     - mission_objective
     - relevant_notes
+    - architecture_run_command
+    - architecture_import_scheme
+    - architecture_modules
     - mode  # "checkpoint" or "completion", default "completion"
 
 defaults:
@@ -156,10 +159,18 @@ steps:
     description: "Execute the project in a terminal session and verify it works"
     flow: run_in_terminal
     input_map:
-      session_goal: "Run the project and verify it works correctly. Mission objective: {{ input.mission_objective or 'verify the project runs without errors' }}. Execute the main entry point, observe output, try basic interactions if applicable. Report whether the software functions as intended."
+      session_goal: >-
+        Run the project and verify it works correctly.
+        Mission objective: {{ input.mission_objective or 'verify the project runs without errors' }}.
+        {% if input.architecture_run_command %}
+        Architecture: Run command: {{ input.architecture_run_command }}.
+        Import scheme: {{ input.architecture_import_scheme }}.
+        Modules: {{ input.architecture_modules }}.
+        {% endif %}
+        Execute the main entry point, observe output, try basic interactions if applicable.
+        Report whether the software functions as intended.
       working_directory: "{{ input.working_directory }}"
       initial_commands: ""
-      max_turns: "4"
     resolver:
       type: rule
       rules:

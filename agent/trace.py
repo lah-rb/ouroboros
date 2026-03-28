@@ -109,6 +109,9 @@ class InferenceCall(TraceEvent):
     temperature: float = 0.0
     max_tokens: int = 0
     purpose: str = ""  # "step_inference" | "llm_menu_resolve"
+    thinking_content: str = ""  # Chain-of-thought from thinking models
+    prompt_content: str = ""  # Full rendered prompt (when --trace-prompts)
+    response_content: str = ""  # Raw model response (when --trace-prompts)
 
 
 # ── Sub-flow Events ──────────────────────────────────────────────────

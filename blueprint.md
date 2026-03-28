@@ -1,8 +1,8 @@
 # Ouroboros Blueprint
 
-Generated: 2026-03-23T16:59:28.376581+00:00
-Source Hash: `799a06d52935…`
-Flows: **27** | Actions: **57** | Context Keys: **101**
+Generated: 2026-03-27T20:27:42.508253+00:00
+Source Hash: `2d165403b50c…`
+Flows: **26** | Actions: **59** | Context Keys: **72**
 
 ## Legend
 
@@ -52,7 +52,7 @@ Flows: **27** | Actions: **57** | Context Keys: **101**
 
 ```mermaid
 flowchart TD
-    %% mission_control v2
+    %% mission_control v3
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -64,33 +64,52 @@ flowchart TD
 
     load_state["□ load_state ⑂\nLoad mission state, event queue, and frustratio..."]
     apply_last_result["□ apply_last_result ⑂\nApply the returning flow's outcome to mission s..."]
-    check_retrospective(["∅ check_retrospective ⑂\nCheck if a learning retrospective is warranted ..."])
-    dispatch_retrospective[/"⟲ ∅ dispatch_retrospective\nDispatch to retrospective for learning capture"\]
+    dispatch_retrospective[/"⟲ ∅ dispatch_retrospective\nDispatch retrospective — task succeeded after f..."\]
     process_events["□ process_events ⑂\nProcess user messages, abort/pause signals"]
-    reason{{"▷ reason ⑂\nAnalyze mission state and reason about the best..."}}
-    decide{{"▷ decide ☰\nSelect the best action based on the director's ..."}}
-    dispatch_create_file["□ dispatch_create_file ⑂\nConfigure and dispatch to create_file flow"]
-    dispatch_modify_file["□ dispatch_modify_file ⑂\nConfigure and dispatch to modify_file flow"]
-    dispatch_integrate_modules["□ dispatch_integrate_modules ⑂\nConfigure and dispatch to integrate_modules flow"]
-    dispatch_diagnose_issue["□ dispatch_diagnose_issue ⑂\nConfigure and dispatch to diagnose_issue flow"]
-    dispatch_create_tests["□ dispatch_create_tests ⑂\nConfigure and dispatch to create_tests flow"]
-    dispatch_validate_behavior["□ dispatch_validate_behavior ⑂\nConfigure and dispatch to validate_behavior flow"]
-    dispatch_setup_project["□ dispatch_setup_project ⑂\nConfigure and dispatch to setup_project flow"]
-    dispatch_design_architecture["□ dispatch_design_architecture ⑂\nConfigure and dispatch to design_architecture flow"]
-    dispatch_explore_spike["□ dispatch_explore_spike ⑂\nConfigure and dispatch to explore_spike flow"]
-    dispatch_refactor["□ dispatch_refactor ⑂\nConfigure and dispatch to refactor flow"]
-    dispatch_document_project["□ dispatch_document_project ⑂\nConfigure and dispatch to document_project flow"]
-    dispatch_manage_packages["□ dispatch_manage_packages ⑂\nConfigure and dispatch to manage_packages flow"]
-    dispatch_request_review["□ dispatch_request_review ⑂\nConfigure and dispatch to request_review flow"]
-    dispatch_revise_plan[/"⟲ ∅ dispatch_revise_plan\nExtend or revise the mission plan based on dire..."\]
-    dispatch[/"⟲ ∅ dispatch\nTail-call to the selected task flow with config..."\]
-    quality_checkpoint[["↳ quality_checkpoint ⑂\nRun quality inspection on current state, then e..."]]
-    quality_completion[["↳ quality_completion ⑂\nFinal quality gate for mission completion"]]
-    invoke_quality_fix[/"⟲ ∅ invoke_quality_fix\nQuality gate failed — tail-call to reload state..."\]
-    dispatch_planning[/"⟲ ∅ dispatch_planning\nNo plan exists — dispatch to create_plan flow"\]
+    start_session["□ start_session ⑂\nOpen memoryful inference session for the direct..."]
+    reason{{"▷ reason ⑂\nAnalyze mission state and reason about next act..."}}
+    reason_standalone{{"▷ reason_standalone ⑂\nDirector reasoning without memoryful session ⟮f..."}}
+    decide_flow(["∅ decide_flow ☰\nSelect the best action type based on analysis"])
+    select_and_dispatch_create["□ select_and_dispatch_create ⑂\nSelect task for create_file"]
+    select_and_dispatch_modify["□ select_and_dispatch_modify ⑂\nSelect task for modify_file"]
+    select_and_dispatch_integrate["□ select_and_dispatch_integrate ⑂\nSelect task for integrate_modules"]
+    select_and_dispatch_diagnose["□ select_and_dispatch_diagnose ⑂\nSelect task for diagnose_issue"]
+    select_and_dispatch_tests["□ select_and_dispatch_tests ⑂\nSelect task for create_tests"]
+    select_and_dispatch_validate["□ select_and_dispatch_validate ⑂\nSelect task for validate_behavior"]
+    select_and_dispatch_setup["□ select_and_dispatch_setup ⑂\nSelect task for setup_project"]
+    select_and_dispatch_explore["□ select_and_dispatch_explore ⑂\nSelect task for explore_spike"]
+    select_and_dispatch_refactor["□ select_and_dispatch_refactor ⑂\nSelect task for refactor"]
+    select_and_dispatch_document["□ select_and_dispatch_document ⑂\nSelect task for document_project"]
+    select_and_dispatch_packages["□ select_and_dispatch_packages ⑂\nSelect task for manage_packages"]
+    select_and_dispatch_review["□ select_and_dispatch_review ⑂\nSelect task for request_review"]
+    resolve_target_file_create["□ resolve_target_file_create ⑂\nResolve target file for create_file"]
+    resolve_target_file_create_tests["□ resolve_target_file_create_tests ⑂\nResolve target file for create_tests"]
+    resolve_target_file_modify["□ resolve_target_file_modify ⑂\nResolve target file for modify_file ⟮requires e..."]
+    resolve_target_file_diagnose["□ resolve_target_file_diagnose ⑂\nResolve target file for diagnose_issue ⟮require..."]
+    resolve_target_file_refactor["□ resolve_target_file_refactor ⑂\nResolve target file for refactor ⟮requires exis..."]
+    resolve_target_file_integrate["□ resolve_target_file_integrate ⑂\nResolve target for integrate_modules"]
+    resolve_target_file_validate["□ resolve_target_file_validate ⑂\nResolve target for validate_behavior"]
+    resolve_target_file_setup["□ resolve_target_file_setup ⑂\nResolve target for setup_project"]
+    resolve_target_file_explore["□ resolve_target_file_explore ⑂\nResolve target for explore_spike"]
+    resolve_target_file_document["□ resolve_target_file_document ⑂\nResolve target for document_project"]
+    resolve_target_file_packages["□ resolve_target_file_packages ⑂\nResolve target for manage_packages"]
+    resolve_target_file_review["□ resolve_target_file_review ⑂\nResolve target for request_review"]
+    resolve_target_file_retrospective["□ resolve_target_file_retrospective ⑂\nResolve target for retrospective"]
+    end_session_and_dispatch["□ end_session_and_dispatch ⑂\nClose director session before dispatching to ta..."]
+    record_and_dispatch["□ record_and_dispatch ⑂\nRecord dispatch in history for deduplication, t..."]
+    dispatch[/"⟲ ∅ dispatch\nTail-call to the selected task flow"\]
+    end_session_and_reason["□ end_session_and_reason ⑂\nClose session — task/file selection failed, loo..."]
+    end_session_error_no_files["□ end_session_error_no_files ⑂\nClose session — no files exist for modification..."]
+    dispatch_revise_plan[/"⟲ ∅ dispatch_revise_plan\nRepeated dispatch detected or plan revision req..."\]
+    dispatch_planning[/"⟲ ∅ dispatch_planning\nNo plan exists — dispatch to design_and_plan flow"\]
+    quality_checkpoint["□ quality_checkpoint ⑂\nClose director session, then run quality checkp..."]
+    quality_checkpoint_run[["↳ quality_checkpoint_run ⑂\nRun quality inspection on current state"]]
+    quality_completion["□ quality_completion ⑂\nClose director session, then run final quality ..."]
+    quality_completion_run[["↳ quality_completion_run ⑂\nFinal quality gate for mission completion"]]
+    quality_failed_restart[/"⟲ ∅ quality_failed_restart\nQuality gate failed — restart mission_control w..."\]
     completed(["◆ □ completed\nMark mission complete"])
-    idle[/"⟲ □ idle\nNothing to do — wait for events"\]
-    mission_deadlocked(["◆ □ mission_deadlocked\nMission deadlocked — no viable path forward"])
+    idle[/"⟲ □ idle\nWait for events"\]
+    mission_deadlocked(["◆ □ mission_deadlocked\nMission deadlocked"])
     aborted(["◆ □ aborted\nMission aborted"])
 
     style load_state stroke-width:3px,stroke:#2d5a27
@@ -98,71 +117,108 @@ flowchart TD
     load_state -->|⑂ result.mission.status == 'active'| apply_last_result
     load_state -->|⑂ result.mission.status == 'paused'| idle
     load_state -->|⑂ result.mission.status == 'completed'| completed
-    load_state -->|⑂ result.mission.status == 'aborted'| aborted
     load_state -->|⑂ always| aborted
+    apply_last_result -->|⑂ result.quality_gate_exhausted == true| completed
     apply_last_result -->|⑂ result.events_pending == true| process_events
     apply_last_result -->|⑂ result.needs_plan == true| dispatch_planning
-    apply_last_result -->|⑂ context.get⟮'last_result', ''⟯ and 'Retros...| reason
-    apply_last_result -->|⑂ result.task_completed == true| check_retrospective
-    apply_last_result -->|⑂ always| reason
-    check_retrospective -->|⑂ context.get⟮'last_status'⟯ == 'success' an...| dispatch_retrospective
-    check_retrospective -->|⑂ len⟮⟦t for t in context.get⟮'mission', ⦃⦄⟯...| dispatch_retrospective
-    check_retrospective -->|⑂ always| reason
+    apply_last_result -->|⑂ result.frustration_reset == true| dispatch_retrospective
+    apply_last_result -->|⑂ always| start_session
     tc_dispatch_retrospective(("⟲ retrospective"))
     style tc_dispatch_retrospective fill:#f0e6f6,stroke:#663399
     dispatch_retrospective -.->|tail-call| tc_dispatch_retrospective
     process_events -->|⑂ result.abort_requested == true| aborted
     process_events -->|⑂ result.pause_requested == true| idle
-    process_events -->|⑂ always| reason
-    reason -->|⑂ always| decide
-    decide -.->|☰ Create one or more new sour...| dispatch_create_file
-    decide -.->|☰ Fix or enhance existing fil...| dispatch_modify_file
-    decide -.->|☰ Inspect project cohesion — ...| dispatch_integrate_modules
-    decide -.->|☰ Investigate a code issue me...| dispatch_diagnose_issue
-    decide -.->|☰ Create test files to verify...| dispatch_create_tests
-    decide -.->|☰ Run the project and verify ...| dispatch_validate_behavior
-    decide -.->|☰ Initialize or configure pro...| dispatch_setup_project
-    decide -.->|☰ Design project structure — ...| dispatch_design_architecture
-    decide -.->|☰ Investigate a pattern, libr...| dispatch_explore_spike
-    decide -.->|☰ Improve code structure with...| dispatch_refactor
-    decide -.->|☰ Write or update project doc...| dispatch_document_project
-    decide -.->|☰ Install, remove, or update ...| dispatch_manage_packages
-    decide -.->|☰ Submit completed work for s...| dispatch_request_review
-    decide -.->|☰ Extend or revise the missio...| dispatch_revise_plan
-    decide -.->|☰ Run a quality inspection on...| quality_checkpoint
-    decide -.->|☰ All planned work is done — ...| quality_completion
-    decide -.->|☰ No viable path forward — re...| mission_deadlocked
-    dispatch_create_file -->|⑂ always| dispatch
-    dispatch_modify_file -->|⑂ always| dispatch
-    dispatch_integrate_modules -->|⑂ always| dispatch
-    dispatch_diagnose_issue -->|⑂ always| dispatch
-    dispatch_create_tests -->|⑂ always| dispatch
-    dispatch_validate_behavior -->|⑂ always| dispatch
-    dispatch_setup_project -->|⑂ always| dispatch
-    dispatch_design_architecture -->|⑂ always| dispatch
-    dispatch_explore_spike -->|⑂ always| dispatch
-    dispatch_refactor -->|⑂ always| dispatch
-    dispatch_document_project -->|⑂ always| dispatch
-    dispatch_manage_packages -->|⑂ always| dispatch
-    dispatch_request_review -->|⑂ always| dispatch
-    tc_dispatch_revise_plan(("⟲ revise_plan"))
-    style tc_dispatch_revise_plan fill:#f0e6f6,stroke:#663399
-    dispatch_revise_plan -.->|tail-call| tc_dispatch_revise_plan
+    process_events -->|⑂ always| start_session
+    start_session -->|⑂ result.session_started == true| reason
+    start_session -->|⑂ always| reason_standalone
+    reason -->|⑂ always| decide_flow
+    reason_standalone -->|⑂ always| decide_flow
+    decide_flow -.->|☰ Create one or more new sour...| select_and_dispatch_create
+    decide_flow -.->|☰ Fix or enhance existing fil...| select_and_dispatch_modify
+    decide_flow -.->|☰ Inspect project cohesion — ...| select_and_dispatch_integrate
+    decide_flow -.->|☰ Investigate a code issue me...| select_and_dispatch_diagnose
+    decide_flow -.->|☰ Create test files to verify...| select_and_dispatch_tests
+    decide_flow -.->|☰ Run the project and verify ...| select_and_dispatch_validate
+    decide_flow -.->|☰ Initialize or configure pro...| select_and_dispatch_setup
+    decide_flow -.->|☰ Investigate a pattern or ap...| select_and_dispatch_explore
+    decide_flow -.->|☰ Improve code structure with...| select_and_dispatch_refactor
+    decide_flow -.->|☰ Write or update project doc...| select_and_dispatch_document
+    decide_flow -.->|☰ Install, remove, or update ...| select_and_dispatch_packages
+    decide_flow -.->|☰ Submit completed work for r...| select_and_dispatch_review
+    decide_flow -.->|☰ Extend or revise the missio...| dispatch_revise_plan
+    decide_flow -.->|☰ Run quality inspection on c...| quality_checkpoint
+    decide_flow -.->|☰ All planned work done — run...| quality_completion
+    decide_flow -.->|☰ No viable path forward — re...| mission_deadlocked
+    select_and_dispatch_create -->|⑂ result.task_selected == true| resolve_target_file_create
+    select_and_dispatch_create -->|⑂ result.no_actionable_tasks == true| quality_completion
+    select_and_dispatch_create -->|⑂ always| quality_completion
+    select_and_dispatch_modify -->|⑂ result.task_selected == true| resolve_target_file_modify
+    select_and_dispatch_modify -->|⑂ always| quality_completion
+    select_and_dispatch_integrate -->|⑂ result.task_selected == true| resolve_target_file_integrate
+    select_and_dispatch_integrate -->|⑂ always| quality_completion
+    select_and_dispatch_diagnose -->|⑂ result.task_selected == true| resolve_target_file_diagnose
+    select_and_dispatch_diagnose -->|⑂ always| quality_completion
+    select_and_dispatch_tests -->|⑂ result.task_selected == true| resolve_target_file_create_tests
+    select_and_dispatch_tests -->|⑂ always| quality_completion
+    select_and_dispatch_validate -->|⑂ result.task_selected == true| resolve_target_file_validate
+    select_and_dispatch_validate -->|⑂ always| quality_completion
+    select_and_dispatch_setup -->|⑂ result.task_selected == true| resolve_target_file_setup
+    select_and_dispatch_setup -->|⑂ always| quality_completion
+    select_and_dispatch_explore -->|⑂ result.task_selected == true| resolve_target_file_explore
+    select_and_dispatch_explore -->|⑂ always| quality_completion
+    select_and_dispatch_refactor -->|⑂ result.task_selected == true| resolve_target_file_refactor
+    select_and_dispatch_refactor -->|⑂ always| quality_completion
+    select_and_dispatch_document -->|⑂ result.task_selected == true| resolve_target_file_document
+    select_and_dispatch_document -->|⑂ always| quality_completion
+    select_and_dispatch_packages -->|⑂ result.task_selected == true| resolve_target_file_packages
+    select_and_dispatch_packages -->|⑂ always| quality_completion
+    select_and_dispatch_review -->|⑂ result.task_selected == true| resolve_target_file_review
+    select_and_dispatch_review -->|⑂ always| quality_completion
+    resolve_target_file_create -->|⑂ result.file_selected == true| end_session_and_dispatch
+    resolve_target_file_create -->|⑂ result.error == 'no_project_files'| end_session_and_dispatch
+    resolve_target_file_create -->|⑂ always| end_session_and_reason
+    resolve_target_file_create_tests -->|⑂ result.file_selected == true| end_session_and_dispatch
+    resolve_target_file_create_tests -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_modify -->|⑂ result.file_selected == true| end_session_and_dispatch
+    resolve_target_file_modify -->|⑂ result.error == 'no_project_files'| end_session_error_no_files
+    resolve_target_file_modify -->|⑂ always| end_session_and_reason
+    resolve_target_file_diagnose -->|⑂ result.file_selected == true| end_session_and_dispatch
+    resolve_target_file_diagnose -->|⑂ result.error == 'no_project_files'| end_session_error_no_files
+    resolve_target_file_diagnose -->|⑂ always| end_session_and_reason
+    resolve_target_file_refactor -->|⑂ result.file_selected == true| end_session_and_dispatch
+    resolve_target_file_refactor -->|⑂ result.error == 'no_project_files'| end_session_error_no_files
+    resolve_target_file_refactor -->|⑂ always| end_session_and_reason
+    resolve_target_file_integrate -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_validate -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_setup -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_explore -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_document -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_packages -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_review -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_retrospective -->|⑂ always| end_session_and_dispatch
+    end_session_and_dispatch -->|⑂ always| record_and_dispatch
+    record_and_dispatch -->|⑂ result.repeat_count ›= 3| dispatch_revise_plan
+    record_and_dispatch -->|⑂ always| dispatch
     tc_dispatch(("⟲ dynamic"))
     style tc_dispatch fill:#f0e6f6,stroke:#663399
     dispatch -.->|tail-call| tc_dispatch
-    quality_checkpoint -->|⑂ result.status == 'success'| reason
-    quality_checkpoint -->|⑂ result.status == 'failed'| dispatch_revise_plan
-    quality_checkpoint -->|⑂ always| reason
-    quality_completion -->|⑂ result.status == 'success'| completed
-    quality_completion -->|⑂ result.status == 'failed' and input.get⟮'q...| invoke_quality_fix
-    quality_completion -->|⑂ always| completed
-    tc_invoke_quality_fix(("⟲ mission_control"))
-    style tc_invoke_quality_fix fill:#f0e6f6,stroke:#663399
-    invoke_quality_fix -.->|tail-call| tc_invoke_quality_fix
-    tc_dispatch_planning(("⟲ create_plan"))
+    end_session_and_reason -->|⑂ always| start_session
+    end_session_error_no_files -->|⑂ always| start_session
+    tc_dispatch_revise_plan(("⟲ revise_plan"))
+    style tc_dispatch_revise_plan fill:#f0e6f6,stroke:#663399
+    dispatch_revise_plan -.->|tail-call| tc_dispatch_revise_plan
+    tc_dispatch_planning(("⟲ design_and_plan"))
     style tc_dispatch_planning fill:#f0e6f6,stroke:#663399
     dispatch_planning -.->|tail-call| tc_dispatch_planning
+    quality_checkpoint -->|⑂ always| quality_checkpoint_run
+    quality_checkpoint_run -->|⑂ result.status == 'success'| start_session
+    quality_checkpoint_run -->|⑂ always| quality_failed_restart
+    quality_completion -->|⑂ always| quality_completion_run
+    quality_completion_run -->|⑂ result.status == 'success'| completed
+    quality_completion_run -->|⑂ always| quality_failed_restart
+    tc_quality_failed_restart(("⟲ mission_control"))
+    style tc_quality_failed_restart fill:#f0e6f6,stroke:#663399
+    quality_failed_restart -.->|tail-call| tc_quality_failed_restart
     tc_idle(("⟲ mission_control"))
     style tc_idle fill:#f0e6f6,stroke:#663399
     idle -.->|tail-call| tc_idle
@@ -185,89 +241,74 @@ flowchart TD
     style L1 fill:#f5f5f5,stroke:none,color:#555
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
-    ast_edit_session[["ast_edit_session\nMemoryful AST-aware editing session. ...\n8 steps"]]
+    ast_edit_session[["ast_edit_session\nMemoryful AST-aware editing session. ...\n10 steps"]]
     capture_learnings[["capture_learnings\nReflect on completed work and persist...\n5 steps ▷1"]]
-    create_file["create_file\nCreate one or more new source files i...\n11 steps ▷3"]
-    create_plan["create_plan\nGenerate a task plan from mission obj...\n7 steps ▷2"]
-    create_tests["create_tests\nCreate test files for existing projec...\n12 steps ▷3"]
-    design_architecture["design_architecture\nModel-led holistic project design flo...\n7 steps ▷1"]
-    diagnose_issue["diagnose_issue\nMethodical diagnosis of a code issue....\n13 steps ▷3"]
-    document_project["document_project\nProduce or update project documentati...\n16 steps ▷4"]
-    explore_spike["explore_spike\nTime-boxed investigation of a codebas...\n9 steps ▷4"]
-    integrate_modules["integrate_modules\nProject cohesion inspector. Scans all...\n10 steps ▷1"]
-    manage_packages["manage_packages\nDetect, create, and manage project vi...\n7 steps ▷1"]
-    mission_control["mission_control\nCore director flow. Loads mission sta...\n30 steps ▷2"]
-    modify_file["modify_file\nModify one or more existing files via...\n12 steps ▷1"]
+    create_file["create_file\nCreate a single source file. Gathers ...\n7 steps ▷1"]
+    create_tests["create_tests\nCreate test files to verify module be...\n6 steps ▷1"]
+    design_and_plan["design_and_plan\nMerged architecture + plan flow. Arch...\n10 steps ▷3"]
+    diagnose_issue["diagnose_issue\nMethodical diagnosis of a code issue....\n10 steps ▷2"]
+    document_project["document_project\nWrite or update project documentation.\n6 steps ▷1"]
+    explore_spike["explore_spike\nInvestigate a pattern, library, or ap...\n6 steps ▷1"]
+    integrate_modules["integrate_modules\nInspect project cohesion — check impo...\n4 steps ▷1"]
+    manage_packages["manage_packages\nInstall, remove, or update project de...\n6 steps ▷1"]
+    mission_control["mission_control\nCore director flow v3. Uses a memoryf...\n49 steps ▷2"]
+    modify_file["modify_file\nModify existing files via AST-aware s...\n12 steps ▷1"]
     prepare_context[["prepare_context\nSub-flow that scans the workspace, as...\n11 steps ▷2"]]
-    quality_gate[["quality_gate\nProject-wide quality validation. Runs...\n9 steps ▷2"]]
-    refactor["refactor\nDeliberate structural improvement of ...\n19 steps ▷3"]
-    request_review["request_review\nProactively submit completed work for...\n8 steps ▷2"]
+    quality_gate[["quality_gate\nProject-wide quality validation. Thre...\n11 steps ▷2"]]
+    refactor["refactor\nImprove code structure without changi...\n9 steps ▷1"]
+    request_review["request_review\nSubmit completed work for review and ...\n6 steps ▷1"]
     research_codebase_history[["research_codebase_history\nInvestigate the history of code chang...\n4 steps ▷2"]]
     research_context[["research_context\nResearch dispatcher — classifies a re...\n12 steps ▷4"]]
     research_repomap[["research_repomap\nBuild an AST-based repository map usi...\n3 steps ▷1"]]
     research_technical[["research_technical\nResearch technical concepts from auth...\n4 steps ▷1"]]
-    retrospective["retrospective\nPeriodic self-assessment of agent per...\n11 steps ▷2"]
+    retrospective["retrospective\nCapture learnings from frustration re...\n5 steps ▷1"]
     revise_plan[["revise_plan\nRevise the mission plan based on new ...\n6 steps ▷1"]]
     run_in_terminal[["run_in_terminal\nMulti-turn persistent terminal sessio...\n7 steps ▷2"]]
-    setup_project["setup_project\nProject management flow for initializ...\n8 steps ▷2"]
-    validate_behavior["validate_behavior\nRun the project code and verify actua...\n10 steps ▷2"]
+    setup_project["setup_project\nInitialize project tooling and struct...\n7 steps ▷1"]
+    validate_behavior["validate_behavior\nRun the project and verify end-to-end...\n6 steps ▷1"]
     validate_output[["validate_output\nValidate a created or modified file w...\n8 steps ▷1"]]
 
-    create_plan -.->|⟲ complete| mission_control
-    create_plan ==>|↳ gather_context| prepare_context
+    design_and_plan -.->|⟲ complete| mission_control
     mission_control -.->|⟲ dispatch_retrospe...| retrospective
     mission_control -.->|⟲ dispatch_revise_plan| revise_plan
-    mission_control -.->|⟲ invoke_quality_fix| mission_control
-    mission_control -.->|⟲ dispatch_planning| create_plan
-    mission_control ==>|↳ quality_checkpoint| quality_gate
+    mission_control -.->|⟲ dispatch_planning| design_and_plan
+    mission_control -.->|⟲ quality_failed_re...| mission_control
+    mission_control ==>|↳ quality_checkpoin...| quality_gate
     prepare_context ==>|↳ research| research_context
+    quality_gate ==>|↳ run_behavioral_check| run_in_terminal
     research_context ==>|↳ route_repomap| research_repomap
     research_context ==>|↳ route_history| research_codebase_history
     research_context ==>|↳ route_technical| research_technical
+    revise_plan -.->|⟲ skip| mission_control
     create_file -.->|⟲ complete| mission_control
     create_file ==>|↳ gather_context| prepare_context
-    create_file ==>|↳ capture_learnings| capture_learnings
     create_tests -.->|⟲ complete| mission_control
     create_tests ==>|↳ gather_context| prepare_context
-    create_tests ==>|↳ capture_learnings| capture_learnings
-    design_architecture -.->|⟲ complete| mission_control
     diagnose_issue -.->|⟲ complete| mission_control
     diagnose_issue ==>|↳ gather_context| prepare_context
-    diagnose_issue ==>|↳ capture_diagnosis...| capture_learnings
     document_project -.->|⟲ complete| mission_control
     document_project ==>|↳ gather_context| prepare_context
-    document_project ==>|↳ verify_no_behavio...| validate_output
-    document_project ==>|↳ capture_learnings| capture_learnings
     explore_spike -.->|⟲ complete| mission_control
-    explore_spike ==>|↳ scan_structure| prepare_context
-    explore_spike ==>|↳ external_research| research_context
-    explore_spike ==>|↳ capture_findings| capture_learnings
+    explore_spike ==>|↳ gather_context| prepare_context
     integrate_modules -.->|⟲ complete| mission_control
     integrate_modules ==>|↳ gather_context| prepare_context
-    integrate_modules ==>|↳ capture_learnings| capture_learnings
     manage_packages -.->|⟲ complete| mission_control
     manage_packages ==>|↳ gather_context| prepare_context
-    manage_packages ==>|↳ run_setup| run_in_terminal
-    manage_packages ==>|↳ capture_learnings| capture_learnings
     modify_file -.->|⟲ complete| mission_control
     modify_file ==>|↳ gather_context| prepare_context
     modify_file ==>|↳ ast_edit| ast_edit_session
-    modify_file ==>|↳ capture_learnings| capture_learnings
-    modify_file ==>|↳ create_fallback| create_file
     refactor -.->|⟲ complete| mission_control
     refactor ==>|↳ gather_context| prepare_context
-    refactor ==>|↳ capture_learnings| capture_learnings
-    request_review -.->|⟲ changes_needed| mission_control
-    request_review ==>|↳ gather_review_con...| prepare_context
-    request_review ==>|↳ approved| capture_learnings
+    refactor ==>|↳ ast_refactor| ast_edit_session
+    request_review -.->|⟲ complete| mission_control
+    request_review ==>|↳ gather_context| prepare_context
     retrospective -.->|⟲ complete| mission_control
-    retrospective ==>|↳ capture_learnings| capture_learnings
+    retrospective ==>|↳ gather_context| prepare_context
     setup_project -.->|⟲ complete| mission_control
-    setup_project ==>|↳ capture_learnings| capture_learnings
-    validate_behavior -.->|⟲ skip_not_ready| mission_control
+    setup_project ==>|↳ gather_context| prepare_context
+    validate_behavior -.->|⟲ complete| mission_control
     validate_behavior ==>|↳ gather_context| prepare_context
-    validate_behavior ==>|↳ run_tests| run_in_terminal
-    validate_behavior ==>|↳ capture_learnings| capture_learnings
+    validate_behavior ==>|↳ parse_and_run| run_in_terminal
 
     style mission_control fill:#e8f0e6,stroke:#2d5a27,stroke-width:3px
     style create_plan fill:#e8f0e6,stroke:#2d5a27,stroke-width:2px
@@ -292,11 +333,11 @@ It operates as a pure GraphQL client — all inference flows through `localhost:
 ### Flow Inventory
 | Category | Count |
 |----------|-------|
-| Task flows | 14 |
+| Task flows | 13 |
 | Shared sub-flows | 11 |
 | Control flows | 2 |
 | Test flows | 3 |
-| **Total** | **30** |
+| **Total** | **29** |
 
 ## Mission Lifecycle
 
@@ -305,77 +346,99 @@ Child task flows tail-call back to `mission_control` on completion, creating a c
 
 ### mission_control Steps
 
-- □ **load_state** ⑂ — Load mission state, event queue, and frustration map from persistence
-- □ **apply_last_result** ⑂ — Apply the returning flow's outcome to mission state and update frustration
-- ∅ **check_retrospective** ⑂ — Check if a learning retrospective is warranted after task completion
-- ∅ **dispatch_retrospective**  — Dispatch to retrospective for learning capture ⟲ → `retrospective`
+- □ **load_state** ⑂ — Load mission state, event queue, and frustration map
+- □ **apply_last_result** ⑂ — Apply the returning flow's outcome to mission state
+- ∅ **dispatch_retrospective**  — Dispatch retrospective — task succeeded after frustration ⟲ → `retrospective`
 - □ **process_events** ⑂ — Process user messages, abort/pause signals
-- ▷ **reason** ⑂ — Analyze mission state and reason about the best next action
-- ▷ **decide** ☰ — Select the best action based on the director's analysis
-- □ **dispatch_create_file** ⑂ — Configure and dispatch to create_file flow
-- □ **dispatch_modify_file** ⑂ — Configure and dispatch to modify_file flow
-- □ **dispatch_integrate_modules** ⑂ — Configure and dispatch to integrate_modules flow
-- □ **dispatch_diagnose_issue** ⑂ — Configure and dispatch to diagnose_issue flow
-- □ **dispatch_create_tests** ⑂ — Configure and dispatch to create_tests flow
-- □ **dispatch_validate_behavior** ⑂ — Configure and dispatch to validate_behavior flow
-- □ **dispatch_setup_project** ⑂ — Configure and dispatch to setup_project flow
-- □ **dispatch_design_architecture** ⑂ — Configure and dispatch to design_architecture flow
-- □ **dispatch_explore_spike** ⑂ — Configure and dispatch to explore_spike flow
-- □ **dispatch_refactor** ⑂ — Configure and dispatch to refactor flow
-- □ **dispatch_document_project** ⑂ — Configure and dispatch to document_project flow
-- □ **dispatch_manage_packages** ⑂ — Configure and dispatch to manage_packages flow
-- □ **dispatch_request_review** ⑂ — Configure and dispatch to request_review flow
-- ∅ **dispatch_revise_plan**  — Extend or revise the mission plan based on director analysis ⟲ → `revise_plan`
-- ∅ **dispatch**  — Tail-call to the selected task flow with configured inputs ⟲ → `{{ context.dispatch_config.flow }}`
-- ↳ **quality_checkpoint** ⑂ — Run quality inspection on current state, then expand tasks if issues found
-- ↳ **quality_completion** ⑂ — Final quality gate for mission completion
-- ∅ **invoke_quality_fix**  — Quality gate failed — tail-call to reload state with new fix tasks ⟲ → `mission_control`
-- ∅ **dispatch_planning**  — No plan exists — dispatch to create_plan flow ⟲ → `create_plan`
+- □ **start_session** ⑂ — Open memoryful inference session for the director cycle
+- ▷ **reason** ⑂ — Analyze mission state and reason about next action (memoryful session)
+- ▷ **reason_standalone** ⑂ — Director reasoning without memoryful session (fallback)
+- ∅ **decide_flow** ☰ — Select the best action type based on analysis
+- □ **select_and_dispatch_create** ⑂ — Select task for create_file
+- □ **select_and_dispatch_modify** ⑂ — Select task for modify_file
+- □ **select_and_dispatch_integrate** ⑂ — Select task for integrate_modules
+- □ **select_and_dispatch_diagnose** ⑂ — Select task for diagnose_issue
+- □ **select_and_dispatch_tests** ⑂ — Select task for create_tests
+- □ **select_and_dispatch_validate** ⑂ — Select task for validate_behavior
+- □ **select_and_dispatch_setup** ⑂ — Select task for setup_project
+- □ **select_and_dispatch_explore** ⑂ — Select task for explore_spike
+- □ **select_and_dispatch_refactor** ⑂ — Select task for refactor
+- □ **select_and_dispatch_document** ⑂ — Select task for document_project
+- □ **select_and_dispatch_packages** ⑂ — Select task for manage_packages
+- □ **select_and_dispatch_review** ⑂ — Select task for request_review
+- □ **resolve_target_file_create** ⑂ — Resolve target file for create_file
+- □ **resolve_target_file_create_tests** ⑂ — Resolve target file for create_tests
+- □ **resolve_target_file_modify** ⑂ — Resolve target file for modify_file (requires existing file)
+- □ **resolve_target_file_diagnose** ⑂ — Resolve target file for diagnose_issue (requires existing file)
+- □ **resolve_target_file_refactor** ⑂ — Resolve target file for refactor (requires existing file)
+- □ **resolve_target_file_integrate** ⑂ — Resolve target for integrate_modules
+- □ **resolve_target_file_validate** ⑂ — Resolve target for validate_behavior
+- □ **resolve_target_file_setup** ⑂ — Resolve target for setup_project
+- □ **resolve_target_file_explore** ⑂ — Resolve target for explore_spike
+- □ **resolve_target_file_document** ⑂ — Resolve target for document_project
+- □ **resolve_target_file_packages** ⑂ — Resolve target for manage_packages
+- □ **resolve_target_file_review** ⑂ — Resolve target for request_review
+- □ **resolve_target_file_retrospective** ⑂ — Resolve target for retrospective
+- □ **end_session_and_dispatch** ⑂ — Close director session before dispatching to task flow
+- □ **record_and_dispatch** ⑂ — Record dispatch in history for deduplication, then tail-call
+- ∅ **dispatch**  — Tail-call to the selected task flow ⟲ → `{{ context.dispatch_config.flow }}`
+- □ **end_session_and_reason** ⑂ — Close session — task/file selection failed, loop back to reason
+- □ **end_session_error_no_files** ⑂ — Close session — no files exist for modification flow
+- ∅ **dispatch_revise_plan**  — Repeated dispatch detected or plan revision requested — revise plan ⟲ → `revise_plan`
+- ∅ **dispatch_planning**  — No plan exists — dispatch to design_and_plan flow ⟲ → `design_and_plan`
+- □ **quality_checkpoint** ⑂ — Close director session, then run quality checkpoint
+- ↳ **quality_checkpoint_run** ⑂ — Run quality inspection on current state
+- □ **quality_completion** ⑂ — Close director session, then run final quality gate
+- ↳ **quality_completion_run** ⑂ — Final quality gate for mission completion
+- ∅ **quality_failed_restart**  — Quality gate failed — restart mission_control with details so director can act ⟲ → `mission_control`
 - □ **completed**  — Mark mission complete ◆ `completed`
-- □ **idle**  — Nothing to do — wait for events ⟲ → `mission_control`
-- □ **mission_deadlocked**  — Mission deadlocked — no viable path forward ◆ `deadlocked`
+- □ **idle**  — Wait for events ⟲ → `mission_control`
+- □ **mission_deadlocked**  — Mission deadlocked ◆ `deadlocked`
 - □ **aborted**  — Mission aborted ◆ `aborted`
 
 ### Tail-Call Targets (flows that return to mission_control)
 
 - `create_file` → `mission_control` (from step `complete`)
+- `create_file` → `mission_control` (from step `complete_with_issues`)
 - `create_file` → `mission_control` (from step `failed`)
-- `create_plan` → `mission_control` (from step `complete`)
 - `create_tests` → `mission_control` (from step `complete`)
 - `create_tests` → `mission_control` (from step `failed`)
-- `design_architecture` → `mission_control` (from step `complete`)
-- `design_architecture` → `mission_control` (from step `failed`)
+- `design_and_plan` → `mission_control` (from step `complete`)
 - `diagnose_issue` → `mission_control` (from step `complete`)
-- `diagnose_issue` → `mission_control` (from step `diagnosis_failed`)
+- `diagnose_issue` → `mission_control` (from step `report_file_not_found`)
+- `diagnose_issue` → `mission_control` (from step `failed`)
 - `document_project` → `mission_control` (from step `complete`)
-- `document_project` → `mission_control` (from step `documentation_adequate`)
+- `document_project` → `mission_control` (from step `complete_no_files`)
 - `document_project` → `mission_control` (from step `failed`)
 - `explore_spike` → `mission_control` (from step `complete`)
+- `explore_spike` → `mission_control` (from step `complete_no_files`)
+- `explore_spike` → `mission_control` (from step `failed`)
 - `integrate_modules` → `mission_control` (from step `complete`)
-- `integrate_modules` → `mission_control` (from step `nothing_to_inspect`)
-- `integrate_modules` → `mission_control` (from step `failed`)
 - `manage_packages` → `mission_control` (from step `complete`)
+- `manage_packages` → `mission_control` (from step `complete_no_files`)
 - `manage_packages` → `mission_control` (from step `failed`)
-- `mission_control` → `mission_control` (from step `invoke_quality_fix`)
+- `mission_control` → `mission_control` (from step `quality_failed_restart`)
 - `mission_control` → `mission_control` (from step `idle`)
 - `modify_file` → `mission_control` (from step `complete`)
+- `modify_file` → `mission_control` (from step `complete_with_issues`)
+- `modify_file` → `mission_control` (from step `error_file_not_found`)
+- `modify_file` → `mission_control` (from step `bail`)
 - `modify_file` → `mission_control` (from step `failed`)
 - `refactor` → `mission_control` (from step `complete`)
-- `refactor` → `mission_control` (from step `code_is_clean`)
-- `refactor` → `mission_control` (from step `too_risky`)
-- `refactor` → `mission_control` (from step `needs_tests_first`)
-- `refactor` → `mission_control` (from step `cannot_refactor`)
+- `refactor` → `mission_control` (from step `error_file_not_found`)
 - `refactor` → `mission_control` (from step `failed`)
-- `request_review` → `mission_control` (from step `changes_needed`)
-- `request_review` → `mission_control` (from step `major_rework`)
-- `request_review` → `mission_control` (from step `review_unavailable`)
+- `request_review` → `mission_control` (from step `complete`)
+- `request_review` → `mission_control` (from step `complete_no_files`)
+- `request_review` → `mission_control` (from step `failed`)
 - `retrospective` → `mission_control` (from step `complete`)
-- `retrospective` → `mission_control` (from step `too_early`)
-- `retrospective` → `mission_control` (from step `return_to_mission`)
+- `retrospective` → `mission_control` (from step `failed`)
+- `revise_plan` → `mission_control` (from step `skip`)
+- `revise_plan` → `mission_control` (from step `complete`)
 - `setup_project` → `mission_control` (from step `complete`)
+- `setup_project` → `mission_control` (from step `complete_no_files`)
 - `setup_project` → `mission_control` (from step `failed`)
-- `validate_behavior` → `mission_control` (from step `skip_not_ready`)
 - `validate_behavior` → `mission_control` (from step `complete`)
+- `validate_behavior` → `mission_control` (from step `complete_with_issues`)
 - `validate_behavior` → `mission_control` (from step `failed`)
 
 ## Flow Catalog
@@ -383,22 +446,18 @@ Child task flows tail-call back to `mission_control` on completion, creating a c
 ### Task Flows
 
 #### create_file (v3)
-*Create one or more new source files in a single inference pass. White-box contract: receives the task description, architecture context, and relevant existing files. Produces complete file contents. How the LLM structures the code is its decision. Multi-file output uses === FILE: path === fenced block format. Validates all created files, corrects issues, captures learnings.*
+*Create a single source file. Gathers project context, generates file content via inference, writes to disk, validates, and reports results. The prompt is focused on producing exactly the target file — existing project files are shown as read-only reference with a distinct delimiter to prevent the model from regenerating them.*
 
-**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ relevant_notes
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response · ● files_changed · ● validation_results · ● correction_history · ● learnings_saved
-**Sub-flows:** ↳ prepare_context · ↳ capture_learnings · ↳ capture_learnings
+**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ reason · ◑ relevant_notes
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response · ● files_changed · ● validation_results
+**Sub-flows:** ↳ prepare_context
 **Tail-calls:** ⟲ mission_control
 **Effects:** ⟶ inference · ⌘ command · 𓉗 file write
-**Stats:** 11 steps · ▷ 3 inference · 9 ⑂ rule
+**Stats:** 7 steps · ▷ 1 inference · 4 ⑂ rule
 
 **Prompts:**
-- **generate_content** ▷ (0.7): Generate file content with project awareness
-  Injects: {← input.task_description}, {← input.target_file_path}, {← input.mission_objective}, {← context.repo_map_formatted}, {← file.path} (+2 more)
-- **correct_issues** ▷ (0.2): Fix issues flagged by validation
-  Injects: {← loop.index}, {← attempt.error}, {← attempt.fix_summary}, {← check.name}, {← check.stdout} (+2 more)
-- **regenerate** ▷ (0.2): Re-generate file content after syntax validation failure
-  Injects: {← check.name}, {← "PASS" if check.passed else "FAIL"}, {← check.stdout}, {← check.stderr}, {← input.task_description}
+- **generate_content** ▷ (t*0.75): Generate complete file content for the task
+  Injects: {← input.task_description}, {← input.target_file_path}, {← input.reason}, {← input.mission_objective}, {← input.relevant_notes} (+4 more)
 
 ```mermaid
 flowchart TD
@@ -413,66 +472,53 @@ flowchart TD
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
     gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    generate_content{{"▷ generate_content ⑂\nGenerate file content with project awareness"}}
-    write_files["□ write_files ⑂\nParse file blocks from inference response and w..."]
-    validate["□ validate ⑂\nRun validation checks on all created files"]
-    build_correction_context["□ build_correction_context ⑂\nTrack correction attempts to avoid repeating th..."]
-    correct_issues{{"▷ correct_issues ⑂\nFix issues flagged by validation"}}
-    regenerate{{"▷ regenerate ⑂\nRe-generate file content after syntax validatio..."}}
-    capture_learnings[["↳ capture_learnings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nFile⟮s⟯ created — return to mission_control"\]
-    capture_failure_note[["↳ capture_failure_note ⑂\nReflect on completed work and persist observations"]]
+    generate_content{{"▷ generate_content ⑂\nGenerate complete file content for the task"}}
+    write_files["□ write_files ⑂\nParse file blocks and write to disk"]
+    validate["□ validate ⑂\nValidate created files — syntax and imports"]
+    complete[/"⟲ ∅ complete\nFiles created and validated — return to mission..."\]
+    complete_with_issues[/"⟲ ∅ complete_with_issues\nFiles created but validation found issues — rep..."\]
     failed[/"⟲ ∅ failed\nFile creation failed"\]
 
     style gather_context stroke-width:3px,stroke:#2d5a27
 
     gather_context -->|⑂ always| generate_content
     generate_content -->|⑂ result.tokens_generated › 0| write_files
-    generate_content -->|⑂ always| capture_failure_note
+    generate_content -->|⑂ always| failed
     write_files -->|⑂ result.files_written › 0| validate
-    write_files -->|⑂ always| capture_failure_note
-    validate -->|⑂ result.status == 'success'| capture_learnings
-    validate -->|⑂ result.status == 'issues' and meta.step_co...| build_correction_context
-    validate -->|⑂ result.status == 'issues'| capture_learnings
-    validate -->|⑂ result.status == 'failed' and meta.step_co...| regenerate
-    validate -->|⑂ always| capture_failure_note
-    build_correction_context -->|⑂ always| correct_issues
-    correct_issues -->|⑂ result.tokens_generated › 0| write_files
-    correct_issues -->|⑂ always| capture_learnings
-    regenerate -->|⑂ result.tokens_generated › 0| write_files
-    regenerate -->|⑂ always| capture_failure_note
-    capture_learnings -->|⑂ always| complete
+    write_files -->|⑂ always| failed
+    validate -->|⑂ result.status == 'success'| complete
+    validate -->|⑂ result.status == 'issues'| complete_with_issues
+    validate -->|⑂ result.status == 'skipped'| complete
+    validate -->|⑂ always| complete_with_issues
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
-    capture_failure_note -->|⑂ always| failed
+    tc_complete_with_issues(("⟲ mission_control"))
+    style tc_complete_with_issues fill:#f0e6f6,stroke:#663399
+    complete_with_issues -.->|tail-call| tc_complete_with_issues
     tc_failed(("⟲ mission_control"))
     style tc_failed fill:#f0e6f6,stroke:#663399
     failed -.->|tail-call| tc_failed
 
 ```
 
-#### create_tests (v1)
-*Create test files for existing project modules. Reads the target module, generates pytest-style tests, writes the test file, and validates by running the tests. Available but not enforced — the planner may include test tasks when appropriate.*
+#### create_tests (v2)
+*Create test files to verify module behavior. Reads the target source file(s) to understand the API, then generates comprehensive tests.*
 
-**Inputs:** ○ mission_id · ○ task_id · ◑ target_file_path · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ test_file_path · ◑ reason · ◑ temperature_multiplier · ◑ frustration_level · ◑ frustration_history · ◑ relevant_notes
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● selected_file_response · ● target_file · ● inference_response · ● created_file · ● test_results · ● learnings_saved
-**Sub-flows:** ↳ prepare_context · ↳ capture_learnings · ↳ capture_learnings
+**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ reason · ◑ relevant_notes
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response · ● files_changed · ● validation_results
+**Sub-flows:** ↳ prepare_context
 **Tail-calls:** ⟲ mission_control
-**Effects:** file_exists · ⟶ inference · makedirs · 𓉗 file read · ⌘ command · 𓉗 file write
-**Stats:** 12 steps · ▷ 3 inference · 10 ⑂ rule
+**Effects:** ⟶ inference · ⌘ command · 𓉗 file write
+**Stats:** 6 steps · ▷ 1 inference · 4 ⑂ rule
 
 **Prompts:**
-- **select_target** ▷ (0.0): No target_file_path provided — select the best file to test from project context
-  Injects: {← input.task_description}, {← filepath}
-- **generate_tests** ▷ (0.3): Generate test code for the target module
-  Injects: {← context.target_file.path}, {← context.target_file.content}, {← context.repo_map_formatted}, {← context.context_bundle.import_graph}, {← context.related_files | join(', ')} (+5 more)
-- **fix_tests** ▷ (0.2): Fix failing tests based on error output
-  Injects: {← context.target_file.path}, {← context.test_results.stdout[:1500]}, {← context.test_results.stderr[:500]}, {← context.target_file.content}
+- **generate_tests** ▷ (0.3): Generate test files based on project source code
+  Injects: {← input.task_description}, {← input.target_file_path}, {← input.mission_objective}, {← input.relevant_notes}, {← context.repo_map_formatted} (+2 more)
 
 ```mermaid
 flowchart TD
-    %% create_tests v1
+    %% create_tests v2
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -483,91 +529,20 @@ flowchart TD
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
     gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    select_target{{"▷ select_target ⑂\nNo target_file_path provided — select the best ..."}}
-    read_selected_target["□ read_selected_target ⑂\nRead the file selected by inference"]
-    read_target["□ read_target ⑂\nRead a single target file into context"]
-    generate_tests{{"▷ generate_tests ⑂\nGenerate test code for the target module"}}
-    write_test_file["□ write_test_file ⑂\nWrite the generated test file"]
-    run_tests["□ run_tests ⑂\nRun the generated tests to validate them"]
-    fix_tests{{"▷ fix_tests ⑂\nFix failing tests based on error output"}}
-    capture_learnings[["↳ capture_learnings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nTests created — return to mission_control"\]
-    capture_failure_note[["↳ capture_failure_note ⑂\nReflect on completed work and persist observations"]]
+    generate_tests{{"▷ generate_tests ⑂\nGenerate test files based on project source code"}}
+    write_tests["□ write_tests ⑂\nWrite test files to disk"]
+    validate["□ validate ⑂\nValidate test files — syntax check"]
+    complete[/"⟲ ∅ complete\nTests created"\]
     failed[/"⟲ ∅ failed\nTest creation failed"\]
 
     style gather_context stroke-width:3px,stroke:#2d5a27
 
-    gather_context -->|⑂ input.get⟮'target_file_path', ''⟯ != ''| read_target
-    gather_context -->|⑂ always| select_target
-    select_target -->|⑂ result.tokens_generated › 0| read_selected_target
-    select_target -->|⑂ always| capture_failure_note
-    read_selected_target -->|⑂ result.file_found == true| generate_tests
-    read_selected_target -->|⑂ always| capture_failure_note
-    read_target -->|⑂ result.file_found == true| generate_tests
-    read_target -->|⑂ always| select_target
-    generate_tests -->|⑂ result.tokens_generated › 0| write_test_file
-    generate_tests -->|⑂ always| capture_failure_note
-    write_test_file -->|⑂ result.write_success == true| run_tests
-    write_test_file -->|⑂ always| capture_failure_note
-    run_tests -->|⑂ result.all_passing == true| capture_learnings
-    run_tests -->|⑂ meta.step_count ‹ 10| fix_tests
-    run_tests -->|⑂ always| capture_learnings
-    fix_tests -->|⑂ result.tokens_generated › 0| write_test_file
-    fix_tests -->|⑂ always| capture_failure_note
-    capture_learnings -->|⑂ always| complete
-    tc_complete(("⟲ mission_control"))
-    style tc_complete fill:#f0e6f6,stroke:#663399
-    complete -.->|tail-call| tc_complete
-    capture_failure_note -->|⑂ always| failed
-    tc_failed(("⟲ mission_control"))
-    style tc_failed fill:#f0e6f6,stroke:#663399
-    failed -.->|tail-call| tc_failed
-
-```
-
-#### design_architecture (v2)
-*Model-led holistic project design flow. Scans the current workspace, builds an AST-based dependency map, and produces a structured blueprint defining: directory layout, module responsibilities, cross-module interfaces, execution conventions, and creation order. The blueprint is persisted as a mission note so all subsequent flows can reference it. This flow should run early — after create_plan but before file creation.*
-
-**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ relevant_notes
-**Publishes:** ● mission · ● project_manifest · ● repo_map_formatted · ● inference_response · ● note_saved
-**Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · →𓇴 read events · 𓉗 file read · 𓇴→ save mission
-**Stats:** 7 steps · ▷ 1 inference · 5 ⑂ rule
-
-**Prompts:**
-- **design_structure** ▷ (0.4): Design holistic project structure — layout, modules, interfaces, execution conventions
-  Injects: {← context.mission.objective}, {← task.status}, {← task.description}, {← context.repo_map_formatted}, {← filepath} (+2 more)
-
-```mermaid
-flowchart TD
-    %% design_architecture v2
-
-    subgraph Legend[" "]
-        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
-        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
-    end
-    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
-    style L1 fill:#f5f5f5,stroke:none,color:#555
-    style L2 fill:#f5f5f5,stroke:none,color:#555
-
-    load_mission["□ load_mission ⑂\nLoad mission to get objective and plan"]
-    scan_workspace["□ scan_workspace ⑂\nDiscover existing files and structure"]
-    build_repomap["□ build_repomap ⑂\nBuild AST-based dependency map of existing code"]
-    design_structure{{"▷ design_structure ⑂\nDesign holistic project structure — layout, mod..."}}
-    persist_blueprint["□ persist_blueprint ⑂\nSave architecture blueprint as a durable missio..."]
-    complete[/"⟲ ∅ complete\nArchitecture designed — return to mission_control"\]
-    failed[/"⟲ ∅ failed\nArchitecture design failed"\]
-
-    style load_mission stroke-width:3px,stroke:#2d5a27
-
-    load_mission -->|⑂ result.mission.status == 'active'| scan_workspace
-    load_mission -->|⑂ always| failed
-    scan_workspace -->|⑂ always| build_repomap
-    build_repomap -->|⑂ always| design_structure
-    design_structure -->|⑂ result.tokens_generated › 0| persist_blueprint
-    design_structure -->|⑂ always| failed
-    persist_blueprint -->|⑂ result.note_saved == true| complete
-    persist_blueprint -->|⑂ always| complete
+    gather_context -->|⑂ always| generate_tests
+    generate_tests -->|⑂ result.tokens_generated › 0| write_tests
+    generate_tests -->|⑂ always| failed
+    write_tests -->|⑂ result.files_written › 0| validate
+    write_tests -->|⑂ always| failed
+    validate -->|⑂ always| complete
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
@@ -577,27 +552,25 @@ flowchart TD
 
 ```
 
-#### diagnose_issue (v1)
-*Methodical diagnosis of a code issue. Reads error output, gathers context, forms hypotheses, evaluates them against the code, and produces a structured diagnosis with root cause analysis and fix recommendations. Does NOT modify code. Can be invoked as a task (tail-calls to mission_control) or as a sub-flow (parent reads terminal status and diagnosis from context).*
+#### diagnose_issue (v2)
+*Methodical diagnosis of a code issue. If the target file exists, reads it and runs the full hypothesis pipeline. If the file doesn't exist, returns a structured error with the project's actual file list — no instant-fail, no silent bail.*
 
-**Inputs:** ○ target_file_path · ◑ error_description · ◑ mission_id · ◑ task_id · ◑ task_description · ◑ mission_objective · ◑ error_output · ◑ previous_attempt · ◑ working_directory · ◑ frustration_level · ◑ frustration_history · ◑ relevant_notes
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● target_file · ● error_analysis · ● hypotheses · ● evaluation · ● diagnosis · ● fix_task_created (+1 more)
-**Sub-flows:** ↳ prepare_context · ↳ prepare_context · ↳ capture_learnings · ↳ capture_learnings
+**Inputs:** ○ mission_id · ○ task_id · ◑ target_file_path · ◑ error_description · ◑ task_description · ◑ mission_objective · ◑ error_output · ◑ working_directory · ◑ relevant_notes
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● target_file · ● error_analysis · ● hypotheses · ● diagnosis · ● fix_task_created
+**Sub-flows:** ↳ prepare_context
 **Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · →𓇴 load mission · 𓉗 file read · 𓇴→ save mission
-**Stats:** 13 steps · ▷ 3-4 inference · 10 ⑂ rule · 1 ☰ menu
+**Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · 𓉗 file read · 𓇴→ save mission
+**Stats:** 10 steps · ▷ 2 inference · 7 ⑂ rule
 
 **Prompts:**
-- **reproduce_mentally** ▷ (t*0.4): Trace the error execution path mentally — understand before fixing
-  Injects: {← input.error_description}, {← input.error_output}, {← context.target_file.path}, {← context.target_file.content}, {← file.path} (+2 more)
-- **form_hypotheses** ▷ (t*0.8): Generate 2-3 distinct fix hypotheses based on the error analysis
-  Injects: {← context.error_analysis}, {← context.target_file.path}, {← context.target_file.content}, {← input.previous_attempt}
-- **evaluate_hypotheses** ▷ (t*0.3): Evaluate hypotheses against the code and select the best approach
-  Injects: {← context.error_analysis}, {← context.hypotheses}, {← context.target_file.path}, {← context.target_file.content}, {← file.path} (+1 more)
+- **reproduce_mentally** ▷ (t*0.4): Trace the error execution path mentally
+  Injects: {← input.error_description or input.task_description}, {← input.error_output}, {← context.target_file.path}, {← context.target_file.content}, {← file.path} (+1 more)
+- **form_hypotheses** ▷ (t*0.8): Generate 2-3 distinct fix hypotheses
+  Injects: {← context.error_analysis}, {← context.target_file.path}, {← context.target_file.content}
 
 ```mermaid
 flowchart TD
-    %% diagnose_issue v1
+    %% diagnose_issue v2
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -608,70 +581,57 @@ flowchart TD
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
     gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    read_target["□ read_target ⑂\nRead a single target file into context"]
-    reproduce_mentally{{"▷ reproduce_mentally ⑂\nTrace the error execution path mentally — under..."}}
-    form_hypotheses{{"▷ form_hypotheses ⑂\nGenerate 2-3 distinct fix hypotheses based on t..."}}
-    evaluate_hypotheses{{"▷ evaluate_hypotheses ☰\nEvaluate hypotheses against the code and select..."}}
-    gather_additional_context[["↳ gather_additional_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    compile_complete["□ compile_complete ⑂\nAssemble the final structured diagnosis"]
-    create_fix_task["□ create_fix_task ⑂\nCreate a follow-up fix task in the mission plan..."]
-    compile_intractable["□ compile_intractable ⑂\nIssue is beyond confident diagnosis — package w..."]
-    capture_diagnosis_learnings[["↳ capture_diagnosis_learnings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nDiagnosis complete — return to mission_control"\]
-    capture_failure_note[["↳ capture_failure_note ⑂\nReflect on completed work and persist observations"]]
-    diagnosis_failed[/"⟲ ∅ diagnosis_failed\nDiagnosis could not be completed"\]
+    check_target["□ check_target ⑂\nTry to read the target file"]
+    reproduce_mentally{{"▷ reproduce_mentally ⑂\nTrace the error execution path mentally"}}
+    form_hypotheses{{"▷ form_hypotheses ⑂\nGenerate 2-3 distinct fix hypotheses"}}
+    compile_diagnosis["□ compile_diagnosis ⑂\nAssemble final structured diagnosis"]
+    create_fix_task["□ create_fix_task ⑂\nCreate a follow-up fix task from the diagnosis"]
+    complete[/"⟲ ∅ complete\nDiagnosis complete — fix task created, original..."\]
+    error_file_not_found["□ error_file_not_found ⑂\nFile not found — scan project and report what e..."]
+    report_file_not_found[/"⟲ ∅ report_file_not_found\nReport the missing file with available file list"\]
+    failed[/"⟲ ∅ failed\nDiagnosis failed"\]
 
     style gather_context stroke-width:3px,stroke:#2d5a27
 
-    gather_context -->|⑂ always| read_target
-    read_target -->|⑂ result.file_found == true| reproduce_mentally
-    read_target -->|⑂ always| diagnosis_failed
+    gather_context -->|⑂ always| check_target
+    check_target -->|⑂ result.file_found == true| reproduce_mentally
+    check_target -->|⑂ always| error_file_not_found
     reproduce_mentally -->|⑂ result.tokens_generated › 0| form_hypotheses
-    reproduce_mentally -->|⑂ always| diagnosis_failed
-    form_hypotheses -->|⑂ result.tokens_generated › 0| evaluate_hypotheses
-    form_hypotheses -->|⑂ always| diagnosis_failed
-    evaluate_hypotheses -.->|☰ The diagnosis is clear and ...| compile_complete
-    evaluate_hypotheses -.->|☰ Need to read additional fil...| gather_additional_context
-    evaluate_hypotheses -.->|☰ The issue is too complex fo...| compile_intractable
-    gather_additional_context -->|⑂ meta.attempt ‹ 3| evaluate_hypotheses
-    gather_additional_context -->|⑂ always| compile_complete
-    compile_complete -->|⑂ always| create_fix_task
-    create_fix_task -->|⑂ always| capture_diagnosis_learnings
-    compile_intractable -->|⑂ always| capture_diagnosis_learnings
-    capture_diagnosis_learnings -->|⑂ always| complete
+    reproduce_mentally -->|⑂ always| failed
+    form_hypotheses -->|⑂ result.tokens_generated › 0| compile_diagnosis
+    form_hypotheses -->|⑂ always| failed
+    compile_diagnosis -->|⑂ always| create_fix_task
+    create_fix_task -->|⑂ always| complete
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
-    capture_failure_note -->|⑂ always| diagnosis_failed
-    tc_diagnosis_failed(("⟲ mission_control"))
-    style tc_diagnosis_failed fill:#f0e6f6,stroke:#663399
-    diagnosis_failed -.->|tail-call| tc_diagnosis_failed
+    error_file_not_found -->|⑂ always| report_file_not_found
+    tc_report_file_not_found(("⟲ mission_control"))
+    style tc_report_file_not_found fill:#f0e6f6,stroke:#663399
+    report_file_not_found -.->|tail-call| tc_report_file_not_found
+    tc_failed(("⟲ mission_control"))
+    style tc_failed fill:#f0e6f6,stroke:#663399
+    failed -.->|tail-call| tc_failed
 
 ```
 
-#### document_project (v1)
-*Produce or update project documentation: README, module docstrings, architecture notes. Reads actual code and produces documentation that accurately reflects the current state of the project.*
+#### document_project (v2)
+*Write or update project documentation.*
 
-**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ reason · ◑ doc_scope · ◑ findings · ◑ frustration_level · ◑ frustration_history · ◑ relevant_notes
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● doc_assessment · ● inference_response · ● readme_written · ● docstring_changes · ● files_changed · ● validation_results (+3 more)
-**Sub-flows:** ↳ prepare_context · ↳ validate_output · ↳ capture_learnings · ↳ capture_learnings
+**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ reason · ◑ relevant_notes
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response · ● files_changed
+**Sub-flows:** ↳ prepare_context
 **Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · 𓉗 list dir · 𓉗 file read · 𓉗 file write
-**Stats:** 16 steps · ▷ 4-5 inference · 12 ⑂ rule · 1 ☰ menu
+**Effects:** ⟶ inference · 𓉗 file write
+**Stats:** 6 steps · ▷ 1 inference · 3 ⑂ rule
 
 **Prompts:**
-- **assess_documentation_state** ▷ (t*0.3): Survey existing documentation and identify gaps
-  Injects: {← input.mission_objective}, {← filepath}, {← sig[:100]}, {← file.path}, {← file.content[:500]} (+1 more)
-- **write_readme** ▷ (t*0.5): Produce a comprehensive README for the project
-  Injects: {← input.mission_objective}, {← filepath}, {← file.path}, {← file.content[:1000]}
-- **update_docstrings** ▷ (t*0.3): Add or improve docstrings across the project
-  Injects: {← context.doc_assessment}, {← file.path}, {← file.content}
-- **write_architecture** ▷ (t*0.5): Produce architecture documentation
-  Injects: {← input.mission_objective}, {← file.path}, {← file.content[:800]}
+- **execute** ▷ (0.4): Execute the task via inference
+  Injects: {← input.task_description}, {← input.reason}, {← input.mission_objective}, {← input.relevant_notes}, {← context.repo_map_formatted} (+2 more)
 
 ```mermaid
 flowchart TD
-    %% document_project v1
+    %% document_project v2
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -682,83 +642,48 @@ flowchart TD
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
     gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    scan_project["□ scan_project ⑂\nGet full file inventory for documentation"]
-    assess_documentation_state{{"▷ assess_documentation_state ☰\nSurvey existing documentation and identify gaps"}}
-    write_readme{{"▷ write_readme ⑂\nProduce a comprehensive README for the project"}}
-    save_readme["□ save_readme ⑂\nWrite README.md to disk"]
-    update_docstrings{{"▷ update_docstrings ⑂\nAdd or improve docstrings across the project"}}
-    apply_docstrings["□ apply_docstrings ⑂\nWrite the docstring-improved files"]
-    verify_no_behavior_change[["↳ verify_no_behavior_change ⑂\nVerify adding docstrings didn't break anything"]]
-    write_architecture{{"▷ write_architecture ⑂\nProduce architecture documentation"}}
-    save_architecture["□ save_architecture ⑂\nWrite ARCHITECTURE.md to disk"]
-    check_more_docs["□ check_more_docs ⑂\nAre there more documentation tasks?"]
-    capture_learnings[["↳ capture_learnings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nDocumentation complete — return to mission_control"\]
-    documentation_adequate[/"⟲ ∅ documentation_adequate\nDocumentation reviewed and found adequate"\]
-    capture_failure_note[["↳ capture_failure_note ⑂\nReflect on completed work and persist observations"]]
-    failed[/"⟲ ∅ failed\nDocumentation failed"\]
+    execute{{"▷ execute ⑂\nExecute the task via inference"}}
+    process_output["□ process_output ⑂\nWrite any file blocks to disk"]
+    complete[/"⟲ ∅ complete\nTask complete with files"\]
+    complete_no_files[/"⟲ ∅ complete_no_files\nTask complete — analysis only"\]
+    failed[/"⟲ ∅ failed\nTask failed"\]
 
     style gather_context stroke-width:3px,stroke:#2d5a27
 
-    gather_context -->|⑂ always| scan_project
-    scan_project -->|⑂ result.file_count › 0| assess_documentation_state
-    scan_project -->|⑂ always| failed
-    assess_documentation_state -.->|☰ README is missing or inadeq...| write_readme
-    assess_documentation_state -.->|☰ Source files lack proper do...| update_docstrings
-    assess_documentation_state -.->|☰ System design needs documen...| write_architecture
-    assess_documentation_state -.->|☰ Documentation is already ad...| documentation_adequate
-    write_readme -->|⑂ result.tokens_generated › 0| save_readme
-    write_readme -->|⑂ always| check_more_docs
-    save_readme -->|⑂ result.write_success == true| check_more_docs
-    save_readme -->|⑂ always| check_more_docs
-    update_docstrings -->|⑂ result.tokens_generated › 0| apply_docstrings
-    update_docstrings -->|⑂ always| check_more_docs
-    apply_docstrings -->|⑂ result.all_written == true| verify_no_behavior_change
-    apply_docstrings -->|⑂ always| check_more_docs
-    verify_no_behavior_change -->|⑂ result.status == 'success' or result.statu...| check_more_docs
-    verify_no_behavior_change -->|⑂ always| check_more_docs
-    write_architecture -->|⑂ result.tokens_generated › 0| save_architecture
-    write_architecture -->|⑂ always| check_more_docs
-    save_architecture -->|⑂ always| check_more_docs
-    check_more_docs -->|⑂ result.remaining › 0 and meta.attempt ‹ 3| assess_documentation_state
-    check_more_docs -->|⑂ always| capture_learnings
-    capture_learnings -->|⑂ always| complete
+    gather_context -->|⑂ always| execute
+    execute -->|⑂ result.tokens_generated › 0| process_output
+    execute -->|⑂ always| failed
+    process_output -->|⑂ result.files_written › 0| complete
+    process_output -->|⑂ always| complete_no_files
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
-    tc_documentation_adequate(("⟲ mission_control"))
-    style tc_documentation_adequate fill:#f0e6f6,stroke:#663399
-    documentation_adequate -.->|tail-call| tc_documentation_adequate
-    capture_failure_note -->|⑂ always| failed
+    tc_complete_no_files(("⟲ mission_control"))
+    style tc_complete_no_files fill:#f0e6f6,stroke:#663399
+    complete_no_files -.->|tail-call| tc_complete_no_files
     tc_failed(("⟲ mission_control"))
     style tc_failed fill:#f0e6f6,stroke:#663399
     failed -.->|tail-call| tc_failed
 
 ```
 
-#### explore_spike (v1)
-*Time-boxed investigation of a codebase, module, pattern, or technology. Produces a structured findings document without modifying any code. Used to build understanding before planning or implementation.*
+#### explore_spike (v2)
+*Investigate a pattern, library, or approach before committing.*
 
-**Inputs:** ○ investigation_goal · ◑ mission_id · ◑ task_id · ◑ task_description · ◑ mission_objective · ◑ scope_hint · ◑ working_directory · ◑ specific_questions · ◑ frustration_level · ◑ frustration_history · ◑ relevant_notes
-**Publishes:** ● investigation_plan · ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● deep_context · ● analysis · ● research_findings · ● findings · ● learnings_saved
-**Sub-flows:** ↳ prepare_context · ↳ research_context · ↳ capture_learnings
+**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ reason · ◑ relevant_notes
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response · ● files_changed
+**Sub-flows:** ↳ prepare_context
 **Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · 𓉗 file read
-**Stats:** 9 steps · ▷ 4-5 inference · 7 ⑂ rule · 1 ☰ menu
+**Effects:** ⟶ inference · 𓉗 file write
+**Stats:** 6 steps · ▷ 1 inference · 3 ⑂ rule
 
 **Prompts:**
-- **plan_investigation** ▷ (t*0.6): Produce a focused investigation plan: what to look at, in what order
-  Injects: {← input.investigation_goal}, {← input.scope_hint}, {← input.specific_questions}, {← input.relevant_notes}
-- **analyze** ▷ (t*0.4): Analyze code patterns, architecture, conventions, and risks
-  Injects: {← input.investigation_goal}, {← context.investigation_plan}, {← filepath}, {← content}, {← sig[:100]} (+1 more)
-- **deeper_look** ▷ (t*0.3): Identify what specific area needs closer examination
-  Injects: {← input.investigation_goal}, {← context.analysis}
-- **synthesize** ▷ (t*0.3): Produce the structured findings document
-  Injects: {← input.investigation_goal}, {← context.analysis}, {← context.research_findings}, {← input.specific_questions}
+- **execute** ▷ (0.4): Execute the task via inference
+  Injects: {← input.task_description}, {← input.reason}, {← input.mission_objective}, {← input.relevant_notes}, {← context.repo_map_formatted} (+2 more)
 
 ```mermaid
 flowchart TD
-    %% explore_spike v1
+    %% explore_spike v2
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -768,51 +693,45 @@ flowchart TD
     style L1 fill:#f5f5f5,stroke:none,color:#555
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
-    plan_investigation{{"▷ plan_investigation ⑂\nProduce a focused investigation plan: what to l..."}}
-    scan_structure[["↳ scan_structure ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    deep_read["□ deep_read ⑂\nRead full content of files identified in the in..."]
-    analyze{{"▷ analyze ☰\nAnalyze code patterns, architecture, convention..."}}
-    deeper_look{{"▷ deeper_look ⑂\nIdentify what specific area needs closer examin..."}}
-    external_research[["↳ external_research ⑂\nResearch external sources for patterns or docum..."]]
-    synthesize{{"▷ synthesize ⑂\nProduce the structured findings document"}}
-    capture_findings[["↳ capture_findings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nInvestigation complete — return to mission_control"\]
+    gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
+    execute{{"▷ execute ⑂\nExecute the task via inference"}}
+    process_output["□ process_output ⑂\nWrite any file blocks to disk"]
+    complete[/"⟲ ∅ complete\nTask complete with files"\]
+    complete_no_files[/"⟲ ∅ complete_no_files\nTask complete — analysis only"\]
+    failed[/"⟲ ∅ failed\nTask failed"\]
 
-    style plan_investigation stroke-width:3px,stroke:#2d5a27
+    style gather_context stroke-width:3px,stroke:#2d5a27
 
-    plan_investigation -->|⑂ result.tokens_generated › 0| scan_structure
-    plan_investigation -->|⑂ always| synthesize
-    scan_structure -->|⑂ always| deep_read
-    deep_read -->|⑂ result.files_read › 0| analyze
-    deep_read -->|⑂ always| synthesize
-    analyze -.->|☰ The analysis addresses the ...| synthesize
-    analyze -.->|☰ There's a specific area tha...| deeper_look
-    analyze -.->|☰ The investigation requires ...| external_research
-    deeper_look -->|⑂ meta.attempt ‹ 3| deep_read
-    deeper_look -->|⑂ always| synthesize
-    external_research -->|⑂ always| synthesize
-    synthesize -->|⑂ result.tokens_generated › 0| capture_findings
-    synthesize -->|⑂ always| capture_findings
-    capture_findings -->|⑂ always| complete
+    gather_context -->|⑂ always| execute
+    execute -->|⑂ result.tokens_generated › 0| process_output
+    execute -->|⑂ always| failed
+    process_output -->|⑂ result.files_written › 0| complete
+    process_output -->|⑂ always| complete_no_files
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
+    tc_complete_no_files(("⟲ mission_control"))
+    style tc_complete_no_files fill:#f0e6f6,stroke:#663399
+    complete_no_files -.->|tail-call| tc_complete_no_files
+    tc_failed(("⟲ mission_control"))
+    style tc_failed fill:#f0e6f6,stroke:#663399
+    failed -.->|tail-call| tc_failed
 
 ```
 
 #### integrate_modules (v2)
-*Project cohesion inspector. Scans all project files, checks cross-file imports, reports name discrepancies (mismatches, duplicates), missing modules, and interface contract violations. Produces a structured integration report that mission_control uses to dispatch targeted fix actions (modify_file, create_file, manage_packages). This flow does NOT modify code — it inspects and reports.*
+*Inspect project cohesion — check imports, interfaces, and module connections. Uses structural analysis + inference to identify issues. Reports findings back to mission_control.*
 
-**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ relevant_notes · ◑ integration_hints
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● cross_file_results · ● cross_file_summary · ● inference_response · ● integration_report · ● learnings_saved
-**Sub-flows:** ↳ prepare_context · ↳ capture_learnings · ↳ capture_learnings
+**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ relevant_notes
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● cross_file_results · ● cross_file_summary · ● integration_report
+**Sub-flows:** ↳ prepare_context
 **Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · 𓉗 file read · 𓇴→ save mission
-**Stats:** 10 steps · ▷ 1 inference · 7 ⑂ rule
+**Effects:** ⟶ inference · 𓉗 list dir · 𓉗 file read
+**Stats:** 4 steps · ▷ 1 inference · 3 ⑂ rule
 
 **Prompts:**
-- **analyze_cohesion** ▷ (t*0.3): Analyze project cohesion and produce integration report
-  Injects: {← input.mission_objective}, {← context.repo_map_formatted}, {← context.cross_file_summary}, {← issue.severity}, {← issue.type} (+6 more)
+- **analyze_cohesion** ▷ (t*0.4): Analyze project cohesion and identify integration issues
+  Injects: {← input.mission_objective}, {← context.cross_file_summary}, {← context.repo_map_formatted}, {← file.path}, {← file.content[:1200]}
 
 ```mermaid
 flowchart TD
@@ -827,58 +746,38 @@ flowchart TD
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
     gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    check_project_size["□ check_project_size ⑂\nGet complete file inventory"]
-    structural_check["□ structural_check ⑂\nAST-based cross-file consistency check — import..."]
-    analyze_cohesion{{"▷ analyze_cohesion ⑂\nAnalyze project cohesion and produce integratio..."}}
-    compile_report["□ compile_report ⑂\nParse analysis into structured report and persi..."]
-    capture_learnings[["↳ capture_learnings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nIntegration inspection complete — return report..."\]
-    nothing_to_inspect[/"⟲ ∅ nothing_to_inspect\nSingle-file project — nothing to inspect"\]
-    capture_failure_note[["↳ capture_failure_note ⑂\nReflect on completed work and persist observations"]]
-    failed[/"⟲ ∅ failed\nIntegration inspection failed"\]
+    structural_check["□ structural_check ⑂\nRun cross-file structural analysis"]
+    analyze_cohesion{{"▷ analyze_cohesion ⑂\nAnalyze project cohesion and identify integrati..."}}
+    complete[/"⟲ ∅ complete\nIntegration check complete"\]
 
     style gather_context stroke-width:3px,stroke:#2d5a27
 
-    gather_context -->|⑂ always| check_project_size
-    check_project_size -->|⑂ result.file_count › 1| structural_check
-    check_project_size -->|⑂ always| nothing_to_inspect
+    gather_context -->|⑂ always| structural_check
     structural_check -->|⑂ always| analyze_cohesion
-    analyze_cohesion -->|⑂ result.tokens_generated › 0| compile_report
-    analyze_cohesion -->|⑂ always| capture_failure_note
-    compile_report -->|⑂ result.status == 'clean'| capture_learnings
-    compile_report -->|⑂ result.issues_count › 0| capture_learnings
-    compile_report -->|⑂ always| capture_failure_note
-    capture_learnings -->|⑂ always| complete
+    analyze_cohesion -->|⑂ always| complete
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
-    tc_nothing_to_inspect(("⟲ mission_control"))
-    style tc_nothing_to_inspect fill:#f0e6f6,stroke:#663399
-    nothing_to_inspect -.->|tail-call| tc_nothing_to_inspect
-    capture_failure_note -->|⑂ always| failed
-    tc_failed(("⟲ mission_control"))
-    style tc_failed fill:#f0e6f6,stroke:#663399
-    failed -.->|tail-call| tc_failed
 
 ```
 
-#### manage_packages (v1)
-*Detect, create, and manage project virtual environment and packages. Analyzes the project for dependency management tools and required packages, then uses run_in_terminal for multi-turn package operations.*
+#### manage_packages (v2)
+*Install, remove, or update project dependencies.*
 
-**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ packages_to_install · ◑ target_file_path · ◑ reason · ◑ temperature_multiplier · ◑ frustration_level · ◑ frustration_history · ◑ relevant_notes
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response · ● session_history · ● session_summary · ● learnings_saved
-**Sub-flows:** ↳ prepare_context · ↳ run_in_terminal · ↳ capture_learnings · ↳ capture_learnings
+**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ reason · ◑ relevant_notes
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response · ● files_changed
+**Sub-flows:** ↳ prepare_context
 **Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference
-**Stats:** 7 steps · ▷ 1 inference · 5 ⑂ rule
+**Effects:** ⟶ inference · 𓉗 file write
+**Stats:** 6 steps · ▷ 1 inference · 3 ⑂ rule
 
 **Prompts:**
-- **analyze_environment** ▷ (0.1): Analyze project for package manager, venv, and required dependencies
-  Injects: {← input.task_description}, {← input.working_directory}, {← input.packages_to_install}, {← filepath}, {← sig[:80]} (+2 more)
+- **execute** ▷ (0.4): Execute the task via inference
+  Injects: {← input.task_description}, {← input.mission_objective}, {← input.relevant_notes}, {← context.repo_map_formatted}, {← file.path} (+1 more)
 
 ```mermaid
 flowchart TD
-    %% manage_packages v1
+    %% manage_packages v2
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -889,41 +788,41 @@ flowchart TD
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
     gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    analyze_environment{{"▷ analyze_environment ⑂\nAnalyze project for package manager, venv, and ..."}}
-    run_setup[["↳ run_setup ⑂\nRun package setup in a persistent terminal session"]]
-    capture_learnings[["↳ capture_learnings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nPackage management completed"\]
-    capture_failure_note[["↳ capture_failure_note ⑂\nReflect on completed work and persist observations"]]
-    failed[/"⟲ ∅ failed\nPackage management failed"\]
+    execute{{"▷ execute ⑂\nExecute the task via inference"}}
+    process_output["□ process_output ⑂\nWrite any file blocks to disk"]
+    complete[/"⟲ ∅ complete\nTask complete with files"\]
+    complete_no_files[/"⟲ ∅ complete_no_files\nTask complete — analysis only"\]
+    failed[/"⟲ ∅ failed\nTask failed"\]
 
     style gather_context stroke-width:3px,stroke:#2d5a27
 
-    gather_context -->|⑂ always| analyze_environment
-    analyze_environment -->|⑂ result.tokens_generated › 0| run_setup
-    analyze_environment -->|⑂ always| capture_failure_note
-    run_setup -->|⑂ result.status == 'success'| capture_learnings
-    run_setup -->|⑂ result.status == 'issues'| capture_learnings
-    run_setup -->|⑂ always| capture_failure_note
-    capture_learnings -->|⑂ always| complete
+    gather_context -->|⑂ always| execute
+    execute -->|⑂ result.tokens_generated › 0| process_output
+    execute -->|⑂ always| failed
+    process_output -->|⑂ result.files_written › 0| complete
+    process_output -->|⑂ always| complete_no_files
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
-    capture_failure_note -->|⑂ always| failed
+    tc_complete_no_files(("⟲ mission_control"))
+    style tc_complete_no_files fill:#f0e6f6,stroke:#663399
+    complete_no_files -.->|tail-call| tc_complete_no_files
     tc_failed(("⟲ mission_control"))
     style tc_failed fill:#f0e6f6,stroke:#663399
     failed -.->|tail-call| tc_failed
 
 ```
 
-#### modify_file (v3)
-*Modify one or more existing files via AST-aware symbol-level editing. Operates in two modes set by the caller: - "fix": Correct a known issue. Diagnosis context drives symbol selection. - "refactor": Improve structure. Model browses symbols and selects targets. Uses tree-sitter to extract symbols, presents them as a constrained menu for selection, then rewrites each selected symbol sequentially in a memoryful session. Falls back to full-file rewrite when AST extraction is unavailable or the model requests it.*
+#### modify_file (v4)
+*Modify existing files via AST-aware symbol-level editing. No create_fallback — if the target file doesn't exist, returns a clear error to mission_control with the project's actual file list. The director can then choose to create the file or re-target.
+AST path: extract symbols → select targets → rewrite sequentially. Full-rewrite fallback only when AST extraction is unavailable or the model explicitly requests it.*
 
 **Inputs:** ○ mission_id · ○ task_id · ○ target_file_path · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ reason · ◑ relevant_notes · ◑ mode
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● target_file · ● symbol_table · ● symbol_menu_options · ● files_changed · ● edit_summary · ● inference_response (+2 more)
-**Sub-flows:** ↳ prepare_context · ↳ ast_edit_session · ↳ capture_learnings · ↳ create_file · ↳ capture_learnings
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● target_file · ● symbol_table · ● symbol_menu_options · ● files_changed · ● edit_summary · ● bail_reason (+2 more)
+**Sub-flows:** ↳ prepare_context · ↳ ast_edit_session
 **Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · 𓉗 file read · ⌘ command · 𓉗 file write
-**Stats:** 12 steps · ▷ 1 inference · 10 ⑂ rule
+**Effects:** ⟶ inference · →𓇴 load mission · 𓉗 file read · ⌘ command · 𓇴→ save mission · 𓉗 file write
+**Stats:** 12 steps · ▷ 1 inference · 7 ⑂ rule
 
 **Prompts:**
 - **full_rewrite** ▷ (0.3): Full file rewrite — when AST editing unavailable or structural change needed
@@ -931,7 +830,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    %% modify_file v3
+    %% modify_file v4
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -944,68 +843,70 @@ flowchart TD
     gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
     read_target["□ read_target ⑂\nRead a single target file into context"]
     extract_symbols["□ extract_symbols ⑂\nParse target file with tree-sitter and extract ..."]
-    ast_edit[["↳ ast_edit ⑂\nMemoryful AST-aware edit session — select symbo..."]]
+    ast_edit[["↳ ast_edit ⑂\nMemoryful AST-aware edit session"]]
     full_rewrite{{"▷ full_rewrite ⑂\nFull file rewrite — when AST editing unavailabl..."}}
     write_rewrite["□ write_rewrite ⑂\nWrite full-rewrite output to disk"]
-    validate["□ validate ⑂\nValidate modified files — syntax, imports, lint"]
-    capture_learnings[["↳ capture_learnings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nFile modified — return to mission_control"\]
-    create_fallback[["↳ create_fallback ⑂\nTarget file doesn't exist — create it instead"]]
-    capture_failure_note[["↳ capture_failure_note ⑂\nReflect on completed work and persist observations"]]
+    validate["□ validate ⑂\nValidate modified files"]
+    complete[/"⟲ ∅ complete\nFile modified successfully"\]
+    complete_with_issues[/"⟲ ∅ complete_with_issues\nFile modified but validation found issues"\]
+    error_file_not_found[/"⟲ ∅ error_file_not_found\nTarget file not found — clear error, no silent ..."\]
+    bail[/"⟲ □ bail\nModel determined this file doesn't need changes..."\]
     failed[/"⟲ ∅ failed\nModification failed"\]
 
     style gather_context stroke-width:3px,stroke:#2d5a27
 
     gather_context -->|⑂ always| read_target
     read_target -->|⑂ result.file_found == true| extract_symbols
-    read_target -->|⑂ always| create_fallback
+    read_target -->|⑂ always| error_file_not_found
     extract_symbols -->|⑂ result.symbols_extracted › 0| ast_edit
     extract_symbols -->|⑂ always| full_rewrite
     ast_edit -->|⑂ result.status == 'success'| validate
     ast_edit -->|⑂ result.status == 'full_rewrite_requested'| full_rewrite
-    ast_edit -->|⑂ always| capture_failure_note
+    ast_edit -->|⑂ result.status == 'bail'| bail
+    ast_edit -->|⑂ always| failed
     full_rewrite -->|⑂ result.tokens_generated › 0| write_rewrite
-    full_rewrite -->|⑂ always| capture_failure_note
+    full_rewrite -->|⑂ always| failed
     write_rewrite -->|⑂ result.files_written › 0| validate
-    write_rewrite -->|⑂ always| capture_failure_note
-    validate -->|⑂ result.status == 'success'| capture_learnings
-    validate -->|⑂ result.status == 'issues'| capture_learnings
-    validate -->|⑂ result.status == 'failed' and meta.step_co...| full_rewrite
-    validate -->|⑂ always| capture_failure_note
-    capture_learnings -->|⑂ always| complete
+    write_rewrite -->|⑂ always| failed
+    validate -->|⑂ result.status == 'success'| complete
+    validate -->|⑂ result.status == 'issues'| complete
+    validate -->|⑂ result.status == 'skipped'| complete
+    validate -->|⑂ always| complete_with_issues
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
-    create_fallback -->|⑂ result.status == 'success'| capture_learnings
-    create_fallback -->|⑂ always| capture_failure_note
-    capture_failure_note -->|⑂ always| failed
+    tc_complete_with_issues(("⟲ mission_control"))
+    style tc_complete_with_issues fill:#f0e6f6,stroke:#663399
+    complete_with_issues -.->|tail-call| tc_complete_with_issues
+    tc_error_file_not_found(("⟲ mission_control"))
+    style tc_error_file_not_found fill:#f0e6f6,stroke:#663399
+    error_file_not_found -.->|tail-call| tc_error_file_not_found
+    tc_bail(("⟲ mission_control"))
+    style tc_bail fill:#f0e6f6,stroke:#663399
+    bail -.->|tail-call| tc_bail
     tc_failed(("⟲ mission_control"))
     style tc_failed fill:#f0e6f6,stroke:#663399
     failed -.->|tail-call| tc_failed
 
 ```
 
-#### refactor (v1)
-*Deliberate structural improvement of existing code without changing behavior. Identifies code smells using Fowler's vocabulary, applies named refactorings one at a time, and verifies tests pass after each change. Rolls back on failure.*
+#### refactor (v2)
+*Improve code structure without changing behavior. Reads the target file, uses AST-aware editing for precise refactoring. Clear error if file doesn't exist.*
 
-**Inputs:** ○ mission_id · ○ task_id · ○ target_file_path · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ reason · ◑ specific_smells · ◑ refactoring_budget · ◑ findings · ◑ frustration_level · ◑ frustration_history · ◑ relevant_notes
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● target_file · ● baseline_results · ● smell_analysis · ● refactoring_applied · ● inference_response · ● created_file (+4 more)
-**Sub-flows:** ↳ prepare_context · ↳ capture_learnings · ↳ capture_learnings
+**Inputs:** ○ mission_id · ○ task_id · ○ target_file_path · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ reason · ◑ relevant_notes · ◑ specific_smells · ◑ findings
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● target_file · ● symbol_table · ● symbol_menu_options · ● files_changed · ● edit_summary · ● inference_response
+**Sub-flows:** ↳ prepare_context · ↳ ast_edit_session
 **Tail-calls:** ⟲ mission_control
-**Effects:** file_exists · ⟶ inference · 𓉗 list dir · makedirs · 𓉗 file read · ⌘ command · 𓉗 file write
-**Stats:** 19 steps · ▷ 3-5 inference · 11 ⑂ rule · 2 ☰ menu
+**Effects:** ⟶ inference · 𓉗 file read · 𓉗 file write
+**Stats:** 9 steps · ▷ 1 inference · 6 ⑂ rule
 
 **Prompts:**
-- **identify_smells** ▷ (t*0.5): Analyze code for structural issues using Fowler's vocabulary
-  Injects: {← context.target_file.path}, {← context.target_file.content}, {← input.specific_smells}, {← input.findings}
-- **identify_smells_no_tests** ▷ (t*0.3): Safe-only smell analysis — no test safety net
-  Injects: {← context.target_file.path}, {← context.target_file.content}
-- **apply_refactoring** ▷ (t*0.2): Apply ONE named refactoring from the smell analysis
-  Injects: {← context.smell_analysis}, {← r}, {← context.target_file.path}, {← context.target_file.content}
+- **full_rewrite** ▷ (0.3): Full file rewrite for structural refactoring
+  Injects: {← input.task_description}, {← input.specific_smells}, {← input.target_file_path}, {← context.target_file.content}, {← input.relevant_notes}
 
 ```mermaid
 flowchart TD
-    %% refactor v1
+    %% refactor v2
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -1017,279 +918,57 @@ flowchart TD
 
     gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
     read_target["□ read_target ⑂\nRead a single target file into context"]
-    baseline_tests["□ baseline_tests ⑂\nRun tests BEFORE any changes — green baseline r..."]
-    identify_smells{{"▷ identify_smells ☰\nAnalyze code for structural issues using Fowler..."}}
-    identify_smells_no_tests{{"▷ identify_smells_no_tests ☰\nSafe-only smell analysis — no test safety net"}}
-    apply_refactoring{{"▷ apply_refactoring ⑂\nApply ONE named refactoring from the smell anal..."}}
-    write_refactored["□ write_refactored ⑂\nExtract code from inference response and write ..."]
-    verify_refactoring["□ verify_refactoring ⑂\nConfirm tests still pass after the refactoring"]
-    check_more_refactorings["□ check_more_refactorings ⑂\nAre there more refactorings to apply within bud..."]
-    re_read_target["□ re_read_target ⑂\nRead a single target file into context"]
-    rollback_refactoring["□ rollback_refactoring ⑂\nLast refactoring broke tests — restore pre-refa..."]
-    capture_learnings[["↳ capture_learnings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nRefactoring complete — return to mission_control"\]
-    code_is_clean[/"⟲ ∅ code_is_clean\nCode reviewed, no refactoring needed"\]
-    too_risky[/"⟲ ∅ too_risky\nRefactorings identified but too risky"\]
-    needs_tests_first[/"⟲ ∅ needs_tests_first\nMeaningful refactoring blocked on test coverage"\]
-    cannot_refactor[/"⟲ ∅ cannot_refactor\nTests already failing — can't refactor"\]
-    capture_failure_note[["↳ capture_failure_note ⑂\nReflect on completed work and persist observations"]]
+    extract_symbols["□ extract_symbols ⑂\nParse file for AST-aware refactoring"]
+    ast_refactor[["↳ ast_refactor ⑂\nAST-aware refactoring session"]]
+    full_rewrite{{"▷ full_rewrite ⑂\nFull file rewrite for structural refactoring"}}
+    write_rewrite["□ write_rewrite ⑂\nWrite refactored file"]
+    complete[/"⟲ ∅ complete\nRefactoring complete"\]
+    error_file_not_found[/"⟲ ∅ error_file_not_found\nTarget file not found"\]
     failed[/"⟲ ∅ failed\nRefactoring failed"\]
 
     style gather_context stroke-width:3px,stroke:#2d5a27
 
-    gather_context -->|⑂ input.get⟮'target_file_path', ''⟯ != ''| read_target
-    gather_context -->|⑂ always| cannot_refactor
-    read_target -->|⑂ result.file_found == true| baseline_tests
-    read_target -->|⑂ always| cannot_refactor
-    baseline_tests -->|⑂ result.all_passing == true and result.no_t...| identify_smells
-    baseline_tests -->|⑂ result.no_tests == true| identify_smells_no_tests
-    baseline_tests -->|⑂ always| cannot_refactor
-    identify_smells -.->|☰ Found meaningful refactorin...| apply_refactoring
-    identify_smells -.->|☰ The code is already well-st...| code_is_clean
-    identify_smells -.->|☰ Identified refactorings are...| too_risky
-    identify_smells_no_tests -.->|☰ Found safe refactoring oppo...| apply_refactoring
-    identify_smells_no_tests -.->|☰ No safe refactorings to sug...| code_is_clean
-    identify_smells_no_tests -.->|☰ Meaningful refactoring requ...| needs_tests_first
-    apply_refactoring -->|⑂ result.tokens_generated › 0| write_refactored
-    apply_refactoring -->|⑂ always| capture_learnings
-    write_refactored -->|⑂ result.write_success == true| verify_refactoring
-    write_refactored -->|⑂ always| capture_failure_note
-    verify_refactoring -->|⑂ result.all_passing == true| check_more_refactorings
-    verify_refactoring -->|⑂ result.no_tests == true| check_more_refactorings
-    verify_refactoring -->|⑂ always| rollback_refactoring
-    check_more_refactorings -->|⑂ result.remaining › 0 and result.applied ‹ 3| re_read_target
-    check_more_refactorings -->|⑂ always| capture_learnings
-    re_read_target -->|⑂ result.file_found == true| apply_refactoring
-    re_read_target -->|⑂ always| capture_learnings
-    rollback_refactoring -->|⑂ result.restored == true| check_more_refactorings
-    rollback_refactoring -->|⑂ always| capture_learnings
-    capture_learnings -->|⑂ always| complete
+    gather_context -->|⑂ always| read_target
+    read_target -->|⑂ result.file_found == true| extract_symbols
+    read_target -->|⑂ always| error_file_not_found
+    extract_symbols -->|⑂ result.symbols_extracted › 0| ast_refactor
+    extract_symbols -->|⑂ always| full_rewrite
+    ast_refactor -->|⑂ result.status == 'success'| complete
+    ast_refactor -->|⑂ result.status == 'full_rewrite_requested'| full_rewrite
+    ast_refactor -->|⑂ always| failed
+    full_rewrite -->|⑂ result.tokens_generated › 0| write_rewrite
+    full_rewrite -->|⑂ always| failed
+    write_rewrite -->|⑂ result.files_written › 0| complete
+    write_rewrite -->|⑂ always| failed
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
-    tc_code_is_clean(("⟲ mission_control"))
-    style tc_code_is_clean fill:#f0e6f6,stroke:#663399
-    code_is_clean -.->|tail-call| tc_code_is_clean
-    tc_too_risky(("⟲ mission_control"))
-    style tc_too_risky fill:#f0e6f6,stroke:#663399
-    too_risky -.->|tail-call| tc_too_risky
-    tc_needs_tests_first(("⟲ mission_control"))
-    style tc_needs_tests_first fill:#f0e6f6,stroke:#663399
-    needs_tests_first -.->|tail-call| tc_needs_tests_first
-    tc_cannot_refactor(("⟲ mission_control"))
-    style tc_cannot_refactor fill:#f0e6f6,stroke:#663399
-    cannot_refactor -.->|tail-call| tc_cannot_refactor
-    capture_failure_note -->|⑂ always| failed
+    tc_error_file_not_found(("⟲ mission_control"))
+    style tc_error_file_not_found fill:#f0e6f6,stroke:#663399
+    error_file_not_found -.->|tail-call| tc_error_file_not_found
     tc_failed(("⟲ mission_control"))
     style tc_failed fill:#f0e6f6,stroke:#663399
     failed -.->|tail-call| tc_failed
 
 ```
 
-#### request_review (v1)
-*Proactively submit completed work for senior dev review. The agent is confident in the work but seeks verification, feedback, and learning. Stub: review submission returns unavailable until Phase 6 escalation.*
+#### request_review (v2)
+*Submit completed work for review and produce a summary.*
 
-**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ work_summary · ◑ files_to_review · ◑ design_decisions · ◑ specific_concerns · ◑ quality_gate_observations · ◑ frustration_level · ◑ frustration_history · ◑ relevant_notes
-**Terminal:** ◆ success
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● review_request · ● review_response · ● feedback_analysis · ● required_changes · ● learnings_from_review
-**Sub-flows:** ↳ prepare_context · ↳ capture_learnings
+**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ reason · ◑ relevant_notes
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response · ● files_changed
+**Sub-flows:** ↳ prepare_context
 **Tail-calls:** ⟲ mission_control
-**Effects:** escalate_to_api · ⟶ inference
-**Stats:** 8 steps · ▷ 2-3 inference · 3 ⑂ rule · 1 ☰ menu
+**Effects:** ⟶ inference · 𓉗 file write
+**Stats:** 6 steps · ▷ 1 inference · 3 ⑂ rule
 
 **Prompts:**
-- **compose_review_request** ▷ (t*0.4): Compose a clear, focused review request
-  Injects: {← input.work_summary or input.task_description}, {← input.design_decisions}, {← input.specific_concerns}, {← input.quality_gate_observations}, {← file.path} (+1 more)
-- **process_review_feedback** ▷ (t*0.3): Analyze the senior dev's review feedback
-  Injects: {← context.review_response}
+- **execute** ▷ (0.4): Execute the task via inference
+  Injects: {← input.task_description}, {← input.mission_objective}, {← input.relevant_notes}, {← context.repo_map_formatted}, {← file.path} (+1 more)
 
 ```mermaid
 flowchart TD
-    %% request_review v1
-
-    subgraph Legend[" "]
-        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
-        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
-    end
-    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
-    style L1 fill:#f5f5f5,stroke:none,color:#555
-    style L2 fill:#f5f5f5,stroke:none,color:#555
-
-    gather_review_context[["↳ gather_review_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    compose_review_request{{"▷ compose_review_request ⑂\nCompose a clear, focused review request"}}
-    submit_review["□ submit_review ⑂\nSend the review request via escalation API ⟮stu..."]
-    process_review_feedback{{"▷ process_review_feedback ☰\nAnalyze the senior dev's review feedback"}}
-    approved(["◆ ↳ approved\nRecord review feedback and learnings"])
-    changes_needed[/"⟲ ∅ changes_needed\nRoute back to mission_control for modification ..."\]
-    major_rework[/"⟲ ∅ major_rework\nReview found significant issues — re-plan the task"\]
-    review_unavailable[/"⟲ ∅ review_unavailable\nSenior dev review not available — proceed witho..."\]
-
-    style gather_review_context stroke-width:3px,stroke:#2d5a27
-
-    gather_review_context -->|⑂ always| compose_review_request
-    compose_review_request -->|⑂ result.tokens_generated › 0| submit_review
-    compose_review_request -->|⑂ always| review_unavailable
-    submit_review -->|⑂ result.response_received == true| process_review_feedback
-    submit_review -->|⑂ always| review_unavailable
-    process_review_feedback -.->|☰ Review approved — no change...| approved
-    process_review_feedback -.->|☰ Changes requested — need to...| changes_needed
-    process_review_feedback -.->|☰ Significant issues found — ...| major_rework
-    tc_changes_needed(("⟲ mission_control"))
-    style tc_changes_needed fill:#f0e6f6,stroke:#663399
-    changes_needed -.->|tail-call| tc_changes_needed
-    tc_major_rework(("⟲ mission_control"))
-    style tc_major_rework fill:#f0e6f6,stroke:#663399
-    major_rework -.->|tail-call| tc_major_rework
-    tc_review_unavailable(("⟲ mission_control"))
-    style tc_review_unavailable fill:#f0e6f6,stroke:#663399
-    review_unavailable -.->|tail-call| tc_review_unavailable
-
-    style approved fill:#c8e6c9,stroke:#2d5a27
-```
-
-#### retrospective (v1)
-*Periodic self-assessment of agent performance. Reviews completed work, analyzes patterns in successes and failures, evaluates effort distribution, and produces actionable recommendations that modify mission state.*
-
-**Inputs:** ○ mission_id · ◑ task_id · ◑ task_description · ◑ working_directory · ◑ trigger_reason · ◑ scope
-**Publishes:** ● mission_history · ● task_outcomes · ● learnings_archive · ● timing_data · ● inference_response · ● performance_analysis · ● changes_applied · ● director_report
-**Sub-flows:** ↳ capture_learnings · ↳ capture_learnings
-**Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · list_artifacts · load_artifact · →𓇴 load mission · 𓇴→ push event · 𓇴→ save mission
-**Stats:** 11 steps · ▷ 2-3 inference · 7 ⑂ rule · 1 ☰ menu
-
-**Prompts:**
-- **analyze_patterns** ▷ (t*0.6): Review performance record and identify patterns
-  Injects: {← context.mission_history.objective}, {← task.id}, {← task.flow}, {← task.status}, {← task.attempts} (+9 more)
-- **generate_recommendations** ▷ (t*0.5): Produce specific, actionable recommendations
-  Injects: {← context.performance_analysis}, {← task.id}, {← task.description}
-
-```mermaid
-flowchart TD
-    %% retrospective v1
-
-    subgraph Legend[" "]
-        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
-        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
-    end
-    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
-    style L1 fill:#f5f5f5,stroke:none,color:#555
-    style L2 fill:#f5f5f5,stroke:none,color:#555
-
-    gather_history["□ gather_history ⑂\nLoad mission state, task outcomes, timing, and ..."]
-    analyze_patterns{{"▷ analyze_patterns ⑂\nReview performance record and identify patterns"}}
-    snapshot_analysis["□ snapshot_analysis ⑂\nPreserve analysis text under a named key"]
-    generate_recommendations{{"▷ generate_recommendations ☰\nProduce specific, actionable recommendations"}}
-    apply_recommendations["□ apply_recommendations ⑂\nTranslate recommendations into mission state ch..."]
-    flag_for_director["□ flag_for_director ⑂\nPackage findings into a report for the shop dir..."]
-    capture_learnings[["↳ capture_learnings ⑂\nRecord retrospective findings"]]
-    complete[/"⟲ ∅ complete\nRetrospective complete — return to mission_control"\]
-    too_early[/"⟲ ∅ too_early\nNot enough completed work to retrospect on"\]
-    no_changes_needed[["↳ no_changes_needed ⑂\nRecord that retrospective found no issues"]]
-    return_to_mission[/"⟲ ∅ return_to_mission\nRetrospective found no issues — return to missi..."\]
-
-    style gather_history stroke-width:3px,stroke:#2d5a27
-
-    gather_history -->|⑂ result.completed_tasks › 0| analyze_patterns
-    gather_history -->|⑂ always| too_early
-    analyze_patterns -->|⑂ result.tokens_generated › 0| snapshot_analysis
-    analyze_patterns -->|⑂ always| no_changes_needed
-    snapshot_analysis -->|⑂ always| generate_recommendations
-    generate_recommendations -.->|☰ Recommendations are actiona...| apply_recommendations
-    generate_recommendations -.->|☰ Issues found that need the ...| flag_for_director
-    generate_recommendations -.->|☰ Performance is healthy — no...| no_changes_needed
-    apply_recommendations -->|⑂ always| capture_learnings
-    flag_for_director -->|⑂ always| capture_learnings
-    capture_learnings -->|⑂ always| complete
-    tc_complete(("⟲ mission_control"))
-    style tc_complete fill:#f0e6f6,stroke:#663399
-    complete -.->|tail-call| tc_complete
-    tc_too_early(("⟲ mission_control"))
-    style tc_too_early fill:#f0e6f6,stroke:#663399
-    too_early -.->|tail-call| tc_too_early
-    no_changes_needed -->|⑂ always| return_to_mission
-    tc_return_to_mission(("⟲ mission_control"))
-    style tc_return_to_mission fill:#f0e6f6,stroke:#663399
-    return_to_mission -.->|tail-call| tc_return_to_mission
-
-```
-
-#### setup_project (v1)
-*Project management flow for initializing and configuring a target project. Scans the project to determine language/framework, then sets up appropriate tooling: package managers, linters, formatters, test frameworks, config files. The LLM decides what's needed based on the project — language agnostic.*
-
-**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ setup_focus · ◑ relevant_notes · ◑ frustration_level · ◑ frustration_history
-**Publishes:** ● project_manifest · ● inference_response · ● setup_results · ● learnings_saved
-**Sub-flows:** ↳ capture_learnings · ↳ capture_learnings
-**Tail-calls:** ⟲ mission_control
-**Effects:** file_exists · ⟶ inference · 𓉗 list dir · 𓉗 file read · ⌘ command · 𓉗 file write
-**Stats:** 8 steps · ▷ 2 inference · 6 ⑂ rule
-
-**Prompts:**
-- **analyze_needs** ▷ (0.2): LLM analyzes project and determines what setup is needed
-  Injects: {← input.setup_focus}, {← input.mission_objective}, {← filepath}, {← sig}
-- **init_empty_project** ▷ (0.2): No files found — generate project scaffold
-  Injects: {← input.mission_objective}, {← input.setup_focus}
-
-```mermaid
-flowchart TD
-    %% setup_project v1
-
-    subgraph Legend[" "]
-        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
-        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
-    end
-    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
-    style L1 fill:#f5f5f5,stroke:none,color:#555
-    style L2 fill:#f5f5f5,stroke:none,color:#555
-
-    scan_project["□ scan_project ⑂\nScan workspace to understand project structure ..."]
-    analyze_needs{{"▷ analyze_needs ⑂\nLLM analyzes project and determines what setup ..."}}
-    execute_setup["□ execute_setup ⑂\nRun setup commands and create config files"]
-    init_empty_project{{"▷ init_empty_project ⑂\nNo files found — generate project scaffold"}}
-    capture_learnings[["↳ capture_learnings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nProject setup complete — return to mission_control"\]
-    capture_failure_note[["↳ capture_failure_note ⑂\nReflect on completed work and persist observations"]]
-    failed[/"⟲ ∅ failed\nSetup failed"\]
-
-    style scan_project stroke-width:3px,stroke:#2d5a27
-
-    scan_project -->|⑂ result.file_count › 0| analyze_needs
-    scan_project -->|⑂ always| init_empty_project
-    analyze_needs -->|⑂ result.tokens_generated › 0| execute_setup
-    analyze_needs -->|⑂ always| capture_failure_note
-    execute_setup -->|⑂ result.setup_complete == true| capture_learnings
-    execute_setup -->|⑂ always| capture_learnings
-    init_empty_project -->|⑂ result.tokens_generated › 0| execute_setup
-    init_empty_project -->|⑂ always| capture_failure_note
-    capture_learnings -->|⑂ always| complete
-    tc_complete(("⟲ mission_control"))
-    style tc_complete fill:#f0e6f6,stroke:#663399
-    complete -.->|tail-call| tc_complete
-    capture_failure_note -->|⑂ always| failed
-    tc_failed(("⟲ mission_control"))
-    style tc_failed fill:#f0e6f6,stroke:#663399
-    failed -.->|tail-call| tc_failed
-
-```
-
-#### validate_behavior (v1)
-*Run the project code and verify actual behavior matches expectations. Uses run_in_terminal for multi-turn interactive CLI testing. Produces a behavioral assessment with pass/fail and issue descriptions.*
-
-**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ entry_point · ◑ test_scenarios · ◑ reason · ◑ temperature_multiplier · ◑ frustration_level · ◑ frustration_history · ◑ relevant_notes
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response · ● session_history · ● session_summary · ● learnings_saved
-**Sub-flows:** ↳ prepare_context · ↳ run_in_terminal · ↳ capture_learnings · ↳ capture_learnings
-**Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference
-**Stats:** 10 steps · ▷ 2 inference · 7 ⑂ rule
-
-**Prompts:**
-- **plan_test_scenarios** ▷ (0.2): LLM reads project code and plans interactive test scenarios
-  Injects: {← input.mission_objective}, {← input.task_description}, {← input.entry_point}, {← input.target_file_path}, {← file.path} (+2 more)
-- **analyze_results** ▷ (0.1): LLM reviews test session and produces behavioral assessment
-  Injects: {← entry.turn}, {← entry.command}, {← entry.output}, {← entry.return_code}
-
-```mermaid
-flowchart TD
-    %% validate_behavior v1
+    %% request_review v2
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -1300,36 +979,179 @@ flowchart TD
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
     gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    plan_test_scenarios{{"▷ plan_test_scenarios ⑂\nLLM reads project code and plans interactive te..."}}
-    check_readiness(["∅ check_readiness ⑂\nRoute based on whether code is ready for behavi..."])
-    run_tests[["↳ run_tests ⑂\nRun interactive tests in a persistent terminal ..."]]
-    analyze_results{{"▷ analyze_results ⑂\nLLM reviews test session and produces behaviora..."}}
-    skip_not_ready[/"⟲ ∅ skip_not_ready\nCode not ready for behavioral testing — skip gr..."\]
-    capture_learnings[["↳ capture_learnings ⑂\nReflect on completed work and persist observations"]]
-    complete[/"⟲ ∅ complete\nBehavioral validation completed"\]
-    capture_failure_note[["↳ capture_failure_note ⑂\nReflect on completed work and persist observations"]]
-    failed[/"⟲ ∅ failed\nBehavioral validation failed"\]
+    execute{{"▷ execute ⑂\nExecute the task via inference"}}
+    process_output["□ process_output ⑂\nWrite any file blocks to disk"]
+    complete[/"⟲ ∅ complete\nTask complete with files"\]
+    complete_no_files[/"⟲ ∅ complete_no_files\nTask complete — analysis only"\]
+    failed[/"⟲ ∅ failed\nTask failed"\]
 
     style gather_context stroke-width:3px,stroke:#2d5a27
 
-    gather_context -->|⑂ always| plan_test_scenarios
-    plan_test_scenarios -->|⑂ result.tokens_generated › 0| check_readiness
-    plan_test_scenarios -->|⑂ always| capture_failure_note
-    check_readiness -->|⑂ 'test_ready' in context.get⟮'inference_res...| run_tests
-    check_readiness -->|⑂ always| skip_not_ready
-    run_tests -->|⑂ result.status == 'success'| analyze_results
-    run_tests -->|⑂ result.status == 'issues'| analyze_results
-    run_tests -->|⑂ always| capture_failure_note
-    analyze_results -->|⑂ result.tokens_generated › 0| capture_learnings
-    analyze_results -->|⑂ always| capture_learnings
-    tc_skip_not_ready(("⟲ mission_control"))
-    style tc_skip_not_ready fill:#f0e6f6,stroke:#663399
-    skip_not_ready -.->|tail-call| tc_skip_not_ready
-    capture_learnings -->|⑂ always| complete
+    gather_context -->|⑂ always| execute
+    execute -->|⑂ result.tokens_generated › 0| process_output
+    execute -->|⑂ always| failed
+    process_output -->|⑂ result.files_written › 0| complete
+    process_output -->|⑂ always| complete_no_files
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
-    capture_failure_note -->|⑂ always| failed
+    tc_complete_no_files(("⟲ mission_control"))
+    style tc_complete_no_files fill:#f0e6f6,stroke:#663399
+    complete_no_files -.->|tail-call| tc_complete_no_files
+    tc_failed(("⟲ mission_control"))
+    style tc_failed fill:#f0e6f6,stroke:#663399
+    failed -.->|tail-call| tc_failed
+
+```
+
+#### retrospective (v3)
+*Capture learnings from frustration recovery — what worked after struggling. Saves analysis as a mission note (accessible to all future director reasoning), NOT as a file on disk. Only fires on frustration reset (task succeeded after elevated frustration).*
+
+**Inputs:** ○ mission_id · ◑ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ reason · ◑ relevant_notes · ◑ trigger_reason
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response
+**Sub-flows:** ↳ prepare_context
+**Tail-calls:** ⟲ mission_control
+**Effects:** ⟶ inference · →𓇴 load mission · 𓇴→ save mission
+**Stats:** 5 steps · ▷ 1 inference · 3 ⑂ rule
+
+**Prompts:**
+- **execute** ▷ (0.4): Analyze what was tried, what failed, what ultimately worked
+  Injects: {← input.trigger_reason or input.reason or input.task_description or 'Frustration recovery'}, {← input.mission_objective}, {← input.relevant_notes}, {← context.repo_map_formatted}, {← file.path} (+1 more)
+
+```mermaid
+flowchart TD
+    %% retrospective v3
+
+    subgraph Legend[" "]
+        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
+        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
+    end
+    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
+    style L1 fill:#f5f5f5,stroke:none,color:#555
+    style L2 fill:#f5f5f5,stroke:none,color:#555
+
+    gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
+    execute{{"▷ execute ⑂\nAnalyze what was tried, what failed, what ultim..."}}
+    save_note["□ save_note ⑂\nSave retrospective analysis as a persistent mis..."]
+    complete[/"⟲ ∅ complete\nRetrospective complete — learnings saved to mis..."\]
+    failed[/"⟲ ∅ failed\nRetrospective failed"\]
+
+    style gather_context stroke-width:3px,stroke:#2d5a27
+
+    gather_context -->|⑂ always| execute
+    execute -->|⑂ result.tokens_generated › 0| save_note
+    execute -->|⑂ always| failed
+    save_note -->|⑂ result.note_saved == true| complete
+    save_note -->|⑂ always| complete
+    tc_complete(("⟲ mission_control"))
+    style tc_complete fill:#f0e6f6,stroke:#663399
+    complete -.->|tail-call| tc_complete
+    tc_failed(("⟲ mission_control"))
+    style tc_failed fill:#f0e6f6,stroke:#663399
+    failed -.->|tail-call| tc_failed
+
+```
+
+#### setup_project (v2)
+*Initialize project tooling and structure. Creates directories, pyproject.toml, __init__.py files, and installs dependencies. Uses the terminal for shell commands (mkdir, pip install, etc.) and inference for generating config files.*
+
+**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ target_file_path · ◑ reason · ◑ relevant_notes · ◑ setup_focus
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response · ● files_changed
+**Sub-flows:** ↳ prepare_context
+**Tail-calls:** ⟲ mission_control
+**Effects:** file_exists · ⟶ inference · ⌘ command · 𓉗 file write
+**Stats:** 7 steps · ▷ 1 inference · 4 ⑂ rule
+
+**Prompts:**
+- **plan_setup** ▷ (0.3): Determine what setup actions are needed
+  Injects: {← input.task_description}, {← input.mission_objective}, {← input.setup_focus}, {← input.relevant_notes}, {← filepath}
+
+```mermaid
+flowchart TD
+    %% setup_project v2
+
+    subgraph Legend[" "]
+        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
+        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
+    end
+    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
+    style L1 fill:#f5f5f5,stroke:none,color:#555
+    style L2 fill:#f5f5f5,stroke:none,color:#555
+
+    gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
+    plan_setup{{"▷ plan_setup ⑂\nDetermine what setup actions are needed"}}
+    write_files["□ write_files ⑂\nWrite setup files to disk"]
+    run_setup_commands["□ run_setup_commands ⑂\nRun setup commands ⟮pip install, etc.⟯"]
+    complete[/"⟲ ∅ complete\nSetup complete"\]
+    complete_no_files[/"⟲ ∅ complete_no_files\nSetup produced no file output"\]
+    failed[/"⟲ ∅ failed\nSetup failed"\]
+
+    style gather_context stroke-width:3px,stroke:#2d5a27
+
+    gather_context -->|⑂ always| plan_setup
+    plan_setup -->|⑂ result.tokens_generated › 0| write_files
+    plan_setup -->|⑂ always| failed
+    write_files -->|⑂ result.files_written › 0| run_setup_commands
+    write_files -->|⑂ always| complete_no_files
+    run_setup_commands -->|⑂ always| complete
+    tc_complete(("⟲ mission_control"))
+    style tc_complete fill:#f0e6f6,stroke:#663399
+    complete -.->|tail-call| tc_complete
+    tc_complete_no_files(("⟲ mission_control"))
+    style tc_complete_no_files fill:#f0e6f6,stroke:#663399
+    complete_no_files -.->|tail-call| tc_complete_no_files
+    tc_failed(("⟲ mission_control"))
+    style tc_failed fill:#f0e6f6,stroke:#663399
+    failed -.->|tail-call| tc_failed
+
+```
+
+#### validate_behavior (v2)
+*Run the project and verify end-to-end behavior. Uses a terminal session to execute the project and check output.*
+
+**Inputs:** ○ mission_id · ○ task_id · ◑ task_description · ◑ mission_objective · ◑ working_directory · ◑ entry_point
+**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● validation_plan · ● terminal_output
+**Sub-flows:** ↳ prepare_context · ↳ run_in_terminal
+**Tail-calls:** ⟲ mission_control
+**Effects:** ⟶ inference
+**Stats:** 6 steps · ▷ 1 inference · 3 ⑂ rule
+
+**Prompts:**
+- **plan_validation** ▷ (0.2): Determine how to validate the project
+  Injects: {← input.mission_objective}, {← input.task_description}, {← context.repo_map_formatted}, {← context.project_manifest.keys() | list | join(', ')}
+
+```mermaid
+flowchart TD
+    %% validate_behavior v2
+
+    subgraph Legend[" "]
+        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
+        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
+    end
+    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
+    style L1 fill:#f5f5f5,stroke:none,color:#555
+    style L2 fill:#f5f5f5,stroke:none,color:#555
+
+    gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
+    plan_validation{{"▷ plan_validation ⑂\nDetermine how to validate the project"}}
+    parse_and_run[["↳ parse_and_run ⑂\nExecute the project in a terminal session"]]
+    complete[/"⟲ ∅ complete\nValidation passed"\]
+    complete_with_issues[/"⟲ ∅ complete_with_issues\nValidation found issues"\]
+    failed[/"⟲ ∅ failed\nValidation planning failed"\]
+
+    style gather_context stroke-width:3px,stroke:#2d5a27
+
+    gather_context -->|⑂ always| plan_validation
+    plan_validation -->|⑂ result.tokens_generated › 0| parse_and_run
+    plan_validation -->|⑂ always| failed
+    parse_and_run -->|⑂ result.status == 'success'| complete
+    parse_and_run -->|⑂ always| complete_with_issues
+    tc_complete(("⟲ mission_control"))
+    style tc_complete fill:#f0e6f6,stroke:#663399
+    complete -.->|tail-call| tc_complete
+    tc_complete_with_issues(("⟲ mission_control"))
+    style tc_complete_with_issues fill:#f0e6f6,stroke:#663399
+    complete_with_issues -.->|tail-call| tc_complete_with_issues
     tc_failed(("⟲ mission_control"))
     style tc_failed fill:#f0e6f6,stroke:#663399
     failed -.->|tail-call| tc_failed
@@ -1342,10 +1164,10 @@ flowchart TD
 *Memoryful AST-aware editing session. Receives a parsed symbol table and file content, presents symbols as a constrained menu for progressive selection, then rewrites each selected symbol sequentially in a memoryful inference session. Each rewrite sees the result of prior rewrites. Returns the modified file written to disk.*
 
 **Inputs:** ○ file_path · ○ file_content · ○ symbol_table · ○ symbol_menu_options · ○ task_description · ◑ reason · ◑ mode · ◑ relevant_notes · ◑ working_directory
-**Terminal:** ◆ success · ◆ full_rewrite_requested · ◆ failed
-**Publishes:** ● edit_session_id · ● file_content · ● file_path · ● mode · ● selected_symbols · ● selection_turn · ● rewrite_queue · ● current_symbol · ● file_content_updated · ● files_changed (+1 more)
+**Terminal:** ◆ success · ◆ full_rewrite_requested · ◆ bail · ◆ failed
+**Publishes:** ● edit_session_id · ● selected_symbols · ● file_content · ● file_path · ● mode · ● selection_turn · ● rewrite_queue · ● current_symbol · ● file_content_updated · ● files_changed (+2 more)
 **Effects:** end_inference_session · session_inference · start_inference_session · 𓉗 file write
-**Stats:** 8 steps · 4 ⑂ rule
+**Stats:** 10 steps · 5 ⑂ rule
 
 ```mermaid
 flowchart TD
@@ -1366,6 +1188,8 @@ flowchart TD
     finalize(["◆ □ finalize\nWrite modified file to disk and close inference..."])
     no_changes_needed(["◆ □ no_changes_needed\nModel determined no symbol changes needed"])
     close_full_rewrite(["◆ □ close_full_rewrite\nModel requested full file rewrite instead of sy..."])
+    capture_bail_reason["□ capture_bail_reason ⑂\nAsk the model why it is bailing — captures reas..."]
+    close_bail(["◆ □ close_bail\nClose session after capturing bail reasoning"])
     session_failed(["◆ ∅ session_failed\nCould not start edit session"])
 
     style start_session stroke-width:3px,stroke:#2d5a27
@@ -1375,6 +1199,7 @@ flowchart TD
     select_symbols -->|⑂ result.selection_complete == true and resu...| begin_rewrites
     select_symbols -->|⑂ result.selection_complete == true and resu...| no_changes_needed
     select_symbols -->|⑂ result.full_rewrite_requested == true| close_full_rewrite
+    select_symbols -->|⑂ result.bail_requested == true| capture_bail_reason
     select_symbols -->|⑂ result.symbol_selected == true| select_symbols
     select_symbols -->|⑂ always| begin_rewrites
     begin_rewrites -->|⑂ result.has_next == true| rewrite_symbol
@@ -1382,6 +1207,7 @@ flowchart TD
     rewrite_symbol -->|⑂ result.rewrite_success == true and result....| rewrite_symbol
     rewrite_symbol -->|⑂ result.rewrite_success == true| finalize
     rewrite_symbol -->|⑂ always| finalize
+    capture_bail_reason -->|⑂ always| close_bail
 
     style finalize fill:#c8e6c9,stroke:#2d5a27
     style no_changes_needed fill:#c8e6c9,stroke:#2d5a27
@@ -1496,26 +1322,27 @@ flowchart TD
     style complete fill:#c8e6c9,stroke:#2d5a27
 ```
 
-#### quality_gate (v2)
-*Project-wide quality validation. Runs in two modes: - "completion" (default): Final gate before declaring mission complete. - "checkpoint": Mid-mission quality inspection to assess current state
-  and identify issues worth expanding the plan for.
-Scans the project, uses LLM to plan comprehensive validation checks (imports, tests, integration), executes them, and reports results.*
+#### quality_gate (v3)
+*Project-wide quality validation. Three-phase gate: 1. Deterministic checks — file scan, cross-file AST consistency, import validation, lint 2. Behavioral validation — sub-flow to run_in_terminal, actually execute the project 3. Summary — LLM reviews all results and determines pass/fail
+Receives clean context: working_directory and mission_objective. Judges the product, not the process that built it.
+Modes: - "completion" (default): Final gate before declaring mission complete. - "checkpoint": Mid-mission inspection. Terminal execution skipped.*
 
 **Inputs:** ○ working_directory · ○ mission_id · ◑ mission_objective · ◑ relevant_notes · ◑ mode
 **Terminal:** ◆ success · ◆ failed
-**Publishes:** ● project_manifest · ● cross_file_results · ● cross_file_summary · ● inference_response · ● validation_results · ● quality_results
+**Publishes:** ● project_manifest · ● cross_file_results · ● cross_file_summary · ● inference_response · ● validation_results · ● terminal_output · ● terminal_status · ● quality_results
+**Sub-flows:** ↳ run_in_terminal
 **Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · 𓉗 file read · ⌘ command · 𓇴→ save mission
-**Stats:** 9 steps · ▷ 2 inference · 6 ⑂ rule
+**Stats:** 11 steps · ▷ 2 inference · 8 ⑂ rule
 
 **Prompts:**
-- **plan_checks** ▷ (0.0): LLM plans comprehensive project-wide validation
+- **plan_checks** ▷ (0.0): LLM plans deterministic validation checks (imports, lint)
   Injects: {← input.working_directory}, {← filepath}, {← sig[:120]}
-- **summarize** ▷ (0.1): Summarize quality gate results into actionable findings
-  Injects: {← filepath}, {← context.cross_file_summary}, {← check.name}, {← "PASS" if check.passed else "FAIL"}, {← check.stdout[:200]} (+1 more)
+- **summarize** ▷ (0.1): Summarize all quality results into actionable findings
+  Injects: {← input.mission_objective or 'not specified'}, {← filepath}, {← context.cross_file_summary}, {← check.name}, {← "PASS" if check.passed else "FAIL"} (+3 more)
 
 ```mermaid
 flowchart TD
-    %% quality_gate v2
+    %% quality_gate v3
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -1527,9 +1354,11 @@ flowchart TD
 
     scan_project["□ scan_project ⑂\nDiscover all source files in the project"]
     cross_file_check["□ cross_file_check ⑂\nDeterministic AST-based cross-file consistency ..."]
-    plan_checks{{"▷ plan_checks ⑂\nLLM plans comprehensive project-wide validation"}}
-    execute_checks["□ execute_checks ⑂\nExecute all project-wide quality checks"]
-    summarize{{"▷ summarize ⑂\nSummarize quality gate results into actionable ..."}}
+    plan_checks{{"▷ plan_checks ⑂\nLLM plans deterministic validation checks ⟮impo..."}}
+    execute_checks["□ execute_checks ⑂\nExecute all deterministic quality checks"]
+    check_mode_for_terminal(["∅ check_mode_for_terminal ⑂\nRoute based on mode — completion runs terminal,..."])
+    run_behavioral_check[["↳ run_behavioral_check ⑂\nExecute the project in a terminal session and v..."]]
+    summarize{{"▷ summarize ⑂\nSummarize all quality results into actionable f..."}}
     evaluate_results["□ evaluate_results ⑂\nParse quality summary and determine pass/fail"]
     gate_pass(["◆ ∅ gate_pass\nProject passes quality gate"])
     gate_fail(["◆ ∅ gate_fail\nProject has quality issues needing attention"])
@@ -1541,8 +1370,12 @@ flowchart TD
     scan_project -->|⑂ always| pass_empty
     cross_file_check -->|⑂ always| plan_checks
     plan_checks -->|⑂ result.tokens_generated › 0| execute_checks
-    plan_checks -->|⑂ always| pass_empty
-    execute_checks -->|⑂ always| summarize
+    plan_checks -->|⑂ always| check_mode_for_terminal
+    execute_checks -->|⑂ always| check_mode_for_terminal
+    check_mode_for_terminal -->|⑂ input.get⟮'mode', 'completion'⟯ == 'comple...| run_behavioral_check
+    check_mode_for_terminal -->|⑂ always| summarize
+    run_behavioral_check -->|⑂ result.status == 'success'| summarize
+    run_behavioral_check -->|⑂ always| summarize
     summarize -->|⑂ result.tokens_generated › 0| evaluate_results
     summarize -->|⑂ always| pass_empty
     evaluate_results -->|⑂ result.all_passing == true| gate_pass
@@ -1757,8 +1590,8 @@ flowchart TD
 *Revise the mission plan based on new observations. Can add tasks, reorder priorities, or mark tasks obsoleted. Writes changes to persistence; mission_control picks them up.*
 
 **Inputs:** ○ mission_id · ○ observation · ◑ discovered_requirement · ◑ affected_task_id
-**Terminal:** ◆ success
 **Publishes:** ● mission · ● repo_map_formatted · ● related_files · ● inference_response
+**Tail-calls:** ⟲ mission_control
 **Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · →𓇴 read events · 𓉗 file read · 𓇴→ save mission
 **Stats:** 6 steps · ▷ 1 inference · 4 ⑂ rule
 
@@ -1782,8 +1615,8 @@ flowchart TD
     scan_workspace["□ scan_workspace ⑂\nBuild AST-based project map so revisions are gr..."]
     evaluate_revision{{"▷ evaluate_revision ⑂\nDetermine what plan changes are needed"}}
     apply_revision["□ apply_revision ⑂\nApply the revision to mission state"]
-    skip(["◆ ∅ skip\nNo revision needed or possible"])
-    complete(["◆ ∅ complete\nPlan revised successfully"])
+    skip[/"⟲ ∅ skip\nNo revision needed or possible — return to miss..."\]
+    complete[/"⟲ ∅ complete\nPlan revised successfully — return to mission_c..."\]
 
     style load_current_plan stroke-width:3px,stroke:#2d5a27
 
@@ -1794,9 +1627,13 @@ flowchart TD
     evaluate_revision -->|⑂ always| skip
     apply_revision -->|⑂ result.revision_applied == true| complete
     apply_revision -->|⑂ always| skip
+    tc_skip(("⟲ mission_control"))
+    style tc_skip fill:#f0e6f6,stroke:#663399
+    skip -.->|tail-call| tc_skip
+    tc_complete(("⟲ mission_control"))
+    style tc_complete fill:#f0e6f6,stroke:#663399
+    complete -.->|tail-call| tc_complete
 
-    style skip fill:#c8e6c9,stroke:#2d5a27
-    style complete fill:#c8e6c9,stroke:#2d5a27
 ```
 
 #### run_in_terminal (v1)
@@ -1805,7 +1642,7 @@ flowchart TD
 **Inputs:** ○ session_goal · ○ working_directory · ◑ initial_commands · ◑ max_turns · ◑ session_context · ◑ environment_vars
 **Terminal:** ◆ success · ◆ failed · ◆ issues
 **Publishes:** ● session_id · ● inference_session_id · ● session_history · ● inference_response · ● session_summary
-**Effects:** ⌘ close terminal · end_inference_session · ⟶ inference · ⌘ terminal cmd · session_inference · start_inference_session · ⌘ terminal
+**Effects:** ⌘ close terminal · end_inference_session · ⟶ inference · ⌘ terminal cmd · start_inference_session · ⌘ terminal
 **Stats:** 7 steps · ▷ 2-3 inference · 3 ⑂ rule · 1 ☰ menu
 
 **Prompts:**
@@ -1859,7 +1696,7 @@ Three possible outcomes: - success: all checks pass - issues: syntax passes but 
 **Inputs:** ○ file_path · ○ working_directory · ◑ project_manifest · ◑ validation_hint · ◑ relevant_notes · ◑ test_path · ◑ max_attempts
 **Terminal:** ◆ success · ◆ issues · ◆ failed
 **Publishes:** ● validation_results · ● inference_response · ● lint_notes_saved
-**Effects:** file_exists · ⟶ inference · →𓇴 load mission · ⌘ command · 𓇴→ save mission
+**Effects:** ⟶ inference · →𓇴 load mission · ⌘ command · 𓇴→ save mission
 **Stats:** 8 steps · ▷ 1 inference · 5 ⑂ rule
 
 **Prompts:**
@@ -1906,26 +1743,27 @@ flowchart TD
 
 ### Control Flows
 
-#### create_plan (v2)
-*Generate a task plan from mission objective with quality validation. Uses prepare_context to see existing project state. Tasks describe intent and outcomes, not flow names — mission_control selects the appropriate flow at dispatch time. Retries up to 2 times if the plan is inadequate.*
+#### design_and_plan (v1)
+*Merged architecture + plan flow. Architecture design runs first and produces structured ArchitectureState on the mission. Plan generation then receives the architecture as input and creates tasks with file paths that match the architecture's canonical module list. This eliminates the architecture/plan desynchronization problem.*
 
 **Inputs:** ○ mission_id · ◑ existing_progress
 **Terminal:** ◆ failed
-**Publishes:** ● mission · ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response
-**Sub-flows:** ↳ prepare_context
+**Publishes:** ● mission · ● project_manifest · ● repo_map_formatted · ● inference_response · ● architecture
 **Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · →𓇴 load mission · →𓇴 read events · 𓇴→ save mission
-**Stats:** 7 steps · ▷ 2 inference · 5 ⑂ rule
+**Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · →𓇴 read events · 𓉗 file read · 𓇴→ save mission
+**Stats:** 10 steps · ▷ 3 inference · 8 ⑂ rule
 
 **Prompts:**
-- **generate_plan** ▷ (0.4): Generate task plan from objective
-  Injects: {← context.mission.objective}, {← context.mission.config.working_directory}, {← input.existing_progress}, {← context.repo_map_formatted}, {← filepath} (+3 more)
-- **retry_plan** ▷ (0.5): Re-prompt with explicit feedback on format
-  Injects: {← context.inference_response[:500]}, {← context.mission.objective}
+- **design_structure** ▷ (0.4): Design project structure — layout, modules, interfaces, execution conventions
+  Injects: {← context.mission.objective}, {← context.repo_map_formatted}, {← filepath}, {← sig[:100]}
+- **generate_plan** ▷ (0.4): Generate task plan aligned to the architecture blueprint
+  Injects: {← context.mission.objective}, {← context.mission.config.working_directory}, {← context.architecture.import_scheme}, {← context.architecture.run_command}, {← mod.file} (+10 more)
+- **generate_plan_no_architecture** ▷ (0.4): Generate plan without structured architecture (architecture parse failed)
+  Injects: {← context.mission.objective}, {← context.mission.config.working_directory}, {← context.project_manifest.keys() | list}
 
 ```mermaid
 flowchart TD
-    %% create_plan v2
+    %% design_and_plan v1
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -1936,25 +1774,33 @@ flowchart TD
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
     load_mission["□ load_mission ⑂\nLoad mission to get objective and working direc..."]
-    gather_context[["↳ gather_context ⑂\nInvoke prepare_context sub-flow for workspace a..."]]
-    generate_plan{{"▷ generate_plan ⑂\nGenerate task plan from objective"}}
-    parse_plan["□ parse_plan ⑂\nParse LLM response into task records"]
-    retry_plan{{"▷ retry_plan ⑂\nRe-prompt with explicit feedback on format"}}
-    complete[/"⟲ ∅ complete\nPlan created — return to mission_control"\]
-    failed(["◆ □ failed\nPlanning failed"])
+    scan_workspace["□ scan_workspace ⑂\nDiscover existing files and structure"]
+    build_repomap["□ build_repomap ⑂\nBuild AST-based dependency map of existing code"]
+    design_structure{{"▷ design_structure ⑂\nDesign project structure — layout, modules, int..."}}
+    parse_architecture["□ parse_architecture ⑂\nParse architecture JSON and store as mission.ar..."]
+    generate_plan{{"▷ generate_plan ⑂\nGenerate task plan aligned to the architecture ..."}}
+    generate_plan_no_architecture{{"▷ generate_plan_no_architecture ⑂\nGenerate plan without structured architecture ⟮..."}}
+    parse_plan["□ parse_plan ⑂\nParse LLM plan response into task records, vali..."]
+    complete[/"⟲ ∅ complete\nArchitecture designed and plan created — return..."\]
+    failed(["◆ □ failed\nDesign and planning failed"])
 
     style load_mission stroke-width:3px,stroke:#2d5a27
 
-    load_mission -->|⑂ result.mission.status == 'active'| gather_context
+    load_mission -->|⑂ result.mission.status == 'active'| scan_workspace
     load_mission -->|⑂ always| failed
-    gather_context -->|⑂ always| generate_plan
+    scan_workspace -->|⑂ always| build_repomap
+    build_repomap -->|⑂ always| design_structure
+    design_structure -->|⑂ result.tokens_generated › 0| parse_architecture
+    design_structure -->|⑂ always| failed
+    parse_architecture -->|⑂ result.architecture_parsed == true| generate_plan
+    parse_architecture -->|⑂ always| generate_plan_no_architecture
     generate_plan -->|⑂ result.tokens_generated › 0| parse_plan
     generate_plan -->|⑂ always| failed
+    generate_plan_no_architecture -->|⑂ result.tokens_generated › 0| parse_plan
+    generate_plan_no_architecture -->|⑂ always| failed
     parse_plan -->|⑂ result.plan_created == true and result.tas...| complete
     parse_plan -->|⑂ result.plan_created == true| complete
-    parse_plan -->|⑂ always| retry_plan
-    retry_plan -->|⑂ result.tokens_generated › 0| parse_plan
-    retry_plan -->|⑂ always| failed
+    parse_plan -->|⑂ always| failed
     tc_complete(("⟲ mission_control"))
     style tc_complete fill:#f0e6f6,stroke:#663399
     complete -.->|tail-call| tc_complete
@@ -1962,26 +1808,26 @@ flowchart TD
     style failed fill:#ffcdd2,stroke:#b71c1c
 ```
 
-#### mission_control (v2)
-*Core director flow. Loads mission state, integrates results from the previous cycle, then uses inference to reason about the full project picture and select the best next action via LLM menu. All child flows tail-call back here on completion.*
+#### mission_control (v3)
+*Core director flow v3. Uses a memoryful inference session across the entire decision cycle: reason → select_task → select_target_file → dispatch. The model sees the full mission state once, then makes three cheap grammar-constrained decisions within the same session context. Replaces word-overlap task matching with LLM menu selection.*
 
-**Inputs:** ○ mission_id · ◑ last_result · ◑ last_status · ◑ last_task_id · ◑ quality_gate_retries
+**Inputs:** ○ mission_id · ◑ last_result · ◑ last_status · ◑ last_task_id
 **Terminal:** ◆ completed · ◆ deadlocked · ◆ aborted
-**Publishes:** ● mission · ● events · ● frustration · ● unblocked_tasks · ● director_analysis · ● dispatch_config · ● quality_results
+**Publishes:** ● mission · ● events · ● frustration · ● session_id · ● director_analysis · ● selected_task · ● selected_task_id · ● dispatch_config · ● dispatch_warning · ● quality_results
 **Sub-flows:** ↳ quality_gate · ↳ quality_gate
-**Tail-calls:** ⟲ create_plan · ⟲ mission_control · ⟲ retrospective · ⟲ revise_plan · ⟲ {{ context.dispatch_config.flow }}
-**Effects:** clear_events · file_exists · ⟶ inference · →𓇴 load mission · →𓇴 read events · 𓇴→ save mission
-**Stats:** 30 steps · ▷ 2-3 inference · 20 ⑂ rule · 1 ☰ menu
+**Tail-calls:** ⟲ design_and_plan · ⟲ mission_control · ⟲ retrospective · ⟲ revise_plan · ⟲ {{ context.dispatch_config.flow }}
+**Effects:** clear_events · end_inference_session · file_exists · ⟶ inference · 𓉗 list dir · →𓇴 load mission · →𓇴 read events · 𓇴→ save mission · session_inference · start_inference_session
+**Stats:** 49 steps · ▷ 2-3 inference · 39 ⑂ rule · 1 ☰ menu
 
 **Prompts:**
-- **reason** ▷ (t*0.8): Analyze mission state and reason about the best next action
-  Injects: {← context.mission.objective}, {← context.mission.config.working_directory}, {← task.status}, {← task.description}, {← task.summary} (+7 more)
-- **decide** ▷ (): Select the best action based on the director's analysis
-  Injects: {← context.director_analysis}, {← context.mission.plan | selectattr('status', 'equalto', 'complete') | list | length}, {← context.mission.plan | selectattr('status', 'equalto', 'pending') | list | length}, {← context.mission.plan | selectattr('status', 'equalto', 'failed') | list | length}, {← context.mission.plan | selectattr('status', 'equalto', 'blocked') | list | length}
+- **reason** ▷ (t*0.8): Analyze mission state and reason about next action (memoryful session)
+  Injects: {← context.mission.objective}, {← context.mission.config.working_directory}, {← context.mission.architecture.import_scheme}, {← context.mission.architecture.run_command}, {← context.mission.architecture.canonical_files() | join(', ')} (+14 more)
+- **reason_standalone** ▷ (t*0.8): Director reasoning without memoryful session (fallback)
+  Injects: {← context.mission.objective}, {← task.status}, {← task.description}, {← task.frustration}, {← context.get('last_status')} (+1 more)
 
 ```mermaid
 flowchart TD
-    %% mission_control v2
+    %% mission_control v3
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -1993,33 +1839,52 @@ flowchart TD
 
     load_state["□ load_state ⑂\nLoad mission state, event queue, and frustratio..."]
     apply_last_result["□ apply_last_result ⑂\nApply the returning flow's outcome to mission s..."]
-    check_retrospective(["∅ check_retrospective ⑂\nCheck if a learning retrospective is warranted ..."])
-    dispatch_retrospective[/"⟲ ∅ dispatch_retrospective\nDispatch to retrospective for learning capture"\]
+    dispatch_retrospective[/"⟲ ∅ dispatch_retrospective\nDispatch retrospective — task succeeded after f..."\]
     process_events["□ process_events ⑂\nProcess user messages, abort/pause signals"]
-    reason{{"▷ reason ⑂\nAnalyze mission state and reason about the best..."}}
-    decide{{"▷ decide ☰\nSelect the best action based on the director's ..."}}
-    dispatch_create_file["□ dispatch_create_file ⑂\nConfigure and dispatch to create_file flow"]
-    dispatch_modify_file["□ dispatch_modify_file ⑂\nConfigure and dispatch to modify_file flow"]
-    dispatch_integrate_modules["□ dispatch_integrate_modules ⑂\nConfigure and dispatch to integrate_modules flow"]
-    dispatch_diagnose_issue["□ dispatch_diagnose_issue ⑂\nConfigure and dispatch to diagnose_issue flow"]
-    dispatch_create_tests["□ dispatch_create_tests ⑂\nConfigure and dispatch to create_tests flow"]
-    dispatch_validate_behavior["□ dispatch_validate_behavior ⑂\nConfigure and dispatch to validate_behavior flow"]
-    dispatch_setup_project["□ dispatch_setup_project ⑂\nConfigure and dispatch to setup_project flow"]
-    dispatch_design_architecture["□ dispatch_design_architecture ⑂\nConfigure and dispatch to design_architecture flow"]
-    dispatch_explore_spike["□ dispatch_explore_spike ⑂\nConfigure and dispatch to explore_spike flow"]
-    dispatch_refactor["□ dispatch_refactor ⑂\nConfigure and dispatch to refactor flow"]
-    dispatch_document_project["□ dispatch_document_project ⑂\nConfigure and dispatch to document_project flow"]
-    dispatch_manage_packages["□ dispatch_manage_packages ⑂\nConfigure and dispatch to manage_packages flow"]
-    dispatch_request_review["□ dispatch_request_review ⑂\nConfigure and dispatch to request_review flow"]
-    dispatch_revise_plan[/"⟲ ∅ dispatch_revise_plan\nExtend or revise the mission plan based on dire..."\]
-    dispatch[/"⟲ ∅ dispatch\nTail-call to the selected task flow with config..."\]
-    quality_checkpoint[["↳ quality_checkpoint ⑂\nRun quality inspection on current state, then e..."]]
-    quality_completion[["↳ quality_completion ⑂\nFinal quality gate for mission completion"]]
-    invoke_quality_fix[/"⟲ ∅ invoke_quality_fix\nQuality gate failed — tail-call to reload state..."\]
-    dispatch_planning[/"⟲ ∅ dispatch_planning\nNo plan exists — dispatch to create_plan flow"\]
+    start_session["□ start_session ⑂\nOpen memoryful inference session for the direct..."]
+    reason{{"▷ reason ⑂\nAnalyze mission state and reason about next act..."}}
+    reason_standalone{{"▷ reason_standalone ⑂\nDirector reasoning without memoryful session ⟮f..."}}
+    decide_flow(["∅ decide_flow ☰\nSelect the best action type based on analysis"])
+    select_and_dispatch_create["□ select_and_dispatch_create ⑂\nSelect task for create_file"]
+    select_and_dispatch_modify["□ select_and_dispatch_modify ⑂\nSelect task for modify_file"]
+    select_and_dispatch_integrate["□ select_and_dispatch_integrate ⑂\nSelect task for integrate_modules"]
+    select_and_dispatch_diagnose["□ select_and_dispatch_diagnose ⑂\nSelect task for diagnose_issue"]
+    select_and_dispatch_tests["□ select_and_dispatch_tests ⑂\nSelect task for create_tests"]
+    select_and_dispatch_validate["□ select_and_dispatch_validate ⑂\nSelect task for validate_behavior"]
+    select_and_dispatch_setup["□ select_and_dispatch_setup ⑂\nSelect task for setup_project"]
+    select_and_dispatch_explore["□ select_and_dispatch_explore ⑂\nSelect task for explore_spike"]
+    select_and_dispatch_refactor["□ select_and_dispatch_refactor ⑂\nSelect task for refactor"]
+    select_and_dispatch_document["□ select_and_dispatch_document ⑂\nSelect task for document_project"]
+    select_and_dispatch_packages["□ select_and_dispatch_packages ⑂\nSelect task for manage_packages"]
+    select_and_dispatch_review["□ select_and_dispatch_review ⑂\nSelect task for request_review"]
+    resolve_target_file_create["□ resolve_target_file_create ⑂\nResolve target file for create_file"]
+    resolve_target_file_create_tests["□ resolve_target_file_create_tests ⑂\nResolve target file for create_tests"]
+    resolve_target_file_modify["□ resolve_target_file_modify ⑂\nResolve target file for modify_file ⟮requires e..."]
+    resolve_target_file_diagnose["□ resolve_target_file_diagnose ⑂\nResolve target file for diagnose_issue ⟮require..."]
+    resolve_target_file_refactor["□ resolve_target_file_refactor ⑂\nResolve target file for refactor ⟮requires exis..."]
+    resolve_target_file_integrate["□ resolve_target_file_integrate ⑂\nResolve target for integrate_modules"]
+    resolve_target_file_validate["□ resolve_target_file_validate ⑂\nResolve target for validate_behavior"]
+    resolve_target_file_setup["□ resolve_target_file_setup ⑂\nResolve target for setup_project"]
+    resolve_target_file_explore["□ resolve_target_file_explore ⑂\nResolve target for explore_spike"]
+    resolve_target_file_document["□ resolve_target_file_document ⑂\nResolve target for document_project"]
+    resolve_target_file_packages["□ resolve_target_file_packages ⑂\nResolve target for manage_packages"]
+    resolve_target_file_review["□ resolve_target_file_review ⑂\nResolve target for request_review"]
+    resolve_target_file_retrospective["□ resolve_target_file_retrospective ⑂\nResolve target for retrospective"]
+    end_session_and_dispatch["□ end_session_and_dispatch ⑂\nClose director session before dispatching to ta..."]
+    record_and_dispatch["□ record_and_dispatch ⑂\nRecord dispatch in history for deduplication, t..."]
+    dispatch[/"⟲ ∅ dispatch\nTail-call to the selected task flow"\]
+    end_session_and_reason["□ end_session_and_reason ⑂\nClose session — task/file selection failed, loo..."]
+    end_session_error_no_files["□ end_session_error_no_files ⑂\nClose session — no files exist for modification..."]
+    dispatch_revise_plan[/"⟲ ∅ dispatch_revise_plan\nRepeated dispatch detected or plan revision req..."\]
+    dispatch_planning[/"⟲ ∅ dispatch_planning\nNo plan exists — dispatch to design_and_plan flow"\]
+    quality_checkpoint["□ quality_checkpoint ⑂\nClose director session, then run quality checkp..."]
+    quality_checkpoint_run[["↳ quality_checkpoint_run ⑂\nRun quality inspection on current state"]]
+    quality_completion["□ quality_completion ⑂\nClose director session, then run final quality ..."]
+    quality_completion_run[["↳ quality_completion_run ⑂\nFinal quality gate for mission completion"]]
+    quality_failed_restart[/"⟲ ∅ quality_failed_restart\nQuality gate failed — restart mission_control w..."\]
     completed(["◆ □ completed\nMark mission complete"])
-    idle[/"⟲ □ idle\nNothing to do — wait for events"\]
-    mission_deadlocked(["◆ □ mission_deadlocked\nMission deadlocked — no viable path forward"])
+    idle[/"⟲ □ idle\nWait for events"\]
+    mission_deadlocked(["◆ □ mission_deadlocked\nMission deadlocked"])
     aborted(["◆ □ aborted\nMission aborted"])
 
     style load_state stroke-width:3px,stroke:#2d5a27
@@ -2027,71 +1892,108 @@ flowchart TD
     load_state -->|⑂ result.mission.status == 'active'| apply_last_result
     load_state -->|⑂ result.mission.status == 'paused'| idle
     load_state -->|⑂ result.mission.status == 'completed'| completed
-    load_state -->|⑂ result.mission.status == 'aborted'| aborted
     load_state -->|⑂ always| aborted
+    apply_last_result -->|⑂ result.quality_gate_exhausted == true| completed
     apply_last_result -->|⑂ result.events_pending == true| process_events
     apply_last_result -->|⑂ result.needs_plan == true| dispatch_planning
-    apply_last_result -->|⑂ context.get⟮'last_result', ''⟯ and 'Retros...| reason
-    apply_last_result -->|⑂ result.task_completed == true| check_retrospective
-    apply_last_result -->|⑂ always| reason
-    check_retrospective -->|⑂ context.get⟮'last_status'⟯ == 'success' an...| dispatch_retrospective
-    check_retrospective -->|⑂ len⟮⟦t for t in context.get⟮'mission', ⦃⦄⟯...| dispatch_retrospective
-    check_retrospective -->|⑂ always| reason
+    apply_last_result -->|⑂ result.frustration_reset == true| dispatch_retrospective
+    apply_last_result -->|⑂ always| start_session
     tc_dispatch_retrospective(("⟲ retrospective"))
     style tc_dispatch_retrospective fill:#f0e6f6,stroke:#663399
     dispatch_retrospective -.->|tail-call| tc_dispatch_retrospective
     process_events -->|⑂ result.abort_requested == true| aborted
     process_events -->|⑂ result.pause_requested == true| idle
-    process_events -->|⑂ always| reason
-    reason -->|⑂ always| decide
-    decide -.->|☰ Create one or more new sour...| dispatch_create_file
-    decide -.->|☰ Fix or enhance existing fil...| dispatch_modify_file
-    decide -.->|☰ Inspect project cohesion — ...| dispatch_integrate_modules
-    decide -.->|☰ Investigate a code issue me...| dispatch_diagnose_issue
-    decide -.->|☰ Create test files to verify...| dispatch_create_tests
-    decide -.->|☰ Run the project and verify ...| dispatch_validate_behavior
-    decide -.->|☰ Initialize or configure pro...| dispatch_setup_project
-    decide -.->|☰ Design project structure — ...| dispatch_design_architecture
-    decide -.->|☰ Investigate a pattern, libr...| dispatch_explore_spike
-    decide -.->|☰ Improve code structure with...| dispatch_refactor
-    decide -.->|☰ Write or update project doc...| dispatch_document_project
-    decide -.->|☰ Install, remove, or update ...| dispatch_manage_packages
-    decide -.->|☰ Submit completed work for s...| dispatch_request_review
-    decide -.->|☰ Extend or revise the missio...| dispatch_revise_plan
-    decide -.->|☰ Run a quality inspection on...| quality_checkpoint
-    decide -.->|☰ All planned work is done — ...| quality_completion
-    decide -.->|☰ No viable path forward — re...| mission_deadlocked
-    dispatch_create_file -->|⑂ always| dispatch
-    dispatch_modify_file -->|⑂ always| dispatch
-    dispatch_integrate_modules -->|⑂ always| dispatch
-    dispatch_diagnose_issue -->|⑂ always| dispatch
-    dispatch_create_tests -->|⑂ always| dispatch
-    dispatch_validate_behavior -->|⑂ always| dispatch
-    dispatch_setup_project -->|⑂ always| dispatch
-    dispatch_design_architecture -->|⑂ always| dispatch
-    dispatch_explore_spike -->|⑂ always| dispatch
-    dispatch_refactor -->|⑂ always| dispatch
-    dispatch_document_project -->|⑂ always| dispatch
-    dispatch_manage_packages -->|⑂ always| dispatch
-    dispatch_request_review -->|⑂ always| dispatch
-    tc_dispatch_revise_plan(("⟲ revise_plan"))
-    style tc_dispatch_revise_plan fill:#f0e6f6,stroke:#663399
-    dispatch_revise_plan -.->|tail-call| tc_dispatch_revise_plan
+    process_events -->|⑂ always| start_session
+    start_session -->|⑂ result.session_started == true| reason
+    start_session -->|⑂ always| reason_standalone
+    reason -->|⑂ always| decide_flow
+    reason_standalone -->|⑂ always| decide_flow
+    decide_flow -.->|☰ Create one or more new sour...| select_and_dispatch_create
+    decide_flow -.->|☰ Fix or enhance existing fil...| select_and_dispatch_modify
+    decide_flow -.->|☰ Inspect project cohesion — ...| select_and_dispatch_integrate
+    decide_flow -.->|☰ Investigate a code issue me...| select_and_dispatch_diagnose
+    decide_flow -.->|☰ Create test files to verify...| select_and_dispatch_tests
+    decide_flow -.->|☰ Run the project and verify ...| select_and_dispatch_validate
+    decide_flow -.->|☰ Initialize or configure pro...| select_and_dispatch_setup
+    decide_flow -.->|☰ Investigate a pattern or ap...| select_and_dispatch_explore
+    decide_flow -.->|☰ Improve code structure with...| select_and_dispatch_refactor
+    decide_flow -.->|☰ Write or update project doc...| select_and_dispatch_document
+    decide_flow -.->|☰ Install, remove, or update ...| select_and_dispatch_packages
+    decide_flow -.->|☰ Submit completed work for r...| select_and_dispatch_review
+    decide_flow -.->|☰ Extend or revise the missio...| dispatch_revise_plan
+    decide_flow -.->|☰ Run quality inspection on c...| quality_checkpoint
+    decide_flow -.->|☰ All planned work done — run...| quality_completion
+    decide_flow -.->|☰ No viable path forward — re...| mission_deadlocked
+    select_and_dispatch_create -->|⑂ result.task_selected == true| resolve_target_file_create
+    select_and_dispatch_create -->|⑂ result.no_actionable_tasks == true| quality_completion
+    select_and_dispatch_create -->|⑂ always| quality_completion
+    select_and_dispatch_modify -->|⑂ result.task_selected == true| resolve_target_file_modify
+    select_and_dispatch_modify -->|⑂ always| quality_completion
+    select_and_dispatch_integrate -->|⑂ result.task_selected == true| resolve_target_file_integrate
+    select_and_dispatch_integrate -->|⑂ always| quality_completion
+    select_and_dispatch_diagnose -->|⑂ result.task_selected == true| resolve_target_file_diagnose
+    select_and_dispatch_diagnose -->|⑂ always| quality_completion
+    select_and_dispatch_tests -->|⑂ result.task_selected == true| resolve_target_file_create_tests
+    select_and_dispatch_tests -->|⑂ always| quality_completion
+    select_and_dispatch_validate -->|⑂ result.task_selected == true| resolve_target_file_validate
+    select_and_dispatch_validate -->|⑂ always| quality_completion
+    select_and_dispatch_setup -->|⑂ result.task_selected == true| resolve_target_file_setup
+    select_and_dispatch_setup -->|⑂ always| quality_completion
+    select_and_dispatch_explore -->|⑂ result.task_selected == true| resolve_target_file_explore
+    select_and_dispatch_explore -->|⑂ always| quality_completion
+    select_and_dispatch_refactor -->|⑂ result.task_selected == true| resolve_target_file_refactor
+    select_and_dispatch_refactor -->|⑂ always| quality_completion
+    select_and_dispatch_document -->|⑂ result.task_selected == true| resolve_target_file_document
+    select_and_dispatch_document -->|⑂ always| quality_completion
+    select_and_dispatch_packages -->|⑂ result.task_selected == true| resolve_target_file_packages
+    select_and_dispatch_packages -->|⑂ always| quality_completion
+    select_and_dispatch_review -->|⑂ result.task_selected == true| resolve_target_file_review
+    select_and_dispatch_review -->|⑂ always| quality_completion
+    resolve_target_file_create -->|⑂ result.file_selected == true| end_session_and_dispatch
+    resolve_target_file_create -->|⑂ result.error == 'no_project_files'| end_session_and_dispatch
+    resolve_target_file_create -->|⑂ always| end_session_and_reason
+    resolve_target_file_create_tests -->|⑂ result.file_selected == true| end_session_and_dispatch
+    resolve_target_file_create_tests -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_modify -->|⑂ result.file_selected == true| end_session_and_dispatch
+    resolve_target_file_modify -->|⑂ result.error == 'no_project_files'| end_session_error_no_files
+    resolve_target_file_modify -->|⑂ always| end_session_and_reason
+    resolve_target_file_diagnose -->|⑂ result.file_selected == true| end_session_and_dispatch
+    resolve_target_file_diagnose -->|⑂ result.error == 'no_project_files'| end_session_error_no_files
+    resolve_target_file_diagnose -->|⑂ always| end_session_and_reason
+    resolve_target_file_refactor -->|⑂ result.file_selected == true| end_session_and_dispatch
+    resolve_target_file_refactor -->|⑂ result.error == 'no_project_files'| end_session_error_no_files
+    resolve_target_file_refactor -->|⑂ always| end_session_and_reason
+    resolve_target_file_integrate -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_validate -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_setup -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_explore -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_document -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_packages -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_review -->|⑂ always| end_session_and_dispatch
+    resolve_target_file_retrospective -->|⑂ always| end_session_and_dispatch
+    end_session_and_dispatch -->|⑂ always| record_and_dispatch
+    record_and_dispatch -->|⑂ result.repeat_count ›= 3| dispatch_revise_plan
+    record_and_dispatch -->|⑂ always| dispatch
     tc_dispatch(("⟲ dynamic"))
     style tc_dispatch fill:#f0e6f6,stroke:#663399
     dispatch -.->|tail-call| tc_dispatch
-    quality_checkpoint -->|⑂ result.status == 'success'| reason
-    quality_checkpoint -->|⑂ result.status == 'failed'| dispatch_revise_plan
-    quality_checkpoint -->|⑂ always| reason
-    quality_completion -->|⑂ result.status == 'success'| completed
-    quality_completion -->|⑂ result.status == 'failed' and input.get⟮'q...| invoke_quality_fix
-    quality_completion -->|⑂ always| completed
-    tc_invoke_quality_fix(("⟲ mission_control"))
-    style tc_invoke_quality_fix fill:#f0e6f6,stroke:#663399
-    invoke_quality_fix -.->|tail-call| tc_invoke_quality_fix
-    tc_dispatch_planning(("⟲ create_plan"))
+    end_session_and_reason -->|⑂ always| start_session
+    end_session_error_no_files -->|⑂ always| start_session
+    tc_dispatch_revise_plan(("⟲ revise_plan"))
+    style tc_dispatch_revise_plan fill:#f0e6f6,stroke:#663399
+    dispatch_revise_plan -.->|tail-call| tc_dispatch_revise_plan
+    tc_dispatch_planning(("⟲ design_and_plan"))
     style tc_dispatch_planning fill:#f0e6f6,stroke:#663399
     dispatch_planning -.->|tail-call| tc_dispatch_planning
+    quality_checkpoint -->|⑂ always| quality_checkpoint_run
+    quality_checkpoint_run -->|⑂ result.status == 'success'| start_session
+    quality_checkpoint_run -->|⑂ always| quality_failed_restart
+    quality_completion -->|⑂ always| quality_completion_run
+    quality_completion_run -->|⑂ result.status == 'success'| completed
+    quality_completion_run -->|⑂ always| quality_failed_restart
+    tc_quality_failed_restart(("⟲ mission_control"))
+    style tc_quality_failed_restart fill:#f0e6f6,stroke:#663399
+    quality_failed_restart -.->|tail-call| tc_quality_failed_restart
     tc_idle(("⟲ mission_control"))
     style tc_idle fill:#f0e6f6,stroke:#663399
     idle -.->|tail-call| tc_idle
@@ -2230,178 +2132,151 @@ flowchart TD
 
 | Key | Published By | Consumed By | Consumers | Audit Flags |
 |-----|-------------|-------------|-----------|-------------|
-| `analysis` | `explore_spike.analyze` | `explore_spike.deeper_look`, `explore_spike.synthesize` | 2 | single_consumer, conditionally_published |
-| `architecture_written` | `document_project.save_architecture` | `document_project.check_more_docs` | 1 | single_consumer |
-| `assessment` |  | `mission_control.completed` | 1 | — |
-| `baseline_results` | `refactor.baseline_tests` | `refactor.verify_refactoring` | 1 | single_consumer |
-| `changes_applied` | `retrospective.apply_recommendations` |  | 0 | never_consumed |
-| `context_bundle` | `create_plan.gather_context`, `prepare_context.load_selected`, `prepare_context.load_fallback` (+13) | `create_plan.generate_plan`, `create_plan.retry_plan`, `create_file.generate_content` (+21) | 24 | — |
-| `correction_history` | `create_file.build_correction_context` | `create_file.build_correction_context`, `create_file.correct_issues` | 2 | single_consumer |
-| `created_file` | `create_tests.write_test_file`, `refactor.write_refactored` |  | 0 | never_consumed |
-| `cross_file_results` | `quality_gate.cross_file_check`, `integrate_modules.structural_check` | `integrate_modules.analyze_cohesion`, `integrate_modules.compile_report` | 2 | single_consumer |
+| `architecture` | `design_and_plan.parse_architecture` | `design_and_plan.generate_plan`, `design_and_plan.parse_plan` | 2 | single_consumer |
+| `bail_reason` | `ast_edit_session.capture_bail_reason`, `ast_edit_session.close_bail`, `modify_file.ast_edit` | `ast_edit_session.close_bail`, `modify_file.bail` | 2 | — |
+| `context_bundle` | `prepare_context.load_selected`, `prepare_context.load_fallback`, `prepare_context.empty_project` (+13) | `create_file.generate_content`, `create_tests.generate_tests`, `diagnose_issue.reproduce_mentally` (+12) | 15 | — |
+| `cross_file_results` | `quality_gate.cross_file_check`, `integrate_modules.structural_check` | `integrate_modules.analyze_cohesion` | 1 | single_consumer |
 | `cross_file_summary` | `quality_gate.cross_file_check`, `integrate_modules.structural_check` | `quality_gate.plan_checks`, `quality_gate.summarize`, `integrate_modules.analyze_cohesion` | 3 | — |
 | `current_symbol` | `ast_edit_session.begin_rewrites`, `ast_edit_session.rewrite_symbol` | `ast_edit_session.rewrite_symbol` | 1 | single_consumer |
-| `deep_context` | `explore_spike.deep_read` | `explore_spike.analyze`, `explore_spike.deeper_look`, `explore_spike.synthesize` | 3 | single_consumer |
-| `design_decisions` |  | `request_review.compose_review_request` | 1 | — |
-| `diagnosis` | `diagnose_issue.compile_complete`, `diagnose_issue.compile_intractable` | `diagnose_issue.create_fix_task` | 1 | single_consumer |
-| `director_analysis` | `mission_control.reason` | `mission_control.decide`, `mission_control.dispatch_create_file`, `mission_control.dispatch_modify_file` (+13) | 16 | single_consumer |
-| `director_report` | `retrospective.flag_for_director` |  | 0 | never_consumed |
-| `dispatch_config` | `mission_control.dispatch_create_file`, `mission_control.dispatch_modify_file`, `mission_control.dispatch_integrate_modules` (+10) | `mission_control.dispatch` | 1 | single_consumer |
-| `doc_assessment` | `document_project.assess_documentation_state` | `document_project.write_readme`, `document_project.update_docstrings`, `document_project.write_architecture` (+1) | 4 | single_consumer, conditionally_published |
-| `docs_completed` | `document_project.check_more_docs` |  | 0 | never_consumed |
-| `docstring_changes` | `document_project.update_docstrings` | `document_project.apply_docstrings`, `document_project.check_more_docs` | 2 | single_consumer |
+| `diagnosis` | `diagnose_issue.compile_diagnosis` | `diagnose_issue.create_fix_task` | 1 | single_consumer |
+| `director_analysis` | `mission_control.reason`, `mission_control.reason_standalone` | `mission_control.decide_flow`, `mission_control.select_and_dispatch_create`, `mission_control.select_and_dispatch_modify` (+12) | 15 | single_consumer |
+| `dispatch_config` | `mission_control.resolve_target_file_create`, `mission_control.resolve_target_file_create_tests`, `mission_control.resolve_target_file_modify` (+10) | `mission_control.end_session_and_dispatch`, `mission_control.record_and_dispatch`, `mission_control.dispatch` | 3 | single_consumer |
+| `dispatch_warning` | `mission_control.record_and_dispatch` |  | 0 | never_consumed |
 | `domain_hint` |  | `research_technical.filter_and_format` | 1 | — |
-| `edit_session_id` | `ast_edit_session.start_session` | `ast_edit_session.select_symbols`, `ast_edit_session.rewrite_symbol`, `ast_edit_session.finalize` (+2) | 5 | single_consumer |
-| `edit_summary` | `ast_edit_session.finalize`, `ast_edit_session.no_changes_needed`, `modify_file.ast_edit` | `modify_file.complete` | 1 | single_consumer |
-| `error_analysis` | `diagnose_issue.reproduce_mentally` | `diagnose_issue.form_hypotheses`, `diagnose_issue.evaluate_hypotheses`, `diagnose_issue.compile_complete` (+2) | 5 | single_consumer |
-| `evaluation` | `diagnose_issue.evaluate_hypotheses` | `diagnose_issue.compile_complete`, `diagnose_issue.compile_intractable` | 2 | single_consumer, conditionally_published |
+| `edit_session_id` | `ast_edit_session.start_session` | `ast_edit_session.select_symbols`, `ast_edit_session.rewrite_symbol`, `ast_edit_session.finalize` (+4) | 7 | single_consumer |
+| `edit_summary` | `ast_edit_session.finalize`, `ast_edit_session.no_changes_needed`, `ast_edit_session.close_bail` (+2) | `modify_file.complete`, `modify_file.bail`, `refactor.complete` | 3 | — |
+| `error_analysis` | `diagnose_issue.reproduce_mentally` | `diagnose_issue.form_hypotheses`, `diagnose_issue.compile_diagnosis`, `diagnose_issue.create_fix_task` | 3 | single_consumer |
 | `events` | `mission_control.load_state` | `mission_control.apply_last_result`, `mission_control.process_events` | 2 | single_consumer |
 | `extra_data` |  | `test_branching.fast_path`, `test_branching.slow_path` | 2 | — |
-| `failed_refactoring` | `refactor.rollback_refactoring` |  | 0 | never_consumed |
-| `feedback_analysis` | `request_review.process_review_feedback` |  | 0 | never_consumed, conditionally_published |
-| `file_content` | `ast_edit_session.start_session` | `ast_edit_session.rewrite_symbol` | 1 | single_consumer |
+| `file_content` | `ast_edit_session.start_session` | `ast_edit_session.start_session`, `ast_edit_session.rewrite_symbol`, `ast_edit_session.capture_bail_reason` | 3 | single_consumer |
 | `file_content_updated` | `ast_edit_session.rewrite_symbol` | `ast_edit_session.rewrite_symbol`, `ast_edit_session.finalize` | 2 | single_consumer |
-| `file_path` | `ast_edit_session.start_session` | `ast_edit_session.rewrite_symbol`, `ast_edit_session.finalize` | 2 | single_consumer |
-| `files_changed` | `ast_edit_session.finalize`, `create_file.write_files`, `document_project.apply_docstrings` (+2) | `create_file.validate`, `create_file.correct_issues`, `create_file.regenerate` (+3) | 6 | — |
-| `findings` | `explore_spike.synthesize` |  | 0 | never_consumed |
+| `file_path` | `ast_edit_session.start_session` | `ast_edit_session.start_session`, `ast_edit_session.rewrite_symbol`, `ast_edit_session.finalize` (+1) | 4 | single_consumer |
+| `files_changed` | `ast_edit_session.finalize`, `create_file.write_files`, `create_tests.write_tests` (+9) | `create_file.validate`, `create_file.complete`, `create_file.complete_with_issues` (+12) | 15 | — |
 | `fix_task_created` | `diagnose_issue.create_fix_task` |  | 0 | never_consumed |
-| `frustration` | `mission_control.load_state`, `mission_control.apply_last_result` | `mission_control.apply_last_result`, `mission_control.check_retrospective`, `mission_control.process_events` (+15) | 18 | single_consumer |
+| `frustration` | `mission_control.load_state`, `mission_control.apply_last_result` | `mission_control.apply_last_result`, `mission_control.process_events`, `mission_control.reason` (+2) | 5 | single_consumer |
 | `git_commands` | `research_codebase_history.determine_git_commands` | `research_codebase_history.execute_git_commands` | 1 | single_consumer |
 | `git_output` | `research_codebase_history.execute_git_commands` | `research_codebase_history.analyze_history` | 1 | single_consumer |
-| `hypotheses` | `diagnose_issue.form_hypotheses` | `diagnose_issue.evaluate_hypotheses`, `diagnose_issue.compile_complete`, `diagnose_issue.compile_intractable` | 3 | single_consumer |
-| `inference_response` | `create_plan.generate_plan`, `create_plan.retry_plan`, `capture_learnings.reflect` (+27) | `create_plan.parse_plan`, `create_plan.retry_plan`, `capture_learnings.save_note` (+26) | 29 | conditionally_published |
-| `inference_session_id` | `run_in_terminal.start_session` | `run_in_terminal.close_success`, `run_in_terminal.close_failure`, `run_in_terminal.close_max_turns` | 3 | single_consumer |
-| `integration_report` | `integrate_modules.compile_report` | `integrate_modules.complete` | 1 | single_consumer |
+| `hypotheses` | `diagnose_issue.form_hypotheses` | `diagnose_issue.compile_diagnosis` | 1 | single_consumer |
+| `inference_response` | `design_and_plan.design_structure`, `design_and_plan.generate_plan`, `design_and_plan.generate_plan_no_architecture` (+20) | `design_and_plan.parse_architecture`, `design_and_plan.parse_plan`, `capture_learnings.save_note` (+24) | 27 | conditionally_published |
+| `inference_session_id` | `run_in_terminal.start_session` | `run_in_terminal.plan_next_command`, `run_in_terminal.evaluate`, `run_in_terminal.close_success` (+2) | 5 | single_consumer |
+| `integration_report` | `integrate_modules.analyze_cohesion` | `integrate_modules.complete` | 1 | single_consumer |
 | `intermediate` | `test_branching.slow_path` | `test_branching.slow_path_2` | 1 | single_consumer |
-| `investigation_plan` | `explore_spike.plan_investigation`, `explore_spike.deeper_look` | `explore_spike.deep_read`, `explore_spike.analyze`, `explore_spike.deeper_look` (+1) | 4 | single_consumer |
-| `last_result` |  | `mission_control.apply_last_result`, `mission_control.reason` | 2 | — |
-| `last_status` |  | `mission_control.apply_last_result`, `mission_control.check_retrospective`, `mission_control.reason` | 3 | — |
-| `last_task_id` |  | `mission_control.apply_last_result`, `mission_control.check_retrospective` | 2 | — |
-| `learnings_archive` | `retrospective.gather_history` | `retrospective.analyze_patterns`, `retrospective.generate_recommendations` | 2 | single_consumer |
-| `learnings_from_review` | `request_review.process_review_feedback` |  | 0 | never_consumed, conditionally_published |
-| `learnings_saved` | `create_file.capture_learnings`, `create_file.capture_failure_note`, `create_tests.capture_learnings` (+18) |  | 0 | never_consumed |
+| `last_result` |  | `mission_control.apply_last_result`, `mission_control.reason`, `mission_control.reason_standalone` | 3 | — |
+| `last_status` |  | `mission_control.apply_last_result`, `mission_control.reason`, `mission_control.reason_standalone` | 3 | — |
+| `last_task_id` |  | `mission_control.apply_last_result` | 1 | — |
 | `lint_notes_saved` | `validate_output.log_lint_warnings` |  | 0 | never_consumed |
-| `mission` | `create_plan.load_mission`, `create_plan.parse_plan`, `mission_control.load_state` (+5) | `create_plan.generate_plan`, `create_plan.parse_plan`, `create_plan.retry_plan` (+31) | 34 | — |
-| `mission_history` | `retrospective.gather_history` | `retrospective.analyze_patterns`, `retrospective.generate_recommendations`, `retrospective.apply_recommendations` (+1) | 4 | single_consumer |
-| `mode` | `ast_edit_session.start_session` | `ast_edit_session.rewrite_symbol` | 1 | single_consumer |
-| `note_saved` | `capture_learnings.save_note`, `design_architecture.persist_blueprint` |  | 0 | never_consumed |
-| `performance_analysis` | `retrospective.snapshot_analysis` | `retrospective.generate_recommendations`, `retrospective.apply_recommendations`, `retrospective.flag_for_director` | 3 | single_consumer |
-| `post_refactoring_results` | `refactor.verify_refactoring` | `refactor.rollback_refactoring` | 1 | single_consumer |
-| `previous_refactorings` | `refactor.check_more_refactorings` | `refactor.apply_refactoring`, `refactor.check_more_refactorings` | 2 | single_consumer |
+| `mission` | `design_and_plan.load_mission`, `design_and_plan.parse_architecture`, `design_and_plan.parse_plan` (+6) | `design_and_plan.design_structure`, `design_and_plan.parse_architecture`, `design_and_plan.generate_plan` (+49) | 52 | — |
+| `mode` | `ast_edit_session.start_session` | `ast_edit_session.start_session`, `ast_edit_session.rewrite_symbol` | 2 | single_consumer |
+| `note_saved` | `capture_learnings.save_note` |  | 0 | never_consumed |
 | `processing_result` | `test_simple.process_content` | `test_simple.complete` | 1 | single_consumer |
-| `project_manifest` | `create_plan.gather_context`, `prepare_context.scan_workspace`, `quality_gate.scan_project` (+16) | `create_plan.generate_plan`, `create_plan.retry_plan`, `prepare_context.decide_research_recommended` (+36) | 39 | — |
-| `quality_gate_observations` |  | `request_review.compose_review_request` | 1 | — |
-| `quality_results` | `mission_control.quality_checkpoint`, `mission_control.quality_completion`, `quality_gate.evaluate_results` | `mission_control.invoke_quality_fix`, `mission_control.completed` | 2 | single_consumer |
+| `project_manifest` | `design_and_plan.scan_workspace`, `prepare_context.scan_workspace`, `quality_gate.scan_project` (+14) | `design_and_plan.design_structure`, `design_and_plan.generate_plan`, `design_and_plan.generate_plan_no_architecture` (+25) | 28 | — |
+| `quality_results` | `mission_control.quality_checkpoint_run`, `mission_control.quality_completion_run`, `quality_gate.evaluate_results` | `mission_control.quality_failed_restart`, `mission_control.completed` | 2 | single_consumer |
 | `query_classification` | `research_context.classify_query_menu` | `research_context.synthesize_subflow` | 1 | single_consumer, conditionally_published |
 | `raw_results` | `research_codebase_history.analyze_history`, `research_context.route_repomap`, `research_context.route_history` (+4) | `research_context.synthesize_subflow` | 1 | single_consumer |
 | `raw_search_results` | `research_context.execute_search`, `research_technical.execute_search` | `research_context.extract_relevant`, `research_technical.filter_and_format` | 2 | — |
-| `readme_written` | `document_project.save_readme` | `document_project.check_more_docs` | 1 | single_consumer |
-| `refactoring_applied` | `refactor.apply_refactoring` | `refactor.check_more_refactorings`, `refactor.rollback_refactoring` | 2 | single_consumer |
-| `related_files` | `create_plan.gather_context`, `prepare_context.build_repomap`, `research_repomap.build_map` (+14) | `prepare_context.select_relevant`, `prepare_context.load_selected`, `research_repomap.analyze_structure` (+3) | 6 | — |
-| `repo_map_formatted` | `create_plan.gather_context`, `prepare_context.build_repomap`, `research_repomap.build_map` (+14) | `create_plan.generate_plan`, `prepare_context.decide_research_recommended`, `prepare_context.decide_research_optional` (+8) | 11 | — |
-| `required_changes` | `request_review.process_review_feedback` |  | 0 | never_consumed, conditionally_published |
-| `research_findings` | `prepare_context.research`, `research_context.extract_relevant`, `research_context.synthesize_subflow` (+1) | `prepare_context.select_relevant`, `prepare_context.load_selected`, `explore_spike.synthesize` | 3 | — |
+| `reason` |  | `ast_edit_session.start_session` | 1 | — |
+| `related_files` | `prepare_context.build_repomap`, `research_repomap.build_map`, `revise_plan.scan_workspace` (+14) | `prepare_context.select_relevant`, `prepare_context.load_selected`, `research_repomap.analyze_structure` (+2) | 5 | — |
+| `relevant_notes` |  | `ast_edit_session.start_session` | 1 | — |
+| `repo_map_formatted` | `design_and_plan.build_repomap`, `prepare_context.build_repomap`, `research_repomap.build_map` (+14) | `design_and_plan.design_structure`, `design_and_plan.generate_plan_no_architecture`, `prepare_context.decide_research_recommended` (+17) | 20 | — |
+| `research_findings` | `prepare_context.research`, `research_context.extract_relevant`, `research_context.synthesize_subflow` | `prepare_context.select_relevant`, `prepare_context.load_selected` | 2 | single_consumer |
 | `research_query` |  | `research_codebase_history.determine_git_commands`, `research_codebase_history.analyze_history`, `research_repomap.analyze_structure` (+2) | 5 | — |
 | `result_data` | `test_branching.fast_path`, `test_branching.slow_path_2`, `test_branching.default_path` | `test_branching.finalize` | 1 | single_consumer |
-| `review_request` | `request_review.compose_review_request` | `request_review.submit_review`, `request_review.process_review_feedback` | 2 | single_consumer |
-| `review_response` | `request_review.submit_review` | `request_review.process_review_feedback` | 1 | single_consumer |
 | `rewrite_queue` | `ast_edit_session.begin_rewrites`, `ast_edit_session.rewrite_symbol` | `ast_edit_session.rewrite_symbol` | 1 | single_consumer |
 | `route_taken` | `test_branching.fast_path`, `test_branching.slow_path`, `test_branching.default_path` | `test_branching.finalize` | 1 | single_consumer |
 | `search_queries` | `research_context.parse_queries`, `research_technical.format_query` | `research_context.execute_search`, `research_technical.execute_search` | 2 | — |
-| `selected_file_response` | `create_tests.select_target` | `create_tests.read_selected_target` | 1 | single_consumer |
 | `selected_files` | `prepare_context.select_relevant` | `prepare_context.load_selected` | 1 | single_consumer |
-| `selected_symbols` | `ast_edit_session.select_symbols` | `ast_edit_session.select_symbols`, `ast_edit_session.begin_rewrites`, `ast_edit_session.finalize` | 3 | single_consumer |
+| `selected_symbols` | `ast_edit_session.start_session`, `ast_edit_session.select_symbols` | `ast_edit_session.select_symbols`, `ast_edit_session.begin_rewrites`, `ast_edit_session.finalize` | 3 | single_consumer |
+| `selected_task` | `mission_control.select_and_dispatch_create`, `mission_control.select_and_dispatch_modify`, `mission_control.select_and_dispatch_integrate` (+9) | `mission_control.resolve_target_file_create`, `mission_control.resolve_target_file_create_tests`, `mission_control.resolve_target_file_modify` (+10) | 13 | single_consumer |
+| `selected_task_id` | `mission_control.select_and_dispatch_create`, `mission_control.select_and_dispatch_modify`, `mission_control.select_and_dispatch_integrate` (+9) |  | 0 | never_consumed |
 | `selection_turn` | `ast_edit_session.select_symbols` | `ast_edit_session.select_symbols` | 1 | single_consumer |
-| `session_history` | `run_in_terminal.start_session`, `run_in_terminal.execute_command`, `run_in_terminal.close_success` (+4) | `run_in_terminal.plan_next_command`, `run_in_terminal.execute_command`, `run_in_terminal.evaluate` (+4) | 7 | — |
-| `session_id` | `run_in_terminal.start_session`, `run_in_terminal.execute_command` | `run_in_terminal.plan_next_command`, `run_in_terminal.execute_command`, `run_in_terminal.evaluate` (+3) | 6 | single_consumer |
-| `session_summary` | `run_in_terminal.close_success`, `run_in_terminal.close_failure`, `run_in_terminal.close_max_turns` (+2) | `validate_behavior.analyze_results` | 1 | single_consumer |
-| `setup_results` | `setup_project.execute_setup` |  | 0 | never_consumed |
-| `smell_analysis` | `refactor.identify_smells`, `refactor.identify_smells_no_tests` | `refactor.apply_refactoring`, `refactor.check_more_refactorings` | 2 | single_consumer, conditionally_published |
-| `specific_concerns` |  | `request_review.compose_review_request` | 1 | — |
+| `session_history` | `run_in_terminal.start_session`, `run_in_terminal.execute_command`, `run_in_terminal.close_success` (+2) | `run_in_terminal.plan_next_command`, `run_in_terminal.execute_command`, `run_in_terminal.evaluate` (+3) | 6 | single_consumer |
+| `session_id` | `mission_control.start_session`, `run_in_terminal.start_session`, `run_in_terminal.execute_command` | `mission_control.reason`, `mission_control.select_and_dispatch_create`, `mission_control.select_and_dispatch_modify` (+34) | 37 | — |
+| `session_summary` | `run_in_terminal.close_success`, `run_in_terminal.close_failure`, `run_in_terminal.close_max_turns` |  | 0 | never_consumed |
 | `summary` | `test_branching.finalize`, `test_inference.complete`, `test_inference.complete_deep` (+3) |  | 0 | never_consumed |
-| `symbol_menu_options` | `modify_file.extract_symbols` | `ast_edit_session.select_symbols` | 1 | single_consumer |
-| `symbol_table` | `modify_file.extract_symbols` | `ast_edit_session.begin_rewrites` | 1 | single_consumer |
-| `target_file` | `capture_learnings.read_source`, `create_tests.read_selected_target`, `create_tests.read_target` (+7) | `capture_learnings.reflect`, `research_codebase_history.determine_git_commands`, `create_tests.generate_tests` (+20) | 23 | — |
+| `symbol_menu_options` | `modify_file.extract_symbols`, `refactor.extract_symbols` | `ast_edit_session.start_session`, `ast_edit_session.select_symbols` | 2 | single_consumer |
+| `symbol_table` | `modify_file.extract_symbols`, `refactor.extract_symbols` | `ast_edit_session.start_session`, `ast_edit_session.begin_rewrites` | 2 | single_consumer |
+| `target_file` | `capture_learnings.read_source`, `diagnose_issue.check_target`, `modify_file.read_target` (+3) | `capture_learnings.reflect`, `research_codebase_history.determine_git_commands`, `diagnose_issue.reproduce_mentally` (+12) | 15 | — |
 | `target_file_path` |  | `research_repomap.build_map` | 1 | — |
-| `task_outcomes` | `retrospective.gather_history` | `retrospective.analyze_patterns`, `retrospective.generate_recommendations` | 2 | single_consumer |
-| `test_results` | `create_tests.run_tests` | `create_tests.fix_tests` | 1 | single_consumer |
+| `task_description` |  | `ast_edit_session.start_session` | 1 | — |
+| `terminal_output` | `quality_gate.run_behavioral_check`, `validate_behavior.parse_and_run` | `quality_gate.summarize`, `validate_behavior.complete_with_issues` | 2 | — |
+| `terminal_status` | `quality_gate.run_behavioral_check` | `quality_gate.summarize` | 1 | single_consumer |
 | `time_range` |  | `research_codebase_history.determine_git_commands` | 1 | — |
-| `timing_data` | `retrospective.gather_history` | `retrospective.analyze_patterns` | 1 | single_consumer |
-| `trigger_reason` |  | `retrospective.analyze_patterns` | 1 | — |
-| `unblocked_tasks` | `mission_control.process_events` | `mission_control.reason` | 1 | single_consumer |
-| `validation_results` | `quality_gate.execute_checks`, `validate_output.check_file_type`, `validate_output.execute_checks` (+4) | `quality_gate.summarize`, `quality_gate.evaluate_results`, `validate_output.log_lint_warnings` (+3) | 6 | — |
-| `work_summary` |  | `request_review.compose_review_request`, `request_review.process_review_feedback` | 2 | — |
+| `validation_plan` | `validate_behavior.plan_validation` |  | 0 | never_consumed |
+| `validation_results` | `quality_gate.execute_checks`, `validate_output.check_file_type`, `validate_output.execute_checks` (+4) | `quality_gate.summarize`, `quality_gate.evaluate_results`, `validate_output.log_lint_warnings` (+2) | 5 | — |
+| `working_directory` |  | `ast_edit_session.start_session` | 1 | — |
 
 ## Action Registry
 
 | Action | Module | Effects Used | Referenced By |
 |--------|--------|-------------|---------------|
-| `accumulate_correction_history` | `agent.actions.refinement_actions` | — | `create_file.build_correction_context` |
-| `apply_multi_file_changes` | `agent.actions.integration_actions` | write_file | `create_file.write_files`, `document_project.apply_docstrings`, `modify_file.write_rewrite` |
+| `apply_multi_file_changes` | `agent.actions.integration_actions` | write_file | `create_file.write_files`, `create_tests.write_tests`, `document_project.process_output` (+6) |
 | `apply_plan_revision` | `agent.actions.refinement_actions` | save_mission | `revise_plan.apply_revision` |
 | `apply_quality_gate_results` | `agent.actions.refinement_actions` | load_mission, save_mission | `quality_gate.evaluate_results` |
-| `apply_retrospective_recommendations` | `agent.actions.retrospective_actions` | load_mission, save_mission | `retrospective.apply_recommendations` |
-| `assess_mission_progress` | `agent.actions.mission_actions` | save_mission | — |
-| `build_and_query_repomap` | `agent.actions.research_actions` | list_directory, read_file | `prepare_context.build_repomap`, `research_repomap.build_map`, `revise_plan.scan_workspace` (+1) |
+| `apply_retrospective_recommendations` | `agent.actions.retrospective_actions` | load_mission, save_mission | — |
+| `build_and_query_repomap` | `agent.actions.research_actions` | list_directory, read_file | `design_and_plan.build_repomap`, `prepare_context.build_repomap`, `research_repomap.build_map` (+1) |
 | `check_condition` | `agent.actions.registry` | — | — |
-| `check_remaining_doc_tasks` | `agent.actions.integration_actions` | — | `document_project.check_more_docs` |
-| `check_remaining_smells` | `agent.actions.integration_actions` | — | `refactor.check_more_refactorings` |
-| `close_edit_session` | `agent.actions.ast_actions` | end_inference_session | `ast_edit_session.no_changes_needed`, `ast_edit_session.close_full_rewrite` |
+| `check_remaining_doc_tasks` | `agent.actions.integration_actions` | — | — |
+| `check_remaining_smells` | `agent.actions.integration_actions` | — | — |
+| `close_edit_session` | `agent.actions.ast_actions` | end_inference_session | `ast_edit_session.no_changes_needed`, `ast_edit_session.close_full_rewrite`, `ast_edit_session.close_bail` |
 | `close_terminal_session` | `agent.actions.terminal_actions` | close_terminal, end_inference_session | `run_in_terminal.close_success`, `run_in_terminal.close_failure`, `run_in_terminal.close_max_turns` |
-| `compile_diagnosis` | `agent.actions.diagnostic_actions` | — | `diagnose_issue.compile_complete`, `diagnose_issue.compile_intractable` |
-| `compile_integration_report` | `agent.actions.integration_actions` | load_mission, save_mission | `integrate_modules.compile_report` |
-| `compose_director_report` | `agent.actions.retrospective_actions` | push_event | `retrospective.flag_for_director` |
-| `configure_task_dispatch` | `agent.actions.mission_actions` | save_mission, file_exists | `mission_control.dispatch_create_file`, `mission_control.dispatch_modify_file`, `mission_control.dispatch_integrate_modules` (+10) |
+| `compile_diagnosis` | `agent.actions.diagnostic_actions` | — | `diagnose_issue.compile_diagnosis` |
+| `compile_integration_report` | `agent.actions.integration_actions` | load_mission, save_mission | — |
+| `compose_director_report` | `agent.actions.retrospective_actions` | push_event | — |
 | `create_fix_task_from_diagnosis` | `agent.actions.diagnostic_actions` | load_mission, save_mission | `diagnose_issue.create_fix_task` |
-| `create_plan_from_objective` | `agent.actions.mission_actions` | save_mission | `create_plan.parse_plan` |
+| `create_plan_from_architecture` | `agent.actions.mission_actions` | save_mission | `design_and_plan.parse_plan` |
 | `curl_search` | `agent.actions.refinement_actions` | run_command | `research_context.execute_search`, `research_technical.execute_search` |
+| `end_director_session` | `agent.actions.mission_actions` | end_inference_session | `mission_control.end_session_and_dispatch`, `mission_control.end_session_and_reason`, `mission_control.end_session_error_no_files` (+2) |
 | `enter_idle` | `agent.actions.mission_actions` | — | `mission_control.idle` |
-| `execute_file_creation` | `agent.actions.mission_actions` | makedirs, write_file, file_exists | `create_tests.write_test_file`, `refactor.write_refactored` |
-| `execute_project_setup` | `agent.actions.refinement_actions` | file_exists, run_command, write_file | `setup_project.execute_setup` |
+| `execute_file_creation` | `agent.actions.mission_actions` | write_file, file_exists | — |
+| `execute_project_setup` | `agent.actions.refinement_actions` | file_exists, run_command, write_file | `setup_project.run_setup_commands` |
 | `extract_search_queries` | `agent.actions.refinement_actions` | — | `research_context.parse_queries` |
-| `extract_symbol_bodies` | `agent.actions.ast_actions` | — | `modify_file.extract_symbols` |
+| `extract_symbol_bodies` | `agent.actions.ast_actions` | — | `modify_file.extract_symbols`, `refactor.extract_symbols` |
 | `finalize_edit_session` | `agent.actions.ast_actions` | write_file, end_inference_session | `ast_edit_session.finalize` |
 | `finalize_mission` | `agent.actions.mission_actions` | save_mission | `mission_control.completed`, `mission_control.mission_deadlocked`, `mission_control.aborted` |
 | `format_technical_query` | `agent.actions.research_actions` | — | `research_technical.format_query` |
 | `handle_events` | `agent.actions.mission_actions` | clear_events, save_mission | `mission_control.process_events` |
 | `load_file_contents` | `agent.actions.refinement_actions` | read_file | `prepare_context.load_selected`, `prepare_context.load_fallback` |
-| `load_mission_state` | `agent.actions.mission_actions` | load_mission, read_events, save_mission | `create_plan.load_mission`, `mission_control.load_state`, `revise_plan.load_current_plan` (+1) |
-| `load_retrospective_data` | `agent.actions.retrospective_actions` | load_mission, list_artifacts, load_artifact | `retrospective.gather_history` |
-| `log_completion` | `agent.actions.registry` | — | `create_plan.failed`, `test_branching.finalize`, `test_inference.complete` (+4) |
+| `load_mission_state` | `agent.actions.mission_actions` | load_mission, read_events | `design_and_plan.load_mission`, `mission_control.load_state`, `revise_plan.load_current_plan` |
+| `load_retrospective_data` | `agent.actions.retrospective_actions` | load_mission, list_artifacts, load_artifact | — |
+| `log_completion` | `agent.actions.registry` | — | `design_and_plan.failed`, `test_branching.finalize`, `test_inference.complete` (+4) |
 | `log_validation_notes` | `agent.actions.refinement_actions` | load_mission, save_mission | `validate_output.log_lint_warnings` |
 | `noop` | `agent.actions.registry` | — | — |
+| `parse_and_store_architecture` | `agent.actions.mission_actions` | save_mission | `design_and_plan.parse_architecture` |
 | `prepare_next_rewrite` | `agent.actions.ast_actions` | — | `ast_edit_session.begin_rewrites` |
-| `push_note` | `agent.actions.refinement_actions` | load_mission, save_mission | `capture_learnings.save_note`, `design_architecture.persist_blueprint` |
-| `read_files` | `agent.actions.registry` | read_file | `capture_learnings.read_source`, `create_tests.read_selected_target`, `create_tests.read_target` (+6) |
-| `read_investigation_targets` | `agent.actions.diagnostic_actions` | read_file | `explore_spike.deep_read` |
-| `restore_file_from_context` | `agent.actions.integration_actions` | write_file | `refactor.rollback_refactoring` |
-| `rewrite_symbol_turn` | `agent.actions.ast_actions` | session_inference | `ast_edit_session.rewrite_symbol` |
-| `run_fallback_validation` | `agent.actions.refinement_actions` | run_command, file_exists | `validate_output.fallback_check` |
+| `push_note` | `agent.actions.refinement_actions` | load_mission, save_mission | `capture_learnings.save_note`, `modify_file.bail`, `retrospective.save_note` |
+| `read_files` | `agent.actions.registry` | read_file | `capture_learnings.read_source`, `diagnose_issue.check_target`, `modify_file.read_target` (+3) |
+| `read_investigation_targets` | `agent.actions.diagnostic_actions` | read_file | — |
+| `record_dispatch` | `agent.actions.mission_actions` | save_mission | `mission_control.record_and_dispatch` |
+| `restore_file_from_context` | `agent.actions.integration_actions` | write_file | — |
+| `rewrite_symbol_turn` | `agent.actions.ast_actions` | session_inference | `ast_edit_session.rewrite_symbol`, `ast_edit_session.capture_bail_reason` |
 | `run_git_investigation` | `agent.actions.research_actions` | run_command | `research_codebase_history.execute_git_commands` |
-| `run_project_tests` | `agent.actions.integration_actions` | run_command, list_directory | `refactor.baseline_tests`, `refactor.verify_refactoring` |
-| `run_tests` | `agent.actions.mission_actions` | run_command | `create_tests.run_tests` |
+| `run_project_tests` | `agent.actions.integration_actions` | run_command, list_directory | — |
+| `run_tests` | `agent.actions.mission_actions` | run_command | — |
 | `run_validation_checks` | `agent.actions.refinement_actions` | run_command | `quality_gate.execute_checks`, `validate_output.execute_checks` |
-| `scan_project` | `agent.actions.refinement_actions` | list_directory, read_file | `prepare_context.scan_workspace`, `quality_gate.scan_project`, `design_architecture.scan_workspace` (+3) |
+| `scan_project` | `agent.actions.refinement_actions` | list_directory, read_file | `design_and_plan.scan_workspace`, `prepare_context.scan_workspace`, `quality_gate.scan_project` (+1) |
 | `select_relevant_files` | `agent.actions.research_actions` | — | `prepare_context.select_relevant` |
 | `select_symbol_turn` | `agent.actions.ast_actions` | session_inference | `ast_edit_session.select_symbols` |
+| `select_target_file` | `agent.actions.mission_actions` | file_exists, list_directory, session_inference | `mission_control.resolve_target_file_create`, `mission_control.resolve_target_file_create_tests`, `mission_control.resolve_target_file_modify` (+10) |
+| `select_task_for_dispatch` | `agent.actions.mission_actions` | session_inference, save_mission | `mission_control.select_and_dispatch_create`, `mission_control.select_and_dispatch_modify`, `mission_control.select_and_dispatch_integrate` (+9) |
 | `send_terminal_command` | `agent.actions.terminal_actions` | send_to_terminal | `run_in_terminal.execute_command` |
+| `start_director_session` | `agent.actions.mission_actions` | start_inference_session | `mission_control.start_session` |
 | `start_edit_session` | `agent.actions.ast_actions` | start_inference_session, session_inference | `ast_edit_session.start_session` |
-| `start_terminal_session` | `agent.actions.terminal_actions` | start_terminal, start_inference_session, session_inference, send_to_terminal | `run_in_terminal.start_session` |
-| `submit_review_to_api` | `agent.actions.retrospective_actions` | escalate_to_api | `request_review.submit_review` |
-| `transform` | `agent.actions.registry` | — | `retrospective.snapshot_analysis`, `test_branching.fast_path`, `test_branching.slow_path` (+3) |
+| `start_terminal_session` | `agent.actions.terminal_actions` | start_terminal, start_inference_session, send_to_terminal | `run_in_terminal.start_session` |
+| `submit_review_to_api` | `agent.actions.retrospective_actions` | escalate_to_api | — |
+| `transform` | `agent.actions.registry` | — | `test_branching.fast_path`, `test_branching.slow_path`, `test_branching.slow_path_2` (+2) |
 | `update_task_status` | `agent.actions.mission_actions` | save_mission | `mission_control.apply_last_result` |
-| `validate_created_files` | `agent.actions.refinement_actions` | run_command | `create_file.validate`, `modify_file.validate` |
+| `validate_created_files` | `agent.actions.refinement_actions` | run_command | `create_file.validate`, `create_tests.validate`, `modify_file.validate` |
 | `validate_cross_file_consistency` | `agent.actions.research_actions` | list_directory, read_file | `quality_gate.cross_file_check`, `integrate_modules.structural_check` |
-| `write_file` | `agent.actions.registry` | write_file | `document_project.save_readme`, `document_project.save_architecture` |
+| `write_file` | `agent.actions.registry` | write_file | — |
 
 ## Step Templates
 
 | Template | Action | Used By |
 |----------|--------|---------|
-| `capture_learnings` | `flow` | `create_file.capture_learnings`, `create_file.capture_failure_note`, `create_tests.capture_learnings`, `create_tests.capture_failure_note`, `diagnose_issue.capture_diagnosis_learnings` (+16) |
-| `gather_project_context` | `flow` | `create_plan.gather_context`, `create_file.gather_context`, `create_tests.gather_context`, `diagnose_issue.gather_context`, `diagnose_issue.gather_additional_context` (+8) |
+| `capture_learnings` | `flow` | — |
+| `gather_project_context` | `flow` | `create_file.gather_context`, `create_tests.gather_context`, `diagnose_issue.gather_context`, `document_project.gather_context`, `explore_spike.gather_context` (+8) |
 | `push_note` | `push_note` | — |
-| `read_target_file` | `read_files` | `create_tests.read_target`, `diagnose_issue.read_target`, `modify_file.read_target`, `refactor.read_target`, `refactor.re_read_target` |
+| `read_target_file` | `read_files` | `modify_file.read_target`, `refactor.read_target` |
 | `validate_file` | `flow` | — |
-| `write_file` | `execute_file_creation` | `refactor.write_refactored` |
+| `write_file` | `execute_file_creation` | — |
 | `write_files` | `apply_multi_file_changes` | — |

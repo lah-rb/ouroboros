@@ -371,7 +371,31 @@ async def execute_flow(
         )
         execution.current_step = next_step
 
-    # If we get here, we exceeded max steps
+    # If we get here, we exceeded max steps.
+    # Before raising, clean up any active sessions that would have been
+    # released by the flow's terminal step (which never ran).
+    if effects is not None:
+        for key in ("inference_session_id", "session_id", "edit_session_id"):
+            sid = execution.accumulator.get(key, "")
+            if not sid:
+                continue
+            try:
+                if key == "session_id" and hasattr(effects, "close_terminal"):
+                    await effects.close_terminal(sid)
+                    logger.info(
+                        "Cleaned up orphaned terminal %s before MaxStepsExceeded", sid
+                    )
+                if key in ("inference_session_id", "edit_session_id") and hasattr(
+                    effects, "end_inference_session"
+                ):
+                    await effects.end_inference_session(sid)
+                    logger.info(
+                        "Cleaned up orphaned inference session %s before MaxStepsExceeded",
+                        sid,
+                    )
+            except Exception:
+                pass  # Best-effort cleanup
+
     raise MaxStepsExceeded(
         f"Flow {flow_def.flow!r} exceeded maximum step count ({max_steps}). "
         f"Steps executed: {execution.steps_executed}. "
@@ -480,10 +504,13 @@ async def _execute_subflow_action(
             action_registry=action_registry,
             effects=effects,
             flow_registry=flow_registry,
-            max_steps=50,  # Sub-flows get a reduced step budget
+            max_steps=200,  # Sub-flows get a generous step budget
         )
     except Exception as e:
         logger.warning("Sub-flow %s failed: %s", target_flow_name, e)
+        # Note: if MaxStepsExceeded, session cleanup already happened
+        # inside execute_flow before the exception was raised.
+
         # ── Trace: FlowReturn (failed) ───────────────────────
         if _can_trace:
             await effects.emit_trace(
@@ -588,10 +615,21 @@ async def _execute_inference_action(
         config_overrides["max_tokens"] = step_input.config["max_tokens"]
 
     # Call inference with tracing
-    # Session-aware: if session_id is in the step's context, route through
-    # the memoryful session instead of making a stateless call.  This avoids
-    # deadlocking when the session has already pinned the only pool instance.
-    session_id = step_input.context.get("session_id")
+    # Session-aware: if an inference session ID is in the step's context, route
+    # through the memoryful session instead of making a stateless call.  This
+    # avoids deadlocking when the session has already pinned the only pool instance.
+    #
+    # IMPORTANT: prefer inference_session_id over session_id.  Flows like
+    # run_in_terminal publish BOTH a terminal session_id (for shell commands)
+    # and an inference_session_id (for LLM calls).  Using the terminal ID
+    # for inference causes "session not found" errors.  Flows that only have
+    # one session (ast_edit_session, mission_control) publish it as session_id
+    # or edit_session_id, which still works as the fallback.
+    session_id = (
+        step_input.context.get("inference_session_id")
+        or step_input.context.get("edit_session_id")
+        or step_input.context.get("session_id")
+    )
     tokens_in = count_tokens(rendered_prompt)
     infer_start = time.monotonic()
 
@@ -613,6 +651,23 @@ async def _execute_inference_action(
         )
 
     tokens_out = count_tokens(result.text) if result.text else 0
+
+    # Fetch chain-of-thought content if tracing is enabled
+    thinking_content = ""
+    if hasattr(effects, "trace_thinking") and effects.trace_thinking:
+        if hasattr(effects, "fetch_thinking"):
+            try:
+                thinking_content = await effects.fetch_thinking()
+            except Exception:
+                pass  # Non-critical — don't let thinking fetch break inference
+
+    # Capture full prompt/response when --trace-prompts is set
+    prompt_content = ""
+    response_content = ""
+    if hasattr(effects, "trace_prompts") and effects.trace_prompts:
+        prompt_content = rendered_prompt
+        response_content = result.text or ""
+
     _can_trace = hasattr(effects, "emit_trace")
     if _can_trace:
         await effects.emit_trace(
@@ -627,6 +682,9 @@ async def _execute_inference_action(
                 temperature=_safe_float_temp(config_overrides.get("temperature", 0)),
                 max_tokens=int(config_overrides.get("max_tokens", 0) or 0),
                 purpose="session_inference" if session_id else "step_inference",
+                thinking_content=thinking_content,
+                prompt_content=prompt_content,
+                response_content=response_content,
             )
         )
 

@@ -1,7 +1,10 @@
 flow: retrospective
-version: 2
+version: 3
 description: >
   Capture learnings from frustration recovery — what worked after struggling.
+  Saves analysis as a mission note (accessible to all future director reasoning),
+  NOT as a file on disk. Only fires on frustration reset (task succeeded after
+  elevated frustration).
 
 input:
   required:
@@ -34,108 +37,99 @@ steps:
 
   execute:
     action: inference
-    description: "Execute the task via inference"
+    description: "Analyze what was tried, what failed, what ultimately worked"
     context:
       optional: [context_bundle, project_manifest, repo_map_formatted]
     prompt: |
-      You are a retrospective analysis module. Analyze what was tried, what failed, and what ultimately worked. Extract reusable lessons.
+      You are a retrospective analysis module. A task that previously failed
+      multiple times has now succeeded. Analyze the pattern and extract
+      reusable lessons for future tasks.
+
+      Respond with PLAIN TEXT analysis only — no file blocks, no markdown
+      headers, no === FILE: === markers. Your output will be saved as
+      a persistent note that informs all future decision-making.
+
+      Keep your analysis concise (under 500 words). Focus on:
+      1. What approaches failed and why
+      2. What finally worked
+      3. Concrete patterns to apply or avoid in future tasks
 
       ## Trigger
-      {{ input.reason or input.task_description }}
+      {{ input.trigger_reason or input.reason or input.task_description or 'Frustration recovery' }}
 
       Project objective: {{ input.mission_objective }}
 
       {% if input.relevant_notes %}
-      ## Architecture & Notes
+      ## Prior Notes
       {{ input.relevant_notes }}
       {% endif %}
 
       {% if context.repo_map_formatted %}
-      ## Project Structure
+      ## Current Project Structure
       {{ context.repo_map_formatted }}
       {% endif %}
 
       {% if context.context_bundle and context.context_bundle.files %}
-      ## Project Files
+      ## Project Files (summaries)
       {% for file in context.context_bundle.files %}
-      === {{ file.path }} ===
-      {{ file.content[:1500] }}
+      - {{ file.path }} ({{ file.content | length }} chars)
       {% endfor %}
       {% endif %}
 
-      If you need to create or update files, use this format:
-
-      === FILE: path/to/file ===
-      ```
-      content
-      ```
-
-      Create ALL files needed. If no files need creating, provide analysis as plain text.
+      Write your analysis as plain text paragraphs. No file blocks.
     config:
       temperature: 0.4
     resolver:
       type: rule
       rules:
         - condition: "result.tokens_generated > 0"
-          transition: process_output
+          transition: save_note
         - condition: "true"
           transition: failed
     publishes:
       - inference_response
 
-  process_output:
-    action: apply_multi_file_changes
-    description: "Write any file blocks to disk"
+  save_note:
+    action: push_note
+    description: "Save retrospective analysis as a persistent mission note"
     context:
       required: [inference_response]
     params:
       content_key: "inference_response"
+      category: "failure_analysis"
+      tags: ["retrospective", "frustration_recovery"]
+      source_flow: "retrospective"
+      source_task: "{{ input.task_id }}"
     resolver:
       type: rule
       rules:
-        - condition: "result.files_written > 0"
+        - condition: "result.note_saved == true"
           transition: complete
         - condition: "true"
-          transition: complete_no_files
-    publishes:
-      - files_changed
+          transition: complete
+    publishes: []
 
   complete:
     action: noop
-    description: "Task complete with files"
-    context:
-      optional: [files_changed]
+    description: "Retrospective complete — learnings saved to mission notes"
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
-        last_status: "success"
-        last_result: "Completed: {{ input.task_description[:100] }}. Files: {{ context.files_changed | join(', ') if context.files_changed else 'none' }}"
-
-  complete_no_files:
-    action: noop
-    description: "Task complete — analysis only"
-    context:
-      optional: [inference_response]
-    tail_call:
-      flow: mission_control
-      input_map:
-        mission_id: "{{ input.mission_id }}"
-        last_task_id: "{{ input.task_id }}"
-        last_status: "success"
-        last_result: "{{ context.inference_response[:200] if context.inference_response else 'Completed' }}"
+        last_status: "diagnosed"
+        last_result: "Retrospective complete — learnings saved to notes"
 
   failed:
     action: noop
-    description: "Task failed"
+    description: "Retrospective failed"
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
-        last_status: "failed"
-        last_result: "Failed: {{ input.task_description[:100] }}"
+        last_status: "diagnosed"
+        last_result: "Retrospective analysis failed"
 
 entry: gather_context
 

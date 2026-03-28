@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════════
 
 
-def extract_key_access_patterns(source: str, file_path: str = "") -> dict[str, list[str]]:
+def extract_key_access_patterns(
+    source: str, file_path: str = ""
+) -> dict[str, list[str]]:
     """Extract dict key access patterns from Python source code.
 
     Finds patterns like:
@@ -85,7 +87,11 @@ def _extract_keys_tree_sitter(source: str, file_path: str) -> dict[str, list[str
             func_node = node.child_by_field_name("function")
             if func_node and func_node.type == "attribute":
                 method_name = func_node.child_by_field_name("attribute")
-                if method_name and method_name.text.decode("utf-8") in ("get", "pop", "setdefault"):
+                if method_name and method_name.text.decode("utf-8") in (
+                    "get",
+                    "pop",
+                    "setdefault",
+                ):
                     args = node.child_by_field_name("arguments")
                     if args:
                         for arg in args.children:
@@ -122,12 +128,12 @@ def _extract_keys_regex(source: str) -> dict[str, list[str]]:
 
     for line in source.splitlines():
         # Track function scope
-        func_match = re.match(r'\s*def\s+(\w+)', line)
+        func_match = re.match(r"\s*def\s+(\w+)", line)
         if func_match:
             current_func = func_match.group(1)
 
         # data["key"] or data['key']
-        for match in re.finditer(r'''\[["'](\w+)["']\]''', line):
+        for match in re.finditer(r"""\[["'](\w+)["']\]""", line):
             key = match.group(1)
             if current_func not in results:
                 results[current_func] = []
@@ -135,7 +141,7 @@ def _extract_keys_regex(source: str) -> dict[str, list[str]]:
                 results[current_func].append(key)
 
         # data.get("key") or data.get('key')
-        for match in re.finditer(r'''\.get\(["'](\w+)["']''', line):
+        for match in re.finditer(r"""\.get\(["'](\w+)["']""", line):
             key = match.group(1)
             if current_func not in results:
                 results[current_func] = []
@@ -195,6 +201,7 @@ def _skeleton_from_yaml(content: str, file_path: str) -> str:
     """Extract skeleton from YAML content."""
     try:
         import yaml
+
         data = yaml.safe_load(content)
         if data is None:
             return ""
@@ -219,11 +226,13 @@ def _skeleton_from_toml(content: str, file_path: str) -> str:
     # TOML parsing requires tomllib (3.11+) or tomli
     try:
         import tomllib
+
         data = tomllib.loads(content)
         return _format_skeleton(data, os.path.basename(file_path))
     except ImportError:
         try:
             import tomli
+
             data = tomli.loads(content)
             return _format_skeleton(data, os.path.basename(file_path))
         except ImportError:
@@ -288,10 +297,14 @@ def _describe_shape(value: Any, depth: int = 0, max_depth: int = 4) -> str:
         # e.g., rooms: {village_square: {name, desc, ...}, general_store: {name, desc, ...}}
         if len(keys) >= 2 and isinstance(first_val, dict):
             first_keys = set(first_val.keys()) if isinstance(first_val, dict) else set()
-            is_homogeneous = all(
-                isinstance(value[k], dict) and set(value[k].keys()) == first_keys
-                for k in keys[:4]
-            ) if first_keys else False
+            is_homogeneous = (
+                all(
+                    isinstance(value[k], dict) and set(value[k].keys()) == first_keys
+                    for k in keys[:4]
+                )
+                if first_keys
+                else False
+            )
 
             if not is_homogeneous and first_keys:
                 # Relaxed check: at least 70% key overlap

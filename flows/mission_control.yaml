@@ -53,6 +53,8 @@ steps:
     resolver:
       type: rule
       rules:
+        - condition: "result.quality_gate_exhausted == true"
+          transition: completed
         - condition: "result.events_pending == true"
           transition: process_events
         - condition: "result.needs_plan == true"
@@ -296,8 +298,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for create_file"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -315,8 +317,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for modify_file"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -332,8 +334,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for integrate_modules"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -349,8 +351,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for diagnose_issue"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -366,8 +368,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for create_tests"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -383,8 +385,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for validate_behavior"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -400,8 +402,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for setup_project"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -417,8 +419,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for explore_spike"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -434,8 +436,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for refactor"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -451,8 +453,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for document_project"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -468,8 +470,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for manage_packages"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -485,8 +487,8 @@ steps:
     action: select_task_for_dispatch
     description: "Select task for request_review"
     context:
-      required: [mission, session_id]
-      optional: [director_analysis]
+      required: [mission]
+      optional: [session_id, director_analysis]
     resolver:
       type: rule
       rules:
@@ -886,6 +888,9 @@ steps:
       working_directory: "{{ context.mission.config.working_directory }}"
       mission_id: "{{ input.mission_id }}"
       mission_objective: "{{ context.mission.objective }}"
+      architecture_run_command: "{{ context.mission.architecture.run_command if context.mission.architecture else '' }}"
+      architecture_import_scheme: "{{ context.mission.architecture.import_scheme if context.mission.architecture else '' }}"
+      architecture_modules: "{{ context.mission.architecture.canonical_files() | join(', ') if context.mission.architecture else '' }}"
       mode: "completion"
     resolver:
       type: rule
@@ -894,8 +899,6 @@ steps:
           transition: completed
         - condition: "true"
           transition: quality_failed_restart
-        - condition: "true"
-          transition: dispatch_revise_plan
     publishes:
       - quality_results
 
@@ -903,15 +906,15 @@ steps:
 
   quality_failed_restart:
     action: noop
-    description: "Quality gate failed — fix tasks added to plan. Restart mission_control to work them."
+    description: "Quality gate failed — restart mission_control with details so director can act"
     context:
       optional: [mission, quality_results]
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
-        last_status: "failed"
-        last_result: "Quality gate failed. Fix tasks have been added to the plan."
+        last_status: "quality_failed"
+        last_result: "Quality gate FAILED. Results: {{ context.quality_results or 'no details' }}. If no actionable tasks remain, the director should dispatch validate_behavior or accept the current state."
 
   # ── Terminal / parking states ───────────────────────────────
 

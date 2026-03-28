@@ -29,6 +29,7 @@ class ResolverDefinition(BaseModel):
     options: dict[str, Any] | None = None
     options_from: str | None = None
     include_step_output: bool = False
+    default_transition: str | None = None  # Fallback when LLM menu fails
 
 
 class ContextRequirements(BaseModel):

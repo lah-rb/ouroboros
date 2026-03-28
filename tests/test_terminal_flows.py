@@ -70,6 +70,25 @@ class TestParseTerminalCommand:
         raw = "Here is the command:\npython run.py\nThis will test the app."
         assert _parse_terminal_command(raw) == "python run.py"
 
+    def test_delimiter_leak_after_json(self):
+        """Chat template delimiters after valid JSON should be stripped."""
+        raw = '{"command": "grep -n __name__ main.py", "rationale": "check"}<|im_end|>\n<|im_end|>\n<|im_end|>'
+        assert _parse_terminal_command(raw) == "grep -n __name__ main.py"
+
+    def test_delimiter_flood_with_hallucinated_template(self):
+        """Massive delimiter flood with hallucinated chat structure should still parse."""
+        raw = (
+            '{"command": "python main.py", "rationale": "run it"}<|im_end|>\n'
+            "<|im_end|>\n" * 15
+            + "<|im_start|>user\nYou are evaluating...\n<|im_end|>"
+        )
+        assert _parse_terminal_command(raw) == "python main.py"
+
+    def test_partial_delimiter_in_command_preserved(self):
+        """A pipe character in a command should not be affected by delimiter stripping."""
+        raw = '{"command": "echo test | grep test", "rationale": "pipe test"}'
+        assert _parse_terminal_command(raw) == "echo test | grep test"
+
 
 # ── Tests for action_start_terminal_session ──────────────────────────
 
@@ -121,7 +140,7 @@ class TestSendTerminalCommand:
         session_id = await effects.start_terminal()
 
         si = make_step_input(
-            params={"max_turns": 10, "command_timeout": 30},
+            params={"command_timeout": 30},
             context={
                 "session_id": session_id,
                 "session_history": [],
@@ -138,7 +157,7 @@ class TestSendTerminalCommand:
     async def test_send_command_no_session(self):
         effects = MockEffects()
         si = make_step_input(
-            params={"max_turns": 10},
+            params={},
             context={
                 "session_id": "",
                 "session_history": [],
@@ -150,41 +169,12 @@ class TestSendTerminalCommand:
         assert result.result["command_sent"] is False
 
     @pytest.mark.asyncio
-    async def test_max_turns_exceeded(self):
-        effects = MockEffects()
-        session_id = await effects.start_terminal()
-
-        # Pre-fill history to max
-        history = [
-            {
-                "command": f"cmd{i}",
-                "output": "",
-                "return_code": 0,
-                "turn": i,
-                "timed_out": False,
-            }
-            for i in range(5)
-        ]
-        si = make_step_input(
-            params={"max_turns": 5},
-            context={
-                "session_id": session_id,
-                "session_history": history,
-                "inference_response": '{"command": "one more"}',
-            },
-            effects=effects,
-        )
-        result = await action_send_terminal_command(si)
-        assert result.result["max_turns_exceeded"] is True
-        assert result.result["command_sent"] is False
-
-    @pytest.mark.asyncio
     async def test_unparseable_command(self):
         effects = MockEffects()
         session_id = await effects.start_terminal()
 
         si = make_step_input(
-            params={"max_turns": 10},
+            params={},
             context={
                 "session_id": session_id,
                 "session_history": [],
@@ -211,7 +201,7 @@ class TestSendTerminalCommand:
             },
         ]
         si = make_step_input(
-            params={"max_turns": 10},
+            params={},
             context={
                 "session_id": session_id,
                 "session_history": history,
@@ -240,7 +230,7 @@ class TestSendTerminalCommand:
             },
         ]
         si = make_step_input(
-            params={"max_turns": 10},
+            params={},
             context={
                 "session_id": session_id,
                 "session_history": history,
@@ -270,7 +260,7 @@ class TestSendTerminalCommand:
             },
         ]
         si = make_step_input(
-            params={"max_turns": 10},
+            params={},
             context={
                 "session_id": session_id,
                 "session_history": history,

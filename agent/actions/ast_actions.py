@@ -148,6 +148,14 @@ async def action_extract_symbol_bodies(step_input: StepInput) -> StepOutput:
         }
     )
 
+    # Bail option — wrong file or task doesn't apply here
+    symbol_menu_options.append(
+        {
+            "id": "__bail__",
+            "description": "BAIL — this file does not need changes, or the task description targets the wrong file",
+        }
+    )
+
     return StepOutput(
         result={"symbols_extracted": len(symbol_table)},
         observations=f"Extracted {len(symbol_table)} editable symbols from {file_path}",
@@ -220,6 +228,16 @@ async def action_start_edit_session(step_input: StepInput) -> StepOutput:
     # (rewrite_symbol, finalize) can access them without extra params.
     file_content = step_input.params.get(
         "file_content", step_input.context.get("file_content", "")
+    )
+
+    logger.info(
+        "start_edit_session: publishing file_content type=%s len=%d | "
+        "file_path=%r | from_params=%s from_context=%s",
+        type(file_content).__name__,
+        len(file_content) if isinstance(file_content, str) else -1,
+        file_path,
+        "file_content" in step_input.params,
+        "file_content" in step_input.context,
     )
 
     return StepOutput(
@@ -409,10 +427,24 @@ async def action_select_symbol_turn(step_input: StepInput) -> StepOutput:
             result={
                 "selection_complete": False,
                 "full_rewrite_requested": True,
+                "bail_requested": False,
                 "symbol_selected": False,
                 "symbols_selected": len(selected),
             },
             observations="Full rewrite requested by model",
+            context_updates={"selected_symbols": selected},
+        )
+
+    if option["id"] == "__bail__":
+        return StepOutput(
+            result={
+                "selection_complete": False,
+                "full_rewrite_requested": False,
+                "bail_requested": True,
+                "symbol_selected": False,
+                "symbols_selected": 0,
+            },
+            observations="Model bailed — file does not need changes or task targets wrong file",
             context_updates={"selected_symbols": selected},
         )
 
@@ -444,10 +476,29 @@ async def action_prepare_next_rewrite(step_input: StepInput) -> StepOutput:
     Takes selected_symbols list and symbol_table, builds an ordered queue.
     Pops the first item as current_symbol.
     """
-    selected = _ensure_parsed(step_input.context.get("selected_symbols", []))
-    symbol_table = _ensure_parsed(step_input.context.get("symbol_table", []))
+    selected_raw = step_input.context.get("selected_symbols", [])
+    symbol_table_raw = step_input.context.get("symbol_table", [])
+    selected = _ensure_parsed(selected_raw)
+    symbol_table = _ensure_parsed(symbol_table_raw)
+
+    logger.info(
+        "prepare_next_rewrite: selected_type=%s selected=%s | "
+        "symbol_table_type=%s symbol_table_len=%s | "
+        "raw_selected_type=%s raw_table_type=%s",
+        type(selected).__name__,
+        repr(selected)[:300],
+        type(symbol_table).__name__,
+        len(symbol_table) if isinstance(symbol_table, list) else "N/A",
+        type(selected_raw).__name__,
+        type(symbol_table_raw).__name__,
+    )
 
     if not selected or not symbol_table:
+        logger.error(
+            "prepare_next_rewrite EMPTY: selected=%s symbol_table=%s",
+            bool(selected),
+            bool(symbol_table),
+        )
         return StepOutput(
             result={"has_next": False},
             observations="No symbols selected for rewriting",
@@ -489,7 +540,55 @@ async def action_rewrite_symbol_turn(step_input: StepInput) -> StepOutput:
     Sends the current symbol body to the session, receives the rewritten
     version, splices it into the file content, and re-parses with tree-sitter
     to get updated byte offsets for remaining symbols.
+
+    Special mode: if params.bail_prompt is True, instead of rewriting a symbol
+    this asks the model to explain why it bailed, captures the reasoning, and
+    returns it as bail_reason for the note system.
     """
+    effects = step_input.effects
+    session_id = step_input.context.get("edit_session_id", "")
+
+    # ── Bail prompt mode ─────────────────────────────────────────
+    if step_input.params.get("bail_prompt"):
+        if not effects or not session_id:
+            return StepOutput(
+                result={"bail_reason_captured": False},
+                observations="Cannot capture bail reason — no session",
+                context_updates={
+                    "bail_reason": "No session available to capture reasoning"
+                },
+            )
+
+        bail_prompt = (
+            "You chose to BAIL on modifying this file. Before we close, "
+            "explain in 2-3 sentences:\n"
+            "1. Why this file does not need the requested changes\n"
+            "2. Which file or approach SHOULD be targeted instead\n"
+            "Be specific — your answer becomes a note for the task director."
+        )
+
+        try:
+            result = await effects.session_inference(
+                session_id,
+                bail_prompt,
+                {"temperature": 0.3, "max_tokens": 300},
+            )
+            bail_reason = (
+                result.text.strip()
+                if result.text
+                else "Model did not provide reasoning"
+            )
+        except Exception as e:
+            logger.warning("Bail reason inference failed: %s", e)
+            bail_reason = f"Failed to capture reasoning: {e}"
+
+        return StepOutput(
+            result={"bail_reason_captured": True},
+            observations=f"Bail reason: {bail_reason[:200]}",
+            context_updates={"bail_reason": bail_reason},
+        )
+
+    # ── Normal rewrite mode ──────────────────────────────────────
     effects = step_input.effects
     session_id = step_input.context.get("edit_session_id", "")
     current_symbol = _ensure_parsed(step_input.context.get("current_symbol"))
@@ -507,9 +606,38 @@ async def action_rewrite_symbol_turn(step_input: StepInput) -> StepOutput:
     mode = step_input.params.get("mode", step_input.context.get("mode", "fix"))
 
     if not effects or not session_id or not current_symbol or not file_content:
+        # Detailed diagnostic logging — identify exactly which value is falsy
+        missing = []
+        if not effects:
+            missing.append("effects=None")
+        if not session_id:
+            missing.append(f"session_id={session_id!r}")
+        if not current_symbol:
+            missing.append(
+                f"current_symbol={type(current_symbol).__name__}:"
+                f"{repr(current_symbol)[:200]}"
+            )
+        if not file_content:
+            missing.append(
+                f"file_content={type(file_content).__name__}:"
+                f"{repr(file_content)[:200]}"
+            )
+        # Log what IS available for cross-reference
+        logger.error(
+            "rewrite_symbol_turn BAIL: missing=[%s] | "
+            "context_keys=%s | params_keys=%s | "
+            "file_content_type=%s len=%d | "
+            "current_symbol_type=%s",
+            ", ".join(missing),
+            list(step_input.context.keys()),
+            list(step_input.params.keys()),
+            type(file_content).__name__,
+            len(file_content) if isinstance(file_content, str) else -1,
+            type(current_symbol).__name__,
+        )
         return StepOutput(
             result={"rewrite_success": False, "has_next": False},
-            observations="Missing session, symbol, or file content",
+            observations=f"BAIL: {', '.join(missing)}",
             context_updates={},
         )
 
@@ -674,6 +802,17 @@ async def action_finalize_edit_session(step_input: StepInput) -> StepOutput:
 
     files_changed: list[str] = []
     edit_summary = "No changes applied"
+
+    logger.info(
+        "finalize_edit_session: file_content_type=%s len=%d | "
+        "file_path=%r | selected=%s | session_id=%s | context_keys=%s",
+        type(file_content).__name__,
+        len(file_content) if isinstance(file_content, str) else -1,
+        file_path,
+        repr(selected)[:200],
+        session_id[:12] if session_id else "none",
+        list(step_input.context.keys()),
+    )
 
     if effects and file_content and file_path:
         try:

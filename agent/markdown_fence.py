@@ -121,10 +121,12 @@ def _extract_with_markdown_it(text: str) -> list[FencedBlock]:
     blocks = []
     for token in tokens:
         if token.type == "fence" and token.content:
-            blocks.append(FencedBlock(
-                language=token.info.strip() if token.info else "",
-                content=token.content,
-            ))
+            blocks.append(
+                FencedBlock(
+                    language=token.info.strip() if token.info else "",
+                    content=token.content,
+                )
+            )
     return blocks
 
 

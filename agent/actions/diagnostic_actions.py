@@ -37,11 +37,17 @@ async def action_compile_diagnosis(step_input: StepInput) -> StepOutput:
     include_rejected = step_input.params.get("include_rejected_hypotheses", True)
     is_intractable = step_input.params.get("mark_as_intractable", False)
 
+    # selected_fix: prefer evaluation (from explicit evaluation step, if present)
+    # but fall back to hypotheses (from form_hypotheses) which contains the
+    # actual fix proposals.  The evaluation step doesn't exist in the current
+    # diagnose_issue flow, so without this fallback selected_fix is always empty.
+    selected_fix = evaluation or hypotheses
+
     diagnosis = {
         "error_description": error_description,
         "root_cause": error_analysis,
         "hypotheses": hypotheses if include_rejected else "",
-        "selected_fix": evaluation,
+        "selected_fix": selected_fix,
         "confidence": "low" if is_intractable else "medium",
         "is_intractable": is_intractable,
     }

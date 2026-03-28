@@ -222,7 +222,7 @@ flows:
     file: shared/run_in_terminal.yaml
     inputs:
       required: [session_goal, working_directory]
-      optional: [initial_commands, max_turns, session_context, environment_vars]
+      optional: [initial_commands, session_context, environment_vars]
 
   quality_gate:
     type: shared
@@ -230,7 +230,7 @@ flows:
     file: shared/quality_gate.yaml
     inputs:
       required: [working_directory, mission_id]
-      optional: [mission_objective, relevant_notes, mode]
+      optional: [mission_objective, relevant_notes, architecture_run_command, architecture_import_scheme, architecture_modules, mode]
 
   ast_edit_session:
     type: shared

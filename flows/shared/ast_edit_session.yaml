@@ -31,6 +31,17 @@ steps:
   start_session:
     action: start_edit_session
     description: "Open memoryful inference session for symbol selection and rewriting"
+    context:
+      optional:
+        - file_content
+        - file_path
+        - task_description
+        - reason
+        - mode
+        - relevant_notes
+        - working_directory
+        - symbol_table
+        - symbol_menu_options
     resolver:
       type: rule
       rules:
@@ -40,6 +51,7 @@ steps:
           transition: session_failed
     publishes:
       - edit_session_id
+      - selected_symbols
       - file_content
       - file_path
       - mode
@@ -64,6 +76,8 @@ steps:
           transition: no_changes_needed
         - condition: "result.full_rewrite_requested == true"
           transition: close_full_rewrite
+        - condition: "result.bail_requested == true"
+          transition: capture_bail_reason
         - condition: "result.symbol_selected == true"
           transition: select_symbols
         - condition: "true"
@@ -147,6 +161,36 @@ steps:
       return_status: "full_rewrite_requested"
     terminal: true
     status: full_rewrite_requested
+
+  capture_bail_reason:
+    action: rewrite_symbol_turn
+    description: "Ask the model why it is bailing — captures reasoning in the memoryful session"
+    context:
+      required: [edit_session_id]
+      optional: [file_content, file_path]
+    params:
+      bail_prompt: true
+    resolver:
+      type: rule
+      rules:
+        - condition: "true"
+          transition: close_bail
+    publishes:
+      - bail_reason
+
+  close_bail:
+    action: close_edit_session
+    description: "Close session after capturing bail reasoning"
+    context:
+      required: [edit_session_id]
+      optional: [bail_reason]
+    params:
+      return_status: "bail"
+    terminal: true
+    status: bail
+    publishes:
+      - edit_summary
+      - bail_reason
 
   session_failed:
     action: noop

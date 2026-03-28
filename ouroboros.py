@@ -486,6 +486,8 @@ def cmd_start(args: argparse.Namespace) -> None:
     effects = LocalEffects(
         working_directory=working_dir,
         llmvp_endpoint=mission.config.llmvp_endpoint,
+        trace_thinking=getattr(args, "trace_thinking", False),
+        trace_prompts=getattr(args, "trace_prompts", False),
     )
 
     # Resolve flows directory
@@ -537,6 +539,16 @@ def main() -> None:
         "--max-cycles", type=int, default=50, help="Max flow cycles (default: 50)"
     )
     start_p.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
+    start_p.add_argument(
+        "--trace-thinking",
+        action="store_true",
+        help="Capture chain-of-thought from LLMVP thinking endpoint in trace events",
+    )
+    start_p.add_argument(
+        "--trace-prompts",
+        action="store_true",
+        help="Capture full rendered prompts and raw model responses in trace events",
+    )
 
     # ── blueprint subcommand ──────────────────────────────────────
     bp_p = subparsers.add_parser("blueprint", help="Generate architectural blueprint")

@@ -164,6 +164,8 @@ class LocalEffects:
         working_directory: str,
         llmvp_endpoint: str | None = None,
         model_default_temperature: float = 0.7,
+        trace_thinking: bool = False,
+        trace_prompts: bool = False,
     ) -> None:
         self._working_dir = os.path.realpath(working_directory)
         if not os.path.isdir(self._working_dir):
@@ -178,6 +180,10 @@ class LocalEffects:
         # Trace buffer — flushed to JSONL at cycle boundaries
         self._trace_buffer: list[TraceEvent] = []
         self._trace_file_path: str | None = None
+        # Chain-of-thought capture — only fetch when flag is set
+        self.trace_thinking: bool = trace_thinking
+        # Full prompt/response capture — only store when flag is set
+        self.trace_prompts: bool = trace_prompts
 
     @property
     def working_directory(self) -> str:
@@ -695,6 +701,19 @@ class LocalEffects:
             )
 
         return result
+
+    async def fetch_thinking(self, request_id: str = "") -> str:
+        """Fetch chain-of-thought content from the last inference call.
+
+        Delegates to the LLMVP inference client's thinking endpoint.
+        Returns empty string if thinking is unavailable or the fetch fails.
+        """
+        try:
+            inference = self._get_inference()
+            return await inference.fetch_thinking(request_id)
+        except Exception as e:
+            logger.debug("fetch_thinking failed: %s", e)
+            return ""
 
     # ── Memoryful inference sessions ──────────────────────────────
 
