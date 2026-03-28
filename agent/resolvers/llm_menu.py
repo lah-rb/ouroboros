@@ -223,10 +223,17 @@ async def resolve_llm_menu(
     tokens_in = count_tokens(prompt)
     infer_start = time.monotonic()
 
-    # Session-aware: if session_id is in context, route through the
-    # memoryful session to avoid deadlocking when the session has
+    # Session-aware: if an inference session is in context, route through
+    # the memoryful session to avoid deadlocking when the session has
     # already pinned the only available pool instance.
-    session_id = context.get("session_id")
+    # IMPORTANT: prefer inference_session_id over session_id — flows like
+    # run_in_terminal publish BOTH a terminal session_id (for shell commands)
+    # and an inference_session_id (for LLM calls).
+    session_id = (
+        context.get("inference_session_id")
+        or context.get("edit_session_id")
+        or context.get("session_id")
+    )
     if session_id and hasattr(effects, "session_inference"):
         logger.debug(
             "LLM menu using memoryful session %s",
@@ -237,6 +244,13 @@ async def resolve_llm_menu(
         result = await effects.run_inference(prompt, config)
 
     if _can_trace:
+        # Capture prompt/response when --trace-prompts is set
+        _prompt_content = ""
+        _response_content = ""
+        if hasattr(effects, "trace_prompts") and effects.trace_prompts:
+            _prompt_content = prompt
+            _response_content = result.text or ""
+
         await effects.emit_trace(
             InferenceCall(
                 mission_id=_t_mission,
@@ -249,21 +263,59 @@ async def resolve_llm_menu(
                 temperature=0.1,
                 max_tokens=5,
                 purpose="llm_menu_resolve",
+                prompt_content=_prompt_content,
+                response_content=_response_content,
             )
         )
 
     if result.error:
+        # Check for default_transition before raising
+        default = resolver_def.get("default_transition")
+        if default:
+            logger.warning(
+                "LLM menu inference failed (%s), using default_transition: %s",
+                result.error,
+                default,
+            )
+            return default
         raise LLMMenuResolverError(f"Inference failed: {result.error}")
 
     # Grammar constraint guarantees a valid letter
-    letter = result.text.strip().lower()
+    letter = result.text.strip().lower() if result.text else ""
     if letter in letter_map:
         choice = letter_map[letter]
         logger.debug("LLM menu resolved: %r (letter %r)", choice, letter)
         return _resolve_option_target(choice, resolver_def, options)
 
-    # Safety fallback (should never fire with grammar)
-    logger.warning("Grammar response %r not in letter_map, using fallback", letter)
+    # Bandaid: chat template delimiter leak (e.g. "b<|" instead of "b").
+    # Some models emit the start of their EOS token (<|im_end|>, <|endoftext|>)
+    # after the constrained letter, before the stop token fully fires.
+    # Recover by checking if the response starts with a valid letter.
+    if letter and letter[0] in letter_map:
+        recovered = letter[0]
+        logger.warning(
+            "LLM menu recovered valid letter %r from leaked response %r "
+            "(likely chat template delimiter leak)",
+            recovered,
+            letter,
+        )
+        choice = letter_map[recovered]
+        return _resolve_option_target(choice, resolver_def, options)
+
+    # Model returned empty or invalid response despite grammar
+    default = resolver_def.get("default_transition")
+    if default:
+        logger.warning(
+            "LLM menu got invalid response %r, using default_transition: %s",
+            letter,
+            default,
+        )
+        return default
+
+    # Final safety fallback (should never fire with grammar)
+    logger.warning(
+        "Grammar response %r not in letter_map, using first option as fallback", letter
+    )
     fallback = next(iter(options))
     return _resolve_option_target(fallback, resolver_def, options)
 

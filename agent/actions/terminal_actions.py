@@ -48,9 +48,35 @@ async def action_start_terminal_session(step_input: StepInput) -> StepOutput:
 
     # Parse initial_commands if it's a string (from template rendering)
     if isinstance(initial_commands, str):
-        initial_commands = [
-            cmd.strip() for cmd in initial_commands.split("\n") if cmd.strip()
-        ]
+        text = initial_commands.strip()
+        if not text:
+            initial_commands = []
+        elif text.startswith(("{", "[")):
+            # Looks like JSON — try parsing. The validation planner may
+            # return a JSON object with {"commands": [...]} or a bare array.
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    initial_commands = [str(c).strip() for c in parsed if c]
+                elif isinstance(parsed, dict):
+                    # Extract "commands" key from validation plan JSON
+                    cmds = parsed.get("commands", [])
+                    if isinstance(cmds, list):
+                        initial_commands = [str(c).strip() for c in cmds if c]
+                    else:
+                        initial_commands = []
+                else:
+                    initial_commands = []
+            except (json.JSONDecodeError, ValueError):
+                # Not valid JSON despite starting with { or [ — split on newlines
+                initial_commands = [
+                    cmd.strip() for cmd in text.split("\n") if cmd.strip()
+                ]
+        else:
+            # Plain text — split on newlines (each line is a command)
+            initial_commands = [
+                cmd.strip() for cmd in text.split("\n") if cmd.strip()
+            ]
 
     # Parse env_vars if string
     if isinstance(env_vars, str):
@@ -71,21 +97,6 @@ async def action_start_terminal_session(step_input: StepInput) -> StepOutput:
         try:
             inference_session_id = await effects.start_inference_session(
                 {"ttl_seconds": 300}
-            )
-            # Send initial context prompt so KV cache has the goal
-            initial_prompt = (
-                "You are operating a terminal session to achieve a specific goal.\n\n"
-                f"Goal: {session_goal}\n"
-                f"Working directory: {working_dir}\n"
-            )
-            if session_context:
-                initial_prompt += f"Context: {session_context}\n"
-            initial_prompt += (
-                "\nYou will receive command output after each command you suggest.\n"
-                "Suggest one command at a time. Be precise and targeted."
-            )
-            await effects.session_inference(
-                inference_session_id, initial_prompt, {"temperature": 0.1}
             )
         except Exception:
             # Graceful degradation — fall back to stateless inference
@@ -132,19 +143,18 @@ async def action_send_terminal_command(step_input: StepInput) -> StepOutput:
     """Parse a command from LLM inference response and send to terminal.
 
     Reads inference_response from context (JSON with "command" key),
-    sends to the persistent terminal session, appends result to
-    session_history, and checks turn count against max_turns.
+    sends to the persistent terminal session, and appends result to
+    session_history.
     """
     effects = step_input.effects
     session_id = step_input.context.get("session_id", "")
     session_history = step_input.context.get("session_history", [])
     inference_response = step_input.context.get("inference_response", "")
-    max_turns = int(step_input.params.get("max_turns", 10))
     timeout = int(step_input.params.get("command_timeout", 30))
 
     if not effects or not session_id:
         return StepOutput(
-            result={"command_sent": False, "max_turns_exceeded": False},
+            result={"command_sent": False},
             observations="No effects or session_id",
             context_updates={
                 "session_id": session_id,
@@ -157,24 +167,8 @@ async def action_send_terminal_command(step_input: StepInput) -> StepOutput:
 
     if not command:
         return StepOutput(
-            result={"command_sent": False, "max_turns_exceeded": False},
+            result={"command_sent": False},
             observations=f"Could not parse command from LLM response: {str(inference_response)[:200]}",
-            context_updates={
-                "session_id": session_id,
-                "session_history": session_history,
-            },
-        )
-
-    # Check turn count
-    current_turn = len(session_history)
-    if current_turn >= max_turns:
-        return StepOutput(
-            result={
-                "command_sent": False,
-                "max_turns_exceeded": True,
-                "turn_count": current_turn,
-            },
-            observations=f"Max turns ({max_turns}) exceeded at turn {current_turn}",
             context_updates={
                 "session_id": session_id,
                 "session_history": session_history,
@@ -185,6 +179,7 @@ async def action_send_terminal_command(step_input: StepInput) -> StepOutput:
     # If the model sends the same command as the previous turn and
     # that turn succeeded (rc=0), the model is stuck in a loop.
     # Don't waste a terminal round — signal stuck immediately.
+    current_turn = len(session_history)
     if session_history:
         last_entry = session_history[-1]
         if (
@@ -196,7 +191,6 @@ async def action_send_terminal_command(step_input: StepInput) -> StepOutput:
                 result={
                     "command_sent": False,
                     "stuck_detected": True,
-                    "max_turns_exceeded": False,
                     "turn_count": current_turn,
                     "duplicate_command": command,
                 },
@@ -226,7 +220,6 @@ async def action_send_terminal_command(step_input: StepInput) -> StepOutput:
             "return_code": result.return_code,
             "timed_out": result.timed_out,
             "turn_count": len(updated_history),
-            "max_turns_exceeded": len(updated_history) >= max_turns,
         },
         observations=f"Turn {result.turn}: $ {command} → rc={result.return_code}"
         + (f" (output: {result.output[:200]})" if result.output else ""),
@@ -244,6 +237,11 @@ def _parse_terminal_command(raw: str) -> str:
     or treating the whole response as a command.
     """
     raw = strip_markdown_wrapper(str(raw).strip())
+
+    # Strip chat template delimiters that leak from local models
+    # (e.g. <|im_end|>, <|im_start|>user, <|endoftext|>)
+    raw = re.sub(r"<\|[^|]*\|>", "", raw)
+    raw = raw.strip()
 
     # Try JSON: {"command": "...", "rationale": "..."}
     json_match = re.search(r"\{[\s\S]*\}", raw)

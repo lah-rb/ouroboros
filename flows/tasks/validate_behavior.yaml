@@ -79,8 +79,7 @@ steps:
     input_map:
       session_goal: "Validate the project runs correctly: {{ input.task_description }}"
       working_directory: "{{ input.working_directory }}"
-      initial_commands: "{{ context.validation_plan }}"
-      max_turns: "3"
+      session_context: "{{ context.validation_plan }}"
     resolver:
       type: rule
       rules:

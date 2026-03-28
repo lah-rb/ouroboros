@@ -223,6 +223,38 @@ def render_detail(events: list[dict], trace_path: str) -> str:
                 f"({e.get('wall_ms', 0):.0f}ms, "
                 f"purpose={e.get('purpose', '')})"
             )
+            # Include chain-of-thought content in detail view
+            thinking = e.get("thinking_content", "")
+            if thinking:
+                # Indent and truncate thinking for readability
+                thinking_lines = thinking.strip().splitlines()
+                lines.append("    💭 CoT:")
+                for tl in thinking_lines[:20]:
+                    lines.append(f"      {tl}")
+                if len(thinking_lines) > 20:
+                    lines.append(f"      ... ({len(thinking_lines) - 20} more lines)")
+            # Include full prompt when --trace-prompts was used
+            prompt_content = e.get("prompt_content", "")
+            if prompt_content:
+                prompt_lines = prompt_content.strip().splitlines()
+                lines.append("    📝 Prompt:")
+                for pl in prompt_lines[:30]:
+                    lines.append(f"      {pl}")
+                if len(prompt_lines) > 30:
+                    lines.append(
+                        f"      ... ({len(prompt_lines) - 30} more lines)"
+                    )
+            # Include raw model response when --trace-prompts was used
+            response_content = e.get("response_content", "")
+            if response_content:
+                resp_lines = response_content.strip().splitlines()
+                lines.append("    📤 Response:")
+                for rl in resp_lines[:30]:
+                    lines.append(f"      {rl}")
+                if len(resp_lines) > 30:
+                    lines.append(
+                        f"      ... ({len(resp_lines) - 30} more lines)"
+                    )
 
         elif et == "flow_invoke":
             lines.append(

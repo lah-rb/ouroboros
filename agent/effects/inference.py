@@ -31,7 +31,7 @@ query Completion($request: CompletionRequest!) {
 }
 """
 
-# GraphQL query for health check (includes generation progress)
+# GraphQL query for health check (includes generation progress + diagnostics)
 HEALTH_QUERY = """
 query Health {
     health {
@@ -42,6 +42,9 @@ query Health {
         tokensGenerated
         elapsedSeconds
         secondsSinceLastToken
+        generationPhase
+        promptTokens
+        evalDuration
     }
 }
 """
@@ -69,6 +72,18 @@ query SessionCompletion($request: SessionTurnRequest!) {
         text
         tokensGenerated
         finished
+    }
+}
+"""
+
+# GraphQL query for chain-of-thought content from thinking models
+THINKING_QUERY = """
+query Thinking($requestId: String) {
+    thinking(requestId: $requestId) {
+        requestId
+        content
+        complete
+        active
     }
 }
 """
@@ -146,24 +161,26 @@ class InferenceEffect:
         endpoint: The LLMVP GraphQL endpoint URL.
         model_default_temperature: Default temperature for the model
             (used to resolve relative temperature values like "t*0.5").
-        timeout: HTTP request timeout in seconds.
     """
 
     def __init__(
         self,
         endpoint: str = "http://localhost:8000/graphql",
         model_default_temperature: float = 0.7,
-        timeout: float = 600.0,
     ) -> None:
         self._endpoint = endpoint
         self._model_default_temperature = model_default_temperature
-        self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Lazy-initialize the HTTP client."""
+        """Lazy-initialize the HTTP client.
+
+        No fixed timeout — the health polling watchdog handles
+        stall detection. This prevents killing productive long
+        generations (e.g., 25K token multi-file output).
+        """
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self._timeout)
+            self._client = httpx.AsyncClient(timeout=None)
         return self._client
 
     async def close(self) -> None:
@@ -201,6 +218,45 @@ class InferenceEffect:
             ) from e
         except httpx.HTTPStatusError as e:
             raise InferenceError(f"LLMVP health check HTTP error: {e}") from e
+
+    async def fetch_thinking(self, request_id: str = "") -> str:
+        """Fetch chain-of-thought content from the last inference call.
+
+        Returns the thinking/CoT content captured by the LLMVP generation
+        tracker. Available when the model uses a thinking delimiter.
+
+        Args:
+            request_id: Optional correlation ID. If empty, returns thinking
+                        from the most recent generation.
+
+        Returns:
+            The thinking content string, or empty string if unavailable.
+        """
+        client = await self._get_client()
+        try:
+            variables = {}
+            if request_id:
+                variables["requestId"] = request_id
+
+            response = await client.post(
+                self._endpoint,
+                json={"query": THINKING_QUERY, "variables": variables},
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if "errors" in data:
+                logger.debug("Thinking query errors: %s", data["errors"])
+                return ""
+
+            thinking = data.get("data", {}).get("thinking", {})
+            content = thinking.get("content", "")
+            return content
+
+        except Exception as e:
+            logger.debug("Failed to fetch thinking: %s", e)
+            return ""
 
     async def run_inference(
         self,
@@ -263,7 +319,7 @@ class InferenceEffect:
         """Execute an inference request with health-polling watchdog.
 
         Strategy:
-        1. Fire the request with a long timeout (self._timeout).
+        1. Fire the request with no fixed timeout (httpx timeout=None).
         2. Concurrently run a watchdog that polls LLMVP health every 30s.
         3. If health shows tokens stalled for 60s+ (two consecutive polls
            with no token increase), cancel the request — the model is stuck.
@@ -303,19 +359,25 @@ class InferenceEffect:
             except httpx.ConnectError as e:
                 logger.error("Cannot connect to LLMVP at %s: %s", self._endpoint, e)
                 return InferenceResult(
-                    text="", tokens_generated=0, finished=False,
+                    text="",
+                    tokens_generated=0,
+                    finished=False,
                     error=f"Connection error: {e}",
                 )
             except httpx.TimeoutException as e:
                 logger.error("LLMVP inference timed out: %s", e)
                 return InferenceResult(
-                    text="", tokens_generated=0, finished=False,
+                    text="",
+                    tokens_generated=0,
+                    finished=False,
                     error=f"Timeout: {e}",
                 )
             except httpx.HTTPStatusError as e:
                 logger.error("LLMVP HTTP error: %s", e)
                 return InferenceResult(
-                    text="", tokens_generated=0, finished=False,
+                    text="",
+                    tokens_generated=0,
+                    finished=False,
                     error=f"HTTP error: {e}",
                 )
 
@@ -350,28 +412,68 @@ class InferenceEffect:
                     gen_active = health.get("generationActive", False)
                     tokens = health.get("tokensGenerated", 0)
                     stall_secs = health.get("secondsSinceLastToken")
+                    phase = health.get("generationPhase", "unknown")
+                    prompt_toks = health.get("promptTokens", 0)
+                    elapsed = health.get("elapsedSeconds", 0)
+                    eval_dur = health.get("evalDuration")
 
-                    if gen_active and tokens > 0:
+                    if gen_active:
                         if tokens > last_token_count:
                             # Model is actively generating — reset stall tracking
                             last_token_count = tokens
-                            logger.debug(
-                                "Health watchdog: generation active, %d tokens so far",
+                            logger.info(
+                                "Health watchdog: phase=%s, %d tokens generated, "
+                                "%.0fs elapsed, prompt=%d tok",
+                                phase,
                                 tokens,
+                                elapsed or 0,
+                                prompt_toks,
                             )
+                        elif phase == "eval":
+                            # Still evaluating prompt — log but don't cancel yet
+                            logger.info(
+                                "Health watchdog: still in eval phase, "
+                                "%.0fs elapsed, prompt=%d tok",
+                                elapsed or 0,
+                                prompt_toks,
+                            )
+                            # Cancel if eval takes unreasonably long (>300s)
+                            if elapsed and elapsed > 300:
+                                logger.warning(
+                                    "Health watchdog: eval phase stuck for %.0fs "
+                                    "— cancelling request",
+                                    elapsed,
+                                )
+                                request_task.cancel()
+                                return
                         elif stall_secs is not None and stall_secs > stall_threshold:
                             # Tokens haven't advanced and LLMVP confirms stall
                             logger.warning(
                                 "Health watchdog: generation stalled for %.0fs "
-                                "at %d tokens — cancelling request",
+                                "at %d tokens (phase=%s) — cancelling request",
                                 stall_secs,
                                 tokens,
+                                phase,
+                            )
+                            request_task.cancel()
+                            return
+                        elif (
+                            tokens == 0
+                            and stall_secs is not None
+                            and stall_secs > stall_threshold
+                        ):
+                            # 0 tokens generated and stalled — model never started
+                            logger.warning(
+                                "Health watchdog: 0 tokens after %.0fs "
+                                "(phase=%s) — cancelling request",
+                                elapsed or 0,
+                                phase,
                             )
                             request_task.cancel()
                             return
                     elif not gen_active and last_token_count > 0:
                         # Generation ended — request should complete soon
-                        logger.debug("Health watchdog: generation finished")
+                        logger.info("Health watchdog: generation finished")
                         return
 
                 except Exception as e:

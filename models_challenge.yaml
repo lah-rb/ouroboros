@@ -22,4 +22,4 @@ pre_create:
   - "touch ~/Repos/ouroboros/llmvp/logs/interactions.jsonl && rm ~/Repos/ouroboros/llmvp/logs/interactions.jsonl"
 
 post_create:
-  - "cd ~/Repos/ouroboros && uv run ouroboros.py start --working-dir /tmp/ouroboros-challenge"
+  - "cd ~/Repos/ouroboros && uv run ouroboros.py start --working-dir /tmp/ouroboros-challenge --trace-thinking --trace-prompts"

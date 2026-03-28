@@ -186,14 +186,14 @@ steps:
 
   complete:
     action: noop
-    description: "Diagnosis complete"
+    description: "Diagnosis complete — fix task created, original task unchanged"
     tail_call:
       flow: mission_control
       input_map:
         mission_id: "{{ input.mission_id }}"
         last_task_id: "{{ input.task_id }}"
-        last_status: "success"
-        last_result: "Diagnosed issue in {{ input.target_file_path }}"
+        last_status: "diagnosed"
+        last_result: "Diagnosed issue in {{ input.target_file_path }} — fix task created"
 
   error_file_not_found:
     action: scan_project

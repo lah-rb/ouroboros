@@ -113,6 +113,32 @@ async def action_update_task_status(step_input: StepInput) -> StepOutput:
     # Apply last result to task
     task_completed = False
     frustration_was_elevated = False
+    quality_gate_exhausted = False
+
+    # Handle quality gate failure status — not tied to a specific task
+    if last_status == "quality_failed":
+        # Count how many consecutive quality failures have occurred
+        # by checking recent attempt records across all tasks
+        gate_fail_count = getattr(mission, "_gate_fail_count", 0) + 1
+        mission._gate_fail_count = gate_fail_count
+
+        # Check if there are any actionable tasks remaining
+        actionable = [
+            t
+            for t in mission.plan
+            if t.status in ("pending", "failed") and t.frustration < 5
+        ]
+
+        if not actionable and gate_fail_count >= 2:
+            # No tasks to work on and gate has failed multiple times — exhausted
+            quality_gate_exhausted = True
+            logger.info(
+                "Quality gate exhausted: %d consecutive failures, 0 actionable tasks",
+                gate_fail_count,
+            )
+    else:
+        # Reset gate fail counter on any non-quality-failed status
+        mission._gate_fail_count = 0
 
     if last_task_id:
         from agent.persistence.models import AttemptRecord
@@ -156,9 +182,11 @@ async def action_update_task_status(step_input: StepInput) -> StepOutput:
             "task_completed": task_completed,
             "events_pending": False,
             "frustration_reset": frustration_was_elevated and task_completed,
+            "quality_gate_exhausted": quality_gate_exhausted,
         },
         observations=f"Updated task {last_task_id[:8] if last_task_id else 'none'}: "
-        f"status={last_status}, completed={task_completed}",
+        f"status={last_status}, completed={task_completed}"
+        + (", QUALITY GATE EXHAUSTED" if quality_gate_exhausted else ""),
         context_updates={"mission": mission, "frustration": frustration},
     )
 
@@ -341,10 +369,9 @@ async def action_select_target_file(step_input: StepInput) -> StepOutput:
     mission = step_input.context.get("mission")
     session_id = step_input.context.get("session_id", "")
     selected_task = step_input.context.get("selected_task")
-    dispatch_flow = (
-        step_input.params.get("dispatch_flow", "")
-        or step_input.context.get("dispatch_flow", "")
-    )
+    dispatch_flow = step_input.params.get(
+        "dispatch_flow", ""
+    ) or step_input.context.get("dispatch_flow", "")
 
     if not mission or not effects or not selected_task:
         return StepOutput(
@@ -462,7 +489,9 @@ async def action_select_target_file(step_input: StepInput) -> StepOutput:
     n_files = min(len(file_list), 19)
     if needs_existing_file and n_files > 0:
         create_letter = chr(ord("a") + n_files)
-        lines.append(f"{create_letter}) [CREATE NEW FILE] The file I need doesn't exist yet")
+        lines.append(
+            f"{create_letter}) [CREATE NEW FILE] The file I need doesn't exist yet"
+        )
         n_options = n_files + 1
     else:
         create_letter = None
@@ -567,9 +596,8 @@ def _build_dispatch_config(
         relevant_interfaces = [
             f"  {i.caller} → {i.callee}: {i.symbol}({i.signature})"
             for i in arch.interfaces
-            if target_file_path and (
-                i.caller == target_file_path or i.callee == target_file_path
-            )
+            if target_file_path
+            and (i.caller == target_file_path or i.callee == target_file_path)
         ]
         if relevant_interfaces:
             arch_summary += "\nInterfaces:\n" + "\n".join(relevant_interfaces)
@@ -578,12 +606,14 @@ def _build_dispatch_config(
         relevant_shapes = [
             f"  {ds.file} → {ds.consumed_by}: {ds.structure}"
             for ds in arch.data_shapes
-            if target_file_path and (
-                ds.file == target_file_path or ds.consumed_by == target_file_path
-            )
+            if target_file_path
+            and (ds.file == target_file_path or ds.consumed_by == target_file_path)
         ]
         if relevant_shapes:
-            arch_summary += "\nData shapes (CRITICAL — match this format exactly):\n" + "\n".join(relevant_shapes)
+            arch_summary += (
+                "\nData shapes (CRITICAL — match this format exactly):\n"
+                + "\n".join(relevant_shapes)
+            )
 
         if relevant_notes:
             relevant_notes = f"[architecture] {arch_summary}\n{relevant_notes}"
@@ -794,13 +824,7 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
 
     data_shapes = []
     for ds in data.get("data_shapes", []):
-        data_shapes.append(
-            DataShapeContract(
-                file=ds.get("file", ""),
-                consumed_by=ds.get("consumed_by", ""),
-                structure=ds.get("structure", ""),
-            )
-        )
+        data_shapes.append(DataShapeContract.from_llm_dict(ds))
 
     arch = ArchitectureState(
         import_scheme=execution.get("import_scheme", "flat"),
@@ -826,8 +850,7 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
     )
     if arch.data_shapes:
         shape_lines = [
-            f"  {ds.file} → {ds.consumed_by}: {ds.structure}"
-            for ds in arch.data_shapes
+            f"  {ds.file} → {ds.consumed_by}: {ds.structure}" for ds in arch.data_shapes
         ]
         arch_summary += "\nData shapes:\n" + "\n".join(shape_lines)
 

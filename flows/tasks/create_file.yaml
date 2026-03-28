@@ -1,12 +1,10 @@
 flow: create_file
-version: 2
+version: 4
 description: >
-  Create one or more source files. Gathers project context, generates
-  file content via inference, writes to disk, validates, and reports
-  results. No correction loop — if validation finds issues, they are
-  reported back to mission_control for the director to decide next steps.
-  The prompt encourages the model to create ALL files needed for the task,
-  not just a single file.
+  Create a single source file. First checks that the target file does NOT
+  already exist — if it does, rejects with a message directing mission_control
+  to use modify_file instead. Otherwise gathers project context, generates
+  file content via inference, writes to disk, validates, and reports results.
 
 input:
   required:
@@ -25,6 +23,35 @@ defaults:
     temperature: "t*0.6"
 
 steps:
+
+  # ── Phase 0: Guard — reject if file already exists ────────
+  #    create_file must never overwrite an existing file. If the
+  #    target already exists on disk, bounce back to mission_control
+  #    so the director can dispatch modify_file instead.
+
+  check_target_exists:
+    action: read_files
+    description: "Check whether the target file already exists on disk"
+    params:
+      target: "{{ input.target_file_path }}"
+    resolver:
+      type: rule
+      rules:
+        - condition: "result.file_found == true"
+          transition: reject_existing
+        - condition: "true"
+          transition: gather_context
+
+  reject_existing:
+    action: noop
+    description: "Target file already exists — cannot create, use modify_file"
+    tail_call:
+      flow: mission_control
+      input_map:
+        mission_id: "{{ input.mission_id }}"
+        last_task_id: "{{ input.task_id }}"
+        last_status: "failed"
+        last_result: "Cannot create {{ input.target_file_path }} — file already exists. Use modify_file to edit existing files."
 
   # ── Phase 1: Context gathering ──────────────────────────────
 
@@ -54,7 +81,9 @@ steps:
       {{ input.task_description }}
 
       {% if input.target_file_path %}
-      Primary target file: {{ input.target_file_path }}
+      TARGET FILE: {{ input.target_file_path }}
+      You MUST create exactly this file. Do NOT recreate or rewrite any other
+      existing project files — only produce {{ input.target_file_path }}.
       {% endif %}
 
       {% if input.reason %}
@@ -83,45 +112,30 @@ steps:
       {% endif %}
 
       {% if context.context_bundle and context.context_bundle.files %}
-      ## Existing Files
+      ## Existing Files (READ-ONLY REFERENCE — do NOT regenerate these)
       {% for file in context.context_bundle.files %}
-      === {{ file.path }} ===
+      ──── {{ file.path }} ────
       {{ file.content[:1500] }}
       {% endfor %}
       {% endif %}
 
-      Produce the complete content for each file needed. You may create
-      MULTIPLE files if the task requires it — do not limit yourself to
-      a single file. Create every file needed to complete this task well.
+      Produce the file content using this exact format:
 
-      Use this exact format for each file:
-
-      === FILE: path/to/file.py ===
-      ```python
+      === FILE: {{ input.target_file_path or 'path/to/file.py' }} ===
+      ```
       # complete file content here
       ```
 
-      For multiple files, repeat the pattern:
-
-      === FILE: path/to/first.py ===
-      ```python
-      # first file
-      ```
-
-      === FILE: path/to/second.py ===
-      ```python
-      # second file
-      ```
-
       RULES:
-      - Every file block MUST have a === FILE: path === header.
-      - Each block contains the COMPLETE file content — no partial snippets.
-      - NOTHING before the first file block or after the last.
+      - The file block MUST have a === FILE: path === header.
+      - The block contains the COMPLETE file content — no partial snippets.
+      - NOTHING before the file block or after it.
       - Include docstrings, type annotations, and clear structure.
       - Match import conventions from existing project files.
-      - Create ALL files needed for this task, not just one.
+      - Do NOT regenerate files that already exist in the project.
+      - Produce ONE file block for the target file, then STOP.
     config:
-      temperature: 0.3
+      temperature: "t*0.75"
     resolver:
       type: rule
       rules:
@@ -212,7 +226,7 @@ steps:
         last_status: "failed"
         last_result: "Failed to create {{ input.target_file_path or 'files' }}"
 
-entry: gather_context
+entry: check_target_exists
 
 overflow:
   strategy: split

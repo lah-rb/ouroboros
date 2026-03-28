@@ -283,9 +283,24 @@ When stuck, **stop and say so.** Write clear observations about what you tried, 
 - **Separation of concerns** — One responsibility per module/class/function. Effects (I/O, network, filesystem) behind interfaces.
 - **Small, focused changes** — Prefer small testable modifications over large rewrites. Each change should be independently verifiable.
 - **Explicit over implicit** — Name things clearly. Declare configuration. List dependencies.
-- **Test after every change** — If a flow step modifies code, the next step should verify it. Never assume a change works because it looks right.
 - **Type safety** — Type annotations on all function signatures. Pydantic models at data boundaries. Annotate `None` explicitly.
 - **Error handling** — Never swallow exceptions silently. Failures must be visible — result types, documented exceptions, or contextual logging.
+
+---
+
+## Development Rhythm
+
+Build incrementally and verify frequently. The most expensive bug is one discovered after building five more files on top of a broken foundation.
+
+**After creating the first 2-3 source files**, dispatch `validate_behavior` to run the project and confirm the foundation is sound. An import error caught now saves three cycles of debugging later.
+
+**After modifying a file to fix a bug**, run the project to verify the fix actually works. Don't assume the change is correct because it looks right — run it.
+
+**If you have never run the project and more than half the planned files exist**, you are overdue for a live test. Stop creating files and validate what you have.
+
+**When diagnosing an issue**, consider running the project in `run_in_terminal` to see the actual error output. Reading code and guessing is slower than running code and seeing.
+
+The terminal is your most direct feedback mechanism. A developer who never runs their code is flying blind. Use `validate_behavior` and `run_in_terminal` aggressively — they are cheap compared to the cycles wasted on hypothetical debugging.
 
 ---
 

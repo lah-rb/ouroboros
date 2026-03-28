@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def _now_iso() -> str:
@@ -112,9 +112,44 @@ class DataShapeContract(BaseModel):
     loads it agree on structure. Prevents dict-vs-list mismatches.
     """
 
-    file: str  # the data file path (e.g., "world_data.yaml")
-    consumed_by: str  # the code file that reads it (e.g., "loader.py")
-    structure: str  # compact shape description (e.g., "rooms: list of {id, name, ...}")
+    file: str = ""  # the data file path (e.g., "world_data.yaml")
+    consumed_by: str = ""  # the code file that reads it (e.g., "loader.py")
+    structure: str = ""  # compact shape description (e.g., "rooms: list of {id, name, ...}")
+
+    @field_validator("file", "consumed_by", "structure", mode="before")
+    @classmethod
+    def _coerce_to_str(cls, v: Any) -> str:
+        """Coerce non-string values to strings.
+
+        The architecture LLM sometimes returns lists, dicts, or nested
+        structures for fields that should be simple strings.
+        """
+        if v is None:
+            return ""
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v) if v else ""
+        if isinstance(v, dict):
+            import json as _json
+
+            try:
+                return _json.dumps(v, default=str)
+            except Exception:
+                return str(v)
+        return str(v)
+
+    @classmethod
+    def from_llm_dict(cls, d: dict) -> "DataShapeContract":
+        """Construct from raw LLM output dict, handling common variations.
+
+        Handles ``produced_by`` as alias for ``consumed_by``, and
+        pre-serializes ``structure`` if it comes back as a dict.
+        """
+        consumed = d.get("consumed_by") or d.get("produced_by", "")
+        return cls(
+            file=d.get("file", ""),
+            consumed_by=consumed,
+            structure=d.get("structure", ""),
+        )
 
 
 class ModuleSpec(BaseModel):
