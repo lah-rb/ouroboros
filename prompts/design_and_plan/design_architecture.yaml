@@ -1,0 +1,116 @@
+# Prompt template: design_and_plan/design_architecture
+#
+# Designs or reconciles project architecture.
+# Mode 1 (initial): No existing architecture — design from scratch.
+# Mode 2 (reconcile): Existing architecture — compare with reality, update.
+#
+# Pre-computed context keys:
+#   project_file_list — formatted project manifest
+#   existing_architecture — formatted current architecture (empty if mode 1)
+
+id: design_and_plan/design_architecture
+description: "Design or reconcile project architecture"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a software architect module in an automated coding pipeline.
+      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
+      object — no markdown, no explanation, no surrounding text.
+
+  - id: objective
+    content: |
+      ## Mission Objective
+      {context.mission_objective}
+
+  - id: existing_architecture
+    when: context.existing_architecture
+    content: |
+      ## Current Architecture (may need revision)
+      {context.existing_architecture}
+
+      Compare this blueprint against the actual files below. Identify any
+      drift — files that don't match the blueprint, interfaces that have
+      diverged, data shapes that don't agree. Produce an UPDATED architecture
+      that reconciles the blueprint with reality.
+
+  - id: repo_map
+    when: context.repo_map_formatted
+    content: |
+      ## Existing Code Structure (AST-based)
+      {context.repo_map_formatted}
+
+  - id: existing_files
+    when: context.project_file_list
+    content: |
+      ## Existing Files
+      {context.project_file_list}
+
+  - id: instructions
+    content: |
+      ## Design a Project Architecture
+
+      Produce a SINGLE authoritative blueprint that defines:
+
+      1. **Execution Convention**: How to run the project. Specify:
+         - The command to run the application (e.g., `python main.py`)
+         - The import scheme: flat (`from models import X`), package
+           (`from src.models import X`), or relative (`from .models import X`)
+         - Whether `__init__.py` files are needed
+         - The assumed working directory
+         This is CRITICAL — every file created after this follows these conventions.
+
+      2. **Directory Layout**: Flat or nested? Which directories and why?
+         If files already exist, the layout MUST be compatible with them.
+
+      3. **Module Responsibilities**: For each file, specify what it defines,
+         what it imports from other project modules, and its public API.
+
+      4. **Interface Contracts**: For each cross-module dependency,
+         specify caller, callee, symbol name, and expected signature.
+
+      5. **Data Shapes**: For data files (YAML, JSON, config) and the code that
+         reads them, specify the expected structure. This ensures the file that
+         writes/defines the data and the file that reads/loads it agree on format.
+         Getting this wrong causes runtime crashes. Be explicit.
+
+      6. **Creation Order**: Dependency-sorted. Files with no project imports
+         come first. Entry points come last.
+
+  - id: output_format
+    content: |
+      Return ONLY a raw JSON object:
+      {
+        "execution": {
+          "run_command": "python main.py",
+          "import_scheme": "flat",
+          "init_files": false,
+          "working_directory": "project root"
+        },
+        "modules": [
+          {
+            "file": "models.py",
+            "responsibility": "Data classes for rooms, items, NPCs",
+            "defines": ["Room", "Item", "NPC"],
+            "imports_from": {}
+          }
+        ],
+        "interfaces": [
+          {
+            "caller": "engine.py",
+            "callee": "parser.py",
+            "symbol": "parse_command",
+            "signature": "parse_command(raw: str) -> Command"
+          }
+        ],
+        "data_shapes": [
+          {
+            "file": "world_data.yaml",
+            "consumed_by": "loader.py",
+            "structure": "rooms: list of {id: str, name: str, ...}"
+          }
+        ],
+        "creation_order": ["models.py", "parser.py", "engine.py", "main.py"],
+        "notes": "Brief notes on design rationale"
+      }

@@ -1,0 +1,73 @@
+# Prompt template: retrospective/execute
+#
+# Analyze frustration recovery — what worked after struggling.
+# Pre-computed: file_listing (from format_file_listing)
+
+id: retrospective/execute
+description: "Analyze frustration recovery — what worked after struggling"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a retrospective analysis module in an automated pipeline.
+      Your output is stored as a mission note for future reference.
+      Do NOT add headers or bullet points — write plain prose.
+
+  - id: trigger
+    when: input.trigger_reason
+    content: |
+      Trigger: {input.trigger_reason}
+
+  - id: task_context
+    when: input.task_description
+    content: |
+      Task: {input.task_description}
+
+  - id: objective
+    when: input.mission_objective
+    content: |
+      Mission: {input.mission_objective}
+
+  - id: notes
+    when: input.relevant_notes
+    content: |
+      Relevant notes:
+      {input.relevant_notes}
+
+  - id: reason
+    when: input.reason
+    content: |
+      Context:
+      {input.reason}
+
+  - id: codebase
+    when: context.repo_map_formatted
+    content: |
+      Repository structure:
+      {context.repo_map_formatted}
+
+  - id: files
+    when: context.file_listing
+    content: |
+      Files in context:
+      {context.file_listing}
+
+  - id: output_format
+    content: |
+      Write a concise retrospective in 3-5 sentences of plain prose covering:
+      what the core difficulty was, what failed, what ultimately worked,
+      and what to do differently next time.
+
+      ✅ CORRECT — plain prose, specific:
+      The parser kept failing on nested brackets because the regex was greedy. Two attempts to fix the regex directly failed. What worked was switching to a state-machine approach with explicit depth tracking. Next time, skip regex for nested structures and go straight to a parser.
+
+      ❌ WRONG — generic advice with formatting:
+      ## Retrospective
+      1. The task was difficult
+      2. Multiple approaches were tried
+      3. Eventually it was resolved
+      ### Recommendations
+      - Try harder next time
+
+      Write plain prose only.

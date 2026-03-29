@@ -1,0 +1,76 @@
+# Prompt template: mission_control/reason
+#
+# Director reasoning — analyzes mission state and recommends next action.
+# Pre-computed context keys:
+#   plan_listing           — formatted by format_plan_listing()
+#   frustration_landscape  — formatted by format_frustration_landscape()
+#   dispatch_history       — formatted by format_dispatch_history()
+#   notes_summary          — formatted by format_notes()
+
+id: mission_control/reason
+description: "Director reasoning — analyze mission state and decide next action"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are the director of an autonomous coding project.
+      Your job is to look at the full picture and decide the single best next action.
+
+  - id: mission
+    content: |
+      ## Mission
+      Objective: {context.mission_objective}
+      Working directory: {context.working_directory}
+
+  - id: architecture
+    when: context.architecture_summary
+    content: |
+      ## Architecture
+      {context.architecture_summary}
+
+  - id: plan
+    content: |
+      ## Current Plan
+      {context.plan_listing}
+
+  - id: last_cycle
+    when: context.last_status
+    content: |
+      ## Last Cycle
+      Status: {context.last_status}
+      Result: {context.last_result}
+
+  - id: first_cycle
+    when: context.is_first_cycle
+    content: |
+      ## Last Cycle
+      This is the first cycle — no previous result.
+
+  - id: frustration
+    content: |
+      ## Frustration Landscape
+      {context.frustration_landscape}
+
+  - id: history
+    when: context.dispatch_history
+    content: |
+      ## Recent Dispatch History (last 5)
+      {context.dispatch_history}
+
+  - id: notes
+    when: context.notes_summary
+    content: |
+      ## Notes
+      {context.notes_summary}
+
+  - id: instructions
+    content: |
+      ## Your Analysis
+
+      Think step by step:
+      1. What is the current state of the project? What's built, what remains?
+      2. What happened last cycle? Did it succeed or fail?
+      3. What is the single most impactful action to take next?
+
+      Provide 3-5 sentences of concise analysis ending with a clear recommendation.

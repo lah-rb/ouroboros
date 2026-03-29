@@ -1,0 +1,119 @@
+rooms:
+  - id: start
+    name: "Forest Clearing"
+    description: "You stand in a peaceful forest clearing. Sunlight filters through the canopy above, illuminating a small path leading north. The air smells of pine and earth."
+    connections:
+      north: "forest_path"
+    items:
+      - "stick"
+    npcs:
+      - "guardian"
+
+  - id: forest_path
+    name: "Dense Forest Path"
+    description: "The path winds through thick undergrowth. Ancient trees tower on either side, their branches forming a natural archway. A faint glimmer catches your eye in the distance."
+    connections:
+      south: "start"
+      north: "ancient_ruins"
+      east: "river_bank"
+    items:
+      - "map"
+
+  - id: ancient_ruins
+    name: "Ancient Ruins"
+    description: "Crumbled stone walls rise around you, hinting at a forgotten civilization. Moss covers the weathered bricks, and strange symbols are carved into the remaining structures."
+    connections:
+      south: "forest_path"
+      east: "hidden_cave"
+    items:
+      - "ancient_key"
+
+  - id: hidden_cave
+    name: "Hidden Cave"
+    description: "A narrow cave entrance opens into a chamber filled with glittering crystals. The air is cool and damp, and the walls shimmer with bioluminescent light."
+    connections:
+      west: "ancient_ruins"
+    items:
+      - "crystal"
+
+  - id: river_bank
+    name: "River Bank"
+    description: "A wide river flows swiftly past, its waters crystal clear. Smooth stones line the bank, and a small wooden boat is tied to a nearby post."
+    connections:
+      west: "forest_path"
+      north: "village_outskirts"
+    items:
+      - "rope"
+
+  - id: village_outskirts
+    name: "Village Outskirts"
+    description: "The outskirts of a small village come into view. Smoke curls from chimneys, and you hear the distant sound of hammering. A wooden signpost points toward the village center."
+    connections:
+      south: "river_bank"
+    items:
+      - "bread"
+
+items:
+  - id: stick
+    name: "Old Stick"
+    description: "A gnarled piece of wood, roughly the length of your forearm. It has some interesting whorls and knots."
+    can_take: true
+
+  - id: map
+    name: "Weathered Map"
+    description: "A parchment map with faded ink showing a forest with several marked locations. One area is circled in red ink."
+    can_take: true
+
+  - id: ancient_key
+    name: "Ancient Key"
+    description: "A heavy bronze key covered in green patina. Intricate symbols are etched along its length."
+    can_take: true
+
+  - id: crystal
+    name: "Glowing Crystal"
+    description: "A palm-sized crystal that emits a soft blue light. It feels warm to the touch and hums faintly."
+    can_take: true
+
+  - id: rope
+    name: "Coiled Rope"
+    description: "A sturdy length of hemp rope, coiled neatly. It looks strong enough to support your weight."
+    can_take: true
+
+  - id: bread
+    name: "Fresh Bread"
+    description: "A warm loaf of rustic bread wrapped in cloth. It smells delicious and still has a crispy crust."
+    can_take: true
+
+npcs:
+  - id: guardian
+    name: "Forest Guardian"
+    description: "An elderly woman with silver hair and kind eyes, dressed in simple robes woven from forest fibers."
+    room_id: "start"
+    dialogue_tree:
+      intro:
+        text: "Greetings, traveler. I haven't seen many visitors out here."
+        responses:
+          - text: "What is this place?"
+            next_state: "explains"
+          - text: "Have you seen anything unusual?"
+            next_state: "mysterious"
+      explains:
+        text: "This is the Whispering Woods. We've lived in peace for generations, but recently strange things have been happening."
+        responses:
+          - text: "What kind of strange things?"
+            next_state: "concerned"
+      mysterious:
+        text: "I've seen lights in the forest at night, and heard voices where no one should be."
+        responses:
+          - text: "Should we be worried?"
+            next_state: "reassuring"
+      concerned:
+        text: "The ancient ruins to the north have been... changing. The stones seem to shift when no one is looking."
+        responses:
+          - text: "I might investigate the ruins."
+            next_state: "warning"
+      reassuring:
+        text: "For now, stay on the main paths and avoid the deep forest after dark."
+        responses:
+          - text: "Thank you for your advice."
+            next_state: "friendly

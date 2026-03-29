@@ -1,0 +1,46 @@
+# Prompt template: quality_gate/plan_checks
+#
+# Emit a JSON array of validation commands to run, based on project structure.
+# Pre-computed: project_listing (formatted file tree from project_manifest)
+
+id: quality_gate/plan_checks
+description: "Plan validation checks based on project structure"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a validation planning module in an automated pipeline.
+      Your output will be parsed as JSON and each check will be executed.
+      Do NOT include commentary or explanation.
+
+  - id: project
+    content: |
+      Working directory: {input.working_directory}
+
+      Project files:
+      {context.project_listing}
+
+  - id: output_format
+    content: |
+      Return a JSON array of validation checks to run.
+      Each check has: command, description, category.
+      Maximum 8 checks. Prioritize syntax checks over style checks.
+      Only include checks for tools configured in the project.
+
+      ✅ CORRECT:
+      ```json
+      [
+        {"command": "python -m py_compile main.py", "description": "Syntax check main.py", "category": "syntax"},
+        {"command": "python -m pytest --tb=short", "description": "Run test suite", "category": "test"}
+      ]
+      ```
+
+      ❌ WRONG — do not add explanation before or after:
+      Based on the project structure, here are the checks:
+      ```json
+      [{"command": "python -m py_compile main.py", "description": "...", "category": "syntax"}]
+      ```
+      These checks cover the main validation needs.
+
+      Return ONLY the JSON.

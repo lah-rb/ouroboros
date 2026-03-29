@@ -460,4 +460,21 @@ def build_action_registry() -> ActionRegistry:
     registry.register("finalize_edit_session", action_finalize_edit_session)
     registry.register("close_edit_session", action_close_edit_session)
 
+    # ── CUE Migration: New Actions ─────────────────────────────────
+    from agent.actions.pipeline_actions import (
+        action_lookup_validation_env,
+        action_run_validation_checks_from_env,
+        action_persist_validation_env,
+        action_check_retry_budget,
+        action_git_log_summary,
+        action_log_validation_notes,
+    )
+
+    registry.register("lookup_validation_env", action_lookup_validation_env)
+    registry.register("run_validation_checks_from_env", action_run_validation_checks_from_env)
+    registry.register("persist_validation_env", action_persist_validation_env)
+    registry.register("check_retry_budget", action_check_retry_budget)
+    registry.register("git_log_summary", action_git_log_summary)
+    registry.register("log_validation_notes", action_log_validation_notes)
+
     return registry

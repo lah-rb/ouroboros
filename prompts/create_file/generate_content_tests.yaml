@@ -1,0 +1,77 @@
+# Prompt template: create_file/generate_content_tests
+#
+# Test-specific variant of create_file's generation prompt.
+# Used when prompt_variant == "test_generation".
+# Includes test-writing instructions (test constructors, edge cases, etc.)
+# and higher context budget for source file visibility.
+
+id: create_file/generate_content_tests
+description: "Generate test file content with test-specific quality instructions"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a test generation module in an automated pipeline.
+      Your output will be parsed for file blocks and written to disk.
+      Do NOT include any text outside the file blocks — no explanation, no commentary.
+
+  - id: task
+    content: |
+      ## Task
+      {input.task_description}
+
+  - id: target_file
+    when: input.target_file_path
+    content: |
+      TARGET TEST FILE: {input.target_file_path}
+      You MUST produce exactly ONE test file. Do NOT create or rewrite any
+      other files — only the test file above.
+
+  - id: reason
+    when: input.reason
+    content: |
+      ## Reason
+      {input.reason}
+
+  - id: objective
+    content: |
+      Project objective: {input.mission_objective}
+
+  - id: architecture
+    when: input.relevant_notes
+    content: |
+      ## Architecture & Notes
+      {input.relevant_notes}
+
+  - id: repo_map
+    when: context.repo_map_formatted
+    content: |
+      ## Project Structure (AST-based)
+      {context.repo_map_formatted}
+
+  - id: source_files
+    when: context.file_excerpts
+    content: |
+      ## Source Files (READ-ONLY REFERENCE — do NOT regenerate these)
+      {context.file_excerpts}
+
+  - id: output_format
+    content: |
+      Produce ONE test file using this exact format:
+
+      === FILE: {input.target_file_path} ===
+      ```
+      # complete test file content
+      ```
+
+  - id: rules
+    content: |
+      RULES:
+      - ONE file block only — a single test file for the target module.
+      - The file block MUST have a === FILE: path === header.
+      - Import the module under test and test its public API.
+      - Test constructors, methods, edge cases, and error handling.
+      - Use descriptive test names.
+      - NOTHING before the file block or after it.
+      - Produce the test file, then STOP.

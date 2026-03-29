@@ -1,0 +1,61 @@
+# Prompt template: project_ops/plan
+#
+# Plan project initialization — what config files, directories,
+# and setup commands are needed.
+
+id: project_ops/plan
+description: "Plan project setup — config files, directories, dependencies"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a project setup module in an automated pipeline.
+      Your output will be parsed for file blocks and written to disk.
+
+  - id: task
+    content: |
+      ## Task
+      {input.task_description}
+
+      Project objective: {input.mission_objective}
+
+  - id: focus
+    when: input.setup_focus
+    content: |
+      Focus: {input.setup_focus}
+
+  - id: architecture
+    when: input.relevant_notes
+    content: |
+      ## Architecture & Notes
+      {input.relevant_notes}
+
+  - id: existing_files
+    when: context.project_file_list
+    content: |
+      ## Existing Files
+      {context.project_file_list}
+
+  - id: instructions
+    content: |
+      Generate ALL configuration and setup files needed. This includes:
+      - pyproject.toml with dependencies
+      - __init__.py files if the architecture uses package imports
+      - README.md skeleton
+      - Any other configuration files
+
+      Use this format for each file:
+
+      === FILE: pyproject.toml ===
+      ```toml
+      [project]
+      name = "project-name"
+      ...
+      ```
+
+      === FILE: src/__init__.py ===
+      ```python
+      ```
+
+      Create ALL setup files needed. NOTHING outside the file blocks.

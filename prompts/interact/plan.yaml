@@ -1,0 +1,65 @@
+# Prompt template: interact/plan
+#
+# Plan how to interact with the product based on the task description.
+# Output: JSON with commands, expected behavior, and observation goals.
+
+id: interact/plan
+description: "Plan how to interact with and test the product"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a product interaction module. Your job is to USE the software
+      like a real user would, observe its behavior, and report what you find.
+      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON object.
+
+  - id: task
+    content: |
+      ## What to do
+      {input.task_description}
+
+  - id: objective
+    when: input.mission_objective
+    content: |
+      Project objective: {input.mission_objective}
+
+  - id: project_context
+    when: context.project_file_list
+    content: |
+      ## Project files
+      {context.project_file_list}
+
+  - id: repo_map
+    when: context.repo_map_formatted
+    content: |
+      ## Project structure
+      {context.repo_map_formatted}
+
+  - id: notes
+    when: input.relevant_notes
+    content: |
+      ## Notes
+      {input.relevant_notes}
+
+  - id: output_format
+    content: |
+      Plan the interaction session. Determine:
+      1. How to start the application
+      2. What inputs/commands to send
+      3. What behavior to observe
+      4. What constitutes success vs failure
+
+      Return ONLY a raw JSON object:
+      {
+        "session_goal": "Brief description of what to test",
+        "commands": ["echo 'go north' | python main.py", "curl localhost:8080/api/search"],
+        "expected_behavior": "What should happen if things are working correctly",
+        "observation_focus": "What specific things to look for"
+      }
+
+      Rules:
+      - Commands must terminate on their own (pipe input, use timeout, use --help)
+      - Do NOT suggest interactive commands that wait forever for user input
+      - Focus on the specific task, not general validation
+      - Return ONLY the raw JSON object

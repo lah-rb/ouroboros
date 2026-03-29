@@ -144,9 +144,12 @@ async def resolve_llm_menu(
 ) -> str:
     """Resolve transition by asking the LLM to choose from a menu of options.
 
-    Uses GBNF grammar-based constrained decoding to guarantee valid output.
-    The model can only produce a single valid letter key — no parsing,
-    no retries, no fallback needed.
+    Uses GBNF grammar-based constrained decoding to produce a valid letter.
+    If the model returns an invalid response (e.g. delimiter leak, empty
+    string), retries up to 3 times before falling through to the
+    default_transition. This mirrors how a terminal program gives a user
+    multiple attempts (like sudo password entry) rather than failing on
+    the first bad input.
 
     The resolver prompt supports Jinja2 template syntax. Templates are
     rendered against {context, input, meta} so the prompt can include
@@ -223,100 +226,111 @@ async def resolve_llm_menu(
     tokens_in = count_tokens(prompt)
     infer_start = time.monotonic()
 
-    # Session-aware: if an inference session is in context, route through
-    # the memoryful session to avoid deadlocking when the session has
-    # already pinned the only available pool instance.
-    # IMPORTANT: prefer inference_session_id over session_id — flows like
-    # run_in_terminal publish BOTH a terminal session_id (for shell commands)
-    # and an inference_session_id (for LLM calls).
+    # Session-aware: prefer inference_session_id over session_id to avoid
+    # deadlocking when a terminal session has pinned the only pool instance.
     session_id = (
         context.get("inference_session_id")
         or context.get("edit_session_id")
         or context.get("session_id")
     )
-    if session_id and hasattr(effects, "session_inference"):
-        logger.debug(
-            "LLM menu using memoryful session %s",
-            session_id,
-        )
-        result = await effects.session_inference(session_id, prompt, config)
-    else:
-        result = await effects.run_inference(prompt, config)
 
-    if _can_trace:
-        # Capture prompt/response when --trace-prompts is set
-        _prompt_content = ""
-        _response_content = ""
-        if hasattr(effects, "trace_prompts") and effects.trace_prompts:
-            _prompt_content = prompt
-            _response_content = result.text or ""
-
-        await effects.emit_trace(
-            InferenceCall(
-                mission_id=_t_mission,
-                cycle=_t_cycle,
-                flow=_t_flow,
-                step=_t_step,
-                tokens_in=tokens_in,
-                tokens_out=count_tokens(result.text) if result.text else 0,
-                wall_ms=(time.monotonic() - infer_start) * 1000,
-                temperature=0.1,
-                max_tokens=5,
-                purpose="llm_menu_resolve",
-                prompt_content=_prompt_content,
-                response_content=_response_content,
-            )
-        )
-
-    if result.error:
-        # Check for default_transition before raising
-        default = resolver_def.get("default_transition")
-        if default:
+    # ── Attempt loop: retry on invalid responses ──────────────────
+    # Like entering a password — the model gets multiple chances to
+    # produce a valid letter before we give up. This replaces the
+    # brittle prefix-match bandaid and avoids killing sessions on
+    # transient grammar/delimiter issues.
+    max_attempts = 3
+    letter = ""
+    for attempt in range(max_attempts):
+        if attempt > 0:
+            # Re-prompt on retry — the session already has context
             logger.warning(
-                "LLM menu inference failed (%s), using default_transition: %s",
-                result.error,
-                default,
+                "LLM menu attempt %d/%d (previous response was %r)",
+                attempt + 1,
+                max_attempts,
+                letter,
             )
-            return default
-        raise LLMMenuResolverError(f"Inference failed: {result.error}")
+            infer_start = time.monotonic()
 
-    # Grammar constraint guarantees a valid letter
-    letter = result.text.strip().lower() if result.text else ""
-    if letter in letter_map:
-        choice = letter_map[letter]
-        logger.debug("LLM menu resolved: %r (letter %r)", choice, letter)
-        return _resolve_option_target(choice, resolver_def, options)
+        if session_id and hasattr(effects, "session_inference"):
+            result = await effects.session_inference(session_id, prompt, config)
+        else:
+            result = await effects.run_inference(prompt, config)
 
-    # Bandaid: chat template delimiter leak (e.g. "b<|" instead of "b").
-    # Some models emit the start of their EOS token (<|im_end|>, <|endoftext|>)
-    # after the constrained letter, before the stop token fully fires.
-    # Recover by checking if the response starts with a valid letter.
-    if letter and letter[0] in letter_map:
-        recovered = letter[0]
+        if _can_trace:
+            _prompt_content = ""
+            _response_content = ""
+            if hasattr(effects, "trace_prompts") and effects.trace_prompts:
+                _prompt_content = prompt if attempt == 0 else "(retry)"
+                _response_content = result.text or ""
+
+            await effects.emit_trace(
+                InferenceCall(
+                    mission_id=_t_mission,
+                    cycle=_t_cycle,
+                    flow=_t_flow,
+                    step=_t_step,
+                    tokens_in=tokens_in if attempt == 0 else 0,
+                    tokens_out=count_tokens(result.text) if result.text else 0,
+                    wall_ms=(time.monotonic() - infer_start) * 1000,
+                    temperature=0.1,
+                    max_tokens=5,
+                    purpose="llm_menu_resolve",
+                    prompt_content=_prompt_content,
+                    response_content=_response_content,
+                )
+            )
+
+        if result.error:
+            logger.warning("LLM menu inference error on attempt %d: %s", attempt + 1, result.error)
+            letter = ""
+            continue
+
+        letter = result.text.strip().lower() if result.text else ""
+        if letter in letter_map:
+            choice = letter_map[letter]
+            logger.debug("LLM menu resolved: %r (letter %r, attempt %d)", choice, letter, attempt + 1)
+
+            # Publish the selected option key to context if configured.
+            # This allows a single downstream step to read the selection
+            # as data rather than requiring N separate transition targets.
+            publish_key = resolver_def.get("publish_selection")
+            if publish_key:
+                context[publish_key] = choice
+
+            return _resolve_option_target(choice, resolver_def, options)
+
+        # Invalid response — will retry if attempts remain
         logger.warning(
-            "LLM menu recovered valid letter %r from leaked response %r "
-            "(likely chat template delimiter leak)",
-            recovered,
+            "LLM menu got invalid response %r on attempt %d/%d",
             letter,
+            attempt + 1,
+            max_attempts,
         )
-        choice = letter_map[recovered]
-        return _resolve_option_target(choice, resolver_def, options)
 
-    # Model returned empty or invalid response despite grammar
+    # ── All attempts exhausted ───────────────────────────────────
+    publish_key = resolver_def.get("publish_selection")
+
     default = resolver_def.get("default_transition")
     if default:
         logger.warning(
-            "LLM menu got invalid response %r, using default_transition: %s",
-            letter,
+            "LLM menu exhausted %d attempts, using default_transition: %s",
+            max_attempts,
             default,
         )
+        # Publish the default_transition as selection if configured
+        if publish_key:
+            context[publish_key] = default
         return default
 
-    # Final safety fallback (should never fire with grammar)
+    # Final safety fallback
     logger.warning(
-        "Grammar response %r not in letter_map, using first option as fallback", letter
+        "LLM menu exhausted %d attempts with no default_transition, using first option",
+        max_attempts,
     )
     fallback = next(iter(options))
+    if publish_key:
+        context[publish_key] = fallback
     return _resolve_option_target(fallback, resolver_def, options)
 
 

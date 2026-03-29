@@ -129,8 +129,9 @@ async def action_create_fix_task_from_diagnosis(step_input: StepInput) -> StepOu
         desc_parts.append(f"— {cause_summary}")
     fix_description = " ".join(desc_parts)
 
-    # Determine flow type
-    flow = "modify_file"
+    # Determine flow type — route through file_write which handles
+    # create vs modify routing and validation lifecycle
+    flow = "file_write"
 
     # Deduplication check
     if _is_duplicate_task(mission, fix_description, flow, target_file):
