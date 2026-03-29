@@ -1,0 +1,61 @@
+# Prompt template: set_env/detect_tooling
+#
+# One-time inference to determine project validation commands.
+# Output is a JSON mapping of file extensions to validation commands.
+
+id: set_env/detect_tooling
+description: "Detect validation tooling for this project's languages"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a project environment detection module. Your output will be
+      parsed by a JSON extractor. Return ONLY a raw JSON object.
+
+  - id: context
+    content: |
+      Working directory: {input.working_directory}
+
+      Project files:
+      {context.project_file_list}
+
+  - id: task
+    when: input.target_file_path
+    content: |
+      A file with this path needs validation: {input.target_file_path}
+
+  - id: instructions
+    content: |
+      Determine the appropriate validation commands for each file extension
+      in this project. For each extension, provide commands for:
+      - syntax: Does the file parse/compile? (REQUIRED check)
+      - import: Can the module be imported/loaded? (optional)
+      - lint: Code quality check (optional)
+
+      Use commands that are standard for the language and likely installed.
+      Use {file} as a placeholder for the file path.
+      Use {module} as a placeholder for the module name (Python: convert
+      path to module, e.g. app/main.py → app.main).
+
+  - id: output_format
+    content: |
+      Return ONLY a raw JSON object:
+      {
+        "py": {
+          "syntax": ["python", "-c", "import py_compile; py_compile.compile('{file}', doraise=True)"],
+          "import": ["python", "-c", "import {module}"],
+          "lint": ["ruff", "check", "{file}"]
+        },
+        "js": {
+          "syntax": ["node", "--check", "{file}"],
+          "lint": ["eslint", "{file}"]
+        }
+      }
+
+      Rules:
+      - Only include extensions present in the project files.
+      - syntax command is required for every extension.
+      - import and lint are optional — omit if no standard tool exists.
+      - Use {file} and {module} placeholders, not literal paths.
+      - Return ONLY the raw JSON object.

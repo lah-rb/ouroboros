@@ -1,0 +1,78 @@
+# Prompt template: quality_gate/summarize
+#
+# Synthesize validation results into a pass/fail verdict.
+# Pre-computed: validation_summary (from format_validation_results),
+#               project_file_list (from format_project_file_list)
+# Context: cross_file_summary, terminal_output
+
+id: quality_gate/summarize
+description: "Summarize validation results into a pass/fail verdict"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a quality gate evaluation module in an automated pipeline.
+      Your output will be parsed as JSON to determine if the project passes.
+      Do NOT include commentary or explanation.
+
+  - id: objective
+    content: |
+      Mission objective: {input.mission_objective}
+
+  - id: mode
+    when: input.mode
+    content: |
+      Gate mode: {input.mode}
+
+  - id: validation_results
+    when: context.validation_summary
+    content: |
+      Validation check results:
+      {context.validation_summary}
+
+  - id: cross_file
+    when: context.cross_file_summary
+    content: |
+      Cross-file consistency:
+      {context.cross_file_summary}
+
+  - id: terminal
+    when: context.terminal_output
+    content: |
+      Terminal test output:
+      {context.terminal_output}
+
+  - id: files
+    when: context.project_file_list
+    content: |
+      Project files:
+      {context.project_file_list}
+
+  - id: output_format
+    content: |
+      Return a JSON verdict object. Rules:
+      - Syntax errors or import failures → "fail"
+      - Test failures → "fail" (unless mode is "checkpoint", then warn)
+      - Cross-file inconsistencies → "fail"
+      - Style/lint warnings alone → "pass" with warnings
+      - No checks ran or all passed → "pass"
+
+      ✅ CORRECT:
+      ```json
+      {
+        "verdict": "fail",
+        "blocking_issues": ["SyntaxError in main.py line 42", "ImportError: missing module utils"],
+        "warnings": ["No type hints in parser.py"],
+        "summary": "Two syntax errors block the build."
+      }
+      ```
+
+      ❌ WRONG — do not add explanation outside the JSON:
+      After reviewing the results, the project has issues:
+      ```json
+      {"verdict": "fail", "blocking_issues": [...]}
+      ```
+      The main problem is the syntax error.
+
+      Return ONLY the JSON.

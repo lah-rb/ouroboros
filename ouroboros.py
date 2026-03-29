@@ -492,6 +492,7 @@ def cmd_start(args: argparse.Namespace) -> None:
 
     # Resolve flows directory
     flows_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flows")
+    prompts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 
     # Run the agent loop
     from agent.loop import run_agent
@@ -502,6 +503,7 @@ def cmd_start(args: argparse.Namespace) -> None:
                 mission_id=mission.id,
                 effects=effects,
                 flows_dir=flows_dir,
+                prompts_dir=prompts_dir,
                 max_cycles=args.max_cycles,
             )
         )

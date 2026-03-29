@@ -4,17 +4,16 @@ Validates inputs → initializes accumulator → loops through steps
 (build StepInput → execute action → merge context_updates → resolve
 transition → repeat) until a terminal step is reached → returns FlowResult.
 
-Phase 3 additions:
-- Resolver dispatch is now async (supports LLM menu resolver).
-- Special action type 'inference': renders prompt template, calls
-  effects.run_inference(), wraps response in StepOutput.
-- Effects interface passed through to resolvers for LLM-driven transitions.
+Uses the CUE pipeline: $ref resolution for params/input_map,
+structured prompt templates with pre_compute formatters,
+and result formatters for tail_call messages.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from agent.actions.registry import ActionNotFoundError, ActionRegistry
@@ -37,9 +36,37 @@ from agent.models import (
 )
 from agent.resolvers import resolve, ResolverError
 from agent.tail_call import FlowOutcome, FlowTailCall, FlowTermination
-from agent.template import render_template, render_params
+from agent.loader_v2 import (
+    resolve_value,
+    resolve_params,
+    resolve_input_map,
+    run_pre_compute,
+    format_result,
+    PromptRenderer,
+)
 
 logger = logging.getLogger(__name__)
+
+# Module-level prompt renderer — initialized lazily
+_prompt_renderer: PromptRenderer | None = None
+
+
+def init_prompt_renderer(prompts_dir: str | Path = "prompts") -> None:
+    """Initialize the prompt renderer with a specific directory."""
+    global _prompt_renderer
+    _prompt_renderer = PromptRenderer(prompts_dir)
+
+
+def _get_prompt_renderer() -> PromptRenderer:
+    """Get or initialize the prompt renderer."""
+    global _prompt_renderer
+    if _prompt_renderer is None:
+        for candidate in [Path("prompts"), Path("ouroboros/prompts")]:
+            if candidate.exists():
+                _prompt_renderer = PromptRenderer(candidate)
+                return _prompt_renderer
+        _prompt_renderer = PromptRenderer(Path("prompts"))
+    return _prompt_renderer
 
 
 def _safe_float_temp(val: Any) -> float:
@@ -446,8 +473,8 @@ async def _execute_subflow_action(
 
     target_flow_def = flow_registry[target_flow_name]
 
-    # Build sub-flow inputs from input_map templates
-    template_vars = {
+    # Build sub-flow inputs from input_map via $ref resolution
+    namespaces = {
         "input": inputs,
         "context": accumulator,
         "meta": {
@@ -458,18 +485,10 @@ async def _execute_subflow_action(
 
     sub_inputs: dict[str, Any] = {}
     if step_def.input_map:
-        for key, value_template in step_def.input_map.items():
-            if isinstance(value_template, str) and "{{" in value_template:
-                try:
-                    resolved = render_template(value_template, template_vars)
-                    sub_inputs[key] = resolved
-                except Exception:
-                    sub_inputs[key] = value_template
-            else:
-                sub_inputs[key] = value_template
+        sub_inputs = resolve_input_map(step_def.input_map, namespaces)
 
     # Also pass through any params as additional inputs
-    rendered_params = render_params(step_def.params, template_vars)
+    rendered_params = resolve_params(step_def.params, namespaces)
     for key, value in rendered_params.items():
         if key not in sub_inputs:
             sub_inputs[key] = value
@@ -589,23 +608,36 @@ async def _execute_inference_action(
             f"Effects: {type(effects).__name__ if effects else 'None'}"
         )
 
-    if not step_def.prompt:
+    if not step_def.prompt_template and not step_def.prompt:
         raise FlowRuntimeError(
-            f"Step with action 'inference' requires a 'prompt' field."
+            f"Step with action 'inference' requires a 'prompt_template' field."
         )
 
-    # Build template variables
-    template_vars = {
+    # Build namespaces for resolution
+    namespaces = {
         "input": inputs,
-        "context": step_input.context,
+        "context": dict(step_input.context),
         "meta": {
             "flow_name": flow_def.flow,
             "step_id": step_input.meta.step_id,
         },
     }
 
-    # Render the prompt template
-    rendered_prompt = render_template(step_def.prompt, template_vars)
+    # Run pre_compute formatters — inject computed values into context
+    if step_def.pre_compute:
+        computed = run_pre_compute(step_def.pre_compute, namespaces)
+        step_input.context.update(computed)
+        namespaces["context"].update(computed)
+
+    # Render the prompt
+    if step_def.prompt_template:
+        renderer = _get_prompt_renderer()
+        rendered_prompt = renderer.render(
+            step_def.prompt_template.template, namespaces
+        )
+    else:
+        # Inline prompt fallback (for steps not yet migrated to templates)
+        rendered_prompt = step_def.prompt or ""
 
     # Build config overrides from merged step config
     config_overrides = {}
@@ -754,7 +786,7 @@ def _build_step_input(
     1. Filter the accumulator to only the keys the step declares (required + optional).
     2. Validate that all required context keys are present.
     3. Merge flow-level and step-level config.
-    4. Render params with Jinja2 templates.
+    4. Resolve $ref values in params.
 
     Args:
         step_def: The step definition.
@@ -788,8 +820,8 @@ def _build_step_input(
     # Merge config: flow defaults + step overrides
     merged_config = {**flow_def.defaults.config, **step_def.config}
 
-    # Build template variables for param rendering
-    template_vars = {
+    # Build namespaces for $ref resolution
+    namespaces = {
         "input": inputs,
         "context": filtered_context,
         "meta": {
@@ -798,8 +830,8 @@ def _build_step_input(
         },
     }
 
-    # Render params through Jinja2 templates
-    rendered_params = render_params(step_def.params, template_vars)
+    # Resolve $ref values in params
+    rendered_params = resolve_params(step_def.params, namespaces)
 
     return StepInput(
         task=step_def.description,

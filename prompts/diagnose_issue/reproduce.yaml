@@ -1,0 +1,54 @@
+# Prompt template: diagnose_issue/reproduce
+#
+# Trace the error execution path — understand, don't fix.
+# Pre-computed context keys:
+#   target_file_content — file content string
+#   target_file_path — file path string
+#   file_excerpts — related files formatted by format_file_excerpts()
+
+id: diagnose_issue/reproduce
+description: "Trace the error execution path to understand root cause"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a diagnostic analysis module in an automated coding pipeline.
+      Write structured analysis — not a fix, not code, just understanding.
+
+  - id: error
+    content: |
+      ## The Error
+      {input.error_description}
+
+  - id: error_output
+    when: input.error_output
+    content: |
+      ## Raw Error Output
+      ```
+      {input.error_output}
+      ```
+
+  - id: target_file
+    content: |
+      ## The File
+      **{context.target_file_path}**
+      ```
+      {context.target_file_content}
+      ```
+
+  - id: related_files
+    when: context.file_excerpts
+    content: |
+      ## Related Files
+      {context.file_excerpts}
+
+  - id: instructions
+    content: |
+      ## Your Task
+      1. Trace the execution path that leads to this error.
+      2. Identify the EXACT line(s) where the problem originates.
+      3. Explain WHY the error occurs.
+      4. Do NOT suggest fixes yet.
+
+      Respond with: Error location, Execution trace, Root cause, Violated assumption.

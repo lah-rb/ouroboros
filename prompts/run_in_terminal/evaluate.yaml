@@ -1,0 +1,41 @@
+# Prompt template: run_in_terminal/evaluate
+#
+# Provide context for the LLM menu resolver to decide: continue, success, or failure.
+# Pre-computed: last_command_output (from format_last_command),
+#               turn_count (from format_turn_count)
+# Note: The resolver appends the menu options automatically — this template
+# only provides the decision context (§6 in PROMPTING_CONVENTIONS.md).
+
+id: run_in_terminal/evaluate
+description: "Evaluate terminal command output for LLM menu decision"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are evaluating the result of a terminal command in an automated pipeline.
+      Based on the output, decide whether to continue, declare success, or declare failure.
+
+  - id: goal
+    content: |
+      Session goal: {input.session_goal}
+
+  - id: turn_info
+    when: context.turn_count
+    content: |
+      Commands executed so far: {context.turn_count}
+
+  - id: last_output
+    when: context.last_command_output
+    content: |
+      Last command output:
+      {context.last_command_output}
+
+  - id: output_format
+    content: |
+      Assess the situation:
+      - Did the command succeed? Does output indicate the goal is met?
+      - Are there errors needing investigation with another command?
+      - Has the session exceeded 5 commands without progress?
+
+      Choose from the options presented below.

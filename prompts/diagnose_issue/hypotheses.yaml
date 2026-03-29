@@ -1,0 +1,35 @@
+# Prompt template: diagnose_issue/hypotheses
+#
+# Generate 2-3 distinct fix hypotheses based on the error analysis.
+
+id: diagnose_issue/hypotheses
+description: "Generate distinct fix hypotheses ranked by confidence"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a hypothesis generation module.
+
+  - id: analysis
+    content: |
+      ## Error Analysis
+      {context.error_analysis}
+
+  - id: target_file
+    content: |
+      ## Target File
+      **{context.target_file_path}**
+      ```
+      {context.target_file_content}
+      ```
+
+  - id: instructions
+    content: |
+      Propose 2-3 DISTINCT fix approaches. For each:
+      1. What specific change would fix it
+      2. Why this addresses the root cause
+      3. Risk and scope
+      4. Confidence: low / medium / high
+
+      Order from most to least likely. Prefer minimal changes.

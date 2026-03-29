@@ -42,19 +42,19 @@ flows:
       optional: [task_description, mission_objective, working_directory, reason, relevant_notes, mode]
     terminal_statuses: []
 
-  create_tests:
+  file_write:
     type: task
-    description: "Create test files for existing project modules"
-    file: tasks/create_tests.yaml
+    description: "Create or modify source files — deterministic routing based on file existence. Supports prompt_variant for test generation."
+    file: cue/file_write.cue
     inputs:
-      required: [mission_id, task_id]
-      optional: [task_description, mission_objective, working_directory, target_file_path, test_file_path, reason, relevant_notes]
+      required: [mission_id, task_id, target_file_path]
+      optional: [task_description, mission_objective, working_directory, reason, relevant_notes, mode, prompt_variant]
     terminal_statuses: []
 
-  setup_project:
+  project_ops:
     type: task
     description: "Initialize and configure project tooling (language agnostic)"
-    file: tasks/setup_project.yaml
+    file: tasks/project_ops.yaml
     inputs:
       required: [mission_id, task_id]
       optional: [task_description, mission_objective, working_directory, setup_focus, relevant_notes]

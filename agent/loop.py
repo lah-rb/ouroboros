@@ -1,7 +1,8 @@
 """Thin outer process loop — bootstrap mission_control, follow tail calls.
 
-This is the only "loop" in Ouroboros. It loads flows, builds the action
-registry, and follows tail calls until a FlowTermination is reached.
+This is the only "loop" in Ouroboros. It loads flows from CUE-exported JSON,
+builds the action registry, and follows tail calls until a FlowTermination
+is reached.
 
 The cycling behavior emerges from the flow graph: mission_control dispatches
 a task flow, the task flow completes and tail-calls back to mission_control,
@@ -11,68 +12,114 @@ which dispatches the next task.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from agent.actions.registry import build_action_registry
-from agent.loader import load_all_flows
-from agent.models import FlowResult
-from agent.runtime import execute_flow
+from agent.loader_v2 import (
+    load_flow_json,
+    resolve_value,
+    resolve_input_map,
+    format_result,
+    FlowLoadError,
+)
+from agent.models import FlowDefinition, FlowResult
+from agent.runtime import execute_flow, init_prompt_renderer
 from agent.tail_call import FlowOutcome, FlowTailCall, FlowTermination
-from agent.template import render_template
 from agent.trace import CycleStart, CycleEnd
 
 logger = logging.getLogger(__name__)
 
 
+def _load_flows(flows_dir: str) -> dict[str, FlowDefinition]:
+    """Load all flows from CUE-exported JSON.
+
+    Expects either:
+      - flows_dir/compiled.json  (single file with all flows)
+      - flows_dir/cue/*.json     (individual flow files)
+
+    Args:
+        flows_dir: Directory containing flow definitions.
+
+    Returns:
+        Dict of flow_name → FlowDefinition.
+    """
+    flows_dir = Path(flows_dir)
+    flows: dict[str, FlowDefinition] = {}
+
+    # Option 1: Single compiled.json (output of `cue export --out json`)
+    compiled = flows_dir / "compiled.json"
+    if compiled.exists():
+        with open(compiled) as f:
+            data = json.load(f)
+
+        # compiled.json contains a dict of flow_name → flow_definition
+        if isinstance(data, dict):
+            for name, flow_data in data.items():
+                if isinstance(flow_data, dict) and "flow" in flow_data:
+                    try:
+                        flow = FlowDefinition(**flow_data)
+                        flows[flow.flow] = flow
+                    except Exception as e:
+                        logger.error("Failed to load flow %r: %s", name, e)
+        logger.info("Loaded %d flows from %s", len(flows), compiled)
+        return flows
+
+    # Option 2: Individual JSON files
+    cue_dir = flows_dir / "cue"
+    json_dir = cue_dir if cue_dir.exists() else flows_dir
+
+    for json_path in sorted(json_dir.glob("*.json")):
+        try:
+            flow = load_flow_json(json_path)
+            flows[flow.flow] = flow
+        except FlowLoadError as e:
+            logger.error("Failed to load %s: %s", json_path, e)
+
+    logger.info("Loaded %d flows from %s", len(flows), json_dir)
+    return flows
+
+
 def _resolve_tail_call(flow_result: FlowResult) -> FlowOutcome:
     """Convert a FlowResult into a FlowOutcome.
 
-    If the FlowResult has a tail_call block, resolve it into a FlowTailCall.
-    Otherwise, wrap it in a FlowTermination.
+    If the FlowResult has a tail_call block, resolve $ref values in the
+    flow name and input_map, apply result_formatter, and return a
+    FlowTailCall. Otherwise, wrap in FlowTermination.
     """
     if flow_result.tail_call:
         tc = flow_result.tail_call
-        target_flow = tc.get("flow", "")
 
-        # Resolve all template values — flow name, input_map, delay
-        template_vars = {
+        # Build namespaces for $ref resolution
+        namespaces = {
             "input": flow_result.context,
             "context": flow_result.context,
             "result": flow_result.result,
             "meta": flow_result.context.get("meta", {}),
         }
 
-        # Resolve flow name (may be a template like {{ context.dispatch_config.flow }})
-        if isinstance(target_flow, str) and "{{" in target_flow:
-            try:
-                target_flow = render_template(target_flow, template_vars)
-            except Exception:
-                pass  # Keep raw value, will fail with clear error downstream
+        # Resolve flow name ($ref or literal)
+        target_flow = resolve_value(tc.get("flow", ""), namespaces)
 
-        # Resolve input_map — values may be templates or direct values
+        # Resolve input_map
         input_map = tc.get("input_map", {})
-        resolved_inputs = {}
+        resolved_inputs = resolve_input_map(input_map, namespaces)
 
-        for key, value in input_map.items():
-            if isinstance(value, str) and "{{" in value:
-                try:
-                    resolved_inputs[key] = render_template(value, template_vars)
-                except Exception:
-                    resolved_inputs[key] = value
-            else:
-                resolved_inputs[key] = value
+        # Apply result_formatter if present
+        result_msg = format_result(tc, namespaces)
+        if result_msg and "last_result" not in resolved_inputs:
+            resolved_inputs["last_result"] = result_msg
 
+        # Resolve delay
         delay = tc.get("delay")
-        if isinstance(delay, str) and "{{" in delay:
-            try:
-                delay = float(render_template(delay, template_vars))
-            except Exception:
-                delay = None
+        if isinstance(delay, dict) and "$ref" in delay:
+            delay = resolve_value(delay, namespaces)
 
         return FlowTailCall(
-            target_flow=target_flow,
+            target_flow=str(target_flow),
             inputs=resolved_inputs,
             delay_seconds=float(delay) if delay else None,
             source_flow=(
@@ -88,6 +135,7 @@ async def run_agent(
     mission_id: str,
     effects: Any,
     flows_dir: str = "flows",
+    prompts_dir: str = "prompts",
     entry_flow: str = "mission_control",
     entry_inputs: dict[str, Any] | None = None,
     max_cycles: int = 50,
@@ -97,7 +145,8 @@ async def run_agent(
     Args:
         mission_id: The mission to work on.
         effects: Effects interface instance.
-        flows_dir: Directory containing flow YAML files.
+        flows_dir: Directory containing flow definitions.
+        prompts_dir: Directory containing prompt templates.
         entry_flow: The flow to start with (default: mission_control).
         entry_inputs: Override initial inputs (default: {mission_id}).
         max_cycles: Maximum number of flow executions (safety limit).
@@ -105,8 +154,9 @@ async def run_agent(
     Returns:
         The final FlowResult when the agent terminates.
     """
-    registry = load_all_flows(flows_dir)
+    registry = _load_flows(flows_dir)
     actions = build_action_registry()
+    init_prompt_renderer(prompts_dir)
 
     current_flow = entry_flow
     current_inputs = entry_inputs or {"mission_id": mission_id}
@@ -144,7 +194,6 @@ async def run_agent(
             list(current_inputs.keys()),
         )
 
-        # Pass synthetic inputs for runtime instrumentation.
         instrumented_inputs = {
             **current_inputs,
             "_trace_cycle": cycle,
@@ -159,7 +208,6 @@ async def run_agent(
                 flow_registry=registry,
             )
         except Exception:
-            # Flush traces on failure so partial trace is inspectable
             if effects and hasattr(effects, "flush_traces"):
                 await effects.flush_traces()
             raise
@@ -190,7 +238,6 @@ async def run_agent(
             )
             return outcome.result
 
-        # FlowTailCall — continue to next flow
         assert isinstance(outcome, FlowTailCall)
         logger.info(
             "Tail call: %r → %r (delay=%s)",
@@ -200,9 +247,6 @@ async def run_agent(
         )
 
         if outcome.delay_seconds and outcome.delay_seconds > 0:
-            logger.info(
-                "Waiting %.1f seconds before next cycle...", outcome.delay_seconds
-            )
             await asyncio.sleep(outcome.delay_seconds)
 
         current_flow = outcome.target_flow
@@ -210,5 +254,5 @@ async def run_agent(
 
     raise RuntimeError(
         f"Agent exceeded maximum cycle count ({max_cycles}). "
-        f"Last flow: {current_flow!r}. This may indicate a stuck loop."
+        f"Last flow: {current_flow!r}."
     )

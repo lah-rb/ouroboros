@@ -1,0 +1,66 @@
+# Prompt template: modify_file/full_rewrite
+#
+# Full file rewrite fallback — used when AST editing is unavailable
+# or the model requested a structural change.
+# Pre-computed context keys:
+#   file_excerpts — formatted by format_file_excerpts(exclude=target)
+
+id: modify_file/full_rewrite
+description: "Full file rewrite when AST editing is unavailable"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a code modification module in an automated pipeline.
+      Your output will be parsed for file blocks and written directly to disk.
+
+  - id: task
+    content: |
+      ## Task
+      {input.task_description}
+
+  - id: reason
+    when: input.reason
+    content: |
+      ## Reason
+      {input.reason}
+
+  - id: current_file
+    content: |
+      ## Current File: {input.target_file_path}
+      ```
+      {context.target_file_content}
+      ```
+
+  - id: related_files
+    when: context.file_excerpts
+    content: |
+      ## Related Files (READ-ONLY REFERENCE)
+      {context.file_excerpts}
+
+  - id: architecture
+    when: input.relevant_notes
+    content: |
+      ## Architecture & Import Conventions
+      {input.relevant_notes}
+
+      CRITICAL: When modifying this file, maintain correct imports from
+      other project modules. Do NOT redefine types that exist in other files.
+
+  - id: output_format
+    content: |
+      Produce the COMPLETE modified file. Preserve all working code.
+      Change only what is needed to address the task.
+
+      === FILE: {input.target_file_path} ===
+      ```
+      # complete modified file content
+      ```
+
+  - id: rules
+    content: |
+      RULES:
+      - One file block with the COMPLETE modified file.
+      - Preserve all functionality not related to the modification.
+      - NOTHING before the file block or after it.

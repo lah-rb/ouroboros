@@ -255,19 +255,20 @@ async def action_apply_retrospective_recommendations(
                     unique_files.append(f)
 
             # Fix 2: Split multi-file refactor into individual tasks
-            if len(unique_files) > 1 and inferred_flow == "refactor":
+            if len(unique_files) > 1 and inferred_flow == "file_write" and "refactor" in desc.lower():
                 for target in unique_files[:3]:  # cap at 3 per recommendation
                     split_desc = f"Refactor: clean up {target}"
                     split_inputs: dict[str, Any] = {
                         "reason": f"Retrospective recommendation: {desc}",
                         "target_file_path": target,
+                        "mode": "refactor",
                     }
-                    if _is_duplicate_task(mission, split_desc, "refactor", target):
+                    if _is_duplicate_task(mission, split_desc, "file_write", target):
                         changes.append(f"Skipped duplicate task: {split_desc[:60]}")
                         continue
                     new_task = TaskRecord(
                         description=split_desc,
-                        flow="refactor",
+                        flow="file_write",
                         priority=len(mission.plan),
                         inputs=split_inputs,
                     )
@@ -280,10 +281,7 @@ async def action_apply_retrospective_recommendations(
             if target_file:
                 task_inputs["target_file_path"] = target_file
             elif inferred_flow in (
-                "modify_file",
-                "create_file",
-                "create_tests",
-                "refactor",
+                "file_write",
             ):
                 # Fix 1: Skip vague tasks without targets for all file-targeting flows
                 changes.append(f"Skipped vague task (no target file): {desc[:60]}")

@@ -371,6 +371,8 @@ async def action_select_target_file(step_input: StepInput) -> StepOutput:
     selected_task = step_input.context.get("selected_task")
     dispatch_flow = step_input.params.get(
         "dispatch_flow", ""
+    ) or step_input.context.get(
+        "dispatch_flow_type", ""
     ) or step_input.context.get("dispatch_flow", "")
 
     if not mission or not effects or not selected_task:
@@ -388,9 +390,10 @@ async def action_select_target_file(step_input: StepInput) -> StepOutput:
         dispatch_flow = selected_task.flow or "create_file"
 
     # Check if we need file selection (only for flows that target existing files)
+    # file_write handles its own create/modify routing internally.
+    # diagnose_issue needs an existing file to analyze.
+    # interact and project_ops are project-level, no file targeting.
     needs_existing_file = dispatch_flow in {
-        "modify_file",
-        "refactor",
         "diagnose_issue",
     }
 
@@ -620,6 +623,18 @@ def _build_dispatch_config(
         else:
             relevant_notes = f"[architecture] {arch_summary}"
 
+    # Determine prompt variant for specialized generation
+    prompt_variant = ""
+    if dispatch_flow == "file_write":
+        desc_lower = selected_task.description.lower()
+        target_lower = (target_file_path or "").lower()
+        if (
+            any(kw in desc_lower for kw in ["test", "create tests", "write tests"])
+            or target_lower.startswith("tests/")
+            or "/test_" in target_lower
+        ):
+            prompt_variant = "test_generation"
+
     dispatch_config = {
         "flow": dispatch_flow,
         "task_id": selected_task.id,
@@ -630,6 +645,7 @@ def _build_dispatch_config(
         "reason": task_inputs.get("reason", "") or selected_task.description,
         "relevant_notes": relevant_notes,
         "mission_id": mission.id,
+        "prompt_variant": prompt_variant,
     }
 
     return StepOutput(
@@ -1033,31 +1049,29 @@ def _parse_task_list(
 
 def _infer_flow_hint(desc: str) -> str:
     """Lightweight flow hint from description. Used as a default that
-    mission_control can override at dispatch time."""
+    mission_control can override at dispatch time.
+
+    Condensed flow set:
+      file_write      — create, modify, refactor, document, explore, manage, review
+      diagnose_issue  — investigate code issues
+      interact        — run and use the product, test features
+      project_ops     — manage project infrastructure, deps, config
+    """
     d = desc.lower()
 
-    if any(
-        kw in d for kw in ["design architecture", "design project", "directory layout"]
-    ):
-        return "design_architecture"
-    if any(kw in d for kw in ["wire all", "integrate", "verify imports"]):
-        return "integrate_modules"
-    if any(kw in d for kw in ["run the", "verify", "end-to-end", "validate"]):
-        return "validate_behavior"
-    if any(kw in d for kw in ["test", "create tests"]):
-        return "create_tests"
-    if any(kw in d for kw in ["diagnose", "debug", "investigate"]):
+    if any(kw in d for kw in ["diagnose", "debug", "investigate root cause"]):
         return "diagnose_issue"
-    if any(kw in d for kw in ["refactor", "improve structure"]):
-        return "refactor"
-    if any(kw in d for kw in ["install", "dependency", "package"]):
-        return "manage_packages"
-    if any(kw in d for kw in ["document", "readme"]):
-        return "document_project"
-    if any(kw in d for kw in ["modify", "fix", "update", "change"]):
-        return "modify_file"
+    if any(kw in d for kw in ["run the", "verify", "end-to-end", "validate",
+                               "test the", "interact", "try the", "use the"]):
+        return "interact"
+    if any(
+        kw in d for kw in ["setup", "initialize", "configure", "project init", "dependency", "package", "install"]
+    ):
+        return "project_ops"
 
-    return "create_file"
+    # Everything else routes through file_write — it handles create, modify,
+    # refactor, document, explore, manage packages, review, and tests.
+    return "file_write"
 
 
 # ══════════════════════════════════════════════════════════════════════

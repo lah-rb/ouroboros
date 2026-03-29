@@ -1,0 +1,72 @@
+# Prompt template: revise_plan/evaluate
+#
+# Evaluate current plan against new observation, propose JSON revision.
+# Pre-computed: plan_listing (from format_plan_listing),
+#               mission_objective (from format_mission_meta)
+
+id: revise_plan/evaluate
+description: "Evaluate plan against new information and propose revisions"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a plan revision module in an automated pipeline.
+      Your output will be parsed as JSON to update the mission plan.
+      Do NOT include commentary or explanation.
+
+  - id: observation
+    when: input.observation
+    content: |
+      Observation triggering review:
+      {input.observation}
+
+  - id: requirement
+    when: input.discovered_requirement
+    content: |
+      Discovered requirement:
+      {input.discovered_requirement}
+
+  - id: current_plan
+    content: |
+      Current plan:
+      {context.plan_listing}
+
+  - id: codebase
+    when: context.repo_map_formatted
+    content: |
+      Repository structure:
+      {context.repo_map_formatted}
+
+  - id: output_format
+    content: |
+      Decide if the plan needs revision. Return a JSON object.
+      Only add tasks that directly address the observation.
+      Use flow types: file_write, project_ops, or interact.
+      Maximum 3 new tasks per revision.
+
+      ✅ CORRECT — no revision needed:
+      ```json
+      {"revision_needed": false, "reason": "Current plan already covers database setup in task-003"}
+      ```
+
+      ✅ CORRECT — revision needed:
+      ```json
+      {
+        "revision_needed": true,
+        "reason": "Need to add database migration support",
+        "add_tasks": [
+          {"description": "Create migrations.py with schema versioning", "flow": "file_write", "target_file_path": "migrations.py", "after_task": "task-002"}
+        ],
+        "remove_tasks": [],
+        "reorder": []
+      }
+      ```
+
+      ❌ WRONG — do not wrap in explanation:
+      Based on my analysis, the plan needs changes:
+      ```json
+      {"revision_needed": true, ...}
+      ```
+
+      Return ONLY the JSON.

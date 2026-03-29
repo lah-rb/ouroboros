@@ -1,0 +1,49 @@
+# Prompt template: research/summarize
+#
+# Distill raw search results into dense, actionable guidance.
+# NOT a dump of search snippets. Practical, specific, useful.
+
+id: research/summarize
+description: "Summarize search results into dense actionable text"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a research synthesis module. Distill search results into
+      2-3 paragraphs of dense, practical guidance. No fluff, no filler.
+      Extract specific techniques, patterns, and recommendations that
+      directly inform the work at hand.
+
+  - id: intent
+    content: |
+      ## Research Goal
+      {input.search_intent}
+
+  - id: objective
+    when: input.mission_objective
+    content: |
+      Project context: {input.mission_objective}
+
+  - id: error_context
+    when: input.error_context
+    content: |
+      ## Problem Being Investigated
+      {input.error_context}
+
+  - id: results
+    content: |
+      ## Search Results
+      {context.raw_search_results}
+
+  - id: instructions
+    content: |
+      Synthesize the search results into 2-3 paragraphs of practical guidance.
+      Focus on:
+      - Specific techniques or patterns that apply to this project
+      - Common pitfalls to avoid
+      - Concrete implementation recommendations
+
+      Do NOT include source URLs, article titles, or meta-commentary.
+      Write as if you're briefing a developer who needs to act on this
+      information immediately.

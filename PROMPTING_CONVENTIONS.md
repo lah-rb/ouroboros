@@ -1,10 +1,45 @@
 # Ouroboros — Runtime Prompt Conventions
 
-Standards for the Jinja2 prompt templates in YAML flow files that are sent to the local Qwen model during execution. These conventions exist because the local model is more sensitive to prompt structure than frontier models — clear framing, explicit constraints, and concrete examples dramatically reduce extraction failures and off-task responses.
+Standards for the section-based YAML prompt templates referenced by CUE flow definitions. These conventions exist because the local model is more sensitive to prompt structure than frontier models — clear framing, explicit constraints, and concrete examples dramatically reduce extraction failures and off-task responses.
 
 ---
 
-## 1. Prompt Structure: The Three-Section Pattern
+## 1. Prompt Architecture
+
+Prompts are **section-based YAML files** in `prompts/<flow>/<step>.yaml`, referenced by CUE flow definitions via `prompt_template.template`. Complex data formatting is handled by **pre-compute formatters** (Python functions) that run before template rendering — the template itself only does simple variable substitution.
+
+```yaml
+# prompts/create_file/generate_content.yaml
+id: create_file/generate_content
+description: "Generate complete file content for a new source file"
+
+sections:
+  - id: system_role
+    content: |
+      You are a code generation module in an automated pipeline.
+      ...
+
+  - id: task
+    content: |
+      ## Task
+      {input.task_description}
+
+  - id: existing_files
+    when: context.file_excerpts        # conditional section
+    content: |
+      ## Existing Files
+      {context.file_excerpts}
+
+  - id: output_format
+    content: |
+      ... format spec with ✅/❌ examples ...
+```
+
+Variable syntax: `{input.X}`, `{context.X}`, `{meta.X}`. Resolved via `string.format_map()` — no expressions, no filters, no method calls. Missing values render as empty string.
+
+---
+
+## 2. Prompt Structure: The Three-Section Pattern
 
 Every inference prompt MUST follow this structure:
 
@@ -18,25 +53,24 @@ Every inference prompt MUST follow this structure:
 
 ### Role Section
 
-Every prompt begins with a brief identity and constraint frame. This is not decorative — it prevents the model from adopting unhelpful personas or adding unwanted commentary.
-
-```yaml
-prompt: |
-  You are a code generation module in an automated pipeline.
-  Your output will be extracted by a parser and written directly to a file.
-  Do NOT include explanatory prose, commentary, or markdown outside code markers.
-```
-
-The role section should be 1-3 sentences. It must convey:
+Every prompt begins with a brief identity and constraint frame. 1-3 sentences. It must convey:
 - What the model is (a module in a pipeline, not a chatbot)
 - What happens to its output (parsed automatically, not read by humans)
 - The single most important constraint (usually: no prose outside the required format)
 
+```yaml
+  - id: system_role
+    content: |
+      You are a code generation module in an automated pipeline.
+      Your output will be extracted by a parser and written directly to a file.
+      Do NOT include explanatory prose or commentary outside code blocks.
+```
+
 ### Task Section
 
-The task section provides all materials inline — file contents, project context, error output, previous attempts. Use Jinja2 conditionals to include only what's available.
+The task section provides all materials inline — file contents, project context, error output. Use `when:` conditionals on sections to include only what's available.
 
-**IMPORTANT:** Place the most critical information (the target file, the specific task) before supplementary context (related files, notes, research). The model weighs content near the beginning and end of prompts more heavily than content in the middle.
+**IMPORTANT:** Place the most critical information (the target file, the specific task) before supplementary context (related files, notes). The model weighs content near the beginning and end of prompts more heavily.
 
 ### Output Format Section
 
@@ -48,272 +82,246 @@ The output format section is the highest-leverage part of the prompt. It MUST in
 
 ---
 
-## 2. Structured Output (JSON) Prompts
+## 3. Structured Output (JSON) Prompts
 
-When the model must return parseable JSON (plans, file selections, validation strategies), use this pattern:
+When the model must return parseable JSON (plans, file selections, validation strategies):
 
 ```yaml
-prompt: |
-  ... [role + task sections] ...
+  - id: output_format
+    content: |
+      Return a JSON object in this exact format:
 
-  Return ONLY a JSON array in this exact format — no markdown, no explanation, no wrapping:
+      ✅ CORRECT:
+      ```json
+      [{"field": "value", "other": "value"}]
+      ```
 
-  ✅ CORRECT output (raw JSON, nothing else):
-  [
-    {"field": "value", "other": "value"}
-  ]
+      ❌ WRONG — do not add explanation before or after:
+      Here is the plan:
+      ```json
+      [{"field": "value"}]
+      ```
 
-  ❌ WRONG — do not wrap in markdown code blocks:
-  ```json
-  [{"field": "value"}]
-  ```
-
-  ❌ WRONG — do not add explanation before or after:
-  Here is the plan:
-  [{"field": "value"}]
-
-  Return ONLY the raw JSON.
+      Return ONLY the JSON.
 ```
 
 ### Key Rules for JSON Prompts
 
 - **ALWAYS show the exact JSON schema** with field names, types, and a complete example
-- **ALWAYS show the ❌ markdown-wrapping failure** — this is the #1 extraction failure mode
-- **ALWAYS end with a one-line reinforcement** ("Return ONLY the raw JSON")
-- **NEVER use `true/false` as placeholder values** in examples — use actual plausible values so the model distinguishes the schema from a boolean instruction
+- **Use fenced code blocks** (```` ```json ````) in the ✅ example — the runtime robustly extracts content from markdown fences via `strip_markdown_wrapper()` and `markdown-it-py`
+- **Show the ❌ explanation-wrapping failure** — prose before/after JSON is the #1 extraction failure mode
+- **ALWAYS end with a one-line reinforcement** ("Return ONLY the JSON")
+- **NEVER use `true/false` as placeholder values** in examples — use actual plausible values
 
 ---
 
-## 3. Code Generation Prompts
+## 4. Code Generation Prompts
 
 When the model must return file content for extraction and writing to disk:
 
 ```yaml
-prompt: |
-  ... [role + task sections] ...
+  - id: output_format
+    content: |
+      Write the complete file content for {input.target_file_path}.
 
-  Write the complete file content for {{ input.target_file_path }}.
+      ✅ CORRECT format:
+      === FILE: {input.target_file_path} ===
+      ```python
+      # your complete file content here
+      def example():
+          pass
+      ```
 
-  Respond with ONLY the code inside triple-backtick markers.
-  Do NOT include any text before or after the code block.
+      ❌ WRONG — no explanation outside the file block:
+      Here is the implementation:
+      === FILE: main.py ===
+      ```python
+      def example():
+          pass
+      ```
+      I added the function because...
 
-  ✅ CORRECT format:
-  ```
-  # your complete file content here
-  def example():
-      pass
-  ```
-
-  ❌ WRONG — no explanation outside the markers:
-  Here is the implementation:
-  ```
-  def example():
-      pass
-  ```
-  I added the function because...
-
-  Return ONLY the code block, nothing else.
+      Return ONLY the file block, nothing else.
 ```
 
 ### Key Rules for Code Prompts
 
-- **ALWAYS request the COMPLETE file** — not a diff, not a partial update, the entire file content
-- **Use plain triple-backtick markers** (not ` ```python `) — the extraction regex is simpler and more reliable with plain markers
-- **NEVER ask for multiple code blocks** — the extractor takes the first one. One file per inference call.
-- **End with format reinforcement** — "Return ONLY the code block, nothing else"
+- **ALWAYS request the COMPLETE file** — not a diff, not a partial update
+- **Use `=== FILE: path ===` markers** followed by fenced code blocks — this is the format `parse_file_blocks()` extracts
+- **Fenced code blocks are fine** — ```` ```python ````, ```` ```yaml ````, or plain ```` ``` ```` are all robustly handled by the extraction pipeline (`markdown_fence.py`)
+- **End with format reinforcement** — "Return ONLY the file block, nothing else"
 
 ---
 
-## 4. Reflection / Free-Text Prompts
+## 5. Reflection / Free-Text Prompts
 
-For prompts where the model should produce unstructured observations (capture_learnings, diagnostics):
+For prompts where the model should produce unstructured observations (capture_learnings, diagnostics, retrospective):
 
 ```yaml
-prompt: |
-  ... [role + task sections] ...
+  - id: output_format
+    content: |
+      Write a concise observation in 2-4 sentences of plain prose.
+      Focus on facts that would help a future task working on this code.
+      Do NOT use bullet points or headers. Do NOT restate the task description.
 
-  Be concise — 2-4 sentences maximum.
-  Focus on facts that would help a future task working on this code.
-  Do NOT restate the task description. Do NOT use bullet points or headers.
-  Write plain prose.
+      ✅ CORRECT — plain prose, specific:
+      The Todo model needed explicit __eq__ to work in sets. The existing tests import from todo.models, so new files must follow that path.
+
+      ❌ WRONG — generic advice with formatting:
+      ## Learnings
+      - Always check imports
+      - Consider edge cases
+
+      Write plain prose only.
 ```
 
 These prompts are lower-stakes (output isn't parsed by regex) but still benefit from length and format constraints to prevent verbose responses that waste context budget.
 
 ---
 
-## 5. LLM Menu Resolver Prompts
+## 6. LLM Menu Resolver Prompts
 
 The `resolver.prompt` field for `type: llm_menu` provides brief context before the menu options. Keep it to one sentence that frames the decision:
 
-```yaml
-resolver:
-  type: llm_menu
-  prompt: "Based on your confidence in the change plan, what should happen next?"
-  options:
-    execute_change:
-      description: "Confidence is high — proceed with implementing the change"
-    abandon:
-      description: "The approach is flawed — return to mission_control"
+```cue
+resolver: {
+    type: "llm_menu"
+    prompt: "Based on your confidence in the change plan, what should happen next?"
+    options: {
+        execute_change: {
+            description: "Confidence is high — proceed with implementing the change"
+        }
+        abandon: {
+            description: "The approach is flawed — return to mission_control"
+        }
+    }
+}
 ```
 
-The resolver system (`agent/resolvers/llm_menu.py`) automatically appends "Choose exactly ONE of the following options by responding with just the option name" and lists the options. Do NOT duplicate this instruction in the resolver prompt.
+The resolver system (`agent/resolvers/llm_menu.py`) automatically appends option listing and selection instructions. Do NOT duplicate this in the resolver prompt.
 
 ---
 
-## 6. Jinja2 Template Patterns
+## 7. Section-Based Template Patterns
 
-### Conditional Context Blocks
+### Conditional Sections
 
-Always guard optional context with `{% if %}` to avoid rendering empty sections:
-
-```yaml
-prompt: |
-  {% if context.context_bundle and context.context_bundle.files %}
-  Existing project files for reference:
-  {% for file in context.context_bundle.files %}
-  === {{ file.path }} ===
-  {{ file.content }}
-  {% endfor %}
-  {% endif %}
-```
-
-### Frustration-Aware Prompts
-
-When frustration history is available, include it with explicit framing that steers the model away from repeating the same approach:
+Use `when:` to include sections only when data is available:
 
 ```yaml
-  {% if input.frustration_history %}
-  ⚠️ Previous attempts at this task FAILED:
-  {{ input.frustration_history }}
-  You MUST take a different approach than what was tried before.
-  {% endif %}
+  - id: architecture
+    when: input.relevant_notes
+    content: |
+      ## Architecture & Import Conventions
+      {input.relevant_notes}
 ```
 
-### Default Values
+### Pre-Computed Context
 
-Use Jinja2 `| default()` for optional values that need sensible fallbacks:
+Complex data formatting is handled by registered Python formatters declared in the CUE step definition's `pre_compute` block. The formatter runs before template rendering and injects a string value into the context namespace:
 
-```yaml
-  Budget: at most {{ input.context_budget | default(8) }} files.
+```cue
+pre_compute: [{
+    formatter:  "format_file_excerpts"
+    output_key: "file_excerpts"
+    params: {
+        source: {$ref: "context.context_bundle.files"}
+        exclude: {$ref: "input.target_file_path"}
+        max_chars: 1500
+    }
+}]
 ```
+
+The template then references the pre-computed key as `{context.file_excerpts}`.
+
+### Variable References
+
+All references use simple dotted paths:
+- `{input.X}` — flow input values
+- `{context.X}` — context accumulator values (including pre-computed)
+- `{meta.X}` — flow execution metadata
+
+No expressions, no filters, no method calls. If a value is None or missing, it renders as empty string.
 
 ---
 
-## 7. Temperature Guidelines
+## 8. Temperature Guidelines
 
 | Prompt Type | Temperature | Rationale |
 |-------------|-------------|-----------|
 | Structured output (JSON) | `0.0` – `0.1` | Deterministic format adherence |
 | Code generation | `t*0.8` (relative) | Slight creativity within patterns |
 | Planning / analysis | `0.3` – `0.4` | Balanced exploration |
-| Reflection / learning | `0.2` | Mild variety in observations |
+| Reflection / learning | `0.2` – `0.4` | Mild variety in observations |
 | Retry after failure | Lower than original | Tighten focus after drift |
-| Frustration retry | Perturbed (see §7 in REFINEMENT.md) | Explore different sampling trajectories |
+| Terminal command planning | `t*0.6` | Some exploration for commands |
 
 Use relative temperature (`t*0.5`, `t*1.2`) for cross-model portability. Use absolute values only for format-critical outputs (JSON extraction, menu choices).
 
 ---
 
-## 8. Strict Block Messages for Code Output
+## 9. Extraction Pipeline
 
-In addition to ❌/✅ teaching patterns, code generation prompts MUST end with strict block directives. These are proven effective at curtailing fenced code block wrapping even on stubborn models:
+The runtime handles LLM response extraction robustly. You do NOT need to tell models to avoid fences — fences are the expected format.
 
-```yaml
-prompt: |
-  ... [role + task + format examples] ...
+### JSON Extraction
+All JSON extraction calls `strip_markdown_wrapper()` which handles ```` ```json ````, ```` ```python ````, and plain ```` ``` ```` wrappers using `markdown-it-py` (CommonMark-compliant) with regex fallback.
 
-  ---DO NOT GENERATE EXTRA CHARACTERS---
-  ---DO NOT USE FENCED CODE BLOCKS (```)---
-  ---END RESPONSE IMMEDIATELY AFTER CODE---
-  ---ONLY CODE EXECUTABLE SYNTAX BELOW---
-```
+### Code Extraction
+`extract_code_from_response()` tries multiple strategies:
+1. Single fenced block → extract content
+2. Multiple fenced blocks → use the largest
+3. Remove obvious non-code lines (explanations, commentary)
+4. Fall back to raw response
 
-**IMPORTANT:** These directives complement the ❌/✅ examples — do NOT replace the examples. Repetition across different framing styles (examples, imperatives, block directives) is intentional and significantly improves compliance. Place block directives as the absolute last content before the `config:` key.
+### Multi-File Extraction
+`parse_file_blocks()` splits on `=== FILE: path ===` markers, then extracts fenced content from each section.
+
+**Key:** JSON regex MUST be **greedy** (`[\s\S]*`) not non-greedy (`[\s\S]*?`). Non-greedy matches inner arrays instead of the full outer array.
 
 ---
 
-## 9. Config Values Are Static — No Jinja2 Templates
+## 10. Config Values Are Static
 
 The `config:` block in step definitions is **NOT template-rendered**. Values are passed directly to the inference engine.
 
-```yaml
-# ✅ CORRECT — static values only
-config:
-  temperature: 0.7
-  max_tokens: 4096
-
-# ✅ CORRECT — relative temperature multiplier (t* prefix)
-config:
-  temperature: "t*0.8"
-
-# ❌ WRONG — Jinja2 templates are NOT rendered in config
-config:
-  temperature: "t*{{ input.temperature_multiplier | default(1.0) }}"
+```cue
+config: temperature: 0.7           // absolute
+config: temperature: "t*0.8"       // relative multiplier
 ```
 
-If you need dynamic temperature (e.g. frustration-based perturbation), set it programmatically in the dispatch action (`action_configure_task_dispatch`) and pass it as a flow input. The `t*` multiplier format is handled by `resolve_temperature()` in `agent/effects/inference.py`.
+The `t*` multiplier format is handled by `resolve_temperature()` in `agent/effects/inference.py`.
 
 ---
 
-## 10. Defensive JSON Parsing — `strip_markdown_wrapper`
+## 11. Retry-with-Limit via `meta.attempt`
 
-All JSON extraction functions MUST call `strip_markdown_wrapper()` before regex extraction. Despite explicit instructions, many models wrap JSON/code in ` ```json ` blocks.
+The runtime tracks step visit counts. Use `meta.attempt` in resolver conditions:
 
-```python
-from agent.actions.refinement_actions import strip_markdown_wrapper
-
-response = strip_markdown_wrapper(response)
-json_match = re.search(r"\[[\s\S]*\]", response)  # greedy
+```cue
+resolver: {
+    type: "rule"
+    rules: [
+        {condition: "result.plan_created == true", transition: "complete"},
+        {condition: "meta.attempt < 3", transition: "retry_plan"},
+        {condition: "true", transition: "failed"},
+    ]
+}
 ```
 
-**CRITICAL:** JSON array regex MUST be **greedy** (`[\s\S]*`) not non-greedy (`[\s\S]*?`). Non-greedy matches inner arrays (like `depends_on: []`) instead of the full outer array, causing silent extraction failures.
+`meta.attempt` starts at 1, increments each revisit.
 
 ---
 
-## 11. Retry-with-Limit via `meta.step_visits`
+## 12. Prompt Maintenance Checklist
 
-The runtime tracks how many times each step has been visited within a single flow execution. Use `meta.attempt` (= visit count for the current step) or `meta.step_visits` (dict of all step visit counts) in resolver conditions:
-
-```yaml
-resolver:
-  type: rule
-  rules:
-    - condition: "result.plan_created == true and result.task_count >= 2"
-      transition: complete
-    - condition: "meta.attempt < 3"
-      transition: retry_plan
-    - condition: "true"
-      transition: failed
-```
-
-`meta.attempt` is the visit count for the current step (starts at 1, increments each revisit). `meta.step_visits` is the full dict if you need cross-step awareness.
-
----
-
-## 12. Research Availability — Frustration-Graduated
-
-Research via `research_context` sub-flow is always available, with urgency graduated by frustration level:
-
-| Frustration | Research Behavior |
-|-------------|------------------|
-| 0-2 (low) | **Optional** — LLM decides whether to research |
-| 3-5 (medium) | **Recommended** — prompt emphasizes research is strongly advised |
-| 6+ (high) | **Mandatory** — rule-based, always researches before proceeding |
-
-This is implemented in `prepare_context.yaml` via the `check_research_needed` → `decide_research_optional` / `decide_research_recommended` / `research` branching.
-
----
-
-## 13. Prompt Maintenance Checklist
-
-When adding or modifying a prompt in a YAML flow file, verify:
+When adding or modifying a prompt template, verify:
 
 - [ ] **Role section present** — 1-3 sentences establishing identity and constraints
 - [ ] **Output format section at the end** — with at least one ✅/❌ example pair
 - [ ] **Critical information at edges** — target file and task near the top; format spec at the bottom
-- [ ] **Optional context guarded** — all `{% if %}` blocks for optional Jinja2 variables
-- [ ] **Single output per prompt** — one file, one JSON object, or one reflection. Never multiple.
+- [ ] **Optional sections use `when:`** — for conditional context inclusion
+- [ ] **Single output per prompt** — one file, one JSON object, or one reflection
 - [ ] **Final reinforcement line** — "Return ONLY..." as the last line
 - [ ] **Temperature set appropriately** — per the guidelines table above
-- [ ] **No duplicate instructions** — don't restate what the resolver or runtime already handles
+- [ ] **Pre-computed keys documented** — comment header listing what formatters provide

@@ -300,38 +300,24 @@ class TestResolveLLMMenu:
         assert call_config["max_tokens"] == 5
 
     @pytest.mark.asyncio
-    async def test_delimiter_leak_recovery_im_end(self):
-        """Model returns 'b<|' (partial <|im_end|> leak) — recovers to 'b'."""
-        effects = MockEffects(inference_responses=["b<|"])
+    async def test_retry_on_invalid_response_succeeds(self):
+        """Model returns junk twice, then a valid letter on third attempt."""
+        effects = MockEffects(inference_responses=["b<|", "<|im_end|>", "b"])
         resolver_def = {
             "type": "llm_menu",
+            "default_transition": "fallback_step",
             "options": {
                 "first": {"description": "First option"},
                 "second": {"description": "Second option"},
-                "third": {"description": "Third option"},
             },
         }
         result = await resolve_llm_menu(resolver_def, {}, {}, {}, effects=effects)
         assert result == "second"
 
     @pytest.mark.asyncio
-    async def test_delimiter_leak_recovery_full_token(self):
-        """Model returns 'a<|im_end|>' — recovers to 'a'."""
-        effects = MockEffects(inference_responses=["a<|im_end|>"])
-        resolver_def = {
-            "type": "llm_menu",
-            "options": {
-                "fix": {"description": "Fix the issue"},
-                "skip": {"description": "Skip it"},
-            },
-        }
-        result = await resolve_llm_menu(resolver_def, {}, {}, {}, effects=effects)
-        assert result == "fix"
-
-    @pytest.mark.asyncio
-    async def test_delimiter_leak_invalid_prefix_uses_default(self):
-        """Model returns 'z<|' — 'z' is not a valid option, falls to default."""
-        effects = MockEffects(inference_responses=["z<|"])
+    async def test_retry_exhausted_uses_default(self):
+        """Model returns junk all 3 times — falls to default_transition."""
+        effects = MockEffects(inference_responses=["b<|", "z<|", "<|im_end|>"])
         resolver_def = {
             "type": "llm_menu",
             "default_transition": "fallback_step",
@@ -342,3 +328,20 @@ class TestResolveLLMMenu:
         }
         result = await resolve_llm_menu(resolver_def, {}, {}, {}, effects=effects)
         assert result == "fallback_step"
+
+    @pytest.mark.asyncio
+    async def test_retry_first_attempt_succeeds_no_extra_calls(self):
+        """Valid response on first attempt — no retries needed."""
+        effects = MockEffects(inference_responses=["a", "b"])
+        resolver_def = {
+            "type": "llm_menu",
+            "options": {
+                "fix": {"description": "Fix"},
+                "skip": {"description": "Skip"},
+            },
+        }
+        result = await resolve_llm_menu(resolver_def, {}, {}, {}, effects=effects)
+        assert result == "fix"
+        # Should have consumed only 1 response
+        calls = effects.calls_to("run_inference")
+        assert len(calls) == 1

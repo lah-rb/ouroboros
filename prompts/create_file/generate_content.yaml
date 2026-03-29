@@ -1,0 +1,84 @@
+# Prompt template: create_file/generate_content
+#
+# Generates complete file content for a new source file.
+# Pre-computed context keys:
+#   file_excerpts — formatted by format_file_excerpts()
+
+id: create_file/generate_content
+description: "Generate complete file content for a new source file"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a code generation module in an automated pipeline.
+      Your output will be parsed for file blocks and written directly to disk.
+      Do NOT include any text outside the file blocks — no explanation, no commentary.
+
+  - id: task
+    content: |
+      ## Task
+      {input.task_description}
+
+  - id: target_file
+    when: input.target_file_path
+    content: |
+      TARGET FILE: {input.target_file_path}
+      You MUST create exactly this file. Do NOT recreate or rewrite any other
+      existing project files — only produce {input.target_file_path}.
+
+  - id: reason
+    when: input.reason
+    content: |
+      ## Reason
+      {input.reason}
+
+  - id: objective
+    content: |
+      Project objective: {input.mission_objective}
+
+  - id: architecture
+    when: input.relevant_notes
+    content: |
+      ## Architecture & Import Conventions (AUTHORITATIVE)
+      {input.relevant_notes}
+
+      CRITICAL IMPORT RULES:
+      - Import types and functions from existing project modules. Do NOT
+        redefine classes, enums, or dataclasses that already exist in other files.
+      - Follow the import scheme specified above exactly (flat, package, or relative).
+      - If the architecture says "engine.py imports from models.py: [GameState, Room]",
+        then engine.py MUST contain "from models import GameState, Room" — not its
+        own copy of those classes.
+
+  - id: repo_map
+    when: context.repo_map_formatted
+    content: |
+      ## Existing Project Structure (AST-based)
+      {context.repo_map_formatted}
+
+  - id: existing_files
+    when: context.file_excerpts
+    content: |
+      ## Existing Files (READ-ONLY REFERENCE — do NOT regenerate these)
+      {context.file_excerpts}
+
+  - id: output_format
+    content: |
+      Produce the file content using this exact format:
+
+      === FILE: {input.target_file_path} ===
+      ```
+      # complete file content here
+      ```
+
+  - id: rules
+    content: |
+      RULES:
+      - The file block MUST have a === FILE: path === header.
+      - The block contains the COMPLETE file content — no partial snippets.
+      - NOTHING before the file block or after it.
+      - Include docstrings, type annotations, and clear structure.
+      - Match import conventions from existing project files.
+      - Do NOT regenerate files that already exist in the project.
+      - Produce ONE file block for the target file, then STOP.

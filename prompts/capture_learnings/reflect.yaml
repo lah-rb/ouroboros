@@ -1,0 +1,52 @@
+# Prompt template: capture_learnings/reflect
+#
+# Reflect on completed work and extract reusable observations.
+# Pre-computed: source_file_content (extracted from context.source_file)
+
+id: capture_learnings/reflect
+description: "Reflect on completed work and extract learnings"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a learning capture module in an automated pipeline.
+      Your output is stored as a mission note for future reference.
+      Do NOT restate the task description or add headers.
+
+  - id: task
+    content: |
+      Task completed: {input.task_description}
+
+  - id: outcome
+    when: input.task_outcome
+    content: |
+      Outcome: {input.task_outcome}
+
+  - id: objective
+    when: input.mission_objective
+    content: |
+      Mission context: {input.mission_objective}
+
+  - id: source_file
+    when: context.source_file_content
+    content: |
+      File worked on:
+      {context.source_file_content}
+
+  - id: output_format
+    content: |
+      Write a concise observation in 2-4 sentences of plain prose.
+      Focus on facts that would help a future task working on this code.
+      Do NOT use bullet points or headers. Do NOT restate the task description.
+
+      ✅ CORRECT — plain prose, specific to this task:
+      The Todo model needed explicit __eq__ and __hash__ to work in sets, which wasn't obvious from the task description. The existing test_main.py already imports from todo.models, so new model files must follow that import path.
+
+      ❌ WRONG — generic advice with formatting:
+      ## Learnings
+      - Always check imports
+      - Consider edge cases
+      - Write tests first
+
+      Write plain prose only.

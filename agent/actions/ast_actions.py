@@ -214,6 +214,30 @@ async def action_start_edit_session(step_input: StepInput) -> StepOutput:
     initial_prompt += f"Mode: {mode}\n"
     if relevant_notes:
         initial_prompt += f"\nNotes:\n{relevant_notes}\n"
+
+    # Surface validation errors so the model knows what to fix
+    validation_errors = step_input.context.get("validation_errors", "")
+    if validation_errors:
+        if isinstance(validation_errors, list):
+            error_lines = []
+            for err in validation_errors:
+                if isinstance(err, dict):
+                    name = err.get("name", "unknown check")
+                    passed = err.get("passed", True)
+                    if not passed:
+                        stderr = err.get("stderr", "")
+                        stdout = err.get("stdout", "")
+                        output = stderr or stdout or "(no output)"
+                        error_lines.append(f"  - {name}: {output}")
+            if error_lines:
+                initial_prompt += (
+                    "\nValidation errors to fix:\n"
+                    + "\n".join(error_lines)
+                    + "\n"
+                )
+        elif isinstance(validation_errors, str) and validation_errors.strip():
+            initial_prompt += f"\nValidation errors to fix:\n{validation_errors}\n"
+
     initial_prompt += "\nAcknowledge with 'ready'."
 
     try:
