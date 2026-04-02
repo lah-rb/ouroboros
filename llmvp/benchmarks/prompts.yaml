@@ -1,0 +1,27 @@
+# LLMvp Benchmark Prompts Configuration
+#
+# This file contains a collection of random prompts that will be used
+# for benchmarking the LLM server. Each prompt should test different
+# aspects of the model's knowledge and capabilities.
+
+prompts:
+  - "What are the basic rules of Kipukas?"
+  - "Can you explain how scoring works in Kipukas?"
+  - "What types of cards exist in Kipukas and what do they do?"
+  - "How do players take turns in Kipukas?"
+  - "What are some common strategies for beginners in Kipukas?"
+  - "Can you describe a typical game flow of Kipukas from start to finish?"
+  - "What happens when specific rule conflicts occur in Kipukas?"
+  - "How does the game handle edge cases and special situations?"
+  - "What are the different phases of a Kipukas game?"
+  - "Can you provide examples of successful moves in Kipukas?"
+  - "What are the winning conditions and how do you achieve them?"
+  - "How does the game balance strategy versus luck elements?"
+  - "What are some common mistakes new players make in Kipukas?"
+  - "Can you explain the card interaction mechanics in detail?"
+  - "What is your role as Kippa and how do you assist players with the rules?"
+
+# Configuration for prompt selection
+selection:
+  randomize: true  # Whether to randomize the order of prompts
+  allow_repeats: false  # Allow the same prompt to be used multiple times in one benchmark run

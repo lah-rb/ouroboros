@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from agent.models import StepInput, StepOutput
+from agent.markdown_fence import extract_first_text_content
 
 logger = logging.getLogger(__name__)
 
@@ -31,23 +32,16 @@ async def action_compile_diagnosis(step_input: StepInput) -> StepOutput:
     """
     error_analysis = step_input.context.get("error_analysis", "")
     hypotheses = step_input.context.get("hypotheses", "")
-    evaluation = step_input.context.get("evaluation", "")
     error_description = step_input.context.get("error_description", "")
 
     include_rejected = step_input.params.get("include_rejected_hypotheses", True)
     is_intractable = step_input.params.get("mark_as_intractable", False)
 
-    # selected_fix: prefer evaluation (from explicit evaluation step, if present)
-    # but fall back to hypotheses (from form_hypotheses) which contains the
-    # actual fix proposals.  The evaluation step doesn't exist in the current
-    # diagnose_issue flow, so without this fallback selected_fix is always empty.
-    selected_fix = evaluation or hypotheses
-
     diagnosis = {
         "error_description": error_description,
         "root_cause": error_analysis,
         "hypotheses": hypotheses if include_rejected else "",
-        "selected_fix": selected_fix,
+        "selected_fix": hypotheses,
         "confidence": "low" if is_intractable else "medium",
         "is_intractable": is_intractable,
     }
@@ -124,14 +118,15 @@ async def action_create_fix_task_from_diagnosis(step_input: StepInput) -> StepOu
     else:
         desc_parts.append("Fix diagnosed issue")
     if root_cause:
-        # Truncate root cause to keep description manageable
-        cause_summary = root_cause[:100].split("\n")[0]
-        desc_parts.append(f"— {cause_summary}")
+        # Extract first substantive text from the model's markdown output
+        cause_summary = extract_first_text_content(root_cause, max_length=100)
+        if cause_summary:
+            desc_parts.append(f"— {cause_summary}")
     fix_description = " ".join(desc_parts)
 
-    # Determine flow type — route through file_write which handles
+    # Determine flow type — route through file_ops which handles
     # create vs modify routing and validation lifecycle
-    flow = "file_write"
+    flow = "file_ops"
 
     # Deduplication check
     if _is_duplicate_task(mission, fix_description, flow, target_file):

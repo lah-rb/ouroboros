@@ -1,37 +1,13 @@
 [project]
-name = "text-adventure-engine"
+name = "my_project"
 version = "0.1.0"
-description = "A text adventure game engine in Python"
-readme = "README.md"
-requires-python = ">=3.11"
+description = "A new Python project."
+requires-python = ">=3.10"
 dependencies = [
-    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0"
 ]
 
-[project.scripts]
-text-adventure = "main:main"
-
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.metadata]
-allow-direct-references = true
-
-[tool.hatch.build.targets.wheel]
-packages = ["src"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_functions = ["test_*"]
-
-[tool.ruff]
-line-length = 88
-target-version = "py311"
-select = ["E", "F", "W", "I"]
-ignore = ["E501", "E203"]
-
-[tool.black]
-line-length = 88
-target-version = ['py311']
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"

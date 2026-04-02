@@ -1,6 +1,6 @@
 """New actions for the CUE flow pipeline.
 
-These actions support the file_write lifecycle (validation, retry budget)
+These actions support the file_ops lifecycle (validation, retry budget)
 and prepare_context (git summary). They're registered in the action registry
 alongside existing actions.
 """
@@ -19,8 +19,24 @@ logger = logging.getLogger(__name__)
 
 # Extensions that skip validation (non-code files)
 _SKIP_EXTENSIONS = {
-    "md", "txt", "csv", "yaml", "yml", "json", "toml", "cfg", "ini", "env",
-    "gitkeep", "gitignore", "lock", "svg", "png", "jpg", "jpeg", "gif",
+    "md",
+    "txt",
+    "csv",
+    "yaml",
+    "yml",
+    "json",
+    "toml",
+    "cfg",
+    "ini",
+    "env",
+    "gitkeep",
+    "gitignore",
+    "lock",
+    "svg",
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
 }
 
 
@@ -112,7 +128,11 @@ async def action_run_validation_checks_from_env(
                 for part in cmd_template
             ]
         elif isinstance(cmd_template, str):
-            cmd = cmd_template.replace("{file}", file_path).replace("{module}", module_name).split()
+            cmd = (
+                cmd_template.replace("{file}", file_path)
+                .replace("{module}", module_name)
+                .split()
+            )
         else:
             continue
 
@@ -168,7 +188,9 @@ async def action_persist_validation_env(step_input: StepInput) -> StepOutput:
         cleaned = raw.strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
-            cleaned = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            cleaned = "\n".join(
+                lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+            )
         try:
             env_config = json.loads(cleaned)
         except json.JSONDecodeError:
@@ -245,8 +267,11 @@ async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
     results = step_input.context.get("validation_results", [])
 
     issues = [
-        r for r in results
-        if isinstance(r, dict) and not r.get("passed", True) and not r.get("required", False)
+        r
+        for r in results
+        if isinstance(r, dict)
+        and not r.get("passed", True)
+        and not r.get("required", False)
     ]
 
     if not issues or not effects:
@@ -265,7 +290,7 @@ async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
     try:
         await effects.push_note(
             content=note_content,
-            category="validation_issues",
+            category="lint_warning",
             tags=["lint", "non_blocking"],
         )
     except Exception as e:
@@ -311,4 +336,256 @@ async def action_git_log_summary(step_input: StepInput) -> StepOutput:
         result={"git_available": False},
         observations="No git history available",
         context_updates={"git_summary": ""},
+    )
+
+
+# ── Dependency coverage check ────────────────────────────────────────
+
+# Well-known dependency manifest filenames, in priority order.
+# Language-agnostic: the LLM interprets contents, we just locate and read.
+_DEP_MANIFEST_NAMES = [
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "requirements.txt",
+    "Pipfile",
+    "package.json",
+    "Cargo.toml",
+    "go.mod",
+    "Gemfile",
+    "build.gradle",
+    "build.gradle.kts",
+    "pom.xml",
+    "composer.json",
+    "pubspec.yaml",
+    "mix.exs",
+    "Package.swift",
+    "deno.json",
+    "deno.jsonc",
+]
+
+# Source extensions worth scanning for import statements.
+_SOURCE_EXTENSIONS = {
+    "py", "js", "ts", "jsx", "tsx", "rs", "go", "rb", "java",
+    "kt", "kts", "swift", "dart", "ex", "exs", "php",
+}
+
+
+def _extract_import_lines(filepath: str, content: str) -> list[str]:
+    """Extract import/require/use lines from source code.
+
+    Language-agnostic grep — pulls lines that look like dependency
+    declarations. The LLM handles the actual interpretation.
+    """
+    lines = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("//"):
+            continue
+        # Python: import X, from X import Y
+        if stripped.startswith(("import ", "from ")):
+            lines.append(stripped)
+        # JS/TS: import ... from '...', require('...')
+        elif "require(" in stripped or (
+            stripped.startswith("import ") and "from" in stripped
+        ):
+            lines.append(stripped)
+        # Rust: use X, extern crate X
+        elif stripped.startswith(("use ", "extern crate ")):
+            lines.append(stripped)
+        # Go: import "X" or import ( block handled by consecutive lines
+        elif stripped.startswith("import "):
+            lines.append(stripped)
+        # Ruby: require 'X', require_relative 'X', gem 'X'
+        elif stripped.startswith(("require ", "require_relative ", "gem ")):
+            lines.append(stripped)
+    return lines
+
+
+async def action_check_dependency_coverage(step_input: StepInput) -> StepOutput:
+    """Check that imports in source files are covered by the dependency manifest.
+
+    Language-agnostic: extracts import lines from all source files, reads
+    dependency manifest file(s), and publishes both into context for an
+    inference step to analyze. Does NOT do the analysis itself.
+
+    Reads:
+        context.project_manifest — {filepath: signature} from scan_project
+        params.working_directory or input.working_directory
+
+    Publishes:
+        dep_check_imports     — deduplicated import lines grouped by file
+        dep_check_manifest    — full text of the dependency manifest file(s)
+        dep_check_skipped     — true if no manifest or no source files found
+    """
+    effects = step_input.effects
+    project_manifest = step_input.context.get("project_manifest", {})
+
+    if not effects or not project_manifest:
+        return StepOutput(
+            result={"dep_check_skipped": True},
+            observations="No effects or project manifest — skipping dep check",
+            context_updates={"dep_check_skipped": True},
+        )
+
+    # ── Find dependency manifest files ────────────────────────────
+    manifest_files = []
+    project_files = set(project_manifest.keys())
+
+    for name in _DEP_MANIFEST_NAMES:
+        # Check both root and common subdirectory patterns
+        for candidate in project_files:
+            basename = os.path.basename(candidate)
+            if basename == name:
+                manifest_files.append(candidate)
+
+    if not manifest_files:
+        return StepOutput(
+            result={"dep_check_skipped": True},
+            observations="No dependency manifest found — skipping dep check",
+            context_updates={"dep_check_skipped": True},
+        )
+
+    # ── Read manifest file contents ───────────────────────────────
+    manifest_contents: dict[str, str] = {}
+    for mf in manifest_files:
+        try:
+            fc = await effects.read_file(mf)
+            if fc.exists:
+                manifest_contents[mf] = fc.content
+        except Exception as e:
+            logger.warning("Could not read manifest %s: %s", mf, e)
+
+    if not manifest_contents:
+        return StepOutput(
+            result={"dep_check_skipped": True},
+            observations="Could not read any manifest files",
+            context_updates={"dep_check_skipped": True},
+        )
+
+    # ── Extract import lines from source files ────────────────────
+    import_map: dict[str, list[str]] = {}
+    for filepath in sorted(project_files):
+        ext = filepath.rsplit(".", 1)[-1].lower() if "." in filepath else ""
+        if ext not in _SOURCE_EXTENSIONS:
+            continue
+        try:
+            fc = await effects.read_file(filepath)
+            if fc.exists and fc.content:
+                imports = _extract_import_lines(filepath, fc.content)
+                if imports:
+                    import_map[filepath] = imports
+        except Exception as e:
+            logger.debug("Could not read %s for import scan: %s", filepath, e)
+
+    if not import_map:
+        return StepOutput(
+            result={"dep_check_skipped": True},
+            observations="No source files with imports found",
+            context_updates={"dep_check_skipped": True},
+        )
+
+    # ── Format for prompt injection ───────────────────────────────
+    import_lines = []
+    for filepath, imports in import_map.items():
+        import_lines.append(f"--- {filepath} ---")
+        for imp in imports:
+            import_lines.append(f"  {imp}")
+    imports_text = "\n".join(import_lines)
+
+    manifest_text_parts = []
+    for mf, content in manifest_contents.items():
+        manifest_text_parts.append(f"--- {mf} ---")
+        manifest_text_parts.append(content)
+    manifest_text = "\n".join(manifest_text_parts)
+
+    return StepOutput(
+        result={"dep_check_skipped": False, "files_scanned": len(import_map)},
+        observations=f"Extracted imports from {len(import_map)} files, "
+                     f"found {len(manifest_contents)} manifest(s)",
+        context_updates={
+            "dep_check_imports": imports_text,
+            "dep_check_manifest": manifest_text,
+            "dep_check_skipped": False,
+        },
+    )
+
+
+async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
+    """Parse the LLM's dependency coverage analysis.
+
+    Reads context.inference_response (JSON from the check_deps prompt),
+    determines if there are missing dependencies, and publishes structured
+    results that the quality gate summarizer can act on.
+
+    Expected LLM output format:
+    {
+        "missing_dependencies": ["pyyaml", "requests"],
+        "details": [
+            {"import": "yaml", "package": "pyyaml", "file": "loader.py"},
+            ...
+        ],
+        "install_command": "uv add pyyaml requests"
+    }
+    or: {"missing_dependencies": []}
+    """
+    from agent.actions.refinement_actions import strip_markdown_wrapper
+
+    raw = step_input.context.get("inference_response", "")
+
+    # Parse JSON response
+    result_data = None
+    if isinstance(raw, str):
+        cleaned = strip_markdown_wrapper(raw)
+        try:
+            result_data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            # Try extracting JSON object from the response
+            import re
+            json_match = re.search(r"\{[\s\S]*\}", cleaned)
+            if json_match:
+                try:
+                    result_data = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    pass
+
+    if not result_data or not isinstance(result_data, dict):
+        return StepOutput(
+            result={"deps_ok": True},
+            observations="Could not parse dep check response — assuming OK",
+            context_updates={"dep_coverage_result": {"missing_dependencies": []}},
+        )
+
+    missing = result_data.get("missing_dependencies", [])
+    if not missing:
+        return StepOutput(
+            result={"deps_ok": True},
+            observations="All dependencies are declared in the manifest",
+            context_updates={"dep_coverage_result": result_data},
+        )
+
+    # Missing deps found — format for quality gate failure
+    details = result_data.get("details", [])
+    install_cmd = result_data.get("install_command", "")
+
+    issue_lines = [f"Missing dependencies: {', '.join(missing)}"]
+    for d in details[:10]:
+        issue_lines.append(
+            f"  {d.get('file', '?')}: imports '{d.get('import', '?')}' "
+            f"→ package '{d.get('package', '?')}'"
+        )
+    if install_cmd:
+        issue_lines.append(f"  Fix: {install_cmd}")
+
+    return StepOutput(
+        result={
+            "deps_ok": False,
+            "missing_count": len(missing),
+        },
+        observations="\n".join(issue_lines),
+        context_updates={
+            "dep_coverage_result": result_data,
+            # Merge into validation_results so summarize sees it
+            "dep_coverage_issues": issue_lines,
+        },
     )

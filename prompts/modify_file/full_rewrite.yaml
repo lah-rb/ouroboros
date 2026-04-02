@@ -3,7 +3,8 @@
 # Full file rewrite fallback — used when AST editing is unavailable
 # or the model requested a structural change.
 # Pre-computed context keys:
-#   file_excerpts — formatted by format_file_excerpts(exclude=target)
+#   file_excerpts — repo map with symbol signatures for all project files
+#   target_file_content — full content of the file being rewritten
 
 id: modify_file/full_rewrite
 description: "Full file rewrite when AST editing is unavailable"
@@ -14,17 +15,18 @@ sections:
     content: |
       You are a code modification module in an automated pipeline.
       Your output will be parsed for file blocks and written directly to disk.
+      Produce the COMPLETE modified file — do not include text outside the file block.
 
   - id: task
     content: |
       ## Task
-      {input.task_description}
+      {input.flow_directive}
 
-  - id: reason
-    when: input.reason
+  - id: validation_errors
+    when: input.validation_errors
     content: |
-      ## Reason
-      {input.reason}
+      ## Validation Errors to Fix
+      {input.validation_errors}
 
   - id: current_file
     content: |
@@ -36,7 +38,9 @@ sections:
   - id: related_files
     when: context.file_excerpts
     content: |
-      ## Related Files (READ-ONLY REFERENCE)
+      ## Project Structure (symbol signatures — READ-ONLY REFERENCE)
+      These are the interfaces defined in other project files.
+      Preserve compatibility with these when rewriting.
       {context.file_excerpts}
 
   - id: architecture
@@ -52,11 +56,23 @@ sections:
     content: |
       Produce the COMPLETE modified file. Preserve all working code.
       Change only what is needed to address the task.
+      The output file MUST be similar in size to the current file.
+      Do NOT remove functions, classes, or methods that are not related
+      to the fix — they are used by other modules.
 
+      ✅ CORRECT format:
       === FILE: {input.target_file_path} ===
+      ```python
+      # complete modified file content — ALL existing code preserved
       ```
-      # complete modified file content
+
+      ❌ WRONG — no explanation outside the file block:
+      I fixed the import error by changing line 12:
+      === FILE: {input.target_file_path} ===
+      ```python
+      ...
       ```
+      The issue was a circular import.
 
   - id: rules
     content: |

@@ -9,7 +9,10 @@ sections:
 
   - id: system_role
     content: |
-      You are a hypothesis generation module.
+      You are a diagnostic hypothesis module in an automated coding pipeline.
+      Your hypotheses will be used to create targeted fix tasks dispatched to
+      the file editing system. Make each hypothesis specific and actionable —
+      name files, functions, and the exact change needed.
 
   - id: analysis
     content: |
@@ -24,10 +27,17 @@ sections:
       {context.target_file_content}
       ```
 
+  - id: peers
+    when: context.peer_personas
+    content: |
+      ## Fix Execution
+      Your top hypothesis will be dispatched as a fix task to:
+      {context.peer_personas}
+
   - id: instructions
     content: |
       Propose 2-3 DISTINCT fix approaches. For each:
-      1. What specific change would fix it
+      1. What specific change would fix it — name the file and function
       2. Why this addresses the root cause
       3. Risk and scope
       4. Confidence: low / medium / high

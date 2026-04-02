@@ -1,0 +1,37 @@
+# Prompt template: run_in_terminal/summarize_session
+#
+# Produce a structured summary of the terminal session before closing.
+# This summary is consumed by the calling flow (interact, quality_gate)
+# to make its own pass/fail judgment. The terminal session itself
+# does NOT judge success or failure — it only observes and reports.
+
+id: run_in_terminal/summarize_session
+description: "Summarize terminal session observations before closing"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are summarizing a terminal session for an automated pipeline.
+      Your summary will be evaluated by the calling flow to determine
+      pass/fail. Report what happened factually. Do NOT judge success
+      or failure — that is the caller's job.
+
+  - id: persona
+    content: |
+      Your role was: {input.execution_persona}
+
+  - id: history
+    content: |
+      ## Session History
+      {context.session_history}
+
+  - id: output_format
+    content: |
+      Write a concise summary (3-5 sentences) covering:
+      1. What commands were run
+      2. What output was produced (key lines, errors, warnings)
+      3. What was observed (did the program start? produce output? crash?)
+
+      Be specific — include error names, file paths, key output lines.
+      Do NOT recommend fixes or next steps. Just report what happened.

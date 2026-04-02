@@ -14,8 +14,8 @@ sections:
   - id: system_role
     content: |
       You are a planning module in an automated coding pipeline.
-      Your output will be parsed by a JSON extractor. Do NOT include any text
-      outside the JSON array — no markdown, no explanation, no commentary.
+      Your output will be parsed by a JSON extractor. Return ONLY a JSON
+      array inside a fenced code block — no explanation, no commentary.
 
   - id: context
     content: |
@@ -41,29 +41,30 @@ sections:
       One task: install dependencies, create config files, initialize tooling.
       Skip this phase ONLY if the project has no dependencies.
 
-      **Phase 2 — file_write**: Create source files in creation_order.
+      **Phase 2 — file_ops**: Create source files in creation_order.
       One task PER FILE from the architecture's creation_order list.
       Each task MUST have depends_on linking to files it imports from.
       Skip files that already exist (listed above).
 
       **Phase 3 — interact**: Use the product.
       One task: run the application and verify it works as intended.
-      This depends on ALL file_write tasks.
+      This depends on ALL file_ops tasks.
 
       AVAILABLE FLOW TYPES (you MUST specify one for each task):
-        file_write    — Create or modify a source file
+        file_ops    — Create or modify a source file
         project_ops   — Install dependencies, create config, manage tooling
         interact      — Run and use the product, test specific features
 
       DEPENDENCY RULES:
-        - A file_write task for X.py MUST depend_on the file_write task for
+        - A file_ops task for X.py MUST depend_on the file_ops task for
           every file that X.py imports from (per the architecture's imports_from).
-        - The interact task MUST depend_on ALL file_write tasks.
+        - The interact task MUST depend_on ALL file_ops tasks.
         - project_ops has no dependencies (runs first).
 
   - id: output_format
     content: |
-      Return ONLY a raw JSON array:
+      ✅ CORRECT:
+      ```json
       [
         {
           "description": "Set up project environment and install dependencies",
@@ -73,13 +74,13 @@ sections:
         },
         {
           "description": "Create data models module",
-          "flow": "file_write",
+          "flow": "file_ops",
           "inputs": {"target_file_path": "models.py"},
           "depends_on": []
         },
         {
           "description": "Create command parser",
-          "flow": "file_write",
+          "flow": "file_ops",
           "inputs": {"target_file_path": "parser.py"},
           "depends_on": ["Create data models module"]
         },
@@ -90,11 +91,19 @@ sections:
           "depends_on": ["Create data models module", "Create command parser"]
         }
       ]
+      ```
+
+      ❌ WRONG — do not add explanation before or after:
+      Here is the task plan based on the architecture:
+      ```json
+      [{"description": "Set up project...", "flow": "project_ops", ...}]
+      ```
+      This plan follows the creation order from the blueprint.
 
       Rules:
       - File paths MUST match the architecture exactly.
       - Every task MUST include a "flow" field from the available types.
-      - Every file_write task MUST have correct depends_on chains.
+      - Every file_ops task MUST have correct depends_on chains.
       - Do NOT create diagnose_issue or quality tasks — these are automatic.
-      - Do NOT create per-file validation tasks — file_write validates internally.
-      - Return ONLY the raw JSON array.
+      - Do NOT create per-file validation tasks — file_ops validates internally.
+      - Return ONLY the fenced JSON array.

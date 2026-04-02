@@ -1,0 +1,1331 @@
+2026-04-02 14:46:44,918 INFO 🚀 Starting LLMvp GraphQL API on 0.0.0.0:8008
+INFO:     Started server process [91180]
+INFO:     Waiting for application startup.
+2026-04-02 14:46:45,343 INFO ✅ Loaded 1337 static tokens
+2026-04-02 14:46:45,343 INFO 🔧 Creating llama.cpp backend
+2026-04-02 14:46:45,343 INFO 🔧 Initializing llama_cpp backend
+2026-04-02 14:46:45,343 INFO 🔥 Initializing Llama pool (eager mode, limit=1)
+llama_kv_cache_iswa: using full-size SWA cache (ref: https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+2026-04-02 14:46:49,818 INFO 🔄 Processing 1,337 static tokens for state snapshot (pool slot #0)…
+2026-04-02 14:46:51,434 INFO ✅ State snapshot saved — 1,337 tokens, 94.0 MiB C-level state (pool slot #0)
+2026-04-02 14:46:51,434 INFO ✅ Llama pool ready (1 instances, shared_model=True, hybrid=False)
+2026-04-02 14:46:51,434 INFO ✅ Backend initialized: llama_cpp
+2026-04-02 14:46:51,434 INFO 🔧 Backend capabilities: streaming=True, batching=False, async_api=False
+2026-04-02 14:46:51,434 INFO 🚀 Server initialized successfully
+2026-04-02 14:46:51,434 INFO 📌 Session manager initialized
+2026-04-02 14:46:51,435 INFO 🔧 Tool registered: keal_means_check
+2026-04-02 14:46:51,435 INFO 🔧 Tool registered: card_lookup
+2026-04-02 14:46:51,435 INFO 🔧 Tools loaded: keal_means_check, card_lookup
+2026-04-02 14:46:51,435 INFO 🚀 GraphQL API started successfully
+2026-04-02 14:46:51,435 INFO 📊 GraphQL endpoint: http://0.0.0.0:8008/graphql
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8008 (Press CTRL+C to quit)
+✅ Loaded static token buffer (1337 tokens) from data/gpt-oss-120b-a5.tokens.bin
+INFO:     127.0.0.1:55792 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-04-02 14:47:48,918 INFO 📌 Session manager shutdown complete
+2026-04-02 14:47:48,918 INFO 🧹 Shutting down backend: llama_cpp
+2026-04-02 14:47:49,223 INFO ✅ Llama backend shutdown complete (1 instances cleared)
+2026-04-02 14:47:49,223 INFO ✅ Backend shutdown complete
+2026-04-02 14:47:49,223 INFO 🗑️ Server shutdown complete
+2026-04-02 14:47:49,223 INFO 🗑️ GraphQL API shutdown complete
+INFO:     Application shutdown complete.
+INFO:     Finished server process [91180]
+2026-04-02 14:50:14,146 INFO 🚀 Starting LLMvp GraphQL API on 0.0.0.0:8008
+INFO:     Started server process [91583]
+INFO:     Waiting for application startup.
+2026-04-02 14:50:14,351 INFO ✅ Loaded 1337 static tokens
+2026-04-02 14:50:14,351 INFO 🔧 Creating llama.cpp backend
+2026-04-02 14:50:14,351 INFO 🔧 Initializing llama_cpp backend
+2026-04-02 14:50:14,351 INFO 🔥 Initializing Llama pool (eager mode, limit=1)
+llama_kv_cache_iswa: using full-size SWA cache (ref: https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+2026-04-02 14:50:18,776 INFO 🔄 Processing 1,337 static tokens for state snapshot (pool slot #0)…
+2026-04-02 14:50:20,386 INFO ✅ State snapshot saved — 1,337 tokens, 94.0 MiB C-level state (pool slot #0)
+2026-04-02 14:50:20,386 INFO ✅ Llama pool ready (1 instances, shared_model=True, hybrid=False)
+2026-04-02 14:50:20,386 INFO ✅ Backend initialized: llama_cpp
+2026-04-02 14:50:20,386 INFO 🔧 Backend capabilities: streaming=True, batching=False, async_api=False
+2026-04-02 14:50:20,386 INFO 🚀 Server initialized successfully
+2026-04-02 14:50:20,386 INFO 📌 Session manager initialized
+2026-04-02 14:50:20,387 INFO 🔧 Tool registered: keal_means_check
+2026-04-02 14:50:20,387 INFO 🔧 Tool registered: card_lookup
+2026-04-02 14:50:20,387 INFO 🔧 Tools loaded: keal_means_check, card_lookup
+2026-04-02 14:50:20,387 INFO 🚀 GraphQL API started successfully
+2026-04-02 14:50:20,387 INFO 📊 GraphQL endpoint: http://0.0.0.0:8008/graphql
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8008 (Press CTRL+C to quit)
+✅ Loaded static token buffer (1337 tokens) from data/gpt-oss-120b-a5.tokens.bin
+INFO:     127.0.0.1:55816 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:50:53,668 INFO Loaded format schema for harmony (GPT-OSS (Harmony))
+2026-04-02 14:50:53,782 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2129
+2026-04-02 14:50:53,782 INFO 🔧 generate_stream_sync: dynamic=792 tok, static=1337 tok, total_ctx=2129/131072, max_gen=128943
+2026-04-02 14:50:54,827 INFO 📊 First token arrived after 1.0s eval (request=(unnamed))
+2026-04-02 14:51:23,389 INFO 📊 Generation complete: request=(unnamed), prompt=2129 tok, generated=1719 tok, eval=1.0s, gen=28.6s, total=29.6s, speed=60.2 tok/s
+2026-04-02 14:51:23,390 INFO 🎯 CRF delimiter model loaded from logs/delim_crf.model
+INFO:     127.0.0.1:55819 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55819 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:51:30,031 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2129
+2026-04-02 14:51:30,031 INFO 🔧 generate_stream_sync: dynamic=792 tok, static=1337 tok, total_ctx=2129/131072, max_gen=128943
+2026-04-02 14:51:31,070 INFO 📊 First token arrived after 1.0s eval (request=(unnamed))
+2026-04-02 14:52:18,621 INFO 📊 Generation complete: request=(unnamed), prompt=2129 tok, generated=2918 tok, eval=1.0s, gen=47.5s, total=48.6s, speed=61.4 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:52:19,718 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2107
+2026-04-02 14:52:19,718 INFO 🔧 generate_stream_sync: dynamic=770 tok, static=1337 tok, total_ctx=2107/131072, max_gen=128965
+2026-04-02 14:52:20,732 INFO 📊 First token arrived after 1.0s eval (request=(unnamed))
+2026-04-02 14:52:34,997 INFO 📊 Generation complete: request=(unnamed), prompt=2107 tok, generated=748 tok, eval=1.0s, gen=14.3s, total=15.3s, speed=52.4 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:52:35,193 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1560
+2026-04-02 14:52:35,194 INFO 🔧 generate_stream_sync: dynamic=223 tok, static=1337 tok, total_ctx=1560/131072, max_gen=500
+2026-04-02 14:52:35,586 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:52:38,101 INFO 📊 Generation complete: request=(unnamed), prompt=1560 tok, generated=128 tok, eval=0.4s, gen=2.5s, total=2.9s, speed=50.9 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:52:38,233 INFO 📌 Session 9820414170784e63 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:52:38,356 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1198
+2026-04-02 14:52:38,356 INFO 🔧 generate_stream_sync: dynamic=1198 tok, static=0 tok, total_ctx=1198/131072, max_gen=256
+2026-04-02 14:52:39,880 INFO 📊 First token arrived after 1.5s eval (request=(unnamed))
+2026-04-02 14:52:44,236 INFO 📊 Generation complete: request=(unnamed), prompt=1198 tok, generated=256 tok, eval=1.5s, gen=4.4s, total=5.9s, speed=58.8 tok/s
+2026-04-02 14:52:44,262 INFO Session 9820414170784e63 turn 1 complete (1270 chars generated, delimiter_found=False)
+2026-04-02 14:52:44,273 INFO Session 9820414170784e63 turn complete: raw=1270 chars → content=41 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:52:44,394 INFO Session turn transition from schema: '<|end|>\n' (8 chars)
+2026-04-02 14:52:44,395 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:52:44,395 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:52:44,808 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:52:45,017 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=13 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=62.3 tok/s
+2026-04-02 14:52:45,045 INFO Session 9820414170784e63 turn 2 complete (56 chars generated, delimiter_found=False)
+2026-04-02 14:52:45,045 INFO Session 9820414170784e63 turn complete: raw=56 chars → content=29 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:52:45,164 INFO 📊 Generation started: request=(unnamed), prompt_tokens=106
+2026-04-02 14:52:45,164 INFO 🔧 generate_stream_sync: dynamic=106 tok, static=0 tok, total_ctx=106/131072, max_gen=256
+2026-04-02 14:52:45,481 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:52:47,171 INFO 📊 Generation complete: request=(unnamed), prompt=106 tok, generated=89 tok, eval=0.3s, gen=1.7s, total=2.0s, speed=52.7 tok/s
+2026-04-02 14:52:47,193 INFO Session 9820414170784e63 turn 3 complete (416 chars generated, delimiter_found=False)
+2026-04-02 14:52:47,197 INFO Session 9820414170784e63 turn complete: raw=416 chars → content=30 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:52:47,205 INFO 📌 Session 9820414170784e63 ended (turns=3, duration=9.0s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:52:47,326 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1636
+2026-04-02 14:52:47,326 INFO 🔧 generate_stream_sync: dynamic=299 tok, static=1337 tok, total_ctx=1636/131072, max_gen=129436
+2026-04-02 14:52:47,786 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 14:52:58,294 INFO 📊 Generation complete: request=(unnamed), prompt=1636 tok, generated=655 tok, eval=0.5s, gen=10.5s, total=11.0s, speed=62.3 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:52:58,467 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1832
+2026-04-02 14:52:58,467 INFO 🔧 generate_stream_sync: dynamic=495 tok, static=1337 tok, total_ctx=1832/131072, max_gen=129240
+2026-04-02 14:52:59,051 INFO 📊 First token arrived after 0.6s eval (request=(unnamed))
+2026-04-02 14:53:07,387 INFO 📊 Generation complete: request=(unnamed), prompt=1832 tok, generated=408 tok, eval=0.6s, gen=8.3s, total=8.9s, speed=48.9 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:07,534 INFO 📌 Session c45ae74afc384330 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:07,652 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1001
+2026-04-02 14:53:07,652 INFO 🔧 generate_stream_sync: dynamic=1001 tok, static=0 tok, total_ctx=1001/131072, max_gen=256
+2026-04-02 14:53:08,829 INFO 📊 First token arrived after 1.2s eval (request=(unnamed))
+2026-04-02 14:53:13,441 INFO 📊 Generation complete: request=(unnamed), prompt=1001 tok, generated=256 tok, eval=1.2s, gen=4.6s, total=5.8s, speed=55.5 tok/s
+2026-04-02 14:53:13,450 INFO Session c45ae74afc384330 turn 1 complete (1298 chars generated, delimiter_found=False)
+2026-04-02 14:53:13,462 INFO Session c45ae74afc384330 turn complete: raw=1298 chars → content=590 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:13,582 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:53:13,582 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:53:13,995 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:53:14,158 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=10 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=61.6 tok/s
+2026-04-02 14:53:14,168 INFO Session c45ae74afc384330 turn 2 complete (49 chars generated, delimiter_found=False)
+2026-04-02 14:53:14,168 INFO Session c45ae74afc384330 turn complete: raw=49 chars → content=22 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:14,286 INFO 📊 Generation started: request=(unnamed), prompt_tokens=73
+2026-04-02 14:53:14,286 INFO 🔧 generate_stream_sync: dynamic=73 tok, static=0 tok, total_ctx=73/131072, max_gen=256
+2026-04-02 14:53:14,559 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:53:15,174 INFO 📊 Generation complete: request=(unnamed), prompt=73 tok, generated=32 tok, eval=0.3s, gen=0.6s, total=0.9s, speed=52.0 tok/s
+2026-04-02 14:53:15,195 INFO Session c45ae74afc384330 turn 3 complete (151 chars generated, delimiter_found=False)
+2026-04-02 14:53:15,196 INFO Session c45ae74afc384330 turn complete: raw=151 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:15,205 INFO 📌 Session c45ae74afc384330 ended (turns=3, duration=7.7s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:18,568 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1782
+2026-04-02 14:53:18,568 INFO 🔧 generate_stream_sync: dynamic=445 tok, static=1337 tok, total_ctx=1782/131072, max_gen=129290
+2026-04-02 14:53:19,126 INFO 📊 First token arrived after 0.6s eval (request=(unnamed))
+2026-04-02 14:53:30,533 INFO 📊 Generation complete: request=(unnamed), prompt=1782 tok, generated=696 tok, eval=0.6s, gen=11.4s, total=12.0s, speed=61.0 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:31,483 INFO 📌 Session c69eeb67f74b4d92 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:31,602 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1318
+2026-04-02 14:53:31,602 INFO 🔧 generate_stream_sync: dynamic=1318 tok, static=0 tok, total_ctx=1318/131072, max_gen=256
+2026-04-02 14:53:33,240 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:53:37,507 INFO 📊 Generation complete: request=(unnamed), prompt=1318 tok, generated=256 tok, eval=1.6s, gen=4.3s, total=5.9s, speed=60.0 tok/s
+2026-04-02 14:53:37,574 INFO Session c69eeb67f74b4d92 turn 1 complete (1193 chars generated, delimiter_found=False)
+2026-04-02 14:53:37,586 INFO Session c69eeb67f74b4d92 turn complete: raw=1193 chars → content=0 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:37,591 INFO 📌 Session c69eeb67f74b4d92 ended (turns=1, duration=6.1s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:37,711 INFO 📌 Session fafffc5f41b349ce started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:37,833 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1318
+2026-04-02 14:53:37,833 INFO 🔧 generate_stream_sync: dynamic=1318 tok, static=0 tok, total_ctx=1318/131072, max_gen=256
+2026-04-02 14:53:39,470 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:53:43,661 INFO 📊 Generation complete: request=(unnamed), prompt=1318 tok, generated=256 tok, eval=1.6s, gen=4.2s, total=5.8s, speed=61.1 tok/s
+2026-04-02 14:53:43,671 INFO Session fafffc5f41b349ce turn 1 complete (1231 chars generated, delimiter_found=False)
+2026-04-02 14:53:43,682 INFO Session fafffc5f41b349ce turn complete: raw=1231 chars → content=1092 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:43,803 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:53:43,803 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:53:44,225 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:53:44,434 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=13 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=62.3 tok/s
+2026-04-02 14:53:44,467 INFO Session fafffc5f41b349ce turn 2 complete (53 chars generated, delimiter_found=False)
+2026-04-02 14:53:44,467 INFO Session fafffc5f41b349ce turn complete: raw=53 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:44,586 INFO 📊 Generation started: request=(unnamed), prompt_tokens=73
+2026-04-02 14:53:44,587 INFO 🔧 generate_stream_sync: dynamic=73 tok, static=0 tok, total_ctx=73/131072, max_gen=256
+2026-04-02 14:53:44,880 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:53:45,186 INFO 📊 Generation complete: request=(unnamed), prompt=73 tok, generated=19 tok, eval=0.3s, gen=0.3s, total=0.6s, speed=62.1 tok/s
+2026-04-02 14:53:45,194 INFO Session fafffc5f41b349ce turn 3 complete (57 chars generated, delimiter_found=False)
+2026-04-02 14:53:45,194 INFO Session fafffc5f41b349ce turn complete: raw=57 chars → content=30 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:45,199 INFO 📌 Session fafffc5f41b349ce ended (turns=3, duration=7.5s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:53:45,331 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2146
+2026-04-02 14:53:45,331 INFO 🔧 generate_stream_sync: dynamic=809 tok, static=1337 tok, total_ctx=2146/131072, max_gen=128926
+2026-04-02 14:53:46,389 INFO 📊 First token arrived after 1.1s eval (request=(unnamed))
+2026-04-02 14:54:06,131 INFO 📊 Generation complete: request=(unnamed), prompt=2146 tok, generated=1158 tok, eval=1.1s, gen=19.7s, total=20.8s, speed=58.7 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:06,662 INFO 📌 Session c53d5443b41e4f27 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:06,780 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1201
+2026-04-02 14:54:06,780 INFO 🔧 generate_stream_sync: dynamic=1201 tok, static=0 tok, total_ctx=1201/131072, max_gen=256
+2026-04-02 14:54:08,322 INFO 📊 First token arrived after 1.5s eval (request=(unnamed))
+2026-04-02 14:54:12,388 INFO 📊 Generation complete: request=(unnamed), prompt=1201 tok, generated=256 tok, eval=1.5s, gen=4.1s, total=5.6s, speed=63.0 tok/s
+2026-04-02 14:54:12,398 INFO Session c53d5443b41e4f27 turn 1 complete (1300 chars generated, delimiter_found=False)
+2026-04-02 14:54:12,409 INFO Session c53d5443b41e4f27 turn complete: raw=1300 chars → content=375 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:12,533 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:54:12,534 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:54:12,950 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:54:13,111 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=10 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=61.8 tok/s
+2026-04-02 14:54:13,122 INFO Session c53d5443b41e4f27 turn 2 complete (49 chars generated, delimiter_found=False)
+2026-04-02 14:54:13,123 INFO Session c53d5443b41e4f27 turn complete: raw=49 chars → content=22 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:13,241 INFO 📊 Generation started: request=(unnamed), prompt_tokens=69
+2026-04-02 14:54:13,241 INFO 🔧 generate_stream_sync: dynamic=69 tok, static=0 tok, total_ctx=69/131072, max_gen=256
+2026-04-02 14:54:13,513 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:54:14,173 INFO 📊 Generation complete: request=(unnamed), prompt=69 tok, generated=41 tok, eval=0.3s, gen=0.7s, total=0.9s, speed=62.1 tok/s
+2026-04-02 14:54:14,181 INFO Session c53d5443b41e4f27 turn 3 complete (192 chars generated, delimiter_found=False)
+2026-04-02 14:54:14,182 INFO Session c53d5443b41e4f27 turn complete: raw=192 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:14,186 INFO 📌 Session c53d5443b41e4f27 ended (turns=3, duration=7.5s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:14,322 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2644
+2026-04-02 14:54:14,322 INFO 🔧 generate_stream_sync: dynamic=1307 tok, static=1337 tok, total_ctx=2644/131072, max_gen=128428
+2026-04-02 14:54:15,966 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:54:26,646 INFO 📊 Generation complete: request=(unnamed), prompt=2644 tok, generated=604 tok, eval=1.6s, gen=10.7s, total=12.3s, speed=56.6 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:26,899 INFO 📌 Session 88117297a0d741cf started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:27,018 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1224
+2026-04-02 14:54:27,018 INFO 🔧 generate_stream_sync: dynamic=1224 tok, static=0 tok, total_ctx=1224/131072, max_gen=256
+2026-04-02 14:54:28,574 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:54:32,632 INFO 📊 Generation complete: request=(unnamed), prompt=1224 tok, generated=256 tok, eval=1.6s, gen=4.1s, total=5.6s, speed=63.1 tok/s
+2026-04-02 14:54:32,643 INFO Session 88117297a0d741cf turn 1 complete (1276 chars generated, delimiter_found=False)
+2026-04-02 14:54:32,655 INFO Session 88117297a0d741cf turn complete: raw=1276 chars → content=518 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:32,779 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:54:32,779 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:54:33,196 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:54:33,358 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=10 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=61.7 tok/s
+2026-04-02 14:54:33,369 INFO Session 88117297a0d741cf turn 2 complete (49 chars generated, delimiter_found=False)
+2026-04-02 14:54:33,369 INFO Session 88117297a0d741cf turn complete: raw=49 chars → content=22 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:33,488 INFO 📊 Generation started: request=(unnamed), prompt_tokens=73
+2026-04-02 14:54:33,488 INFO 🔧 generate_stream_sync: dynamic=73 tok, static=0 tok, total_ctx=73/131072, max_gen=256
+2026-04-02 14:54:33,764 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:54:34,279 INFO 📊 Generation complete: request=(unnamed), prompt=73 tok, generated=32 tok, eval=0.3s, gen=0.5s, total=0.8s, speed=62.2 tok/s
+2026-04-02 14:54:34,287 INFO Session 88117297a0d741cf turn 3 complete (151 chars generated, delimiter_found=False)
+2026-04-02 14:54:34,287 INFO Session 88117297a0d741cf turn complete: raw=151 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:34,291 INFO 📌 Session 88117297a0d741cf ended (turns=3, duration=7.4s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:54:34,429 INFO 📊 Generation started: request=(unnamed), prompt_tokens=3010
+2026-04-02 14:54:34,429 INFO 🔧 generate_stream_sync: dynamic=1673 tok, static=1337 tok, total_ctx=3010/131072, max_gen=128062
+2026-04-02 14:54:36,544 INFO 📊 First token arrived after 2.1s eval (request=(unnamed))
+2026-04-02 14:55:00,330 INFO 📊 Generation complete: request=(unnamed), prompt=3010 tok, generated=1419 tok, eval=2.1s, gen=23.8s, total=25.9s, speed=59.7 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:00,855 INFO 📌 Session accae43aeb1a4f9a started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:00,974 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1440
+2026-04-02 14:55:00,975 INFO 🔧 generate_stream_sync: dynamic=103 tok, static=1337 tok, total_ctx=1440/131072, max_gen=256
+2026-04-02 14:55:01,266 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:55:07,308 INFO 📊 Generation complete: request=(unnamed), prompt=1440 tok, generated=256 tok, eval=0.3s, gen=6.0s, total=6.3s, speed=42.4 tok/s
+2026-04-02 14:55:07,342 INFO Session accae43aeb1a4f9a turn 1 complete (1271 chars generated, delimiter_found=False)
+2026-04-02 14:55:07,358 INFO Session accae43aeb1a4f9a turn complete: raw=1271 chars → content=0 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:07,364 INFO 📌 Session accae43aeb1a4f9a ended (turns=1, duration=6.5s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:07,484 INFO 📌 Session 97ad0d54fff24e48 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:07,603 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1440
+2026-04-02 14:55:07,603 INFO 🔧 generate_stream_sync: dynamic=103 tok, static=1337 tok, total_ctx=1440/131072, max_gen=256
+2026-04-02 14:55:07,897 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:55:10,085 INFO 📊 Generation complete: request=(unnamed), prompt=1440 tok, generated=140 tok, eval=0.3s, gen=2.2s, total=2.5s, speed=64.0 tok/s
+2026-04-02 14:55:10,092 INFO Session 97ad0d54fff24e48 turn 1 complete (838 chars generated, delimiter_found=False)
+2026-04-02 14:55:10,097 INFO Session 97ad0d54fff24e48 turn complete: raw=838 chars → content=507 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:10,215 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:55:10,215 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:55:10,613 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:55:10,817 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=13 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=63.5 tok/s
+2026-04-02 14:55:10,827 INFO Session 97ad0d54fff24e48 turn 2 complete (53 chars generated, delimiter_found=False)
+2026-04-02 14:55:10,828 INFO Session 97ad0d54fff24e48 turn complete: raw=53 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:10,941 INFO 📊 Generation started: request=(unnamed), prompt_tokens=76
+2026-04-02 14:55:10,941 INFO 🔧 generate_stream_sync: dynamic=76 tok, static=0 tok, total_ctx=76/131072, max_gen=256
+2026-04-02 14:55:11,223 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:55:12,079 INFO 📊 Generation complete: request=(unnamed), prompt=76 tok, generated=52 tok, eval=0.3s, gen=0.9s, total=1.1s, speed=60.7 tok/s
+2026-04-02 14:55:12,105 INFO Session 97ad0d54fff24e48 turn 3 complete (185 chars generated, delimiter_found=False)
+2026-04-02 14:55:12,107 INFO Session 97ad0d54fff24e48 turn complete: raw=185 chars → content=30 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:12,116 INFO 📌 Session 97ad0d54fff24e48 ended (turns=3, duration=4.6s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:12,261 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2247
+2026-04-02 14:55:12,261 INFO 🔧 generate_stream_sync: dynamic=910 tok, static=1337 tok, total_ctx=2247/131072, max_gen=128825
+2026-04-02 14:55:13,379 INFO 📊 First token arrived after 1.1s eval (request=(unnamed))
+2026-04-02 14:55:19,936 INFO 📊 Generation complete: request=(unnamed), prompt=2247 tok, generated=393 tok, eval=1.1s, gen=6.6s, total=7.7s, speed=59.9 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:20,243 INFO 📌 Session 1db34f2a47064fb0 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:20,361 INFO 📊 Generation started: request=(unnamed), prompt_tokens=390
+2026-04-02 14:55:20,361 INFO 🔧 generate_stream_sync: dynamic=390 tok, static=0 tok, total_ctx=390/131072, max_gen=256
+2026-04-02 14:55:20,878 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 14:55:24,920 INFO 📊 Generation complete: request=(unnamed), prompt=390 tok, generated=248 tok, eval=0.5s, gen=4.0s, total=4.6s, speed=61.4 tok/s
+2026-04-02 14:55:24,934 INFO Session 1db34f2a47064fb0 turn 1 complete (1154 chars generated, delimiter_found=False)
+2026-04-02 14:55:24,944 INFO Session 1db34f2a47064fb0 turn complete: raw=1154 chars → content=95 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:26,398 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1519
+2026-04-02 14:55:26,399 INFO 🔧 generate_stream_sync: dynamic=182 tok, static=1337 tok, total_ctx=1519/131072, max_gen=200
+2026-04-02 14:55:26,793 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:55:28,348 INFO 📊 Generation complete: request=(unnamed), prompt=1519 tok, generated=98 tok, eval=0.4s, gen=1.6s, total=1.9s, speed=63.0 tok/s
+2026-04-02 14:55:28,359 INFO Session 1db34f2a47064fb0 turn 2 complete (483 chars generated, delimiter_found=False)
+2026-04-02 14:55:28,362 INFO Session 1db34f2a47064fb0 turn complete: raw=483 chars → content=0 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:28,480 INFO 📊 Generation started: request=(unnamed), prompt_tokens=89
+2026-04-02 14:55:28,480 INFO 🔧 generate_stream_sync: dynamic=89 tok, static=0 tok, total_ctx=89/131072, max_gen=256
+2026-04-02 14:55:28,785 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:55:29,740 INFO 📊 Generation complete: request=(unnamed), prompt=89 tok, generated=60 tok, eval=0.3s, gen=1.0s, total=1.3s, speed=62.8 tok/s
+2026-04-02 14:55:29,747 INFO Session 1db34f2a47064fb0 turn 3 complete (326 chars generated, delimiter_found=False)
+2026-04-02 14:55:29,748 INFO Session 1db34f2a47064fb0 turn complete: raw=326 chars → content=27 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:29,868 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1482
+2026-04-02 14:55:29,868 INFO 🔧 generate_stream_sync: dynamic=145 tok, static=1337 tok, total_ctx=1482/131072, max_gen=300
+2026-04-02 14:55:30,250 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:55:32,969 INFO 📊 Generation complete: request=(unnamed), prompt=1482 tok, generated=148 tok, eval=0.4s, gen=2.7s, total=3.1s, speed=54.4 tok/s
+2026-04-02 14:55:32,989 INFO Session 1db34f2a47064fb0 turn 4 complete (695 chars generated, delimiter_found=False)
+2026-04-02 14:55:32,998 INFO Session 1db34f2a47064fb0 turn complete: raw=695 chars → content=578 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:33,007 INFO 📌 Session 1db34f2a47064fb0 ended (turns=4, duration=12.8s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:33,130 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2865
+2026-04-02 14:55:33,130 INFO 🔧 generate_stream_sync: dynamic=1528 tok, static=1337 tok, total_ctx=2865/131072, max_gen=128207
+2026-04-02 14:55:34,904 INFO 📊 First token arrived after 1.8s eval (request=(unnamed))
+2026-04-02 14:55:36,049 INFO 📊 Generation complete: request=(unnamed), prompt=2865 tok, generated=72 tok, eval=1.8s, gen=1.1s, total=2.9s, speed=62.9 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:36,175 INFO 📌 Session 5194f74365db4201 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:36,294 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1246
+2026-04-02 14:55:36,294 INFO 🔧 generate_stream_sync: dynamic=1246 tok, static=0 tok, total_ctx=1246/131072, max_gen=256
+2026-04-02 14:55:37,872 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:55:41,963 INFO 📊 Generation complete: request=(unnamed), prompt=1246 tok, generated=256 tok, eval=1.6s, gen=4.1s, total=5.7s, speed=62.6 tok/s
+2026-04-02 14:55:41,988 INFO Session 5194f74365db4201 turn 1 complete (1406 chars generated, delimiter_found=False)
+2026-04-02 14:55:42,005 INFO Session 5194f74365db4201 turn complete: raw=1406 chars → content=473 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:42,127 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:55:42,127 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:55:42,553 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:55:42,731 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=11 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=61.9 tok/s
+2026-04-02 14:55:42,759 INFO Session 5194f74365db4201 turn 2 complete (55 chars generated, delimiter_found=False)
+2026-04-02 14:55:42,759 INFO Session 5194f74365db4201 turn complete: raw=55 chars → content=28 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:42,878 INFO 📊 Generation started: request=(unnamed), prompt_tokens=83
+2026-04-02 14:55:42,879 INFO 🔧 generate_stream_sync: dynamic=83 tok, static=0 tok, total_ctx=83/131072, max_gen=256
+2026-04-02 14:55:43,170 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:55:43,813 INFO 📊 Generation complete: request=(unnamed), prompt=83 tok, generated=40 tok, eval=0.3s, gen=0.6s, total=0.9s, speed=62.2 tok/s
+2026-04-02 14:55:43,820 INFO Session 5194f74365db4201 turn 3 complete (147 chars generated, delimiter_found=False)
+2026-04-02 14:55:43,821 INFO Session 5194f74365db4201 turn complete: raw=147 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:43,939 INFO 📊 Generation started: request=(unnamed), prompt_tokens=245
+2026-04-02 14:55:43,939 INFO 🔧 generate_stream_sync: dynamic=245 tok, static=0 tok, total_ctx=245/131072, max_gen=256
+2026-04-02 14:55:44,365 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:55:48,621 INFO 📊 Generation complete: request=(unnamed), prompt=245 tok, generated=256 tok, eval=0.4s, gen=4.3s, total=4.7s, speed=60.2 tok/s
+2026-04-02 14:55:48,631 INFO Session 5194f74365db4201 turn 4 complete (1683 chars generated, delimiter_found=False)
+2026-04-02 14:55:48,645 INFO Session 5194f74365db4201 turn complete: raw=1683 chars → content=0 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:48,648 INFO 📌 Session 5194f74365db4201 ended (turns=4, duration=12.5s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:48,787 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2568
+2026-04-02 14:55:48,787 INFO 🔧 generate_stream_sync: dynamic=1231 tok, static=1337 tok, total_ctx=2568/131072, max_gen=128504
+2026-04-02 14:55:50,379 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:55:57,455 INFO 📊 Generation complete: request=(unnamed), prompt=2568 tok, generated=437 tok, eval=1.6s, gen=7.1s, total=8.7s, speed=61.8 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:55:57,608 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2412
+2026-04-02 14:55:57,608 INFO 🔧 generate_stream_sync: dynamic=1075 tok, static=1337 tok, total_ctx=2412/131072, max_gen=128660
+2026-04-02 14:55:59,052 INFO 📊 First token arrived after 1.4s eval (request=(unnamed))
+2026-04-02 14:56:16,206 INFO 📊 Generation complete: request=(unnamed), prompt=2412 tok, generated=1016 tok, eval=1.4s, gen=17.1s, total=18.6s, speed=59.2 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:56:16,506 INFO 📌 Session add54bc4396b406b started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:56:16,624 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1287
+2026-04-02 14:56:16,624 INFO 🔧 generate_stream_sync: dynamic=1287 tok, static=0 tok, total_ctx=1287/131072, max_gen=256
+2026-04-02 14:56:18,231 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:56:22,301 INFO 📊 Generation complete: request=(unnamed), prompt=1287 tok, generated=256 tok, eval=1.6s, gen=4.1s, total=5.7s, speed=62.9 tok/s
+2026-04-02 14:56:22,311 INFO Session add54bc4396b406b turn 1 complete (1232 chars generated, delimiter_found=False)
+2026-04-02 14:56:22,323 INFO Session add54bc4396b406b turn complete: raw=1232 chars → content=549 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:56:22,447 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:56:22,447 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:56:22,869 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:56:23,031 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=10 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=61.8 tok/s
+2026-04-02 14:56:23,062 INFO Session add54bc4396b406b turn 2 complete (49 chars generated, delimiter_found=False)
+2026-04-02 14:56:23,062 INFO Session add54bc4396b406b turn complete: raw=49 chars → content=22 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:56:23,195 INFO 📊 Generation started: request=(unnamed), prompt_tokens=73
+2026-04-02 14:56:23,195 INFO 🔧 generate_stream_sync: dynamic=73 tok, static=0 tok, total_ctx=73/131072, max_gen=256
+2026-04-02 14:56:23,477 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:56:23,991 INFO 📊 Generation complete: request=(unnamed), prompt=73 tok, generated=32 tok, eval=0.3s, gen=0.5s, total=0.8s, speed=62.2 tok/s
+2026-04-02 14:56:23,999 INFO Session add54bc4396b406b turn 3 complete (151 chars generated, delimiter_found=False)
+2026-04-02 14:56:24,000 INFO Session add54bc4396b406b turn complete: raw=151 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:56:24,004 INFO 📌 Session add54bc4396b406b ended (turns=3, duration=7.5s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:56:24,144 INFO 📊 Generation started: request=(unnamed), prompt_tokens=3491
+2026-04-02 14:56:24,144 INFO 🔧 generate_stream_sync: dynamic=2154 tok, static=1337 tok, total_ctx=3491/131072, max_gen=127581
+2026-04-02 14:56:26,844 INFO 📊 First token arrived after 2.7s eval (request=(unnamed))
+2026-04-02 14:56:59,106 INFO 📊 Generation complete: request=(unnamed), prompt=3491 tok, generated=1934 tok, eval=2.7s, gen=32.3s, total=35.0s, speed=59.9 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:56:59,877 INFO 📌 Session 0c9d093e1d4e4acc started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:56:59,996 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1225
+2026-04-02 14:56:59,996 INFO 🔧 generate_stream_sync: dynamic=1225 tok, static=0 tok, total_ctx=1225/131072, max_gen=256
+2026-04-02 14:57:01,554 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:57:05,623 INFO 📊 Generation complete: request=(unnamed), prompt=1225 tok, generated=256 tok, eval=1.6s, gen=4.1s, total=5.6s, speed=62.9 tok/s
+2026-04-02 14:57:05,633 INFO Session 0c9d093e1d4e4acc turn 1 complete (1253 chars generated, delimiter_found=False)
+2026-04-02 14:57:05,644 INFO Session 0c9d093e1d4e4acc turn complete: raw=1253 chars → content=378 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:05,785 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:57:05,785 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:57:06,207 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:57:06,416 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=13 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=62.0 tok/s
+2026-04-02 14:57:06,427 INFO Session 0c9d093e1d4e4acc turn 2 complete (53 chars generated, delimiter_found=False)
+2026-04-02 14:57:06,428 INFO Session 0c9d093e1d4e4acc turn complete: raw=53 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:06,547 INFO 📊 Generation started: request=(unnamed), prompt_tokens=83
+2026-04-02 14:57:06,547 INFO 🔧 generate_stream_sync: dynamic=83 tok, static=0 tok, total_ctx=83/131072, max_gen=256
+2026-04-02 14:57:06,844 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:57:07,746 INFO 📊 Generation complete: request=(unnamed), prompt=83 tok, generated=56 tok, eval=0.3s, gen=0.9s, total=1.2s, speed=62.1 tok/s
+2026-04-02 14:57:07,754 INFO Session 0c9d093e1d4e4acc turn 3 complete (210 chars generated, delimiter_found=False)
+2026-04-02 14:57:07,755 INFO Session 0c9d093e1d4e4acc turn complete: raw=210 chars → content=30 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:07,758 INFO 📌 Session 0c9d093e1d4e4acc ended (turns=3, duration=7.9s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:07,896 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2250
+2026-04-02 14:57:07,896 INFO 🔧 generate_stream_sync: dynamic=913 tok, static=1337 tok, total_ctx=2250/131072, max_gen=128822
+2026-04-02 14:57:09,011 INFO 📊 First token arrived after 1.1s eval (request=(unnamed))
+2026-04-02 14:57:16,663 INFO 📊 Generation complete: request=(unnamed), prompt=2250 tok, generated=454 tok, eval=1.1s, gen=7.7s, total=8.8s, speed=59.3 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:16,982 INFO 📌 Session 48865afd68dd4da0 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:17,097 INFO 📊 Generation started: request=(unnamed), prompt_tokens=365
+2026-04-02 14:57:17,098 INFO 🔧 generate_stream_sync: dynamic=365 tok, static=0 tok, total_ctx=365/131072, max_gen=256
+2026-04-02 14:57:17,597 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 14:57:18,942 INFO 📊 Generation complete: request=(unnamed), prompt=365 tok, generated=64 tok, eval=0.5s, gen=1.4s, total=1.8s, speed=47.6 tok/s
+2026-04-02 14:57:18,961 INFO Session 48865afd68dd4da0 turn 1 complete (321 chars generated, delimiter_found=False)
+2026-04-02 14:57:18,964 INFO Session 48865afd68dd4da0 turn complete: raw=321 chars → content=21 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:19,213 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1388
+2026-04-02 14:57:19,214 INFO 🔧 generate_stream_sync: dynamic=51 tok, static=1337 tok, total_ctx=1388/131072, max_gen=200
+2026-04-02 14:57:19,446 INFO 📊 First token arrived after 0.2s eval (request=(unnamed))
+2026-04-02 14:57:20,501 INFO 📊 Generation complete: request=(unnamed), prompt=1388 tok, generated=67 tok, eval=0.2s, gen=1.1s, total=1.3s, speed=63.5 tok/s
+2026-04-02 14:57:20,507 INFO Session 48865afd68dd4da0 turn 2 complete (360 chars generated, delimiter_found=False)
+2026-04-02 14:57:20,509 INFO Session 48865afd68dd4da0 turn complete: raw=360 chars → content=21 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:20,625 INFO 📊 Generation started: request=(unnamed), prompt_tokens=87
+2026-04-02 14:57:20,625 INFO 🔧 generate_stream_sync: dynamic=87 tok, static=0 tok, total_ctx=87/131072, max_gen=256
+2026-04-02 14:57:20,924 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:57:21,665 INFO 📊 Generation complete: request=(unnamed), prompt=87 tok, generated=47 tok, eval=0.3s, gen=0.7s, total=1.0s, speed=63.4 tok/s
+2026-04-02 14:57:21,671 INFO Session 48865afd68dd4da0 turn 3 complete (267 chars generated, delimiter_found=False)
+2026-04-02 14:57:21,672 INFO Session 48865afd68dd4da0 turn complete: raw=267 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:21,790 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1442
+2026-04-02 14:57:21,790 INFO 🔧 generate_stream_sync: dynamic=105 tok, static=1337 tok, total_ctx=1442/131072, max_gen=256
+2026-04-02 14:57:22,119 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:57:25,948 INFO 📊 Generation complete: request=(unnamed), prompt=1442 tok, generated=205 tok, eval=0.3s, gen=3.8s, total=4.2s, speed=53.5 tok/s
+2026-04-02 14:57:25,954 INFO Session 48865afd68dd4da0 turn 4 complete (970 chars generated, delimiter_found=False)
+2026-04-02 14:57:25,962 INFO Session 48865afd68dd4da0 turn complete: raw=970 chars → content=39 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:26,196 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1347
+2026-04-02 14:57:26,197 INFO 🔧 generate_stream_sync: dynamic=10 tok, static=1337 tok, total_ctx=1347/131072, max_gen=200
+2026-04-02 14:57:26,269 INFO 📊 First token arrived after 0.1s eval (request=(unnamed))
+2026-04-02 14:57:27,322 INFO 📊 Generation complete: request=(unnamed), prompt=1347 tok, generated=66 tok, eval=0.1s, gen=1.1s, total=1.1s, speed=62.7 tok/s
+2026-04-02 14:57:27,328 INFO Session 48865afd68dd4da0 turn 5 complete (331 chars generated, delimiter_found=False)
+2026-04-02 14:57:27,330 INFO Session 48865afd68dd4da0 turn complete: raw=331 chars → content=39 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:27,447 INFO 📊 Generation started: request=(unnamed), prompt_tokens=93
+2026-04-02 14:57:27,447 INFO 🔧 generate_stream_sync: dynamic=93 tok, static=0 tok, total_ctx=93/131072, max_gen=256
+2026-04-02 14:57:27,754 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:57:29,576 INFO 📊 Generation complete: request=(unnamed), prompt=93 tok, generated=112 tok, eval=0.3s, gen=1.8s, total=2.1s, speed=61.5 tok/s
+2026-04-02 14:57:29,583 INFO Session 48865afd68dd4da0 turn 6 complete (569 chars generated, delimiter_found=False)
+2026-04-02 14:57:29,586 INFO Session 48865afd68dd4da0 turn complete: raw=569 chars → content=185 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:29,707 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2482
+2026-04-02 14:57:29,707 INFO 🔧 generate_stream_sync: dynamic=1145 tok, static=1337 tok, total_ctx=2482/131072, max_gen=256
+2026-04-02 14:57:31,285 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:57:32,259 INFO 📊 Generation complete: request=(unnamed), prompt=2482 tok, generated=60 tok, eval=1.6s, gen=1.0s, total=2.5s, speed=61.6 tok/s
+2026-04-02 14:57:32,294 INFO Session 48865afd68dd4da0 turn 7 complete (296 chars generated, delimiter_found=False)
+2026-04-02 14:57:32,295 INFO Session 48865afd68dd4da0 turn complete: raw=296 chars → content=0 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:32,302 INFO 📌 Session 48865afd68dd4da0 ended (turns=7, duration=15.3s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:32,424 INFO 📊 Generation started: request=(unnamed), prompt_tokens=3667
+2026-04-02 14:57:32,424 INFO 🔧 generate_stream_sync: dynamic=2330 tok, static=1337 tok, total_ctx=3667/131072, max_gen=127405
+2026-04-02 14:57:35,221 INFO 📊 First token arrived after 2.8s eval (request=(unnamed))
+2026-04-02 14:57:36,780 INFO 📊 Generation complete: request=(unnamed), prompt=3667 tok, generated=97 tok, eval=2.8s, gen=1.6s, total=4.4s, speed=62.2 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:36,907 INFO 📌 Session b7d156de45a44632 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:37,025 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1216
+2026-04-02 14:57:37,025 INFO 🔧 generate_stream_sync: dynamic=1216 tok, static=0 tok, total_ctx=1216/131072, max_gen=256
+2026-04-02 14:57:38,572 INFO 📊 First token arrived after 1.5s eval (request=(unnamed))
+2026-04-02 14:57:42,639 INFO 📊 Generation complete: request=(unnamed), prompt=1216 tok, generated=256 tok, eval=1.6s, gen=4.1s, total=5.6s, speed=62.9 tok/s
+2026-04-02 14:57:42,648 INFO Session b7d156de45a44632 turn 1 complete (1286 chars generated, delimiter_found=False)
+2026-04-02 14:57:42,659 INFO Session b7d156de45a44632 turn complete: raw=1286 chars → content=581 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:42,782 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:57:42,782 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:57:43,198 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:57:43,359 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=10 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=61.9 tok/s
+2026-04-02 14:57:43,369 INFO Session b7d156de45a44632 turn 2 complete (49 chars generated, delimiter_found=False)
+2026-04-02 14:57:43,370 INFO Session b7d156de45a44632 turn complete: raw=49 chars → content=22 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:43,488 INFO 📊 Generation started: request=(unnamed), prompt_tokens=83
+2026-04-02 14:57:43,489 INFO 🔧 generate_stream_sync: dynamic=83 tok, static=0 tok, total_ctx=83/131072, max_gen=256
+2026-04-02 14:57:43,782 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:57:44,281 INFO 📊 Generation complete: request=(unnamed), prompt=83 tok, generated=31 tok, eval=0.3s, gen=0.5s, total=0.8s, speed=62.1 tok/s
+2026-04-02 14:57:44,289 INFO Session b7d156de45a44632 turn 3 complete (137 chars generated, delimiter_found=False)
+2026-04-02 14:57:44,290 INFO Session b7d156de45a44632 turn complete: raw=137 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:44,294 INFO 📌 Session b7d156de45a44632 ended (turns=3, duration=7.4s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:44,439 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2250
+2026-04-02 14:57:44,439 INFO 🔧 generate_stream_sync: dynamic=913 tok, static=1337 tok, total_ctx=2250/131072, max_gen=128822
+2026-04-02 14:57:45,560 INFO 📊 First token arrived after 1.1s eval (request=(unnamed))
+2026-04-02 14:57:52,679 INFO 📊 Generation complete: request=(unnamed), prompt=2250 tok, generated=400 tok, eval=1.1s, gen=7.1s, total=8.2s, speed=56.2 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:53,006 INFO 📌 Session 8c1f926981524d18 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:53,122 INFO 📊 Generation started: request=(unnamed), prompt_tokens=387
+2026-04-02 14:57:53,122 INFO 🔧 generate_stream_sync: dynamic=387 tok, static=0 tok, total_ctx=387/131072, max_gen=256
+2026-04-02 14:57:53,633 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 14:57:54,603 INFO 📊 Generation complete: request=(unnamed), prompt=387 tok, generated=50 tok, eval=0.5s, gen=1.0s, total=1.5s, speed=51.6 tok/s
+2026-04-02 14:57:54,623 INFO Session 8c1f926981524d18 turn 1 complete (270 chars generated, delimiter_found=False)
+2026-04-02 14:57:54,625 INFO Session 8c1f926981524d18 turn complete: raw=270 chars → content=21 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:54,869 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1410
+2026-04-02 14:57:54,869 INFO 🔧 generate_stream_sync: dynamic=73 tok, static=1337 tok, total_ctx=1410/131072, max_gen=200
+2026-04-02 14:57:55,133 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:57:58,263 INFO 📊 Generation complete: request=(unnamed), prompt=1410 tok, generated=200 tok, eval=0.3s, gen=3.1s, total=3.4s, speed=63.9 tok/s
+2026-04-02 14:57:58,269 INFO Session 8c1f926981524d18 turn 2 complete (950 chars generated, delimiter_found=False)
+2026-04-02 14:57:58,277 INFO Session 8c1f926981524d18 turn complete: raw=950 chars → content=108 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:58,393 INFO 📊 Generation started: request=(unnamed), prompt_tokens=105
+2026-04-02 14:57:58,393 INFO 🔧 generate_stream_sync: dynamic=105 tok, static=0 tok, total_ctx=105/131072, max_gen=256
+2026-04-02 14:57:58,716 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:57:58,895 INFO 📊 Generation complete: request=(unnamed), prompt=105 tok, generated=11 tok, eval=0.3s, gen=0.2s, total=0.5s, speed=61.6 tok/s
+2026-04-02 14:57:58,909 INFO Session 8c1f926981524d18 turn 3 complete (61 chars generated, delimiter_found=False)
+2026-04-02 14:57:58,909 INFO Session 8c1f926981524d18 turn complete: raw=61 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:57:59,036 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1464
+2026-04-02 14:57:59,036 INFO 🔧 generate_stream_sync: dynamic=127 tok, static=1337 tok, total_ctx=1464/131072, max_gen=256
+2026-04-02 14:57:59,362 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:58:00,886 INFO 📊 Generation complete: request=(unnamed), prompt=1464 tok, generated=96 tok, eval=0.3s, gen=1.5s, total=1.9s, speed=63.0 tok/s
+2026-04-02 14:58:00,893 INFO Session 8c1f926981524d18 turn 4 complete (468 chars generated, delimiter_found=False)
+2026-04-02 14:58:00,895 INFO Session 8c1f926981524d18 turn complete: raw=468 chars → content=39 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:01,132 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1369
+2026-04-02 14:58:01,132 INFO 🔧 generate_stream_sync: dynamic=32 tok, static=1337 tok, total_ctx=1369/131072, max_gen=200
+2026-04-02 14:58:01,331 INFO 📊 First token arrived after 0.2s eval (request=(unnamed))
+2026-04-02 14:58:02,445 INFO 📊 Generation complete: request=(unnamed), prompt=1369 tok, generated=70 tok, eval=0.2s, gen=1.1s, total=1.3s, speed=62.9 tok/s
+2026-04-02 14:58:02,453 INFO Session 8c1f926981524d18 turn 5 complete (342 chars generated, delimiter_found=False)
+2026-04-02 14:58:02,455 INFO Session 8c1f926981524d18 turn complete: raw=342 chars → content=39 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:02,576 INFO 📊 Generation started: request=(unnamed), prompt_tokens=93
+2026-04-02 14:58:02,576 INFO 🔧 generate_stream_sync: dynamic=93 tok, static=0 tok, total_ctx=93/131072, max_gen=256
+2026-04-02 14:58:02,886 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:58:03,542 INFO 📊 Generation complete: request=(unnamed), prompt=93 tok, generated=41 tok, eval=0.3s, gen=0.7s, total=1.0s, speed=62.6 tok/s
+2026-04-02 14:58:03,549 INFO Session 8c1f926981524d18 turn 6 complete (232 chars generated, delimiter_found=False)
+2026-04-02 14:58:03,550 INFO Session 8c1f926981524d18 turn complete: raw=232 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:03,683 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2504
+2026-04-02 14:58:03,683 INFO 🔧 generate_stream_sync: dynamic=1167 tok, static=1337 tok, total_ctx=2504/131072, max_gen=256
+2026-04-02 14:58:05,275 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:58:06,524 INFO 📊 Generation complete: request=(unnamed), prompt=2504 tok, generated=77 tok, eval=1.6s, gen=1.2s, total=2.8s, speed=61.7 tok/s
+2026-04-02 14:58:06,561 INFO Session 8c1f926981524d18 turn 7 complete (374 chars generated, delimiter_found=False)
+2026-04-02 14:58:06,563 INFO Session 8c1f926981524d18 turn complete: raw=374 chars → content=0 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:06,569 INFO 📌 Session 8c1f926981524d18 ended (turns=7, duration=13.6s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:06,689 INFO 📊 Generation started: request=(unnamed), prompt_tokens=3667
+2026-04-02 14:58:06,689 INFO 🔧 generate_stream_sync: dynamic=2330 tok, static=1337 tok, total_ctx=3667/131072, max_gen=127405
+2026-04-02 14:58:09,490 INFO 📊 First token arrived after 2.8s eval (request=(unnamed))
+2026-04-02 14:58:11,787 INFO 📊 Generation complete: request=(unnamed), prompt=3667 tok, generated=143 tok, eval=2.8s, gen=2.3s, total=5.1s, speed=62.3 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:11,916 INFO 📌 Session 667df477219e4cfb started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:12,034 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1217
+2026-04-02 14:58:12,034 INFO 🔧 generate_stream_sync: dynamic=1217 tok, static=0 tok, total_ctx=1217/131072, max_gen=256
+2026-04-02 14:58:13,585 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:58:17,752 INFO 📊 Generation complete: request=(unnamed), prompt=1217 tok, generated=249 tok, eval=1.6s, gen=4.2s, total=5.7s, speed=59.7 tok/s
+2026-04-02 14:58:17,762 INFO Session 667df477219e4cfb turn 1 complete (1255 chars generated, delimiter_found=False)
+2026-04-02 14:58:17,773 INFO Session 667df477219e4cfb turn complete: raw=1255 chars → content=543 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:17,894 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:58:17,894 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:58:18,306 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:58:18,468 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=10 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=61.8 tok/s
+2026-04-02 14:58:18,479 INFO Session 667df477219e4cfb turn 2 complete (49 chars generated, delimiter_found=False)
+2026-04-02 14:58:18,479 INFO Session 667df477219e4cfb turn complete: raw=49 chars → content=22 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:18,598 INFO 📊 Generation started: request=(unnamed), prompt_tokens=83
+2026-04-02 14:58:18,598 INFO 🔧 generate_stream_sync: dynamic=83 tok, static=0 tok, total_ctx=83/131072, max_gen=256
+2026-04-02 14:58:18,887 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:58:19,701 INFO 📊 Generation complete: request=(unnamed), prompt=83 tok, generated=39 tok, eval=0.3s, gen=0.8s, total=1.1s, speed=47.9 tok/s
+2026-04-02 14:58:19,723 INFO Session 667df477219e4cfb turn 3 complete (144 chars generated, delimiter_found=False)
+2026-04-02 14:58:19,724 INFO Session 667df477219e4cfb turn complete: raw=144 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:19,731 INFO 📌 Session 667df477219e4cfb ended (turns=3, duration=7.8s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:19,875 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2250
+2026-04-02 14:58:19,875 INFO 🔧 generate_stream_sync: dynamic=913 tok, static=1337 tok, total_ctx=2250/131072, max_gen=128822
+2026-04-02 14:58:20,990 INFO 📊 First token arrived after 1.1s eval (request=(unnamed))
+2026-04-02 14:58:28,844 INFO 📊 Generation complete: request=(unnamed), prompt=2250 tok, generated=399 tok, eval=1.1s, gen=7.8s, total=9.0s, speed=50.8 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:29,232 INFO 📌 Session 3714ed1eb8804a48 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:29,362 INFO 📊 Generation started: request=(unnamed), prompt_tokens=382
+2026-04-02 14:58:29,362 INFO 🔧 generate_stream_sync: dynamic=382 tok, static=0 tok, total_ctx=382/131072, max_gen=256
+2026-04-02 14:58:29,872 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 14:58:31,851 INFO 📊 Generation complete: request=(unnamed), prompt=382 tok, generated=87 tok, eval=0.5s, gen=2.0s, total=2.5s, speed=44.0 tok/s
+2026-04-02 14:58:31,871 INFO Session 3714ed1eb8804a48 turn 1 complete (435 chars generated, delimiter_found=False)
+2026-04-02 14:58:31,876 INFO Session 3714ed1eb8804a48 turn complete: raw=435 chars → content=21 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:32,120 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1405
+2026-04-02 14:58:32,120 INFO 🔧 generate_stream_sync: dynamic=68 tok, static=1337 tok, total_ctx=1405/131072, max_gen=200
+2026-04-02 14:58:32,379 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:58:33,373 INFO 📊 Generation complete: request=(unnamed), prompt=1405 tok, generated=63 tok, eval=0.3s, gen=1.0s, total=1.2s, speed=63.4 tok/s
+2026-04-02 14:58:33,379 INFO Session 3714ed1eb8804a48 turn 2 complete (329 chars generated, delimiter_found=False)
+2026-04-02 14:58:33,380 INFO Session 3714ed1eb8804a48 turn complete: raw=329 chars → content=21 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:33,497 INFO 📊 Generation started: request=(unnamed), prompt_tokens=87
+2026-04-02 14:58:33,497 INFO 🔧 generate_stream_sync: dynamic=87 tok, static=0 tok, total_ctx=87/131072, max_gen=256
+2026-04-02 14:58:33,794 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:58:34,524 INFO 📊 Generation complete: request=(unnamed), prompt=87 tok, generated=46 tok, eval=0.3s, gen=0.7s, total=1.0s, speed=63.0 tok/s
+2026-04-02 14:58:34,530 INFO Session 3714ed1eb8804a48 turn 3 complete (266 chars generated, delimiter_found=False)
+2026-04-02 14:58:34,531 INFO Session 3714ed1eb8804a48 turn complete: raw=266 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:34,649 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1459
+2026-04-02 14:58:34,650 INFO 🔧 generate_stream_sync: dynamic=122 tok, static=1337 tok, total_ctx=1459/131072, max_gen=256
+2026-04-02 14:58:34,993 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:58:39,435 INFO 📊 Generation complete: request=(unnamed), prompt=1459 tok, generated=256 tok, eval=0.3s, gen=4.4s, total=4.8s, speed=57.6 tok/s
+2026-04-02 14:58:39,442 INFO Session 3714ed1eb8804a48 turn 4 complete (1182 chars generated, delimiter_found=False)
+2026-04-02 14:58:39,452 INFO Session 3714ed1eb8804a48 turn complete: raw=1182 chars → content=41 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:39,574 INFO 📊 Generation started: request=(unnamed), prompt_tokens=365
+2026-04-02 14:58:39,574 INFO 🔧 generate_stream_sync: dynamic=365 tok, static=0 tok, total_ctx=365/131072, max_gen=200
+2026-04-02 14:58:40,114 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 14:58:42,598 INFO 📊 Generation complete: request=(unnamed), prompt=365 tok, generated=155 tok, eval=0.5s, gen=2.5s, total=3.0s, speed=62.4 tok/s
+2026-04-02 14:58:42,606 INFO Session 3714ed1eb8804a48 turn 5 complete (721 chars generated, delimiter_found=False)
+2026-04-02 14:58:42,611 INFO Session 3714ed1eb8804a48 turn complete: raw=721 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:42,731 INFO 📊 Generation started: request=(unnamed), prompt_tokens=89
+2026-04-02 14:58:42,731 INFO 🔧 generate_stream_sync: dynamic=89 tok, static=0 tok, total_ctx=89/131072, max_gen=256
+2026-04-02 14:58:43,026 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:58:45,353 INFO 📊 Generation complete: request=(unnamed), prompt=89 tok, generated=142 tok, eval=0.3s, gen=2.3s, total=2.6s, speed=61.0 tok/s
+2026-04-02 14:58:45,377 INFO Session 3714ed1eb8804a48 turn 6 complete (641 chars generated, delimiter_found=False)
+2026-04-02 14:58:45,383 INFO Session 3714ed1eb8804a48 turn complete: raw=641 chars → content=110 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:45,504 INFO 📊 Generation started: request=(unnamed), prompt_tokens=60
+2026-04-02 14:58:45,504 INFO 🔧 generate_stream_sync: dynamic=60 tok, static=0 tok, total_ctx=60/131072, max_gen=256
+2026-04-02 14:58:45,777 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:58:47,178 INFO 📊 Generation complete: request=(unnamed), prompt=60 tok, generated=87 tok, eval=0.3s, gen=1.4s, total=1.7s, speed=62.1 tok/s
+2026-04-02 14:58:47,187 INFO Session 3714ed1eb8804a48 turn 7 complete (462 chars generated, delimiter_found=False)
+2026-04-02 14:58:47,189 INFO Session 3714ed1eb8804a48 turn complete: raw=462 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:47,310 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1500
+2026-04-02 14:58:47,310 INFO 🔧 generate_stream_sync: dynamic=163 tok, static=1337 tok, total_ctx=1500/131072, max_gen=256
+2026-04-02 14:58:47,703 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:58:48,252 INFO 📊 Generation complete: request=(unnamed), prompt=1500 tok, generated=34 tok, eval=0.4s, gen=0.6s, total=0.9s, speed=62.0 tok/s
+2026-04-02 14:58:48,261 INFO Session 3714ed1eb8804a48 turn 8 complete (204 chars generated, delimiter_found=False)
+2026-04-02 14:58:48,261 INFO Session 3714ed1eb8804a48 turn complete: raw=204 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:48,383 INFO 📊 Generation started: request=(unnamed), prompt_tokens=347
+2026-04-02 14:58:48,383 INFO 🔧 generate_stream_sync: dynamic=347 tok, static=0 tok, total_ctx=347/131072, max_gen=200
+2026-04-02 14:58:48,892 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 14:58:49,525 INFO 📊 Generation complete: request=(unnamed), prompt=347 tok, generated=39 tok, eval=0.5s, gen=0.6s, total=1.1s, speed=61.6 tok/s
+2026-04-02 14:58:49,535 INFO Session 3714ed1eb8804a48 turn 9 complete (231 chars generated, delimiter_found=False)
+2026-04-02 14:58:49,536 INFO Session 3714ed1eb8804a48 turn complete: raw=231 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:49,657 INFO 📊 Generation started: request=(unnamed), prompt_tokens=89
+2026-04-02 14:58:49,657 INFO 🔧 generate_stream_sync: dynamic=89 tok, static=0 tok, total_ctx=89/131072, max_gen=256
+2026-04-02 14:58:49,950 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:58:55,982 INFO 📊 Generation complete: request=(unnamed), prompt=89 tok, generated=256 tok, eval=0.3s, gen=6.0s, total=6.3s, speed=42.4 tok/s
+2026-04-02 14:58:56,011 INFO Session 3714ed1eb8804a48 turn 10 complete (755 chars generated, delimiter_found=False)
+2026-04-02 14:58:56,037 INFO Session 3714ed1eb8804a48 turn complete: raw=755 chars → content=593 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:56,161 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1524
+2026-04-02 14:58:56,161 INFO 🔧 generate_stream_sync: dynamic=187 tok, static=1337 tok, total_ctx=1524/131072, max_gen=256
+2026-04-02 14:58:56,591 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:58:58,125 INFO 📊 Generation complete: request=(unnamed), prompt=1524 tok, generated=94 tok, eval=0.4s, gen=1.5s, total=2.0s, speed=61.3 tok/s
+2026-04-02 14:58:58,137 INFO Session 3714ed1eb8804a48 turn 11 complete (408 chars generated, delimiter_found=False)
+2026-04-02 14:58:58,139 INFO Session 3714ed1eb8804a48 turn complete: raw=408 chars → content=110 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:58:58,262 INFO 📊 Generation started: request=(unnamed), prompt_tokens=397
+2026-04-02 14:58:58,262 INFO 🔧 generate_stream_sync: dynamic=397 tok, static=0 tok, total_ctx=397/131072, max_gen=200
+2026-04-02 14:58:58,826 INFO 📊 First token arrived after 0.6s eval (request=(unnamed))
+2026-04-02 14:59:03,206 INFO 📊 Generation complete: request=(unnamed), prompt=397 tok, generated=200 tok, eval=0.6s, gen=4.4s, total=4.9s, speed=45.7 tok/s
+2026-04-02 14:59:03,272 INFO Session 3714ed1eb8804a48 turn 12 complete (988 chars generated, delimiter_found=False)
+2026-04-02 14:59:03,281 INFO Session 3714ed1eb8804a48 turn complete: raw=988 chars → content=80 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:03,405 INFO 📊 Generation started: request=(unnamed), prompt_tokens=103
+2026-04-02 14:59:03,405 INFO 🔧 generate_stream_sync: dynamic=103 tok, static=0 tok, total_ctx=103/131072, max_gen=256
+2026-04-02 14:59:03,741 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:59:08,464 INFO 📊 Generation complete: request=(unnamed), prompt=103 tok, generated=256 tok, eval=0.3s, gen=4.7s, total=5.1s, speed=54.2 tok/s
+2026-04-02 14:59:08,502 INFO Session 3714ed1eb8804a48 turn 13 complete (997 chars generated, delimiter_found=False)
+2026-04-02 14:59:08,521 INFO Session 3714ed1eb8804a48 turn complete: raw=997 chars → content=749 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:08,648 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1597
+2026-04-02 14:59:08,648 INFO 🔧 generate_stream_sync: dynamic=260 tok, static=1337 tok, total_ctx=1597/131072, max_gen=256
+2026-04-02 14:59:09,145 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 14:59:10,472 INFO 📊 Generation complete: request=(unnamed), prompt=1597 tok, generated=77 tok, eval=0.5s, gen=1.3s, total=1.8s, speed=58.0 tok/s
+2026-04-02 14:59:10,542 INFO Session 3714ed1eb8804a48 turn 14 complete (409 chars generated, delimiter_found=False)
+2026-04-02 14:59:10,544 INFO Session 3714ed1eb8804a48 turn complete: raw=409 chars → content=39 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:10,671 INFO 📊 Generation started: request=(unnamed), prompt_tokens=348
+2026-04-02 14:59:10,671 INFO 🔧 generate_stream_sync: dynamic=348 tok, static=0 tok, total_ctx=348/131072, max_gen=200
+2026-04-02 14:59:11,227 INFO 📊 First token arrived after 0.6s eval (request=(unnamed))
+2026-04-02 14:59:13,470 INFO 📊 Generation complete: request=(unnamed), prompt=348 tok, generated=135 tok, eval=0.6s, gen=2.2s, total=2.8s, speed=60.1 tok/s
+2026-04-02 14:59:13,514 INFO Session 3714ed1eb8804a48 turn 15 complete (662 chars generated, delimiter_found=False)
+2026-04-02 14:59:13,519 INFO Session 3714ed1eb8804a48 turn complete: raw=662 chars → content=0 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:13,646 INFO 📊 Generation started: request=(unnamed), prompt_tokens=89
+2026-04-02 14:59:13,646 INFO 🔧 generate_stream_sync: dynamic=89 tok, static=0 tok, total_ctx=89/131072, max_gen=256
+2026-04-02 14:59:13,960 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:59:14,412 INFO 📊 Generation complete: request=(unnamed), prompt=89 tok, generated=27 tok, eval=0.3s, gen=0.5s, total=0.8s, speed=59.7 tok/s
+2026-04-02 14:59:14,442 INFO Session 3714ed1eb8804a48 turn 16 complete (162 chars generated, delimiter_found=False)
+2026-04-02 14:59:14,443 INFO Session 3714ed1eb8804a48 turn complete: raw=162 chars → content=27 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:14,572 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1531
+2026-04-02 14:59:14,573 INFO 🔧 generate_stream_sync: dynamic=194 tok, static=1337 tok, total_ctx=1531/131072, max_gen=300
+2026-04-02 14:59:14,987 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:59:18,027 INFO 📊 Generation complete: request=(unnamed), prompt=1531 tok, generated=163 tok, eval=0.4s, gen=3.0s, total=3.5s, speed=53.6 tok/s
+2026-04-02 14:59:18,075 INFO Session 3714ed1eb8804a48 turn 17 complete (770 chars generated, delimiter_found=False)
+2026-04-02 14:59:18,081 INFO Session 3714ed1eb8804a48 turn complete: raw=770 chars → content=644 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:21,095 INFO 📌 Session 3714ed1eb8804a48 ended (turns=17, duration=51.9s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:21,227 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2934
+2026-04-02 14:59:21,227 INFO 🔧 generate_stream_sync: dynamic=1597 tok, static=1337 tok, total_ctx=2934/131072, max_gen=128138
+2026-04-02 14:59:23,241 INFO 📊 First token arrived after 2.0s eval (request=(unnamed))
+2026-04-02 14:59:25,084 INFO 📊 Generation complete: request=(unnamed), prompt=2934 tok, generated=116 tok, eval=2.0s, gen=1.8s, total=3.9s, speed=62.9 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:25,219 INFO 📌 Session 186dbf76cc994171 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:25,337 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1274
+2026-04-02 14:59:25,338 INFO 🔧 generate_stream_sync: dynamic=1274 tok, static=0 tok, total_ctx=1274/131072, max_gen=256
+2026-04-02 14:59:26,937 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:59:31,435 INFO 📊 Generation complete: request=(unnamed), prompt=1274 tok, generated=256 tok, eval=1.6s, gen=4.5s, total=6.1s, speed=56.9 tok/s
+2026-04-02 14:59:31,462 INFO Session 186dbf76cc994171 turn 1 complete (1256 chars generated, delimiter_found=False)
+2026-04-02 14:59:31,479 INFO Session 186dbf76cc994171 turn complete: raw=1256 chars → content=427 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:31,601 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 14:59:31,602 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 14:59:32,022 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 14:59:32,232 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=13 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=61.9 tok/s
+2026-04-02 14:59:32,244 INFO Session 186dbf76cc994171 turn 2 complete (53 chars generated, delimiter_found=False)
+2026-04-02 14:59:32,244 INFO Session 186dbf76cc994171 turn complete: raw=53 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:32,363 INFO 📊 Generation started: request=(unnamed), prompt_tokens=83
+2026-04-02 14:59:32,363 INFO 🔧 generate_stream_sync: dynamic=83 tok, static=0 tok, total_ctx=83/131072, max_gen=256
+2026-04-02 14:59:32,667 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:59:33,358 INFO 📊 Generation complete: request=(unnamed), prompt=83 tok, generated=43 tok, eval=0.3s, gen=0.7s, total=1.0s, speed=62.2 tok/s
+2026-04-02 14:59:33,367 INFO Session 186dbf76cc994171 turn 3 complete (149 chars generated, delimiter_found=False)
+2026-04-02 14:59:33,367 INFO Session 186dbf76cc994171 turn complete: raw=149 chars → content=30 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:33,371 INFO 📌 Session 186dbf76cc994171 ended (turns=3, duration=8.2s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:33,509 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2250
+2026-04-02 14:59:33,509 INFO 🔧 generate_stream_sync: dynamic=913 tok, static=1337 tok, total_ctx=2250/131072, max_gen=128822
+2026-04-02 14:59:34,623 INFO 📊 First token arrived after 1.1s eval (request=(unnamed))
+2026-04-02 14:59:44,243 INFO 📊 Generation complete: request=(unnamed), prompt=2250 tok, generated=542 tok, eval=1.1s, gen=9.6s, total=10.7s, speed=56.3 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:44,569 INFO 📌 Session f543a860995c4b64 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:44,693 INFO 📊 Generation started: request=(unnamed), prompt_tokens=376
+2026-04-02 14:59:44,693 INFO 🔧 generate_stream_sync: dynamic=376 tok, static=0 tok, total_ctx=376/131072, max_gen=256
+2026-04-02 14:59:45,203 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 14:59:46,256 INFO 📊 Generation complete: request=(unnamed), prompt=376 tok, generated=59 tok, eval=0.5s, gen=1.1s, total=1.6s, speed=56.0 tok/s
+2026-04-02 14:59:46,265 INFO Session f543a860995c4b64 turn 1 complete (309 chars generated, delimiter_found=False)
+2026-04-02 14:59:46,266 INFO Session f543a860995c4b64 turn complete: raw=309 chars → content=21 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:46,501 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1398
+2026-04-02 14:59:46,501 INFO 🔧 generate_stream_sync: dynamic=61 tok, static=1337 tok, total_ctx=1398/131072, max_gen=200
+2026-04-02 14:59:46,768 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:59:47,900 INFO 📊 Generation complete: request=(unnamed), prompt=1398 tok, generated=72 tok, eval=0.3s, gen=1.1s, total=1.4s, speed=63.6 tok/s
+2026-04-02 14:59:47,907 INFO Session f543a860995c4b64 turn 2 complete (387 chars generated, delimiter_found=False)
+2026-04-02 14:59:47,908 INFO Session f543a860995c4b64 turn complete: raw=387 chars → content=21 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:48,026 INFO 📊 Generation started: request=(unnamed), prompt_tokens=87
+2026-04-02 14:59:48,026 INFO 🔧 generate_stream_sync: dynamic=87 tok, static=0 tok, total_ctx=87/131072, max_gen=256
+2026-04-02 14:59:48,329 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:59:49,151 INFO 📊 Generation complete: request=(unnamed), prompt=87 tok, generated=52 tok, eval=0.3s, gen=0.8s, total=1.1s, speed=63.2 tok/s
+2026-04-02 14:59:49,157 INFO Session f543a860995c4b64 turn 3 complete (293 chars generated, delimiter_found=False)
+2026-04-02 14:59:49,158 INFO Session f543a860995c4b64 turn complete: raw=293 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:49,281 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1453
+2026-04-02 14:59:49,281 INFO 🔧 generate_stream_sync: dynamic=116 tok, static=1337 tok, total_ctx=1453/131072, max_gen=256
+2026-04-02 14:59:49,623 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:59:52,338 INFO 📊 Generation complete: request=(unnamed), prompt=1453 tok, generated=133 tok, eval=0.3s, gen=2.7s, total=3.1s, speed=49.0 tok/s
+2026-04-02 14:59:52,356 INFO Session f543a860995c4b64 turn 4 complete (600 chars generated, delimiter_found=False)
+2026-04-02 14:59:52,364 INFO Session f543a860995c4b64 turn complete: raw=600 chars → content=39 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:52,619 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1357
+2026-04-02 14:59:52,619 INFO 🔧 generate_stream_sync: dynamic=20 tok, static=1337 tok, total_ctx=1357/131072, max_gen=200
+2026-04-02 14:59:52,728 INFO 📊 First token arrived after 0.1s eval (request=(unnamed))
+2026-04-02 14:59:53,524 INFO 📊 Generation complete: request=(unnamed), prompt=1357 tok, generated=50 tok, eval=0.1s, gen=0.8s, total=0.9s, speed=62.7 tok/s
+2026-04-02 14:59:53,531 INFO Session f543a860995c4b64 turn 5 complete (249 chars generated, delimiter_found=False)
+2026-04-02 14:59:53,532 INFO Session f543a860995c4b64 turn complete: raw=249 chars → content=39 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:53,649 INFO 📊 Generation started: request=(unnamed), prompt_tokens=93
+2026-04-02 14:59:53,649 INFO 🔧 generate_stream_sync: dynamic=93 tok, static=0 tok, total_ctx=93/131072, max_gen=256
+2026-04-02 14:59:53,952 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 14:59:54,639 INFO 📊 Generation complete: request=(unnamed), prompt=93 tok, generated=43 tok, eval=0.3s, gen=0.7s, total=1.0s, speed=62.6 tok/s
+2026-04-02 14:59:54,645 INFO Session f543a860995c4b64 turn 6 complete (255 chars generated, delimiter_found=False)
+2026-04-02 14:59:54,646 INFO Session f543a860995c4b64 turn complete: raw=255 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:54,767 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2493
+2026-04-02 14:59:54,768 INFO 🔧 generate_stream_sync: dynamic=1156 tok, static=1337 tok, total_ctx=2493/131072, max_gen=256
+2026-04-02 14:59:56,348 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 14:59:57,254 INFO 📊 Generation complete: request=(unnamed), prompt=2493 tok, generated=56 tok, eval=1.6s, gen=0.9s, total=2.5s, speed=61.8 tok/s
+2026-04-02 14:59:57,266 INFO Session f543a860995c4b64 turn 7 complete (280 chars generated, delimiter_found=False)
+2026-04-02 14:59:57,267 INFO Session f543a860995c4b64 turn complete: raw=280 chars → content=0 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:57,274 INFO 📌 Session f543a860995c4b64 ended (turns=7, duration=12.7s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 14:59:57,394 INFO 📊 Generation started: request=(unnamed), prompt_tokens=3667
+2026-04-02 14:59:57,394 INFO 🔧 generate_stream_sync: dynamic=2330 tok, static=1337 tok, total_ctx=3667/131072, max_gen=127405
+2026-04-02 15:00:00,185 INFO 📊 First token arrived after 2.8s eval (request=(unnamed))
+2026-04-02 15:00:01,797 INFO 📊 Generation complete: request=(unnamed), prompt=3667 tok, generated=69 tok, eval=2.8s, gen=1.6s, total=4.4s, speed=42.8 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:00:01,945 INFO 📌 Session e2f8935d88ee4077 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:00:02,063 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1218
+2026-04-02 15:00:02,063 INFO 🔧 generate_stream_sync: dynamic=1218 tok, static=0 tok, total_ctx=1218/131072, max_gen=256
+2026-04-02 15:00:03,619 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 15:00:08,452 INFO 📊 Generation complete: request=(unnamed), prompt=1218 tok, generated=256 tok, eval=1.6s, gen=4.8s, total=6.4s, speed=53.0 tok/s
+2026-04-02 15:00:08,463 INFO Session e2f8935d88ee4077 turn 1 complete (1318 chars generated, delimiter_found=False)
+2026-04-02 15:00:08,474 INFO Session e2f8935d88ee4077 turn complete: raw=1318 chars → content=318 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:00:08,595 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 15:00:08,595 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 15:00:09,024 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:00:09,186 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=10 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=61.6 tok/s
+2026-04-02 15:00:09,197 INFO Session e2f8935d88ee4077 turn 2 complete (49 chars generated, delimiter_found=False)
+2026-04-02 15:00:09,197 INFO Session e2f8935d88ee4077 turn complete: raw=49 chars → content=22 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:00:09,201 INFO 📌 Session e2f8935d88ee4077 ended (turns=2, duration=7.3s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:00:09,327 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2508
+2026-04-02 15:00:09,327 INFO 🔧 generate_stream_sync: dynamic=1171 tok, static=1337 tok, total_ctx=2508/131072, max_gen=128564
+2026-04-02 15:00:10,867 INFO 📊 First token arrived after 1.5s eval (request=(unnamed))
+2026-04-02 15:00:36,871 INFO 📊 Generation complete: request=(unnamed), prompt=2508 tok, generated=1571 tok, eval=1.5s, gen=26.0s, total=27.5s, speed=60.4 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:00:37,313 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1884
+2026-04-02 15:00:37,313 INFO 🔧 generate_stream_sync: dynamic=547 tok, static=1337 tok, total_ctx=1884/131072, max_gen=129188
+2026-04-02 15:00:38,109 INFO 📊 First token arrived after 0.8s eval (request=(unnamed))
+2026-04-02 15:00:40,988 INFO 📊 Generation complete: request=(unnamed), prompt=1884 tok, generated=146 tok, eval=0.8s, gen=2.9s, total=3.7s, speed=50.7 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:00:42,127 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2394
+2026-04-02 15:00:42,127 INFO 🔧 generate_stream_sync: dynamic=1057 tok, static=1337 tok, total_ctx=2394/131072, max_gen=128678
+2026-04-02 15:00:43,523 INFO 📊 First token arrived after 1.4s eval (request=(unnamed))
+2026-04-02 15:00:57,719 INFO 📊 Generation complete: request=(unnamed), prompt=2394 tok, generated=893 tok, eval=1.4s, gen=14.2s, total=15.6s, speed=62.9 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:00:57,958 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2271
+2026-04-02 15:00:57,958 INFO 🔧 generate_stream_sync: dynamic=934 tok, static=1337 tok, total_ctx=2271/131072, max_gen=128801
+2026-04-02 15:00:59,088 INFO 📊 First token arrived after 1.1s eval (request=(unnamed))
+2026-04-02 15:01:11,371 INFO 📊 Generation complete: request=(unnamed), prompt=2271 tok, generated=764 tok, eval=1.1s, gen=12.3s, total=13.4s, speed=62.2 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:11,570 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1688
+2026-04-02 15:01:11,570 INFO 🔧 generate_stream_sync: dynamic=351 tok, static=1337 tok, total_ctx=1688/131072, max_gen=500
+2026-04-02 15:01:12,050 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 15:01:15,471 INFO 📊 Generation complete: request=(unnamed), prompt=1688 tok, generated=157 tok, eval=0.5s, gen=3.4s, total=3.9s, speed=45.9 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:15,629 INFO 📌 Session f92ba795a1124cba started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:15,749 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1809
+2026-04-02 15:01:15,749 INFO 🔧 generate_stream_sync: dynamic=472 tok, static=1337 tok, total_ctx=1809/131072, max_gen=256
+2026-04-02 15:01:16,311 INFO 📊 First token arrived after 0.6s eval (request=(unnamed))
+2026-04-02 15:01:20,714 INFO 📊 Generation complete: request=(unnamed), prompt=1809 tok, generated=256 tok, eval=0.6s, gen=4.4s, total=5.0s, speed=58.1 tok/s
+2026-04-02 15:01:20,736 INFO Session f92ba795a1124cba turn 1 complete (1380 chars generated, delimiter_found=False)
+2026-04-02 15:01:20,748 INFO Session f92ba795a1124cba turn complete: raw=1380 chars → content=313 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:20,867 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 15:01:20,867 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 15:01:21,280 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:01:22,347 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=67 tok, eval=0.4s, gen=1.1s, total=1.5s, speed=62.8 tok/s
+2026-04-02 15:01:22,360 INFO Session f92ba795a1124cba turn 2 complete (346 chars generated, delimiter_found=False)
+2026-04-02 15:01:22,362 INFO Session f92ba795a1124cba turn complete: raw=346 chars → content=29 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:22,365 INFO 📌 Session f92ba795a1124cba ended (turns=2, duration=6.7s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:22,504 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2309
+2026-04-02 15:01:22,504 INFO 🔧 generate_stream_sync: dynamic=972 tok, static=1337 tok, total_ctx=2309/131072, max_gen=128763
+2026-04-02 15:01:23,668 INFO 📊 First token arrived after 1.2s eval (request=(unnamed))
+2026-04-02 15:01:32,841 INFO 📊 Generation complete: request=(unnamed), prompt=2309 tok, generated=571 tok, eval=1.2s, gen=9.2s, total=10.3s, speed=62.2 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:33,031 INFO 📌 Session 338758bd0d984c2a started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:33,150 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1415
+2026-04-02 15:01:33,150 INFO 🔧 generate_stream_sync: dynamic=78 tok, static=1337 tok, total_ctx=1415/131072, max_gen=256
+2026-04-02 15:01:33,423 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:01:35,864 INFO 📊 Generation complete: request=(unnamed), prompt=1415 tok, generated=147 tok, eval=0.3s, gen=2.4s, total=2.7s, speed=60.2 tok/s
+2026-04-02 15:01:35,871 INFO Session 338758bd0d984c2a turn 1 complete (885 chars generated, delimiter_found=False)
+2026-04-02 15:01:35,877 INFO Session 338758bd0d984c2a turn complete: raw=885 chars → content=508 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:35,995 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 15:01:35,995 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 15:01:36,384 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:01:37,438 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=67 tok, eval=0.4s, gen=1.1s, total=1.4s, speed=63.6 tok/s
+2026-04-02 15:01:37,444 INFO Session 338758bd0d984c2a turn 2 complete (344 chars generated, delimiter_found=False)
+2026-04-02 15:01:37,446 INFO Session 338758bd0d984c2a turn complete: raw=344 chars → content=22 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:37,563 INFO 📊 Generation started: request=(unnamed), prompt_tokens=230
+2026-04-02 15:01:37,563 INFO 🔧 generate_stream_sync: dynamic=230 tok, static=0 tok, total_ctx=230/131072, max_gen=256
+2026-04-02 15:01:37,977 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:01:38,786 INFO 📊 Generation complete: request=(unnamed), prompt=230 tok, generated=51 tok, eval=0.4s, gen=0.8s, total=1.2s, speed=63.0 tok/s
+2026-04-02 15:01:38,795 INFO Session 338758bd0d984c2a turn 3 complete (232 chars generated, delimiter_found=False)
+2026-04-02 15:01:38,796 INFO Session 338758bd0d984c2a turn complete: raw=232 chars → content=26 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:38,800 INFO 📌 Session 338758bd0d984c2a ended (turns=3, duration=5.8s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:38,937 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2347
+2026-04-02 15:01:38,937 INFO 🔧 generate_stream_sync: dynamic=1010 tok, static=1337 tok, total_ctx=2347/131072, max_gen=128725
+2026-04-02 15:01:40,135 INFO 📊 First token arrived after 1.2s eval (request=(unnamed))
+2026-04-02 15:01:47,242 INFO 📊 Generation complete: request=(unnamed), prompt=2347 tok, generated=377 tok, eval=1.2s, gen=7.1s, total=8.3s, speed=53.0 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:47,632 INFO 📌 Session 61db018922384579 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:47,747 INFO 📊 Generation started: request=(unnamed), prompt_tokens=392
+2026-04-02 15:01:47,748 INFO 🔧 generate_stream_sync: dynamic=392 tok, static=0 tok, total_ctx=392/131072, max_gen=256
+2026-04-02 15:01:48,264 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 15:01:49,997 INFO 📊 Generation complete: request=(unnamed), prompt=392 tok, generated=95 tok, eval=0.5s, gen=1.7s, total=2.2s, speed=54.8 tok/s
+2026-04-02 15:01:50,017 INFO Session 61db018922384579 turn 1 complete (449 chars generated, delimiter_found=False)
+2026-04-02 15:01:50,022 INFO Session 61db018922384579 turn complete: raw=449 chars → content=21 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:50,272 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1415
+2026-04-02 15:01:50,272 INFO 🔧 generate_stream_sync: dynamic=78 tok, static=1337 tok, total_ctx=1415/131072, max_gen=200
+2026-04-02 15:01:50,529 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:01:51,477 INFO 📊 Generation complete: request=(unnamed), prompt=1415 tok, generated=60 tok, eval=0.3s, gen=0.9s, total=1.2s, speed=63.3 tok/s
+2026-04-02 15:01:51,485 INFO Session 61db018922384579 turn 2 complete (335 chars generated, delimiter_found=False)
+2026-04-02 15:01:51,487 INFO Session 61db018922384579 turn complete: raw=335 chars → content=21 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:51,602 INFO 📊 Generation started: request=(unnamed), prompt_tokens=87
+2026-04-02 15:01:51,603 INFO 🔧 generate_stream_sync: dynamic=87 tok, static=0 tok, total_ctx=87/131072, max_gen=256
+2026-04-02 15:01:51,902 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:01:52,713 INFO 📊 Generation complete: request=(unnamed), prompt=87 tok, generated=51 tok, eval=0.3s, gen=0.8s, total=1.1s, speed=62.9 tok/s
+2026-04-02 15:01:52,719 INFO Session 61db018922384579 turn 3 complete (292 chars generated, delimiter_found=False)
+2026-04-02 15:01:52,720 INFO Session 61db018922384579 turn complete: raw=292 chars → content=34 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:52,838 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1469
+2026-04-02 15:01:52,838 INFO 🔧 generate_stream_sync: dynamic=132 tok, static=1337 tok, total_ctx=1469/131072, max_gen=256
+2026-04-02 15:01:53,184 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:01:58,715 INFO 📊 Generation complete: request=(unnamed), prompt=1469 tok, generated=255 tok, eval=0.3s, gen=5.5s, total=5.9s, speed=46.1 tok/s
+2026-04-02 15:01:58,727 INFO Session 61db018922384579 turn 4 complete (1092 chars generated, delimiter_found=False)
+2026-04-02 15:01:58,735 INFO Session 61db018922384579 turn complete: raw=1092 chars → content=121 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:01:58,969 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1422
+2026-04-02 15:01:58,969 INFO 🔧 generate_stream_sync: dynamic=85 tok, static=1337 tok, total_ctx=1422/131072, max_gen=200
+2026-04-02 15:01:59,272 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:02:01,979 INFO 📊 Generation complete: request=(unnamed), prompt=1422 tok, generated=131 tok, eval=0.3s, gen=2.7s, total=3.0s, speed=48.4 tok/s
+2026-04-02 15:02:02,015 INFO Session 61db018922384579 turn 5 complete (604 chars generated, delimiter_found=False)
+2026-04-02 15:02:02,020 INFO Session 61db018922384579 turn complete: raw=604 chars → content=121 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:02,140 INFO 📊 Generation started: request=(unnamed), prompt_tokens=115
+2026-04-02 15:02:02,140 INFO 🔧 generate_stream_sync: dynamic=115 tok, static=0 tok, total_ctx=115/131072, max_gen=256
+2026-04-02 15:02:02,459 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:02:05,805 INFO 📊 Generation complete: request=(unnamed), prompt=115 tok, generated=194 tok, eval=0.3s, gen=3.4s, total=3.7s, speed=58.0 tok/s
+2026-04-02 15:02:05,830 INFO Session 61db018922384579 turn 6 complete (981 chars generated, delimiter_found=False)
+2026-04-02 15:02:05,837 INFO Session 61db018922384579 turn complete: raw=981 chars → content=27 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:05,960 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2466
+2026-04-02 15:02:05,960 INFO 🔧 generate_stream_sync: dynamic=1129 tok, static=1337 tok, total_ctx=2466/131072, max_gen=300
+2026-04-02 15:02:07,504 INFO 📊 First token arrived after 1.5s eval (request=(unnamed))
+2026-04-02 15:02:12,819 INFO 📊 Generation complete: request=(unnamed), prompt=2466 tok, generated=300 tok, eval=1.5s, gen=5.3s, total=6.9s, speed=56.4 tok/s
+2026-04-02 15:02:12,855 INFO Session 61db018922384579 turn 7 complete (1324 chars generated, delimiter_found=False)
+2026-04-02 15:02:12,867 INFO Session 61db018922384579 turn complete: raw=1324 chars → content=651 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:12,874 INFO 📌 Session 61db018922384579 ended (turns=7, duration=25.2s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:12,995 INFO 📊 Generation started: request=(unnamed), prompt_tokens=3868
+2026-04-02 15:02:12,995 INFO 🔧 generate_stream_sync: dynamic=2531 tok, static=1337 tok, total_ctx=3868/131072, max_gen=127204
+2026-04-02 15:02:15,945 INFO 📊 First token arrived after 3.0s eval (request=(unnamed))
+2026-04-02 15:02:17,638 INFO 📊 Generation complete: request=(unnamed), prompt=3868 tok, generated=105 tok, eval=3.0s, gen=1.7s, total=4.6s, speed=62.1 tok/s
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:17,768 INFO 📌 Session b9978fd5b5cc469a started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:17,896 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1487
+2026-04-02 15:02:17,896 INFO 🔧 generate_stream_sync: dynamic=150 tok, static=1337 tok, total_ctx=1487/131072, max_gen=256
+2026-04-02 15:02:18,224 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:02:22,843 INFO 📊 Generation complete: request=(unnamed), prompt=1487 tok, generated=256 tok, eval=0.3s, gen=4.6s, total=5.0s, speed=55.4 tok/s
+2026-04-02 15:02:22,850 INFO Session b9978fd5b5cc469a turn 1 complete (1220 chars generated, delimiter_found=False)
+2026-04-02 15:02:22,861 INFO Session b9978fd5b5cc469a turn complete: raw=1220 chars → content=0 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:22,866 INFO 📌 Session b9978fd5b5cc469a ended (turns=1, duration=5.1s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:22,986 INFO 📌 Session 74ef565675a646eb started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:23,105 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1487
+2026-04-02 15:02:23,105 INFO 🔧 generate_stream_sync: dynamic=150 tok, static=1337 tok, total_ctx=1487/131072, max_gen=256
+2026-04-02 15:02:23,433 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:02:28,576 INFO 📊 Generation complete: request=(unnamed), prompt=1487 tok, generated=256 tok, eval=0.3s, gen=5.1s, total=5.5s, speed=49.8 tok/s
+2026-04-02 15:02:28,583 INFO Session 74ef565675a646eb turn 1 complete (1274 chars generated, delimiter_found=False)
+2026-04-02 15:02:28,594 INFO Session 74ef565675a646eb turn complete: raw=1274 chars → content=0 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:28,713 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 15:02:28,713 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 15:02:29,128 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:02:29,350 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=14 tok, eval=0.4s, gen=0.2s, total=0.6s, speed=63.1 tok/s
+2026-04-02 15:02:29,356 INFO Session 74ef565675a646eb turn 2 complete (60 chars generated, delimiter_found=False)
+2026-04-02 15:02:29,356 INFO Session 74ef565675a646eb turn complete: raw=60 chars → content=33 chars
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:29,359 INFO 📌 Session 74ef565675a646eb ended (turns=2, duration=6.4s)
+INFO:     127.0.0.1:55822 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:29,491 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2390
+2026-04-02 15:02:29,491 INFO 🔧 generate_stream_sync: dynamic=1053 tok, static=1337 tok, total_ctx=2390/131072, max_gen=128682
+2026-04-02 15:02:30,814 INFO 📊 First token arrived after 1.3s eval (request=(unnamed))
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:47,985 INFO 📊 Generation complete: request=(unnamed), prompt=2390 tok, generated=838 tok, eval=1.3s, gen=17.2s, total=18.5s, speed=48.8 tok/s
+2026-04-02 15:02:48,224 INFO 📌 Session a52f7e48e59c4db0 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:48,343 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1436
+2026-04-02 15:02:48,343 INFO 🔧 generate_stream_sync: dynamic=99 tok, static=1337 tok, total_ctx=1436/131072, max_gen=256
+2026-04-02 15:02:48,630 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:02:53,587 INFO 📊 Generation complete: request=(unnamed), prompt=1436 tok, generated=256 tok, eval=0.3s, gen=5.0s, total=5.2s, speed=51.6 tok/s
+2026-04-02 15:02:53,606 INFO Session a52f7e48e59c4db0 turn 1 complete (1336 chars generated, delimiter_found=False)
+2026-04-02 15:02:53,625 INFO Session a52f7e48e59c4db0 turn complete: raw=1336 chars → content=344 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:53,746 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 15:02:53,746 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 15:02:54,157 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:02:56,281 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=102 tok, eval=0.4s, gen=2.1s, total=2.5s, speed=48.0 tok/s
+2026-04-02 15:02:56,296 INFO Session a52f7e48e59c4db0 turn 2 complete (515 chars generated, delimiter_found=False)
+2026-04-02 15:02:56,301 INFO Session a52f7e48e59c4db0 turn complete: raw=515 chars → content=22 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:56,419 INFO 📊 Generation started: request=(unnamed), prompt_tokens=237
+2026-04-02 15:02:56,419 INFO 🔧 generate_stream_sync: dynamic=237 tok, static=0 tok, total_ctx=237/131072, max_gen=256
+2026-04-02 15:02:56,838 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:02:57,971 INFO 📊 Generation complete: request=(unnamed), prompt=237 tok, generated=65 tok, eval=0.4s, gen=1.1s, total=1.6s, speed=57.4 tok/s
+2026-04-02 15:02:57,987 INFO Session a52f7e48e59c4db0 turn 3 complete (312 chars generated, delimiter_found=False)
+2026-04-02 15:02:57,989 INFO Session a52f7e48e59c4db0 turn complete: raw=312 chars → content=26 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:57,998 INFO 📌 Session a52f7e48e59c4db0 ended (turns=3, duration=9.8s)
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:02:58,144 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2347
+2026-04-02 15:02:58,144 INFO 🔧 generate_stream_sync: dynamic=1010 tok, static=1337 tok, total_ctx=2347/131072, max_gen=128725
+2026-04-02 15:02:59,332 INFO 📊 First token arrived after 1.2s eval (request=(unnamed))
+2026-04-02 15:03:07,630 INFO 📊 Generation complete: request=(unnamed), prompt=2347 tok, generated=455 tok, eval=1.2s, gen=8.3s, total=9.5s, speed=54.8 tok/s
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:07,902 INFO 📌 Session 46edaf50a212454e started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:08,019 INFO 📊 Generation started: request=(unnamed), prompt_tokens=386
+2026-04-02 15:03:08,019 INFO 🔧 generate_stream_sync: dynamic=386 tok, static=0 tok, total_ctx=386/131072, max_gen=256
+2026-04-02 15:03:08,536 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 15:03:12,647 INFO 📊 Generation complete: request=(unnamed), prompt=386 tok, generated=230 tok, eval=0.5s, gen=4.1s, total=4.6s, speed=55.9 tok/s
+2026-04-02 15:03:12,655 INFO Session 46edaf50a212454e turn 1 complete (978 chars generated, delimiter_found=False)
+2026-04-02 15:03:12,664 INFO Session 46edaf50a212454e turn complete: raw=978 chars → content=97 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:12,907 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1458
+2026-04-02 15:03:12,908 INFO 🔧 generate_stream_sync: dynamic=121 tok, static=1337 tok, total_ctx=1458/131072, max_gen=200
+2026-04-02 15:03:13,203 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:03:15,553 INFO 📊 Generation complete: request=(unnamed), prompt=1458 tok, generated=136 tok, eval=0.3s, gen=2.4s, total=2.6s, speed=57.9 tok/s
+2026-04-02 15:03:15,562 INFO Session 46edaf50a212454e turn 2 complete (600 chars generated, delimiter_found=False)
+2026-04-02 15:03:15,566 INFO Session 46edaf50a212454e turn complete: raw=600 chars → content=97 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:15,688 INFO 📊 Generation started: request=(unnamed), prompt_tokens=111
+2026-04-02 15:03:15,688 INFO 🔧 generate_stream_sync: dynamic=111 tok, static=0 tok, total_ctx=111/131072, max_gen=256
+2026-04-02 15:03:16,019 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:03:17,502 INFO 📊 Generation complete: request=(unnamed), prompt=111 tok, generated=90 tok, eval=0.3s, gen=1.5s, total=1.8s, speed=60.7 tok/s
+2026-04-02 15:03:17,516 INFO Session 46edaf50a212454e turn 3 complete (481 chars generated, delimiter_found=False)
+2026-04-02 15:03:17,520 INFO Session 46edaf50a212454e turn complete: raw=481 chars → content=34 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:17,643 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1513
+2026-04-02 15:03:17,643 INFO 🔧 generate_stream_sync: dynamic=176 tok, static=1337 tok, total_ctx=1513/131072, max_gen=256
+2026-04-02 15:03:18,036 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:03:21,035 INFO 📊 Generation complete: request=(unnamed), prompt=1513 tok, generated=170 tok, eval=0.4s, gen=3.0s, total=3.4s, speed=56.7 tok/s
+2026-04-02 15:03:21,049 INFO Session 46edaf50a212454e turn 4 complete (826 chars generated, delimiter_found=False)
+2026-04-02 15:03:21,057 INFO Session 46edaf50a212454e turn complete: raw=826 chars → content=46 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:21,291 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1373
+2026-04-02 15:03:21,291 INFO 🔧 generate_stream_sync: dynamic=36 tok, static=1337 tok, total_ctx=1373/131072, max_gen=200
+2026-04-02 15:03:21,499 INFO 📊 First token arrived after 0.2s eval (request=(unnamed))
+2026-04-02 15:03:22,268 INFO 📊 Generation complete: request=(unnamed), prompt=1373 tok, generated=43 tok, eval=0.2s, gen=0.8s, total=1.0s, speed=55.9 tok/s
+2026-04-02 15:03:22,285 INFO Session 46edaf50a212454e turn 5 complete (240 chars generated, delimiter_found=False)
+2026-04-02 15:03:22,287 INFO Session 46edaf50a212454e turn complete: raw=240 chars → content=34 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:22,410 INFO 📊 Generation started: request=(unnamed), prompt_tokens=89
+2026-04-02 15:03:22,410 INFO 🔧 generate_stream_sync: dynamic=89 tok, static=0 tok, total_ctx=89/131072, max_gen=256
+2026-04-02 15:03:22,700 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:03:25,744 INFO 📊 Generation complete: request=(unnamed), prompt=89 tok, generated=146 tok, eval=0.3s, gen=3.0s, total=3.3s, speed=48.0 tok/s
+2026-04-02 15:03:25,766 INFO Session 46edaf50a212454e turn 6 complete (750 chars generated, delimiter_found=False)
+2026-04-02 15:03:25,775 INFO Session 46edaf50a212454e turn complete: raw=750 chars → content=34 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:25,901 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2559
+2026-04-02 15:03:25,901 INFO 🔧 generate_stream_sync: dynamic=1222 tok, static=1337 tok, total_ctx=2559/131072, max_gen=256
+2026-04-02 15:03:27,557 INFO 📊 First token arrived after 1.7s eval (request=(unnamed))
+2026-04-02 15:03:28,982 INFO 📊 Generation complete: request=(unnamed), prompt=2559 tok, generated=79 tok, eval=1.7s, gen=1.4s, total=3.1s, speed=55.4 tok/s
+2026-04-02 15:03:29,036 INFO Session 46edaf50a212454e turn 7 complete (358 chars generated, delimiter_found=False)
+2026-04-02 15:03:29,038 INFO Session 46edaf50a212454e turn complete: raw=358 chars → content=0 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:29,045 INFO 📌 Session 46edaf50a212454e ended (turns=7, duration=21.1s)
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:29,167 INFO 📊 Generation started: request=(unnamed), prompt_tokens=3722
+2026-04-02 15:03:29,167 INFO 🔧 generate_stream_sync: dynamic=2385 tok, static=1337 tok, total_ctx=3722/131072, max_gen=127350
+2026-04-02 15:03:32,009 INFO 📊 First token arrived after 2.8s eval (request=(unnamed))
+2026-04-02 15:03:33,930 INFO 📊 Generation complete: request=(unnamed), prompt=3722 tok, generated=119 tok, eval=2.8s, gen=1.9s, total=4.8s, speed=61.9 tok/s
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:34,074 INFO 📌 Session db3b87c68891447e started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:34,193 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1428
+2026-04-02 15:03:34,193 INFO 🔧 generate_stream_sync: dynamic=91 tok, static=1337 tok, total_ctx=1428/131072, max_gen=256
+2026-04-02 15:03:34,470 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:03:38,649 INFO 📊 Generation complete: request=(unnamed), prompt=1428 tok, generated=232 tok, eval=0.3s, gen=4.2s, total=4.5s, speed=55.5 tok/s
+2026-04-02 15:03:38,667 INFO Session db3b87c68891447e turn 1 complete (1301 chars generated, delimiter_found=False)
+2026-04-02 15:03:38,684 INFO Session db3b87c68891447e turn complete: raw=1301 chars → content=617 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:38,805 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 15:03:38,805 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 15:03:39,211 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:03:40,996 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=96 tok, eval=0.4s, gen=1.8s, total=2.2s, speed=53.8 tok/s
+2026-04-02 15:03:41,012 INFO Session db3b87c68891447e turn 2 complete (483 chars generated, delimiter_found=False)
+2026-04-02 15:03:41,016 INFO Session db3b87c68891447e turn complete: raw=483 chars → content=22 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:41,135 INFO 📊 Generation started: request=(unnamed), prompt_tokens=237
+2026-04-02 15:03:41,135 INFO 🔧 generate_stream_sync: dynamic=237 tok, static=0 tok, total_ctx=237/131072, max_gen=256
+2026-04-02 15:03:41,564 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:03:42,597 INFO 📊 Generation complete: request=(unnamed), prompt=237 tok, generated=65 tok, eval=0.4s, gen=1.0s, total=1.5s, speed=63.0 tok/s
+2026-04-02 15:03:42,603 INFO Session db3b87c68891447e turn 3 complete (300 chars generated, delimiter_found=False)
+2026-04-02 15:03:42,604 INFO Session db3b87c68891447e turn complete: raw=300 chars → content=26 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:42,608 INFO 📌 Session db3b87c68891447e ended (turns=3, duration=8.5s)
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:42,745 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2347
+2026-04-02 15:03:42,745 INFO 🔧 generate_stream_sync: dynamic=1010 tok, static=1337 tok, total_ctx=2347/131072, max_gen=128725
+2026-04-02 15:03:43,930 INFO 📊 First token arrived after 1.2s eval (request=(unnamed))
+2026-04-02 15:03:54,711 INFO 📊 Generation complete: request=(unnamed), prompt=2347 tok, generated=655 tok, eval=1.2s, gen=10.8s, total=12.0s, speed=60.8 tok/s
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:55,018 INFO 📌 Session 57e87584e7db4358 started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:55,134 INFO 📊 Generation started: request=(unnamed), prompt_tokens=338
+2026-04-02 15:03:55,134 INFO 🔧 generate_stream_sync: dynamic=338 tok, static=0 tok, total_ctx=338/131072, max_gen=256
+2026-04-02 15:03:55,613 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 15:03:57,223 INFO 📊 Generation complete: request=(unnamed), prompt=338 tok, generated=87 tok, eval=0.5s, gen=1.6s, total=2.1s, speed=54.0 tok/s
+2026-04-02 15:03:57,233 INFO Session 57e87584e7db4358 turn 1 complete (440 chars generated, delimiter_found=False)
+2026-04-02 15:03:57,236 INFO Session 57e87584e7db4358 turn complete: raw=440 chars → content=21 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:57,473 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1361
+2026-04-02 15:03:57,473 INFO 🔧 generate_stream_sync: dynamic=24 tok, static=1337 tok, total_ctx=1361/131072, max_gen=200
+2026-04-02 15:03:57,595 INFO 📊 First token arrived after 0.1s eval (request=(unnamed))
+2026-04-02 15:03:59,003 INFO 📊 Generation complete: request=(unnamed), prompt=1361 tok, generated=83 tok, eval=0.1s, gen=1.4s, total=1.5s, speed=58.9 tok/s
+2026-04-02 15:03:59,013 INFO Session 57e87584e7db4358 turn 2 complete (436 chars generated, delimiter_found=False)
+2026-04-02 15:03:59,016 INFO Session 57e87584e7db4358 turn complete: raw=436 chars → content=21 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:03:59,136 INFO 📊 Generation started: request=(unnamed), prompt_tokens=87
+2026-04-02 15:03:59,136 INFO 🔧 generate_stream_sync: dynamic=87 tok, static=0 tok, total_ctx=87/131072, max_gen=256
+2026-04-02 15:03:59,443 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:04:00,315 INFO 📊 Generation complete: request=(unnamed), prompt=87 tok, generated=53 tok, eval=0.3s, gen=0.9s, total=1.2s, speed=60.8 tok/s
+2026-04-02 15:04:00,321 INFO Session 57e87584e7db4358 turn 3 complete (295 chars generated, delimiter_found=False)
+2026-04-02 15:04:00,323 INFO Session 57e87584e7db4358 turn complete: raw=295 chars → content=34 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:00,447 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1415
+2026-04-02 15:04:00,447 INFO 🔧 generate_stream_sync: dynamic=78 tok, static=1337 tok, total_ctx=1415/131072, max_gen=256
+2026-04-02 15:04:00,765 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:04:01,516 INFO 📊 Generation complete: request=(unnamed), prompt=1415 tok, generated=41 tok, eval=0.3s, gen=0.8s, total=1.1s, speed=54.6 tok/s
+2026-04-02 15:04:01,533 INFO Session 57e87584e7db4358 turn 4 complete (242 chars generated, delimiter_found=False)
+2026-04-02 15:04:01,535 INFO Session 57e87584e7db4358 turn complete: raw=242 chars → content=34 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:01,679 INFO 📊 Generation started: request=(unnamed), prompt_tokens=326
+2026-04-02 15:04:01,679 INFO 🔧 generate_stream_sync: dynamic=326 tok, static=0 tok, total_ctx=326/131072, max_gen=200
+2026-04-02 15:04:02,172 INFO 📊 First token arrived after 0.5s eval (request=(unnamed))
+2026-04-02 15:04:05,558 INFO 📊 Generation complete: request=(unnamed), prompt=326 tok, generated=161 tok, eval=0.5s, gen=3.4s, total=3.9s, speed=47.6 tok/s
+2026-04-02 15:04:05,579 INFO Session 57e87584e7db4358 turn 5 complete (829 chars generated, delimiter_found=False)
+2026-04-02 15:04:05,589 INFO Session 57e87584e7db4358 turn complete: raw=829 chars → content=34 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:05,709 INFO 📊 Generation started: request=(unnamed), prompt_tokens=89
+2026-04-02 15:04:05,710 INFO 🔧 generate_stream_sync: dynamic=89 tok, static=0 tok, total_ctx=89/131072, max_gen=256
+2026-04-02 15:04:05,998 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:04:06,350 INFO 📊 Generation complete: request=(unnamed), prompt=89 tok, generated=22 tok, eval=0.3s, gen=0.3s, total=0.6s, speed=62.4 tok/s
+2026-04-02 15:04:06,359 INFO Session 57e87584e7db4358 turn 6 complete (136 chars generated, delimiter_found=False)
+2026-04-02 15:04:06,359 INFO Session 57e87584e7db4358 turn complete: raw=136 chars → content=34 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:06,478 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1461
+2026-04-02 15:04:06,478 INFO 🔧 generate_stream_sync: dynamic=124 tok, static=1337 tok, total_ctx=1461/131072, max_gen=256
+2026-04-02 15:04:06,814 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:04:07,249 INFO 📊 Generation complete: request=(unnamed), prompt=1461 tok, generated=27 tok, eval=0.3s, gen=0.4s, total=0.8s, speed=62.1 tok/s
+2026-04-02 15:04:07,257 INFO Session 57e87584e7db4358 turn 7 complete (158 chars generated, delimiter_found=False)
+2026-04-02 15:04:07,257 INFO Session 57e87584e7db4358 turn complete: raw=158 chars → content=34 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:07,379 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1370
+2026-04-02 15:04:07,379 INFO 🔧 generate_stream_sync: dynamic=33 tok, static=1337 tok, total_ctx=1370/131072, max_gen=300
+2026-04-02 15:04:07,577 INFO 📊 First token arrived after 0.2s eval (request=(unnamed))
+2026-04-02 15:04:08,348 INFO 📊 Generation complete: request=(unnamed), prompt=1370 tok, generated=48 tok, eval=0.2s, gen=0.8s, total=1.0s, speed=62.3 tok/s
+2026-04-02 15:04:08,356 INFO Session 57e87584e7db4358 turn 8 complete (263 chars generated, delimiter_found=False)
+2026-04-02 15:04:08,357 INFO Session 57e87584e7db4358 turn complete: raw=263 chars → content=21 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:08,363 INFO 📌 Session 57e87584e7db4358 ended (turns=8, duration=13.3s)
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:08,479 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2678
+2026-04-02 15:04:08,479 INFO 🔧 generate_stream_sync: dynamic=1341 tok, static=1337 tok, total_ctx=2678/131072, max_gen=128394
+2026-04-02 15:04:10,117 INFO 📊 First token arrived after 1.6s eval (request=(unnamed))
+2026-04-02 15:04:12,242 INFO 📊 Generation complete: request=(unnamed), prompt=2678 tok, generated=112 tok, eval=1.6s, gen=2.1s, total=3.8s, speed=52.7 tok/s
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:12,382 INFO 📌 Session 34c94ec40f8a496a started (ttl=300s, pinned instance)
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:12,501 INFO 📊 Generation started: request=(unnamed), prompt_tokens=1437
+2026-04-02 15:04:12,501 INFO 🔧 generate_stream_sync: dynamic=100 tok, static=1337 tok, total_ctx=1437/131072, max_gen=256
+2026-04-02 15:04:12,793 INFO 📊 First token arrived after 0.3s eval (request=(unnamed))
+2026-04-02 15:04:16,660 INFO 📊 Generation complete: request=(unnamed), prompt=1437 tok, generated=179 tok, eval=0.3s, gen=3.9s, total=4.2s, speed=46.3 tok/s
+2026-04-02 15:04:16,679 INFO Session 34c94ec40f8a496a turn 1 complete (1053 chars generated, delimiter_found=False)
+2026-04-02 15:04:16,691 INFO Session 34c94ec40f8a496a turn complete: raw=1053 chars → content=637 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:16,811 INFO 📊 Generation started: request=(unnamed), prompt_tokens=219
+2026-04-02 15:04:16,811 INFO 🔧 generate_stream_sync: dynamic=219 tok, static=0 tok, total_ctx=219/131072, max_gen=256
+2026-04-02 15:04:17,220 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:04:19,856 INFO 📊 Generation complete: request=(unnamed), prompt=219 tok, generated=130 tok, eval=0.4s, gen=2.6s, total=3.0s, speed=49.3 tok/s
+2026-04-02 15:04:19,864 INFO Session 34c94ec40f8a496a turn 2 complete (683 chars generated, delimiter_found=False)
+2026-04-02 15:04:19,869 INFO Session 34c94ec40f8a496a turn complete: raw=683 chars → content=22 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:19,986 INFO 📊 Generation started: request=(unnamed), prompt_tokens=237
+2026-04-02 15:04:19,986 INFO 🔧 generate_stream_sync: dynamic=237 tok, static=0 tok, total_ctx=237/131072, max_gen=256
+2026-04-02 15:04:20,412 INFO 📊 First token arrived after 0.4s eval (request=(unnamed))
+2026-04-02 15:04:21,880 INFO 📊 Generation complete: request=(unnamed), prompt=237 tok, generated=70 tok, eval=0.4s, gen=1.5s, total=1.9s, speed=47.7 tok/s
+2026-04-02 15:04:21,887 INFO Session 34c94ec40f8a496a turn 3 complete (323 chars generated, delimiter_found=False)
+2026-04-02 15:04:21,889 INFO Session 34c94ec40f8a496a turn complete: raw=323 chars → content=26 chars
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:21,893 INFO 📌 Session 34c94ec40f8a496a ended (turns=3, duration=9.5s)
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+2026-04-02 15:04:22,030 INFO 📊 Generation started: request=(unnamed), prompt_tokens=2347
+2026-04-02 15:04:22,030 INFO 🔧 generate_stream_sync: dynamic=1010 tok, static=1337 tok, total_ctx=2347/131072, max_gen=128725
+INFO:     Shutting down
+INFO:     Waiting for connections to close. (CTRL+C to force quit)
+2026-04-02 15:04:23,215 INFO 📊 First token arrived after 1.2s eval (request=(unnamed))
+2026-04-02 15:04:30,962 INFO 📊 Generation complete: request=(unnamed), prompt=2347 tok, generated=398 tok, eval=1.2s, gen=7.8s, total=8.9s, speed=51.4 tok/s
+INFO:     127.0.0.1:55864 - "POST /graphql HTTP/1.1" 200 OK
+INFO:     Waiting for application shutdown.
+2026-04-02 15:04:31,035 INFO 📌 Session manager shutdown complete
+2026-04-02 15:04:31,035 INFO 🧹 Shutting down backend: llama_cpp
+2026-04-02 15:04:31,372 INFO ✅ Llama backend shutdown complete (1 instances cleared)
+2026-04-02 15:04:31,373 INFO ✅ Backend shutdown complete
+2026-04-02 15:04:31,373 INFO 🗑️ Server shutdown complete
+2026-04-02 15:04:31,373 INFO 🗑️ GraphQL API shutdown complete
+INFO:     Application shutdown complete.
+INFO:     Finished server process [91583]

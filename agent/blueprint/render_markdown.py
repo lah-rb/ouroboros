@@ -160,10 +160,10 @@ def _render_system_diagrams(ir: BlueprintIR) -> str:
 
 def _render_system_context(ir: BlueprintIR) -> str:
     # Count categories
+    orchestrator_count = sum(1 for f in ir.flows.values() if f.category == "orchestrator")
     task_count = sum(1 for f in ir.flows.values() if f.category == "task")
-    shared_count = sum(1 for f in ir.flows.values() if f.category == "shared")
-    control_count = sum(1 for f in ir.flows.values() if f.category == "control")
-    test_count = sum(1 for f in ir.flows.values() if f.category == "test")
+    sub_flow_count = sum(1 for f in ir.flows.values() if f.category == "sub_flow")
+    other_count = sum(1 for f in ir.flows.values() if f.category in ("unknown", "test"))
 
     return f"""## System Context
 
@@ -176,7 +176,7 @@ It operates as a pure GraphQL client — all inference flows through `localhost:
 - **Senior Developer (External API)** — Consulted on escalation (design pending).
 
 ### Subsystem Boundaries
-- **Flow Engine** — Declarative YAML graphs with typed I/O and explicit transitions.
+- **Flow Engine** — Declarative CUE graphs with typed I/O and explicit transitions.
 - **Effects Interface** — Swappable protocol for all side effects (file I/O, subprocess, inference, persistence).
 - **Persistence** — File-backed JSON in `.agent/` with atomic writes.
 - **LLMVP** — External GraphQL inference server (separate project).
@@ -184,10 +184,10 @@ It operates as a pure GraphQL client — all inference flows through `localhost:
 ### Flow Inventory
 | Category | Count |
 |----------|-------|
+| Orchestrator flows | {orchestrator_count} |
 | Task flows | {task_count} |
-| Shared sub-flows | {shared_count} |
-| Control flows | {control_count} |
-| Test flows | {test_count} |
+| Sub-flows | {sub_flow_count} |
+| Other | {other_count} |
 | **Total** | **{ir.meta.flow_count}** |"""
 
 
@@ -249,10 +249,10 @@ def _render_flow_catalog(ir: BlueprintIR) -> str:
     lines = ["## Flow Catalog", ""]
 
     categories = [
+        ("Orchestrator Flows", "orchestrator"),
         ("Task Flows", "task"),
-        ("Shared Sub-flows", "shared"),
-        ("Control Flows", "control"),
-        ("Test Flows", "test"),
+        ("Sub-flows", "sub_flow"),
+        ("Other Flows", "unknown"),
     ]
 
     for heading, category in categories:
@@ -278,6 +278,25 @@ def _render_flow_card(flow_ir: FlowIR, ir: BlueprintIR) -> str:
     lines.append(f"#### {flow_ir.name} (v{flow_ir.version})")
     lines.append(f"*{flow_ir.description.strip()}*")
     lines.append("")
+
+    # Context Contract
+    contract_parts = []
+    if flow_ir.context_tier:
+        contract_parts.append(f"**Tier:** `{flow_ir.context_tier}`")
+    if flow_ir.state_reads:
+        reads = ", ".join(f"`{r}`" for r in flow_ir.state_reads[:6])
+        more = f" (+{len(flow_ir.state_reads) - 6})" if len(flow_ir.state_reads) > 6 else ""
+        contract_parts.append(f"**Reads:** {reads}{more}")
+    if flow_ir.returns:
+        ret_keys = ", ".join(f"`{k}`" for k in list(flow_ir.returns.keys())[:6])
+        contract_parts.append(f"**Returns:** {ret_keys}")
+    if contract_parts:
+        lines.append(" · ".join(contract_parts))
+
+    # Persona
+    if flow_ir.known_personas:
+        peers = ", ".join(f"`{p}`" for p in flow_ir.known_personas)
+        lines.append(f"**Peers:** {peers}")
 
     # Inputs
     req_inputs = [

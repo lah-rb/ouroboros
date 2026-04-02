@@ -1,35 +1,39 @@
 // design_and_plan.cue — Architecture Design and Mission Planning
 //
-// Ported from design_and_plan.yaml (version 1).
+// Single entry point for all architecture and planning work.
+// Three deterministic paths based on drift detection:
 //
-// Two modes:
-//   Mode 1 (initial): No architecture exists — design from scratch, generate plan.
-//   Mode 2 (reconcile): Architecture exists — compare with codebase reality,
-//     update the architecture, optionally revise the plan.
+//   Path 1 (initial): No architecture → design from scratch → derive goals → generate plan
+//   Path 2 (drift): Architecture exists but files on disk don't match →
+//                    reconcile architecture → revise plan (additive)
+//   Path 3 (no drift): Architecture matches disk → skip straight to
+//                       revise plan (additive, no expensive reconciliation)
 //
-// Invoked by:
-//   - mission_control (automatic, when needs_plan == true)
-//   - director menu (manual, when architecture needs revision)
-//
-// Key improvements over v1:
-//   - Plan uses condensed flow set (file_write, project_ops, interact)
-//   - Plan follows standard phase structure (ops → create → interact)
-//   - Plan requires explicit flow types (no keyword inference)
-//   - Plan requires explicit dependency chains
-//   - Reconciliation mode compares architecture vs disk reality
-//   - No per-file validation tasks (file_write validates internally)
+// Goal derivation (new in v4):
+//   After architecture is established, derives project_goals in two passes:
+//   1. Deterministic structural goals from architecture modules
+//   2. Inference-derived functional goals from objective + architecture
+//   Goals are stored on MissionState and inform all downstream dispatch.
 
 package ouroboros
 
 design_and_plan: #FlowDefinition & {
 	flow:    "design_and_plan"
-	version: 2
+	version: 4
 	description: """
-		Design or reconcile project architecture, then generate a task
-		plan aligned to the blueprint. Two modes: initial design
-		(greenfield) and reconciliation (update architecture to match
-		evolved codebase).
+		Design or reconcile project architecture, derive project goals,
+		then generate or revise the task plan. Auto-detects whether full
+		architecture reconciliation is needed (drift detected) or can be
+		skipped (no drift — straight to plan revision).
 		"""
+
+	context_tier: "mission_objective"
+	returns: {
+		architecture_updated: {type: "bool", from: "context.architecture_stored", optional: true}
+		goals_derived:        {type: "list", from: "context.goals",               optional: true}
+		plan_task_count:      {type: "int",  from: "context.task_count",          optional: true}
+	}
+	state_reads: ["mission.objective", "mission.architecture", "mission.plan", "mission.goals"]
 
 	input: {
 		required: ["mission_id"]
@@ -37,6 +41,9 @@ design_and_plan: #FlowDefinition & {
 	}
 
 	defaults: config: temperature: "t*0.6"
+
+	flow_persona:   _personas.design_and_plan
+	known_personas: ["file_ops", "project_ops", "interact"]
 
 	steps: {
 
@@ -63,6 +70,7 @@ design_and_plan: #FlowDefinition & {
 		build_repomap: #StepDefinition & {
 			action:      "build_and_query_repomap"
 			description: "Build AST-based dependency map of existing code"
+			context: optional: ["target_file_path"]
 			params: {
 				root:             "."
 				include_patterns: ["*.py", "*.js", "*.ts", "*.rs", "*.yaml", "*.yml"]
@@ -70,25 +78,27 @@ design_and_plan: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "check_mode"}]
+				rules: [{condition: "true", transition: "check_drift"}]
 			}
 			publishes: ["repo_map_formatted"]
 		}
 
-		// ── Phase 1b: Detect mode ───────────────────────────────────
-		//
-		// If architecture already exists on the mission, this is a
-		// reconciliation call. Otherwise, it's initial design.
+		// ── Phase 1b: Deterministic drift detection ────────────────
 
-		check_mode: #StepDefinition & {
-			action:      "noop"
-			description: "Detect whether this is initial design or reconciliation"
-			context: required: ["mission"]
+		check_drift: #StepDefinition & {
+			action:      "check_architecture_drift"
+			description: "Compare architecture against files on disk to detect drift"
+			context: {
+				required: ["mission"]
+				optional: ["project_manifest"]
+			}
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "context.get('mission') and context.mission.architecture is not None", transition: "design_reconcile"},
-					{condition: "true", transition: "design_initial"},
+					{condition: "result.has_architecture == false", transition: "design_initial"},
+					{condition: "result.drift_detected == true", transition: "design_reconcile"},
+					{condition: "result.has_tasks == true", transition: "dispatch_revise"},
+					{condition: "true", transition: "domain_research"},
 				]
 			}
 		}
@@ -116,7 +126,7 @@ design_and_plan: #FlowDefinition & {
 				{formatter: "format_project_file_list", output_key: "project_file_list"
 					params: {source: {$ref: "context.project_manifest"}}},
 			]
-			config: temperature: 0.4
+			config: temperature: "t*0.2"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -127,11 +137,11 @@ design_and_plan: #FlowDefinition & {
 			publishes: ["inference_response"]
 		}
 
-		// ── Phase 2b: Architecture reconciliation ───────────────────
+		// ── Phase 2b: Architecture reconciliation (drift detected) ──
 
 		design_reconcile: #StepDefinition & {
 			action:      "inference"
-			description: "Reconcile architecture with current codebase state"
+			description: "Reconcile architecture with drifted codebase"
 			context: {
 				required: ["mission"]
 				optional: ["project_manifest", "repo_map_formatted"]
@@ -152,11 +162,11 @@ design_and_plan: #FlowDefinition & {
 				{formatter: "format_existing_architecture", output_key: "existing_architecture"
 					params: {source: {$ref: "context.mission.architecture"}}},
 			]
-			config: temperature: 0.4
+			config: temperature: "t*0.2"
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.tokens_generated > 0", transition: "parse_architecture"},
+					{condition: "result.tokens_generated > 0", transition: "parse_architecture_then_revise"},
 					{condition: "true", transition: "failed"},
 				]
 			}
@@ -179,11 +189,34 @@ design_and_plan: #FlowDefinition & {
 			publishes: ["mission", "architecture"]
 		}
 
+		parse_architecture_then_revise: #StepDefinition & {
+			action:      "parse_and_store_architecture"
+			description: "Parse updated architecture, then revise plan"
+			context: required: ["mission", "inference_response"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.architecture_parsed == true", transition: "dispatch_revise"},
+					{condition: "true", transition: "dispatch_revise"},
+				]
+			}
+			publishes: ["mission", "architecture"]
+		}
+
+		dispatch_revise: #StepDefinition & {
+			action:      "noop"
+			description: "Dispatch plan revision — add missing tasks, reorder, or obsolete"
+			context: required: ["mission"]
+			tail_call: {
+				flow: "revise_plan"
+				input_map: {
+					mission_id:  {$ref: "input.mission_id"}
+					observation: "Review the plan for missing tasks, ordering issues, or gaps. Add tasks for data files, integration glue, or tests if needed. Reorder tasks if dependencies are wrong. Do NOT remove completed tasks."
+				}
+			}
+		}
+
 		// ── Phase 3b: Proactive domain research ─────────────────────
-		//
-		// Before planning, search for domain knowledge that could improve
-		// the project. "Building a text adventure? Here's what makes
-		// NPC dialogue engaging." Results persist as mission notes.
 
 		domain_research: #StepDefinition & {
 			action:      "flow"
@@ -191,14 +224,12 @@ design_and_plan: #FlowDefinition & {
 			flow:        "research"
 			context: required: ["mission"]
 			input_map: {
-				search_intent:    {$ref: "context.mission.objective"}
-				mission_objective: {$ref: "context.mission.objective"}
-				max_results:      3
+				research_query: {$ref: "context.mission.objective"}
+				max_results:    3
 			}
 			resolver: {
 				type: "rule"
 				rules: [
-					// Research is best-effort — don't block planning on search failure
 					{condition: "result.status == 'success'", transition: "save_research"},
 					{condition: "true", transition: "generate_plan"},
 				]
@@ -247,7 +278,7 @@ design_and_plan: #FlowDefinition & {
 				{formatter: "format_project_file_list", output_key: "project_file_list"
 					params: {source: {$ref: "context.project_manifest"}}},
 			]
-			config: temperature: 0.4
+			config: temperature: "t*0.2"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -278,7 +309,7 @@ design_and_plan: #FlowDefinition & {
 				{formatter: "format_project_file_list", output_key: "project_file_list"
 					params: {source: {$ref: "context.project_manifest"}}},
 			]
-			config: temperature: 0.4
+			config: temperature: "t*0.2"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -301,18 +332,45 @@ design_and_plan: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.plan_created == true", transition: "complete"},
+					{condition: "result.plan_created == true", transition: "derive_goals"},
 					{condition: "true", transition: "failed"},
 				]
 			}
 			publishes: ["mission"]
 		}
 
+		// ── Phase 6: Derive project goals ───────────────────────────
+		//
+		// Two-pass goal derivation:
+		//   Pass 1 (deterministic): structural goals from architecture modules
+		//   Pass 2 (inference): functional goals from objective + architecture
+		//
+		// Both passes happen inside the derive_goals action. The action
+		// handles the dual approach internally — one step, two passes.
+
+		derive_goals: #StepDefinition & {
+			action:      "derive_project_goals"
+			description: "Derive structural and functional goals from architecture and objective"
+			context: {
+				required: ["mission"]
+				optional: ["architecture"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.goals_derived == true", transition: "complete"},
+					// Goals are best-effort — plan can work without them
+					{condition: "true", transition: "complete"},
+				]
+			}
+			publishes: ["goals", "mission"]
+		}
+
 		// ── Terminal paths ──────────────────────────────────────────
 
 		complete: #StepDefinition & {
 			action:      "noop"
-			description: "Architecture designed and plan created"
+			description: "Architecture designed, goals derived, plan created/revised"
 			tail_call: {
 				flow: "mission_control"
 				input_map: {

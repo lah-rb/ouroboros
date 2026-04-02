@@ -30,6 +30,7 @@ from agent.effects.protocol import (
     SearchResults,
     TerminalOutput,
     WriteResult,
+    truncate_terminal_output,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,9 +113,8 @@ class _TerminalSession:
             )
 
         output = "\n".join(output_lines)
-        # Truncate very long output to prevent context explosion
-        if len(output) > 8000:
-            output = output[:4000] + "\n... [truncated] ...\n" + output[-4000:]
+        # Apply smart head+tail truncation via shared utility
+        output = truncate_terminal_output(output)
 
         entry = TerminalOutput(
             command=command,
@@ -126,7 +126,7 @@ class _TerminalSession:
         self.history.append(
             {
                 "command": command,
-                "output": output[:2000],  # Compact for history
+                "output": output,
                 "return_code": return_code,
                 "turn": self.turn_count,
                 "timed_out": timed_out,
@@ -313,6 +313,20 @@ class LocalEffects:
             self._log_entry("write_file", f"path={path!r}", f"error: {e}", start)
             return WriteResult(success=False, path=path, error=str(e))
 
+    # Directories to skip during recursive walks — virtual environments,
+    # caches, build artifacts, and version control. These are never project
+    # source code and can contain thousands of files that pollute cross-file
+    # checks, repo maps, and token budgets.
+    _EXCLUDE_DIRS: set[str] = {
+        ".venv", "venv", "env", ".env",
+        "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+        "node_modules",
+        ".git",
+        ".agent",
+        "dist", "build", ".eggs", "*.egg-info",
+        ".tox", ".nox",
+    }
+
     async def list_directory(
         self, path: str = ".", recursive: bool = False
     ) -> DirListing:
@@ -328,6 +342,12 @@ class LocalEffects:
 
             if recursive:
                 for root, dirs, files in os.walk(resolved):
+                    # Prune excluded directories in-place so os.walk
+                    # doesn't descend into them at all
+                    dirs[:] = [
+                        d for d in dirs
+                        if d not in self._EXCLUDE_DIRS
+                    ]
                     for name in dirs + files:
                         full = os.path.join(root, name)
                         rel = os.path.relpath(full, self._working_dir)
@@ -819,6 +839,42 @@ class LocalEffects:
         pm = self._get_persistence()
         success = pm.clear_events()
         self._log_entry("clear_events", "", str(success), start)
+        return success
+
+    async def push_note(
+        self,
+        content: str,
+        category: str = "general",
+        tags: list[str] | None = None,
+        source_flow: str = "unknown",
+        source_task: str = "unknown",
+    ) -> bool:
+        """Append a note to the mission's notes list and persist."""
+        start = time.monotonic()
+        from agent.persistence.models import NoteRecord
+
+        mission = await self.load_mission()
+        if not mission:
+            self._log_entry(
+                "push_note", f"category={category}", "no mission loaded", start
+            )
+            return False
+
+        note = NoteRecord(
+            content=content,
+            category=category,
+            tags=tags or [],
+            source_flow=source_flow,
+            source_task=source_task,
+        )
+        mission.notes.append(note)
+        success = await self.save_mission(mission)
+        self._log_entry(
+            "push_note",
+            f"category={category}, tags={tags}",
+            f"saved={success}, notes={len(mission.notes)}",
+            start,
+        )
         return success
 
     async def save_artifact(self, artifact) -> bool:

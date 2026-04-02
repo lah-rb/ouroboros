@@ -1,0 +1,60 @@
+# Harmony format schema — GPT-OSS model family
+#
+# Derived from the OpenAI Harmony specification, Unsloth's
+# corrected Jinja template, and the openai-harmony library.
+#
+# Reference: https://developers.openai.com/cookbook/articles/openai-harmony
+# Reference: https://github.com/openai/harmony
+
+family: harmony
+display_name: "GPT-OSS (Harmony)"
+
+tokens:
+  msg_open: "<|start|>"
+  msg_content: "<|message|>"
+  msg_close: "<|end|>"
+  gen_stop: "<|return|>"
+  history_close: "<|end|>"
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: "assistant"
+  developer: "developer"
+
+thinking:
+  style: channel
+  channel_token: "<|channel|>"
+  channel_name: "analysis"
+  content_channel: "final"
+  commentary_channel: "commentary"
+  constrain_token: "<|constrain|>"
+
+system_block:
+  identity: "You are ChatGPT, a large language model trained by OpenAI."
+  cutoff: "2024-06"
+  reasoning_default: "medium"
+  channel_directive: "# Valid channels: analysis, commentary, final. Channel must be included for every message."
+  template: |
+    {identity}
+    Knowledge cutoff: {cutoff}
+    Current date: {date}
+
+    Reasoning: {reasoning}
+
+    {channel_directive}
+
+traits:
+  fold_system_into_first_user: false
+  supports_developer_role: true
+
+generation:
+  temperature: 1.0
+  top_p: 1.0
+  top_k: 0
+  min_p: 0.0
+  repeat_penalty: 1.05
+
+turn_transition:
+  needs_close: true
+  after_generation: "<|end|>\n"

@@ -144,7 +144,7 @@ async def action_extract_symbol_bodies(step_input: StepInput) -> StepOutput:
     symbol_menu_options.append(
         {
             "id": "__full_rewrite__",
-            "description": "Full file rewrite — use when structural changes are needed across the entire file",
+            "description": "Full file rewrite — use when changes are needed to module-level imports, top-level variables, or structural changes across the entire file",
         }
     )
 
@@ -212,6 +212,26 @@ async def action_start_edit_session(step_input: StepInput) -> StepOutput:
     if reason:
         initial_prompt += f"Reason: {reason}\n"
     initial_prompt += f"Mode: {mode}\n"
+
+    # Surface module-level imports — these are OUTSIDE all editable symbols
+    # and cannot be changed by symbol-level rewrites. If the task requires
+    # changing imports, the model should select "Full file rewrite" instead.
+    file_content = step_input.params.get(
+        "file_content", step_input.context.get("file_content", "")
+    )
+    if file_content:
+        import_lines = [
+            line for line in file_content.splitlines()
+            if line.strip().startswith(("import ", "from "))
+        ]
+        if import_lines:
+            initial_prompt += (
+                "\nModule-level imports (OUTSIDE editable symbols — "
+                "select 'Full file rewrite' if these need to change):\n"
+                + "\n".join(f"  {line.strip()}" for line in import_lines)
+                + "\n"
+            )
+
     if relevant_notes:
         initial_prompt += f"\nNotes:\n{relevant_notes}\n"
 
@@ -231,9 +251,7 @@ async def action_start_edit_session(step_input: StepInput) -> StepOutput:
                         error_lines.append(f"  - {name}: {output}")
             if error_lines:
                 initial_prompt += (
-                    "\nValidation errors to fix:\n"
-                    + "\n".join(error_lines)
-                    + "\n"
+                    "\nValidation errors to fix:\n" + "\n".join(error_lines) + "\n"
                 )
         elif isinstance(validation_errors, str) and validation_errors.strip():
             initial_prompt += f"\nValidation errors to fix:\n{validation_errors}\n"
@@ -250,9 +268,7 @@ async def action_start_edit_session(step_input: StepInput) -> StepOutput:
 
     # Publish file_content and file_path into context so downstream steps
     # (rewrite_symbol, finalize) can access them without extra params.
-    file_content = step_input.params.get(
-        "file_content", step_input.context.get("file_content", "")
-    )
+    # (file_content already read above for import extraction)
 
     logger.info(
         "start_edit_session: publishing file_content type=%s len=%d | "
@@ -284,7 +300,8 @@ async def action_select_symbol_turn(step_input: StepInput) -> StepOutput:
     """One turn of the symbol selection loop.
 
     Presents the symbol menu to the memoryful session. Model picks
-    a letter (grammar-constrained) or empty string to finish.
+    a letter (grammar-constrained) or selects DONE to finish.
+    If >50% of symbols are selected, routes to full rewrite.
     """
     effects = step_input.effects
     session_id = step_input.context.get("edit_session_id", "")
@@ -319,43 +336,68 @@ async def action_select_symbol_turn(step_input: StepInput) -> StepOutput:
             context_updates={"selected_symbols": selected},
         )
 
-    # Safety: hard cap on selection turns to prevent runaway loops.
-    # Track turn count via context (incremented each call).
+    # Safety: hard cap — if >50% of symbols are selected, the model
+    # is trying to rewrite most of the file. Route to full rewrite
+    # instead of editing symbols one at a time.
+    selectable_count = len(selectable_ids)
+    half_cap = max(1, selectable_count // 2)
     selection_turn = int(step_input.context.get("selection_turn", 0)) + 1
-    max_turns = len(menu_options) * 2 + 2
-    if selection_turn > max_turns:
-        logger.warning(
-            "Selection exceeded %d turns — auto-completing with %d symbols",
-            max_turns,
+
+    if len(selected) >= half_cap and selectable_count > 2:
+        logger.info(
+            "Selection hit 50%% cap (%d/%d symbols) — routing to full rewrite",
             len(selected),
+            selectable_count,
         )
         return StepOutput(
             result={
-                "selection_complete": True,
-                "full_rewrite_requested": False,
+                "selection_complete": False,
+                "full_rewrite_requested": True,
                 "symbol_selected": False,
                 "symbols_selected": len(selected),
             },
-            observations=f"Max selection turns ({max_turns}) exceeded — auto-completing",
+            observations=f"Selected {len(selected)}/{selectable_count} symbols (>50%) — full rewrite more efficient",
             context_updates={
                 "selected_symbols": selected,
                 "selection_turn": selection_turn,
             },
         )
 
-    # Append explicit "done" option — LLMs can't produce empty strings,
-    # so we use a real letter option instead of relying on "" in the grammar.
+    # Secondary safety: hard turn cap prevents runaway loops from
+    # invalid responses that don't match any option.
+    max_turns = selectable_count + 4  # generous but bounded
+    if selection_turn > max_turns:
+        logger.warning(
+            "Selection exceeded %d turns — routing to full rewrite",
+            max_turns,
+        )
+        return StepOutput(
+            result={
+                "selection_complete": False,
+                "full_rewrite_requested": True,
+                "symbol_selected": False,
+                "symbols_selected": len(selected),
+            },
+            observations=f"Max selection turns ({max_turns}) exceeded — full rewrite",
+            context_updates={
+                "selected_symbols": selected,
+                "selection_turn": selection_turn,
+            },
+        )
+
+    # Append explicit "done" option
     done_option = {
         "id": "__done__",
         "description": "Done — finish selection and proceed to rewriting",
     }
     display_options = list(menu_options) + [done_option]
 
-    # Build the menu prompt
+    # Build the menu prompt — JSON-based selection using symbol IDs
+    symbol_options = {}
     lines = ["Available symbols:"]
-    for i, opt in enumerate(display_options):
-        letter = chr(ord("a") + i)
-        lines.append(f"{letter}) {opt['description']}")
+    for opt in display_options:
+        lines.append(f"  - {opt['id']}: {opt['description']}")
+        symbol_options[opt["id"]] = opt["description"]
 
     if selected:
         selected_names = ", ".join(selected)
@@ -364,23 +406,24 @@ async def action_select_symbol_turn(step_input: StepInput) -> StepOutput:
         lines.append("\nSelected so far: none")
 
     lines.append(
-        "\nPick the next symbol to modify, or select 'Done' to finish selection."
+        "\nPick the next symbol to modify, or select '__done__' to finish selection."
     )
+    lines.append(
+        'Respond with ONLY a JSON object: {"choice": "<symbol_id>"}'
+    )
+    lines.append(f"Valid IDs: {', '.join(symbol_options.keys())}")
 
     prompt = "\n".join(lines)
 
-    # Build GBNF grammar — all letters including the "done" option
-    n = len(display_options)
-    last_letter = chr(ord("a") + n - 1)
-    grammar = f"root ::= [a-{last_letter}]"
+    from agent.resolvers.llm_menu import extract_choice
 
     try:
         result = await effects.session_inference(
             session_id,
             prompt,
-            {"temperature": 0.1, "max_tokens": 5, "grammar": grammar},
+            {"temperature": 0.1},
         )
-        response = result.text.strip()
+        response = result.text.strip() if result.text else ""
     except Exception as e:
         logger.error("Symbol selection turn failed: %s", e)
         return StepOutput(
@@ -394,9 +437,11 @@ async def action_select_symbol_turn(step_input: StepInput) -> StepOutput:
             context_updates={"selected_symbols": selected},
         )
 
-    # Parse the response
-    if not response:
-        # Empty response = selection complete
+    # Parse the response — extract chosen symbol ID
+    chosen_id = extract_choice(response, list(symbol_options.keys()))
+
+    if not chosen_id:
+        # Could not parse — treat as done
         return StepOutput(
             result={
                 "selection_complete": True,
@@ -404,31 +449,35 @@ async def action_select_symbol_turn(step_input: StepInput) -> StepOutput:
                 "symbol_selected": False,
                 "symbols_selected": len(selected),
             },
-            observations=f"Selection complete: {len(selected)} symbols selected",
-            context_updates={"selected_symbols": selected},
-        )
-
-    # Map letter to option (using display_options which includes __done__)
-    letter = response[0].lower()
-    index = ord(letter) - ord("a")
-
-    if index < 0 or index >= len(display_options):
-        # Invalid selection — treat as done
-        return StepOutput(
-            result={
-                "selection_complete": True,
-                "full_rewrite_requested": False,
-                "symbol_selected": False,
-                "symbols_selected": len(selected),
-            },
-            observations=f"Invalid selection '{response}' — finishing",
+            observations=f"Could not parse selection from '{response[:60]}' — finishing",
             context_updates={
                 "selected_symbols": selected,
                 "selection_turn": selection_turn,
             },
         )
 
-    option = display_options[index]
+    # Find the matching option
+    option = None
+    for opt in display_options:
+        if opt["id"] == chosen_id:
+            option = opt
+            break
+
+    if option is None:
+        # No match — treat as done
+        return StepOutput(
+            result={
+                "selection_complete": True,
+                "full_rewrite_requested": False,
+                "symbol_selected": False,
+                "symbols_selected": len(selected),
+            },
+            observations=f"Selection '{chosen_id}' not in options — finishing",
+            context_updates={
+                "selected_symbols": selected,
+                "selection_turn": selection_turn,
+            },
+        )
 
     # "Done" option — finish selection
     if option["id"] == "__done__":

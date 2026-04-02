@@ -4,40 +4,41 @@
 // behavior, test specific features. The director dispatches this when
 // the task requires using the product rather than editing files.
 //
-// Examples:
-//   "Fix the search element to align-center" → interact to see current state
-//   "NPC A has boring dialog, make it more lively" → interact to experience it
-//   "Verify the login flow works" → interact to test it
-//
-// Currently routes to run_in_terminal for CLI interaction.
-// Future: router between terminal session, MCP server connections,
-// and live browser interaction based on project type.
-//
-// The interaction output (observations, issues found) flows back to
-// mission_control as context for the director's next decision.
-// If the interaction reveals issues, the director can dispatch
-// file_write to fix them with the interaction output as context.
+// The planning step crafts an execution_persona for run_session —
+// telling the model WHO it is and WHAT to look for, not WHAT commands
+// to run. The interaction output flows back to mission_control as
+// structured returns for the director's next decision.
 
 package ouroboros
 
 interact: #FlowDefinition & {
 	flow:    "interact"
-	version: 1
+	version: 2
 	description: """
 		Use the product. Run it, interact with it, observe behavior,
 		test specific features. Returns observations to the director.
-		Currently uses terminal sessions. Future: browser, MCP servers.
+		Plans an execution persona, then dispatches run_session.
 		"""
 
+	context_tier: "flow_directive"
+	returns: {
+		session_summary: {type: "string", from: "context.session_summary", optional: true}
+		commands_run:    {type: "int",    from: "context.command_count",   optional: true}
+		issues_found:    {type: "list",   from: "context.issues_found",   optional: true}
+	}
+	state_reads: []
+
 	input: {
-		required: ["mission_id", "task_id"]
+		required: ["mission_id", "task_id", "flow_directive"]
 		optional: [
-			"task_description", "mission_objective", "working_directory",
-			"target_file_path", "relevant_notes",
+			"working_directory",
+			"relevant_notes",
 		]
 	}
 
 	defaults: config: temperature: "t*0.6"
+
+	flow_persona: _personas.interact
 
 	steps: {
 
@@ -49,22 +50,22 @@ interact: #FlowDefinition & {
 			}
 		}
 
-		// Plan what to do — the LLM decides how to interact based on
-		// the task description and project context.
+		// Plan the interaction — the LLM crafts an execution_persona
+		// and session_context for the run_session sub-flow.
 		plan_interaction: #StepDefinition & {
 			action:      "inference"
-			description: "Plan how to interact with the product"
+			description: "Craft execution persona and session context"
 			context: optional: ["project_manifest", "repo_map_formatted"]
 			prompt_template: {
 				template: "interact/plan"
 				context_keys: ["project_file_list", "repo_map_formatted"]
-				input_keys: ["task_description", "mission_objective", "relevant_notes"]
+				input_keys: ["flow_directive", "relevant_notes"]
 			}
 			pre_compute: [{
 				formatter: "format_project_file_list", output_key: "project_file_list"
 				params: {source: {$ref: "context.project_manifest"}}
 			}]
-			config: temperature: 0.2
+			config: temperature: "t*0.4"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -72,35 +73,57 @@ interact: #FlowDefinition & {
 					{condition: "true", transition: "failed"},
 				]
 			}
-			publishes: ["interaction_plan"]
+			publishes: ["execution_persona"]
 		}
 
-		// Execute the interaction via terminal session.
-		// Future: route based on project type (terminal, browser, MCP).
+		// Execute the interaction via exploratory terminal session.
 		run_session: #StepDefinition & {
 			action:      "flow"
-			description: "Execute product interaction via terminal"
-			flow:        "run_in_terminal"
+			description: "Execute product interaction via persona-driven terminal"
+			flow:        "run_session"
 			input_map: {
-				session_goal:      {$ref: "input.task_description"}
+				execution_persona: {$ref: "context.execution_persona"}
 				working_directory: {$ref: "input.working_directory"}
-				session_context:   {$ref: "context.interaction_plan"}
 			}
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.status == 'success'", transition: "report_success"},
+					{condition: "true", transition: "evaluate_outcome"},
+				]
+			}
+			publishes: ["terminal_output", "session_summary"]
+		}
+
+		// Evaluate whether the product interaction achieved its goal.
+		evaluate_outcome: #StepDefinition & {
+			action:      "inference"
+			description: "Evaluate whether the product worked correctly"
+			context: {
+				required: ["terminal_output"]
+				optional: ["session_summary"]
+			}
+			prompt_template: {
+				template: "interact/evaluate_session"
+				context_keys: ["session_summary", "terminal_output"]
+				input_keys: ["flow_directive"]
+			}
+			config: temperature: "t*0.2"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0 and '\"goal_met\": true' in str(result.get('text', '')).lower().replace(' ', '')", transition: "report_success"},
 					{condition: "true", transition: "report_with_issues"},
 				]
 			}
-			publishes: ["terminal_output"]
+			publishes: ["inference_response"]
 		}
 
 		// ── Terminal paths ──────────────────────────────────────────
 
-		report_success: #StepDefinition & _templates.return_success & {
+		report_success: #StepDefinition & {
+			action:      "noop"
 			description: "Interaction completed — observations captured"
-			context: optional: ["terminal_output"]
+			context: optional: ["terminal_output", "session_summary"]
 			tail_call: {
 				flow: "mission_control"
 				input_map: {
@@ -108,14 +131,13 @@ interact: #FlowDefinition & {
 					last_task_id: {$ref: "input.task_id"}
 					last_status:  "success"
 				}
-				result_formatter: "interaction_result"
-				result_keys: ["context.terminal_output", "input.task_description"]
 			}
 		}
 
-		report_with_issues: #StepDefinition & _templates.return_failed & {
+		report_with_issues: #StepDefinition & {
+			action:      "noop"
 			description: "Interaction found issues"
-			context: optional: ["terminal_output"]
+			context: optional: ["terminal_output", "session_summary"]
 			tail_call: {
 				flow: "mission_control"
 				input_map: {
@@ -123,12 +145,11 @@ interact: #FlowDefinition & {
 					last_task_id: {$ref: "input.task_id"}
 					last_status:  "failed"
 				}
-				result_formatter: "interaction_issues"
-				result_keys: ["context.terminal_output", "input.task_description"]
 			}
 		}
 
-		failed: #StepDefinition & _templates.return_failed & {
+		failed: #StepDefinition & {
+			action:      "noop"
 			description: "Could not plan interaction"
 			tail_call: {
 				flow: "mission_control"
@@ -137,8 +158,6 @@ interact: #FlowDefinition & {
 					last_task_id: {$ref: "input.task_id"}
 					last_status:  "failed"
 				}
-				result_formatter: "task_failed"
-				result_keys: []
 			}
 		}
 	}

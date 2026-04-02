@@ -1,22 +1,28 @@
 // capture_learnings.cue — Learning Capture (Sub-flow)
 //
-// Mechanical port from capture_learnings.yaml (version 1).
 // Reads source file, reflects via inference, saves as mission note.
-// Used by retrospective flow.
+// Used by retrospective flow and other flows that want to persist
+// observations. Mechanical — operates on whatever context the caller provides.
 
 package ouroboros
 
 capture_learnings: #FlowDefinition & {
 	flow:    "capture_learnings"
-	version: 2
+	version: 3
 	description: """
 		Reflect on completed work and persist observations as mission
 		notes. Reads source file, generates reflection, saves as note.
 		"""
 
+	context_tier: "session_task"
+	returns: {
+		learning_captured: {type: "bool", from: "context.note_saved", optional: true}
+	}
+	state_reads: []
+
 	input: {
 		required: ["task_description"]
-		optional: ["target_file_path", "task_outcome", "mission_objective"]
+		optional: ["target_file_path", "task_outcome"]
 	}
 
 	defaults: config: temperature: "t*0.8"
@@ -44,14 +50,14 @@ capture_learnings: #FlowDefinition & {
 			prompt_template: {
 				template: "capture_learnings/reflect"
 				context_keys: ["source_file_content"]
-				input_keys: ["task_description", "task_outcome", "mission_objective"]
+				input_keys: ["task_description", "task_outcome"]
 			}
 			pre_compute: [{
 				formatter:  "extract_field"
 				output_key: "source_file_content"
 				params: {source: {$ref: "context.source_file"}, field: "content"}
 			}]
-			config: temperature: "t*1.0"
+			config: temperature: "t*0.5"
 			resolver: {
 				type: "rule"
 				rules: [

@@ -24,6 +24,7 @@ from agent.loader_v2 import (
     resolve_value,
     resolve_input_map,
     format_result,
+    assemble_returns,
     FlowLoadError,
 )
 from agent.models import FlowDefinition, FlowResult
@@ -83,12 +84,21 @@ def _load_flows(flows_dir: str) -> dict[str, FlowDefinition]:
     return flows
 
 
-def _resolve_tail_call(flow_result: FlowResult) -> FlowOutcome:
+def _resolve_tail_call(
+    flow_result: FlowResult,
+    flow_def: FlowDefinition,
+    inputs: dict[str, Any],
+) -> FlowOutcome:
     """Convert a FlowResult into a FlowOutcome.
 
     If the FlowResult has a tail_call block, resolve $ref values in the
-    flow name and input_map, apply result_formatter, and return a
-    FlowTailCall. Otherwise, wrap in FlowTermination.
+    flow name and input_map, assemble structured returns as last_result,
+    and return a FlowTailCall. Otherwise, wrap in FlowTermination.
+
+    Args:
+        flow_result: The result from execute_flow.
+        flow_def: The flow definition (for returns declaration).
+        inputs: The original flow inputs (for returns resolution).
     """
     if flow_result.tail_call:
         tc = flow_result.tail_call
@@ -108,10 +118,14 @@ def _resolve_tail_call(flow_result: FlowResult) -> FlowOutcome:
         input_map = tc.get("input_map", {})
         resolved_inputs = resolve_input_map(input_map, namespaces)
 
-        # Apply result_formatter if present
-        result_msg = format_result(tc, namespaces)
-        if result_msg and "last_result" not in resolved_inputs:
-            resolved_inputs["last_result"] = result_msg
+        # Assemble structured returns as last_result
+        # Replaces the old format_result() prose string mechanism
+        if flow_def.returns and "last_result" not in resolved_inputs:
+            structured_result = assemble_returns(
+                flow_def, flow_result.context, inputs,
+            )
+            if structured_result:
+                resolved_inputs["last_result"] = structured_result
 
         # Resolve delay
         delay = tc.get("delay")
@@ -212,7 +226,25 @@ async def run_agent(
                 await effects.flush_traces()
             raise
 
-        outcome = _resolve_tail_call(flow_result)
+        outcome = _resolve_tail_call(flow_result, flow_def, instrumented_inputs)
+
+        # ── Context Tier Enforcement (belt-and-suspenders) ───────
+        # CUE validates at compile time; this catches dynamic violations.
+        if isinstance(outcome, FlowTailCall) and outcome.target_flow in registry:
+            target_def = registry[outcome.target_flow]
+            target_tier = getattr(target_def, "context_tier", "")
+            if target_tier == "flow_directive" and "flow_directive" not in outcome.inputs:
+                logger.warning(
+                    "Tier violation: flow %r requires flow_directive but none "
+                    "provided by tail-call from %r",
+                    outcome.target_flow, current_flow,
+                )
+            if target_tier == "session_task" and "mission_objective" in outcome.inputs:
+                logger.warning(
+                    "Tier noise: flow %r operates at session_task tier but "
+                    "received mission_objective from %r — this context will be ignored",
+                    outcome.target_flow, current_flow,
+                )
 
         # ── Trace: CycleEnd + flush ──────────────────────────────
         if effects and hasattr(effects, "emit_trace"):

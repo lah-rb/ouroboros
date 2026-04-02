@@ -398,11 +398,16 @@ async def action_extract_search_queries(step_input: StepInput) -> StepOutput:
 async def action_curl_search(step_input: StepInput) -> StepOutput:
     """Execute web searches via curl and return raw results.
 
-    Parses search queries from inference response (JSON array),
-    fetches results via DuckDuckGo lite, extracts text.
+    Parses search queries from context.search_queries (set by
+    extract_search_queries) or falls back to params.query (set
+    directly by the research flow's input_map).
+    Fetches results via DuckDuckGo lite, extracts text.
     """
     effects = step_input.effects
-    queries_raw = step_input.context.get("search_queries", "")
+    queries_raw = (
+        step_input.context.get("search_queries", "")
+        or step_input.params.get("query", "")
+    )
     max_queries = int(step_input.params.get("max_queries", 2))
     timeout = int(step_input.params.get("timeout", 15))
 
@@ -593,20 +598,19 @@ def _parse_validation_strategy(raw: str, max_checks: int) -> list[dict]:
 async def action_load_file_contents(step_input: StepInput) -> StepOutput:
     """Load full file contents for selected files.
 
-    Uses hybrid selection: deterministic repomap-related files first,
-    then LLM-selected files to fill remaining budget.
+    Selection sources (in priority order):
+    1. selected_files — deterministic list from select_relevant_files
+    2. related_files — AST dependency graph from repomap
+    3. file_selection — structured {file, reason, priority} objects
 
-    Reads file_selection from context (JSON array of {file, reason, priority}),
-    loads each file via effects.read_file(), returns context_bundle.
+    Fallback strategy (target_plus_neighbors): loads the target file
+    and files in the same directory when no selection data is available.
 
-    The context_bundle always includes the mission_objective (when available)
-    so downstream steps retain awareness of the overall goal.
+    Returns a context_bundle with loaded file contents, manifest summary,
+    and import graph for cross-module awareness.
     """
     effects = step_input.effects
-    selection_raw = step_input.context.get(
-        "file_selection",
-        step_input.context.get("inference_response", ""),
-    )
+    selection_raw = step_input.context.get("file_selection", "")
     manifest = step_input.context.get("project_manifest", {})
     budget = int(step_input.params.get("budget", 8))
     strategy = step_input.params.get("strategy")
@@ -643,7 +647,18 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
                 if len(files_to_load) >= budget:
                     break
     else:
-        # ── Hybrid selection: deterministic repomap files first ───
+        # ── Hybrid selection ──────────────────────────────────────
+        # Phase 0: Deterministic selected_files from select_relevant_files
+        # (AST graph + heuristics — list of file paths)
+        selected_files = step_input.context.get("selected_files", [])
+        if selected_files and isinstance(selected_files, list):
+            for fp in selected_files:
+                if isinstance(fp, str) and fp in manifest and fp not in seen:
+                    files_to_load.append(fp)
+                    seen.add(fp)
+                    if len(files_to_load) >= budget:
+                        break
+
         # Phase 1: Include repomap-related files (actual dependency graph)
         if related_files and isinstance(related_files, list):
             for fp in related_files:
@@ -664,7 +679,6 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
                     break
 
     loaded = []
-    research_findings = step_input.context.get("research_findings")
 
     for filepath in files_to_load[:budget]:
         try:
@@ -697,9 +711,6 @@ async def action_load_file_contents(step_input: StepInput) -> StepOutput:
     # Include import graph so models understand cross-module dependencies
     if import_graph:
         context_bundle["import_graph"] = import_graph
-
-    if research_findings:
-        context_bundle["research_findings"] = research_findings
 
     return StepOutput(
         result={"files_loaded": len(loaded)},
@@ -812,9 +823,21 @@ async def action_apply_plan_revision(step_input: StepInput) -> StepOutput:
         if not isinstance(new_task, dict) or "description" not in new_task:
             continue
         desc = new_task["description"]
-        flow = new_task.get("flow", "create_file")
+        flow = new_task.get("flow", "create")
+        # B5: Normalize stale flow names from model memory
+        from agent.actions.mission_actions import _FLOW_NAME_REMAP
+        flow = _FLOW_NAME_REMAP.get(flow, flow)
         inputs = new_task.get("inputs", {})
-        target_file = inputs.get("target_file_path", "")
+
+        # target_file_path may be at the top level (from the template
+        # example format) or inside inputs — check both.
+        target_file = (
+            new_task.get("target_file_path", "")
+            or inputs.get("target_file_path", "")
+        )
+        # Ensure target_file_path lands in inputs for downstream dispatch
+        if target_file and "target_file_path" not in inputs:
+            inputs["target_file_path"] = target_file
 
         if _is_duplicate_task(mission, desc, flow, target_file):
             changes.append(f"Skipped duplicate task: {desc[:60]}")
@@ -1172,7 +1195,7 @@ async def action_execute_project_setup(step_input: StepInput) -> StepOutput:
                 await effects.write_file(f"{path}/.gitkeep", "")
                 results.append({"name": name, "passed": True, "path": path})
 
-        elif action_type in ("file", "create_file"):
+        elif action_type in ("file", "create"):
             path = action.get("file_path", action.get("path", ""))
             desc = action.get("description", "")
             if path:
@@ -1287,14 +1310,23 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
                 if ft["description"] in existing_descriptions:
                     skipped += 1
                     continue
-                # Skip semantic duplicates (same flow + same file)
+
                 target_file = ft.get("file", "")
-                flow = ft.get("flow", "modify_file")
+                flow = ft.get("flow", "rewrite")
+                issue_text = ft.get("issue", ft["description"])
+
+                # ── Fix 16: Infer target + flow from error type ──────
+                target_file, flow = _infer_fix_target(
+                    issue_text, target_file, flow, known_files
+                )
+
+                # Skip semantic duplicates (same flow + same file)
                 if (flow, target_file) in existing_targets:
                     skipped += 1
                     continue
-                # Skip fix tasks targeting non-existent files
-                if target_file and known_files and target_file not in known_files:
+                # For file_write (create) tasks, allow targeting non-existent files
+                # For modify tasks, skip non-existent files
+                if flow != "file_ops" and target_file and known_files and target_file not in known_files:
                     logger.warning(
                         "Quality gate: skipping fix task for non-existent file %s",
                         target_file,
@@ -1310,7 +1342,7 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
                     priority=len(mission.plan),
                     inputs={
                         "target_file_path": target_file,
-                        "reason": ft.get("issue", ft["description"]),
+                        "reason": issue_text,
                     },
                 )
                 mission.plan.append(task)
@@ -1339,15 +1371,120 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
 
 
 def _parse_quality_summary(raw: str) -> dict:
-    """Parse quality gate summary from LLM response."""
+    """Parse quality gate summary from LLM response.
+
+    The prompt asks for: {verdict, blocking_issues, warnings, summary}.
+    The action expects: {all_passing, fix_tasks, summary}.
+    This function normalizes the LLM format to the internal format.
+    """
     raw = strip_markdown_wrapper(raw)
     json_match = re.search(r"\{[\s\S]*\}", raw)
     if json_match:
         try:
-            return json.loads(json_match.group())
+            parsed = json.loads(json_match.group())
         except json.JSONDecodeError:
-            pass
+            return {}
+
+        # Normalize: translate "verdict" to "all_passing" if present
+        if "verdict" in parsed and "all_passing" not in parsed:
+            verdict = str(parsed["verdict"]).lower().strip()
+            parsed["all_passing"] = verdict == "pass"
+
+        # Normalize: translate "blocking_issues" to "fix_tasks" if present
+        if "blocking_issues" in parsed and "fix_tasks" not in parsed:
+            fix_tasks = []
+            for issue in parsed.get("blocking_issues", []):
+                if isinstance(issue, str):
+                    fix_tasks.append({"description": issue, "issue": issue})
+                elif isinstance(issue, dict):
+                    fix_tasks.append(issue)
+            parsed["fix_tasks"] = fix_tasks
+
+        return parsed
     return {}
+
+
+def _infer_fix_target(
+    issue_text: str,
+    target_file: str,
+    flow: str,
+    known_files: set[str],
+) -> tuple[str, str]:
+    """Infer the correct target file and flow from a quality gate issue.
+
+    Fix 16: Ensures fix tasks target the right file based on error type:
+    - Missing file errors → target the missing file with file_write (create)
+    - Import errors → target the file that defines the missing symbol
+    - Build/packaging issues → use project_ops flow
+
+    Returns (target_file, flow) tuple, possibly modified from inputs.
+    """
+    issue_lower = issue_text.lower()
+
+    # ── Missing file errors → create the file ─────────────────────
+    missing_file_keywords = (
+        "failed to read",
+        "no such file",
+        "filenotfounderror",
+        "file not found",
+        "not found:",
+        "missing file",
+    )
+    if any(kw in issue_lower for kw in missing_file_keywords):
+        # Extract the missing filename from the issue text
+        # Patterns: "Failed to read YAML file world_data.yaml"
+        #           "FileNotFoundError: config.json"
+        #           "No such file: data/rooms.yaml"
+        file_match = re.search(
+            r"(?:file|read|open|load|found:?)\s+[`'\"]?"
+            r"([a-zA-Z0-9_/.-]+\.\w{1,5})[`'\"]?",
+            issue_text,
+            re.IGNORECASE,
+        )
+        if file_match:
+            target_file = file_match.group(1)
+        flow = "file_ops"
+        return target_file, flow
+
+    # ── Import errors → target the module that should define the symbol ─
+    if "importerror" in issue_lower or "cannot import" in issue_lower:
+        # Pattern: "cannot import name 'Connection' from 'models'"
+        # → target models.py, not the importing file
+        import_match = re.search(
+            r"cannot import.*from\s+['\"]?([a-zA-Z0-9_.]+)['\"]?",
+            issue_text,
+            re.IGNORECASE,
+        )
+        if import_match:
+            module = import_match.group(1)
+            # Convert module path to file path
+            candidate = module.replace(".", "/") + ".py"
+            if candidate in known_files:
+                target_file = candidate
+            else:
+                # Try just the last component
+                simple = module.split(".")[-1] + ".py"
+                for kf in known_files:
+                    if kf.endswith(simple):
+                        target_file = kf
+                        break
+        flow = "file_ops"  # modify if exists, create if not
+        return target_file, flow
+
+    # ── Build/packaging warnings → project_ops ────────────────────
+    build_keywords = (
+        "build error",
+        "packaging",
+        "setuptools",
+        "pip install",
+        "dependency",
+        "requirements",
+    )
+    if any(kw in issue_lower for kw in build_keywords):
+        flow = "project_ops"
+        return target_file, flow
+
+    return target_file, flow
 
 
 # ── validate_created_files ────────────────────────────────────────────

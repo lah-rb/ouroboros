@@ -292,8 +292,11 @@ def build_action_registry() -> ActionRegistry:
         action_start_director_session,
         action_end_director_session,
         action_record_dispatch,
+        action_check_architecture_drift,
         action_parse_and_store_architecture,
         action_create_plan_from_architecture,
+        # Context Contract Architecture
+        action_derive_project_goals,
     )
 
     # ── Diagnostic actions ────────────────────────────────────────
@@ -335,6 +338,8 @@ def build_action_registry() -> ActionRegistry:
         action_start_terminal_session,
         action_send_terminal_command,
         action_close_terminal_session,
+        # Context Contract Architecture — batch execution for run_commands
+        action_execute_commands_batch,
     )
 
     # ── AST-aware editing actions ─────────────────────────────────
@@ -388,11 +393,16 @@ def build_action_registry() -> ActionRegistry:
     registry.register("record_dispatch", action_record_dispatch)
     # NEW: architecture state management
     registry.register(
+        "check_architecture_drift", action_check_architecture_drift
+    )
+    registry.register(
         "parse_and_store_architecture", action_parse_and_store_architecture
     )
     registry.register(
         "create_plan_from_architecture", action_create_plan_from_architecture
     )
+    # Context Contract Architecture: goal derivation
+    registry.register("derive_project_goals", action_derive_project_goals)
 
     # ── File operations ───────────────────────────────────────────
     registry.register("execute_file_creation", action_execute_file_creation)
@@ -411,7 +421,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("apply_quality_gate_results", action_apply_quality_gate_results)
     registry.register("validate_created_files", action_validate_created_files)
     # NOTE: run_fallback_validation REMOVED — use validate_created_files instead
-    # NOTE: accumulate_correction_history REMOVED — create_file no longer has correction loop
+    # NOTE: accumulate_correction_history REMOVED — create no longer has correction loop
 
     # ── Diagnostic actions ────────────────────────────────────────
     registry.register("compile_diagnosis", action_compile_diagnosis)
@@ -450,6 +460,8 @@ def build_action_registry() -> ActionRegistry:
     registry.register("start_terminal_session", action_start_terminal_session)
     registry.register("send_terminal_command", action_send_terminal_command)
     registry.register("close_terminal_session", action_close_terminal_session)
+    # Context Contract Architecture: batch command execution for run_commands
+    registry.register("execute_commands_batch", action_execute_commands_batch)
 
     # ── AST-aware editing actions ─────────────────────────────────
     registry.register("extract_symbol_bodies", action_extract_symbol_bodies)
@@ -468,13 +480,21 @@ def build_action_registry() -> ActionRegistry:
         action_check_retry_budget,
         action_git_log_summary,
         action_log_validation_notes,
+        # A1: Dependency coverage check
+        action_check_dependency_coverage,
+        action_parse_dep_check_result,
     )
 
     registry.register("lookup_validation_env", action_lookup_validation_env)
-    registry.register("run_validation_checks_from_env", action_run_validation_checks_from_env)
+    registry.register(
+        "run_validation_checks_from_env", action_run_validation_checks_from_env
+    )
     registry.register("persist_validation_env", action_persist_validation_env)
     registry.register("check_retry_budget", action_check_retry_budget)
     registry.register("git_log_summary", action_git_log_summary)
     registry.register("log_validation_notes", action_log_validation_notes)
+    # A1: Dependency coverage check
+    registry.register("check_dependency_coverage", action_check_dependency_coverage)
+    registry.register("parse_dep_check_result", action_parse_dep_check_result)
 
     return registry

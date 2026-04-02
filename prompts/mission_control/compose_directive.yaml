@@ -1,0 +1,40 @@
+# Prompt template: mission_control/compose_directive
+#
+# Used when the director selects "infer_directive" — composing a novel
+# flow_directive that doesn't map to an existing task in the plan.
+# This is the escape hatch for creative/novel director decisions.
+
+id: mission_control/compose_directive
+description: "Compose a novel flow_directive via inference"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are composing a specific, actionable directive for the next work cycle.
+      The directive should be 1-2 sentences, name specific files and symbols,
+      and describe the change to make — not the goal it serves.
+
+  - id: analysis
+    content: |
+      ## Director Analysis
+      {context.director_analysis}
+
+  - id: plan
+    content: |
+      ## Current Plan
+      {context.plan_listing}
+
+  - id: instructions
+    content: |
+      Based on your analysis, write a single flow_directive. It must be:
+      - Specific: name files, functions, or data structures
+      - Actionable: describe what to create, modify, or fix
+      - Concise: 1-2 sentences maximum
+
+      Examples:
+      - "Add print_wrapped utility function to utils.py for text formatting"
+      - "Fix ImportError in engine.py — Connection class is not exported from models.py"
+      - "Create demo_data.yaml with 6 rooms, 4 items, and 2 NPCs for the demo adventure"
+
+      Write ONLY the directive text, nothing else.

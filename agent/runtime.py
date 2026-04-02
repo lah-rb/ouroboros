@@ -42,6 +42,7 @@ from agent.loader_v2 import (
     resolve_input_map,
     run_pre_compute,
     format_result,
+    assemble_returns,
     PromptRenderer,
 )
 
@@ -294,9 +295,20 @@ async def execute_flow(
                 step_name,
                 step_def.status,
             )
+
+            # Assemble structured returns from the flow's declaration
+            structured_returns = assemble_returns(
+                flow_def, execution.accumulator, inputs,
+            )
+
+            # Merge structured returns into result dict
+            result = dict(step_output.result)
+            if structured_returns:
+                result["_returns"] = structured_returns
+
             return FlowResult(
                 status=step_def.status or "completed",
-                result=step_output.result,
+                result=result,
                 context=execution.accumulator,
                 steps_executed=execution.steps_executed,
                 observations=execution.observations,
@@ -632,9 +644,7 @@ async def _execute_inference_action(
     # Render the prompt
     if step_def.prompt_template:
         renderer = _get_prompt_renderer()
-        rendered_prompt = renderer.render(
-            step_def.prompt_template.template, namespaces
-        )
+        rendered_prompt = renderer.render(step_def.prompt_template.template, namespaces)
     else:
         # Inline prompt fallback (for steps not yet migrated to templates)
         rendered_prompt = step_def.prompt or ""
@@ -655,7 +665,7 @@ async def _execute_inference_action(
     # run_in_terminal publish BOTH a terminal session_id (for shell commands)
     # and an inference_session_id (for LLM calls).  Using the terminal ID
     # for inference causes "session not found" errors.  Flows that only have
-    # one session (ast_edit_session, mission_control) publish it as session_id
+    # one session (patch, mission_control) publish it as session_id
     # or edit_session_id, which still works as the fallback.
     session_id = (
         step_input.context.get("inference_session_id")
@@ -666,8 +676,8 @@ async def _execute_inference_action(
     infer_start = time.monotonic()
 
     if session_id and hasattr(effects, "session_inference"):
-        logger.debug(
-            "Inference step %r using memoryful session %s",
+        logger.info(
+            "Inference step %r using session %s",
             _step_name,
             session_id,
         )
@@ -677,6 +687,12 @@ async def _execute_inference_action(
             config_overrides=config_overrides if config_overrides else None,
         )
     else:
+        if session_id:
+            logger.warning(
+                "Inference step %r has session_id=%r but effects lacks session_inference",
+                _step_name,
+                session_id,
+            )
         result = await effects.run_inference(
             prompt=rendered_prompt,
             config_overrides=config_overrides if config_overrides else None,

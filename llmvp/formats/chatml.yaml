@@ -1,0 +1,48 @@
+# ChatML format schema — Qwen / DeepSeek model family
+#
+# Covers Qwen3, Qwen3.5, Qwen3-Next, and DeepSeek R1 variants.
+# All use <|im_start|>/<|im_end|> framing with inline <think> tags.
+#
+# Reference: https://huggingface.co/Qwen/Qwen3.5-35B-A3B
+# Reference: https://huggingface.co/blog/qwen-3-chat-template-deep-dive
+
+family: chatml
+display_name: "ChatML (Qwen/DeepSeek)"
+
+tokens:
+  msg_open: "<|im_start|>"
+  msg_content: "\n"
+  msg_close: "<|im_end|>"
+  gen_stop: "<|im_end|>"
+  history_close: "<|im_end|>"
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: "assistant"
+
+thinking:
+  style: inline_tags
+  open_tag: "<think>"
+  close_tag: "</think>"
+
+system_block:
+  identity: "You are a helpful assistant."
+  reasoning_default: ""
+  channel_directive: ""
+  template: "{identity}\n{persona}"
+
+traits:
+  fold_system_into_first_user: false
+  supports_developer_role: false
+
+generation:
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+turn_transition:
+  needs_close: true
+  after_generation: "\n"

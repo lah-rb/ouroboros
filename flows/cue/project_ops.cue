@@ -1,7 +1,5 @@
 // project_ops.cue — Project Operations — Infrastructure and Tooling
 //
-// Ported from project_ops.yaml (version 2).
-//
 // Responsibilities:
 //   1. Scan workspace to understand current state
 //   2. LLM plans what setup is needed (config files, directories, deps)
@@ -10,35 +8,37 @@
 //   5. Detect and persist validation tooling via set_env
 //   6. Report to mission_control
 //
-// Changes from YAML version:
-//   - Added set_env sub-flow at end to pre-populate .agent/env.json
-//   - Config files get a validation pass after writing
-//   - Standard return templates for terminal paths
-//   - Prompt extracted to template file
-//
 // Unique capability: Only flow that runs shell setup commands.
-// Cannot be absorbed into file_write — the planning step asks
-// "what infrastructure does this project need?" not "write this file."
 
 package ouroboros
 
 project_ops: #FlowDefinition & {
 	flow:    "project_ops"
-	version: 3
+	version: 4
 	description: """
 		Initialize project tooling and structure. Creates config files,
 		directories, installs dependencies, and detects validation tooling.
 		"""
 
+	context_tier: "flow_directive"
+	returns: {
+		setup_complete: {type: "bool", from: "context.setup_result",  optional: true}
+		files_changed:  {type: "list", from: "context.files_changed", optional: true}
+		env_detected:   {type: "bool", from: "context.env_config",    optional: true}
+	}
+	state_reads: []
+
 	input: {
-		required: ["mission_id", "task_id"]
+		required: ["mission_id", "task_id", "flow_directive"]
 		optional: [
-			"task_description", "mission_objective", "working_directory",
-			"target_file_path", "reason", "relevant_notes", "setup_focus",
+			"working_directory",
+			"relevant_notes", "setup_focus",
 		]
 	}
 
 	defaults: config: temperature: "t*0.4"
+
+	flow_persona: _personas.project_ops
 
 	steps: {
 
@@ -61,13 +61,13 @@ project_ops: #FlowDefinition & {
 			prompt_template: {
 				template: "project_ops/plan"
 				context_keys: ["project_file_list"]
-				input_keys: ["task_description", "mission_objective", "setup_focus", "relevant_notes"]
+				input_keys: ["flow_directive", "setup_focus", "relevant_notes"]
 			}
 			pre_compute: [{
 				formatter: "format_project_file_list", output_key: "project_file_list"
 				params: {source: {$ref: "context.project_manifest"}}
 			}]
-			config: temperature: 0.3
+			config: temperature: "t*0.3"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -103,11 +103,6 @@ project_ops: #FlowDefinition & {
 		}
 
 		// ── Phase 5: Detect validation tooling ──────────────────────
-		//
-		// Now that dependencies are installed, detect what validation
-		// tools are available and persist to .agent/env.json.
-		// This pre-populates the env table so file_write never needs
-		// to call set_env during the mission.
 
 		detect_env: #StepDefinition & {
 			action:      "flow"
@@ -120,7 +115,6 @@ project_ops: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					// set_env success or failure doesn't block setup completion
 					{condition: "true", transition: "report_success"},
 				]
 			}
@@ -128,7 +122,8 @@ project_ops: #FlowDefinition & {
 
 		// ── Terminal paths ──────────────────────────────────────────
 
-		report_success: #StepDefinition & _templates.return_success & {
+		report_success: #StepDefinition & {
+			action:      "noop"
 			description: "Project setup complete"
 			context: optional: ["files_changed"]
 			tail_call: {
@@ -138,12 +133,11 @@ project_ops: #FlowDefinition & {
 					last_task_id: {$ref: "input.task_id"}
 					last_status:  "success"
 				}
-				result_formatter: "setup_complete"
-				result_keys: ["context.files_changed"]
 			}
 		}
 
-		failed: #StepDefinition & _templates.return_failed & {
+		failed: #StepDefinition & {
+			action:      "noop"
 			description: "Setup failed"
 			tail_call: {
 				flow: "mission_control"
@@ -152,8 +146,6 @@ project_ops: #FlowDefinition & {
 					last_task_id: {$ref: "input.task_id"}
 					last_status:  "failed"
 				}
-				result_formatter: "task_failed"
-				result_keys: []
 			}
 		}
 	}

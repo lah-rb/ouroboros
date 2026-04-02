@@ -140,7 +140,7 @@ def _resolve_ref(ref: dict, namespaces: dict[str, Any]) -> Any:
     path_str = ref["$ref"]
     parts = path_str.split(".")
     namespace_name = parts[0]  # "input", "context", or "meta"
-    key_path = parts[1:]       # ["mission_id"] or ["dispatch_config", "flow"]
+    key_path = parts[1:]  # ["mission_id"] or ["dispatch_config", "flow"]
 
     # Navigate into the namespace
     current = namespaces.get(namespace_name)
@@ -181,7 +181,9 @@ def _apply_fallbacks(ref: dict, namespaces: dict[str, Any]) -> Any:
     return None
 
 
-def resolve_params(params: dict[str, Any], namespaces: dict[str, Any]) -> dict[str, Any]:
+def resolve_params(
+    params: dict[str, Any], namespaces: dict[str, Any]
+) -> dict[str, Any]:
     """Resolve all $ref values in a params dictionary.
 
     Drop-in replacement for render_params().
@@ -266,7 +268,9 @@ def run_pre_compute(
         else:
             formatter_name = step.formatter
             output_key = step.output_key
-            raw_params = step.params if isinstance(step.params, dict) else step.params or {}
+            raw_params = (
+                step.params if isinstance(step.params, dict) else step.params or {}
+            )
 
         # Resolve any $refs in the formatter's params
         resolved_params = resolve_params(raw_params, namespaces)
@@ -331,9 +335,7 @@ class PromptRenderer:
 
         template_path = self.prompts_dir / f"{template_id}.yaml"
         if not template_path.exists():
-            raise FlowRuntimeError(
-                f"Prompt template not found: {template_path}"
-            )
+            raise FlowRuntimeError(f"Prompt template not found: {template_path}")
 
         with open(template_path, "r") as f:
             template = yaml.safe_load(f)
@@ -361,9 +363,7 @@ class PromptRenderer:
 
         return "\n\n".join(rendered_sections)
 
-    def _render_section(
-        self, section: dict, namespaces: dict[str, Any]
-    ) -> str | None:
+    def _render_section(self, section: dict, namespaces: dict[str, Any]) -> str | None:
         """Render a single section, returning None if skipped.
 
         Handles three section types:
@@ -492,16 +492,9 @@ def format_result(
 ) -> str | None:
     """Format a result message from a tail_call definition.
 
-    If the tail_call has a result_formatter, runs it with the declared
-    result_keys resolved from namespaces. Otherwise returns None
-    (the runtime should use a default message or the raw status).
-
-    Args:
-        tail_call: The tail_call dict from the step definition.
-        namespaces: Current input/context/meta namespaces.
-
-    Returns:
-        Formatted result string, or None if no formatter declared.
+    DEPRECATED — replaced by assemble_returns() in the context contract
+    architecture. Kept temporarily for backward compatibility during
+    migration. Will be removed once all flows use returns declarations.
     """
     formatter_name = tail_call.get("result_formatter")
     if not formatter_name:
@@ -514,9 +507,7 @@ def format_result(
     for key_path in result_keys:
         parts = key_path.split(".", 1)
         if len(parts) == 2:
-            value = _resolve_ref(
-                {"$ref": key_path}, namespaces
-            )
+            value = _resolve_ref({"$ref": key_path}, namespaces)
             resolved_keys[key_path] = value
 
     formatter_fn = _formatter_registry.get(formatter_name)
@@ -524,6 +515,73 @@ def format_result(
         return f"[unknown formatter: {formatter_name}]"
 
     return formatter_fn(resolved_keys, namespaces)
+
+
+# ── Returns Assembly ───────────────────────────────────────────────
+#
+# Replaces format_result(). Assembles structured return data from
+# the flow's `returns` declaration, resolving each field's `from`
+# path against the live accumulator.
+#
+# Called by loop.py at tail-call resolution and terminal step handling.
+
+
+def assemble_returns(
+    flow_def: Any,
+    accumulator: dict[str, Any],
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Assemble structured returns from a flow's returns declaration.
+
+    Resolves each return field's `from` path against the accumulator
+    and input namespaces. Validates that required fields are present.
+
+    Args:
+        flow_def: The FlowDefinition (must have a `returns` dict).
+        accumulator: The current context accumulator at terminal step.
+        inputs: The original flow inputs.
+
+    Returns:
+        Dict of field_name → resolved value. Missing optional fields
+        are omitted (not set to None).
+    """
+    returns_decl = getattr(flow_def, "returns", None) or {}
+    if not returns_decl:
+        return {}
+
+    namespaces = {
+        "input": inputs,
+        "context": accumulator,
+    }
+
+    assembled = {}
+    for field_name, field_spec in returns_decl.items():
+        if not isinstance(field_spec, dict):
+            continue
+
+        from_path = field_spec.get("from", "")
+        is_optional = field_spec.get("optional", False)
+
+        if not from_path:
+            continue
+
+        # Resolve the from path
+        value = _resolve_ref({"$ref": from_path}, namespaces)
+
+        if value is not None:
+            assembled[field_name] = value
+        elif not is_optional:
+            # Required field missing — log warning but don't fail
+            import logging
+            logging.getLogger(__name__).warning(
+                "Flow %r: required return field %r (from %r) resolved to None",
+                getattr(flow_def, "flow", "unknown"),
+                field_name,
+                from_path,
+            )
+            assembled[field_name] = None
+
+    return assembled
 
 
 # ── Integration: Runtime Changes ─────────────────────────────────────
@@ -569,16 +627,22 @@ def format_result(
 
 # ── Exception Classes ────────────────────────────────────────────────
 
+
 class FlowLoadError(Exception):
     """Raised when a flow definition fails to load or validate."""
+
     pass
+
 
 class FlowValidationError(FlowLoadError):
     """Raised when a flow definition fails semantic validation."""
+
     pass
+
 
 class FlowRuntimeError(Exception):
     """Raised during flow execution (ref resolution, formatting, etc.)."""
+
     pass
 
 
@@ -652,15 +716,16 @@ def _validate_semantics(flow: "FlowDefinition", path: Path) -> None:
     unreachable = step_names - reachable
     if unreachable:
         import logging
+
         logging.getLogger(__name__).warning(
             "Flow %s (%s): unreachable steps: %s",
-            flow.flow, path, unreachable,
+            flow.flow,
+            path,
+            unreachable,
         )
 
     if errors:
-        raise FlowValidationError(
-            f"Flow {flow.flow!r} ({path}): {'; '.join(errors)}"
-        )
+        raise FlowValidationError(f"Flow {flow.flow!r} ({path}): {'; '.join(errors)}")
 
 
 # ── Formatter Registry Initialization ────────────────────────────────
@@ -671,10 +736,12 @@ def _init_formatter_registry() -> None:
     global _formatter_registry
     try:
         from agent.formatters import PRE_COMPUTE_FORMATTERS, RESULT_FORMATTERS
+
         _formatter_registry.update(PRE_COMPUTE_FORMATTERS)
         _formatter_registry.update(RESULT_FORMATTERS)
     except ImportError:
         import logging
+
         logging.getLogger(__name__).warning(
             "Could not import formatters module — registry empty"
         )
@@ -713,6 +780,7 @@ def load_all_flows(
             flows[flow.flow] = flow
         except FlowLoadError as e:
             import logging
+
             logging.getLogger(__name__).error("Failed to load %s: %s", json_path, e)
 
     # Load YAML files (legacy, for flows not yet ported)
@@ -724,6 +792,7 @@ def load_all_flows(
                 flows[flow.flow] = flow
         except FlowLoadError as e:
             import logging
+
             logging.getLogger(__name__).error("Failed to load %s: %s", yaml_path, e)
 
     # Initialize prompt renderer
@@ -732,4 +801,3 @@ def load_all_flows(
         renderer = PromptRenderer(prompts_dir)
 
     return flows, renderer
-

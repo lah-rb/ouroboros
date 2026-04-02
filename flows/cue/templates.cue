@@ -107,6 +107,7 @@ _templates: {
 
 	read_target_file: {
 		action: "read_files"
+		publishes: ["target_file", "related_files"]
 		params: {
 			target:           {$ref: "input.target_file_path"}
 			discover_imports: bool | *false
@@ -133,14 +134,12 @@ _templates: {
 	gather_project_context: {
 		action: "flow"
 		flow:   "prepare_context"
+		publishes: ["context_bundle", "project_manifest", "repo_map_formatted", "related_files"]
 		input_map: {
-			working_directory:   {$ref: "input.working_directory"}
-			task_description:    {$ref: "input.task_description"}
-			mission_objective:   {$ref: "input.mission_objective"}
-			target_file_path:    {$ref: "input.target_file_path", default: ""}
-			frustration_level:   {$ref: "input.frustration_level", default: "0"}
-			frustration_history: {$ref: "input.frustration_history", default: ""}
-			relevant_notes:      {$ref: "input.relevant_notes", default: ""}
+			working_directory: {$ref: "input.working_directory"}
+			task_description:  {$ref: "input.flow_directive", default: ""}
+			target_file_path:  {$ref: "input.target_file_path", default: ""}
+			relevant_notes:    {$ref: "input.relevant_notes", default: ""}
 		}
 		param_schema: {
 			context_budget: {
@@ -150,11 +149,6 @@ _templates: {
 				min:         1
 				max:         20
 				description: "Maximum files to include in context bundle"
-			}
-			frustration_history: {
-				type:        "string"
-				required:    false
-				description: "Previous failure context for adaptive selection"
 			}
 		}
 		...
@@ -247,6 +241,7 @@ _templates: {
 
 	scan_workspace: {
 		action: "scan_project"
+		publishes: ["project_manifest"]
 		params: {
 			root: string | *"."
 			...
@@ -285,6 +280,7 @@ _templates: {
 
 	cross_file_check: {
 		action: "validate_cross_file_consistency"
+		publishes: ["cross_file_summary"]
 		...
 	}
 
@@ -292,6 +288,7 @@ _templates: {
 
 	execute_search: {
 		action: "curl_search"
+		publishes: ["raw_search_results"]
 		...
 	}
 

@@ -1,27 +1,32 @@
 # Prompt template: mission_control/reason
 #
-# Director reasoning — analyzes mission state and recommends next action.
+# Director reasoning at the project_goal level.
+# Goals are foregrounded — the director reasons about which capability
+# to advance, not the raw mission objective.
+#
 # Pre-computed context keys:
-#   plan_listing           — formatted by format_plan_listing()
-#   frustration_landscape  — formatted by format_frustration_landscape()
-#   dispatch_history       — formatted by format_dispatch_history()
-#   notes_summary          — formatted by format_notes()
+#   goals_listing           — formatted by format_goals_listing()
+#   plan_listing            — formatted by format_plan_listing()
+#   frustration_landscape   — formatted by format_frustration_landscape()
+#   dispatch_history        — formatted by format_dispatch_history()
+#   notes_summary           — formatted by format_notes()
+#   architecture_summary    — formatted by format_architecture_summary()
+#   last_result             — formatted by format_structured_result()
 
 id: mission_control/reason
-description: "Director reasoning — analyze mission state and decide next action"
+description: "Director reasoning — analyze goals and decide next action"
 
 sections:
 
   - id: system_role
     content: |
       You are the director of an autonomous coding project.
-      Your job is to look at the full picture and decide the single best next action.
+      Your job is to reason about project goals and decide the single best next action.
 
-  - id: mission
+  - id: goals
     content: |
-      ## Mission
-      Objective: {context.mission_objective}
-      Working directory: {context.working_directory}
+      ## Project Goals
+      {context.goals_listing}
 
   - id: architecture
     when: context.architecture_summary
@@ -39,7 +44,7 @@ sections:
     content: |
       ## Last Cycle
       Status: {context.last_status}
-      Result: {context.last_result}
+      {context.last_result}
 
   - id: first_cycle
     when: context.is_first_cycle
@@ -64,13 +69,29 @@ sections:
       ## Notes
       {context.notes_summary}
 
+  - id: peers
+    when: context.peer_personas
+    content: |
+      ## Available Actions
+      {context.peer_personas}
+
   - id: instructions
     content: |
       ## Your Analysis
 
       Think step by step:
-      1. What is the current state of the project? What's built, what remains?
-      2. What happened last cycle? Did it succeed or fail?
-      3. What is the single most impactful action to take next?
+      1. Which goals are in progress? Which are blocked?
+      2. What happened last cycle? Did it advance a goal?
+      3. Are there pending tasks for active goals? If yes,
+         execute them — do not revise the plan while actionable work remains.
+      4. Which goal should be advanced next, and what specific task serves it?
+
+      IMPORTANT — avoid unnecessary replanning:
+      - If there are pending file_ops or interact tasks, execute them.
+        Do NOT choose design_and_plan or revise_plan when work is available.
+      - Only revise the plan when you have completed several tasks and
+        discovered a concrete gap. Vague concerns are not grounds for replanning.
+      - Check the dispatch history — if design_and_plan or revise_plan
+        ran recently, do NOT choose it again. Execute pending tasks first.
 
       Provide 3-5 sentences of concise analysis ending with a clear recommendation.

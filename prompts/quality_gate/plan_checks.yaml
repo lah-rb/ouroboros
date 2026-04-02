@@ -11,8 +11,8 @@ sections:
   - id: system_role
     content: |
       You are a validation planning module in an automated pipeline.
-      Your output will be parsed as JSON and each check will be executed.
-      Do NOT include commentary or explanation.
+      Your output will be parsed as JSON. Return ONLY a JSON array
+      inside a fenced code block — no commentary or explanation.
 
   - id: project
     content: |
@@ -23,7 +23,7 @@ sections:
 
   - id: output_format
     content: |
-      Return a JSON array of validation checks to run.
+      Return a JSON array of validation checks inside a fenced code block.
       Each check has: command, description, category.
       Maximum 8 checks. Prioritize syntax checks over style checks.
       Only include checks for tools configured in the project.
@@ -43,4 +43,4 @@ sections:
       ```
       These checks cover the main validation needs.
 
-      Return ONLY the JSON.
+      Return ONLY the fenced JSON.

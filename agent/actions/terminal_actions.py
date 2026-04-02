@@ -74,9 +74,7 @@ async def action_start_terminal_session(step_input: StepInput) -> StepOutput:
                 ]
         else:
             # Plain text — split on newlines (each line is a command)
-            initial_commands = [
-                cmd.strip() for cmd in text.split("\n") if cmd.strip()
-            ]
+            initial_commands = [cmd.strip() for cmd in text.split("\n") if cmd.strip()]
 
     # Parse env_vars if string
     if isinstance(env_vars, str):
@@ -214,6 +212,31 @@ async def action_send_terminal_command(step_input: StepInput) -> StepOutput:
     }
     updated_history = list(session_history) + [entry]
 
+    # ── Consecutive timeout detection ────────────────────────────
+    # If the last 2 commands both timed out, the subprocess is likely
+    # stuck in an interactive loop (e.g., a game waiting for input()
+    # that consumes our marker). Signal stuck so the session closes
+    # instead of looping indefinitely.
+    if result.timed_out and session_history:
+        last_entry = session_history[-1]
+        if isinstance(last_entry, dict) and last_entry.get("timed_out", False):
+            return StepOutput(
+                result={
+                    "command_sent": False,
+                    "stuck_detected": True,
+                    "turn_count": len(updated_history),
+                    "consecutive_timeouts": True,
+                },
+                observations=(
+                    f"Stuck detected: 2 consecutive timeouts — "
+                    f"subprocess likely waiting for interactive input"
+                ),
+                context_updates={
+                    "session_id": session_id,
+                    "session_history": updated_history,
+                },
+            )
+
     return StepOutput(
         result={
             "command_sent": True,
@@ -331,6 +354,25 @@ async def action_close_terminal_session(step_input: StepInput) -> StepOutput:
         f"{failures} failures, {timeouts} timeouts"
     )
 
+    # Build full terminal transcript — no truncation.
+    # Downstream consumers (quality_gate summarize, interact result formatters)
+    # receive the complete output and are responsible for summarization.
+    transcript_parts = []
+    for entry in session_history:
+        if isinstance(entry, dict):
+            cmd = entry.get("command", "")
+            output = entry.get("output", "")
+            rc = entry.get("return_code", "?")
+            turn = entry.get("turn", "?")
+            transcript_parts.append(f"[Turn {turn}] $ {cmd}")
+            if output:
+                transcript_parts.append(output)
+            if rc != 0:
+                transcript_parts.append(f"(exit code: {rc})")
+    terminal_output = "\n".join(transcript_parts) if transcript_parts else ""
+
+    terminal_status = f"{total_turns} turns, {failures} failures, {timeouts} timeouts"
+
     return StepOutput(
         result={
             "session_closed": True,
@@ -340,7 +382,101 @@ async def action_close_terminal_session(step_input: StepInput) -> StepOutput:
         },
         observations=summary,
         context_updates={
-            "session_summary": summary,
-            "session_history": session_history,
+            "terminal_output": terminal_output,
+            "terminal_status": terminal_status,
+        },
+    )
+
+
+# ── execute_commands_batch ─────────────────────────────────────────────
+
+
+async def action_execute_commands_batch(step_input: StepInput) -> StepOutput:
+    """Execute a list of commands sequentially in a terminal session.
+
+    Used by the run_commands flow for deterministic command execution.
+    Unlike send_terminal_command (which parses a single command from LLM
+    inference output), this takes a list of commands directly from params.
+
+    Params:
+        commands: list of shell command strings
+        stop_on_error: if true, stop on first non-zero exit code (default true)
+        command_timeout: per-command timeout in seconds (default 30)
+
+    Publishes:
+        terminal_output: concatenated output from all commands
+        exit_codes: list of exit codes (one per command)
+        all_passed: bool — true if all commands exited 0
+    """
+    effects = step_input.effects
+    session_id = step_input.context.get("session_id", "")
+    commands = step_input.params.get("commands", [])
+    stop_on_error = step_input.params.get("stop_on_error", True)
+    timeout = int(step_input.params.get("command_timeout", 30))
+
+    if not effects or not session_id:
+        return StepOutput(
+            result={"command_sent": False},
+            observations="No effects or session_id",
+            context_updates={
+                "terminal_output": "",
+                "exit_codes": [],
+                "all_passed": False,
+            },
+        )
+
+    # Normalize commands — could be a list or a single string
+    if isinstance(commands, str):
+        commands = [commands]
+    if not isinstance(commands, list):
+        commands = [str(commands)]
+
+    output_parts = []
+    exit_codes = []
+    all_passed = True
+
+    for cmd in commands:
+        cmd = str(cmd).strip()
+        if not cmd:
+            continue
+
+        try:
+            result = await effects.send_to_terminal(
+                session_id=session_id,
+                command=cmd,
+                timeout=timeout,
+            )
+            output_parts.append(f"$ {cmd}")
+            output_parts.append(result.output if result.output else "(no output)")
+            exit_codes.append(result.return_code)
+
+            if result.return_code != 0:
+                all_passed = False
+                if stop_on_error:
+                    output_parts.append(f"(exit code: {result.return_code} — stopping)")
+                    break
+        except Exception as e:
+            output_parts.append(f"$ {cmd}")
+            output_parts.append(f"ERROR: {e}")
+            exit_codes.append(-1)
+            all_passed = False
+            if stop_on_error:
+                break
+
+    terminal_output = "\n".join(output_parts)
+
+    return StepOutput(
+        result={
+            "command_sent": True,
+            "commands_run": len(exit_codes),
+            "all_passed": all_passed,
+        },
+        observations=f"Executed {len(exit_codes)} commands, all_passed={all_passed}",
+        context_updates={
+            "session_id": session_id,
+            "terminal_output": terminal_output,
+            "exit_codes": exit_codes,
+            "all_passed": all_passed,
+            "command_count": len(exit_codes),
         },
     )

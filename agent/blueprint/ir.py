@@ -56,6 +56,7 @@ class ResolverIR:
     rules: list[RuleIR] | None = None
     options: dict[str, OptionIR] | None = None
     prompt: str | None = None
+    publish_selection: str | None = None  # Context key for LLM menu selection
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -98,15 +99,19 @@ class StepIR:
     context_required: list[str] = field(default_factory=list)
     context_optional: list[str] = field(default_factory=list)
     publishes: list[str] = field(default_factory=list)
-    prompt: str | None = None  # Raw Jinja2 template for inference steps
-    prompt_injects: list[str] = field(default_factory=list)  # Extracted {{ }} refs
+    prompt: str | None = None  # Legacy inline prompt (unused in CUE flows)
+    prompt_template: str | None = None  # Template ID (e.g., "mission_control/reason")
+    prompt_injects: list[str] = field(default_factory=list)  # Extracted variable refs
+    pre_compute: list[str] = field(default_factory=list)  # Pre-compute formatter names
     config: ConfigIR | None = None
     resolver: ResolverIR = field(default_factory=lambda: ResolverIR(type="none"))
     effects: list[str] = field(default_factory=list)  # Declared effects
     is_terminal: bool = False
     terminal_status: str | None = None
     is_entry: bool = False
-    tail_call_target: str | None = None  # Target flow for tail-call steps
+    tail_call_target: str | None = (
+        None  # Target flow for tail-call steps (or "$ref:..." for dynamic)
+    )
     sub_flow_target: str | None = None  # Target flow for sub-flow steps
 
     def to_dict(self) -> dict:
@@ -132,9 +137,13 @@ class InputIR:
 class TailCallIR:
     """A tail-call connection from this flow to another."""
 
-    target_flow: str  # May be a template expression
+    target_flow: str  # Flow name, or "$ref:path" for dynamic dispatch
     from_step: str
     input_map: dict[str, str] = field(default_factory=dict)
+    result_formatter: str | None = None  # Registered formatter name
+    result_keys: list[str] = field(
+        default_factory=list
+    )  # Context/input paths for formatter
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -174,7 +183,7 @@ class FlowIR:
     version: int
     description: str
     category: str  # "task" | "shared" | "control" | "test"
-    source_file: str  # Relative path to YAML
+    source_file: str  # Relative path to CUE source file
     inputs: list[InputIR] = field(default_factory=list)
     terminal_statuses: list[str] = field(default_factory=list)
     publishes_to_parent: list[str] = field(default_factory=list)
@@ -183,6 +192,15 @@ class FlowIR:
     defaults: ConfigIR | None = None
     steps: dict[str, StepIR] = field(default_factory=dict)
     stats: FlowStatsIR = field(default_factory=FlowStatsIR)
+
+    # Context Contract Architecture
+    context_tier: str = ""  # "mission_objective" | "project_goal" | "flow_directive" | "session_task"
+    returns: dict[str, Any] = field(default_factory=dict)  # Structured return declarations
+    state_reads: list[str] = field(default_factory=list)  # Persistence paths loaded
+
+    # Persona
+    flow_persona: str = ""  # This flow's role description
+    known_personas: list[str] = field(default_factory=list)  # Peer flow names
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -226,7 +244,7 @@ class ContextKeyIR:
 
 @dataclass
 class TemplateIR:
-    """A step template from shared/step_templates.yaml."""
+    """A step template from flows/cue/templates.cue."""
 
     name: str
     base_config: dict = field(default_factory=dict)

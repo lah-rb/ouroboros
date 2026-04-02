@@ -527,6 +527,156 @@ def cmd_start(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_cue_compile(args: argparse.Namespace) -> None:
+    """Validate CUE schemas and compile flows to compiled.json.
+
+    Runs ``cue vet`` then ``cue export`` from within Python, reading
+    the JSON output directly and writing flows/compiled.json.
+    """
+    import subprocess
+
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    cue_dir = os.path.join(project_root, "flows", "cue")
+    compiled_path = os.path.join(project_root, "flows", "compiled.json")
+
+    if not os.path.isdir(cue_dir):
+        print(f"Error: CUE directory not found: {cue_dir}")
+        sys.exit(1)
+
+    # Locate cue binary
+    cue_bin = None
+    for candidate in ("cue", os.path.join(project_root, "cue")):
+        try:
+            subprocess.run(
+                [candidate, "version"],
+                capture_output=True, check=True,
+            )
+            cue_bin = candidate
+            break
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            continue
+
+    if cue_bin is None:
+        print("Error: 'cue' not found. Install from https://cuelang.org/docs/install/")
+        sys.exit(1)
+
+    # Step 1: Validate
+    print("Validating CUE schemas...")
+    result = subprocess.run(
+        [cue_bin, "vet", "."],
+        capture_output=True, text=True, cwd=cue_dir,
+    )
+    if result.returncode != 0:
+        print(f"CUE validation failed:\n{result.stderr}")
+        sys.exit(1)
+
+    # Step 2: Export to JSON
+    print("Exporting flows to JSON...")
+    result = subprocess.run(
+        [cue_bin, "export", ".", "--out", "json"],
+        capture_output=True, text=True, cwd=cue_dir,
+    )
+    if result.returncode != 0:
+        print(f"CUE export failed:\n{result.stderr}")
+        sys.exit(1)
+
+    # Step 3: Parse, validate, and write
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        print(f"CUE export produced invalid JSON: {e}")
+        sys.exit(1)
+
+    flow_count = sum(1 for v in data.values() if isinstance(v, dict) and "flow" in v)
+
+    with open(compiled_path, "w") as f:
+        json.dump(data, f, indent=2)
+
+    print(f"Done. {compiled_path} generated.")
+    print(f"Flow count: {flow_count}")
+
+    # Step 4: Quick structural sanity checks
+    errors = []
+    for name, flow_def in data.items():
+        if not isinstance(flow_def, dict) or "flow" not in flow_def:
+            continue
+        entry = flow_def.get("entry", "")
+        steps = flow_def.get("steps", {})
+        if entry and entry not in steps:
+            errors.append(f"  {name}: entry step '{entry}' not in steps")
+        for step_name, step_def in steps.items():
+            if not isinstance(step_def, dict):
+                continue
+            resolver = step_def.get("resolver", {})
+            if resolver.get("type") == "rule":
+                for rule in resolver.get("rules", []):
+                    target = rule.get("transition", "")
+                    if target and target not in steps:
+                        errors.append(
+                            f"  {name}.{step_name}: transition '{target}' not in steps"
+                        )
+
+    if errors:
+        print(f"\n⚠️  Structural issues found:")
+        for e in errors:
+            print(e)
+        sys.exit(1)
+
+
+def cmd_lint_flows(args: argparse.Namespace) -> None:
+    """Run the comprehensive flow context linter (dev/lint_flows.py)."""
+    import subprocess
+
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    lint_script = os.path.join(project_root, "dev", "lint_flows.py")
+
+    if not os.path.exists(lint_script):
+        print(f"Error: lint script not found: {lint_script}")
+        sys.exit(1)
+
+    compiled_path = (
+        args.compiled
+        if hasattr(args, "compiled") and args.compiled
+        else os.path.join(project_root, "flows", "compiled.json")
+    )
+    if not os.path.exists(compiled_path):
+        print(f"Error: {compiled_path} not found. Run 'ouroboros.py cue-compile' first.")
+        sys.exit(1)
+
+    cmd = [sys.executable, lint_script]
+    if args.verbose:
+        cmd.append("--verbose")
+    if hasattr(args, "compiled") and args.compiled:
+        cmd.extend(["--compiled", args.compiled])
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run(cmd, cwd=project_root, env=env)
+    sys.exit(result.returncode)
+
+
+def cmd_smoke(args: argparse.Namespace) -> None:
+    """Run the smoke test suite against compiled.json."""
+    import subprocess
+
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    smoke_script = os.path.join(project_root, "dev", "smoke_test.py")
+
+    if not os.path.exists(smoke_script):
+        print(f"Error: smoke test not found: {smoke_script}")
+        sys.exit(1)
+
+    compiled_path = os.path.join(project_root, "flows", "compiled.json")
+    if not os.path.exists(compiled_path):
+        print(f"Error: {compiled_path} not found. Run 'ouroboros.py cue-compile' first.")
+        sys.exit(1)
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run([sys.executable, smoke_script], cwd=project_root, env=env)
+    sys.exit(result.returncode)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="ouroboros",
@@ -587,6 +737,27 @@ def main() -> None:
         "--verbose", action="store_true", help="Show all checks, not just warnings"
     )
     lint_p.set_defaults(func=cmd_lint)
+
+    # ── cue-compile subcommand ────────────────────────────────────
+    cue_p = subparsers.add_parser(
+        "cue-compile", help="Validate CUE schemas and compile flows to compiled.json"
+    )
+
+    # ── lint-flows subcommand ─────────────────────────────────────
+    lf_p = subparsers.add_parser(
+        "lint-flows", help="Run comprehensive flow context linter"
+    )
+    lf_p.add_argument(
+        "--verbose", action="store_true", help="Show all checks"
+    )
+    lf_p.add_argument(
+        "--compiled", help="Path to compiled.json (default: flows/compiled.json)"
+    )
+
+    # ── smoke subcommand ──────────────────────────────────────────
+    smoke_p = subparsers.add_parser(
+        "smoke", help="Run smoke test suite against compiled flows"
+    )
 
     # ── visualize subcommand ──────────────────────────────────────
     viz_p = subparsers.add_parser("visualize", help="Visualize flow definitions")
@@ -664,6 +835,12 @@ def main() -> None:
         cmd_trace(args)
     elif args.command == "lint":
         cmd_lint(args)
+    elif args.command == "cue-compile":
+        cmd_cue_compile(args)
+    elif args.command == "lint-flows":
+        cmd_lint_flows(args)
+    elif args.command == "smoke":
+        cmd_smoke(args)
     elif args.command == "visualize":
         cmd_visualize(args)
     elif args.command == "mission":

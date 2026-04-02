@@ -1,4 +1,9 @@
-// flow.cue — Ouroboros Flow Definition Schema v2
+// flow.cue — Ouroboros Flow Definition Schema v3
+//
+// Context Contract Architecture. Every flow declares:
+//   - context_tier: what level of context it operates at
+//   - returns: structured data it produces at termination
+//   - state_reads: what it loads from persistence (auditability)
 //
 // Zero-Jinja flow definitions. All structural data plumbing uses typed
 // references resolved by the Python runtime. Prompt templates live in
@@ -12,8 +17,33 @@
 //   - Python validates what requires runtime data (context reachability, contracts)
 //   - No string-embedded logic — references are typed values, not template syntax
 //   - Prompt content is decoupled from flow structure
+//   - Context crosses flow boundaries through declared, typed contracts
+//   - No scope receives context from more than one tier above it
 
 package ouroboros
+
+import "list"
+
+// ── Context Tier ────────────────────────────────────────────────────
+//
+// Each flow declares which tier of downward context it operates at.
+// The runtime enforces tier boundaries at dispatch time:
+//   - A flow at "flow_directive" tier MUST receive a flow_directive input
+//   - A flow at "session_task" tier MUST NOT receive mission_objective
+//   - Violations are runtime errors (required missing) or warnings (noise present)
+//
+// Tier hierarchy (each narrows context for the scope below it):
+//
+//   mission_objective  — Full mission picture. design_and_plan, quality_gate.
+//   project_goal       — Which capability to advance. mission_control, revise_plan,
+//                         retrospective.
+//   flow_directive     — What to do right now. file_ops, interact, diagnose_issue,
+//                         project_ops.
+//   session_task       — Mechanical execution. run_commands, run_session,
+//                         ast_edit_session, create_file, modify_file, set_env,
+//                         capture_learnings, research, prepare_context.
+
+#ContextTier: "mission_objective" | "project_goal" | "flow_directive" | "session_task"
 
 // ── Value References ────────────────────────────────────────────────
 //
@@ -130,28 +160,51 @@ package ouroboros
 	input_keys: [...string] | *[]
 }
 
+// ── Flow Returns ────────────────────────────────────────────────────
+//
+// Structured data a flow produces at termination. Replaces the
+// result_formatter + result_keys mechanism with typed declarations.
+//
+// At terminal steps, the runtime:
+//   1. Reads the flow's returns declaration
+//   2. Resolves each field's `from` path against the accumulator
+//   3. Validates required fields are present
+//   4. Packages as a structured dict
+//   5. Passes to the tail-call as `last_result` (replacing formatted strings)
+//
+// The director's prompt template formats the structured dict for display.
+// The CUE linter validates that `from` paths are reachable in context.
+//
+// Usage:
+//
+//   returns: {
+//       target_file:  {type: "string", from: "input.target_file_path"}
+//       files_changed:{type: "list",   from: "context.files_changed", optional: true}
+//   }
+
+#ReturnField: {
+	type:     "string" | "list" | "dict" | "bool" | "int"
+	from:     string & =~"^(input|context)\\."  // Resolution path
+	optional: bool | *false
+}
+
+#FlowReturns: {
+	[string]: #ReturnField
+}
+
 // ── Tail Call ───────────────────────────────────────────────────────
+//
+// Chains to another flow without nesting. The current flow's context
+// is fully released. The runtime assembles `returns` into a structured
+// dict and passes it as `last_result` in the tail-call inputs.
+//
+// result_formatter and result_keys are REMOVED in v3 — replaced by
+// the flow-level `returns` declaration.
 
 #TailCall: {
 	flow:      string | #Ref               // Static name or dynamic ref
 	input_map: {[string]: _}              // Mapped values for the target flow
 	delay?:    number & >= 0               // Seconds before dispatch
-
-	// ── Result formatting (replaces Jinja2 last_result strings) ────
-	//
-	// Result messages are formatted by registered Python functions.
-	// The flow definition declares which formatter to use and which
-	// context/input keys are relevant. Python owns the string construction.
-	//
-	// Example formatters (registered in Python):
-	//   "file_operation"  → "Created models.py, parser.py"
-	//   "task_outcome"    → "Completed: Build REST API. Files: app.py"
-	//   "diagnosis"       → "Diagnosed issue in loader.py — fix task created"
-	//   "error"           → "File not found: engine.py. Project files: ..."
-	//
-	// The linter validates that result_keys are reachable in context.
-	result_formatter?: string & =~"^[a-z][a-z0-9_]*$"
-	result_keys?:      [...string]          // input.X / context.X paths
 }
 
 // ── Step Definition ─────────────────────────────────────────────────
@@ -233,6 +286,21 @@ package ouroboros
 	}
 }
 
+// ── Flow Persona ───────────────────────────────────────────────────
+//
+// Optional persona declarations for cross-flow awareness.
+//
+//   flow_persona:    This flow's role description, injected as ---ACT AS---
+//                    in prompts that declare it. Defined in personas.cue.
+//   known_personas:  List of peer flow names whose personas are injected
+//                    as ---PEERS--- so this flow can reason about them.
+//
+// Not every flow needs a persona. Session-task tier flows that do
+// mechanical execution (create, patch, rewrite, run_commands) operate
+// with the soul + step prompt alone.
+
+#FlowPersona: string  // PList-style persona text
+
 // ── Flow Definition ─────────────────────────────────────────────────
 
 #FlowInput: {
@@ -258,13 +326,51 @@ package ouroboros
 	version:     int & >= 1
 	description: string | *""
 
+	// ── Context Contract ────────────────────────────────────────
+	//
+	// context_tier: What level of downward context this flow operates at.
+	// returns: Structured data produced at termination.
+	// state_reads: Persistence paths loaded at runtime (auditability).
+	//
+	// Together these form the flow's contract: what it receives, what
+	// it loads, and what it hands back. The runtime validates all three.
+
+	context_tier: #ContextTier
+	returns:      #FlowReturns
+	state_reads:  [...string] | *[]  // e.g. ["mission.objective", "mission.architecture"]
+
 	input:    #FlowInput    | *{required: [], optional: []}
 	defaults: #FlowDefaults | *{config: {}}
+
+	// ── Persona Declarations ───────────────────────────────────
+	//
+	// flow_persona: This flow's role, from _personas in personas.cue.
+	//   Injected into prompts as ---ACT AS--- block.
+	// known_personas: Peer flows this flow needs awareness of.
+	//   Injected into prompts as ---PEERS--- block.
+	//   Each name must have a corresponding entry in _personas.
+
+	flow_persona?:   #FlowPersona
+	known_personas?: [...string]
 
 	steps: {[string]: #StepDefinition}
 	entry: string
 
 	overflow: #OverflowConfig | *{strategy: "split", fallback: "reorganize"}
+
+	// ── Context Tier Constraints ────────────────────────────────
+	//
+	// CUE-level enforcement of tier boundaries on input declarations.
+	// Prevents structural violations at compile time.
+	//
+	// - flow_directive tier flows MUST declare flow_directive as required input
+	// - session_task tier flows MUST NOT declare mission_objective as required
+	//
+	// Runtime provides belt-and-suspenders enforcement for dynamic context.
+
+	if context_tier == "flow_directive" {
+		input: required: list.Contains("flow_directive")
+	}
 
 	// ── Structural Invariant ────────────────────────────────────
 	// Entry step must exist in steps map.

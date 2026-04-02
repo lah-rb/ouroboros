@@ -1,15 +1,15 @@
-"""Blueprint Analyzer — parses all YAML flows, action registry, and templates
-to produce a BlueprintIR.
+"""Blueprint Analyzer — parses compiled.json flows, action registry, and prompt
+templates to produce a BlueprintIR.
 
 This is the heavy lift of the blueprint system. It:
-1. Walks the flows directory to map flow names to source files and categories.
-2. Loads all flows via agent/loader.py (with template merging).
+1. Loads all flows from CUE-exported compiled.json.
+2. Walks flows/cue/ to build a flow name → CUE source file map.
 3. Converts each FlowDefinition → FlowIR with full step details.
 4. Introspects the action registry for module paths and effects usage.
 5. Builds the context key cross-reference with audit flags.
 6. Builds the dependency graph (tail-calls + sub-flows).
-7. Extracts prompt inject points from Jinja2 templates.
-8. Tracks step template usage.
+7. Extracts prompt template references and pre-compute formatters.
+8. Tracks step template usage from CUE source.
 9. Computes a source hash for cache invalidation.
 """
 
@@ -17,13 +17,12 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from agent.blueprint.ir import (
     ActionIR,
@@ -47,7 +46,6 @@ from agent.blueprint.ir import (
     TailCallIR,
     TemplateIR,
 )
-from agent.loader import load_all_flows, load_template_registry
 from agent.models import FlowDefinition, StepDefinition
 
 
@@ -61,38 +59,36 @@ def analyze(flows_dir: str = "flows", agent_dir: str = "agent") -> BlueprintIR:
     Returns:
         A fully populated BlueprintIR.
     """
-    # 1. Build flow_name → source_file map and determine categories
+    # 1. Load all flows from compiled.json
+    flow_defs, raw_flow_data = _load_flows_from_compiled(flows_dir)
+
+    # 2. Build flow_name → CUE source file map
     source_map = _build_source_map(flows_dir)
 
-    # 2. Load all flows with template merging
-    flow_defs = load_all_flows(flows_dir)
-
-    # 3. Scan raw YAML for template usage (before merging strips 'use:')
+    # 3. Scan CUE files for template usage (_templates.X &)
     template_usage = _scan_template_usage(flows_dir)
 
-    # 4. Load template registry
-    template_registry = load_template_registry(flows_dir)
-
-    # 5. Convert FlowDefinitions → FlowIRs
+    # 4. Convert FlowDefinitions → FlowIRs
     flow_irs: dict[str, FlowIR] = {}
     for flow_name, flow_def in flow_defs.items():
         source_file = source_map.get(flow_name, "")
         category = _categorize_flow(flow_name, source_file)
-        flow_irs[flow_name] = _flow_def_to_ir(flow_def, source_file, category)
+        raw = raw_flow_data.get(flow_name, {})
+        flow_irs[flow_name] = _flow_def_to_ir(flow_def, source_file, category, raw)
 
-    # 6. Introspect action registry
+    # 5. Introspect action registry
     action_irs = _introspect_actions(flow_irs)
 
-    # 7. Build context key cross-reference
+    # 6. Build context key cross-reference
     context_keys = _build_context_keys(flow_irs)
 
-    # 8. Build dependency graph
+    # 7. Build dependency graph
     dep_graph = _build_dependency_graph(flow_irs)
 
-    # 9. Build template IRs
-    template_irs = _build_template_irs(template_registry, template_usage)
+    # 8. Build template IRs from CUE scan
+    template_irs = _build_template_irs_from_cue(flows_dir, template_usage)
 
-    # 10. Compute source hash
+    # 9. Compute source hash
     source_hash = _compute_source_hash(flows_dir, agent_dir)
 
     # Assemble the BlueprintIR
@@ -114,65 +110,107 @@ def analyze(flows_dir: str = "flows", agent_dir: str = "agent") -> BlueprintIR:
     )
 
 
+# ── Flow Loading ────────────────────────────────────────────────────
+
+
+def _load_flows_from_compiled(flows_dir: str) -> tuple[dict[str, FlowDefinition], dict[str, dict]]:
+    """Load all flows from CUE-exported compiled.json.
+
+    Returns both parsed FlowDefinitions and the raw JSON dicts
+    (for fields like flow_persona that aren't in the Pydantic model).
+    """
+    compiled_path = Path(flows_dir) / "compiled.json"
+    flows: dict[str, FlowDefinition] = {}
+    raw: dict[str, dict] = {}
+
+    if not compiled_path.exists():
+        return flows, raw
+
+    with open(compiled_path) as f:
+        data = json.load(f)
+
+    if isinstance(data, dict):
+        for name, flow_data in data.items():
+            if isinstance(flow_data, dict) and "flow" in flow_data:
+                try:
+                    flow = FlowDefinition(**flow_data)
+                    flows[flow.flow] = flow
+                    raw[flow.flow] = flow_data
+                except Exception:
+                    continue
+
+    return flows, raw
+
+
 # ── Source Discovery ──────────────────────────────────────────────────
 
 
 def _build_source_map(flows_dir: str) -> dict[str, str]:
-    """Walk the flows directory and build a mapping of flow name → relative file path.
+    """Walk flows/cue/ and build a mapping of flow name → relative CUE file path.
 
-    This is needed because load_all_flows() doesn't preserve source file paths.
-    We parse each YAML file's 'flow' field to get the flow name.
+    Parses each CUE file looking for the pattern `<name>: #FlowDefinition &`.
     """
     source_map: dict[str, str] = {}
     flows_path = Path(flows_dir)
-    skip_names = {"registry.yaml", "step_templates.yaml"}
+    cue_dir = flows_path / "cue"
 
-    if not flows_path.is_dir():
+    if not cue_dir.is_dir():
         return source_map
 
-    for yaml_file in sorted(flows_path.rglob("*.yaml")):
-        if yaml_file.name in skip_names:
+    # Pattern: <flow_name>: #FlowDefinition &
+    flow_def_pattern = re.compile(r"^(\w+):\s+#FlowDefinition\s+&", re.MULTILINE)
+
+    for cue_file in sorted(cue_dir.glob("*.cue")):
+        # Skip schema/utility files
+        if cue_file.name in ("flow.cue", "prompt.cue", "lint.cue", "templates.cue"):
             continue
         try:
-            with open(yaml_file, "r") as f:
-                raw = yaml.safe_load(f)
-            if isinstance(raw, dict) and "flow" in raw:
-                rel_path = str(yaml_file.relative_to(flows_path.parent))
-                source_map[raw["flow"]] = rel_path
+            content = cue_file.read_text(encoding="utf-8")
+            matches = flow_def_pattern.findall(content)
+            rel_path = str(cue_file.relative_to(flows_path.parent))
+            for flow_name in matches:
+                source_map[flow_name] = rel_path
         except Exception:
             continue
 
     return source_map
 
 
+# Known flow categorizations for the consolidated CUE flow set.
+_ORCHESTRATOR_FLOWS = {"mission_control", "design_and_plan", "revise_plan"}
+_TASK_FLOWS = {"file_ops", "project_ops", "interact", "diagnose_issue", "research"}
+_SUB_FLOWS = {
+    "create",
+    "rewrite",
+    "patch",
+    "prepare_context",
+    "quality_gate",
+    "run_in_terminal",
+    "capture_learnings",
+    "retrospective",
+    "set_env",
+}
+
+
 def _categorize_flow(flow_name: str, source_file: str) -> str:
-    """Determine a flow's category from its source file path.
+    """Determine a flow's category.
 
     Categories:
-    - "task" — flows/tasks/*.yaml
-    - "shared" — flows/shared/*.yaml
-    - "control" — flows/mission_control.yaml, flows/create_plan.yaml
-    - "test" — flows/test_*.yaml
+    - "orchestrator" — mission_control, design_and_plan, revise_plan
+    - "task" — file_write, project_ops, interact, diagnose_issue, research
+    - "sub_flow" — create_file, modify_file, prepare_context, etc.
+    - "test" — test_* flows
+    - "unknown" — unrecognized
     """
-    if not source_file:
-        return "unknown"
-
-    # Normalize separators
-    path = source_file.replace("\\", "/")
-
-    if "/tasks/" in path:
+    if flow_name.startswith("test_") or flow_name.startswith("test"):
+        return "test"
+    if flow_name in _ORCHESTRATOR_FLOWS:
+        return "orchestrator"
+    if flow_name in _TASK_FLOWS:
         return "task"
-    if "/shared/" in path:
-        return "shared"
-    if flow_name.startswith("test_"):
-        return "test"
-    # Top-level flows that are control flows
-    if flow_name in ("mission_control", "create_plan"):
-        return "control"
-    # Default: if it's at the top level of flows/, categorize by name
-    if flow_name.startswith("test"):
-        return "test"
-    return "control"
+    if flow_name in _SUB_FLOWS:
+        return "sub_flow"
+    return "unknown"
 
 
 # ── FlowDefinition → FlowIR Conversion ───────────────────────────────
@@ -182,8 +220,10 @@ def _flow_def_to_ir(
     flow_def: FlowDefinition,
     source_file: str,
     category: str,
+    raw: dict | None = None,
 ) -> FlowIR:
     """Convert a loaded FlowDefinition into a FlowIR."""
+    raw = raw or {}
     # Build inputs
     inputs = []
     for name in flow_def.input.required:
@@ -216,22 +256,28 @@ def _flow_def_to_ir(
 
         # Collect tail-calls
         if step_def.tail_call:
-            tc_flow = step_def.tail_call.get("flow", "")
+            tc_flow_raw = step_def.tail_call.get("flow", "")
+            tc_flow = _resolve_ref_display(tc_flow_raw)
             tc_input_map = step_def.tail_call.get("input_map", {})
-            # Ensure input_map values are strings
-            tc_input_map_str = {k: str(v) for k, v in tc_input_map.items()}
+            tc_input_map_str = {
+                k: _resolve_ref_display(v) for k, v in tc_input_map.items()
+            }
             tail_calls.append(
                 TailCallIR(
                     target_flow=tc_flow,
                     from_step=step_name,
                     input_map=tc_input_map_str,
+                    result_formatter=step_def.tail_call.get("result_formatter"),
+                    result_keys=step_def.tail_call.get("result_keys", []),
                 )
             )
 
         # Collect sub-flow invocations
         if step_def.action == "flow" and step_def.flow:
             sf_input_map = step_def.input_map or {}
-            sf_input_map_str = {k: str(v) for k, v in sf_input_map.items()}
+            sf_input_map_str = {
+                k: _resolve_ref_display(v) for k, v in sf_input_map.items()
+            }
             sub_flows.append(
                 SubFlowIR(
                     flow=step_def.flow,
@@ -243,7 +289,7 @@ def _flow_def_to_ir(
     # Compute stats
     stats = _compute_flow_stats(steps)
 
-    # Collect all keys published by any step (for publishes_to_parent)
+    # Collect all keys published by any step
     all_published: list[str] = []
     for step_ir in steps.values():
         for key in step_ir.publishes:
@@ -264,7 +310,28 @@ def _flow_def_to_ir(
         defaults=defaults,
         steps=steps,
         stats=stats,
+        # Context Contract Architecture
+        context_tier=getattr(flow_def, "context_tier", "") or "",
+        returns=getattr(flow_def, "returns", {}) or {},
+        state_reads=getattr(flow_def, "state_reads", []) or [],
+        # Persona (from raw JSON — not in Pydantic model)
+        flow_persona=raw.get("flow_persona", ""),
+        known_personas=raw.get("known_personas", []),
     )
+
+
+def _resolve_ref_display(value: Any) -> str:
+    """Convert a value that may be a $ref dict into a human-readable string.
+
+    - Literal string/number/bool → str(value)
+    - $ref dict → "$ref:context.dispatch_config.flow"
+    - Other dicts/lists → str(value)
+    """
+    if isinstance(value, dict) and "$ref" in value:
+        return f"$ref:{value['$ref']}"
+    if isinstance(value, str):
+        return value
+    return str(value)
 
 
 def _step_def_to_ir(
@@ -276,10 +343,29 @@ def _step_def_to_ir(
     # Determine action type
     action_type = _classify_action_type(step_def.action)
 
-    # Extract prompt injects
+    # Extract prompt template reference
+    prompt_template_id = None
+    if step_def.prompt_template:
+        prompt_template_id = step_def.prompt_template.template
+
+    # Extract prompt injects from prompt_template keys or legacy inline prompt
     prompt_injects: list[str] = []
-    if step_def.prompt:
-        prompt_injects = extract_injects(step_def.prompt)
+    if step_def.prompt_template:
+        # Collect declared context_keys and input_keys
+        prompt_injects.extend(
+            f"context.{k}" for k in step_def.prompt_template.context_keys
+        )
+        prompt_injects.extend(f"input.{k}" for k in step_def.prompt_template.input_keys)
+    elif step_def.prompt:
+        prompt_injects = _extract_jinja2_injects(step_def.prompt)
+
+    # Extract pre-compute formatter names
+    pre_compute_names: list[str] = []
+    if step_def.pre_compute:
+        for pc in step_def.pre_compute:
+            name = pc.formatter if hasattr(pc, "formatter") else pc.get("formatter", "")
+            if name:
+                pre_compute_names.append(name)
 
     # Build config
     config = None
@@ -295,7 +381,8 @@ def _step_def_to_ir(
     # Determine tail-call target
     tail_call_target = None
     if step_def.tail_call:
-        tail_call_target = step_def.tail_call.get("flow", "")
+        tc_flow_raw = step_def.tail_call.get("flow", "")
+        tail_call_target = _resolve_ref_display(tc_flow_raw)
 
     # Determine sub-flow target
     sub_flow_target = None
@@ -311,7 +398,9 @@ def _step_def_to_ir(
         context_optional=list(step_def.context.optional),
         publishes=list(step_def.publishes),
         prompt=step_def.prompt,
+        prompt_template=prompt_template_id,
         prompt_injects=prompt_injects,
+        pre_compute=pre_compute_names,
         config=config,
         resolver=resolver,
         effects=list(step_def.effects),
@@ -370,17 +459,18 @@ def _build_resolver_ir(step_def: StepDefinition) -> ResolverIR:
         rules=rules,
         options=options,
         prompt=resolver_def.prompt,
+        publish_selection=resolver_def.publish_selection,
     )
 
 
 # ── Prompt Inject Extraction ──────────────────────────────────────────
 
 
-def extract_injects(prompt: str) -> list[str]:
-    """Extract Jinja2 variable references from a prompt template.
+def _extract_jinja2_injects(prompt: str) -> list[str]:
+    """Extract Jinja2 variable references from an inline prompt template.
 
     Matches {{ ... }} patterns, strips whitespace. Deduplicates while
-    preserving order.
+    preserving order. Used only for legacy inline prompts.
     """
     raw = [m.strip() for m in re.findall(r"\{\{(.+?)\}\}", prompt, re.DOTALL)]
     # Deduplicate preserving order
@@ -391,6 +481,10 @@ def extract_injects(prompt: str) -> list[str]:
             seen.add(item)
             result.append(item)
     return result
+
+
+# Keep the old name as an alias for backward compatibility
+extract_injects = _extract_jinja2_injects
 
 
 # ── Flow Stats ────────────────────────────────────────────────────────
@@ -582,8 +676,8 @@ def _build_dependency_graph(flow_irs: dict[str, FlowIR]) -> DependencyGraphIR:
         # Tail-call edges
         for tc in flow_ir.tail_calls:
             target = tc.target_flow
-            # Skip template expressions that can't be resolved statically
-            if "{{" not in target:
+            # Include static targets; skip dynamic $ref targets for graph edges
+            if not target.startswith("$ref:"):
                 flow_edges.append(
                     FlowEdgeIR(
                         source=flow_name,
@@ -634,37 +728,40 @@ def _build_dependency_graph(flow_irs: dict[str, FlowIR]) -> DependencyGraphIR:
 
 
 def _scan_template_usage(flows_dir: str) -> dict[str, list[str]]:
-    """Scan raw YAML files for 'use: template_name' declarations.
+    """Scan CUE flow files for '_templates.<name> &' declarations.
 
     Returns a mapping of template_name → ["flow.step", ...].
-    This must be done on raw YAML because load_all_flows() strips
-    the 'use' field after merging.
     """
     usage: dict[str, list[str]] = {}
-    flows_path = Path(flows_dir)
-    skip_names = {"registry.yaml", "step_templates.yaml"}
+    cue_dir = Path(flows_dir) / "cue"
 
-    if not flows_path.is_dir():
+    if not cue_dir.is_dir():
         return usage
 
-    for yaml_file in sorted(flows_path.rglob("*.yaml")):
-        if yaml_file.name in skip_names:
+    # Pattern: matches _templates.<template_name> anywhere in a step definition
+    template_ref_pattern = re.compile(r"_templates\.(\w+)\s+&")
+
+    for cue_file in sorted(cue_dir.glob("*.cue")):
+        if cue_file.name in ("flow.cue", "prompt.cue", "lint.cue", "templates.cue"):
             continue
         try:
-            with open(yaml_file, "r") as f:
-                raw = yaml.safe_load(f)
-            if not isinstance(raw, dict) or "flow" not in raw:
+            content = cue_file.read_text(encoding="utf-8")
+            # Find the flow name
+            flow_match = re.search(
+                r"^(\w+):\s+#FlowDefinition\s+&", content, re.MULTILINE
+            )
+            if not flow_match:
                 continue
+            flow_name = flow_match.group(1)
 
-            flow_name = raw["flow"]
-            steps = raw.get("steps", {})
-            if not isinstance(steps, dict):
-                continue
-
-            for step_name, step_def in steps.items():
-                if isinstance(step_def, dict) and "use" in step_def:
-                    template_name = step_def["use"]
-                    ref = f"{flow_name}.{step_name}"
+            # Find step blocks that reference templates
+            # Pattern: <step_name>: ... _templates.<template> &
+            step_template_pattern = re.compile(
+                r"(\w+):\s+(?:#StepDefinition\s+&\s+)?_templates\.(\w+)\s+&"
+            )
+            for step_name, template_name in step_template_pattern.findall(content):
+                ref = f"{flow_name}.{step_name}"
+                if ref not in usage.get(template_name, []):
                     usage.setdefault(template_name, []).append(ref)
         except Exception:
             continue
@@ -672,37 +769,54 @@ def _scan_template_usage(flows_dir: str) -> dict[str, list[str]]:
     return usage
 
 
-def _build_template_irs(
-    template_registry: Any,
+def _build_template_irs_from_cue(
+    flows_dir: str,
     template_usage: dict[str, list[str]],
 ) -> dict[str, TemplateIR]:
-    """Build TemplateIR entries from the loaded template registry."""
+    """Build TemplateIR entries by parsing templates.cue.
+
+    Extracts template names and their base configurations from the CUE source.
+    """
     template_irs: dict[str, TemplateIR] = {}
+    templates_path = Path(flows_dir) / "cue" / "templates.cue"
 
-    for name, template in template_registry.templates.items():
-        # Build a base_config dict from the template's fields
+    if not templates_path.exists():
+        # Fall back: create entries from usage alone
+        for template_name, refs in template_usage.items():
+            template_irs[template_name] = TemplateIR(
+                name=template_name,
+                base_config={},
+                used_by=refs,
+            )
+        return template_irs
+
+    try:
+        content = templates_path.read_text(encoding="utf-8")
+    except Exception:
+        return template_irs
+
+    # Extract template names from _templates block
+    # Look for top-level definitions: <name>: #StepDefinition & { or <name>: {
+    template_def_pattern = re.compile(
+        r"^\t(\w+):\s+(?:#StepDefinition\s+&\s+)?{",
+        re.MULTILINE,
+    )
+
+    for match in template_def_pattern.finditer(content):
+        template_name = match.group(1)
+        # Extract action if present near the definition
+        block_start = match.end()
+        block_preview = content[block_start : block_start + 200]
+        action_match = re.search(r'action:\s*"(\w+)"', block_preview)
+
         base_config: dict[str, Any] = {}
-        if template.action:
-            base_config["action"] = template.action
-        if template.description:
-            base_config["description"] = template.description
-        if template.context:
-            base_config["context"] = template.context
-        if template.params:
-            base_config["params"] = template.params
-        if template.config:
-            base_config["config"] = template.config
-        if template.flow:
-            base_config["flow"] = template.flow
-        if template.input_map:
-            base_config["input_map"] = template.input_map
-        if template.publishes:
-            base_config["publishes"] = template.publishes
+        if action_match:
+            base_config["action"] = action_match.group(1)
 
-        template_irs[name] = TemplateIR(
-            name=name,
+        template_irs[template_name] = TemplateIR(
+            name=template_name,
             base_config=base_config,
-            used_by=template_usage.get(name, []),
+            used_by=template_usage.get(template_name, []),
         )
 
     return template_irs
@@ -714,18 +828,27 @@ def _build_template_irs(
 def _compute_source_hash(flows_dir: str, agent_dir: str) -> str:
     """Compute a SHA-256 hash of all input files for cache invalidation.
 
-    Includes all YAML files in flows_dir and the action registry source.
+    Includes CUE flow definitions, compiled.json, prompt templates,
+    and the action registry source.
     """
     hasher = hashlib.sha256()
     flows_path = Path(flows_dir)
 
-    # Hash all YAML files
-    if flows_path.is_dir():
-        for yaml_file in sorted(flows_path.rglob("*.yaml")):
+    # Hash compiled.json
+    compiled = flows_path / "compiled.json"
+    if compiled.is_file():
+        try:
+            hasher.update(compiled.read_bytes())
+        except Exception:
+            pass
+
+    # Hash all CUE files
+    cue_dir = flows_path / "cue"
+    if cue_dir.is_dir():
+        for cue_file in sorted(cue_dir.glob("*.cue")):
             try:
-                content = yaml_file.read_bytes()
-                hasher.update(yaml_file.name.encode())
-                hasher.update(content)
+                hasher.update(cue_file.name.encode())
+                hasher.update(cue_file.read_bytes())
             except Exception:
                 continue
 

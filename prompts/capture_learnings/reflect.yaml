@@ -23,11 +23,6 @@ sections:
     content: |
       Outcome: {input.task_outcome}
 
-  - id: objective
-    when: input.mission_objective
-    content: |
-      Mission context: {input.mission_objective}
-
   - id: source_file
     when: context.source_file_content
     content: |

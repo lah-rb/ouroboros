@@ -117,28 +117,36 @@ async def action_update_task_status(step_input: StepInput) -> StepOutput:
 
     # Handle quality gate failure status — not tied to a specific task
     if last_status == "quality_failed":
-        # Count how many consecutive quality failures have occurred
-        # by checking recent attempt records across all tasks
-        gate_fail_count = getattr(mission, "_gate_fail_count", 0) + 1
-        mission._gate_fail_count = gate_fail_count
+        # Set the blocked flag so the quality gate cannot re-run
+        # until actual fix work (file_ops, patch, rewrite, create, interact) completes.
+        mission.quality_gate_blocked = True
 
-        # Check if there are any actionable tasks remaining
+        # Check for exhaustion: if blocked AND too many gate attempts,
+        # the mission is deadlocked.
         actionable = [
             t
             for t in mission.plan
             if t.status in ("pending", "failed") and t.frustration < 5
         ]
 
-        if not actionable and gate_fail_count >= 2:
-            # No tasks to work on and gate has failed multiple times — exhausted
+        if not actionable and mission.quality_gate_attempts >= 3:
             quality_gate_exhausted = True
             logger.info(
-                "Quality gate exhausted: %d consecutive failures, 0 actionable tasks",
-                gate_fail_count,
+                "Quality gate exhausted: %d attempts, 0 actionable tasks",
+                mission.quality_gate_attempts,
             )
-    else:
-        # Reset gate fail counter on any non-quality-failed status
-        mission._gate_fail_count = 0
+    elif last_status in ("success", "completed"):
+        # Unblock the quality gate when real fix work has completed.
+        # Check that the last dispatched flow was a work flow, not
+        # just a director cycle or planning step.
+        last_dispatch = (
+            mission.dispatch_history[-1]
+            if mission.dispatch_history
+            else None
+        )
+        last_flow = last_dispatch.flow if last_dispatch else ""
+        if last_flow in ("file_ops", "patch", "rewrite", "create", "interact", "project_ops"):
+            mission.quality_gate_blocked = False
 
     if last_task_id:
         from agent.persistence.models import AttemptRecord
@@ -160,12 +168,16 @@ async def action_update_task_status(step_input: StepInput) -> StepOutput:
                     task.frustration = min(task.frustration + 1, 5)
                     task.summary = str(last_result)[:200] if last_result else "Failed"
 
-                # Record the attempt
+                # Record the attempt — store full error output for diagnosis
+                error_output = None
+                if last_status in ("abandoned", "failed", "diagnosed"):
+                    error_output = str(last_result) if last_result else None
                 task.attempts.append(
                     AttemptRecord(
                         flow=task.flow,
                         status=last_status or "unknown",
                         summary=str(last_result)[:200] if last_result else "",
+                        error=error_output,
                     )
                 )
 
@@ -176,6 +188,18 @@ async def action_update_task_status(step_input: StepInput) -> StepOutput:
     if effects:
         await effects.save_mission(mission)
 
+    # ── Check goal-level completion ──────────────────────────────
+    # If all goals are complete (or no goals exist yet), signal it.
+    # The director uses this as a termination signal: all_goals_complete
+    # means the mission can proceed to final quality gate.
+    all_goals_complete = False
+    if hasattr(mission, "goals") and mission.goals:
+        all_goals_complete = all(
+            g.status == "complete" for g in mission.goals
+        )
+        # Also update goal statuses based on task completion
+        _update_goal_statuses(mission)
+
     return StepOutput(
         result={
             "needs_plan": False,
@@ -183,12 +207,53 @@ async def action_update_task_status(step_input: StepInput) -> StepOutput:
             "events_pending": False,
             "frustration_reset": frustration_was_elevated and task_completed,
             "quality_gate_exhausted": quality_gate_exhausted,
+            "all_goals_complete": all_goals_complete,
         },
         observations=f"Updated task {last_task_id[:8] if last_task_id else 'none'}: "
         f"status={last_status}, completed={task_completed}"
-        + (", QUALITY GATE EXHAUSTED" if quality_gate_exhausted else ""),
+        + (", QUALITY GATE EXHAUSTED" if quality_gate_exhausted else "")
+        + (", ALL GOALS COMPLETE" if all_goals_complete else ""),
         context_updates={"mission": mission, "frustration": frustration},
     )
+
+
+def _update_goal_statuses(mission) -> None:
+    """Update goal statuses based on associated task completion and frustration.
+
+    A goal is:
+      - "complete" when ALL associated tasks are complete
+      - "in_progress" when at least one task is in_progress or complete
+      - "blocked" when >50% of associated tasks have frustration >= 3
+      - "pending" otherwise
+    """
+    if not hasattr(mission, "goals") or not mission.goals:
+        return
+
+    task_map = {t.id: t for t in mission.plan} if hasattr(mission, "plan") else {}
+
+    for goal in mission.goals:
+        if goal.status in ("revised",):
+            continue  # Don't auto-update revised goals
+
+        if not goal.associated_task_ids:
+            continue
+
+        tasks = [task_map[tid] for tid in goal.associated_task_ids if tid in task_map]
+        if not tasks:
+            continue
+
+        all_complete = all(t.status == "complete" for t in tasks)
+        any_active = any(t.status in ("in_progress", "complete") for t in tasks)
+        frustrated_count = sum(1 for t in tasks if t.frustration >= 3)
+        is_blocked = frustrated_count > len(tasks) / 2
+
+        if all_complete:
+            goal.status = "complete"
+        elif is_blocked:
+            goal.status = "blocked"
+        elif any_active:
+            goal.status = "in_progress"
+        # else: stays "pending"
 
 
 async def action_handle_events(step_input: StepInput) -> StepOutput:
@@ -282,46 +347,107 @@ async def action_select_task_for_dispatch(step_input: StepInput) -> StepOutput:
     ]
 
     if not actionable:
-        return StepOutput(
-            result={"task_selected": False, "no_actionable_tasks": True},
-            observations="No actionable tasks remaining",
-        )
+        # Distinguish: are all tasks genuinely complete, or are some
+        # still pending/in_progress but blocked by unmet dependencies?
+        incomplete = [
+            t for t in mission.plan
+            if t.status not in ("complete",)
+        ]
+        all_complete = len(incomplete) == 0
 
-    # Build the menu prompt
+        # Also detect stale in_progress tasks (set in_progress but never
+        # attempted in the last N cycles) and reset them to pending so
+        # they become actionable again.
+        for t in mission.plan:
+            if t.status == "in_progress":
+                # If a task has been in_progress but has no recent attempts,
+                # it was likely abandoned during a diagnosis detour
+                logger.warning(
+                    "Resetting stale in_progress task to pending: %s",
+                    t.description[:60],
+                )
+                t.status = "pending"
+
+        # After reset, re-check if any tasks are now actionable
+        newly_actionable = [
+            t for t in mission.plan
+            if t.status in ("pending", "failed")
+            and t.frustration < 5
+            and _dependencies_met(t, mission)
+        ]
+        if newly_actionable:
+            # Save the reset and continue with these tasks
+            if effects:
+                await effects.save_mission(mission)
+            # Fall through to the normal selection logic below
+            # by replacing the empty actionable list
+            actionable = newly_actionable
+            logger.info(
+                "Reset stale tasks — %d tasks now actionable",
+                len(actionable),
+            )
+        else:
+            if effects:
+                await effects.save_mission(mission)
+
+            return StepOutput(
+                result={
+                    "task_selected": False,
+                    "no_actionable_tasks": True,
+                    "all_tasks_complete": all_complete,
+                },
+                observations="All tasks complete" if all_complete
+                else f"No actionable tasks — {len(incomplete)} tasks blocked or in_progress",
+            )
+
+    # Build the menu prompt — use task IDs as option names for JSON selection
+    task_options = {}
     lines = ["Select the task to work on next:\n"]
-    for i, task in enumerate(actionable):
-        letter = chr(ord("a") + i)
+    for task in actionable:
         frust = f" [frustration: {task.frustration}]" if task.frustration > 0 else ""
         target = task.inputs.get("target_file_path", "")
         target_str = f" → {target}" if target else ""
-        lines.append(f"{letter}) [{task.status}] {task.description}{target_str}{frust}")
+        desc = f"[{task.status}] {task.description}{target_str}{frust}"
+        lines.append(f"  - {task.id}: {desc}")
+        task_options[task.id] = desc
 
-    lines.append("\nPick the letter of the most impactful task to work on.")
+    lines.append("")
+    lines.append(
+        "Pick the most impactful task. "
+        'Respond with ONLY a JSON object: {"choice": "<task_id>"}'
+    )
+    lines.append(f"Valid task IDs: {', '.join(task_options.keys())}")
     prompt = "\n".join(lines)
 
-    # Grammar: constrain to valid letters
-    n = len(actionable)
-    last_letter = chr(ord("a") + n - 1)
-    grammar = f"root ::= [a-{last_letter}]"
+    from agent.resolvers.llm_menu import extract_choice
 
     try:
         result = await effects.session_inference(
             session_id,
             prompt,
-            {"temperature": 0.1, "max_tokens": 5, "grammar": grammar},
+            {"temperature": 0.1},
         )
-        response = result.text.strip().lower()
+        response = result.text.strip() if result.text else ""
     except Exception as e:
         logger.error("Task selection failed: %s", e)
-        # Fall back to first actionable task
-        response = "a"
+        response = ""
 
-    # Map letter to task
-    index = ord(response[0]) - ord("a") if response else 0
-    if index < 0 or index >= len(actionable):
-        index = 0
+    # Extract the chosen task ID from the response
+    chosen_id = extract_choice(response, list(task_options.keys()))
+    selected = None
+    if chosen_id:
+        for task in actionable:
+            if task.id == chosen_id:
+                selected = task
+                break
 
-    selected = actionable[index]
+    # Fallback: first actionable task
+    if selected is None:
+        selected = actionable[0]
+        logger.warning(
+            "Task selection fallback to first task (response was %r)",
+            response[:60],
+        )
 
     # Mark as in_progress
     for task in mission.plan:
@@ -332,12 +458,97 @@ async def action_select_task_for_dispatch(step_input: StepInput) -> StepOutput:
     if effects:
         await effects.save_mission(mission)
 
+    # ── Assemble partial dispatch_config ──────────────────────
+    # Contains everything except target_file_path (resolved by
+    # select_target_file in the next step).
+    dispatch_flow_type = step_input.context.get("dispatch_flow_type", "")
+    dispatch_flow = dispatch_flow_type or selected.flow or "file_ops"
+
+    # Assemble flow_directive from goal + task
+    task_desc = selected.description or ""
+    goal_context = ""
+    goal_id = getattr(selected, "goal_id", "") or (selected.inputs or {}).get("goal_id", "")
+    if goal_id and hasattr(mission, "goals"):
+        for goal in mission.goals:
+            if goal.id == goal_id:
+                goal_context = goal.description
+                break
+
+    if goal_context and task_desc:
+        flow_directive = f"{task_desc} — serving goal: {goal_context}"
+    else:
+        flow_directive = task_desc or (selected.inputs or {}).get("reason", "") or "No directive specified"
+
+    # Gather relevant_notes (architecture + recent observations)
+    # NOTE: Uses Option A — re-evaluate alongside persistence audit.
+    relevant_notes = ""
+    if hasattr(mission, "notes") and mission.notes:
+        recent = sorted(mission.notes, key=lambda n: n.timestamp, reverse=True)[:8]
+        relevant_notes = "\n".join(f"[{n.category}] {n.content[:200]}" for n in recent)
+
+    if mission.architecture:
+        arch = mission.architecture
+        arch_summary = (
+            f"Import scheme: {arch.import_scheme}. "
+            f"Run command: {arch.run_command}. "
+            f"Modules: {', '.join(arch.canonical_files())}."
+        )
+        if relevant_notes:
+            relevant_notes = f"[architecture] {arch_summary}\n{relevant_notes}"
+        else:
+            relevant_notes = f"[architecture] {arch_summary}"
+
+    # Determine prompt variant for specialized generation
+    prompt_variant = ""
+    if dispatch_flow == "file_ops":
+        desc_lower = selected.description.lower()
+        target_lower = ((selected.inputs or {}).get("target_file_path", "") or "").lower()
+        if (
+            any(kw in desc_lower for kw in ["test", "create tests", "write tests"])
+            or target_lower.startswith("tests/")
+            or "/test_" in target_lower
+        ):
+            prompt_variant = "test_generation"
+
+    partial_config = {
+        "flow": dispatch_flow,
+        "task_id": selected.id,
+        "flow_directive": flow_directive,
+        "working_directory": mission.config.working_directory,
+        "target_file_path": (selected.inputs or {}).get("target_file_path", ""),
+        "relevant_notes": relevant_notes,
+        "mission_id": mission.id,
+        "prompt_variant": prompt_variant,
+    }
+
+    # For diagnose_issue: extract error context from the task's attempt history
+    if dispatch_flow == "diagnose_issue":
+        error_description = selected.description
+        error_output = ""
+        if hasattr(selected, "attempts") and selected.attempts:
+            for attempt in reversed(selected.attempts):
+                if attempt.error:
+                    error_output = attempt.error
+                    break
+                if attempt.summary and not error_output:
+                    error_output = attempt.summary
+        if not error_output:
+            for task in mission.plan:
+                if task.status == "failed" and task.attempts:
+                    for attempt in reversed(task.attempts):
+                        if attempt.error:
+                            error_output = attempt.error
+                            break
+                    if error_output:
+                        break
+        partial_config["error_description"] = error_description
+        partial_config["error_output"] = error_output
+
     return StepOutput(
         result={"task_selected": True},
         observations=f"Selected task: {selected.description[:60]}",
         context_updates={
-            "selected_task": selected,
-            "selected_task_id": selected.id,
+            "dispatch_config": partial_config,
         },
     )
 
@@ -356,76 +567,73 @@ def _dependencies_met(task, mission) -> bool:
 
 
 async def action_select_target_file(step_input: StepInput) -> StepOutput:
-    """Present project files as an LLM menu for file-targeting flows.
+    """Resolve target file for the dispatch.
 
-    Only fires when the selected task's target_file_path is empty or
-    doesn't exist on disk. Uses the memoryful session so the model
-    already has context from the reason and task selection steps.
+    Reads the partial dispatch_config from select_task_for_dispatch.
+    If a target_file_path is already set and valid, passes through.
+    Otherwise presents project files as an LLM menu for selection.
 
-    Reads: context.selected_task, context.session_id, context.mission
-    Publishes: dispatch_config (complete dispatch configuration)
+    Reads: context.dispatch_config, context.session_id, context.mission
+    Publishes: dispatch_config (with target_file_path resolved)
     """
     effects = step_input.effects
     mission = step_input.context.get("mission")
     session_id = step_input.context.get("session_id", "")
-    selected_task = step_input.context.get("selected_task")
-    dispatch_flow = step_input.params.get(
-        "dispatch_flow", ""
-    ) or step_input.context.get(
-        "dispatch_flow_type", ""
-    ) or step_input.context.get("dispatch_flow", "")
+    dispatch_config = step_input.context.get("dispatch_config", {})
 
-    if not mission or not effects or not selected_task:
+    if not mission or not effects or not dispatch_config:
         return StepOutput(
-            result={"file_selected": False},
+            result={"target_resolved": False},
             observations="Missing context for file selection",
         )
 
-    task_inputs = selected_task.inputs or {}
-    target_path = task_inputs.get("target_file_path", "")
-    working_dir = mission.config.working_directory
-
-    # Determine the flow to dispatch
-    if not dispatch_flow:
-        dispatch_flow = selected_task.flow or "create_file"
+    target_path = dispatch_config.get("target_file_path", "")
+    dispatch_flow = dispatch_config.get("flow", "file_ops")
+    working_dir = dispatch_config.get("working_directory", "") or mission.config.working_directory
+    task_desc = dispatch_config.get("flow_directive", "")
 
     # Check if we need file selection (only for flows that target existing files)
-    # file_write handles its own create/modify routing internally.
+    # file_ops handles its own create/modify routing internally.
     # diagnose_issue needs an existing file to analyze.
     # interact and project_ops are project-level, no file targeting.
     needs_existing_file = dispatch_flow in {
         "diagnose_issue",
     }
 
-    # If we have a valid path, or flow doesn't need an existing file, skip selection
+    # ── Fast paths: target already resolved ─────────────────────
+
+    # If we have a valid path and the flow doesn't need to verify existence, pass through
     if target_path and not needs_existing_file:
-        return _build_dispatch_config(
-            mission,
-            selected_task,
-            dispatch_flow,
-            target_path,
+        dispatch_config["target_file_path"] = target_path
+        return StepOutput(
+            result={"target_resolved": True},
+            observations=f"Target file from task: {target_path}",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+
+    # Empty target for file_ops/interact/project_ops: pass through.
+    # file_ops will route to create (which infers from flow_directive).
+    # interact and project_ops are project-level, no file needed.
+    if not target_path and not needs_existing_file:
+        return StepOutput(
+            result={"target_resolved": True},
+            observations=f"No target file specified — flow will infer from directive",
+            context_updates={"dispatch_config": dispatch_config},
         )
 
     # For existing-file flows, validate the path exists
     if target_path and needs_existing_file:
         full_path = os.path.join(working_dir, target_path)
         if await effects.file_exists(full_path):
-            return _build_dispatch_config(
-                mission,
-                selected_task,
-                dispatch_flow,
-                target_path,
+            dispatch_config["target_file_path"] = target_path
+            return StepOutput(
+                result={"target_resolved": True},
+                observations=f"Target file verified: {target_path}",
+                context_updates={"dispatch_config": dispatch_config},
             )
         # Path invalid — fall through to menu selection
 
-    # For create flows with a path from the architecture, use it directly
-    if target_path and not needs_existing_file:
-        return _build_dispatch_config(
-            mission,
-            selected_task,
-            dispatch_flow,
-            target_path,
-        )
+    # ── Menu path: need to select a file ──────────────────────
 
     # Scan project for available files
     file_list = []
@@ -468,68 +676,67 @@ async def action_select_target_file(step_input: StepInput) -> StepOutput:
 
     if not file_list:
         if not needs_existing_file:
-            return _build_dispatch_config(
-                mission,
-                selected_task,
-                dispatch_flow,
-                target_path,
+            # No files on disk — keep whatever target_path we have (might be from architecture)
+            return StepOutput(
+                result={"target_resolved": True},
+                observations=f"No files on disk, using target: {target_path or '(none)'}",
+                context_updates={"dispatch_config": dispatch_config},
             )
         return StepOutput(
-            result={"file_selected": False, "error": "no_project_files"},
-            observations=f"No project files found for {dispatch_flow}. "
-            f"The project may be empty — consider creating files first.",
+            result={"target_resolved": False, "error": "no_project_files"},
+            observations=f"No project files found for {dispatch_flow}.",
         )
 
-    # Present file menu via memoryful session
+    # Present file menu via memoryful session — JSON-based selection
+    # Build option map: use file paths as option keys
+    file_options = {}
     lines = [f"Select the target file for this {dispatch_flow} task:"]
-    lines.append(f"Task: {selected_task.description}\n")
+    lines.append(f"Task: {task_desc}\n")
 
-    for i, filepath in enumerate(file_list[:19]):  # Leave room for create option
-        letter = chr(ord("a") + i)
-        lines.append(f"{letter}) {filepath}")
+    truncated_list = file_list[:19]
+    for filepath in truncated_list:
+        lines.append(f"  - {filepath}")
+        file_options[filepath] = filepath
 
     # Add "create new file" escape hatch for flows that target existing files
-    n_files = min(len(file_list), 19)
-    if needs_existing_file and n_files > 0:
-        create_letter = chr(ord("a") + n_files)
-        lines.append(
-            f"{create_letter}) [CREATE NEW FILE] The file I need doesn't exist yet"
-        )
-        n_options = n_files + 1
-    else:
-        create_letter = None
-        n_options = n_files
+    create_option_key = "__create_new__"
+    if needs_existing_file and truncated_list:
+        lines.append(f"  - {create_option_key}: The file I need doesn't exist yet")
+        file_options[create_option_key] = "CREATE NEW FILE"
 
-    lines.append("\nPick the file that best matches the task.")
+    lines.append("")
+    lines.append(
+        "Pick the file that best matches the task. "
+        'Respond with ONLY a JSON object: {"choice": "<file_path>"}'
+    )
+    lines.append(f"Valid file paths: {', '.join(file_options.keys())}")
     prompt = "\n".join(lines)
 
-    last_letter = chr(ord("a") + n_options - 1)
-    grammar = f"root ::= [a-{last_letter}]"
+    from agent.resolvers.llm_menu import extract_choice
 
     try:
         result = await effects.session_inference(
             session_id,
             prompt,
-            {"temperature": 0.1, "max_tokens": 5, "grammar": grammar},
+            {"temperature": 0.1},
         )
-        response = result.text.strip().lower()
+        response = result.text.strip() if result.text else ""
     except Exception as e:
         logger.error("File selection failed: %s", e)
+        # Fall through with whatever path we have
         return StepOutput(
-            result={"file_selected": False, "error": "selection_failed"},
-            observations=f"File selection failed: {e}",
+            result={"target_resolved": bool(target_path)},
+            observations=f"File selection failed: {e}, using: {target_path or '(none)'}",
+            context_updates={"dispatch_config": dispatch_config},
         )
 
-    index = ord(response[0]) - ord("a") if response else 0
-    if index < 0 or index >= n_options:
-        index = 0
+    chosen = extract_choice(response, list(file_options.keys()))
 
     # Handle "create new file" selection
-    if create_letter and response and response[0] == create_letter:
-        # Follow-up prompt: ask what file path to create
+    if chosen == create_option_key:
         create_prompt = (
             f"You chose to create a new file instead of modifying an existing one.\n"
-            f"Task: {selected_task.description}\n\n"
+            f"Task: {task_desc}\n\n"
             f"What file path should be created? "
             f"Reply with ONLY the file path (e.g., loader.py or src/utils.py), nothing else."
         )
@@ -540,7 +747,6 @@ async def action_select_target_file(step_input: StepInput) -> StepOutput:
                 {"temperature": 0.1, "max_tokens": 30},
             )
             new_path = create_result.text.strip().strip("'\"` \n")
-            # Basic sanitation — take first line, strip whitespace
             new_path = new_path.splitlines()[0].strip() if new_path else ""
         except Exception as e:
             logger.error("Create file path prompt failed: %s", e)
@@ -548,109 +754,37 @@ async def action_select_target_file(step_input: StepInput) -> StepOutput:
 
         if new_path:
             logger.info(
-                "File selection redirected: %s → create_file for %s",
+                "File selection redirected: %s → file_ops (create) for %s",
                 dispatch_flow,
                 new_path,
             )
-            return _build_dispatch_config(
-                mission,
-                selected_task,
-                "create_file",
-                new_path,
+            dispatch_config["flow"] = "file_ops"
+            dispatch_config["target_file_path"] = new_path
+            return StepOutput(
+                result={"target_resolved": True},
+                observations=f"Redirected to file_ops create: {new_path}",
+                context_updates={"dispatch_config": dispatch_config},
             )
-        # Fallback: if no path given, fall through to first file in list
         logger.warning("Create redirect failed — no path given, using first file")
+        chosen = None  # Fall through to default
 
-    selected_path = file_list[index] if index < n_files else file_list[0]
-
-    return _build_dispatch_config(
-        mission,
-        selected_task,
-        dispatch_flow,
-        selected_path,
-    )
-
-
-def _build_dispatch_config(
-    mission,
-    selected_task,
-    dispatch_flow: str,
-    target_file_path: str,
-) -> StepOutput:
-    """Build the flat dispatch_config for the tail-call to a task flow."""
-    task_inputs = selected_task.inputs or {}
-
-    # Gather relevant notes — architecture summary + recent observations
-    relevant_notes = ""
-    if hasattr(mission, "notes") and mission.notes:
-        recent = sorted(mission.notes, key=lambda n: n.timestamp, reverse=True)[:8]
-        relevant_notes = "\n".join(f"[{n.category}] {n.content[:200]}" for n in recent)
-
-    # Include architecture summary if available
-    if mission.architecture:
-        arch = mission.architecture
-        arch_summary = (
-            f"Import scheme: {arch.import_scheme}. "
-            f"Run command: {arch.run_command}. "
-            f"Modules: {', '.join(arch.canonical_files())}."
-        )
-
-        # Include interface contracts relevant to the target file
-        relevant_interfaces = [
-            f"  {i.caller} → {i.callee}: {i.symbol}({i.signature})"
-            for i in arch.interfaces
-            if target_file_path
-            and (i.caller == target_file_path or i.callee == target_file_path)
-        ]
-        if relevant_interfaces:
-            arch_summary += "\nInterfaces:\n" + "\n".join(relevant_interfaces)
-
-        # Include data shape contracts relevant to the target file
-        relevant_shapes = [
-            f"  {ds.file} → {ds.consumed_by}: {ds.structure}"
-            for ds in arch.data_shapes
-            if target_file_path
-            and (ds.file == target_file_path or ds.consumed_by == target_file_path)
-        ]
-        if relevant_shapes:
-            arch_summary += (
-                "\nData shapes (CRITICAL — match this format exactly):\n"
-                + "\n".join(relevant_shapes)
+    # Resolve the selected file path
+    if chosen and chosen in file_list:
+        selected_path = chosen
+    else:
+        # Fallback: first file
+        selected_path = file_list[0]
+        if chosen:
+            logger.warning(
+                "File selection response %r not in file_list, using first: %s",
+                chosen,
+                selected_path,
             )
-
-        if relevant_notes:
-            relevant_notes = f"[architecture] {arch_summary}\n{relevant_notes}"
-        else:
-            relevant_notes = f"[architecture] {arch_summary}"
-
-    # Determine prompt variant for specialized generation
-    prompt_variant = ""
-    if dispatch_flow == "file_write":
-        desc_lower = selected_task.description.lower()
-        target_lower = (target_file_path or "").lower()
-        if (
-            any(kw in desc_lower for kw in ["test", "create tests", "write tests"])
-            or target_lower.startswith("tests/")
-            or "/test_" in target_lower
-        ):
-            prompt_variant = "test_generation"
-
-    dispatch_config = {
-        "flow": dispatch_flow,
-        "task_id": selected_task.id,
-        "task_description": selected_task.description,
-        "mission_objective": mission.objective,
-        "working_directory": mission.config.working_directory,
-        "target_file_path": target_file_path,
-        "reason": task_inputs.get("reason", "") or selected_task.description,
-        "relevant_notes": relevant_notes,
-        "mission_id": mission.id,
-        "prompt_variant": prompt_variant,
-    }
+    dispatch_config["target_file_path"] = selected_path
 
     return StepOutput(
-        result={"file_selected": True},
-        observations=f"Dispatch ready: {dispatch_flow} → {target_file_path or '(project-level)'}",
+        result={"target_resolved": True},
+        observations=f"Selected file: {selected_path}",
         context_updates={"dispatch_config": dispatch_config},
     )
 
@@ -681,6 +815,16 @@ async def action_start_director_session(step_input: StepInput) -> StepOutput:
             result={"session_started": False},
             observations=f"Failed to start director session: {e}",
         )
+
+    if not session_id:
+        logger.warning("Director session returned empty session_id — falling back to stateless")
+        return StepOutput(
+            result={"session_started": False},
+            observations="Director session returned empty session_id",
+            context_updates={"session_id": ""},
+        )
+
+    logger.info("Director session started: %s", session_id)
 
     return StepOutput(
         result={"session_started": True},
@@ -767,6 +911,99 @@ async def action_record_dispatch(step_input: StepInput) -> StepOutput:
 # ══════════════════════════════════════════════════════════════════════
 # Architecture State Management (NEW)
 # ══════════════════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Architecture Drift Detection (deterministic, no inference)
+# ══════════════════════════════════════════════════════════════════════
+
+
+async def action_check_architecture_drift(step_input: StepInput) -> StepOutput:
+    """Deterministically compare architecture against files on disk.
+
+    Compares architecture.canonical_files() against project_manifest keys.
+    Detects files on disk not in architecture (drift → reconciliation needed).
+
+    Infrastructure files (pyproject.toml, README.md, __init__.py, etc.) are
+    excluded from drift detection since they're not application architecture.
+
+    Returns:
+        has_architecture: bool
+        has_tasks: bool
+        drift_detected: bool
+        new_files: list of files on disk not in architecture
+    """
+    mission = step_input.context.get("mission")
+    manifest = step_input.context.get("project_manifest", {})
+
+    if not mission:
+        return StepOutput(
+            result={
+                "has_architecture": False,
+                "has_tasks": False,
+                "drift_detected": False,
+            },
+            observations="No mission in context",
+        )
+
+    has_architecture = mission.architecture is not None
+    has_tasks = len(mission.plan) > 0
+
+    if not has_architecture:
+        return StepOutput(
+            result={
+                "has_architecture": False,
+                "has_tasks": has_tasks,
+                "drift_detected": False,
+            },
+            observations="No architecture exists — initial design needed",
+        )
+
+    # Get canonical files from architecture
+    arch_files = set(mission.architecture.canonical_files())
+
+    # Get project files from manifest, excluding infrastructure
+    infrastructure = {
+        "pyproject.toml", "setup.cfg", "setup.py", "requirements.txt",
+        "uv.lock", "README.md", "readme.md", "CHANGELOG.md",
+        ".gitignore", ".editorconfig", ".flake8", ".pre-commit-config.yaml",
+        "Makefile", "Dockerfile", "docker-compose.yml",
+    }
+    infrastructure_prefixes = (".", "tests/", "test_", "__pycache__/")
+    infrastructure_suffixes = ("__init__.py",)
+
+    disk_files = set()
+    for filepath in manifest.keys():
+        basename = os.path.basename(filepath)
+        if basename in infrastructure:
+            continue
+        if any(filepath.startswith(p) for p in infrastructure_prefixes):
+            continue
+        if any(filepath.endswith(s) for s in infrastructure_suffixes):
+            continue
+        disk_files.add(filepath)
+
+    # Detect drift: files on disk that architecture doesn't know about
+    new_on_disk = sorted(disk_files - arch_files)
+
+    drift_detected = len(new_on_disk) > 0
+    drift_summary = ""
+    if drift_detected:
+        drift_summary = (
+            f"Architecture drift: {len(new_on_disk)} file(s) on disk "
+            f"not in architecture: {', '.join(new_on_disk)}"
+        )
+
+    return StepOutput(
+        result={
+            "has_architecture": True,
+            "has_tasks": has_tasks,
+            "drift_detected": drift_detected,
+            "new_files": new_on_disk,
+        },
+        observations=drift_summary or f"No drift — architecture matches disk ({len(arch_files)} files)",
+        context_updates={"drift_summary": drift_summary},
+    )
 
 
 async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutput:
@@ -930,7 +1167,7 @@ async def action_create_plan_from_architecture(step_input: StepInput) -> StepOut
         tasks = [
             TaskRecord(
                 description=f"Implement: {mission.objective}",
-                flow="create_file",
+                flow="create",
                 inputs={"target_file_path": "", "reason": mission.objective},
             )
         ]
@@ -1007,6 +1244,8 @@ def _parse_task_list(
 
         # Infer flow from description (lightweight hint)
         flow = item.get("flow") or _infer_flow_hint(desc)
+        # B5: Normalize stale flow names the model may produce from memory
+        flow = _FLOW_NAME_REMAP.get(flow, flow)
 
         task_inputs = {
             "target_file_path": filename or "",
@@ -1047,12 +1286,22 @@ def _parse_task_list(
     return tasks
 
 
+# B5: Stale flow names the model sometimes produces from memory.
+# Maps old names → current canonical names.
+_FLOW_NAME_REMAP: dict[str, str] = {
+    "file_write": "file_ops",
+    "create_file": "create",
+    "modify_file": "rewrite",
+    "ast_edit_session": "patch",
+}
+
+
 def _infer_flow_hint(desc: str) -> str:
     """Lightweight flow hint from description. Used as a default that
     mission_control can override at dispatch time.
 
     Condensed flow set:
-      file_write      — create, modify, refactor, document, explore, manage, review
+      file_ops      — create, modify, refactor, document, explore, manage, review
       diagnose_issue  — investigate code issues
       interact        — run and use the product, test features
       project_ops     — manage project infrastructure, deps, config
@@ -1061,17 +1310,37 @@ def _infer_flow_hint(desc: str) -> str:
 
     if any(kw in d for kw in ["diagnose", "debug", "investigate root cause"]):
         return "diagnose_issue"
-    if any(kw in d for kw in ["run the", "verify", "end-to-end", "validate",
-                               "test the", "interact", "try the", "use the"]):
+    if any(
+        kw in d
+        for kw in [
+            "run the",
+            "verify",
+            "end-to-end",
+            "validate",
+            "test the",
+            "interact",
+            "try the",
+            "use the",
+        ]
+    ):
         return "interact"
     if any(
-        kw in d for kw in ["setup", "initialize", "configure", "project init", "dependency", "package", "install"]
+        kw in d
+        for kw in [
+            "setup",
+            "initialize",
+            "configure",
+            "project init",
+            "dependency",
+            "package",
+            "install",
+        ]
     ):
         return "project_ops"
 
-    # Everything else routes through file_write — it handles create, modify,
+    # Everything else routes through file_ops — it handles create, modify,
     # refactor, document, explore, manage packages, review, and tests.
-    return "file_write"
+    return "file_ops"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1245,3 +1514,194 @@ def _infer_flow_from_description(desc: str) -> str:
 
 def _derive_source_for_tests(test_path: str, desc: str) -> str:
     return ""
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Goal Derivation (Context Contract Architecture)
+# ══════════════════════════════════════════════════════════════════════
+
+
+async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
+    """Derive project goals from architecture and mission objective.
+
+    Two-pass derivation:
+      Pass 1 (deterministic): structural goals from architecture modules
+      Pass 2 (inference): functional goals from objective + architecture
+
+    Stores goals on MissionState and links tasks to parent goals.
+
+    Context required: mission
+    Context optional: architecture
+    Publishes: goals, mission
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    architecture = step_input.context.get("architecture")
+
+    if not effects or not mission:
+        return StepOutput(
+            result={"goals_derived": False},
+            observations="No effects or mission state",
+        )
+
+    # Import persistence model
+    from agent.persistence.models import GoalRecord
+
+    # Access mission as dict or object
+    if hasattr(mission, "objective"):
+        objective = mission.objective
+        modules = (
+            architecture.modules if architecture and hasattr(architecture, "modules")
+            else []
+        )
+        data_shapes = (
+            architecture.data_shapes if architecture and hasattr(architecture, "data_shapes")
+            else []
+        )
+        plan = mission.plan if hasattr(mission, "plan") else []
+    elif isinstance(mission, dict):
+        objective = mission.get("objective", "")
+        arch = mission.get("architecture") or architecture or {}
+        if isinstance(arch, dict):
+            modules = arch.get("modules", [])
+            data_shapes = arch.get("data_shapes", [])
+        else:
+            modules = getattr(arch, "modules", [])
+            data_shapes = getattr(arch, "data_shapes", [])
+        plan = mission.get("plan", [])
+    else:
+        return StepOutput(
+            result={"goals_derived": False},
+            observations="Cannot read mission state",
+        )
+
+    goals = []
+
+    # ── Pass 1: Deterministic structural goals from architecture ──
+    for mod in modules:
+        if isinstance(mod, dict):
+            file_path = mod.get("file", "")
+            responsibility = mod.get("responsibility", "")
+        else:
+            file_path = getattr(mod, "file", "")
+            responsibility = getattr(mod, "responsibility", "")
+
+        if not file_path:
+            continue
+
+        goal = GoalRecord(
+            description=responsibility or f"Implement {file_path}",
+            type="structural",
+            associated_files=[file_path],
+        )
+        goals.append(goal)
+
+    for ds in data_shapes:
+        if isinstance(ds, dict):
+            file_path = ds.get("file", "")
+            consumed_by = ds.get("consumed_by", "")
+        else:
+            file_path = getattr(ds, "file", "")
+            consumed_by = getattr(ds, "consumed_by", "")
+
+        if not file_path:
+            continue
+
+        goal = GoalRecord(
+            description=f"Data file {file_path} consumed by {consumed_by}",
+            type="structural",
+            associated_files=[file_path],
+        )
+        goals.append(goal)
+
+    # ── Pass 2: Inference-derived functional goals ──
+    if effects and objective:
+        structural_summary = "\n".join(
+            f"- {g.description} ({', '.join(g.associated_files)})"
+            for g in goals
+        )
+        prompt = (
+            f"Given these structural goals:\n{structural_summary}\n\n"
+            f"And the mission objective:\n{objective}\n\n"
+            f"What functional capabilities should the project deliver? "
+            f"Each goal should describe a user-facing capability, not a file or module.\n\n"
+            f"Produce 3-5 functional goals as a JSON array of strings.\n"
+            f"Example: [\"Players can navigate between rooms using cardinal directions\", "
+            f"\"NPC dialogue branches based on player choices\"]\n\n"
+            f"Return ONLY the JSON array."
+        )
+
+        try:
+            result = await effects.run_inference(
+                prompt=prompt,
+                config_overrides={"temperature": 0.4, "max_tokens": 500},
+            )
+            if result.text:
+                # Parse JSON array from response
+                import json as _json
+                text = result.text.strip()
+                # Strip markdown fences if present
+                if text.startswith("```"):
+                    text = re.sub(r"^```\w*\n?", "", text)
+                    text = re.sub(r"\n?```$", "", text)
+                    text = text.strip()
+
+                try:
+                    functional_goals = _json.loads(text)
+                    if isinstance(functional_goals, list):
+                        for desc in functional_goals:
+                            if isinstance(desc, str) and desc.strip():
+                                goals.append(GoalRecord(
+                                    description=desc.strip(),
+                                    type="functional",
+                                ))
+                except _json.JSONDecodeError:
+                    logger.warning("Could not parse functional goals JSON: %s", text[:200])
+        except Exception as e:
+            logger.warning("Functional goal inference failed: %s", e)
+
+    # ── Link tasks to goals by file association ──
+    for task in plan:
+        if isinstance(task, dict):
+            task_target = task.get("inputs", {}).get("target_file_path", "")
+            task_id = task.get("id", "")
+        else:
+            task_target = (task.inputs or {}).get("target_file_path", "")
+            task_id = task.id
+
+        if not task_target or not task_id:
+            continue
+
+        for goal in goals:
+            if task_target in goal.associated_files:
+                if task_id not in goal.associated_task_ids:
+                    goal.associated_task_ids.append(task_id)
+                # Set goal_id on task
+                if isinstance(task, dict):
+                    task["goal_id"] = goal.id
+                elif hasattr(task, "goal_id"):
+                    task.goal_id = goal.id
+                break  # First matching goal wins
+
+    # ── Persist goals on mission state ──
+    goal_dicts = [g.model_dump() for g in goals]
+    if hasattr(mission, "goals"):
+        mission.goals = goals
+        await effects.save_mission(mission)
+    elif isinstance(mission, dict):
+        mission["goals"] = goal_dicts
+        await effects.save_mission(mission)
+
+    return StepOutput(
+        result={
+            "goals_derived": True,
+            "structural_count": sum(1 for g in goals if g.type == "structural"),
+            "functional_count": sum(1 for g in goals if g.type == "functional"),
+        },
+        observations=f"Derived {len(goals)} goals ({sum(1 for g in goals if g.type == 'structural')} structural, {sum(1 for g in goals if g.type == 'functional')} functional)",
+        context_updates={
+            "goals": goal_dicts,
+            "mission": mission,
+            "task_count": len(plan),
+        },
+    )
