@@ -1,0 +1,63 @@
+## Tool Use
+
+When you need to look up or calculate data that a tool provides,
+emit a tool call in your response using this exact format:
+
+```
+<tool_call>{"name": "tool_name", "params": {"key": "value"}}</tool_call>
+```
+
+The system will execute the tool and provide the result.
+Then use the result to complete your answer.
+Only call one tool at a time.
+
+## Available Tools
+
+### keal_means_check
+Look up or calculate the KEAL means damage bonus.  Each KEAL means has up to 3 archetypal types; every attacker type is compared against every defender type and the modifiers are summed.  For a single-pair lookup pass one-element arrays.
+
+**Parameters (JSON):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "attacker_types": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of attacker KEAL means archetypal adaptations (1-3 types)"
+    },
+    "defender_types": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of defender KEAL means archetypal adaptations (1-3 types)"
+    }
+  },
+  "required": [
+    "attacker_types",
+    "defender_types"
+  ]
+}
+```
+
+### card_lookup
+Look up a Kipukas card by name, slug, type, or keywords. Returns card details including type, stats, keal means, genetic disposition, description, and lore.
+
+**Parameters (JSON):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Search query \u2014 card name, slug, tags, or card type (e.g. 'hilbert', 'frost otter', 'Species', 'dragon')"
+    }
+  },
+  "required": [
+    "query"
+  ]
+}
+```

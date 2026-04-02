@@ -19,27 +19,16 @@ sections:
     content: |
       Trigger: {input.trigger_reason}
 
-  - id: task_context
-    when: input.task_description
+  - id: goal
+    when: input.goal_context
     content: |
-      Task: {input.task_description}
-
-  - id: objective
-    when: input.mission_objective
-    content: |
-      Mission: {input.mission_objective}
+      Goal: {input.goal_context}
 
   - id: notes
     when: input.relevant_notes
     content: |
       Relevant notes:
       {input.relevant_notes}
-
-  - id: reason
-    when: input.reason
-    content: |
-      Context:
-      {input.reason}
 
   - id: codebase
     when: context.repo_map_formatted

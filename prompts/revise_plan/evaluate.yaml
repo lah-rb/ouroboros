@@ -32,6 +32,12 @@ sections:
       Current plan:
       {context.plan_listing}
 
+  - id: goals
+    when: context.goals_listing
+    content: |
+      Project goals:
+      {context.goals_listing}
+
   - id: codebase
     when: context.repo_map_formatted
     content: |
@@ -40,9 +46,9 @@ sections:
 
   - id: output_format
     content: |
-      Decide if the plan needs revision. Return a JSON object.
+      Decide if the plan needs revision. Return a JSON object inside a fenced code block.
       Only add tasks that directly address the observation.
-      Use flow types: file_write, project_ops, or interact.
+      Use flow types: file_ops, project_ops, or interact.
       Maximum 3 new tasks per revision.
 
       ✅ CORRECT — no revision needed:
@@ -56,7 +62,7 @@ sections:
         "revision_needed": true,
         "reason": "Need to add database migration support",
         "add_tasks": [
-          {"description": "Create migrations.py with schema versioning", "flow": "file_write", "target_file_path": "migrations.py", "after_task": "task-002"}
+          {"description": "Create migrations.py with schema versioning", "flow": "file_ops", "target_file_path": "migrations.py", "after_task": "task-002"}
         ],
         "remove_tasks": [],
         "reorder": []
@@ -69,4 +75,4 @@ sections:
       {"revision_needed": true, ...}
       ```
 
-      Return ONLY the JSON.
+      Return ONLY the fenced JSON.

@@ -1,30 +1,34 @@
 // mission_control.cue — Core Director Flow
 //
-// Ported from mission_control.yaml (version 3, 963 lines, 49 steps).
-// Version 4: 26 steps, ~45% reduction from dispatch routing collapse.
+// Version 5: Context Contract Architecture.
 //
-// Key changes:
-//   - 12 select_and_dispatch_* steps → 1 select_task step
-//   - 13 resolve_target_file_* steps → 1 resolve_target step
-//   - LLM menu uses publish_selection to pass flow type as data
-//   - create/modify merged into file_write in the options list
-//   - reason + reason_standalone merged (action handles session detection)
-//   - end_session_and_reason + end_session_error_no_files merged
-//   - All Jinja2 replaced with typed $ref
-//   - Prompt templates extracted to prompts/mission_control/
+// Key changes from v4:
+//   - Operates at project_goal tier (not mission_objective)
+//   - last_result is now a structured dict from flow returns (not prose)
+//   - Dispatch produces a flow_directive for task flows
+//   - Goals inform dispatch decisions and frustration reasoning
+//   - result_formatter/result_keys removed from all tail-calls
+//   - select_task menu includes "infer_directive" escape hatch
+//   - mission_objective removed from task flow input_maps
 
 package ouroboros
 
 mission_control: #FlowDefinition & {
 	flow:    "mission_control"
-	version: 4
+	version: 5
 	description: """
 		Core director flow. Orchestrates the entire agent lifecycle:
 		load state → integrate last result → reason about next action →
-		select task → resolve target → dispatch. Uses a memoryful inference
-		session for the reasoning cycle and grammar-constrained LLM menus
-		for flow/task selection.
+		select task → dispatch with flow_directive. Operates at the
+		project_goal level — reasons about which capability to advance.
 		"""
+
+	context_tier: "project_goal"
+	returns: {
+		final_status: {type: "string", from: "context.mission.status", optional: true}
+	}
+	state_reads: ["mission.objective", "mission.goals", "mission.plan",
+		"mission.architecture", "mission.notes", "mission.dispatch_history"]
 
 	input: {
 		required: ["mission_id"]
@@ -32,6 +36,9 @@ mission_control: #FlowDefinition & {
 	}
 
 	defaults: config: temperature: "t*0.5"
+
+	known_personas: ["file_ops", "diagnose_issue", "interact", "project_ops",
+		"design_and_plan", "quality_gate"]
 
 	steps: {
 
@@ -59,7 +66,7 @@ mission_control: #FlowDefinition & {
 
 		apply_last_result: #StepDefinition & {
 			action:      "update_task_status"
-			description: "Apply the returning flow's outcome to mission state"
+			description: "Apply the returning flow's structured result to mission state"
 			context: {
 				required: ["mission", "frustration"]
 				optional: ["events", "last_result", "last_status", "last_task_id"]
@@ -67,6 +74,7 @@ mission_control: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
+					{condition: "result.all_goals_complete == true", transition: "completed"},
 					{condition: "result.quality_gate_exhausted == true", transition: "completed"},
 					{condition: "result.events_pending == true", transition: "process_events"},
 					{condition: "result.needs_plan == true", transition: "dispatch_planning"},
@@ -130,11 +138,9 @@ mission_control: #FlowDefinition & {
 			publishes: ["session_id"]
 		}
 
-		// Director reasoning — single step handles both session and standalone modes.
-		// The Python action detects whether a session is active and adjusts accordingly.
 		reason: #StepDefinition & {
 			action:      "inference"
-			description: "Analyze mission state and reason about next action"
+			description: "Analyze mission state at goal level — reason about next action"
 			context: {
 				required: ["mission", "frustration"]
 				optional: ["session_id", "last_result", "last_status"]
@@ -142,25 +148,96 @@ mission_control: #FlowDefinition & {
 			prompt_template: {
 				template: "mission_control/reason"
 				context_keys: [
-					"mission_objective", "working_directory",
-					"architecture_summary", "plan_listing",
+					"goals_listing", "plan_listing",
+					"architecture_summary",
 					"last_status", "last_result", "is_first_cycle",
 					"frustration_landscape", "dispatch_history",
-					"notes_summary",
+					"notes_summary", "peer_personas",
 				]
 				input_keys: []
 			}
 			pre_compute: [
+				{formatter: "format_goals_listing", output_key: "goals_listing", params: {source: {$ref: "context.mission.goals"}}},
 				{formatter: "format_plan_listing", output_key: "plan_listing", params: {source: {$ref: "context.mission.plan"}}},
 				{formatter: "format_frustration_landscape", output_key: "frustration_landscape", params: {source: {$ref: "context.frustration"}}},
 				{formatter: "format_dispatch_history", output_key: "dispatch_history", params: {source: {$ref: "context.mission.dispatch_history"}, limit: 5}},
 				{formatter: "format_notes", output_key: "notes_summary", params: {source: {$ref: "context.mission.notes"}, limit: 5}},
 				{formatter: "format_architecture_summary", output_key: "architecture_summary", params: {source: {$ref: "context.mission.architecture"}}},
-				{formatter: "format_mission_meta", output_key: "mission_objective", params: {mission: {$ref: "context.mission"}, field: "objective"}},
-				{formatter: "format_mission_meta", output_key: "working_directory", params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
 				{formatter: "format_cycle_status", output_key: "is_first_cycle", params: {last_status: {$ref: "context.last_status"}}},
+				{formatter: "format_structured_result", output_key: "last_result", params: {source: {$ref: "context.last_result"}}},
+				{formatter: "format_known_personas", output_key: "peer_personas", params: {source: ["file_ops", "diagnose_issue", "interact", "project_ops", "design_and_plan", "quality_gate"]}},
 			]
-			config: temperature: "t*0.8"
+			config: temperature: "t*0.6"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "decide_flow"},
+					{condition: "true", transition: "end_failed_session"},
+				]
+			}
+			publishes: ["director_analysis"]
+		}
+
+		// ── 0-token recovery: tear down session, start fresh, retry ──
+		//
+		// GPT-OSS Harmony issue #80: model occasionally generates 0 tokens
+		// on session continuation turns. Since reason is the first session
+		// turn, the session has no accumulated value yet. End it, start a
+		// fresh one, and retry. If the retry also fails, proceed stateless.
+
+		end_failed_session: #StepDefinition & {
+			action:      "end_director_session"
+			description: "0-token on reason — end the failed session"
+			context: optional: ["session_id"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "restart_session"}]
+			}
+		}
+
+		restart_session: #StepDefinition & {
+			action:      "start_director_session"
+			description: "Start a fresh session for reason retry"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.session_started == true", transition: "reason_retry"},
+					{condition: "true", transition: "reason_retry"},
+				]
+			}
+			publishes: ["session_id"]
+		}
+
+		reason_retry: #StepDefinition & {
+			action:      "inference"
+			description: "Retry reasoning after session reset — proceed regardless of result"
+			context: {
+				required: ["mission", "frustration"]
+				optional: ["session_id", "last_result", "last_status"]
+			}
+			prompt_template: {
+				template: "mission_control/reason"
+				context_keys: [
+					"goals_listing", "plan_listing",
+					"architecture_summary",
+					"last_status", "last_result", "is_first_cycle",
+					"frustration_landscape", "dispatch_history",
+					"notes_summary", "peer_personas",
+				]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_goals_listing", output_key: "goals_listing", params: {source: {$ref: "context.mission.goals"}}},
+				{formatter: "format_plan_listing", output_key: "plan_listing", params: {source: {$ref: "context.mission.plan"}}},
+				{formatter: "format_frustration_landscape", output_key: "frustration_landscape", params: {source: {$ref: "context.frustration"}}},
+				{formatter: "format_dispatch_history", output_key: "dispatch_history", params: {source: {$ref: "context.mission.dispatch_history"}, limit: 5}},
+				{formatter: "format_notes", output_key: "notes_summary", params: {source: {$ref: "context.mission.notes"}, limit: 5}},
+				{formatter: "format_architecture_summary", output_key: "architecture_summary", params: {source: {$ref: "context.mission.architecture"}}},
+				{formatter: "format_cycle_status", output_key: "is_first_cycle", params: {last_status: {$ref: "context.last_status"}}},
+				{formatter: "format_structured_result", output_key: "last_result", params: {source: {$ref: "context.last_result"}}},
+				{formatter: "format_known_personas", output_key: "peer_personas", params: {source: ["file_ops", "diagnose_issue", "interact", "project_ops", "design_and_plan", "quality_gate"]}},
+			]
+			config: temperature: "t*0.7"
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "decide_flow"}]
@@ -171,10 +248,6 @@ mission_control: #FlowDefinition & {
 		// ══════════════════════════════════════════════════════════
 		// Phase 5: Choose flow type (LLM menu)
 		// ══════════════════════════════════════════════════════════
-		//
-		// The LLM picks which type of action to take. publish_selection
-		// writes the chosen option key to context as "dispatch_flow_type",
-		// and ALL options transition to the same select_task step.
 
 		decide_flow: #StepDefinition & {
 			action:      "noop"
@@ -186,7 +259,7 @@ mission_control: #FlowDefinition & {
 				publish_selection: "dispatch_flow_type"
 				prompt:            "Based on the director's analysis, choose the single best action type."
 				options: {
-					file_write: {
+					file_ops: {
 						description: "Create, modify, refactor, document, or manage project files"
 						target:      "select_task"
 					}
@@ -203,7 +276,7 @@ mission_control: #FlowDefinition & {
 						target:      "select_task"
 					}
 					design_and_plan: {
-						description: "Design or revise project architecture and regenerate the task plan"
+						description: "Revise the mission plan — add, reorder, or remove tasks"
 						target:      "end_session_and_design"
 					}
 					quality_checkpoint: {
@@ -213,10 +286,6 @@ mission_control: #FlowDefinition & {
 					quality_completion: {
 						description: "All planned work done — run final quality gate"
 						target:      "end_session_quality_completion"
-					}
-					dispatch_revise_plan: {
-						description: "Extend or revise the mission plan"
-						target:      "end_session_and_revise"
 					}
 					mission_deadlocked: {
 						description: "No viable path forward — remaining tasks blocked"
@@ -229,165 +298,133 @@ mission_control: #FlowDefinition & {
 		}
 
 		// ══════════════════════════════════════════════════════════
-		// Phase 6: Select task (single parameterized step)
+		// Phase 6: Select task and assemble directive
 		// ══════════════════════════════════════════════════════════
 		//
-		// Replaces 12 select_and_dispatch_* steps. The Python action
-		// reads dispatch_flow_type from context and selects the
-		// appropriate task from the mission plan.
+		// The LLM picks a task from the plan. The menu includes an
+		// "infer_directive" option for cases where the director needs
+		// to compose a novel directive not covered by existing tasks.
 
 		select_task: #StepDefinition & {
 			action:      "select_task_for_dispatch"
-			description: "Select task for the chosen flow type"
+			description: "Select task and assemble flow_directive from goal + task"
 			context: {
-				required: ["mission", "dispatch_flow_type"]
-				optional: ["session_id", "director_analysis"]
+				required: ["mission", "director_analysis", "dispatch_flow_type"]
+				optional: ["frustration", "session_id"]
 			}
 			resolver: {
 				type: "rule"
 				rules: [
 					{condition: "result.task_selected == true", transition: "resolve_target"},
-					{condition: "result.no_actionable_tasks == true", transition: "end_session_quality_completion"},
-					{condition: "true", transition: "end_session_quality_completion"},
-				]
-			}
-			publishes: ["selected_task", "selected_task_id"]
-		}
-
-		// ══════════════════════════════════════════════════════════
-		// Phase 7: Resolve target file (single parameterized step)
-		// ══════════════════════════════════════════════════════════
-		//
-		// Replaces 13 resolve_target_file_* steps. The Python action
-		// reads dispatch_flow_type to determine if file selection is
-		// needed (file-targeted flows) or can be skipped (project-level).
-
-		resolve_target: #StepDefinition & {
-			action:      "select_target_file"
-			description: "Resolve target file for the selected task"
-			context: {
-				required: ["mission", "selected_task", "dispatch_flow_type"]
-				optional: ["session_id"]
-			}
-			params: {
-				dispatch_flow: {$ref: "context.dispatch_flow_type"}
-			}
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.file_selected == true", transition: "end_session_and_dispatch"},
-					{condition: "result.error == 'no_project_files'", transition: "end_session_and_retry"},
-					{condition: "true", transition: "end_session_and_retry"},
+					{condition: "result.infer_directive == true", transition: "compose_directive"},
+					{condition: "result.no_tasks_available == true", transition: "end_session_and_design"},
+					{condition: "true", transition: "end_session_and_design"},
 				]
 			}
 			publishes: ["dispatch_config"]
 		}
 
-		// ══════════════════════════════════════════════════════════
-		// Phase 8: Session management and dispatch
-		// ══════════════════════════════════════════════════════════
-
-		end_session_and_dispatch: #StepDefinition & {
-			action:      "end_director_session"
-			description: "Close director session before dispatching to task flow"
+		// Novel directive path — director composes something not in the plan
+		compose_directive: #StepDefinition & {
+			action:      "inference"
+			description: "Director composes a novel flow_directive via inference"
 			context: {
-				required: ["dispatch_config", "mission"]
-				optional: ["session_id"]
+				required: ["mission", "director_analysis"]
+				optional: ["session_id", "dispatch_flow_type"]
+			}
+			prompt_template: {
+				template: "mission_control/compose_directive"
+				context_keys: ["director_analysis", "plan_listing"]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_plan_listing", output_key: "plan_listing"
+					params: {source: {$ref: "context.mission.plan"}}},
+			]
+			config: temperature: "t*0.6"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "resolve_target"},
+					{condition: "true", transition: "end_session_and_design"},
+				]
+			}
+			publishes: ["dispatch_config"]
+		}
+
+		resolve_target: #StepDefinition & {
+			action:      "select_target_file"
+			description: "Determine target file for the dispatch"
+			context: {
+				required: ["mission", "dispatch_config"]
+				optional: ["director_analysis", "session_id"]
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "record_and_dispatch"}]
+				rules: [
+					{condition: "result.target_resolved == true", transition: "record_and_dispatch"},
+					{condition: "true", transition: "record_and_dispatch"},
+				]
 			}
+			publishes: ["dispatch_config"]
 		}
 
 		record_and_dispatch: #StepDefinition & {
 			action:      "record_dispatch"
-			description: "Record dispatch in history for deduplication, then tail-call"
-			context: required: ["dispatch_config", "mission"]
+			description: "Record dispatch decision and end session"
+			context: {
+				required: ["mission", "dispatch_config"]
+				optional: ["session_id"]
+			}
 			resolver: {
 				type: "rule"
-				rules: [
-					{condition: "result.repeat_count >= 3", transition: "dispatch_revise_plan"},
-					{condition: "true", transition: "dispatch"},
-				]
+				rules: [{condition: "true", transition: "end_session_and_dispatch"}]
 			}
-			publishes: ["mission", "dispatch_warning"]
+			publishes: ["mission"]
 		}
+
+		end_session_and_dispatch: #StepDefinition & {
+			action:      "end_director_session"
+			description: "Close director session, then dispatch task flow"
+			context: {
+				required: ["dispatch_config"]
+				optional: ["session_id"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "dispatch"}]
+			}
+		}
+
+		// ══════════════════════════════════════════════════════════
+		// Phase 7: Dispatch — tail-call with flow_directive
+		// ══════════════════════════════════════════════════════════
 
 		dispatch: #StepDefinition & {
 			action:      "noop"
-			description: "Tail-call to the selected task flow"
+			description: "Dispatch to selected task flow with flow_directive"
 			context: required: ["dispatch_config", "mission"]
 			tail_call: {
 				flow: {$ref: "context.dispatch_config.flow"}
 				input_map: {
 					mission_id:        {$ref: "input.mission_id"}
 					task_id:           {$ref: "context.dispatch_config.task_id"}
-					task_description:  {$ref: "context.dispatch_config.task_description"}
-					mission_objective: {$ref: "context.dispatch_config.mission_objective"}
-					working_directory: {$ref: "context.dispatch_config.working_directory"}
-					target_file_path:  {$ref: "context.dispatch_config.target_file_path"}
-					reason:            {$ref: "context.dispatch_config.reason"}
-					relevant_notes:    {$ref: "context.dispatch_config.relevant_notes"}
-					prompt_variant:    {$ref: "context.dispatch_config.prompt_variant", default: ""}
+					flow_directive:    {$ref: "context.dispatch_config.flow_directive"}
+					target_file_path:  {$ref: "context.dispatch_config.target_file_path", default: ""}
+					working_directory: {$ref: "context.mission.config.working_directory"}
+					relevant_notes:    {$ref: "context.dispatch_config.relevant_notes", default: ""}
 				}
 			}
 		}
 
 		// ══════════════════════════════════════════════════════════
-		// Error recovery
+		// Planning dispatch
 		// ══════════════════════════════════════════════════════════
-
-		end_session_and_retry: #StepDefinition & {
-			action:      "end_director_session"
-			description: "Close session — selection failed, loop back to reason"
-			context: optional: ["session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "start_session"}]
-			}
-		}
-
-		// ══════════════════════════════════════════════════════════
-		// Plan revision and planning dispatch
-		// ══════════════════════════════════════════════════════════
-
-		end_session_and_revise: #StepDefinition & {
-			action:      "end_director_session"
-			description: "Close session, then dispatch plan revision"
-			context: optional: ["session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "dispatch_revise_plan"}]
-			}
-		}
-
-		dispatch_revise_plan: #StepDefinition & {
-			action:      "noop"
-			description: "Repeated dispatch or plan revision requested — revise plan"
-			context: {
-				required: ["mission"]
-				optional: ["director_analysis", "dispatch_warning"]
-			}
-			tail_call: {
-				flow: "revise_plan"
-				input_map: {
-					mission_id: {$ref: "input.mission_id"}
-					observation: {
-						$ref: "context.director_analysis"
-						fallback: [
-							{$ref: "context.dispatch_warning"},
-							"Plan revision needed",
-						]
-					}
-				}
-			}
-		}
 
 		dispatch_planning: #StepDefinition & {
 			action:      "noop"
-			description: "No plan exists — dispatch to design_and_plan flow"
-			context: required: ["mission"]
+			description: "No plan exists — dispatch to design_and_plan"
+			context: optional: ["mission"]
 			tail_call: {
 				flow: "design_and_plan"
 				input_map: {
@@ -398,8 +435,8 @@ mission_control: #FlowDefinition & {
 
 		end_session_and_design: #StepDefinition & {
 			action:      "end_director_session"
-			description: "Close session, then dispatch to design_and_plan for architecture revision"
-			context: optional: ["session_id"]
+			description: "Close director session before design_and_plan dispatch"
+			context: optional: ["session_id", "mission"]
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "dispatch_design"}]
@@ -408,12 +445,25 @@ mission_control: #FlowDefinition & {
 
 		dispatch_design: #StepDefinition & {
 			action:      "noop"
-			description: "Director requested architecture revision — dispatch to design_and_plan"
+			description: "Director requested architecture revision"
 			context: required: ["mission"]
 			tail_call: {
 				flow: "design_and_plan"
 				input_map: {
 					mission_id: {$ref: "input.mission_id"}
+				}
+			}
+		}
+
+		dispatch_revise_plan: #StepDefinition & {
+			action:      "noop"
+			description: "Dispatch plan revision"
+			context: required: ["mission"]
+			tail_call: {
+				flow: "revise_plan"
+				input_map: {
+					mission_id:  {$ref: "input.mission_id"}
+					observation: {$ref: "context.director_analysis", default: "Review the plan for gaps"}
 				}
 			}
 		}
@@ -428,7 +478,10 @@ mission_control: #FlowDefinition & {
 			context: optional: ["session_id", "mission"]
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "quality_checkpoint_run"}]
+				rules: [
+					{condition: "context.mission.quality_gate_blocked == true", transition: "start_session"},
+					{condition: "true", transition: "quality_checkpoint_run"},
+				]
 			}
 		}
 
@@ -438,10 +491,12 @@ mission_control: #FlowDefinition & {
 			flow:        "quality_gate"
 			context: required: ["mission"]
 			input_map: {
-				working_directory: {$ref: "context.mission.config.working_directory"}
-				mission_id:        {$ref: "input.mission_id"}
-				mission_objective: {$ref: "context.mission.objective"}
-				mode:              "checkpoint"
+				working_directory:        {$ref: "context.mission.config.working_directory"}
+				mission_id:               {$ref: "input.mission_id"}
+				mission_objective:        {$ref: "context.mission.objective"}
+				architecture_run_command: {$ref: "context.mission.architecture.run_command", default: ""}
+				architecture:            {$ref: "context.mission.architecture", default: ""}
+				mode:                     "checkpoint"
 			}
 			resolver: {
 				type: "rule"
@@ -459,7 +514,10 @@ mission_control: #FlowDefinition & {
 			context: optional: ["session_id", "mission"]
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "quality_completion_run"}]
+				rules: [
+					{condition: "context.mission.quality_gate_blocked == true", transition: "start_session"},
+					{condition: "true", transition: "quality_completion_run"},
+				]
 			}
 		}
 
@@ -469,14 +527,13 @@ mission_control: #FlowDefinition & {
 			flow:        "quality_gate"
 			context: required: ["mission"]
 			input_map: {
-				working_directory: {$ref: "context.mission.config.working_directory"}
-				mission_id:        {$ref: "input.mission_id"}
-				mission_objective: {$ref: "context.mission.objective"}
-				mode:              "completion"
+				working_directory:        {$ref: "context.mission.config.working_directory"}
+				mission_id:               {$ref: "input.mission_id"}
+				mission_objective:        {$ref: "context.mission.objective"}
+				architecture_run_command: {$ref: "context.mission.architecture.run_command", default: ""}
+				architecture:            {$ref: "context.mission.architecture", default: ""}
+				mode:                     "completion"
 			}
-			pre_compute: [
-				{formatter: "format_architecture_for_quality", output_key: "arch_quality_context", params: {source: {$ref: "context.mission.architecture"}}},
-			]
 			resolver: {
 				type: "rule"
 				rules: [
@@ -489,7 +546,7 @@ mission_control: #FlowDefinition & {
 
 		quality_failed_restart: #StepDefinition & {
 			action:      "noop"
-			description: "Quality gate failed — restart with details so director can act"
+			description: "Quality gate failed — restart with structured results"
 			context: optional: ["mission", "quality_results"]
 			tail_call: {
 				flow: "mission_control"
@@ -497,13 +554,11 @@ mission_control: #FlowDefinition & {
 					mission_id:  {$ref: "input.mission_id"}
 					last_status: "quality_failed"
 				}
-				result_formatter: "quality_gate_failed"
-				result_keys: ["context.quality_results"]
 			}
 		}
 
 		// ══════════════════════════════════════════════════════════
-		// Terminal and parking states
+		// Deadlock handling
 		// ══════════════════════════════════════════════════════════
 
 		end_session_deadlock: #StepDefinition & {
@@ -515,12 +570,6 @@ mission_control: #FlowDefinition & {
 				rules: [{condition: "true", transition: "check_rescue_budget"}]
 			}
 		}
-
-		// ── Deadlock rescue path ─────────────────────────────────────
-		//
-		// Before giving up, attempt a diagnostic search to find solutions.
-		// If the search yields useful guidance, revise the plan and resume.
-		// Bounded by rescue_count — only one rescue attempt per deadlock.
 
 		check_rescue_budget: #StepDefinition & {
 			action:      "check_retry_budget"
@@ -546,13 +595,9 @@ mission_control: #FlowDefinition & {
 			flow:        "research"
 			context: optional: ["mission", "director_analysis"]
 			input_map: {
-				search_intent: {
-					$ref: "context.director_analysis"
-					default: "How to resolve blocked coding tasks"
-				}
-				mission_objective: {$ref: "context.mission.objective"}
-				error_context: {$ref: "context.director_analysis"}
-				max_results: 5
+				research_query:   {$ref: "context.director_analysis"}
+				research_context: "Mission is deadlocked. Searching for solutions."
+				max_results:      5
 			}
 			resolver: {
 				type: "rule"

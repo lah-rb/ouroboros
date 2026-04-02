@@ -1,38 +1,40 @@
 // research.cue — Search and Summarize (Sub-flow)
 //
-// Replaces: research_context (301 lines), research_repomap (87 lines),
-//           research_codebase_history (106 lines), research_technical (99 lines)
-// Total replaced: 593 lines, 23 steps, up to 8 inference calls
-// New: 47 lines, 4 steps, 1 inference call + 1 search
+// A reusable tool for explicit research. The caller provides a specific
+// research_query — not a raw mission objective. This flow knows HOW to
+// search and summarize, not WHAT to research.
 //
-// A reusable sub-flow for explicit research. NOT frustration-gated.
-// Callers invoke it when they need domain knowledge, creative input,
-// or diagnostic information from external sources.
-//
-// Pipeline: curl_search → LLM summarizes into dense actionable text → return
+// Pipeline: plan queries → extract → search → summarize → return
 //
 // Callers:
-//   design_and_plan — proactive domain research before planning
-//   interact — observational research for quality feedback
-//   mission_control (deadlock rescue) — diagnostic search for stuck missions
+//   design_and_plan — "How do Python text adventure games structure dialogue trees?"
+//   mission_control (deadlock rescue) — "Python ImportError circular dependency solutions"
+//   interact — "CLI text adventure testing strategies"
 
 package ouroboros
 
 research: #FlowDefinition & {
 	flow:    "research"
-	version: 1
+	version: 2
 	description: """
 		Search for information and summarize into dense, actionable text.
-		One search + one inference call. Returns a summary string the
-		caller can persist as notes or include in context.
+		The caller provides a specific research_query. This flow plans
+		search queries, executes them, and returns a summary.
 		"""
 
+	context_tier: "session_task"
+	returns: {
+		summary:       {type: "string", from: "context.research_summary", optional: true}
+		queries_run:   {type: "int",    from: "context.query_count",      optional: true}
+		results_found: {type: "bool",   from: "context.has_results",      optional: true}
+	}
+	state_reads: []
+
 	input: {
-		required: ["search_intent"]
+		required: ["research_query"]
 		optional: [
-			"mission_objective",
-			"error_context",   // For diagnostic searches
-			"max_results",     // Default 3
+			"research_context", // Background for the summarizer
+			"max_results",      // Default 3
 		]
 	}
 
@@ -40,9 +42,44 @@ research: #FlowDefinition & {
 
 	steps: {
 
+		plan_queries: #StepDefinition & {
+			action:      "inference"
+			description: "Generate 2-3 targeted search queries from the research question"
+			prompt_template: {
+				template: "research/plan_queries"
+				context_keys: []
+				input_keys: ["research_query", "research_context"]
+			}
+			config: temperature: "t*0.2"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "extract_queries"},
+					{condition: "true", transition: "search"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		extract_queries: #StepDefinition & {
+			action:      "extract_search_queries"
+			description: "Parse generated queries into structured list"
+			context: required: ["inference_response"]
+			params: max_queries: 3
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.query_count > 0", transition: "search"},
+					{condition: "true", transition: "search"},
+				]
+			}
+			publishes: ["search_queries"]
+		}
+
 		search: #StepDefinition & _templates.execute_search & {
+			context: optional: ["search_queries"]
 			params: {
-				query:       {$ref: "input.search_intent"}
+				query:       {$ref: "input.research_query"}
 				max_results: {$ref: "input.max_results", default: 3}
 			}
 			resolver: {
@@ -61,9 +98,9 @@ research: #FlowDefinition & {
 			prompt_template: {
 				template: "research/summarize"
 				context_keys: ["raw_search_results"]
-				input_keys: ["search_intent", "mission_objective", "error_context"]
+				input_keys: ["research_query", "research_context"]
 			}
-			config: temperature: 0.3
+			config: temperature: "t*0.2"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -87,5 +124,5 @@ research: #FlowDefinition & {
 		}
 	}
 
-	entry: "search"
+	entry: "plan_queries"
 }

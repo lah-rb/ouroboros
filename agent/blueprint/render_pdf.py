@@ -478,9 +478,9 @@ def _html_system_diagrams(
 
 
 def _html_system_context(ir: BlueprintIR) -> str:
+    orchestrator_count = sum(1 for f in ir.flows.values() if f.category == "orchestrator")
     task_count = sum(1 for f in ir.flows.values() if f.category == "task")
-    shared_count = sum(1 for f in ir.flows.values() if f.category == "shared")
-    control_count = sum(1 for f in ir.flows.values() if f.category == "control")
+    sub_flow_count = sum(1 for f in ir.flows.values() if f.category == "sub_flow")
     arch_count = _arch_flow_count(ir)
 
     return f"""
@@ -499,9 +499,9 @@ It operates as a pure GraphQL client — all inference flows through <code>local
 <h3>Flow Inventory</h3>
 <table>
     <tr><th>Category</th><th>Count</th></tr>
+    <tr><td>Orchestrator flows</td><td>{orchestrator_count}</td></tr>
     <tr><td>Task flows</td><td>{task_count}</td></tr>
-    <tr><td>Shared sub-flows</td><td>{shared_count}</td></tr>
-    <tr><td>Control flows</td><td>{control_count}</td></tr>
+    <tr><td>Sub-flows</td><td>{sub_flow_count}</td></tr>
     <tr><td><strong>Total</strong></td><td><strong>{arch_count}</strong></td></tr>
 </table>"""
 
@@ -552,9 +552,10 @@ def _html_flow_catalog(ir: BlueprintIR, flow_pngs: dict[str, bytes]) -> str:
     html = '<div class="page-break"></div>\n<h2>Flow Catalog</h2>\n'
 
     categories = [
+        ("Orchestrator Flows", "orchestrator"),
         ("Task Flows", "task"),
-        ("Shared Sub-flows", "shared"),
-        ("Control Flows", "control"),
+        ("Sub-flows", "sub_flow"),
+        ("Other Flows", "unknown"),
     ]
 
     for heading, category in categories:
@@ -587,6 +588,25 @@ def _html_flow_card(flow_ir: FlowIR, ir: BlueprintIR) -> str:
     html = '<div class="flow-card">\n'
     html += f'<h4>{_esc(flow_ir.name)} <span style="font-weight:normal;color:#888">(v{flow_ir.version})</span></h4>\n'
     html += f'<div class="desc">{_esc(flow_ir.description.strip())}</div>\n'
+
+    # Context Contract
+    contract_parts: list[str] = []
+    if flow_ir.context_tier:
+        contract_parts.append(f'<strong>Tier:</strong> <code>{_esc(flow_ir.context_tier)}</code>')
+    if flow_ir.state_reads:
+        reads = ", ".join(f'<code>{_esc(r)}</code>' for r in flow_ir.state_reads[:6])
+        more = f" (+{len(flow_ir.state_reads) - 6})" if len(flow_ir.state_reads) > 6 else ""
+        contract_parts.append(f'<strong>Reads:</strong> {reads}{more}')
+    if flow_ir.returns:
+        ret_keys = ", ".join(f'<code>{_esc(k)}</code>' for k in list(flow_ir.returns.keys())[:6])
+        contract_parts.append(f'<strong>Returns:</strong> {ret_keys}')
+    if contract_parts:
+        html += f'<div class="meta-line">{" · ".join(contract_parts)}</div>\n'
+
+    # Persona peers
+    if flow_ir.known_personas:
+        peers = ", ".join(f'<code>{_esc(p)}</code>' for p in flow_ir.known_personas)
+        html += f'<div class="meta-line"><strong>Peers:</strong> {peers}</div>\n'
 
     # Inputs
     parts: list[str] = []

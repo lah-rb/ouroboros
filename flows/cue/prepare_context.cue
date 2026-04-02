@@ -1,36 +1,38 @@
 // prepare_context.cue — Context Preparation (Sub-flow)
 //
-// Ported from prepare_context.yaml (version 1).
+// Deterministic context gathering pipeline. Zero inference calls.
+// Scans workspace, builds repo map, grabs git summary, selects
+// relevant files, loads content.
 //
-// Scans workspace, builds repo map, selects relevant files, loads content.
-// Returns a curated context bundle to the caller.
-//
-// Changes from v1:
-//   - Removed frustration-gated research (4 steps, 2 inference calls → 0)
-//   - Removed research_context sub-flow call
-//   - Added deterministic git summary step
-//   - Zero inference calls — purely deterministic context gathering
-//   - All Jinja2 replaced with $ref
-//
-// Research is no longer embedded here. When research is needed, callers
-// (design_and_plan, interact, mission_control rescue) invoke the
-// `research` sub-flow explicitly.
+// NOTE: This flow is a candidate for collapse into a single action
+// (gather_context action). It exists as a sub-flow because multiple
+// flows share the same 5-step pipeline. A future refactor should
+// evaluate whether collapsing improves clarity without losing
+// the step-level traceability.
 
 package ouroboros
 
 prepare_context: #FlowDefinition & {
 	flow:    "prepare_context"
-	version: 2
+	version: 3
 	description: """
 		Deterministic context preparation. Scans workspace, builds AST
 		repo map, grabs git summary, selects relevant files, and loads
 		content. Zero inference calls.
 		"""
 
+	context_tier: "session_task"
+	returns: {
+		context_bundle:     {type: "dict",   from: "context.context_bundle",     optional: true}
+		project_manifest:   {type: "dict",   from: "context.project_manifest",   optional: true}
+		repo_map_formatted: {type: "string", from: "context.repo_map_formatted", optional: true}
+	}
+	state_reads: []
+
 	input: {
 		required: ["working_directory", "task_description"]
 		optional: [
-			"mission_objective", "target_file_path",
+			"target_file_path",
 			"context_budget", "relevant_notes",
 		]
 	}
@@ -63,6 +65,7 @@ prepare_context: #FlowDefinition & {
 		build_repomap: #StepDefinition & {
 			action:      "build_and_query_repomap"
 			description: "Build AST-based dependency map for file selection"
+			context: optional: ["target_file_path"]
 			params: {
 				root:             {$ref: "input.working_directory", default: "."}
 				include_patterns: ["*.py", "*.js", "*.ts", "*.rs"]
@@ -86,7 +89,6 @@ prepare_context: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					// Git summary is best-effort — missing .git is fine
 					{condition: "true", transition: "select_relevant"},
 				]
 			}
@@ -123,8 +125,7 @@ prepare_context: #FlowDefinition & {
 				optional: ["related_files"]
 			}
 			params: {
-				budget:            {$ref: "input.context_budget", default: 8}
-				mission_objective: {$ref: "input.mission_objective", default: ""}
+				budget: {$ref: "input.context_budget", default: 8}
 			}
 			resolver: {
 				type: "rule"
@@ -139,11 +140,10 @@ prepare_context: #FlowDefinition & {
 		load_fallback: #StepDefinition & {
 			action:      "load_file_contents"
 			description: "Fallback: load target file and immediate neighbors"
-			context: optional: ["project_manifest"]
+			context: optional: ["project_manifest", "related_files"]
 			params: {
-				strategy:          "target_plus_neighbors"
-				target:            {$ref: "input.target_file_path"}
-				mission_objective: {$ref: "input.mission_objective", default: ""}
+				strategy: "target_plus_neighbors"
+				target:   {$ref: "input.target_file_path"}
 			}
 			resolver: {
 				type: "rule"

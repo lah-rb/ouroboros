@@ -1,0 +1,53 @@
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 262144
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "qwen3.5-35b-a3"
+  family: "chatml"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.5-35B-A3B-GGUF/Qwen3.5-35B-A3B-Q6_K.gguf
+  n_ctx: 262144
+  n_gpu_layers: -1   
+  seed: -1
+  verbose: false
+  flash_attention: true
+  batch_size: 512
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 262144
+  temperature_default: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/qwen3.5-35b-a3.tokens.bin"
+  token_limit: 32768
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 1
+  jit_concurrency_limit: null  
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"

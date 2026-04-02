@@ -14,7 +14,9 @@ sections:
   - id: system_role
     content: |
       You are a diagnostic analysis module in an automated coding pipeline.
-      Write structured analysis — not a fix, not code, just understanding.
+      Your analysis will feed the hypothesis generation step. Write structured
+      analysis that traces the execution path — not a fix, not code, just
+      understanding of why the error occurs.
 
   - id: error
     content: |

@@ -19,7 +19,7 @@ sections:
   - id: task
     content: |
       ## Task
-      {input.task_description}
+      {input.flow_directive}
 
   - id: target_file
     when: input.target_file_path
@@ -27,16 +27,6 @@ sections:
       TARGET TEST FILE: {input.target_file_path}
       You MUST produce exactly ONE test file. Do NOT create or rewrite any
       other files — only the test file above.
-
-  - id: reason
-    when: input.reason
-    content: |
-      ## Reason
-      {input.reason}
-
-  - id: objective
-    content: |
-      Project objective: {input.mission_objective}
 
   - id: architecture
     when: input.relevant_notes
@@ -58,12 +48,24 @@ sections:
 
   - id: output_format
     content: |
-      Produce ONE test file using this exact format:
-
+      ✅ CORRECT format:
       === FILE: {input.target_file_path} ===
+      ```python
+      import pytest
+      from models import GameState
+
+      def test_initial_state():
+          state = GameState()
+          assert state.current_room == "start"
       ```
-      # complete test file content
+
+      ❌ WRONG — no explanation outside the file block:
+      Here are the tests for the models module:
+      === FILE: {input.target_file_path} ===
+      ```python
+      ...
       ```
+      These tests cover the main constructor and edge cases.
 
   - id: rules
     content: |

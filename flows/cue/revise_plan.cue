@@ -1,30 +1,39 @@
 // revise_plan.cue — Plan Revision (Sub-flow)
 //
-// Ported from revise_plan.yaml (version 1).
 // Revises the mission plan based on new observations — can add tasks,
-// reorder priorities, or mark tasks obsoleted.
-//
-// Changes from v1:
-//   - Flow references updated to condensed set
-//   - Prompt uses $ref and template
-//   - Removed stale manage_packages reference in prompt rules
+// reorder priorities, or mark tasks obsoleted. Operates at project_goal
+// tier: reasons about which tasks serve which goals. Loads mission
+// state itself so it has access to the full picture including objectives.
 
 package ouroboros
 
 revise_plan: #FlowDefinition & {
 	flow:    "revise_plan"
-	version: 2
+	version: 3
 	description: """
 		Revise the mission plan based on new observations.
 		Can add tasks, reorder priorities, or mark tasks obsoleted.
+		Reasons at the goal level — which tasks serve which goals.
 		"""
+
+	context_tier: "project_goal"
+	returns: {
+		revision_applied: {type: "bool", from: "context.revision_applied"}
+		tasks_added:      {type: "int",  from: "context.revision_stats.added",     optional: true}
+		tasks_reordered:  {type: "int",  from: "context.revision_stats.reordered", optional: true}
+		tasks_removed:    {type: "int",  from: "context.revision_stats.removed",   optional: true}
+	}
+	state_reads: ["mission.objective", "mission.plan", "mission.goals", "mission.architecture"]
 
 	input: {
 		required: ["mission_id", "observation"]
 		optional: ["discovered_requirement", "affected_task_id"]
 	}
 
-	defaults: config: temperature: "t*1.1"
+	defaults: config: temperature: "t*0.6"
+
+	flow_persona:   _personas.revise_plan
+	known_personas: ["file_ops", "project_ops", "interact"]
 
 	steps: {
 
@@ -41,6 +50,7 @@ revise_plan: #FlowDefinition & {
 		scan_workspace: #StepDefinition & {
 			action:      "build_and_query_repomap"
 			description: "Build AST-based project map so revisions are grounded in reality"
+			context: optional: ["target_file_path"]
 			params: {
 				root:             "."
 				include_patterns: ["*.py", "*.yaml", "*.yml", "*.js", "*.ts", "*.rs", "*.md", "*.toml", "*.json"]
@@ -62,7 +72,7 @@ revise_plan: #FlowDefinition & {
 			}
 			prompt_template: {
 				template: "revise_plan/evaluate"
-				context_keys: ["plan_listing", "repo_map_formatted"]
+				context_keys: ["plan_listing", "repo_map_formatted", "goals_listing"]
 				input_keys: ["observation", "discovered_requirement"]
 			}
 			pre_compute: [
@@ -70,8 +80,10 @@ revise_plan: #FlowDefinition & {
 					params: {source: {$ref: "context.mission.plan"}}},
 				{formatter: "format_mission_meta", output_key: "mission_objective"
 					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+				{formatter: "format_goals_listing", output_key: "goals_listing"
+					params: {source: {$ref: "context.mission.goals"}}},
 			]
-			config: temperature: 0.3
+			config: temperature: "t*0.3"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -93,20 +105,20 @@ revise_plan: #FlowDefinition & {
 					{condition: "true", transition: "skip"},
 				]
 			}
-			publishes: ["mission"]
+			publishes: ["mission", "revision_applied", "revision_stats"]
 		}
 
 		skip: #StepDefinition & {
-			action:      "noop"
-			description: "No revision needed — return to mission_control"
+			action:      "transform"
+			description: "No revision needed — publish result and return to mission_control"
+			params: set_values: revision_applied: false
+			publishes: ["revision_applied"]
 			tail_call: {
 				flow: "mission_control"
 				input_map: {
 					mission_id:  {$ref: "input.mission_id"}
 					last_status: "success"
 				}
-				result_formatter: "static_message"
-				result_keys: []
 			}
 		}
 
@@ -119,8 +131,6 @@ revise_plan: #FlowDefinition & {
 					mission_id:  {$ref: "input.mission_id"}
 					last_status: "success"
 				}
-				result_formatter: "plan_revised"
-				result_keys: []
 			}
 		}
 	}

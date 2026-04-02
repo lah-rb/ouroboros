@@ -1,0 +1,54 @@
+# Prompt template: interact/evaluate_session
+#
+# After the terminal session closes, interact evaluates whether the
+# product interaction achieved its goal. This is where the pass/fail
+# judgment lives — NOT in the terminal session itself.
+
+id: interact/evaluate_session
+description: "Evaluate whether the product interaction achieved its goal"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are evaluating whether a product interaction achieved its goal.
+      Based on the session summary, determine if the product worked correctly.
+
+  - id: goal
+    content: |
+      ## Interaction Goal
+      {input.flow_directive}
+
+  - id: summary
+    content: |
+      ## Session Summary
+      {context.session_summary}
+
+  - id: output
+    when: context.terminal_output
+    content: |
+      ## Raw Terminal Output
+      {context.terminal_output}
+
+  - id: instructions
+    content: |
+      Based on the session summary, did the product achieve the interaction goal?
+
+      ✅ CORRECT:
+      ```json
+      {"goal_met": false, "summary": "The program crashed with ImportError on startup — models module not found."}
+      ```
+
+      ❌ WRONG — do not add explanation outside the JSON:
+      After reviewing the session, I believe the goal was not met because:
+      ```json
+      {"goal_met": false, "summary": "..."}
+      ```
+
+      Rules:
+      - goal_met = true ONLY if the program ran and produced the expected behavior
+      - Crashes, tracebacks, ImportErrors, missing files = goal NOT met
+      - Deprecation warnings alone do NOT mean goal failed
+      - If the program never started, goal is NOT met
+
+      Return ONLY the fenced JSON object.

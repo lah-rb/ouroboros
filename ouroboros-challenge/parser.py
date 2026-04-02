@@ -1,90 +1,70 @@
-"""Command parser for the text adventure game engine."""
+"""Command parsing utilities.
 
+This module provides a lightweight parser for textual commands used by the
+application.  A command consists of a name followed by zero or more space‑
+separated arguments.  Arguments may be quoted to include whitespace.
+
+Typical usage::
+
+    >>> from parser import parse_command
+    >>> cmd = parse_command('create_user "Alice Smith" alice@example.com')
+    >>> cmd.name
+    'create_user'
+    >>> cmd.args
+    ['Alice Smith', 'alice@example.com']
+
+The implementation relies on :mod:`shlex` to perform POSIX‑compatible tokenisation.
+"""
+
+from __future__ import annotations
+
+import shlex
 from dataclasses import dataclass
-from enum import Enum, auto
-from typing import Optional
+from typing import List
 
 
-class CommandType(Enum):
-    """Types of commands supported by the game."""
-    MOVE = auto()
-    INVENTORY_MANAGE = auto()
-    NPC_INTERACT = auto()
-    LOOK = auto()
-    HELP = auto()
-    QUIT = auto()
-    UNKNOWN = auto()
-
-
-@dataclass
+@dataclass(frozen=True, slots=True)
 class Command:
-    """Represents a parsed command."""
-    type: CommandType
-    action: Optional[str] = None  # e.g., "north", "take", "talk"
-    target: Optional[str] = None  # e.g., item name, NPC name
+    """Represent a parsed command.
+
+    Attributes
+    ----------
+    name: str
+        The command identifier (the first token of the input string).
+    args: List[str]
+        Positional arguments following the command name.
+    """
+    name: str
+    args: List[str]
 
 
-def parse_command(raw: str) -> Command:
+def parse_command(command_line: str) -> Command:
+    """Parse a raw command line into a :class:`Command` instance.
+
+    Parameters
+    ----------
+    command_line: str
+        The raw input string entered by the user or read from a script.
+
+    Returns
+    -------
+    Command
+        An immutable object containing the command name and its arguments.
+
+    Raises
+    ------
+    ValueError
+        If ``command_line`` is empty or contains only whitespace.
     """
-    Parse a raw command string into a structured Command.
-    
-    Args:
-        raw: The raw command input from the player.
-        
-    Returns:
-        A Command object with type and optional action/target.
-    """
-    # Normalize input
-    normalized = raw.strip().lower()
-    if not normalized:
-        return Command(type=CommandType.UNKNOWN)
-    
-    parts = normalized.split()
-    verb = parts[0]
-    
-    # Movement commands
-    if verb in ("go", "move", "walk"):
-        if len(parts) >= 2:
-            direction = parts[1]
-            if direction in ("north", "south", "east", "west"):
-                return Command(type=CommandType.MOVE, action="go", target=direction)
-        return Command(type=CommandType.UNKNOWN)
-    
-    # Direct movement (just direction)
-    if verb in ("north", "south", "east", "west"):
-        return Command(type=CommandType.MOVE, action="go", target=verb)
-    
-    # Inventory management
-    if verb in ("take", "grab", "pick", "pickup"):
-        item = " ".join(parts[1:]) if len(parts) > 1 else None
-        return Command(type=CommandType.INVENTORY_MANAGE, action="take", target=item)
-    
-    if verb in ("drop",):
-        item = " ".join(parts[1:]) if len(parts) > 1 else None
-        return Command(type=CommandType.INVENTORY_MANAGE, action="drop", target=item)
-    
-    if verb in ("use",):
-        item = " ".join(parts[1:]) if len(parts) > 1 else None
-        return Command(type=CommandType.INVENTORY_MANAGE, action="use", target=item)
-    
-    if verb in ("examine", "inspect", "look"):
-        target = " ".join(parts[1:]) if len(parts) > 1 else None
-        return Command(type=CommandType.INVENTORY_MANAGE, action="examine", target=target)
-    
-    # NPC interaction
-    if verb in ("talk", "speak", "chat"):
-        npc = " ".join(parts[1:]) if len(parts) > 1 else None
-        return Command(type=CommandType.NPC_INTERACT, action="talk", target=npc)
-    
-    # Static commands
-    if verb in ("look",):
-        return Command(type=CommandType.LOOK, action="look")
-    
-    if verb in ("help", "?"):
-        return Command(type=CommandType.HELP, action="help")
-    
-    if verb in ("quit", "q", "exit"):
-        return Command(type=CommandType.QUIT, action="quit")
-    
-    # Default to unknown
-    return Command(type=CommandType.UNKNOWN)
+    if not command_line or command_line.strip() == "":
+        raise ValueError("Command line must contain at least a command name.")
+
+    # shlex.split respects quoted substrings and handles escaped characters.
+    tokens = shlex.split(command_line)
+
+    # The first token is the command name; the rest are arguments.
+    name, *args = tokens
+    return Command(name=name, args=args)
+
+
+__all__: List[str] = ["Command", "parse_command"]

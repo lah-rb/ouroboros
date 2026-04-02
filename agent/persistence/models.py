@@ -62,6 +62,36 @@ class TaskRecord(BaseModel):
     attempts: list[AttemptRecord] = Field(default_factory=list)
     summary: str | None = None
     escalation_bundle: dict[str, Any] | None = None
+    goal_id: str = ""  # Links task to its parent GoalRecord
+
+
+# ── Goals ─────────────────────────────────────────────────────────────
+
+
+class GoalRecord(BaseModel):
+    """A project goal — functional capability or structural deliverable.
+
+    Goals sit between the mission objective (too broad for tactical
+    decisions) and individual tasks (too narrow for strategic reasoning).
+    The director reasons at the goal level: which capability to advance,
+    whether an approach is working, when to redesign vs retry.
+
+    Derived by design_and_plan in two passes:
+      1. Deterministic structural goals from architecture modules
+      2. Inference-derived functional goals from objective + architecture
+
+    Goal-level frustration is derived, not stored: if >50% of a goal's
+    associated tasks have frustration >= 3, the goal is "blocked."
+    """
+
+    id: str = Field(default_factory=_new_id)
+    description: str
+    type: Literal["structural", "functional"] = "structural"
+    status: Literal["pending", "in_progress", "complete", "blocked", "revised"] = (
+        "pending"
+    )
+    associated_files: list[str] = Field(default_factory=list)
+    associated_task_ids: list[str] = Field(default_factory=list)
 
 
 # ── Notes ─────────────────────────────────────────────────────────────
@@ -114,7 +144,9 @@ class DataShapeContract(BaseModel):
 
     file: str = ""  # the data file path (e.g., "world_data.yaml")
     consumed_by: str = ""  # the code file that reads it (e.g., "loader.py")
-    structure: str = ""  # compact shape description (e.g., "rooms: list of {id, name, ...}")
+    structure: str = (
+        ""  # compact shape description (e.g., "rooms: list of {id, name, ...}")
+    )
 
     @field_validator("file", "consumed_by", "structure", mode="before")
     @classmethod
@@ -214,6 +246,7 @@ class MissionState(BaseModel):
     status: Literal["active", "paused", "completed", "aborted"] = "active"
     objective: str
     principles: list[str] = Field(default_factory=list)
+    goals: list[GoalRecord] = Field(default_factory=list)
     plan: list[TaskRecord] = Field(default_factory=list)
     notes: list[NoteRecord] = Field(default_factory=list)
     architecture: ArchitectureState | None = None
@@ -222,7 +255,8 @@ class MissionState(BaseModel):
     updated_at: str = Field(default_factory=_now_iso)
     config: MissionConfig
     quality_gate_attempts: int = 0
-    schema_version: int = 2
+    quality_gate_blocked: bool = False
+    schema_version: int = 3
 
 
 # ── Events ────────────────────────────────────────────────────────────

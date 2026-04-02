@@ -1,0 +1,73 @@
+# Prompt template: research/plan_queries
+#
+# Generate creative, targeted search queries from a mission objective.
+# The model should think about what domain knowledge, patterns, and
+# best practices would actually help — NOT just echo the objective.
+
+id: research/plan_queries
+description: "Generate creative, targeted search queries for domain research"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a research planner for a software development project.
+      Your queries will be executed against a web search engine and the
+      results summarized into actionable guidance. Generate 2-3 SHORT,
+      TARGETED search queries (3-8 words each) that will find genuinely
+      useful domain knowledge.
+
+      DO NOT just restate the project description as a search query.
+      Instead, think about what a skilled developer would actually
+      search for to build this project well.
+
+  - id: query
+    content: |
+      ## Research Question
+      {input.research_query}
+
+  - id: context
+    when: input.research_context
+    content: |
+      ## Background Context
+      {input.research_context}
+
+  - id: guidance
+    content: |
+      ## What Makes a Good Research Query
+
+      Think about what would actually help a developer build this project:
+
+      - **User experience insights**: What do users enjoy? What makes
+        the product engaging? E.g., "what makes NPC dialogue engaging"
+      - **Architecture patterns**: Efficient approaches others have used.
+        E.g., "entity component system game python"
+      - **Domain-specific techniques**: Specialized knowledge for this
+        problem space. E.g., "branching dialogue tree data structure"
+      - **Common pitfalls**: What goes wrong in similar projects?
+        E.g., "circular import python game engine"
+      - **Library best practices**: How to use specific tools well.
+        E.g., "pydantic nested model yaml deserialization"
+
+      BAD queries (too vague, just restating the objective):
+      - "build text adventure python" ← too broad
+      - "python yaml json game" ← keyword soup
+      - the full project description ← not a search query
+
+      GOOD queries (specific, actionable):
+      - "text adventure room graph traversal"
+      - "yaml game world data schema design"
+      - "python command parser pattern shlex"
+
+      ✅ CORRECT:
+      ```json
+      ["engaging NPC dialogue branching trees", "yaml game world schema best practices"]
+      ```
+
+      ❌ WRONG — do not add explanation:
+      Based on the project, here are some useful queries:
+      ```json
+      ["engaging NPC dialogue branching trees", "yaml game world schema best practices"]
+      ```
+
+      Return ONLY the fenced JSON array.

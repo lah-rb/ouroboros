@@ -14,15 +14,9 @@ sections:
       Your output will be executed directly as a shell command.
       Respond with ONLY a single command — no explanation, no markdown.
 
-  - id: goal
+  - id: persona
     content: |
-      Session goal: {input.session_goal}
-
-  - id: context
-    when: input.session_context
-    content: |
-      Additional context:
-      {input.session_context}
+      {input.execution_persona}
 
   - id: history
     when: context.session_history
@@ -38,13 +32,18 @@ sections:
       If stuck after 3+ failures: output `exit 1`
       Do NOT use interactive commands (vim, nano, less, top).
 
-      ✅ CORRECT:
-      python -m pytest --tb=short
+      CRITICAL RULES:
+      - Do NOT install packages, fix code, or modify the project.
+        Your job is to RUN and OBSERVE, not fix.
+      - Use the run command from project context if provided.
+      - If a command fails with a real error (traceback, crash), report via `exit 1`.
+      - Deprecation warnings and build tool messages are NOT failures.
+        If the program ran and produced output despite warnings, it succeeded.
 
-      ❌ WRONG — no explanation or formatting:
-      Let me run the tests:
-      ```
-      python -m pytest --tb=short
-      ```
+      ✅ CORRECT:
+      uv run python main.py
+
+      ❌ WRONG — do not install or fix:
+      pip install pyyaml
 
       Return ONLY the command.

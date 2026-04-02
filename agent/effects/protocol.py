@@ -95,6 +95,53 @@ class InferenceResult:
     error: str | None = None
 
 
+# ── Terminal output limits ────────────────────────────────────────────
+#
+# Single authoritative constant for terminal output truncation.
+# When output exceeds this limit, it is truncated to preserve the
+# first and last portions (head + tail), since errors typically
+# appear at the top (import failures, syntax errors) or the bottom
+# (stack traces, exit messages) of command output.
+#
+# The split is 60% head / 40% tail — the head usually contains the
+# command echo and initial output, while the tail captures the final
+# error or exit status.
+
+TERMINAL_OUTPUT_MAX_CHARS = 8000
+"""Maximum characters to retain from a single terminal command's output.
+
+When output exceeds this limit, it is split into head (first 60%) and
+tail (last 40%), with a marker indicating how many characters were
+omitted. This preserves:
+  - Import errors, warnings, and banners at the top
+  - Stack traces, exit codes, and final status at the bottom
+"""
+
+
+def truncate_terminal_output(output: str, limit: int = TERMINAL_OUTPUT_MAX_CHARS) -> str:
+    """Truncate terminal output preserving head and tail.
+
+    Args:
+        output: Raw terminal output string.
+        limit: Maximum total characters to retain.
+
+    Returns:
+        Original output if under limit, otherwise head + marker + tail.
+    """
+    if len(output) <= limit:
+        return output
+
+    head_size = int(limit * 0.6)
+    tail_size = limit - head_size
+    omitted = len(output) - head_size - tail_size
+
+    return (
+        output[:head_size]
+        + f"\n\n... [{omitted} chars omitted] ...\n\n"
+        + output[-tail_size:]
+    )
+
+
 @dataclass
 class TerminalOutput:
     """Result of sending a command to a persistent terminal session."""

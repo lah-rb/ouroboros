@@ -13,19 +13,25 @@ package ouroboros
 
 set_env: #FlowDefinition & {
 	flow:    "set_env"
-	version: 1
+	version: 2
 	description: """
 		Detect project validation tooling. Scans the project, makes one
 		inference call to determine language-appropriate syntax, lint,
 		and format commands, and persists to .agent/env.json.
 		"""
 
+	context_tier: "session_task"
+	returns: {
+		env_detected: {type: "bool", from: "context.env_config", optional: true}
+	}
+	state_reads: []
+
 	input: {
 		required: ["working_directory", "mission_id"]
 		optional: ["target_file_path"]
 	}
 
-	defaults: config: temperature: 0.1
+	defaults: config: temperature: "t*0.1"
 
 	steps: {
 
@@ -49,7 +55,7 @@ set_env: #FlowDefinition & {
 				formatter: "format_project_file_list", output_key: "project_file_list"
 				params: {source: {$ref: "context.project_manifest"}}
 			}]
-			config: temperature: 0.0
+			config: temperature: "t*0.0"
 			resolver: {
 				type: "rule"
 				rules: [

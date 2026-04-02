@@ -7,19 +7,21 @@ overview, see `IMPLEMENTATION.md`. For operational guidance, see `AGENT.md`.*
 
 ## Adding a New Task Flow
 
-1. **Create the YAML** in `flows/tasks/<flow_name>.yaml`.
-2. Follow the flow definition format (see `IMPLEMENTATION.md` §2.1.2).
+1. **Create the CUE file** in `flows/cue/<flow_name>.cue`.
+2. Define the flow using `#FlowDefinition &` schema (see `flows/cue/flow.cue` and
+   `IMPLEMENTATION.md` §2.1.2).
 3. Every flow must have:
    - `flow`, `version`, `description`, `input`, `entry` fields.
    - At least one terminal step with `terminal: true` and `status`.
    - A tail-call back to `mission_control` on terminal steps.
-4. Register the flow in `flows/registry.yaml` with its metadata.
-5. Ensure `create_plan.yaml`'s prompt knows about the new flow (it selects flows by name).
-6. Add tests in `tests/` covering the flow's key paths.
+4. Create prompt templates in `prompts/<flow_name>/<step>.yaml` for inference steps.
+5. Rebuild: `uv run ouroboros.py cue-compile` (validates CUE and exports `flows/compiled.json`).
+7. Ensure `design_and_plan`'s planning prompt knows about the new flow (it selects flows by name).
+8. Add tests in `tests/` covering the flow's key paths.
 
-**Template:** Copy an existing task flow that's similar in structure. `modify_file.yaml`
-is a good general-purpose starting point. `diagnose_issue.yaml` is good for investigation
-flows.
+**Template:** Copy an existing task flow that's similar in structure. `diagnose_issue.cue`
+is a good starting point for investigation flows. `file_ops.cue` shows the full
+create/modify lifecycle pattern.
 
 ---
 
@@ -31,7 +33,7 @@ flows.
 3. All side effects go through `step_input.effects` — never direct file I/O, subprocess,
    or network calls.
 4. **Register** in `agent/actions/registry.py` → `build_action_registry()`.
-5. Add tests in `tests/test_new_actions.py` using `MockEffects`.
+5. Add tests in `tests/` using `MockEffects`.
 
 **Naming convention:** Action names in the registry are snake_case and should match the
 function name minus the `action_` prefix. E.g., `action_read_files` → registered as
@@ -41,11 +43,12 @@ function name minus the `action_` prefix. E.g., `action_read_files` → register
 
 ## Adding a New Shared Sub-flow
 
-1. **Create the YAML** in `flows/shared/<flow_name>.yaml`.
+1. **Create the CUE file** in `flows/cue/<flow_name>.cue`.
 2. Shared sub-flows are invoked via `action: flow` from parent steps.
 3. They should be focused and reusable — one clear responsibility.
 4. Document inputs/outputs clearly since multiple parent flows will depend on the contract.
-5. Add to the shared flow inventory in `IMPLEMENTATION.md` §3.2.
+5. Add to the flow inventory in `IMPLEMENTATION.md` §3.
+6. Rebuild: `uv run ouroboros.py cue-compile`.
 
 ---
 
@@ -53,8 +56,8 @@ function name minus the `action_` prefix. E.g., `action_read_files` → register
 
 1. **Create** `agent/resolvers/<type_name>.py` with a `resolve()` function.
 2. **Register** in `agent/resolvers/__init__.py` dispatcher.
-3. **Update** `agent/loader.py` validation to accept the new resolver type.
-4. Add tests in `tests/test_resolvers.py`.
+3. **Update** `agent/loader_v2.py` validation to accept the new resolver type.
+4. Add tests in `tests/`.
 
 The resolver receives the step output, context accumulator, resolver definition, and
 effects interface. It returns the name of the next step (transition target).
@@ -87,19 +90,20 @@ Key rules:
 
 ## Step Templates
 
-Reusable step configurations live in `flows/shared/step_templates.yaml`. To use a
+Reusable step configurations live in `flows/cue/templates.cue`. To use a
 template in a flow step:
 
-```yaml
-steps:
-  my_step:
-    template: template_name
-    # Any fields here override the template defaults
-    description: "Custom description"
+```cue
+steps: {
+    my_step: #StepDefinition & _templates.template_name & {
+        // Any fields here override the template defaults
+        description: "Custom description"
+    }
+}
 ```
 
 The loader merges template fields with step-level overrides at load time. Step-level
-values always win. See `agent/loader.py` for merge logic.
+values always win. See `agent/loader_v2.py` for merge logic.
 
 ---
 
@@ -122,12 +126,12 @@ Step 5 is NOT optional for feature work.
 
 | Entity | Convention | Example |
 |--------|-----------|---------|
-| Flow names | snake_case | `modify_file`, `research_context` |
+| Flow names | snake_case | `rewrite`, `research_context` |
 | Step names | snake_case | `gather_context`, `plan_change` |
 | Action names | snake_case | `read_files`, `load_mission_state` |
 | Context keys | snake_case | `target_file`, `mission`, `frustration` |
 | Python modules | snake_case | `terminal_actions.py`, `mission_config.py` |
-| Test files | `test_<module>.py` | `test_runtime.py`, `test_effects.py` |
+| Test files | `test_<module>.py` | `test_contracts.py` |
 | Pydantic models | PascalCase | `FlowDefinition`, `StepInput`, `MissionState` |
 
 ---

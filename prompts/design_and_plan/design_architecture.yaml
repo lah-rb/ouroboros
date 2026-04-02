@@ -16,8 +16,8 @@ sections:
   - id: system_role
     content: |
       You are a software architect module in an automated coding pipeline.
-      Your output will be parsed by a JSON extractor. Return ONLY a raw JSON
-      object — no markdown, no explanation, no surrounding text.
+      Your output will be parsed by a JSON extractor. Return ONLY a JSON
+      object inside a fenced code block — no explanation, no surrounding text.
 
   - id: objective
     content: |
@@ -80,7 +80,8 @@ sections:
 
   - id: output_format
     content: |
-      Return ONLY a raw JSON object:
+      ✅ CORRECT:
+      ```json
       {
         "execution": {
           "run_command": "python main.py",
@@ -114,3 +115,13 @@ sections:
         "creation_order": ["models.py", "parser.py", "engine.py", "main.py"],
         "notes": "Brief notes on design rationale"
       }
+      ```
+
+      ❌ WRONG — do not add explanation before or after:
+      Based on the mission objective, here is the architecture:
+      ```json
+      {"execution": {"run_command": "..."}, ...}
+      ```
+      I chose a flat import scheme because...
+
+      Return ONLY the fenced JSON.

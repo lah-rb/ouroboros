@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "LLMvp"
+version = "0.1.0"
+description = "LLMvp server: mmap static knowledge base, graphql api, and llama.cpp inference"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.128.0",
+    "starlette>=0.49.3",
+    "uvicorn>=0.39.0",
+    "psutil>=7.2.2",
+    "pyyaml>=6.0.3",
+    "pydantic>=2.12.5",
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+    "httpx>=0.28.1",
+    "pytest-asyncio>=1.2.0",
+    "rich>=14.3.2",
+    "black>=25.11.0",
+    "strawberry-graphql>=0.262.0",
+    "websockets>=14.0",
+    "llama-cpp-python",
+    "numpy>=1.26.0",
+    "python-crfsuite>=0.9.10",
+]
+
+[tool.uv.sources]
+llama-cpp-python = { git = "https://github.com/JamePeng/llama-cpp-python.git", rev = "a184583e908cc138fd15794986b3581521fb9b0c" }

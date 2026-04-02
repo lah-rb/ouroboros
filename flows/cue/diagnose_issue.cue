@@ -1,46 +1,46 @@
 // diagnose_issue.cue — Deep Issue Diagnosis
 //
-// Ported from diagnose_issue.yaml (version 2).
-//
 // Methodical diagnosis: read the error → trace execution path →
 // generate fix hypotheses → create a targeted fix task.
 //
 // Does NOT modify files. Reads, thinks, and creates follow-up work.
 //
 // Invoked two ways:
-//   1. By file_write when self-correction retries are exhausted
-//      (automatic escalation — no director involvement)
+//   1. By file_ops when self-correction retries are exhausted
 //   2. By mission_control when the director explicitly chooses diagnosis
-//      (manual — "I know something is wrong but don't understand why")
-//
-// When invoked by file_write (as sub-flow), returns FlowResult.
-// When invoked by mission_control (via LLM menu), tail-calls back.
-// The flow detects which mode it's in based on whether it was called
-// as a sub-flow (action: flow) or dispatched (tail-call from dispatch).
-// In practice, both paths end with create_fix_task adding a task to
-// the plan, and the result flowing back to whoever called.
 
 package ouroboros
 
 diagnose_issue: #FlowDefinition & {
 	flow:    "diagnose_issue"
-	version: 3
+	version: 4
 	description: """
 		Deep issue diagnosis. Traces the error path, generates fix
 		hypotheses, and creates a targeted fix task. Does not modify
 		files — produces understanding and follow-up work.
 		"""
 
+	context_tier: "flow_directive"
+	returns: {
+		root_cause:       {type: "string", from: "context.diagnosis.root_cause", optional: true}
+		fix_task_created: {type: "bool",   from: "context.fix_task_created",     optional: true}
+		target_file:      {type: "string", from: "input.target_file_path",       optional: true}
+	}
+	state_reads: []
+
 	input: {
-		required: ["mission_id", "task_id"]
+		required: ["mission_id", "task_id", "flow_directive"]
 		optional: [
-			"target_file_path", "error_description", "task_description",
-			"mission_objective", "error_output", "working_directory",
+			"target_file_path", "error_description",
+			"error_output", "working_directory",
 			"relevant_notes",
 		]
 	}
 
 	defaults: config: temperature: "t*0.6"
+
+	flow_persona:   _personas.diagnose_issue
+	known_personas: ["file_ops"]
 
 	steps: {
 
@@ -66,8 +66,6 @@ diagnose_issue: #FlowDefinition & {
 			publishes: ["target_file"]
 		}
 
-		// ── Phase 2: Understand the problem ────────────────────────
-
 		reproduce_mentally: #StepDefinition & {
 			action:      "inference"
 			description: "Trace the error execution path — understand, don't fix"
@@ -78,7 +76,7 @@ diagnose_issue: #FlowDefinition & {
 			prompt_template: {
 				template: "diagnose_issue/reproduce"
 				context_keys: ["target_file_content", "target_file_path", "file_excerpts"]
-				input_keys: ["error_description", "task_description", "error_output"]
+				input_keys: ["error_description", "flow_directive", "error_output"]
 			}
 			pre_compute: [
 				{formatter: "extract_field", output_key: "target_file_content"
@@ -99,8 +97,6 @@ diagnose_issue: #FlowDefinition & {
 			publishes: ["error_analysis"]
 		}
 
-		// ── Phase 3: Generate hypotheses ───────────────────────────
-
 		form_hypotheses: #StepDefinition & {
 			action:      "inference"
 			description: "Generate 2-3 distinct fix hypotheses"
@@ -110,7 +106,7 @@ diagnose_issue: #FlowDefinition & {
 			}
 			prompt_template: {
 				template: "diagnose_issue/hypotheses"
-				context_keys: ["error_analysis", "target_file_content", "target_file_path"]
+				context_keys: ["error_analysis", "target_file_content", "target_file_path", "peer_personas"]
 				input_keys: []
 			}
 			pre_compute: [
@@ -118,6 +114,8 @@ diagnose_issue: #FlowDefinition & {
 					params: {source: {$ref: "context.target_file"}, field: "content"}},
 				{formatter: "extract_field", output_key: "target_file_path"
 					params: {source: {$ref: "context.target_file"}, field: "path"}},
+				{formatter: "format_known_personas", output_key: "peer_personas"
+					params: {source: ["file_ops"]}},
 			]
 			config: temperature: "t*0.8"
 			resolver: {
@@ -130,14 +128,12 @@ diagnose_issue: #FlowDefinition & {
 			publishes: ["hypotheses"]
 		}
 
-		// ── Phase 4: Compile and create fix task ───────────────────
-
 		compile_diagnosis: #StepDefinition & {
 			action:      "compile_diagnosis"
 			description: "Assemble structured diagnosis from analysis and hypotheses"
 			context: {
 				required: ["error_analysis", "hypotheses"]
-				optional: ["target_file"]
+				optional: ["target_file", "error_description"]
 			}
 			params: include_rejected_hypotheses: true
 			resolver: {
@@ -166,8 +162,14 @@ diagnose_issue: #FlowDefinition & {
 		done: #StepDefinition & {
 			action:      "noop"
 			description: "Diagnosis complete — fix task created"
-			terminal:    true
-			status:      "success"
+			tail_call: {
+				flow: "mission_control"
+				input_map: {
+					mission_id:   {$ref: "input.mission_id"}
+					last_task_id: {$ref: "input.task_id"}
+					last_status:  "diagnosed"
+				}
+			}
 		}
 
 		error_file_not_found: #StepDefinition & _templates.scan_workspace & {
@@ -181,8 +183,14 @@ diagnose_issue: #FlowDefinition & {
 		failed: #StepDefinition & {
 			action:      "noop"
 			description: "Diagnosis failed"
-			terminal:    true
-			status:      "failed"
+			tail_call: {
+				flow: "mission_control"
+				input_map: {
+					mission_id:   {$ref: "input.mission_id"}
+					last_task_id: {$ref: "input.task_id"}
+					last_status:  "failed"
+				}
+			}
 		}
 	}
 

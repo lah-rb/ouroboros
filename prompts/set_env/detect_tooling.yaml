@@ -11,7 +11,7 @@ sections:
   - id: system_role
     content: |
       You are a project environment detection module. Your output will be
-      parsed by a JSON extractor. Return ONLY a raw JSON object.
+      parsed by a JSON extractor. Return ONLY a JSON object inside a fenced code block.
 
   - id: context
     content: |
@@ -31,6 +31,10 @@ sections:
       in this project. For each extension, provide commands for:
       - syntax: Does the file parse/compile? (REQUIRED check)
       - import: Can the module be imported/loaded? (optional)
+      - cross_import: Verify all imports from this module resolve against
+        the project's own files (optional). This should check that every
+        `from X import Y` statement in the file can actually find Y in
+        module X. For Python, use: python -c "from {module} import *"
       - lint: Code quality check (optional)
 
       Use commands that are standard for the language and likely installed.
@@ -40,11 +44,13 @@ sections:
 
   - id: output_format
     content: |
-      Return ONLY a raw JSON object:
+      ✅ CORRECT:
+      ```json
       {
         "py": {
           "syntax": ["python", "-c", "import py_compile; py_compile.compile('{file}', doraise=True)"],
           "import": ["python", "-c", "import {module}"],
+          "cross_import": ["python", "-c", "from {module} import *"],
           "lint": ["ruff", "check", "{file}"]
         },
         "js": {
@@ -52,10 +58,18 @@ sections:
           "lint": ["eslint", "{file}"]
         }
       }
+      ```
+
+      ❌ WRONG — do not add explanation before or after:
+      Based on the project files, here are the validation commands:
+      ```json
+      {"py": {"syntax": [...], ...}}
+      ```
+      I included ruff because the project has a pyproject.toml.
 
       Rules:
       - Only include extensions present in the project files.
       - syntax command is required for every extension.
-      - import and lint are optional — omit if no standard tool exists.
+      - import, cross_import, and lint are optional — omit if no standard tool exists.
       - Use {file} and {module} placeholders, not literal paths.
-      - Return ONLY the raw JSON object.
+      - Return ONLY the fenced JSON object.

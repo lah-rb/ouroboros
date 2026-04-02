@@ -54,7 +54,7 @@ MERMAID_THEME_CONFIG = """{
     "lineColor": "#2d5a27",
     "secondaryColor": "#f0f4ef",
     "tertiaryColor": "#fafafa",
-    "fontSize": "12px",
+    "fontSize": "14px",
     "fontFamily": "Helvetica, Arial, sans-serif"
   }
 }"""
@@ -109,12 +109,13 @@ def flow_ir_to_mermaid(flow_ir: FlowIR) -> str:
     # Inline legend
     lines.extend(_inline_legend())
 
-    # Generate nodes with descriptions
+    # Generate nodes — concise labels for readability.
+    # Node shape conveys type, symbol reinforces it.
+    # Full descriptions are in the flow card below the diagram.
     for step_name, step_ir in flow_ir.steps.items():
         sym = _step_symbol(step_ir)
         resolver_sym = _resolver_label(step_ir)
-        desc = _sanitize(_truncate(step_ir.description or step_name, 50))
-        label = f"{sym} {step_name}{resolver_sym}\\n{desc}"
+        label = f"{sym} {step_name}{resolver_sym}"
 
         node_def = _mermaid_node(step_name, label, step_ir)
         lines.append(f"    {node_def}")
@@ -135,7 +136,7 @@ def flow_ir_to_mermaid(flow_ir: FlowIR) -> str:
                 cond = rule.condition
                 if cond == "true":
                     cond = "always"
-                safe_cond = _sanitize(_truncate(cond, 45))
+                safe_cond = _sanitize(cond)
                 lines.append(
                     f"    {step_name} -->|{SYM_RULE} {safe_cond}| {rule.transition}"
                 )
@@ -143,10 +144,11 @@ def flow_ir_to_mermaid(flow_ir: FlowIR) -> str:
         elif step_ir.resolver.type == "llm_menu" and step_ir.resolver.options:
             for opt_name, opt_def in step_ir.resolver.options.items():
                 target = opt_def.target or opt_name
-                desc_text = _sanitize(_truncate(opt_def.description, 30))
+                # Use the option key name — short and cross-referenceable
+                safe_name = _sanitize(opt_name)
                 if target in flow_ir.steps:
                     lines.append(
-                        f"    {step_name} -.->|{SYM_LLM_MENU} {desc_text}| {target}"
+                        f"    {step_name} -.->|{SYM_LLM_MENU} {safe_name}| {target}"
                     )
 
         # Tail-call edges
@@ -251,8 +253,7 @@ def system_view_mermaid(ir: BlueprintIR) -> str:
             if stats.inference_step_count > 0
             else ""
         )
-        desc = _sanitize(_truncate(flow_ir.description.strip(), 40))
-        label = f"{flow_name}\\n{desc}\\n{stats.step_count} steps{inference_label}"
+        label = f"{flow_name}\\n{stats.step_count} steps{inference_label}"
 
         if flow_ir.category == "control":
             lines.append(f'    {flow_name}["{label}"]')
@@ -279,7 +280,7 @@ def system_view_mermaid(ir: BlueprintIR) -> str:
             continue
         seen_edges.add(edge_key)
 
-        safe_step = _sanitize(_truncate(edge.from_step, 20))
+        safe_step = _sanitize(edge.from_step)
         if edge.edge_type == "tail_call":
             lines.append(
                 f"    {edge.source} -.->|{SYM_TAIL_CALL} {safe_step}| {edge.target}"

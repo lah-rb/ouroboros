@@ -381,6 +381,27 @@ class MockEffects:
         self._record("clear_events", {}, True)
         return True
 
+    async def push_note(
+        self,
+        content: str,
+        category: str = "general",
+        tags: list[str] | None = None,
+        source_flow: str = "unknown",
+        source_task: str = "unknown",
+    ) -> bool:
+        notes = self._state.setdefault("notes", [])
+        notes.append(
+            {
+                "content": content,
+                "category": category,
+                "tags": tags or [],
+                "source_flow": source_flow,
+                "source_task": source_task,
+            }
+        )
+        self._record("push_note", {"category": category, "tags": tags}, True)
+        return True
+
     async def save_artifact(self, artifact: Any) -> bool:
         artifacts = self._state.setdefault("artifacts", {})
         task_id = getattr(artifact, "task_id", "unknown")

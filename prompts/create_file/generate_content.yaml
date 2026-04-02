@@ -18,7 +18,7 @@ sections:
   - id: task
     content: |
       ## Task
-      {input.task_description}
+      {input.flow_directive}
 
   - id: target_file
     when: input.target_file_path
@@ -26,16 +26,6 @@ sections:
       TARGET FILE: {input.target_file_path}
       You MUST create exactly this file. Do NOT recreate or rewrite any other
       existing project files — only produce {input.target_file_path}.
-
-  - id: reason
-    when: input.reason
-    content: |
-      ## Reason
-      {input.reason}
-
-  - id: objective
-    content: |
-      Project objective: {input.mission_objective}
 
   - id: architecture
     when: input.relevant_notes
@@ -65,12 +55,22 @@ sections:
 
   - id: output_format
     content: |
-      Produce the file content using this exact format:
-
+      ✅ CORRECT format:
       === FILE: {input.target_file_path} ===
-      ```
+      ```python
       # complete file content here
+      def example():
+          pass
       ```
+
+      ❌ WRONG — no explanation outside the file block:
+      Here is the implementation for {input.target_file_path}:
+      === FILE: {input.target_file_path} ===
+      ```python
+      def example():
+          pass
+      ```
+      I structured it this way because...
 
   - id: rules
     content: |

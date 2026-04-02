@@ -1,17 +1,25 @@
 """LLM-driven menu resolver.
 
 Presents the model with a constrained set of named options, each with a
-description. Uses GBNF grammar-based constrained decoding to guarantee
-valid output at the token level — the model can only produce a valid
-letter key. No parsing, no retries, no fallback.
+description. The model responds with its choice as a JSON object. No GBNF
+grammar — works naturally with Harmony channel models where grammar
+constraints conflict with special token generation.
 
-Supports both static options (defined in YAML) and dynamic options
+Extraction pipeline:
+  1. CRF strips delimiters/thinking (server-side, already done by inference)
+  2. Parse the choice from the response via extract_choice()
+  3. Retry loop (3 attempts) for robustness
+  4. default_transition as final safety net
+
+Supports both static options (defined in CUE) and dynamic options
 (read from a context key via options_from).
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -24,6 +32,102 @@ class LLMMenuResolverError(Exception):
     """Raised when LLM menu resolution fails."""
 
     pass
+
+
+# ── Shared choice extraction ─────────────────────────────────────────
+
+
+def extract_choice(response: str, valid_options: list[str]) -> str | None:
+    """Extract a choice from a model response against known option names.
+
+    Tries multiple strategies in order of reliability:
+      1. JSON object with a choice key: {"choice": "option_name"}
+      2. Bare JSON string: "option_name"
+      3. Exact match: response text IS an option name
+      4. Line-anchored match: option name appears as a distinct word/token
+      5. Substring containment (longest match wins to avoid false positives)
+
+    Args:
+        response: The model's response text (already CRF-stripped).
+        valid_options: List of valid option names/keys.
+
+    Returns:
+        The matched option name, or None if no match found.
+    """
+    if not response or not valid_options:
+        return None
+
+    text = response.strip()
+
+    # Strategy 1: JSON object — {"choice": "option_name"}
+    json_match = re.search(r'\{[^{}]*\}', text)
+    if json_match:
+        try:
+            data = json.loads(json_match.group())
+            for key in ("choice", "selection", "option", "answer", "pick"):
+                val = data.get(key, "")
+                if val:
+                    found = _match_option(str(val), valid_options)
+                    if found:
+                        return found
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    # Strategy 2: Bare JSON string — "option_name"
+    quoted_match = re.search(r'"([^"]+)"', text)
+    if quoted_match:
+        found = _match_option(quoted_match.group(1), valid_options)
+        if found:
+            return found
+
+    # Strategy 3: Exact match (case-insensitive, underscore/space normalized)
+    found = _match_option(text, valid_options)
+    if found:
+        return found
+
+    # Strategy 4: Line-anchored — option name on its own line or after punctuation
+    text_lower = text.lower().replace("-", "_")
+    for opt in sorted(valid_options, key=len, reverse=True):
+        opt_lower = opt.lower()
+        # Word boundary match
+        pattern = (
+            r'(?:^|[\s,.:;!?\-])\s*'
+            + re.escape(opt_lower)
+            + r'(?:$|[\s,.:;!?\-])'
+        )
+        if re.search(pattern, text_lower):
+            return opt
+
+    # Strategy 5: Substring containment (longest match first)
+    for opt in sorted(valid_options, key=len, reverse=True):
+        if opt.lower() in text_lower:
+            return opt
+
+    return None
+
+
+def _match_option(candidate: str, valid_options: list[str]) -> str | None:
+    """Try to match a candidate string against valid options.
+
+    Handles case differences and underscore/space/hyphen normalization.
+    Normalizes both candidate and option for comparison.
+    """
+    candidate_clean = candidate.strip().lower()
+    # Try raw match first (preserves hyphens, dots, slashes in IDs/paths)
+    for opt in valid_options:
+        if candidate_clean == opt.lower():
+            return opt
+
+    # Normalize separators and try again
+    candidate_norm = candidate_clean.replace(" ", "_").replace("-", "_")
+    for opt in valid_options:
+        opt_norm = opt.lower().replace(" ", "_").replace("-", "_")
+        if candidate_norm == opt_norm:
+            return opt
+        # Also try without separators for "file ops" → "fileops" → "file_ops"
+        if candidate_norm.replace("_", "") == opt_norm.replace("_", ""):
+            return opt
+    return None
 
 
 def _build_options_list(
@@ -76,7 +180,7 @@ def _build_options_list(
             f"expected a list."
         )
 
-    # Static options from YAML
+    # Static options from CUE
     static_options = resolver_def.get("options", {})
     if not static_options:
         raise LLMMenuResolverError("LLM menu resolver has no options defined.")
@@ -97,11 +201,11 @@ def _build_menu_prompt(
     resolver_prompt: str | None,
     options: dict[str, str],
     step_output_text: str | None = None,
-) -> tuple[str, str, dict[str, str]]:
-    """Build the constrained menu prompt with GBNF grammar.
+) -> str:
+    """Build the menu prompt asking for a JSON choice.
 
     Returns:
-        Tuple of (prompt_text, gbnf_grammar, letter_to_option_map)
+        The prompt text.
     """
     lines = []
 
@@ -114,25 +218,21 @@ def _build_menu_prompt(
         lines.append(resolver_prompt)
         lines.append("")
 
-    lines.append("Choose ONE option by responding with its letter:")
+    lines.append("Choose ONE of these options:")
     lines.append("")
 
-    letters = "abcdefghijklmnopqrstuvwxyz"
-    letter_map = {}
-
-    for i, (name, description) in enumerate(options.items()):
-        letter = letters[i]
-        letter_map[letter] = name
-        lines.append(f"  [{letter}] {description}")
+    for name, description in options.items():
+        lines.append(f"  - {name}: {description}")
 
     lines.append("")
-    lines.append("Respond with ONLY the letter (a, b, c, etc.).")
+    lines.append(
+        'Respond with ONLY a JSON object: {"choice": "<option_name>"}'
+    )
+    lines.append(
+        f"Valid option names: {', '.join(options.keys())}"
+    )
 
-    valid_letters = list(letter_map.keys())
-    grammar_alternatives = " | ".join(f'"{l}"' for l in valid_letters)
-    gbnf = f"root ::= {grammar_alternatives}"
-
-    return "\n".join(lines), gbnf, letter_map
+    return "\n".join(lines)
 
 
 async def resolve_llm_menu(
@@ -144,12 +244,12 @@ async def resolve_llm_menu(
 ) -> str:
     """Resolve transition by asking the LLM to choose from a menu of options.
 
-    Uses GBNF grammar-based constrained decoding to produce a valid letter.
-    If the model returns an invalid response (e.g. delimiter leak, empty
-    string), retries up to 3 times before falling through to the
-    default_transition. This mirrors how a terminal program gives a user
-    multiple attempts (like sudo password entry) rather than failing on
-    the first bad input.
+    Asks the model to respond with a JSON object naming its choice.
+    The CRF handles delimiter stripping on the server side. The response
+    is parsed with extract_choice() which tries JSON parsing, quoted
+    string extraction, and fuzzy matching as fallbacks.
+
+    Retries up to 3 times before falling through to default_transition.
 
     The resolver prompt supports Jinja2 template syntax. Templates are
     rendered against {context, input, meta} so the prompt can include
@@ -211,9 +311,8 @@ async def resolve_llm_menu(
         if not step_output_text and isinstance(step_output, str):
             step_output_text = step_output
 
-    prompt, gbnf_grammar, letter_map = _build_menu_prompt(
-        resolver_prompt, options, step_output_text
-    )
+    prompt = _build_menu_prompt(resolver_prompt, options, step_output_text)
+    option_names = list(options.keys())
 
     # Trace helpers
     _can_trace = hasattr(effects, "emit_trace")
@@ -222,7 +321,11 @@ async def resolve_llm_menu(
     _t_flow = meta.get("flow_name", "") if meta else ""
     _t_step = meta.get("step_id", "") if meta else ""
 
-    config = {"temperature": 0.1, "max_tokens": 5, "grammar": gbnf_grammar}
+    # No max_tokens cap — let the model generate until it naturally
+    # completes. Harmony models need to finish their analysis channel
+    # thinking before emitting the final channel with the JSON choice.
+    # Any cap risks truncating mid-thought, producing CoT as content.
+    config = {"temperature": 0.1}
     tokens_in = count_tokens(prompt)
     infer_start = time.monotonic()
 
@@ -234,28 +337,49 @@ async def resolve_llm_menu(
         or context.get("session_id")
     )
 
+    logger.info(
+        "LLM menu resolve: %d options, session=%s, step=%s",
+        len(options),
+        session_id or "(stateless)",
+        meta.get("step_id", "?") if meta else "?",
+    )
+
     # ── Attempt loop: retry on invalid responses ──────────────────
-    # Like entering a password — the model gets multiple chances to
-    # produce a valid letter before we give up. This replaces the
-    # brittle prefix-match bandaid and avoids killing sessions on
-    # transient grammar/delimiter issues.
+    # All attempts use the session if available. On retries, we prepend
+    # a correction note so the KV cache has new content (sending the
+    # exact same prompt in a session produces empty output because the
+    # model thinks it already answered). Falling back to stateless
+    # inference would deadlock when pool_size=1 since the session holds
+    # the only instance.
     max_attempts = 3
-    letter = ""
+    last_response = ""
     for attempt in range(max_attempts):
         if attempt > 0:
-            # Re-prompt on retry — the session already has context
             logger.warning(
                 "LLM menu attempt %d/%d (previous response was %r)",
                 attempt + 1,
                 max_attempts,
-                letter,
+                last_response[:80],
             )
             infer_start = time.monotonic()
 
+        # Build the prompt — on retries, add a correction prefix
+        attempt_prompt = prompt
+        if attempt > 0:
+            attempt_prompt = (
+                f"Your previous response was not valid "
+                f"(got: {repr(last_response[:40])}). "
+                f"You MUST respond with a JSON object like "
+                f'{{"choice": "<option_name>"}} where option_name is one of: '
+                f"{', '.join(option_names)}.\n\n"
+            )
+
         if session_id and hasattr(effects, "session_inference"):
-            result = await effects.session_inference(session_id, prompt, config)
+            result = await effects.session_inference(
+                session_id, attempt_prompt, config
+            )
         else:
-            result = await effects.run_inference(prompt, config)
+            result = await effects.run_inference(attempt_prompt, config)
 
         if _can_trace:
             _prompt_content = ""
@@ -274,7 +398,7 @@ async def resolve_llm_menu(
                     tokens_out=count_tokens(result.text) if result.text else 0,
                     wall_ms=(time.monotonic() - infer_start) * 1000,
                     temperature=0.1,
-                    max_tokens=5,
+                    max_tokens=0,
                     purpose="llm_menu_resolve",
                     prompt_content=_prompt_content,
                     response_content=_response_content,
@@ -282,18 +406,24 @@ async def resolve_llm_menu(
             )
 
         if result.error:
-            logger.warning("LLM menu inference error on attempt %d: %s", attempt + 1, result.error)
-            letter = ""
+            logger.warning(
+                "LLM menu inference error on attempt %d: %s", attempt + 1, result.error
+            )
+            last_response = ""
             continue
 
-        letter = result.text.strip().lower() if result.text else ""
-        if letter in letter_map:
-            choice = letter_map[letter]
-            logger.debug("LLM menu resolved: %r (letter %r, attempt %d)", choice, letter, attempt + 1)
+        last_response = result.text.strip() if result.text else ""
+        choice = extract_choice(last_response, option_names)
+
+        if choice:
+            logger.debug(
+                "LLM menu resolved: %r (attempt %d, raw response %r)",
+                choice,
+                attempt + 1,
+                last_response[:60],
+            )
 
             # Publish the selected option key to context if configured.
-            # This allows a single downstream step to read the selection
-            # as data rather than requiring N separate transition targets.
             publish_key = resolver_def.get("publish_selection")
             if publish_key:
                 context[publish_key] = choice
@@ -302,8 +432,8 @@ async def resolve_llm_menu(
 
         # Invalid response — will retry if attempts remain
         logger.warning(
-            "LLM menu got invalid response %r on attempt %d/%d",
-            letter,
+            "LLM menu could not extract choice from response %r on attempt %d/%d",
+            last_response[:80],
             attempt + 1,
             max_attempts,
         )
@@ -318,9 +448,29 @@ async def resolve_llm_menu(
             max_attempts,
             default,
         )
-        # Publish the default_transition as selection if configured
         if publish_key:
-            context[publish_key] = default
+            for opt_key, opt_val in options.items():
+                opt_target = (
+                    opt_val.get("target", "") if isinstance(opt_val, dict) else ""
+                )
+                if opt_target == default:
+                    context[publish_key] = opt_key
+                    logger.info(
+                        "LLM menu default: publishing %s=%r (first option targeting %r)",
+                        publish_key,
+                        opt_key,
+                        default,
+                    )
+                    break
+            else:
+                first_key = next(iter(options))
+                context[publish_key] = first_key
+                logger.warning(
+                    "LLM menu default: no option targets %r, publishing first: %s=%r",
+                    default,
+                    publish_key,
+                    first_key,
+                )
         return default
 
     # Final safety fallback
@@ -341,12 +491,14 @@ async def resolve_llm_multi_select(
     meta: dict,
     effects: Any = None,
 ) -> str:
-    """Multi-select resolver using memoryful session.
+    """Multi-select resolver — single-turn JSON response.
 
-    Opens a session, presents options with letter keys, collects
-    selections one at a time. Empty response terminates selection.
-    Grammar constraint changes each turn to exclude already-selected
-    options and always include empty string.
+    Instead of a memoryful session with per-letter turns, asks the model
+    to respond with all selections in one JSON object:
+      {"choices": ["option_a", "option_b"]}
+
+    This is simpler, cheaper (one inference call), and doesn't need a
+    session. The model can think naturally before emitting the JSON.
 
     The selected items are stored in meta['_multi_select_result'] for
     the runtime to inject into context_updates.
@@ -356,7 +508,7 @@ async def resolve_llm_multi_select(
         step_output: The output from the step's action.
         context: The current context accumulator.
         meta: Flow execution metadata (will receive _multi_select_result).
-        effects: Effects interface (must have session methods).
+        effects: Effects interface (must have inference methods).
 
     Returns:
         The transition target (from 'target' field, or 'items_selected'/'none_selected').
@@ -370,86 +522,73 @@ async def resolve_llm_multi_select(
     if not options:
         raise LLMMenuResolverError("No options available for multi-select.")
 
-    option_keys = list(options.keys())
-    letters = "abcdefghijklmnopqrstuvwxyz"
-    letter_to_option = {letters[i]: key for i, key in enumerate(option_keys)}
+    option_names = list(options.keys())
+
+    # Build the multi-select prompt
+    lines = []
+    resolver_prompt = resolver_def.get("prompt")
+    if resolver_prompt:
+        lines.append(resolver_prompt)
+        lines.append("")
+
+    lines.append("Available options:")
+    for name, desc in options.items():
+        lines.append(f"  - {name}: {desc}")
+
+    lines.append("")
+    lines.append(
+        "Select one or more options. Respond with a JSON object:\n"
+        '  {"choices": ["option_a", "option_b"]}\n'
+        'Use an empty list if none apply: {"choices": []}'
+    )
+    lines.append(f"Valid option names: {', '.join(option_names)}")
+
+    prompt = "\n".join(lines)
+
+    config = {"temperature": 0.1}
+
+    # Session-aware
+    session_id = (
+        context.get("inference_session_id")
+        or context.get("edit_session_id")
+        or context.get("session_id")
+    )
+
+    if session_id and hasattr(effects, "session_inference"):
+        result = await effects.session_inference(session_id, prompt, config)
+    else:
+        result = await effects.run_inference(prompt, config)
+
     selected: list[str] = []
+    if result.text:
+        text = result.text.strip()
 
-    session_id = await effects.start_inference_session({"ttl_seconds": 120})
+        # Try JSON parse for {"choices": [...]}
+        json_match = re.search(r'\{[^{}]*\}', text)
+        if json_match:
+            try:
+                data = json.loads(json_match.group())
+                choices_raw = data.get("choices", data.get("selected", []))
+                if isinstance(choices_raw, list):
+                    for item in choices_raw:
+                        matched = _match_option(str(item), option_names)
+                        if matched and matched not in selected:
+                            selected.append(matched)
+            except (json.JSONDecodeError, AttributeError):
+                pass
 
-    try:
-        # Build initial prompt
-        prompt = _build_multi_select_prompt(
-            resolver_def.get("prompt"),
-            options,
-            letter_to_option,
-            selected=[],
-        )
-
-        while True:
-            # Grammar: available letters + empty string
-            available = [
-                l for l, opt in letter_to_option.items() if opt not in selected
-            ]
-            if not available:
-                break  # All selected
-
-            grammar_parts = [f'"{l}"' for l in available] + ['""']
-            gbnf = f"root ::= {' | '.join(grammar_parts)}"
-
-            config = {"temperature": 0.1, "max_tokens": 5, "grammar": gbnf}
-            result = await effects.session_inference(session_id, prompt, config)
-
-            choice = result.text.strip().lower()
-
-            if choice == "" or choice not in letter_to_option:
-                break  # Empty string = done selecting
-
-            selected_option = letter_to_option[choice]
-            selected.append(selected_option)
-
-            # Next turn prompt: just the status update
-            selected_names = ", ".join(selected)
-            prompt = (
-                f"Selected so far: {selected_names}\nSelect next (empty to finish):"
-            )
-
-    finally:
-        await effects.end_inference_session(session_id)
+        # Fallback: try to find option names mentioned in the text
+        if not selected:
+            text_lower = text.lower()
+            for opt in option_names:
+                if opt.lower() in text_lower:
+                    selected.append(opt)
 
     # Store selections in meta for the runtime to inject
     meta["_multi_select_result"] = selected
 
     # Determine transition target
     return _resolve_multi_select_target(selected, resolver_def)
-
-
-def _build_multi_select_prompt(
-    resolver_prompt: str | None,
-    options: dict[str, str],
-    letter_map: dict[str, str],
-    selected: list[str],
-) -> str:
-    """Build the multi-select prompt with letter options."""
-    lines = []
-    if resolver_prompt:
-        lines.append(resolver_prompt)
-        lines.append("")
-
-    for letter, opt_key in letter_map.items():
-        desc = options[opt_key]
-        marker = " ✓" if opt_key in selected else ""
-        lines.append(f"  [{letter}] {desc}{marker}")
-
-    lines.append("")
-    if selected:
-        lines.append(f"Selected: {', '.join(selected)}")
-    else:
-        lines.append("Selected: none")
-    lines.append("")
-    lines.append("Enter a letter to select, or empty to finish.")
-
-    return "\n".join(lines)
 
 
 def _resolve_multi_select_target(

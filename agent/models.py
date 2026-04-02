@@ -90,6 +90,9 @@ class FlowDefinition(BaseModel):
     flow: str
     version: int = 1
     description: str = ""
+    context_tier: str = "flow_directive"
+    returns: dict[str, Any] = Field(default_factory=dict)
+    state_reads: list[str] = Field(default_factory=list)
     input: FlowInput = Field(default_factory=FlowInput)
     defaults: FlowDefaults = Field(default_factory=FlowDefaults)
     steps: dict[str, StepDefinition]

@@ -1,0 +1,202 @@
+# =============================================================================
+# LLMVP — Reference Configuration
+# =============================================================================
+# This file documents all available configuration options with their types,
+# mandatory/optional status, and default values.
+#
+# Usage:
+#   - Copy this file and modify values for your deployment
+#   - Remove optional fields to use their defaults
+#   - Update active_config.txt to point to your config file
+#
+# Legend:
+#   [M] = Mandatory (must be provided)
+#   [O] = Optional (has default value)
+#   Type: str, int, float, bool, list, path, Optional[type]
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# APP CONFIGURATION - FastAPI application settings
+# -----------------------------------------------------------------------------
+app:
+  # [M] Type: str
+  # Network interface to bind to (e.g., "0.0.0.0" for all interfaces)
+  host: "0.0.0.0"
+
+  # [M] Type: int
+  # Port number for the HTTP server
+  port: 8000
+
+  # [M] Type: str
+  # Logging level: "debug", "info", "warning", "error", "critical"
+  log_level: "info"
+
+  # [O] Type: list[str] | Default: ["*"]
+  # CORS allowed origins
+  cors_origins: ["*"]
+
+  # [O] Type: bool | Default: false
+  # Enable OpenAI-compatible API shim
+  openai_shim: false
+
+  # [O] Type: int | Default: 120
+  # Timeout in seconds for waiting for backend pool to be ready
+  backend_timeout: 120
+
+
+# -----------------------------------------------------------------------------
+# GRAPHQL CONFIGURATION - Security and query limits
+# -----------------------------------------------------------------------------
+# [O] All fields optional - uses defaults if section omitted
+graphql:
+  max_query_depth: 10
+  max_tokens: 2000
+  max_aliases: 50
+  introspection_enabled: true
+
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION - LLM architecture and inference settings
+# -----------------------------------------------------------------------------
+model:
+  # [M] Type: str
+  # Model identifier name (used for logging and identification)
+  name: "your-model-name"
+
+  # [M] Type: str
+  # Format schema family. Determines all prompt formatting: tokens, roles,
+  # thinking style, system block, turn transitions, stop tokens, and
+  # delimiter patterns.
+  #
+  # Available families (see llmvp/formats/*.yaml):
+  #   "harmony"  — GPT-OSS models (channel-based thinking, developer role)
+  #   "chatml"   — Qwen, DeepSeek, Mistral (inline <think> tags)
+  #
+  # This single field replaces the old prompt.delimiter_token,
+  # prompt.chat_template_file, prompt.use_jinja_templates,
+  # prompt.bos_token, and model.stop_tokens.
+  family: "harmony"
+
+  # [M] Type: path
+  # Absolute or relative path to the GGUF model file
+  path: "/path/to/model.gguf"
+
+  # [M] Type: int
+  # Context window size (maximum tokens in context)
+  n_ctx: 4096
+
+  # [M] Type: int
+  # Number of layers to offload to GPU (-1 = all layers, 0 = CPU only)
+  n_gpu_layers: -1
+
+  # [M] Type: int
+  # Random seed for reproducible generation (-1 = random)
+  seed: -1
+
+  # [M] Type: bool
+  # Enable verbose logging from the inference backend
+  verbose: false
+
+  # [O] Type: bool | Default: false
+  # Enable Flash Attention for faster inference and lower memory usage
+  flash_attention: false
+
+  # [O] Type: int | Default: 64
+  # Batch size for prompt processing
+  batch_size: 64
+
+
+# -----------------------------------------------------------------------------
+# PROMPT CONFIGURATION - Persona and tools for the developer block
+# -----------------------------------------------------------------------------
+# The format schema (determined by model.family) handles all structural
+# prompt formatting.  This section only configures content files that
+# are injected into the format's developer/system block.
+prompt:
+  # [O] Type: Optional[path] | Default: null
+  # Path to persona file (e.g., SOUL.md).
+  # For Harmony: injected as developer block content.
+  # For ChatML: appended to system block.
+  persona_file: "./knowledge/SOUL.md"
+
+  # [O] Type: Optional[path] | Default: null
+  # Path to tool definitions file.
+  # For Harmony: appended to developer block after persona.
+  # For ChatML: appended to system block.
+  tools_file: null
+
+
+# -----------------------------------------------------------------------------
+# GENERATION CONFIGURATION - Text generation parameters
+# -----------------------------------------------------------------------------
+# [O] All fields optional - uses defaults if section omitted
+# These values can be overridden per-request via API.
+# The format schema also declares recommended defaults per family.
+generation:
+  max_tokens_default: null
+  temperature_default: null
+  top_p: null
+  streaming_default: null
+  top_k: null
+  min_p: null
+  presence_penalty: null
+  repeat_penalty: null
+
+
+# -----------------------------------------------------------------------------
+# KNOWLEDGE CONFIGURATION - Static token prefix
+# -----------------------------------------------------------------------------
+knowledge:
+  # [M] Type: path
+  # Path to pre-tokenized binary file for fast loading.
+  # Generated by `uv run llmvp.py --prep` using the format renderer.
+  tokens_bin: "./data/model.tokens.bin"
+
+  # [M] Type: int
+  # Maximum token budget for the static prefix.
+  # Should be << n_ctx to leave room for dynamic prompts and generation.
+  token_limit: 40000
+
+
+# -----------------------------------------------------------------------------
+# RESOURCES CONFIGURATION - System resource allocation
+# -----------------------------------------------------------------------------
+resources:
+  # [M] Type: int
+  # Number of CPU threads for inference (recommend: number of physical cores)
+  cpu_threads: 4
+
+  # [M] Type: int
+  # Maximum number of concurrent inference requests (= pool size).
+  #
+  # The backend uses a shared-model pool:
+  #   Model weights loaded ONCE, each pool slot is a lightweight KV-cache.
+  #   Memory: 1 × weights + N × kv_cache
+  max_concurrent_requests: 1
+
+  # [O] Type: Optional[int] | Default: null
+  # JIT concurrency limit. When set, pool starts with 1 instance and
+  # scales up on demand to this limit. null = pre-allocate all at startup.
+  jit_concurrency_limit: null
+
+
+# -----------------------------------------------------------------------------
+# TOOLS CONFIGURATION - Tool-augmented inference
+# -----------------------------------------------------------------------------
+# [O] All fields optional
+tools:
+  enabled: false
+  max_iterations: 3
+
+
+# -----------------------------------------------------------------------------
+# LOGGING CONFIGURATION - Interaction logging
+# -----------------------------------------------------------------------------
+logging:
+  # [O] Type: bool | Default: false
+  # Enable interaction logging (prompts, responses, timings)
+  enabled: false
+
+  # [O] Type: path | Default: "./logs"
+  # Directory for log files (interactions.jsonl, CRF model, etc.)
+  directory: "./logs"

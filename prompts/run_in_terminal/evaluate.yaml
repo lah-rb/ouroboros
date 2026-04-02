@@ -1,24 +1,22 @@
 # Prompt template: run_in_terminal/evaluate
 #
-# Provide context for the LLM menu resolver to decide: continue, success, or failure.
-# Pre-computed: last_command_output (from format_last_command),
-#               turn_count (from format_turn_count)
-# Note: The resolver appends the menu options automatically — this template
-# only provides the decision context (§6 in PROMPTING_CONVENTIONS.md).
+# Evaluate whether to continue running commands or close the session.
+# This is a simple continue/close decision — the terminal does NOT
+# judge success or failure. That judgment belongs to the calling flow.
 
 id: run_in_terminal/evaluate
-description: "Evaluate terminal command output for LLM menu decision"
+description: "Decide whether to continue or close the terminal session"
 
 sections:
 
   - id: system_role
     content: |
-      You are evaluating the result of a terminal command in an automated pipeline.
-      Based on the output, decide whether to continue, declare success, or declare failure.
+      You are managing a terminal session in an automated pipeline.
+      Decide whether to run more commands or close the session.
 
-  - id: goal
+  - id: persona
     content: |
-      Session goal: {input.session_goal}
+      Your role: {input.execution_persona}
 
   - id: turn_info
     when: context.turn_count
@@ -33,9 +31,19 @@ sections:
 
   - id: output_format
     content: |
-      Assess the situation:
-      - Did the command succeed? Does output indicate the goal is met?
-      - Are there errors needing investigation with another command?
-      - Has the session exceeded 5 commands without progress?
+      Should you run more commands, or is the session done?
+
+      CLOSE the session when:
+      - The program ran and you observed its behavior (success or failure)
+      - You hit an error and have enough info to report it
+      - You've run 5+ commands without making progress
+      - The goal has been achieved
+
+      CONTINUE when:
+      - You need to run additional commands to fully observe behavior
+      - The first command was setup (cd, ls) and you haven't run the actual program yet
+
+      Your job is to RUN and OBSERVE, not to fix issues.
+      Do NOT install packages, edit files, or attempt repairs.
 
       Choose from the options presented below.

@@ -54,8 +54,6 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
     # Also check inference_response if the content_key is empty
     if not raw_text:
         raw_text = step_input.context.get("inference_response", "")
-    if not raw_text:
-        raw_text = step_input.context.get("docstring_changes", "")
 
     fallback_path = step_input.params.get("fallback_path", "")
     file_blocks = _parse_multi_file_output(raw_text, fallback_path=fallback_path)
@@ -71,12 +69,48 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
             context_updates={"files_changed": []},
         )
 
+    # ── Anti-gut guard ────────────────────────────────────────────
+    # Reject rewrites that reduce file size below a threshold ratio
+    # of the original. This catches LLM responses that produce a
+    # minimal stub instead of a complete file rewrite.
+    #
+    # The ratio could potentially be set by an inference session that
+    # evaluates the expected scope of changes — for now it's a fixed
+    # threshold that catches catastrophic reductions while allowing
+    # legitimate simplifications.
+    min_retention_ratio = float(
+        step_input.params.get("min_retention_ratio", 0.20)
+    )
+
     files_written = 0
     errors = []
     files_changed = []
 
     for file_path, content in file_blocks:
         try:
+            # Check existing file size before overwriting
+            if min_retention_ratio > 0:
+                existing = await effects.read_file(file_path)
+                if existing.exists and len(existing.content) > 0:
+                    ratio = len(content) / len(existing.content)
+                    if ratio < min_retention_ratio:
+                        errors.append(
+                            f"Anti-gut guard: {file_path} would shrink from "
+                            f"{len(existing.content)} to {len(content)} chars "
+                            f"({ratio:.0%} retention, minimum is "
+                            f"{min_retention_ratio:.0%}). Rejecting to prevent "
+                            f"content loss."
+                        )
+                        logger.warning(
+                            "Anti-gut guard rejected write to %s: "
+                            "%d→%d chars (%.0f%% retention)",
+                            file_path,
+                            len(existing.content),
+                            len(content),
+                            ratio * 100,
+                        )
+                        continue
+
             wr = await effects.write_file(file_path, content)
             if wr.success:
                 files_written += 1

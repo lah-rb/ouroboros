@@ -12,13 +12,13 @@ sections:
     content: |
       You are a project setup module in an automated pipeline.
       Your output will be parsed for file blocks and written to disk.
+      Produce only configuration and setup files — do not include text
+      outside the file blocks.
 
   - id: task
     content: |
       ## Task
-      {input.task_description}
-
-      Project objective: {input.mission_objective}
+      {input.flow_directive}
 
   - id: focus
     when: input.setup_focus
@@ -43,19 +43,32 @@ sections:
       - pyproject.toml with dependencies
       - __init__.py files if the architecture uses package imports
       - README.md skeleton
-      - Any other configuration files
+      - Any other configuration files (.gitignore, tool configs, etc.)
 
-      Use this format for each file:
+      DO NOT create source code files (*.py modules, *.yaml data files, etc.)
+      beyond __init__.py stubs. Source code will be created by dedicated
+      file_ops tasks later in the pipeline. Creating code stubs here
+      causes conflicts with downstream file creation.
 
+      ✅ CORRECT format:
       === FILE: pyproject.toml ===
       ```toml
       [project]
       name = "project-name"
-      ...
+      requires-python = ">=3.12"
+      dependencies = ["pyyaml>=6.0", "pydantic>=2.0"]
       ```
 
       === FILE: src/__init__.py ===
       ```python
       ```
+
+      ❌ WRONG — no explanation outside the file blocks:
+      First, we need a pyproject.toml for dependencies:
+      === FILE: pyproject.toml ===
+      ```toml
+      ...
+      ```
+      Next, we need init files for the package structure:
 
       Create ALL setup files needed. NOTHING outside the file blocks.

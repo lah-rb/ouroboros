@@ -2,8 +2,9 @@
 #
 # Synthesize validation results into a pass/fail verdict.
 # Pre-computed: validation_summary (from format_validation_results),
-#               project_file_list (from format_project_file_list)
-# Context: cross_file_summary, terminal_output
+#               project_file_list (from format_project_file_list),
+#               architecture_summary (from format_architecture_summary)
+# Context: cross_file_summary, terminal_output, session_summary
 
 id: quality_gate/summarize
 description: "Summarize validation results into a pass/fail verdict"
@@ -13,12 +14,18 @@ sections:
   - id: system_role
     content: |
       You are a quality gate evaluation module in an automated pipeline.
-      Your output will be parsed as JSON to determine if the project passes.
-      Do NOT include commentary or explanation.
+      Your output will be parsed as JSON. Return ONLY a JSON object
+      inside a fenced code block — no commentary or explanation.
 
   - id: objective
     content: |
       Mission objective: {input.mission_objective}
+
+  - id: architecture
+    when: context.architecture_summary
+    content: |
+      Planned architecture:
+      {context.architecture_summary}
 
   - id: mode
     when: input.mode
@@ -43,6 +50,12 @@ sections:
       Terminal test output:
       {context.terminal_output}
 
+  - id: ux_summary
+    when: context.session_summary
+    content: |
+      UX verification session:
+      {context.session_summary}
+
   - id: files
     when: context.project_file_list
     content: |
@@ -51,12 +64,15 @@ sections:
 
   - id: output_format
     content: |
-      Return a JSON verdict object. Rules:
+      Return a JSON verdict object inside a fenced code block. Rules:
       - Syntax errors or import failures → "fail"
       - Test failures → "fail" (unless mode is "checkpoint", then warn)
       - Cross-file inconsistencies → "fail"
+      - Project does not implement the mission objective → "fail"
+      - Architecture specifies modules or files that do not exist → "fail"
+      - No source files exist at all → "fail"
       - Style/lint warnings alone → "pass" with warnings
-      - No checks ran or all passed → "pass"
+      - All checks passed AND project addresses the mission objective → "pass"
 
       ✅ CORRECT:
       ```json
@@ -75,4 +91,4 @@ sections:
       ```
       The main problem is the syntax error.
 
-      Return ONLY the JSON.
+      Return ONLY the fenced JSON.

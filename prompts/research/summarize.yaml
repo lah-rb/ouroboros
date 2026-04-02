@@ -10,26 +10,22 @@ sections:
 
   - id: system_role
     content: |
-      You are a research synthesis module. Distill search results into
-      2-3 paragraphs of dense, practical guidance. No fluff, no filler.
-      Extract specific techniques, patterns, and recommendations that
-      directly inform the work at hand.
+      You are a research synthesis module in an automated coding pipeline.
+      Your summary will be stored as a mission note and referenced by future
+      tasks. Distill search results into 2-3 paragraphs of dense, practical
+      guidance. No fluff, no filler. Extract specific techniques, patterns,
+      and recommendations that directly inform the work at hand.
 
   - id: intent
     content: |
-      ## Research Goal
-      {input.search_intent}
+      ## Research Question
+      {input.research_query}
 
-  - id: objective
-    when: input.mission_objective
+  - id: context
+    when: input.research_context
     content: |
-      Project context: {input.mission_objective}
-
-  - id: error_context
-    when: input.error_context
-    content: |
-      ## Problem Being Investigated
-      {input.error_context}
+      ## Background
+      {input.research_context}
 
   - id: results
     content: |

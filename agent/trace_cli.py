@@ -241,9 +241,7 @@ def render_detail(events: list[dict], trace_path: str) -> str:
                 for pl in prompt_lines[:30]:
                     lines.append(f"      {pl}")
                 if len(prompt_lines) > 30:
-                    lines.append(
-                        f"      ... ({len(prompt_lines) - 30} more lines)"
-                    )
+                    lines.append(f"      ... ({len(prompt_lines) - 30} more lines)")
             # Include raw model response when --trace-prompts was used
             response_content = e.get("response_content", "")
             if response_content:
@@ -252,9 +250,7 @@ def render_detail(events: list[dict], trace_path: str) -> str:
                 for rl in resp_lines[:30]:
                     lines.append(f"      {rl}")
                 if len(resp_lines) > 30:
-                    lines.append(
-                        f"      ... ({len(resp_lines) - 30} more lines)"
-                    )
+                    lines.append(f"      ... ({len(resp_lines) - 30} more lines)")
 
         elif et == "flow_invoke":
             lines.append(
