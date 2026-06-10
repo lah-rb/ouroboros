@@ -1,0 +1,68 @@
+{
+  "$id": "diagnosis_document",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Diagnosis document",
+  "description": "Structured conclusion of a diagnose_issue investigation. Flat operation spec: target file, optional target symbol, change spec, kind, confidence. Feeds the file_ops dispatcher which infers operation (create / patch / add / rewrite) from file existence plus AST parseability.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["target_file", "root_cause", "change_spec", "kind", "confidence", "recommended_flow"],
+  "properties": {
+    "target_file": {
+      "type": "string",
+      "description": "The file the change targets. May be a path that doesn't exist yet — when it doesn't, file_ops dispatches the create flow automatically."
+    },
+    "target_symbol": {
+      "type": "string",
+      "description": "The function / method / class to modify or add. Optional: omit for whole-file operations (create_file, data files). Use the qualified name for methods (e.g. 'GameEngine._handle_move')."
+    },
+    "related_symbols": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Other symbols that must change alongside target_symbol to keep the contract consistent. File-qualified ('path/to/file.py:ClassName.method', preferred) or bare ('ClassName.method', resolved in target_file). At most 6."
+    },
+    "root_cause": {
+      "type": "string",
+      "description": "Why the test failed — a bug, missing feature, or behavior gap. Grounded in evidence gathered during the investigation."
+    },
+    "change_spec": {
+      "type": "string",
+      "description": "What needs to be true after the change. Concrete enough that the next step can author the fix directly — the patch / add_symbol / create flows read this as their directive."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["fix", "enhancement", "new_file", "import_fix"],
+      "description": "fix: existing code is broken. enhancement: an existing file needs a new symbol or behavior. new_file: a file needs to exist that currently doesn't (file_ops will route to create regardless, but the explicit signal aids diagnosis quality). import_fix: the code is right but a module-level import is missing or wrong in target_file — requires import_statement."
+    },
+    "import_statement": {
+      "type": "string",
+      "description": "Required when kind is import_fix: the exact literal import statement to insert, exactly as it should appear in the file (e.g. 'from commands import InventoryCommand'). One complete statement. file_ops routes to the module-frame editor on this — no heuristic extraction from prose."
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["HIGH", "MEDIUM", "LOW"],
+      "description": "How confident you are in this diagnosis given the evidence you examined."
+    },
+    "recommended_flow": {
+      "type": "string",
+      "enum": ["file_ops", "project_ops"],
+      "description": "Which flow family should apply the change. file_ops: a code or data file change (covers create, patch, add, rewrite internally). project_ops: environment/dependency fix — install a missing package, set up build tools, fix Python path."
+    },
+    "secondary_issues": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Additional issues noticed during investigation; does not block the primary change."
+    }
+  },
+  "if": {"properties": {"kind": {"const": "import_fix"}}},
+  "then": {"required": ["import_statement"]},
+  "x-example": {
+    "target_file": "engine.py",
+    "target_symbol": "GameEngine.parse_command",
+    "root_cause": "The parser splits on whitespace before stripping quoted segments, so commands with apostrophes fragment.",
+    "change_spec": "Tokenize the input with shlex.split before splitting on whitespace.",
+    "kind": "fix",
+    "confidence": "HIGH",
+    "recommended_flow": "file_ops",
+    "secondary_issues": []
+  }
+}

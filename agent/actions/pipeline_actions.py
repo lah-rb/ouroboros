@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from pathlib import Path
-from typing import Any
 
 from agent.models import StepInput, StepOutput
 
@@ -22,10 +20,6 @@ _SKIP_EXTENSIONS = {
     "md",
     "txt",
     "csv",
-    "yaml",
-    "yml",
-    "json",
-    "toml",
     "cfg",
     "ini",
     "env",
@@ -38,6 +32,37 @@ _SKIP_EXTENSIONS = {
     "jpeg",
     "gif",
 }
+
+# Structured data files the program loads at runtime (world.yaml, save.json,
+# pyproject.toml, …). These were previously skipped, so a malformed data file
+# sailed through the structural gate and only broke at runtime — an expensive,
+# often mis-diagnosed failure (e.g. Step-3.5/Qwen3-Next YAML breakages). We now
+# give them a PARSE-VALIDITY check (the data analog of the Python syntax gate)
+# via action_check_data_file. Parse-only — NOT style/lint — so a real
+# malformation blocks the structural goal while formatting nits don't.
+_DATA_EXTENSIONS = {"yaml", "yml", "json", "toml"}
+
+
+async def _load_env_config(effects) -> dict:
+    """Load ``.agent/env.json`` for the mission, returning {} on any failure.
+
+    Read through the effects layer so the path resolves against the mission's
+    working_directory — NOT the agent process cwd. (Reading it via a bare
+    relative ``Path`` wrote/read the repo's own ``.agent/`` and cross-contaminated
+    missions; effects.read_file is working_dir-scoped and traversal-safe.)"""
+    if effects is None:
+        return {}
+    try:
+        fc = await effects.read_file(".agent/env.json")
+    except Exception:  # noqa: BLE001 - missing/unreadable env config → no config
+        return {}
+    if not getattr(fc, "exists", False):
+        return {}
+    try:
+        return json.loads(getattr(fc, "content", "") or "") or {}
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning("Failed to parse .agent/env.json: %s", e)
+        return {}
 
 
 async def action_lookup_validation_env(step_input: StepInput) -> StepOutput:
@@ -62,22 +87,23 @@ async def action_lookup_validation_env(step_input: StepInput) -> StepOutput:
             observations=f"Non-code file ({ext}) — skipping validation",
         )
 
-    # Try to load env config
-    env_path = Path(".agent/env.json")
-    if env_path.exists():
-        try:
-            with open(env_path) as f:
-                env_config = json.load(f)
+    # Structured data files get a built-in parse-validity check (not env
+    # commands, not set_env) — see action_check_data_file. Routed here before
+    # the env lookup so it's consistent regardless of project tooling.
+    if ext in _DATA_EXTENSIONS:
+        return StepOutput(
+            result={"is_data_file": True},
+            observations=f"Data file ({ext}) — parse-validity check",
+        )
 
-            if ext in env_config:
-                commands = env_config[ext]
-                return StepOutput(
-                    result={"env_found": True},
-                    observations=f"Found validation config for .{ext}",
-                    context_updates={"validation_commands": commands},
-                )
-        except (json.JSONDecodeError, IOError) as e:
-            logger.warning("Failed to read .agent/env.json: %s", e)
+    env_config = await _load_env_config(step_input.effects)
+    if ext in env_config:
+        commands = env_config[ext]
+        return StepOutput(
+            result={"env_found": True},
+            observations=f"Found validation config for .{ext}",
+            context_updates={"validation_commands": commands},
+        )
 
     return StepOutput(
         result={"env_found": False},
@@ -85,80 +111,210 @@ async def action_lookup_validation_env(step_input: StepInput) -> StepOutput:
     )
 
 
+async def action_collect_env_field(step_input: StepInput) -> StepOutput:
+    """Collect a named field from all language sections in .agent/env.json.
+
+    Iterates every language section (e.g., "py", "js") in the env config,
+    extracts the named field from each, and publishes a flat list of
+    shell command strings. Used by project_ops to collect install_command
+    from all languages for sequential execution via run_commands.
+
+    Params:
+        field: The key to extract from each lang section (e.g., "install_command")
+        output_key: Context key to publish the collected list under
+                    (default: "collected_commands")
+
+    Result:
+        commands_found: bool — whether any commands were collected
+    Publishes:
+        <output_key>: list of shell command strings
+    """
+    field = step_input.params.get("field", "install_command")
+    output_key = step_input.params.get("output_key", "collected_commands")
+
+    env_config = await _load_env_config(step_input.effects)
+    if not env_config:
+        return StepOutput(
+            result={"commands_found": False},
+            observations="No env config found",
+            context_updates={output_key: []},
+        )
+
+    commands = []
+    for lang, section in env_config.items():
+        if isinstance(section, dict) and field in section:
+            cmd = section[field]
+            if cmd:
+                # Convert command arrays to shell strings
+                if isinstance(cmd, list):
+                    cmd = " ".join(str(part) for part in cmd)
+                commands.append(str(cmd))
+                logger.info("Collected %s from %s: %s", field, lang, cmd)
+
+    # Route Python dependency installs through uv so each project gets a clean,
+    # isolated venv and the install lands in the SAME interpreter the framework
+    # runs the program under. Bare `pip` is ambient and was silently installing
+    # into the wrong (sometimes broken) interpreter while the program ran under
+    # another — every interactive goal then failed regardless of code quality.
+    if field == "install_command":
+        commands = _uvize_install_commands(commands, env_config)
+
+    return StepOutput(
+        result={"commands_found": len(commands) > 0},
+        observations=f"Collected {len(commands)} {field} command(s) from env config",
+        context_updates={output_key: commands},
+    )
+
+
+def _uvize_install_commands(commands: list[str], env_config: dict) -> list[str]:
+    """Rewrite Python installs to use uv and a per-project venv.
+
+    - ``pip``/``pip3`` → ``uv pip`` (installs into the per-project venv).
+    - ``pip install -e .`` → ``uv pip install -r pyproject.toml``. Editable
+      installs BUILD the project, which fails for the common flat-layout (several
+      top-level modules — setuptools refuses auto-discovery). The framework runs
+      programs via ``python main.py`` from the project root, so only the declared
+      DEPENDENCIES are needed; installing them from pyproject sidesteps the build.
+    - Prepend ``uv venv --allow-existing`` for Python so the venv that uv pip /
+      validation / execution all target actually exists.
+    Non-Python install commands (npm, cargo, …) pass through unchanged."""
+    has_python = isinstance(env_config.get("py"), dict)
+    out: list[str] = []
+    for cmd in commands:
+        toks = cmd.split()
+        # Normalize bare pip → uv pip (the LLM may emit either, or `uv pip`).
+        if toks and toks[0] in ("pip", "pip3"):
+            toks = ["uv", "pip", *toks[1:]]
+            has_python = True
+        # An editable project install (`... install -e .`) BUILDS the project,
+        # which fails for the common flat-layout (several top-level modules —
+        # setuptools refuses auto-discovery). The framework runs programs via
+        # `python main.py` from the root, so install the declared DEPENDENCIES
+        # from pyproject instead. Gated on a uv pip install so non-pip commands
+        # that merely contain "-e" can't be clobbered.
+        if toks[:3] == ["uv", "pip", "install"]:
+            has_python = True
+            if "-e" in toks[3:] or "--editable" in toks[3:]:
+                toks = ["uv", "pip", "install", "-r", "pyproject.toml"]
+        out.append(" ".join(toks))
+    if has_python:
+        out.insert(0, "uv venv --allow-existing")
+    return out
+
+
+def _substitute_command(template, file_path: str, module_name: str) -> list | None:
+    """Fill {file}/{module} placeholders in an env command template."""
+    if isinstance(template, list):
+        return [
+            part.replace("{file}", file_path).replace("{module}", module_name)
+            for part in template
+        ]
+    if isinstance(template, str):
+        return (
+            template.replace("{file}", file_path)
+            .replace("{module}", module_name)
+            .split()
+        )
+    return None
+
+
 async def action_run_validation_checks_from_env(
     step_input: StepInput,
 ) -> StepOutput:
     """Execute validation commands from the env config.
 
-    Runs syntax (required), import, and lint checks deterministically.
+    Runs formatter first (if configured), then syntax (required), import,
+    and lint checks deterministically, for EVERY file the operation
+    changed (params.files, falling back to the single dispatch target).
+    Cross-file batches are Python-only today, so one env command set
+    (selected by the target's extension) covers all files.
     No LLM involvement — commands come from .agent/env.json.
     """
     effects = step_input.effects
     commands = step_input.context.get("validation_commands", {})
     target = step_input.params.get("target", "")
+    files_param = step_input.params.get("files", []) or []
+    if isinstance(files_param, str):
+        files_param = [files_param] if files_param else []
+    files = [str(f) for f in files_param if str(f)] or ([target] if target else [])
 
-    if not effects or not commands:
+    if not effects or not commands or not files:
         return StepOutput(
             result={"all_passing": True},
-            observations="No commands or effects — skipping",
+            observations="No commands, files, or effects — skipping",
             context_updates={"validation_results": []},
         )
-
-    # Determine file path and module name for template substitution
-    file_path = target or ""
-    module_name = ""
-    if file_path.endswith(".py"):
-        module_name = file_path.replace("/", ".").replace(".py", "")
-        if module_name.startswith("."):
-            module_name = module_name[1:]
 
     results = []
     syntax_failed = False
     has_issues = False
 
-    for tier in ("syntax", "import", "lint"):
-        cmd_template = commands.get(tier)
-        if not cmd_template:
-            continue
+    for file_path in files:
+        module_name = ""
+        if file_path.endswith(".py"):
+            module_name = file_path.replace("/", ".").replace(".py", "")
+            if module_name.startswith("."):
+                module_name = module_name[1:]
 
-        # Substitute placeholders
-        if isinstance(cmd_template, list):
-            cmd = [
-                part.replace("{file}", file_path).replace("{module}", module_name)
-                for part in cmd_template
-            ]
-        elif isinstance(cmd_template, str):
-            cmd = (
-                cmd_template.replace("{file}", file_path)
-                .replace("{module}", module_name)
-                .split()
-            )
-        else:
-            continue
+        # ── Run formatter before validation (non-fatal) ──────────
+        # If a formatter command is configured, run it to normalize
+        # indentation, whitespace, and style before checks.
+        fmt_cmd = _substitute_command(commands.get("formatter"), file_path, module_name)
+        if fmt_cmd:
+            try:
+                await effects.run_command(fmt_cmd, timeout=30)
+                logger.info("Formatter ran: %s", " ".join(fmt_cmd))
+            except Exception as e:
+                logger.warning("Formatter failed (non-fatal): %s — %s", fmt_cmd, e)
 
-        try:
-            result = await effects.run_command(cmd, timeout=30)
-            passed = result.return_code == 0
-        except Exception as e:
-            logger.warning("Validation command failed: %s — %s", cmd, e)
-            passed = False
-            result = type("R", (), {"stdout": "", "stderr": str(e), "return_code": 1})()
+        for tier in ("syntax", "import", "lint"):
+            cmd = _substitute_command(commands.get(tier), file_path, module_name)
+            if not cmd:
+                continue
 
-        check = {
-            "name": f"{tier}: {file_path}",
-            "passed": passed,
-            "tier": tier,
-            "required": tier == "syntax",
-            "stdout": result.stdout[:500] if hasattr(result, "stdout") else "",
-            "stderr": result.stderr[:500] if hasattr(result, "stderr") else "",
-        }
-        results.append(check)
+            try:
+                result = await effects.run_command(cmd, timeout=30)
+                passed = result.return_code == 0
+            except Exception as e:
+                logger.warning("Validation command failed: %s — %s", cmd, e)
+                passed = False
+                result = type(
+                    "R", (), {"stdout": "", "stderr": str(e), "return_code": 1}
+                )()
 
-        if not passed:
-            if tier == "syntax":
-                syntax_failed = True
-            else:
-                has_issues = True
+            check = {
+                "name": f"{tier}: {file_path}",
+                "passed": passed,
+                "tier": tier,
+                "required": tier == "syntax",
+                "stdout": result.stdout[:500] if hasattr(result, "stdout") else "",
+                "stderr": result.stderr[:500] if hasattr(result, "stderr") else "",
+            }
+            results.append(check)
+
+            if not passed:
+                if tier == "syntax":
+                    syntax_failed = True
+                else:
+                    has_issues = True
+
+    # Build a human-readable formatted output string from the check
+    # results so downstream consumers (e.g. the diagnose_issue flow
+    # seeding prompt) can interpolate it directly as terminal output.
+    # validation_results remains available as structured data for
+    # consumers that need to reason over pass/fail tiers.
+    output_lines: list[str] = []
+    for r in results:
+        tier_name = r.get("name", "?")
+        status = "PASS" if r.get("passed") else "FAIL"
+        output_lines.append(f"[{status}] {tier_name}")
+        stdout = r.get("stdout", "")
+        stderr = r.get("stderr", "")
+        if stdout:
+            output_lines.append(f"  stdout: {stdout}")
+        if stderr:
+            output_lines.append(f"  stderr: {stderr}")
+    validation_output = "\n".join(output_lines)
 
     return StepOutput(
         result={
@@ -167,7 +323,96 @@ async def action_run_validation_checks_from_env(
             "has_issues": has_issues,
         },
         observations=f"Validation: {sum(1 for r in results if r['passed'])}/{len(results)} checks passed",
-        context_updates={"validation_results": results},
+        context_updates={
+            "validation_results": results,
+            "validation_output": validation_output,
+        },
+    )
+
+
+def _parse_data_file(ext: str, content: str) -> tuple[bool, str]:
+    """Return (parses_ok, detail) — parse-only validity for one data file.
+
+    JSON/TOML use the stdlib; YAML needs PyYAML, and if it's not importable we
+    degrade gracefully (pass with a note) rather than false-fail a project that
+    doesn't ship a YAML parser.
+    """
+    try:
+        if ext == "json":
+            json.loads(content)
+            return True, ""
+        if ext == "toml":
+            try:
+                import tomllib
+            except ModuleNotFoundError:  # <3.11 — can't validate; don't false-fail
+                return True, "tomllib unavailable — parse check skipped"
+            tomllib.loads(content)
+            return True, ""
+        if ext in ("yaml", "yml"):
+            try:
+                import yaml
+            except ImportError:  # PyYAML not installed — degrade gracefully
+                return True, "PyYAML unavailable — parse check skipped"
+            yaml.safe_load(content)
+            return True, ""
+    except Exception as e:  # noqa: BLE001 - any parse error → malformed file
+        return False, f"{type(e).__name__}: {e}"
+    return True, f"unrecognized data ext '{ext}' — skipped"
+
+
+async def action_check_data_file(step_input: StepInput) -> StepOutput:
+    """Parse-validity check for a structured data file (.yaml/.yml/.json/.toml).
+
+    The data analog of the Python syntax gate: parse the file and report a
+    single required ``syntax: <file>`` check, so the structural gate blocks a
+    malformed data file exactly as it blocks a syntax error — instead of letting
+    it pass and break (and get mis-diagnosed) at runtime. Parse-only, not
+    style/lint. Output shape mirrors ``action_run_validation_checks_from_env``
+    so the file_ops routing + ``structural_block_reason`` logic is unchanged.
+    """
+    effects = step_input.effects
+    target = step_input.params.get("target", "")
+    ext = target.rsplit(".", 1)[-1].lower() if "." in target else ""
+
+    if not effects or not target:
+        ok, detail = True, "no target/effects — skipped"
+    else:
+        try:
+            fc = await effects.read_file(target)
+            content = getattr(fc, "content", "") if getattr(fc, "exists", False) else ""
+        except Exception as e:  # noqa: BLE001
+            content, detail = "", f"could not read file: {e}"
+        if not content:
+            # Empty/unreadable: empty parses as valid for all three formats —
+            # nothing structural to flag.
+            ok, detail = True, locals().get("detail", "") or "empty file"
+        else:
+            ok, detail = _parse_data_file(ext, content)
+
+    check = {
+        "name": f"syntax: {target}",
+        "passed": ok,
+        "tier": "syntax",
+        "required": True,
+        "stdout": "",
+        "stderr": "" if ok else detail[:500],
+    }
+    status = "PASS" if ok else "FAIL"
+    validation_output = f"[{status}] {check['name']}"
+    if not ok and detail:
+        validation_output += f"\n  stderr: {detail}"
+    return StepOutput(
+        result={
+            "all_passing": ok,
+            "syntax_failed": not ok,
+            "has_issues": False,
+        },
+        observations=f"Data-file parse check ({ext or '?'}): {status}"
+        + (f" — {detail}" if detail else ""),
+        context_updates={
+            "validation_results": [check],
+            "validation_output": validation_output,
+        },
     )
 
 
@@ -179,22 +424,14 @@ async def action_persist_validation_env(step_input: StepInput) -> StepOutput:
     """
     raw = step_input.context.get("inference_response", "")
 
-    # Try to extract JSON from the response
+    # Parse env config from inference response
+    from agent.llm_json import parse_llm_json
+
     env_config = None
     if isinstance(raw, dict):
         env_config = raw
     elif isinstance(raw, str):
-        # Strip markdown fences if present
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            cleaned = "\n".join(
-                lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-            )
-        try:
-            env_config = json.loads(cleaned)
-        except json.JSONDecodeError:
-            logger.warning("Could not parse env config from inference response")
+        env_config = parse_llm_json(raw)
 
     if not env_config or not isinstance(env_config, dict):
         return StepOutput(
@@ -202,58 +439,35 @@ async def action_persist_validation_env(step_input: StepInput) -> StepOutput:
             observations="Could not parse validation config",
         )
 
-    # Merge with existing config if present
-    env_path = Path(".agent/env.json")
-    existing = {}
-    if env_path.exists():
-        try:
-            with open(env_path) as f:
-                existing = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pass
-
-    existing.update(env_config)
-
-    # Ensure .agent directory exists
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        with open(env_path, "w") as f:
-            json.dump(existing, f, indent=2)
-    except IOError as e:
-        logger.error("Failed to write .agent/env.json: %s", e)
+    # Persist through the effects layer so .agent/env.json lands in the mission
+    # working_directory (NOT the agent process cwd, which leaked a stray .agent/
+    # into the repo and shared one env.json across all missions).
+    effects = step_input.effects
+    if effects is None:
         return StepOutput(
             result={"env_saved": False},
-            observations=f"Failed to write env config: {e}",
+            observations="No effects available to persist env config",
+        )
+
+    # Merge with existing config if present (working-dir scoped read).
+    existing = await _load_env_config(effects)
+    if not isinstance(existing, dict):
+        existing = {}
+    existing.update(env_config)
+
+    write = await effects.write_file(".agent/env.json", json.dumps(existing, indent=2))
+    if not getattr(write, "success", False):
+        err = getattr(write, "error", "") or "unknown"
+        logger.error("Failed to write .agent/env.json: %s", err)
+        return StepOutput(
+            result={"env_saved": False},
+            observations=f"Failed to write env config: {err}",
         )
 
     return StepOutput(
         result={"env_saved": True},
         observations=f"Saved validation config for: {', '.join(env_config.keys())}",
         context_updates={"env_config": existing},
-    )
-
-
-async def action_check_retry_budget(step_input: StepInput) -> StepOutput:
-    """Check if retries remain for a given counter.
-
-    Reads counter_key from context (defaults to "retry_count"),
-    compares against max_retries param.
-    Increments the counter and publishes the updated value.
-    """
-    max_retries = step_input.params.get("max_retries", 2)
-    counter_key = step_input.params.get("counter_key", "retry_count")
-
-    current = step_input.context.get(counter_key, 0)
-    if not isinstance(current, int):
-        current = 0
-
-    remaining = current < max_retries
-
-    return StepOutput(
-        result={"retries_remaining": remaining, "current": current, "max": max_retries},
-        observations=f"{counter_key}: {current}/{max_retries} ({'retries available' if remaining else 'exhausted'})",
-        context_updates={counter_key: current + 1},
     )
 
 
@@ -302,43 +516,6 @@ async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
     )
 
 
-async def action_git_log_summary(step_input: StepInput) -> StepOutput:
-    """Grab recent git history — deterministic, no inference.
-
-    Runs `git log --oneline -N` and returns the output.
-    Fails silently if no .git directory exists.
-    """
-    effects = step_input.effects
-    working_dir = step_input.params.get("working_directory", ".")
-    max_entries = step_input.params.get("max_entries", 20)
-
-    if not effects:
-        return StepOutput(
-            result={"git_available": False},
-            observations="No effects interface",
-        )
-
-    try:
-        result = await effects.run_command(
-            ["git", "log", "--oneline", f"-{max_entries}"],
-            timeout=10,
-        )
-        if result.return_code == 0 and result.stdout.strip():
-            return StepOutput(
-                result={"git_available": True},
-                observations=f"Git history: {result.stdout.count(chr(10))} entries",
-                context_updates={"git_summary": result.stdout.strip()},
-            )
-    except Exception as e:
-        logger.debug("Git log failed (expected if no .git): %s", e)
-
-    return StepOutput(
-        result={"git_available": False},
-        observations="No git history available",
-        context_updates={"git_summary": ""},
-    )
-
-
 # ── Dependency coverage check ────────────────────────────────────────
 
 # Well-known dependency manifest filenames, in priority order.
@@ -366,8 +543,22 @@ _DEP_MANIFEST_NAMES = [
 
 # Source extensions worth scanning for import statements.
 _SOURCE_EXTENSIONS = {
-    "py", "js", "ts", "jsx", "tsx", "rs", "go", "rb", "java",
-    "kt", "kts", "swift", "dart", "ex", "exs", "php",
+    "py",
+    "js",
+    "ts",
+    "jsx",
+    "tsx",
+    "rs",
+    "go",
+    "rb",
+    "java",
+    "kt",
+    "kts",
+    "swift",
+    "dart",
+    "ex",
+    "exs",
+    "php",
 }
 
 
@@ -376,28 +567,34 @@ def _extract_import_lines(filepath: str, content: str) -> list[str]:
 
     Language-agnostic grep — pulls lines that look like dependency
     declarations. The LLM handles the actual interpretation.
+    Language-specific patterns (Rust 'use', Ruby 'require') are gated
+    on file extension to avoid false positives from content text.
     """
     lines = []
+    ext = filepath.rsplit(".", 1)[-1].lower() if "." in filepath else ""
     for line in content.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or stripped.startswith("//"):
             continue
         # Python: import X, from X import Y
-        if stripped.startswith(("import ", "from ")):
+        if stripped.startswith(("import ", "from ")) and ext in ("py", "pyx", ""):
             lines.append(stripped)
         # JS/TS: import ... from '...', require('...')
-        elif "require(" in stripped or (
-            stripped.startswith("import ") and "from" in stripped
+        elif ext in ("js", "ts", "jsx", "tsx", "mjs", "cjs", "") and (
+            "require(" in stripped
+            or (stripped.startswith("import ") and "from" in stripped)
         ):
             lines.append(stripped)
-        # Rust: use X, extern crate X
-        elif stripped.startswith(("use ", "extern crate ")):
+        # Rust: use X, extern crate X (only for .rs files)
+        elif ext == "rs" and stripped.startswith(("use ", "extern crate ")):
             lines.append(stripped)
-        # Go: import "X" or import ( block handled by consecutive lines
-        elif stripped.startswith("import "):
+        # Go: import "X"
+        elif ext == "go" and stripped.startswith("import "):
             lines.append(stripped)
-        # Ruby: require 'X', require_relative 'X', gem 'X'
-        elif stripped.startswith(("require ", "require_relative ", "gem ")):
+        # Ruby: require 'X', require_relative 'X', gem 'X' (only for .rb files)
+        elif ext in ("rb", "gemspec") and stripped.startswith(
+            ("require ", "require_relative ", "gem ")
+        ):
             lines.append(stripped)
     return lines
 
@@ -502,7 +699,7 @@ async def action_check_dependency_coverage(step_input: StepInput) -> StepOutput:
     return StepOutput(
         result={"dep_check_skipped": False, "files_scanned": len(import_map)},
         observations=f"Extracted imports from {len(import_map)} files, "
-                     f"found {len(manifest_contents)} manifest(s)",
+        f"found {len(manifest_contents)} manifest(s)",
         context_updates={
             "dep_check_imports": imports_text,
             "dep_check_manifest": manifest_text,
@@ -529,25 +726,15 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
     }
     or: {"missing_dependencies": []}
     """
-    from agent.actions.refinement_actions import strip_markdown_wrapper
 
     raw = step_input.context.get("inference_response", "")
 
     # Parse JSON response
+    from agent.llm_json import parse_llm_json
+
     result_data = None
     if isinstance(raw, str):
-        cleaned = strip_markdown_wrapper(raw)
-        try:
-            result_data = json.loads(cleaned)
-        except json.JSONDecodeError:
-            # Try extracting JSON object from the response
-            import re
-            json_match = re.search(r"\{[\s\S]*\}", cleaned)
-            if json_match:
-                try:
-                    result_data = json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    pass
+        result_data = parse_llm_json(raw)
 
     if not result_data or not isinstance(result_data, dict):
         return StepOutput(
@@ -589,3 +776,184 @@ async def action_parse_dep_check_result(step_input: StepInput) -> StepOutput:
             "dep_coverage_issues": issue_lines,
         },
     )
+
+
+# ── Generic LLM JSON parsing action ──────────────────────────────────
+
+
+async def action_parse_inference_json(step_input: StepInput) -> StepOutput:
+    """Parse JSON from the latest inference response and publish fields to context.
+
+    Reads inference_response from context, parses it via parse_llm_json,
+    and publishes each top-level key as a separate context key. This lets
+    downstream resolver conditions check clean typed values instead of
+    string-matching raw LLM text.
+
+    Used by interact/evaluate_outcome to extract goal_met as a boolean.
+
+    Params:
+        source_key: Context key to read raw text from (default: "inference_response")
+        required_fields: List of field names that must be present (default: [])
+
+    Publishes: each top-level key from the parsed JSON
+    Result: parsed=True/False, plus each parsed field
+    """
+    from agent.llm_json import parse_llm_json
+
+    source_key = step_input.params.get("source_key", "inference_response")
+    required_fields = step_input.params.get("required_fields", [])
+
+    raw = step_input.context.get(source_key, "")
+    if not raw:
+        return StepOutput(
+            result={"parsed": False},
+            observations=f"No content in {source_key}",
+        )
+
+    data = parse_llm_json(raw)
+    if not isinstance(data, dict):
+        return StepOutput(
+            result={"parsed": False},
+            observations=f"Could not parse JSON from {source_key}",
+        )
+
+    # Check required fields
+    missing = [f for f in required_fields if f not in data]
+    if missing:
+        return StepOutput(
+            result={"parsed": False, "missing_fields": missing},
+            observations=f"Parsed JSON missing required fields: {missing}",
+        )
+
+    # Publish each field to context AND result
+    context_updates = {}
+    result = {"parsed": True}
+    for key, value in data.items():
+        context_updates[key] = value
+        result[key] = value
+
+    return StepOutput(
+        result=result,
+        observations=f"Parsed {len(data)} fields from {source_key}",
+        context_updates=context_updates,
+    )
+
+
+# ── Deterministic evaluation ─────────────────────────────────────────
+
+# Error patterns that indicate failure even when exit code is 0.
+# Ordered by specificity — most diagnostic first.
+_FAILURE_PATTERNS = [
+    "Traceback (most recent call last)",
+    "ImportError:",
+    "ModuleNotFoundError:",
+    "SyntaxError:",
+    "FileNotFoundError:",
+    "NameError:",
+    "TypeError:",
+    "AttributeError:",
+    "ValueError:",
+    "KeyError:",
+    "IndentationError:",
+    "OSError:",
+    "PermissionError:",
+    "RuntimeError:",
+]
+
+
+async def action_evaluate_deterministic_result(step_input: StepInput) -> StepOutput:
+    """Evaluate a deterministic run_commands result without inference.
+
+    Checks exit code (via all_passed) and scans terminal_output for
+    error patterns. Publishes goal_met, summary, and headline — same
+    keys as the inference-based parse_evaluation step, so downstream
+    routing and report compilation work identically.
+
+    Context required: terminal_output, all_passed
+    Publishes: goal_met, summary, headline
+    """
+    terminal_output = step_input.context.get("terminal_output", "")
+    all_passed = step_input.context.get("all_passed", False)
+
+    # Scan for error patterns in output
+    found_errors = []
+    for pattern in _FAILURE_PATTERNS:
+        if pattern in terminal_output:
+            found_errors.append(pattern.rstrip(":"))
+
+    # Determine goal_met
+    if not all_passed:
+        goal_met = False
+        summary = "Command exited with non-zero status."
+        if found_errors:
+            summary += f" Errors detected: {', '.join(found_errors)}"
+        elif terminal_output:
+            # Show tail of output for context
+            tail = terminal_output.strip().splitlines()[-3:]
+            summary += " Output tail: " + " | ".join(tail)
+    elif found_errors:
+        goal_met = False
+        summary = (
+            f"Command exited 0 but output contains errors: "
+            f"{', '.join(found_errors)}"
+        )
+    elif not terminal_output.strip():
+        # Exit 0 but no output at all — could be fine (silent success)
+        # or could mean the command didn't actually run. Accept it.
+        goal_met = True
+        summary = "Command completed with exit code 0 (no output)."
+    else:
+        goal_met = True
+        summary = "Command completed successfully with exit code 0."
+
+    # Derive a compact headline — parse_evaluation's inference path
+    # produces one via the eval JSON, but the deterministic path never
+    # had this (b75 regression: 40 reports with empty headlines blocking
+    # the before/after regression diffing across retry cycles).
+    #
+    # For failures, extract the first error-looking line from the
+    # terminal tail — that's the signal most useful for regression
+    # detection. For successes, use a fixed short string.
+    if goal_met:
+        headline = "Command ran to success exit 0"
+    else:
+        headline = _derive_failure_headline(terminal_output, found_errors)
+
+    return StepOutput(
+        result={"goal_met": goal_met},
+        observations=summary,
+        context_updates={
+            "goal_met": goal_met,
+            "summary": summary,
+            "headline": headline,
+        },
+    )
+
+
+def _derive_failure_headline(terminal_output: str, found_errors: list[str]) -> str:
+    """Extract a ~10-15 word headline from failure evidence.
+
+    Prefers the last exception line if present (e.g.
+    ``TypeError: non-default argument follows default argument``),
+    falling back to the first detected error pattern + tail line,
+    then to a generic string. The goal is a stable signal that
+    changes when the underlying failure changes — the regression-
+    detection machinery compares consecutive reports' headlines.
+    """
+    lines = [ln.strip() for ln in terminal_output.splitlines() if ln.strip()]
+    # Look for a Python exception line: something like
+    # "ModuleNotFoundError: No module named 'foo'"
+    for ln in reversed(lines[-15:]):
+        # Heuristic: CamelCase word starting a line followed by ":"
+        # covers Python's stdlib + most common exceptions.
+        if ":" in ln and ln[0:1].isupper():
+            head, _, tail = ln.partition(":")
+            if head.isalpha() and len(head) <= 40 and len(ln) <= 140:
+                return ln[:140]
+    # Fallback 1: use found_errors + last output line
+    if found_errors and lines:
+        return (f"{found_errors[0]} — {lines[-1][:90]}")[:140]
+    # Fallback 2: just the tail
+    if lines:
+        return lines[-1][:140]
+    return "Command failed with no diagnostic output"

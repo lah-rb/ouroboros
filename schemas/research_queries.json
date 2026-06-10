@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "research_queries",
+  "description": "A prioritized list of search queries produced by research.plan_queries. Between 1 and 3 distinctive queries, each a terse noun-phrase covering a different angle of the research question.",
+  "type": "array",
+  "items": {
+    "type": "string",
+    "minLength": 1
+  },
+  "minItems": 1,
+  "maxItems": 3,
+  "x-example": [
+    "npc dialogue branching tree yaml schema",
+    "dialogue engine condition-gated options",
+    "game dialogue state machine patterns"
+  ]
+}

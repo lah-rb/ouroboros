@@ -23,8 +23,7 @@ threading.Lock serializes access.
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 log = logging.getLogger("llm-mvp")
 
@@ -164,6 +163,37 @@ class GenerationTracker:
             snap["total_duration"],
             snap["tok_per_sec"],
         )
+
+    def promote_thinking(self, thinking_text: str) -> None:
+        """Forward thinking content captured after finish() into the
+        persistent post-mortem field.
+
+        Exists because the session-turn path extracts thinking via the
+        FSM labeller on the full raw output *after* the backend has
+        already called ``finish()``. Plain ``append_thinking`` at that
+        point writes to ``_status.thinking_content`` but ``active`` is
+        already False, so ``get_thinking()`` skips the active branch
+        and reads from ``_last_thinking`` — which was captured empty
+        at finish() time.
+
+        This method writes directly to ``_last_thinking`` so the
+        GraphQL ``thinking`` query returns content extracted after
+        generation completed. Idempotent: repeat calls just overwrite
+        with the latest value.
+
+        902 regression fix: all session-based inference was publishing
+        empty thinking_content to trace events because the stream-time
+        ``append_thinking`` hook isn't called on the session path
+        (session_manager yields raw chunks unchanged; FSM runs later).
+        """
+        with self._lock:
+            self._last_thinking = thinking_text
+            # Also keep _status.thinking_content coherent for callers
+            # that inspect the live tracker state before a new
+            # generation starts. After the next start() it will be
+            # reset to "" per the start() contract.
+            self._status.thinking_content = thinking_text
+            self._status.thinking_complete = True
 
     def get_status(self) -> dict:
         """Get current generation status (for health endpoint)."""

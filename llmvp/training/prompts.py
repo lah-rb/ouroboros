@@ -22,6 +22,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class TrainingPrompt:
     """A prompt in the training suite."""
+
     id: str
     category: str
     text: str
@@ -32,7 +33,6 @@ class TrainingPrompt:
 # ── Prompt Suite ──────────────────────────────────────────────────────
 
 TRAINING_PROMPTS: list[TrainingPrompt] = [
-
     # ── Category: simple_qa (no thinking expected) ────────────────
     TrainingPrompt(
         id="simple-001",
@@ -67,7 +67,6 @@ TRAINING_PROMPTS: list[TrainingPrompt] = [
         expected_phases=["content"],
         notes="Menu-like pick without grammar — tests natural delimiter behavior",
     ),
-
     # ── Category: reasoning (thinking + content) ──────────────────
     TrainingPrompt(
         id="reason-001",
@@ -99,7 +98,6 @@ TRAINING_PROMPTS: list[TrainingPrompt] = [
         text="A farmer has 17 sheep. All but 9 die. How many are left? Explain why most people get this wrong.",
         expected_phases=["thinking", "delimiter", "content"],
     ),
-
     # ── Category: code_generation (structured output) ─────────────
     TrainingPrompt(
         id="code-001",
@@ -131,7 +129,6 @@ TRAINING_PROMPTS: list[TrainingPrompt] = [
         text="Write a bash script that monitors a directory for new files and processes them.",
         expected_phases=["thinking", "delimiter", "content"],
     ),
-
     # ── Category: json_output (structured format) ─────────────────
     TrainingPrompt(
         id="json-001",
@@ -166,7 +163,6 @@ TRAINING_PROMPTS: list[TrainingPrompt] = [
         text="List 5 programming languages with their year of creation as a JSON array of objects. Think about which ones to include, then output only the JSON.",
         expected_phases=["thinking", "delimiter", "content"],
     ),
-
     # ── Category: long_form (extended generation) ─────────────────
     TrainingPrompt(
         id="long-001",
@@ -198,7 +194,6 @@ TRAINING_PROMPTS: list[TrainingPrompt] = [
         text="Describe the process of photosynthesis in detail, including the light-dependent reactions and the Calvin cycle. Include the chemical equations.",
         expected_phases=["thinking", "delimiter", "content"],
     ),
-
     # ── Category: constrained_short (menu-like, grammar-relevant) ─
     TrainingPrompt(
         id="short-001",
@@ -231,7 +226,6 @@ TRAINING_PROMPTS: list[TrainingPrompt] = [
         text="Yes or no: should I use a database index on a column that's frequently queried but rarely updated?",
         expected_phases=["content"],
     ),
-
     # ── Category: multi_step (complex reasoning chains) ───────────
     TrainingPrompt(
         id="multi-001",
@@ -264,7 +258,6 @@ TRAINING_PROMPTS: list[TrainingPrompt] = [
         text="I need to deploy a Python web app. Analyze the tradeoffs between Heroku, AWS EC2, and a VPS, then recommend one for a small startup.",
         expected_phases=["thinking", "delimiter", "content"],
     ),
-
     # ── Category: edge_case (delimiter-confusing content) ─────────
     TrainingPrompt(
         id="edge-001",
@@ -301,7 +294,6 @@ TRAINING_PROMPTS: list[TrainingPrompt] = [
         expected_phases=["thinking", "delimiter", "content"],
         notes="Pipe characters and angle brackets in code — maximally confusing for naive parsers",
     ),
-
     # ── Category: instruction_following (tests format compliance) ──
     TrainingPrompt(
         id="instr-001",
@@ -333,7 +325,6 @@ TRAINING_PROMPTS: list[TrainingPrompt] = [
         text="Create a markdown table with 3 columns (Language, Typing, Year) and 4 rows of programming languages.",
         expected_phases=["content"],
     ),
-
     # ── Category: persona (tests B4 — persona text with delimiters) ─
     TrainingPrompt(
         id="persona-001",
@@ -365,6 +356,67 @@ TRAINING_PROMPTS: list[TrainingPrompt] = [
         category="persona",
         text="You are a security auditor reviewing a web application. List the first 5 things you would check, in order of priority.",
         expected_phases=["thinking", "delimiter", "content"],
+    ),
+    # ── Category: html_xml (angle bracket stress tests) ──────────
+    # These exercise the CRF's ability to distinguish structural
+    # delimiters (<|...|>, <think>, [INST]) from HTML/XML content.
+    # ChatML's <think></think> tags are close to HTML — the CRF
+    # must not confuse <div>, <span>, </p> etc. with phase markers.
+    TrainingPrompt(
+        id="html-001",
+        category="html_xml",
+        text="Write a simple HTML page with a header, navigation bar, and a paragraph of lorem ipsum content.",
+        expected_phases=["thinking", "delimiter", "content"],
+        notes="Basic HTML — tests <html>, <head>, <body>, <nav>, <p> in content",
+    ),
+    TrainingPrompt(
+        id="html-002",
+        category="html_xml",
+        text="Write a React component that renders a user profile card with name, avatar image, and bio. Use JSX.",
+        expected_phases=["thinking", "delimiter", "content"],
+        notes="JSX — self-closing tags like <img />, <br />, angle brackets in expressions",
+    ),
+    TrainingPrompt(
+        id="html-003",
+        category="html_xml",
+        text="Write an XML document representing a bookstore catalog with 3 books. Each book should have title, author, price, and category elements.",
+        expected_phases=["thinking", "delimiter", "content"],
+        notes="XML — nested <book>, <title>, <author> tags that look like structural markers",
+    ),
+    TrainingPrompt(
+        id="html-004",
+        category="html_xml",
+        text="Write a Python function that parses HTML and extracts all <a> tag href attributes using BeautifulSoup. Include example HTML in a docstring.",
+        expected_phases=["thinking", "delimiter", "content"],
+        notes="HTML inside Python strings — angle brackets in both code and embedded HTML",
+    ),
+    TrainingPrompt(
+        id="html-005",
+        category="html_xml",
+        text="Explain the difference between <div> and <span> in HTML. When would you use each? Give code examples showing block vs inline behavior.",
+        expected_phases=["thinking", "delimiter", "content"],
+        notes="Prose discussing HTML tags — <div>, <span>, </div> etc. as words not markers",
+    ),
+    TrainingPrompt(
+        id="html-006",
+        category="html_xml",
+        text="Write a Jinja2 template that renders a product listing page. Use {% for %}, {% if %}, and {{ variable }} syntax with HTML structure.",
+        expected_phases=["thinking", "delimiter", "content"],
+        notes="Template syntax mixed with HTML — {% %} and {{ }} alongside angle brackets",
+    ),
+    TrainingPrompt(
+        id="html-007",
+        category="html_xml",
+        text="Write SVG markup for a simple bar chart with 4 bars of different heights and colors. Include labels.",
+        expected_phases=["thinking", "delimiter", "content"],
+        notes="SVG — lots of self-closing tags, attributes with < > in values",
+    ),
+    TrainingPrompt(
+        id="html-008",
+        category="html_xml",
+        text="Write a markdown document that explains HTML form elements. Include code blocks showing <form>, <input>, <select>, and <textarea> examples.",
+        expected_phases=["thinking", "delimiter", "content"],
+        notes="Markdown with embedded HTML code blocks — backtick-fenced HTML",
     ),
 ]
 

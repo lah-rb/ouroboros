@@ -97,7 +97,7 @@ be added without modifying the engine.
 
 Flows are CUE files in `flows/cue/` conforming to the `#FlowDefinition` schema defined in
 `flows/cue/flow.cue`. The build pipeline is: `.cue` → `cue export --out json` →
-`flows/compiled.json` → Python loader (`loader_v2.py`) resolves `$ref` values and assembles
+`flows/compiled.json` → Python loader (`loader.py`) resolves `$ref` values and assembles
 prompts at runtime.
 
 ```cue
@@ -147,7 +147,7 @@ observation: {$ref: "context.director_analysis", fallback: [
 
 The `$ref` system replaces Jinja2 `{{ }}` syntax in all structural fields (params,
 input_map, tail_call). CUE validates structure and types; the Python runtime
-(`loader_v2.py`) resolves references against live input/context/meta namespaces at
+(`loader.py`) resolves references against live input/context/meta namespaces at
 execution time.
 
 #### 2.1.3 Step Definition Elements
@@ -252,9 +252,10 @@ context it operates with. The tier hierarchy narrows context at each level:
 
 ```
 mission_objective  — Full mission picture (design_and_plan, quality_gate)
-project_goal       — Which capability to advance (mission_control, revise_plan, retrospective)
+project_goal       — Which capability to advance (mission_control)
 flow_directive     — What to do right now (file_ops, interact, diagnose_issue, project_ops)
-session_task       — Mechanical execution (create, patch, rewrite, run_commands, etc.)
+session_task       — Mechanical execution (create, patch, rewrite, run_commands,
+                      run_session, prepare_context, research, set_env)
 ```
 
 CUE enforces tier constraints at compile time (e.g., `flow_directive` tier flows must
@@ -310,9 +311,8 @@ dispatch: #StepDefinition & {
 ```
 
 At tail-call time, the runtime assembles the flow's `returns` declaration into a structured
-dict and passes it as `last_result` in the tail-call inputs. This replaces the old
-`result_formatter`/`result_keys` mechanism — `last_result` is now structured data (not
-prose), and the director's prompt template formats it for display.
+dict and passes it as `last_result` in the tail-call inputs. `last_result` is structured
+data (not prose), and the director's prompt template formats it for display.
 
 The agent's continuous operation emerges from this: `mission_control` dispatches a task
 flow → task flow completes and tail-calls back to `mission_control` → `mission_control`
@@ -355,44 +355,55 @@ network, or subprocess.
 
 ### 2.5 The Agent Cycle — mission_control
 
-`mission_control` (defined in `flows/cue/mission_control.cue`, version 5) is the hub flow
-that orchestrates the entire agent lifecycle. It operates at the `project_goal` context
-tier — reasoning about which capability to advance, not the full mission picture.
+`mission_control` (defined in `flows/cue/mission_control.cue`) is the hub flow that
+orchestrates the entire agent lifecycle. It operates at the `project_goal` context tier —
+reasoning about which capability to advance, not the full mission picture.
 
-1. **Load state** — read mission state, event queue, and frustration map from persistence.
-2. **Apply last result** — integrate the returning flow's structured result (goal completion
-   checks, frustration resets, plan availability).
-3. **Process events** — handle user messages, abort/pause signals.
-4. **Start director session** — open a memoryful inference session for the reasoning cycle.
-5. **Reason** — analyze mission state at the goal level with pre-computed context (goals,
-   plan, architecture, frustration landscape, dispatch history, notes).
-6. **Decide flow** — LLM menu selects the best action type (file_ops, diagnose_issue,
-   interact, project_ops, design_and_plan, quality_checkpoint, quality_completion, deadlock).
-   The selection is published to context via `publish_selection`.
-7. **Select task** — pick a task from the plan (or compose a novel directive via inference).
-8. **Resolve target** — determine target file for the dispatch.
-9. **Record and dispatch** — record the dispatch decision, end the director session,
-   tail-call to the selected flow with a structured `flow_directive`.
+`mission_control` is a **deterministic pipeline**: it computes the current mission phase
+from goal statuses and dispatches the appropriate work without LLM routing. The phases
+are ordered and each has a clear entry condition based on what goals exist, what their
+states are, and what the last returning flow reported:
 
-All child task flows tail-call back to `mission_control` on completion, creating the
-continuous cycle.
+- **Plan** — no architecture yet, or architecture drift detected → tail-call
+  `design_and_plan`.
+- **Structural sweep** — structural goals (file creation) have incomplete members →
+  dispatch the next one to `file_ops`.
+- **Environment** — source files exist but project tooling is missing → dispatch to
+  `project_ops` or `set_env`.
+- **Functional sweep** — structural goals complete, functional goals incomplete →
+  dispatch to `interact` for behavioral testing, or `diagnose_issue` when tests fail.
+- **Quality gate** — all goals provisionally complete → dispatch to `quality_gate` for
+  final validation before mission completion.
 
-### 2.6 Frustration System
+At each cycle, `mission_control` loads mission state, integrates the `last_result` from
+the returning flow (goal completion, dispatch history updates), processes any user
+events, and then computes the phase. The dispatch step tail-calls the selected task
+flow with a structured `flow_directive` input. All task flows tail-call back to
+`mission_control` on completion, creating the continuous cycle with no external loop.
 
-The frustration system is a per-task counter that gates escalation permissions. It prevents
-the agent from immediately reaching for expensive solutions and forces cheap retries first.
+The deterministic-pipeline model replaces an earlier LLM-routing approach. Removing
+LLM calls from the dispatch decision eliminated hallucination-driven failures (dispatching
+tasks that weren't ready, skipping tasks the model didn't "see") and made the cycle
+cheaper and more reproducible. The LLM is still consulted during task *execution* —
+just not during task *selection*.
 
-**Current behavior:**
-- Each task has a frustration counter that increments on failure/retry.
-- `select_task_for_dispatch` checks frustration levels when selecting the next task.
-  Higher frustration influences temperature perturbation and research injection.
-- Temperature perturbation: at frustration 2+, the temperature is offset by 0.15-0.4 to
-  encourage different model outputs.
-- Research injection: at frustration 3+, additional research context is gathered.
+### 2.6 Frustration System (Deprecated)
 
-**Escalation integration is pending** — the thresholds exist but no external API call is
-wired. The frustration system currently influences dispatch configuration (temperature,
-research) but does not escalate to an external model. See §4 Future Directions.
+The per-task frustration counter has been deprecated. It was removed along with the
+`TaskRecord` class when the persistence model moved to a goal-centric plan (`GoalRecord`
+with accumulated `DirectiveReport`s; tasks no longer exist as persisted entities).
+
+**Why it was removed:** In practice, the frustration filter (`frustration < 5`) silently
+removed tasks from the actionable pool without informing the director. This caused two
+systemic failures: (1) tasks that succeeded on disk but failed verification were permanently
+filtered out, blocking all downstream dependencies; (2) with actionable tasks removed, the
+agent was funneled into inappropriate work (running tests before code exists, replanning
+when implementation was needed). The existing circuit breakers — dispatch repeat detection,
+completion gate rework budgets, quality gate exhaustion, deadlock detection, and the cycle
+budget — provide more targeted protection without these side effects.
+
+See §4.6 for the planned replacement: a unified circuit breaker layer that gives the
+director visibility into task health rather than silently filtering.
 
 ### 2.7 Persistence
 
@@ -429,54 +440,47 @@ fully resolved step definitions.
 
 ---
 
-## 3. Flow Inventory
+## 3. Flow Organization
 
 All flows are defined as CUE files in `flows/cue/` and compiled to `flows/compiled.json`
-via `uv run ouroboros.py cue-compile`. The flow set was consolidated during the CUE
-migration — many single-purpose flows were absorbed into broader lifecycle flows.
+via `uv run ouroboros.py cue-compile`. The authoritative flow list is the CUE source —
+this document describes how the set is *organized*, not what flows currently exist.
 
-### 3.1 Orchestrator Flows
+### 3.1 Flow Categories
 
-| Flow | Version | Tier | Steps | Purpose |
-|------|---------|------|-------|---------|
-| `mission_control` | v5 | project_goal | 30 | Core director — load state, reason about goals, select task, dispatch |
-| `design_and_plan` | v4 | mission_objective | 17 | Design/reconcile architecture, derive goals, generate plan |
-| `revise_plan` | v3 | project_goal | 6 | Add/reorder/remove tasks based on observations |
-| `retrospective` | v5 | project_goal | 5 | Capture learnings from frustration recovery |
+Flows are organized by their role in the agent cycle, which aligns with their declared
+`context_tier`:
 
-### 3.2 Task Flows (dispatched by mission_control)
+**Orchestrator flows** (`project_goal` and `mission_objective` tiers). These shape the
+mission itself — designing architecture, selecting goals, reasoning about what to
+advance. `mission_control` is the always-present hub; other orchestrators run at mission
+start or checkpoint boundaries. They tail-call into task flows and receive structured
+reports back.
 
-| Flow | Version | Tier | Steps | Purpose |
-|------|---------|------|-------|---------|
-| `file_ops` | v1 | flow_directive | 18 | File lifecycle — routes to create/patch/rewrite, validates, self-corrects (2 retries), diagnoses on failure |
-| `diagnose_issue` | v4 | flow_directive | 9 | Deep issue diagnosis — traces error paths, generates hypotheses, creates fix tasks |
-| `interact` | v2 | flow_directive | 7 | Run the software, test features, observe behavior via terminal sessions |
-| `project_ops` | v4 | flow_directive | 7 | Initialize project tooling and structure — configs, directories, packages |
+**Flow-directive flows** (`flow_directive` tier). The dispatchable units of work that
+`mission_control` routes specific directives to. Each handles one class of work (source
+files, project infrastructure, investigation, behavioral testing) and produces a
+`DirectiveReport` before tail-calling back. This is the layer where inference-heavy
+reasoning about project changes happens.
 
-### 3.3 Sub-flows (invoked by parent flows via `action: flow`)
+**Sub-flows** (`session_task` tier). Mechanical execution units invoked synchronously via
+`action: flow`. They have no agency — a specific job, structured data back. Sub-flows
+are the shared building blocks: modification modes (`create`, `rewrite`, `patch`),
+context assembly (`prepare_context`, `research`), terminal interaction (`run_commands`,
+`run_session`), environment probing (`set_env`). Parent flows treat them as black boxes.
 
-| Flow | Version | Tier | Steps | Invoked By | Purpose |
-|------|---------|------|-------|------------|---------|
-| `create` | v1 | session_task | 7 | `file_ops` | Generate content for a new source file |
-| `patch` | v1 | session_task | 10 | `file_ops` | AST-parsed surgical symbol-level editing |
-| `rewrite` | v1 | session_task | 6 | `file_ops` | Complete file replacement |
-| `run_commands` | v1 | session_task | 4 | `quality_gate` | Batch command execution |
-| `run_session` | v1 | session_task | 7 | `interact`, `quality_gate` | Multi-turn persistent terminal session |
-| `prepare_context` | v3 | session_task | 8 | Most task flows | Scan workspace, build repo map, select relevant files |
-| `quality_gate` | v5 | mission_objective | 12 | `mission_control` | Structural + behavioral quality validation |
-| `research` | v2 | session_task | 6 | `design_and_plan`, `mission_control` | Search and summarize into actionable text |
-| `capture_learnings` | v3 | session_task | 5 | `retrospective` | Reflect on completed work, persist observations |
-| `set_env` | v2 | session_task | 5 | `file_ops` | Detect and persist project validation tooling |
-
-### 3.4 Supporting Files
+### 3.2 Supporting Files
 
 | File | Purpose |
 |------|---------|
 | `flows/cue/flow.cue` | CUE schema — `#FlowDefinition`, `#StepDefinition`, `#Ref`, `#Resolver`, `#ContextTier`, `#FlowReturns` |
-| `flows/cue/templates.cue` | Reusable step templates (e.g., `load_mission`, `read_target_file`, `push_note`) |
+| `flows/cue/templates.cue` | Reusable step templates (inherited via CUE unification) |
 | `flows/cue/prompt.cue` | Prompt template reference types and pre-compute formatter registry |
 | `flows/cue/lint.cue` | CUE-level lint constraints for flow validation |
 | `flows/compiled.json` | Build artifact — all flows compiled from CUE (do not edit directly) |
+
+For the current flow inventory, inspect `flows/cue/` directly or run
+`uv run ouroboros.py cue-compile` then read `flows/compiled.json`.
 
 ---
 
@@ -497,8 +501,8 @@ is the largest open design question. Several interaction models are under consid
   safety guard while Claude runs Ouroboros tasks.
 - **Focused prompting**: Claude Code fixes specific issues with tightly scoped prompts.
 
-The right answer depends on observed failure modes from real missions. The runtime tracing
-system (Phase 2) will provide the data needed to make this design decision. Key questions:
+The right answer depends on observed failure modes from real missions. The runtime
+tracing system will provide the data needed to make this design decision. Key questions:
 where does the local model actually get stuck, what's the pattern of those failures, and
 how much context needs to be conveyed to a senior model?
 
@@ -534,69 +538,169 @@ Track which prompt formulations work best based on empirical data. Prompt tiers
 (default → escalated), success/fail tracking per model-prompt combination. Deferred until
 sufficient execution history exists for data-driven decisions.
 
+### 4.6 Unified Circuit Breaker Layer (Subsumes Retrospective Redesign)
+
+Replace the deprecated per-task frustration filter (§2.6) with a circuit breaker system
+that the director can reason about. The frustration counter was a blunt safety valve —
+it silently removed tasks after N failures without diagnostic context. The replacement
+should unify the existing circuit breakers (dispatch repeat detection, rework budgets,
+quality gate exhaustion, deadlock detection, cycle budget) under a single coherent
+framework that:
+
+- Surfaces task health to the director as structured context (attempt count, failure
+  patterns, last error category) rather than silently filtering.
+- Distinguishes failure modes: "verification parse error" vs "code genuinely wrong" vs
+  "prerequisite missing" vs "environment broken" — each warrants a different response.
+- Allows the director to explicitly decide: retry with different approach, skip and
+  revisit, redesign the task, or escalate — rather than having the system decide
+  by removing the task from view.
+- Integrates with the escalation protocol (§4.1) when it arrives — the circuit breaker
+  is the natural trigger point for consulting a senior model.
+
+**Retrospective subsystem.** The original `retrospective` / `capture_learnings` flows
+(since removed) coupled observation-capture to frustration thresholds: when a task hit
+the frustration cap, the retrospective flow would run to surface learnings before
+giving up. With frustration deprecated and the flows removed, there is no
+learning-capture mechanism. The circuit breaker work above is the natural place to
+reintroduce one — when a breaker trips, the director has concrete failure data worth
+persisting as a learning. This avoids the original coupling (retrospective triggered
+only on frustration) and makes learning-capture a first-class part of circuit-breaker
+handling rather than a separate flow to invoke.
+
+### 4.7 Step-Context Plumbing for Effects
+
+Most effects methods are called with just their data arguments — the effect has no
+knowledge of which flow, step, or goal the call originates from. `push_note` was the
+first case where that missing context became interesting: a `source_flow` string is
+passed per-call, every caller has to remember to pass it, and only one field in one
+data model actually carries the value. Other effects have the same latent need —
+`emit_trace` currently gets flow/step context from its payload rather than the effect
+knowing inherently; `save_artifact` and `run_inference` would benefit from the same
+correlation data if downstream consumers ever want to slice by step or goal.
+
+Two plumbing shapes are worth considering when a concrete need arises:
+
+**Context-manager approach.** `effects.in_step_context(meta)` sets a per-call context
+variable around the step's execution. Any effect method can read it to enrich its
+writes (`push_note` auto-injects `goal_id`; `emit_trace` auto-tags events; etc.).
+The runtime wraps each action call with the context manager; effects read from it
+opportunistically. Works across nested effect calls in a single step. Cost: a context
+var, enter/exit bookkeeping in the runtime, and a small amount of discipline about
+re-entrancy.
+
+**Bind-on-build approach.** Just before handing `effects` to the action, the runtime
+returns a lightweight wrapper (`effects.bind(meta)`) that knows the step's flow/step/
+goal. The wrapper forwards every method, but methods that want step context read it
+from the wrapper's bound meta. Zero changes to the action signatures; effects methods
+opt in individually. Cost: a wrapper class and a small runtime change at the
+`_build_step_input` call site.
+
+**Candidate methods that could benefit.** Only pursue when there is a concrete consumer
+for the enrichment:
+
+- `push_note` — auto-inject `source_goal_id` so projections can slice notes per goal.
+- `emit_trace` — auto-tag trace events with `goal_id` for per-goal timeline analysis.
+- `save_artifact` — artifacts currently carry `task_id` from the action; `goal_id`
+  would enable grouping artifacts under their owning goal.
+- `run_inference` — prompt-observability tooling could tag inference calls with the
+  step that produced them without every action threading it manually.
+
+Either approach is a small project — the right moment to build it is when the first
+consumer (likely the circuit-breaker work in §4.6, which will want per-goal failure
+timelines) creates a concrete requirement. Until then, per-call arguments remain the
+simpler choice.
+
+### 4.8 Self-Hosted Search Stack
+
+The `research` flow currently consumes Exa via the hosted `exa-mcp-server` (see
+AGENT.md §"External Services"). Exa is inexpensive at expected volume and its
+bundled search+content returns match the "search with follow-up fetch" shape the
+flow needs. It is the right default today.
+
+A self-hosted alternative is worth reaching for when one of these triggers fires:
+research call volume sustainably exceeds Exa's free tier in a way that matters, Exa
+quality or reliability regresses materially on coding queries, or the project
+commits to operating without any paid external services.
+
+**Proposed architecture.** A new `mcp_servers/search/` package mirroring
+`mcp_servers/terminal/` in shape — FastMCP over stdio, same consumption pattern
+from the effects layer. Tools would be `search(query, n)`, `fetch(url)`, and
+`search_and_fetch(query, n)` to preserve the current research-flow contract.
+
+**Backends.**
+- *Primary:* SearXNG running as a local container. Open-source metasearch,
+  aggregates DuckDuckGo, Brave, Wikipedia, Stack Overflow, GitHub, arXiv, and
+  others. No API keys. Quality is respectable on coding queries thanks to the
+  domain mix; inherits upstream rate limits but is resilient to any single
+  engine's bad day.
+- *Fallback:* Google Programmable Search Engine (CSE). 100 queries/day free, then
+  $5/1,000. Invoked when SearXNG returns thin or irrelevant results. Highest-
+  quality index available; 10 results per request ceiling is fine for our use
+  case.
+- *Extraction:* `trafilatura` for HTML→markdown on follow-up fetches.
+  Article-quality on the major coding sources (Stack Overflow, GitHub README/wiki,
+  MDN, Python/Rust/language docs).
+
+**Why not now.** The current research volume is roughly one invocation per mission
+from `design_and_plan`. Exa is free at that scale and the self-hosted path adds
+ops surface area (a SearXNG container to keep updated, CSE billing to monitor,
+extractor tweaks when upstream sites change). The payoff doesn't materialize
+until volume grows or Exa stops being a fit. Deferring this is the "consolidation
+over proliferation" call — ship research using the service that already works,
+replace when the trigger fires.
+
 ---
 
-## 5. Development Phases
+## 5. System Capabilities
 
-### Completed Phases (Development History)
+The system delivers the following capabilities in working form. This section describes
+*what the system can do*, not the sequence of development phases that produced each
+capability — phase numbering drifts over time and the current state is what matters.
 
-**Phases 1-5** built the core system from scratch:
+**Flow engine.** Declarative CUE flow definitions compiled to JSON. Steps with typed I/O,
+explicit transitions, context scoping. Rule-based and LLM-menu resolvers. Sub-flow
+invocation and tail-call chaining. Context Contract Architecture enforces tier
+boundaries and structured returns.
 
-| Phase | Delivered |
-|-------|-----------|
-| 1 — Flow Engine Core | `models.py`, `loader.py`, `runtime.py`, `resolvers/rule.py`, `actions/registry.py`. YAML flow loading, step execution, rule-based transitions, context accumulator. |
-| 2 — Effects Interface | `effects/protocol.py`, `effects/local.py`, `effects/mock.py`. Swappable side-effect protocol. Actions decoupled from direct I/O. |
-| 3 — Inference Integration | `effects/inference.py`, `resolvers/llm_menu.py`, `template.py`. LLMVP GraphQL inference, Jinja2 prompt rendering, LLM menu resolvers. |
-| 4 — Persistence | `persistence/models.py`, `persistence/manager.py`, `persistence/migrations.py`. Mission state, event queue, artifact storage. CLI commands. |
-| 5 — Tail Calls & mission_control | `loop.py`, `tail_call.py`, `mission_control` flow. Full agent cycle with continuous tail-call operation. |
+**Effects interface.** All side effects routed through a swappable protocol. `LocalEffects`
+for production (real filesystem, subprocess, LLMVP inference, JSON persistence,
+terminal sessions via MCP, runtime tracing). `MockEffects` for testing (canned
+responses, call recording).
 
-**Post-Phase 5 — CUE Migration & Flow Consolidation** ✅
+**Inference integration.** LLMVP GraphQL client with section-based YAML prompt templates,
+pre-compute formatters, Jinja2 rendering, and memoryful inference sessions for
+multi-turn reasoning. Robust JSON extraction via `llm_json.py` wrapping `json_repair`
+for malformed LLM output.
 
-Major restructuring: 14 task flows + 11 sub-flows → 4 task flows + 10 sub-flows.
+**Persistence.** File-backed JSON state in `.agent/` (mission, events, artifacts, repo
+map cache). Atomic writes via temp+rename. Single-threaded access enforced by the
+tail-call execution model.
 
-- `loader_v2.py` — CUE/JSON flow loading with `$ref` resolution, replacing Jinja2 in structural fields
-- Section-based prompt templates in `prompts/` with pre-compute formatters (`formatters.py`)
-- `markdown_fence.py` — robust CommonMark-based code block extraction from LLM responses
-- `schema_extract.py` — lightweight structural summaries for LLM context
-- Frustration system with threshold-gated dispatch configuration
-- Quality gate with retry cycles
-- Plan revision and extension checking
-- Retrospective flow with periodic triggers
-- AST-based repo map with tree-sitter and PageRank
-- Flow visualizer with Mermaid/Graphviz output
-- Mission YAML config with lifecycle commands (`pre_create`/`post_create`)
-- Step templates for reusable step configuration via CUE unification
+**Goal-driven planning.** `design_and_plan` derives project goals from the mission
+objective and architecture in two passes (deterministic structural + inference-derived
+functional). The director reasons at the goal level; goals are the plan.
 
-**Post-Phase 5 — Blueprint System** ✅
+**Runtime tracing.** Always-on structured JSONL trace events (cycle/step/inference/
+flow-invoke events). `ouroboros.py trace` CLI for post-run analysis. Optional
+`--trace-thinking` for chain-of-thought capture and `--trace-prompts` for full
+prompt/response recording.
 
-`ouroboros.py blueprint` command producing a comprehensive plan set in both
-Markdown (for AI developer context) and PDF via WeasyPrint (for human architectural review).
-Implementation in `agent/blueprint/` with IR schema, flow analyzer, linter, Mermaid
-diagram generation, and custom Egyptian hieroglyphic symbology.
+**Blueprint generation.** `ouroboros.py blueprint` produces Markdown and PDF architectural
+documentation from the compiled flows. Custom symbology, Mermaid diagrams, flow-level
+cross-references.
 
-**Post-Phase 5 — Runtime Tracing** ✅
+**AST-based repo map.** Structural code awareness via tree-sitter parsing. Directed
+reference graph with PageRank to surface the most important files. Token-budgeted
+formatting for inclusion in prompts.
 
-Lightweight always-on trace instrumentation producing structured JSONL trace events.
-8 event types (CycleStart, CycleEnd, StepStart, StepEnd, InferenceCall, FlowInvoke,
-FlowReturn, base TraceEvent). Token counting, wall-clock timing, resolver decisions.
-`ouroboros.py trace` CLI for post-run analysis. Supports `--trace-thinking` for
-chain-of-thought capture and `--trace-prompts` for full prompt/response recording.
-
-**Post-Phase 5 — Context Contract Architecture** ✅
-
-Context tier system (mission_objective → project_goal → flow_directive → session_task)
-with compile-time CUE enforcement and runtime belt-and-suspenders validation. Structured
-`returns` declarations replacing prose-formatted result strings. `state_reads` for
-persistence auditability. Goal derivation (structural + functional) with goal-aware
-director reasoning. See §2.2.1 for full documentation.
+**Mission management.** YAML-configured missions with pre/post-create lifecycle commands.
+CLI for create, start, pause, resume, abort, status, history, and interactive messaging.
 
 ### Active Work
 
-Current focus areas (see issue registry for prioritized backlog):
-- LLMVP Harmony parser integration (B2/B4 — highest impact bug fix)
-- Dependency coverage validation (A1 — blocks live testing)
-- Cross-file integration validation (A2/A3 — runtime correctness)
-- Early smoke testing after file creation (A5 — efficiency)
+Active work items live in the project's issue registry, not in this document. This
+section intentionally does not enumerate them — any such list goes stale quickly and
+the issue registry is the source of truth.
 
 ---
 

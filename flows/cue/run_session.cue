@@ -1,12 +1,18 @@
-// run_session.cue — Exploratory Terminal Session (Sub-flow)
+// run_session.cue — Interactive Terminal Session (Sub-flow)
 //
-// Inference-driven terminal interaction. The caller provides an
+// MCP-based interactive terminal session. The caller provides an
 // execution_persona — a crafted prompt that tells the model WHO it is
-// and WHAT it's trying to accomplish, not WHAT commands to run.
+// and WHAT it's trying to accomplish.
 //
 // The model acts as a user: tries things, observes responses, makes
-// choices, follows up on unexpected behavior. Each turn: plan command
-// (inference) → execute → evaluate (LLM menu) → loop or close.
+// choices, follows up on unexpected behavior. Supports both shell
+// commands and interactive programs (games, REPLs, CLI tools).
+//
+// Each turn: plan interaction (inference) → execute via MCP terminal →
+// evaluate (LLM menu) → loop or close.
+//
+// Uses PTY-based terminal via MCP server — interactive programs that
+// read from stdin (input(), readline) work naturally without piping.
 //
 // Used by:
 //   - interact: test product features as a beta tester
@@ -18,24 +24,28 @@ package ouroboros
 
 run_session: #FlowDefinition & {
 	flow:    "run_session"
-	version: 1
+	version: 3
 	description: """
-		Exploratory terminal session driven by an execution persona.
+		Interactive terminal session driven by an execution persona.
 		The model acts as a user — tries things, observes, adapts.
-		Multi-turn with memoryful inference session.
+		Multi-turn with memoryful inference session. Uses PTY via MCP
+		for true interactive program support.
+
+		The inference session is kept alive after the PTY closes so
+		the calling flow can run evaluation in the same KV cache context.
+		The caller is responsible for ending the inference session.
 		"""
 
 	context_tier: "session_task"
 	returns: {
-		session_summary: {type: "string", from: "context.session_summary", optional: true}
-		terminal_output: {type: "string", from: "context.terminal_output", optional: true}
-		commands_run:    {type: "int",    from: "context.command_count",   optional: true}
+		terminal_output:      {type: "string", from: "context.terminal_output",      optional: true}
+		commands_run:         {type: "int",    from: "context.command_count",         optional: true}
+		inference_session_id: {type: "string", from: "context.inference_session_id",  optional: true}
 	}
-	state_reads: []
 
 	input: {
 		required: ["execution_persona", "working_directory"]
-		optional: ["max_turns", "environment_vars"]
+		optional: ["environment_vars", "expected_prompt"]
 	}
 
 	defaults: config: temperature: "t*0.8"
@@ -43,155 +53,246 @@ run_session: #FlowDefinition & {
 	steps: {
 
 		start_session: #StepDefinition & {
-			action:      "start_terminal_session"
-			description: "Start persistent shell and memoryful inference session"
+			action:      "start_interactive_session"
+			description: "Start PTY session via MCP terminal server and memoryful inference"
 			params: {
 				working_directory: {$ref: "input.working_directory"}
 				environment_vars:  {$ref: "input.environment_vars", default: ""}
 				session_goal:      {$ref: "input.execution_persona"}
+				expected_prompt:   {$ref: "input.expected_prompt", default: ""}
 			}
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.session_started == true", transition: "plan_next_command"},
+					{condition: "result.session_started == true", transition: "plan_interaction"},
 					{condition: "true", transition: "close_failure"},
 				]
 			}
-			publishes: ["session_id", "inference_session_id", "session_history"]
+			publishes: ["mcp_connection_id", "mcp_session_id", "inference_session_id", "session_history"]
 		}
 
-		plan_next_command: #StepDefinition & {
+		plan_interaction: #StepDefinition & {
 			action:      "inference"
-			description: "Model decides what to do next based on persona and observations"
+			description: "Model decides what to do next — shell command, send input, or close"
 			context: {
-				required: ["session_id", "session_history"]
+				required: ["mcp_session_id", "session_history"]
 				optional: ["inference_session_id"]
 			}
-			prompt_template: {
-				template: "run_in_terminal/plan_command"
-				context_keys: ["session_history"]
-				input_keys: ["execution_persona", "session_context"]
-			}
-			pre_compute: [{
-				formatter:  "format_session_history"
-				output_key: "session_history"
-				params: {source: {$ref: "context.session_history"}}
-			}]
-			config: temperature: "t*0.6"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "execute_command"},
-					{condition: "true", transition: "close_failure"},
+			turn: #Turn & {
+				response_shape: "menu_compound"
+				sections: [
+					{type: "role", template:        "personas/run_session_operator"},
+					{type: "evidence", template:    "run_in_terminal/session_state"},
+					{type: "instruction", template: "run_in_terminal/plan_interaction_rules"},
+					{type: "options"},
+					{type: "envelope"},
 				]
-			}
-			publishes: ["inference_response"]
-		}
-
-		execute_command: #StepDefinition & {
-			action:      "send_terminal_command"
-			description: "Send planned command to the terminal session"
-			context: required: ["session_id", "session_history", "inference_response"]
-			params: command_timeout: 30
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.stuck_detected == true", transition: "summarize_and_close"},
-					{condition: "result.command_sent == true", transition: "evaluate"},
-					{condition: "true", transition: "close_failure"},
-				]
-			}
-			publishes: ["session_id", "session_history"]
-		}
-
-		evaluate: #StepDefinition & {
-			action:      "inference"
-			description: "Model evaluates whether to continue exploring or close"
-			context: {
-				required: ["session_id", "session_history"]
-				optional: ["inference_session_id"]
-			}
-			prompt_template: {
-				template: "run_in_terminal/evaluate"
-				context_keys: ["last_command_output", "turn_count"]
-				input_keys: ["execution_persona"]
+				response: {
+					// Per-option distinct arg names — first use of this
+					// schema feature. Each option declares its own arg
+					// independently.
+					options: {
+						shell_command: #MenuOption & {
+							key:         "shell_command"
+							description: "Run a bash command. Use when at a shell prompt ($ or #) — launch programs, check files, or run one-off commands."
+							arg: {name:  "command", description: "The full bash command to execute"}
+						}
+						send_input: #MenuOption & {
+							key:         "send_input"
+							description: "Send input to a running interactive program. Use when the program is waiting at a prompt like '> ' or '? '. Include \\n at the end."
+							arg: {name:  "text", description: "The text to send to the running program"}
+						}
+						close: #MenuOption & {
+							key:         "close"
+							description: "End the session. Use when you have enough information, the goal is achieved, or you're stuck after 3+ failed attempts."
+							arg: {name:  "reason", description: "Brief explanation of why closing"}
+						}
+					}
+					publish_selection: "planned_action"
+				}
+				transitions: {
+					options: {
+						shell_command: "execute_interaction"
+						send_input:    "execute_interaction"
+						close:         "close_session"
+					}
+					// Safety — assume shell_command-like intent if
+					// unresolvable; close cleanly on retry exhaustion.
+					default:   "execute_interaction"
+					no_answer: "close_session"
+				}
+				config: temperature: "t*0.6"
+				retries: 3
 			}
 			pre_compute: [
-				{formatter: "format_last_command", output_key: "last_command_output"
-					params: {source: {$ref: "context.session_history"}}},
-				{formatter: "format_turn_count", output_key: "turn_count"
-					params: {source: {$ref: "context.session_history"}}},
+				{
+					formatter:  "format_session_history"
+					output_key: "session_history"
+					params: source: {$ref: "context.session_history"}
+				},
+				{
+					formatter:  "format_last_turn"
+					output_key: "last_turn"
+					params: source: {$ref: "context.session_history"}
+				},
 			]
-			config: {
-				temperature: "t*0.3"
-				max_tokens:  200
-			}
-			resolver: {
-				type:              "llm_menu"
-				default_transition: "summarize_and_close"
-				include_step_output: true
-				prompt: "Pick one:"
-				options: {
-					continue_interaction: {
-						description: "CONTINUE — need to explore more"
-						target:      "plan_next_command"
-					}
-					close_session: {
-						description: "CLOSE — done observing (goal met, issue found, or stuck)"
-						target:      "summarize_and_close"
-					}
-				}
-			}
 			publishes: ["inference_response"]
 		}
 
-		summarize_and_close: #StepDefinition & {
-			action:      "inference"
-			description: "Produce a structured summary of the session before closing"
+		execute_interaction: #StepDefinition & {
+			action:      "send_interaction"
+			description: "Dispatch the model's structured action to MCP terminal"
 			context: {
-				required: ["session_id", "session_history"]
-				optional: ["inference_session_id"]
-			}
-			prompt_template: {
-				template: "run_in_terminal/summarize_session"
-				context_keys: ["session_history"]
-				input_keys: ["execution_persona"]
-			}
-			pre_compute: [{
-				formatter:  "format_session_history"
-				output_key: "session_history"
-				params: {source: {$ref: "context.session_history"}}
-			}]
-			config: {
-				temperature: "t*0.3"
-				max_tokens:  300
+				required: ["mcp_connection_id", "mcp_session_id", "session_history", "inference_response"]
+				// planned_action / planned_action_arg are published by
+				// the preceding plan_interaction turn (via menu_compound
+				// publish_selection + arg). Declared optional because
+				// the action falls back to re-parsing inference_response
+				// when these aren't available (tests, legacy paths).
+				// launch_command: read to avoid re-capturing after the
+				// first shell command (ask_relaunch replays it verbatim).
+				// See action_send_interaction in interactive_actions.py.
+				optional: ["planned_action", "planned_action_arg", "launch_command"]
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "close_session"}]
+				rules: [
+					{condition: "result.session_done == true", transition: "close_session"},
+					{condition: "result.stuck_detected == true", transition: "close_session"},
+					// Program exited (e.g. the tester quit it). Don't force-
+					// close: charters can require state spanning program runs
+					// (save → relaunch → load → verify). Ask the model — via
+					// menu — whether another run is needed to complete its
+					// brief. Before this, the forced close made multi-run
+					// arcs structurally impossible and the gate reported the
+					// untested features as broken.
+					{condition: "result.process_exited == true", transition: "ask_relaunch"},
+					// Loop back to plan_interaction after a successful
+					// command. Previously there was an intermediate
+					// `evaluate` turn here — a cold-temperature binary
+					// continue/close checkpoint with its own menu. 779
+					// showed that menu confused with plan_interaction's
+					// menu (same session, alternating turns, overlapping
+					// semantics on close vs close_session) and produced
+					// 8/38 unparseable responses (21%) where the model
+					// emitted plan-shape {"choice": "send_input", ...}
+					// responses at evaluate turns. Removing the step
+					// eliminates the menu-confusion class of failures.
+					// The model still decides to stop via plan's `close`
+					// option, and runtime safeguards (stuck_detected,
+					// session_done, process_exited above) catch runaways
+					// independent of the model. See run_session.cue
+					// change log / archived evaluate step definition if
+					// we need to restore the cold-reflection checkpoint.
+					{condition: "result.command_sent == true", transition: "plan_interaction"},
+					{condition: "true", transition: "close_failure"},
+				]
 			}
-			publishes: ["session_summary"]
+			publishes: ["mcp_session_id", "session_history", "launch_command"]
 		}
 
-		close_session: #StepDefinition & {
-			action:      "close_terminal_session"
-			description: "Close the terminal session — caller interprets the summary"
+		// ── Multi-run sessions: relaunch after program exit ────────
+		// The program exited mid-session. One structured choice — in
+		// the same memoryful session, so the model remembers what it
+		// did (and saved) in the previous run.
+
+		ask_relaunch: #StepDefinition & {
+			action:      "inference"
+			description: "Program exited — does the brief need another run?"
 			context: {
-				required: ["session_id", "session_history"]
-				optional: ["inference_session_id", "session_summary"]
+				required: ["mcp_session_id", "session_history"]
+				optional: ["inference_session_id", "relaunch_count"]
 			}
+			turn: #Turn & {
+				response_shape: "menu_compound"
+				sections: [
+					{type: "evidence", template:    "run_in_terminal/session_state"},
+					{type: "instruction", template: "run_in_terminal/ask_relaunch"},
+					{type: "options"},
+					{type: "envelope"},
+				]
+				response: {
+					options: {
+						relaunch: #MenuOption & {
+							key:         "relaunch"
+							description: "Run the program again (same launch command) to complete remaining items in your brief — e.g. load a save you just made."
+						}
+						conclude: #MenuOption & {
+							key:         "conclude"
+							description: "Every item in the brief is done (or another run cannot help) — end the session and move to assessment."
+						}
+					}
+					publish_selection: "relaunch_choice"
+				}
+				transitions: {
+					options: {
+						relaunch: "do_relaunch"
+						conclude: "close_session"
+					}
+					default:   "close_session"
+					no_answer: "close_session"
+				}
+				config: temperature: "t*0.3"
+				retries: 2
+			}
+			pre_compute: [
+				{
+					formatter:  "format_session_history"
+					output_key: "session_history"
+					params: source: {$ref: "context.session_history"}
+				},
+				{
+					formatter:  "format_last_turn"
+					output_key: "last_turn"
+					params: source: {$ref: "context.session_history"}
+				},
+			]
+			publishes: ["inference_response"]
+		}
+
+		// Deterministic replay of the session's own first launch command
+		// (captured by send_interaction). Capped in the action — a model
+		// that keeps relaunching still terminates.
+		do_relaunch: #StepDefinition & {
+			action:      "relaunch_program"
+			description: "Replay the session's launch command for another run"
+			context: {
+				required: ["mcp_connection_id", "mcp_session_id", "session_history"]
+				optional: ["launch_command", "relaunch_count"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.relaunched == true", transition: "plan_interaction"},
+					{condition: "true", transition: "close_session"},
+				]
+			}
+			publishes: ["session_history", "relaunch_count"]
+		}
+
+		// PTY closes but inference session stays alive for the caller
+		// to run evaluation in the same KV cache context.
+		close_session: #StepDefinition & {
+			action:      "close_interactive_session"
+			description: "Close PTY — inference session stays alive for caller evaluation"
+			context: {
+				required: ["mcp_session_id", "session_history"]
+				optional: ["mcp_connection_id", "inference_session_id", "terminal_output", "session_summary"]
+			}
+			params: keep_inference_session: true
 			terminal: true
 			status:   "success"
-			publishes: ["terminal_output", "terminal_status", "session_summary"]
+			publishes: ["terminal_output", "inference_session_id"]
 		}
 
 		close_failure: #StepDefinition & {
-			action:      "close_terminal_session"
-			description: "Close session — failed"
-			context: optional: ["session_id", "session_history", "inference_session_id"]
+			action:      "close_interactive_session"
+			description: "Close session — failed (inference session preserved for evaluation)"
+			context: optional: ["mcp_connection_id", "mcp_session_id", "session_history", "inference_session_id", "terminal_output", "session_summary"]
+			params: keep_inference_session: true
 			terminal: true
 			status:   "failed"
-			publishes: ["terminal_output", "terminal_status"]
+			publishes: ["terminal_output", "inference_session_id"]
 		}
 	}
 

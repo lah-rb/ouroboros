@@ -20,9 +20,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Local imports
-from core.config import get_config, init_config
-from inference.tokenizer import create_tokenizer, tokenize_text
+# Local imports (sys.path modified above to allow repo-relative imports)
+from core.config import get_config, init_config  # noqa: E402
+from inference.tokenizer import (  # noqa: E402
+    create_tokenizer,
+    tokenize_segments,
+)
+from formats.renderer import join_segments  # noqa: E402
 
 
 def write_token_file(token_ids: list[int], out_path: Path) -> None:
@@ -59,6 +63,7 @@ def main():
 
         # Load the format renderer for this model family
         from formats.registry import get_renderer
+
         renderer = get_renderer(config.model.family)
         print(f"📐 Format: {renderer.s.display_name} (family={config.model.family})")
 
@@ -83,17 +88,34 @@ def main():
                 tools = tools_path.read_text(encoding="utf-8")
                 print(f"🔧 Tools: {tools_path.name} ({len(tools)} chars)")
 
-        # Render the static prefix
-        static_text = renderer.render_system(
+        # Render the static prefix as (text, is_framing) segments so framing
+        # tokenizes as canonical special tokens while persona/tools content
+        # stays plain text.
+        static_segments = renderer.render_system_segments(
             persona=persona,
+            reasoning=config.model.thinking_mode,
             tools=tools,
         )
+        static_text = join_segments(static_segments)
         print(f"📝 Static prefix: {len(static_text)} chars")
 
-        # Tokenize
-        print("🧩 Tokenizing …")
+        # Tokenize — BOS behavior is read from GGUF metadata.
+        # The model file is authoritative for whether BOS should be
+        # prepended (e.g. Tekken/Mistral: add_bos=true, ChatML/Qwen: false).
+        from inference.metadata import (
+            read_metadata,
+            log_metadata,
+            log_metadata_vs_config,
+        )
+
         tokenizer = create_tokenizer()
-        token_ids = tokenize_text(tokenizer, static_text)
+        metadata = read_metadata(tokenizer)
+        log_metadata(metadata)
+        log_metadata_vs_config(metadata)
+
+        needs_bos = metadata.add_bos
+        print(f"🧩 Tokenizing (add_bos={needs_bos}, source=GGUF metadata) …")
+        token_ids = tokenize_segments(tokenizer, static_segments, add_bos=needs_bos)
 
         token_out_path = Path(config.knowledge.tokens_bin).expanduser().resolve()
 
@@ -109,10 +131,10 @@ def main():
         write_token_file(token_ids, token_out_path)
 
         # Report what's in the prefix
-        print(f"\n📊 Prefix breakdown:")
+        print("\n📊 Prefix breakdown:")
         print(f"   Stop tokens: {renderer.stop_tokens()}")
         print(f"   Delimiter:   {renderer.delimiter_pattern()!r}")
-        print(f"\n🚀 Assets ready. Launch with: uv run llmvp.py --backend")
+        print("\n🚀 Assets ready. Launch with: uv run llmvp.py --backend")
 
     except Exception as exc:
         print(f"❌ Error during processing: {exc}")
@@ -133,6 +155,7 @@ if __name__ == "__main__":
 
     if args.config:
         from core.config import load_config
+
         load_config(Path(args.config))
 
     exit(main())

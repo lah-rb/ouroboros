@@ -1,0 +1,4 @@
+id: project_ops/task
+content: |
+  ## Task
+  {input.flow_directive}

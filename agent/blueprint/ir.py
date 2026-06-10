@@ -99,10 +99,17 @@ class StepIR:
     context_required: list[str] = field(default_factory=list)
     context_optional: list[str] = field(default_factory=list)
     publishes: list[str] = field(default_factory=list)
-    prompt: str | None = None  # Legacy inline prompt (unused in CUE flows)
-    prompt_template: str | None = None  # Template ID (e.g., "mission_control/reason")
+    prompt_template: str | None = (
+        None  # Template ID (e.g., "create_file/generate_content")
+    )
     prompt_injects: list[str] = field(default_factory=list)  # Extracted variable refs
     pre_compute: list[str] = field(default_factory=list)  # Pre-compute formatter names
+    pre_compute_input_refs: list[str] = field(
+        default_factory=list
+    )  # input.<name> refs in pre_compute params
+    params_input_refs: list[str] = field(
+        default_factory=list
+    )  # input.<name> refs in step-level params
     config: ConfigIR | None = None
     resolver: ResolverIR = field(default_factory=lambda: ResolverIR(type="none"))
     effects: list[str] = field(default_factory=list)  # Declared effects
@@ -140,10 +147,6 @@ class TailCallIR:
     target_flow: str  # Flow name, or "$ref:path" for dynamic dispatch
     from_step: str
     input_map: dict[str, str] = field(default_factory=dict)
-    result_formatter: str | None = None  # Registered formatter name
-    result_keys: list[str] = field(
-        default_factory=list
-    )  # Context/input paths for formatter
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -194,8 +197,12 @@ class FlowIR:
     stats: FlowStatsIR = field(default_factory=FlowStatsIR)
 
     # Context Contract Architecture
-    context_tier: str = ""  # "mission_objective" | "project_goal" | "flow_directive" | "session_task"
-    returns: dict[str, Any] = field(default_factory=dict)  # Structured return declarations
+    context_tier: str = (
+        ""  # "mission_objective" | "project_goal" | "flow_directive" | "session_task"
+    )
+    returns: dict[str, Any] = field(
+        default_factory=dict
+    )  # Structured return declarations
     state_reads: list[str] = field(default_factory=list)  # Persistence paths loaded
 
     # Persona

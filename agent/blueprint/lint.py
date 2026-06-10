@@ -10,8 +10,9 @@ Advisory only — does not block mission creation.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
 
 from agent.blueprint.ir import BlueprintIR, FlowIR, StepIR
 
@@ -48,8 +49,8 @@ def lint_flows(ir: BlueprintIR, verbose: bool = False) -> list[LintResult]:
     results.extend(_check_unused_optional_inputs(ir))
     results.extend(_check_published_never_consumed(ir))
     results.extend(_check_consumed_never_published(ir))
-    results.extend(_check_prompt_conventions(ir))
     results.extend(_check_resolver_conventions(ir))
+    results.extend(_check_duplicate_class_defs())
 
     if not verbose:
         results = [r for r in results if r.level != "INFO"]
@@ -66,6 +67,15 @@ def lint_flows(ir: BlueprintIR, verbose: bool = False) -> list[LintResult]:
 
 def _check_unused_optional_inputs(ir: BlueprintIR) -> list[LintResult]:
     """Warn about flow optional inputs that no step references."""
+    import re
+
+    # Pattern to extract input.<name> refs from resolver condition strings.
+    # Matches: input.foo, input.get('foo'), input.get("foo").
+    input_ref_patterns = [
+        re.compile(r"\binput\.(\w+)"),
+        re.compile(r"\binput\.get\(\s*['\"](\w+)['\"]"),
+    ]
+
     results = []
 
     for flow_name, flow in ir.flows.items():
@@ -83,14 +93,40 @@ def _check_unused_optional_inputs(ir: BlueprintIR) -> list[LintResult]:
                 continue
             referenced.update(step.context_required)
             referenced.update(step.context_optional)
-            # Check prompt template references
-            if step.prompt:
-                for match in re.finditer(r"\{\{\s*input\.(\w+)", step.prompt):
-                    referenced.add(match.group(1))
             # Check param template references
             for pkey in step.prompt_injects:
                 if pkey.startswith("input."):
                     referenced.add(pkey[6:])
+            # Pre-compute $ref:input.<n> references
+            referenced.update(step.pre_compute_input_refs)
+            # Step-level params $ref:input.<n> references
+            referenced.update(step.params_input_refs)
+            # Resolver rule conditions that reference input.<name>
+            if step.resolver and step.resolver.rules:
+                for rule in step.resolver.rules:
+                    for pat in input_ref_patterns:
+                        referenced.update(pat.findall(rule.condition))
+            # LLM menu resolver prompts can also reference input.<name>
+            if step.resolver and step.resolver.prompt:
+                for pat in input_ref_patterns:
+                    referenced.update(pat.findall(step.resolver.prompt))
+
+        # Also scan sub-flow invocations and tail-calls for $ref:input.<x>
+        # references — these are how dispatchable flows pass their inputs
+        # down to sub-flows or back up to mission_control. input_map values
+        # may be raw $ref strings or stringified dicts/lists (e.g., list
+        # elements that contain $refs get rendered as Python-repr strings).
+        _embedded_ref = re.compile(r"\$ref:input\.(\w+)|'\$ref':\s*'input\.(\w+)")
+        for sub in flow.sub_flows:
+            for v in sub.input_map.values():
+                if isinstance(v, str):
+                    for m in _embedded_ref.finditer(v):
+                        referenced.add(m.group(1) or m.group(2))
+        for tc in flow.tail_calls:
+            for v in tc.input_map.values():
+                if isinstance(v, str):
+                    for m in _embedded_ref.finditer(v):
+                        referenced.add(m.group(1) or m.group(2))
 
         for opt in optional_inputs:
             if opt not in referenced:
@@ -187,54 +223,6 @@ def _check_consumed_never_published(ir: BlueprintIR) -> list[LintResult]:
     return results
 
 
-# ── Check 4: Prompt convention violations ────────────────────────────
-
-
-def _check_prompt_conventions(ir: BlueprintIR) -> list[LintResult]:
-    """Warn about inference step prompts that don't follow conventions."""
-    results = []
-
-    for flow_name, flow in ir.flows.items():
-        if not isinstance(flow, FlowIR):
-            continue
-
-        for step_name, step in flow.steps.items():
-            if not isinstance(step, StepIR):
-                continue
-            if step.action_type != "inference" or not step.prompt:
-                continue
-
-            prompt = step.prompt
-
-            # Check for output format examples (✅ or ❌)
-            has_correct = "✅" in prompt or "CORRECT" in prompt
-            has_wrong = "❌" in prompt or "WRONG" in prompt
-
-            if not has_correct:
-                results.append(
-                    LintResult(
-                        level="WARNING",
-                        flow=flow_name,
-                        step=step_name,
-                        check="prompt_missing_correct_example",
-                        message="inference prompt missing ✅ CORRECT output example",
-                    )
-                )
-
-            if not has_wrong:
-                results.append(
-                    LintResult(
-                        level="WARNING",
-                        flow=flow_name,
-                        step=step_name,
-                        check="prompt_missing_wrong_example",
-                        message="inference prompt missing ❌ WRONG output example",
-                    )
-                )
-
-    return results
-
-
 # ── Check 5: Resolver convention checks ──────────────────────────────
 
 
@@ -268,5 +256,57 @@ def _check_resolver_conventions(ir: BlueprintIR) -> list[LintResult]:
                                 ),
                             )
                         )
+
+    return results
+
+
+# ── Check: Duplicate class definitions across agent/ ─────────────────
+
+
+def _check_duplicate_class_defs() -> list[LintResult]:
+    """Flag top-level class names defined in more than one file under agent/.
+
+    Catches the trap where the same class name (e.g., FlowRuntimeError)
+    exists in multiple modules — callers importing one file's version will
+    not catch instances from the other, leading to silent exception-handler
+    misses. Detection is a simple grep for `^class Name\\b`; nested classes
+    are excluded by the leading-edge anchor.
+    """
+    results: list[LintResult] = []
+
+    agent_root = Path(__file__).resolve().parent.parent
+    if not agent_root.exists() or agent_root.name != "agent":
+        return results
+
+    class_pattern = re.compile(r"^class (\w+)\b", re.MULTILINE)
+    # name -> list of file paths (relative to agent_root) declaring it
+    occurrences: dict[str, list[str]] = defaultdict(list)
+
+    for py in agent_root.rglob("*.py"):
+        if "__pycache__" in py.parts:
+            continue
+        try:
+            source = py.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        rel = str(py.relative_to(agent_root))
+        for m in class_pattern.finditer(source):
+            occurrences[m.group(1)].append(rel)
+
+    for name, paths in sorted(occurrences.items()):
+        if len(paths) > 1:
+            results.append(
+                LintResult(
+                    level="WARNING",
+                    flow="(agent)",
+                    step=None,
+                    check="duplicate_class_def",
+                    message=(
+                        f"class '{name}' defined in {len(paths)} files: "
+                        f"{', '.join(sorted(paths))} — "
+                        "caller using one import will not catch instances from the other"
+                    ),
+                )
+            )
 
     return results

@@ -1,0 +1,19 @@
+id: patch/rewrite_function_instruction
+content: |
+  {context.already_rewritten_block}
+  {context.call_graph_block}
+  Rewrite this function completely. Your output must be the full
+  function definition:
+
+  - Start with any decorators (`@cached`, `@staticmethod`, etc.) on
+    their own lines above the `def` statement
+  - Then the `def` statement with its full signature (parameters,
+    type hints, return type — exactly as needed)
+  - Then the complete function body
+  - Preserve indentation as it appears in the file (top-level
+    function → no indent; method → one level of indent)
+  - Do NOT include anything outside the function — no surrounding
+    class, no imports, no other code
+
+  The splicer uses AST positions to place your output — extra
+  scaffolding will break the replacement.

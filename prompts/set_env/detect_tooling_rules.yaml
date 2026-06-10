@@ -1,0 +1,50 @@
+id: set_env/detect_tooling_rules
+content: |
+  Determine validation commands for each file extension in this project.
+
+  For each extension, provide commands for these fields:
+
+  - `install_command` — install dependencies for this language
+    (optional but strongly recommended). Python with pyproject.toml:
+    `uv pip install -r pyproject.toml` (installs the declared dependencies
+    into a clean per-project venv that is created automatically — the program
+    is run from source, so do NOT editable-install the package, and do NOT use
+    bare `pip`).  Node.js: `npm install`.
+  - `formatter` — auto-format the file (optional but strongly recommended).
+    Python: `black` or `ruff format`.
+  - `syntax` — does the file parse/compile? **Required for every extension.**
+    Python: `python -c "import py_compile; py_compile.compile('{file}', doraise=True)"`
+    (use a `-c` one-liner; do NOT use `python -m py_compile {file}` — `-m` takes
+    the module name only, so the file path must be a separate argument).
+  - `import` — can the module be imported/loaded? (optional)
+  - `cross_import` — verify every `from X import Y` in the file resolves
+    against the project's own files (optional). Python example:
+    `python -c "from {module} import *"`
+  - `lint` — code-quality check (optional). Prefer an auto-fixing variant
+    when the linter supports it (`ruff check --fix`, `eslint --fix`, etc.)
+    so validation also repairs safely-fixable issues. The check should
+    still fail (non-zero exit) on issues the auto-fixer couldn't resolve.
+
+  Use commands that are standard for the language and likely installed.
+  Use `{file}` as a placeholder for the file path. Use `{module}` as a
+  placeholder for the module name (Python: convert path to module, e.g.
+  `app/main.py` → `app.main`).
+
+  Also determine the **interactive prompt character** for this project.
+  If the project has an interactive mode (game, REPL, CLI tool that reads
+  user input), identify the exact prompt string the program displays when
+  waiting for user input. Look in the source files for calls like
+  `input("> ")`, `input(">>> ")`, `input("? ")`, `raw_input()`, or
+  readline usage. Include as `interactive_prompt` at the top level of
+  your JSON output. Omit or set to `""` if the project is not interactive.
+
+  ## Rules
+
+  - Only include extensions present in the project files.
+  - `syntax` is required for every extension.
+  - `install_command` should install all dependencies declared in the
+    project config (`pyproject.toml`, `package.json`, `Cargo.toml`, etc.).
+    Omit if none.
+  - `import`, `cross_import`, and `lint` are optional — omit if no
+    standard tool exists.
+  - Use `{file}` and `{module}` placeholders, not literal paths.

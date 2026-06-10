@@ -22,17 +22,22 @@ project_ops: #FlowDefinition & {
 
 	context_tier: "flow_directive"
 	returns: {
-		setup_complete: {type: "bool", from: "context.setup_result",  optional: true}
-		files_changed:  {type: "list", from: "context.files_changed", optional: true}
-		env_detected:   {type: "bool", from: "context.env_config",    optional: true}
+		setup_complete:    {type: "bool", from: "context.setup_result",       optional: true}
+		files_changed:     {type: "list", from: "context.files_changed",      optional: true}
+		env_detected:      {type: "bool", from: "context.env_config",         optional: true}
+		directive_report:  {type: "dict", from: "context.directive_report",   optional: true}
 	}
-	state_reads: []
+
+	projections: {
+		project_setup_context: _projections.project_setup_context
+	}
+
 
 	input: {
-		required: ["mission_id", "task_id", "flow_directive"]
+		required: ["mission_id", "goal_id", "flow_directive"]
 		optional: [
 			"working_directory",
-			"relevant_notes", "setup_focus",
+			"project_setup_context", "setup_focus",
 		]
 	}
 
@@ -57,24 +62,34 @@ project_ops: #FlowDefinition & {
 		plan_setup: #StepDefinition & {
 			action:      "inference"
 			description: "Determine what setup actions are needed"
-			context: optional: ["project_manifest", "repo_map_formatted", "context_bundle"]
-			prompt_template: {
-				template: "project_ops/plan"
-				context_keys: ["project_file_list"]
-				input_keys: ["flow_directive", "setup_focus", "relevant_notes"]
-			}
-			pre_compute: [{
-				formatter: "format_project_file_list", output_key: "project_file_list"
-				params: {source: {$ref: "context.project_manifest"}}
-			}]
-			config: temperature: "t*0.3"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "write_files"},
-					{condition: "true", transition: "failed"},
+			context: optional: ["project_manifest", "repo_map_formatted"]
+			turn: #Turn & {
+				response_shape: "code"
+				sections: [
+					{type: "role", template:        "personas/project_ops_setup"},
+					{type: "problem", template:     "project_ops/task"},
+					{type: "problem", ref:          {$ref: "input.setup_focus"}, title: "Focus"},
+					{type: "context_files", ref:    {$ref: "context.project_file_list"}},
+					{type: "dependencies", ref:     {$ref: "context.setup_brief"}},
+					{type: "instruction", template: "project_ops/plan_setup_instruction"},
+					{type: "envelope"},
 				]
+				// Multi-file, varied languages — per-fence language tag is
+				// authoritative, declared in the instruction template.
+				response: language: ""
+				transitions: {
+					default:   "write_files"
+					no_answer: "build_report_failure"
+				}
+				config: temperature: "t*0.4"
+				retries: 3
 			}
+			pre_compute: [
+				{formatter: "render_project_setup_context", output_key: "setup_brief"
+					params: source:                                    {$ref: "input.project_setup_context"}},
+				{formatter: "format_project_file_list", output_key: "project_file_list"
+					params: source:                                {$ref: "context.project_manifest"}},
+			]
 			publishes: ["inference_response"]
 		}
 
@@ -115,38 +130,100 @@ project_ops: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "true", transition: "report_success"},
+					{condition: "true", transition: "collect_installs"},
 				]
 			}
 		}
 
-		// ── Terminal paths ──────────────────────────────────────────
+		// ── Phase 6: Install dependencies ─────────────────────────
+		//
+		// Collect install_command from each language section in env.json,
+		// then run them sequentially. Ensures dependencies declared in
+		// pyproject.toml, package.json, etc. are actually installed.
 
-		report_success: #StepDefinition & {
-			action:      "noop"
-			description: "Project setup complete"
-			context: optional: ["files_changed"]
-			tail_call: {
-				flow: "mission_control"
-				input_map: {
-					mission_id:   {$ref: "input.mission_id"}
-					last_task_id: {$ref: "input.task_id"}
-					last_status:  "success"
-				}
+		collect_installs: #StepDefinition & {
+			action:      "collect_env_field"
+			description: "Collect install commands from all language sections in env config"
+			params: {
+				field:      "install_command"
+				output_key: "install_commands"
 			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.commands_found == true", transition: "run_installs"},
+					{condition: "true", transition: "build_report_success"},
+				]
+			}
+			publishes: ["install_commands"]
 		}
 
-		failed: #StepDefinition & {
-			action:      "noop"
-			description: "Setup failed"
-			tail_call: {
-				flow: "mission_control"
-				input_map: {
-					mission_id:   {$ref: "input.mission_id"}
-					last_task_id: {$ref: "input.task_id"}
-					last_status:  "failed"
-				}
+		run_installs: #StepDefinition & {
+			action:      "flow"
+			description: "Run collected install commands sequentially"
+			flow:        "run_commands"
+			input_map: {
+				commands:          {$ref: "context.install_commands"}
+				working_directory: {$ref: "input.working_directory"}
+				timeout:           120
+				stop_on_error:     true
 			}
+			resolver: {
+				type: "rule"
+				rules: [
+					// all_passed lives in context (via publishes), not in
+					// result (sub-flow returns nest under result._returns).
+					{condition: "context.get('all_passed') == true", transition: "build_report_success"},
+					{condition: "true", transition: "build_report_failure"},
+				]
+			}
+			publishes: ["all_passed"]
+		}
+
+		// ── Build directive reports before tail-call ────────────────
+
+		build_report_success: #StepDefinition & {
+			action:      "build_directive_report"
+			description: "Build mechanical report for successful project setup"
+			context: optional: ["files_changed", "setup_result"]
+			params: {
+				flow_name: "project_ops"
+				status:    "success"
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "report_success"}]
+			}
+			publishes: ["directive_report"]
+		}
+
+		build_report_failure: #StepDefinition & {
+			action:      "build_directive_report"
+			description: "Build mechanical report for failed project setup"
+			context: optional: ["files_changed"]
+			params: {
+				flow_name: "project_ops"
+				status:    "failed"
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "failed"}]
+			}
+			publishes: ["directive_report"]
+		}
+
+		// ── Tail-call terminal steps ──────────────────────────────
+
+		report_success: #StepDefinition & _templates.return_to_director & {
+			description: "Project setup complete"
+			context: optional: ["files_changed", "directive_report"]
+			tail_call: input_map: last_status: "success"
+		}
+
+		failed: #StepDefinition & _templates.return_to_director & {
+			description: "Setup failed"
+			context: optional: ["directive_report"]
+			tail_call: input_map: last_status: "failed"
 		}
 	}
 

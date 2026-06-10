@@ -1,573 +1,518 @@
-"""YAML parser and validator for flow definitions.
+"""Loader pipeline for CUE-exported flow definitions.
 
-Loads flow YAML files, validates them with Pydantic models, and performs
-semantic validation (transition targets exist, context key reachability,
-terminal states reachable, etc.)
+Pipeline:
+  CUE export → JSON → load_flow_json() → FlowDefinition
 
-Includes step template expansion: steps declaring `use: template_name`
-are expanded against a StepTemplateRegistry before validation.
+Responsibilities:
+  - Parse CUE-exported JSON into FlowDefinition (Pydantic)
+  - Run semantic validation (transitions, context reachability, terminals)
+  - Resolve $ref values in params / input_map at runtime
+  - Run pre-compute formatters before prompt rendering
+  - Render section-based YAML prompt templates
+  - Assemble structured returns at terminal steps
+
+CUE has already validated types, cross-field constraints, template
+unification, and entry-step existence by the time Python sees the JSON.
 """
 
 from __future__ import annotations
 
-import copy
-import os
+import logging
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import ValidationError
 
-from agent.models import (
-    FlowDefinition,
-    ParamSchemaEntry,
-    StepTemplate,
-    StepTemplateRegistry,
-)
+from agent.errors import FlowRuntimeError
+
+logger = logging.getLogger(__name__)
 
 
-class FlowLoadError(Exception):
-    """Raised when a flow definition fails to load or validate."""
-
-    pass
-
-
-class FlowValidationError(FlowLoadError):
-    """Raised when a flow definition fails semantic validation."""
-
-    pass
-
-
-def load_flow(path: str | Path) -> FlowDefinition:
-    """Load and validate a flow definition from a YAML file.
-
-    Performs two levels of validation:
-    1. Structural: Pydantic model validation (types, required fields).
-    2. Semantic: Graph validation (transitions, context keys, terminals).
-
-    Args:
-        path: Path to the YAML flow definition file.
-
-    Returns:
-        A validated FlowDefinition.
-
-    Raises:
-        FlowLoadError: If the file can't be read or parsed.
-        FlowValidationError: If semantic validation fails.
-    """
-    path = Path(path)
-
-    if not path.exists():
-        raise FlowLoadError(f"Flow file not found: {path}")
-
-    if not path.suffix in (".yaml", ".yml"):
-        raise FlowLoadError(f"Flow file must be .yaml or .yml: {path}")
-
-    # Parse YAML
-    try:
-        with open(path, "r") as f:
-            raw = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        raise FlowLoadError(f"YAML parse error in {path}: {e}") from e
-
-    if not isinstance(raw, dict):
-        raise FlowLoadError(
-            f"Flow file must contain a YAML mapping, got {type(raw).__name__}"
-        )
-
-    # Structural validation via Pydantic
-    try:
-        flow = FlowDefinition(**raw)
-    except ValidationError as e:
-        raise FlowLoadError(f"Flow definition validation error in {path}:\n{e}") from e
-
-    # Semantic validation
-    _validate_semantics(flow, path)
-
-    return flow
+# ── Stage 1: Ref Resolution ─────────────────────────────────────────
+#
+# Called by: runtime._build_step_input() and runtime._execute_subflow()
+# Input:    A value that may be a $ref dict, a literal, or nested
+# Output:   The resolved value
+#
+# Resolution happens at RUNTIME, not load time, because refs reference
+# input/context/meta which only exist during execution.
+#
+# Resolution rules:
+#   1. If value is a dict with "$ref" key → resolve the ref
+#   2. If value is a plain literal → return as-is
+#   3. If value is a list/dict without "$ref" → recurse
+#
+# Ref resolution:
+#   - Parse the dotted path: "input.mission_id" → namespace="input", path=["mission_id"]
+#   - Navigate into the namespace dict following the path
+#   - If the value is None/missing and "default" is set → return default
+#   - If the value is None/missing and "fallback" is set → try each fallback in order
+#   - If all resolution fails → return None (not an error — optional refs are common)
 
 
-def load_flow_from_dict(data: dict[str, Any]) -> FlowDefinition:
-    """Load and validate a flow definition from a dictionary.
-
-    Useful for testing — same validation as load_flow but without file I/O.
+def resolve_value(value: Any, namespaces: dict[str, Any]) -> Any:
+    """Resolve a value that may contain $ref references.
 
     Args:
-        data: Dictionary matching the flow YAML structure.
+        value: A literal, a $ref dict, or a nested structure containing refs.
+        namespaces: Dict of available namespaces, e.g.:
+            {"input": {...}, "context": {...}, "meta": {...}}
 
     Returns:
-        A validated FlowDefinition.
-
-    Raises:
-        FlowLoadError: If structural validation fails.
-        FlowValidationError: If semantic validation fails.
+        The resolved value.
     """
-    try:
-        flow = FlowDefinition(**data)
-    except ValidationError as e:
-        raise FlowLoadError(f"Flow definition validation error:\n{e}") from e
+    if isinstance(value, dict) and "$ref" in value:
+        return _resolve_ref(value, namespaces)
+    elif isinstance(value, dict):
+        return {k: resolve_value(v, namespaces) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [resolve_value(item, namespaces) for item in value]
+    else:
+        return value
 
-    _validate_semantics(flow, source="<dict>")
-    return flow
 
+def _resolve_ref(ref: dict, namespaces: dict[str, Any]) -> Any:
+    """Resolve a single $ref dict.
 
-def load_all_flows(directory: str | Path) -> dict[str, FlowDefinition]:
-    """Load all flow definitions from a directory and its subdirectories.
-
-    Scans for .yaml and .yml files, loads each one.
-    Skips registry.yaml and step_templates.yaml.
-    Recurses into shared/ and tasks/ subdirectories.
-
-    If a step_templates.yaml exists in shared/, loads it and uses
-    template expansion when loading flows.
+    Ref format: {"$ref": "namespace.dotted.path", "default": ..., "fallback": [...]}
 
     Args:
-        directory: Path to the flows directory.
+        ref: The $ref dict.
+        namespaces: Available namespaces.
 
     Returns:
-        Dictionary mapping flow names to FlowDefinition objects.
-
-    Raises:
-        FlowLoadError: If the directory doesn't exist or any flow fails to load.
+        The resolved value, or None if unresolvable.
     """
-    directory = Path(directory)
-    if not directory.is_dir():
-        raise FlowLoadError(f"Flows directory not found: {directory}")
+    path_str = ref["$ref"]
+    parts = path_str.split(".")
+    namespace_name = parts[0]  # "input", "context", or "meta"
+    key_path = parts[1:]  # ["mission_id"] or ["dispatch_config", "flow"]
 
-    # Load template registry if available
-    template_registry = load_template_registry(str(directory))
+    # Navigate into the namespace
+    current = namespaces.get(namespace_name)
+    if current is None:
+        return _apply_fallbacks(ref, namespaces)
 
-    flows: dict[str, FlowDefinition] = {}
-    skip_names = {"registry.yaml", "step_templates.yaml"}
+    for part in key_path:
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif hasattr(current, part):
+            current = getattr(current, part)
+        else:
+            current = None
+        if current is None:
+            break
 
-    def _scan_dir(scan_path: Path) -> None:
-        if not scan_path.is_dir():
-            return
-        for file_path in sorted(scan_path.iterdir()):
-            if file_path.is_dir():
-                # Recurse into subdirectories (shared/, tasks/)
-                _scan_dir(file_path)
-                continue
-            if file_path.suffix not in (".yaml", ".yml"):
-                continue
-            if file_path.name in skip_names:
-                continue
+    if current is not None:
+        return current
 
-            if template_registry.templates:
-                flow = load_flow_with_templates(str(file_path), template_registry)
+    return _apply_fallbacks(ref, namespaces)
+
+
+def _apply_fallbacks(ref: dict, namespaces: dict[str, Any]) -> Any:
+    """Apply default or fallback chain when primary ref resolves to None."""
+    if "default" in ref:
+        return ref["default"]
+
+    if "fallback" in ref:
+        for fallback_item in ref["fallback"]:
+            if isinstance(fallback_item, dict) and "$ref" in fallback_item:
+                result = _resolve_ref(fallback_item, namespaces)
+                if result is not None:
+                    return result
+            elif fallback_item is not None:
+                # Literal fallback value
+                return fallback_item
+
+    return None
+
+
+def resolve_params(
+    params: dict[str, Any], namespaces: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve all $ref values in a params dictionary.
+
+    Drop-in replacement for render_params().
+
+    Args:
+        params: Step params dict (may contain $ref values).
+        namespaces: Available namespaces.
+
+    Returns:
+        New dict with all refs resolved.
+    """
+    return {k: resolve_value(v, namespaces) for k, v in params.items()}
+
+
+def resolve_input_map(
+    input_map: dict[str, Any], namespaces: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve all $ref values in an input_map (tail_call or sub-flow).
+
+    Drop-in replacement for Jinja2 rendering of input_map values.
+
+    Args:
+        input_map: Mapping of target input names → values (may contain $refs).
+        namespaces: Available namespaces.
+
+    Returns:
+        New dict with all refs resolved to runtime values.
+    """
+    return {k: resolve_value(v, namespaces) for k, v in input_map.items()}
+
+
+# ── Stage 3: Pre-Compute Formatters ─────────────────────────────────
+#
+# Replaces: Complex Jinja2 loops and filters inside prompt templates
+# Called by: runtime._execute_inference_action() before prompt rendering
+# Input:    pre_compute list from step definition + live context
+# Output:   Additional context keys injected into the namespace
+#
+# Each pre_compute entry names a registered formatter function and an
+# output_key. The formatter runs, and its return value is added to
+# the context namespace under that key. The prompt template then
+# references {context.output_key} as a simple string insertion.
+
+
+# Formatter registry — maps names to callables
+# Each formatter signature: (params: dict, namespaces: dict) -> str
+_formatter_registry: dict[str, Any] = {}
+
+
+def register_formatter(name: str, fn: Any) -> None:
+    """Register a pre-compute formatter function.
+
+    Args:
+        name: Formatter name (matches pre_compute.formatter in flow defs).
+        fn: Callable with signature (params: dict, namespaces: dict) -> str
+    """
+    _formatter_registry[name] = fn
+
+
+def run_pre_compute(
+    pre_compute_steps: list[dict],
+    namespaces: dict[str, Any],
+) -> dict[str, str]:
+    """Run pre-compute formatters and return computed context keys.
+
+    Args:
+        pre_compute_steps: List of pre_compute dicts from step definition.
+            Each has: formatter (str), output_key (str), params (dict).
+        namespaces: Current input/context/meta namespaces.
+
+    Returns:
+        Dict of output_key → formatted string, to be merged into context.
+    """
+    computed = {}
+
+    for step in pre_compute_steps:
+        # Handle both Pydantic PreComputeStep models and raw dicts
+        if isinstance(step, dict):
+            formatter_name = step["formatter"]
+            output_key = step["output_key"]
+            raw_params = step.get("params", {})
+        else:
+            formatter_name = step.formatter
+            output_key = step.output_key
+            raw_params = (
+                step.params if isinstance(step.params, dict) else step.params or {}
+            )
+
+        # Resolve any $refs in the formatter's params
+        resolved_params = resolve_params(raw_params, namespaces)
+
+        # Look up and call the formatter
+        formatter_fn = _formatter_registry.get(formatter_name)
+        if formatter_fn is None:
+            raise FlowRuntimeError(
+                f"Unknown pre-compute formatter: {formatter_name!r}. "
+                f"Registered: {list(_formatter_registry.keys())}"
+            )
+
+        result = formatter_fn(resolved_params, namespaces)
+        computed[output_key] = result
+
+        # Propagate into namespaces so subsequent formatters in the
+        # same chain can reference earlier outputs via $ref.
+        # Example: step 1 writes "arch_fallback_context", step 2
+        # reads {$ref: "context.arch_fallback_context"} to coalesce.
+        namespaces["context"][output_key] = result
+
+    return computed
+
+
+# ── Stage 4: Prompt Template Rendering ───────────────────────────────
+#
+# Replaces: Jinja2 render_template() for prompt: | blocks
+# Called by: runtime._execute_inference_action()
+# Input:    Prompt template file (YAML sections) + resolved namespaces
+# Output:   Assembled prompt string
+#
+# The renderer:
+#   1. Loads the template YAML file by template ID
+#   2. Walks sections in order
+#   3. For each section:
+#      a. Evaluates `when` condition (truthiness of a namespace value)
+#      b. If `loop` is declared, iterates and expands per-item
+#      c. Substitutes {input.X}, {context.X}, {meta.X} in content
+#   4. Joins all rendered sections with double newlines
+#   5. Returns the assembled string
+
+
+class PromptRenderer:
+    """Loads and renders structured prompt templates."""
+
+    def __init__(self, prompts_dir: str | Path):
+        """Initialize with the prompts directory path.
+
+        Args:
+            prompts_dir: Root directory containing prompt template files.
+                         Templates are at <prompts_dir>/<template_id>.yaml
+        """
+        self.prompts_dir = Path(prompts_dir)
+        self._cache: dict[str, dict] = {}
+
+    def load_template(self, template_id: str) -> dict:
+        """Load a prompt template by ID.
+
+        Args:
+            template_id: Template identifier, e.g. "create_file/generate_content"
+                         Maps to <prompts_dir>/create_file/generate_content.yaml
+
+        Returns:
+            Parsed template dict with id, description, sections.
+        """
+        if template_id in self._cache:
+            return self._cache[template_id]
+
+        template_path = self.prompts_dir / f"{template_id}.yaml"
+        if not template_path.exists():
+            raise FlowRuntimeError(f"Prompt template not found: {template_path}")
+
+        with open(template_path, "r") as f:
+            template = yaml.safe_load(f)
+
+        self._cache[template_id] = template
+        return template
+
+    def render(self, template_id: str, namespaces: dict[str, Any]) -> str:
+        """Render a prompt template against live namespaces.
+
+        Args:
+            template_id: Template identifier.
+            namespaces: Dict with "input", "context", "meta" keys.
+
+        Returns:
+            Assembled prompt string.
+        """
+        template = self.load_template(template_id)
+        rendered_sections = []
+
+        for section in template.get("sections", []):
+            rendered = self._render_section(section, namespaces)
+            if rendered is not None:
+                rendered_sections.append(rendered)
+
+        return "\n\n".join(rendered_sections)
+
+    def _render_section(self, section: dict, namespaces: dict[str, Any]) -> str | None:
+        """Render a single section, returning None if skipped.
+
+        Handles three section types:
+          - Static: always renders
+          - Conditional: renders if `when` value is truthy
+          - Loop: repeats content for each item in a list
+        """
+        # Check `when` condition
+        if "when" in section:
+            condition_value = self._resolve_path(section["when"], namespaces)
+            if not condition_value:
+                return None
+
+        # Handle loop sections
+        if "loop" in section:
+            return self._render_loop_section(section, namespaces)
+
+        # Render content with variable substitution
+        content = section.get("content", "")
+        return self._substitute(content, namespaces)
+
+    def _render_loop_section(
+        self, section: dict, namespaces: dict[str, Any]
+    ) -> str | None:
+        """Render a loop section by iterating over a list."""
+        loop_source = self._resolve_path(section["loop"], namespaces)
+        if not loop_source or not isinstance(loop_source, list):
+            return None
+
+        separator = section.get("separator", "\n")
+        content_template = section.get("content", "")
+        header = section.get("header", "")
+        footer = section.get("footer", "")
+
+        rendered_items = []
+        for item in loop_source:
+            # Create a temporary namespace with the loop variable.
+            # Templates reference loop items as {loop.field} (or {loop} for
+            # simple string lists).
+            loop_namespaces = {**namespaces, "loop": item}
+
+            rendered = self._substitute(content_template, loop_namespaces)
+            rendered_items.append(rendered)
+
+        body = separator.join(rendered_items)
+
+        parts = []
+        if header:
+            parts.append(self._substitute(header, namespaces))
+        parts.append(body)
+        if footer:
+            parts.append(self._substitute(footer, namespaces))
+
+        return "\n".join(parts)
+
+    # Compiled regex for variable substitution.
+    # Only matches {namespace.path} where namespace is one of the four
+    # known prefixes and there's at least one dot. This naturally avoids:
+    #   - JSON examples: {"key": value}, {} → quotes/colons don't match
+    #   - Placeholders: {file}, {module_name} → no dot, no namespace prefix
+    #   - Code snippets: any braces without namespace.key pattern
+    # No escape mechanism needed — the namespace prefix is the discriminator.
+    _REF_PATTERN = re.compile(
+        r"\{((?:input|context|meta|loop)\.[a-zA-Z_][a-zA-Z0-9_.]*)\}"
+    )
+
+    def _substitute(self, template: str, namespaces: dict[str, Any]) -> str:
+        """Simple variable substitution in a content string.
+
+        Replaces {input.X}, {context.X}, {meta.X}, {loop.X} with values.
+        No expressions, no filters, no method calls.
+        Missing values resolve to empty string.
+
+        Literal braces in JSON examples, code snippets, and single-word
+        placeholders pass through untouched because the regex requires
+        a known namespace prefix followed by a dot.
+        """
+
+        def _replacer(match: re.Match) -> str:
+            path = match.group(1)
+            value = self._resolve_path(path, namespaces)
+            if value is None:
+                return ""
+            return str(value)
+
+        return self._REF_PATTERN.sub(_replacer, template)
+
+    def _resolve_path(self, path: str, namespaces: dict[str, Any]) -> Any:
+        """Resolve a dotted path against namespaces.
+
+        "input.mission_id" → namespaces["input"]["mission_id"]
+        "context.repo_map_formatted" → namespaces["context"]["repo_map_formatted"]
+        "loop.path" → namespaces["loop"]["path"] or namespaces["loop"].path
+        """
+        parts = path.split(".")
+        current = namespaces.get(parts[0])
+
+        for part in parts[1:]:
+            if current is None:
+                return None
+            if isinstance(current, dict):
+                current = current.get(part)
+            elif hasattr(current, part):
+                current = getattr(current, part)
             else:
-                flow = load_flow(file_path)
+                return None
 
-            if flow.flow in flows:
-                raise FlowLoadError(
-                    f"Duplicate flow name {flow.flow!r}: "
-                    f"found in both {flows[flow.flow]} and {file_path}"
-                )
-            flows[flow.flow] = flow
-
-    _scan_dir(directory)
-    return flows
+        return current
 
 
-# ── Semantic Validation ───────────────────────────────────────────────
+# ── Returns Assembly ───────────────────────────────────────────────
+#
+# Assembles structured return data from the flow's `returns` declaration,
+# resolving each field's `from` path against the live accumulator.
+#
+# Called by loop.py at tail-call resolution and terminal step handling.
 
 
-def _validate_semantics(flow: FlowDefinition, source: str | Path = "<unknown>") -> None:
-    """Perform semantic validation on a flow definition.
+def assemble_returns(
+    flow_def: Any,
+    accumulator: dict[str, Any],
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Assemble structured returns from a flow's returns declaration.
 
-    Checks:
-    1. All transition targets reference existing steps.
-    2. At least one reachable terminal state exists.
-    3. Required context keys have upstream publishers (best-effort).
-    4. Non-terminal steps without resolvers are flagged.
+    Resolves each return field's `from` path against the accumulator
+    and input namespaces. Validates that required fields are present.
 
     Args:
-        flow: The flow definition to validate.
-        source: The source file/identifier for error messages.
-
-    Raises:
-        FlowValidationError: If any semantic check fails.
-    """
-    errors: list[str] = []
-    step_names = set(flow.steps.keys())
-
-    # Check 1: All transition targets reference existing steps
-    for step_name, step_def in flow.steps.items():
-        if step_def.resolver:
-            for rule in step_def.resolver.rules:
-                if rule.transition not in step_names:
-                    errors.append(
-                        f"Step {step_name!r}: transition target "
-                        f"{rule.transition!r} not found in steps."
-                    )
-            # Check llm_menu options with explicit targets
-            if step_def.resolver.options:
-                for opt_name, opt_def in step_def.resolver.options.items():
-                    if isinstance(opt_def, dict):
-                        target = opt_def.get("target")
-                        if target and target not in step_names:
-                            errors.append(
-                                f"Step {step_name!r}: option {opt_name!r} "
-                                f"target {target!r} not found in steps."
-                            )
-
-    # Check 2: At least one exit point exists (terminal or tail_call)
-    terminal_steps = [name for name, step in flow.steps.items() if step.terminal]
-    tail_call_steps = [
-        name
-        for name, step in flow.steps.items()
-        if step.tail_call and not step.terminal
-    ]
-    exit_steps = terminal_steps + tail_call_steps
-    if not exit_steps:
-        errors.append(
-            "Flow has no terminal or tail-call steps — execution can never end."
-        )
-
-    # Check 3: Exit steps are reachable from entry
-    reachable = _find_reachable_steps(flow)
-    reachable_exits = [s for s in exit_steps if s in reachable]
-    if exit_steps and not reachable_exits:
-        errors.append(
-            f"No exit steps are reachable from entry step {flow.entry!r}. "
-            f"Exit steps: {exit_steps}. Reachable steps: {sorted(reachable)}."
-        )
-
-    # Check 4: Non-exit steps should have resolvers
-    # (tail_call steps exit via tail call, so they don't need resolvers)
-    for step_name, step_def in flow.steps.items():
-        if not step_def.terminal and not step_def.tail_call and not step_def.resolver:
-            errors.append(
-                f"Step {step_name!r}: non-terminal step has no resolver — "
-                f"execution will have no way to determine the next step."
-            )
-
-    # Check 5: Context key reachability (best-effort)
-    _validate_context_keys(flow, errors)
-
-    if errors:
-        error_list = "\n  - ".join(errors)
-        raise FlowValidationError(
-            f"Semantic validation failed for flow {flow.flow!r} "
-            f"(source: {source}):\n  - {error_list}"
-        )
-
-
-def _find_reachable_steps(flow: FlowDefinition) -> set[str]:
-    """Find all steps reachable from the entry step via BFS."""
-    visited: set[str] = set()
-    queue = [flow.entry]
-
-    while queue:
-        current = queue.pop(0)
-        if current in visited:
-            continue
-        visited.add(current)
-
-        step = flow.steps.get(current)
-        if not step:
-            continue
-
-        # Follow resolver transitions
-        if step.resolver:
-            for rule in step.resolver.rules:
-                if rule.transition not in visited:
-                    queue.append(rule.transition)
-            # Follow option targets
-            if step.resolver.options:
-                for opt_name, opt_def in step.resolver.options.items():
-                    if isinstance(opt_def, dict):
-                        target = opt_def.get("target")
-                        if target and target not in visited:
-                            queue.append(target)
-                    # Option names that match step names are implicit targets
-                    if opt_name in flow.steps and opt_name not in visited:
-                        queue.append(opt_name)
-
-    return visited
-
-
-def _validate_context_keys(flow: FlowDefinition, errors: list[str]) -> None:
-    """Best-effort validation that required context keys have upstream publishers.
-
-    This is a static check — it walks the graph and tracks which keys
-    each step publishes, then checks if downstream required keys are covered.
-    Since the actual execution path is dynamic, this can only catch obvious
-    issues (e.g., a key required by step B is never published by any step
-    that could precede B).
-    """
-    # Build map of what each step publishes
-    publishers: dict[str, list[str]] = {}  # key → list of step names that publish it
-    for step_name, step_def in flow.steps.items():
-        for key in step_def.publishes:
-            publishers.setdefault(key, []).append(step_name)
-
-    # Also, flow inputs are implicitly available
-    available_from_input = set(flow.input.required + flow.input.optional)
-
-    # Check each step's required context keys
-    for step_name, step_def in flow.steps.items():
-        for required_key in step_def.context.required:
-            if required_key in available_from_input:
-                continue
-            if required_key not in publishers:
-                errors.append(
-                    f"Step {step_name!r}: requires context key {required_key!r} "
-                    f"but no step publishes it and it's not a flow input."
-                )
-
-
-# ── Step Template System ──────────────────────────────────────────────
-
-
-def load_template_registry(flows_dir: str) -> StepTemplateRegistry:
-    """Load step_templates.yaml from the shared directory.
-
-    Args:
-        flows_dir: Path to the flows directory.
+        flow_def: The FlowDefinition (must have a `returns` dict).
+        accumulator: The current context accumulator at terminal step.
+        inputs: The original flow inputs.
 
     Returns:
-        A StepTemplateRegistry (empty if no templates file exists).
+        Dict of field_name → resolved value. Missing optional fields
+        are omitted (not set to None).
     """
-    templates_path = os.path.join(flows_dir, "shared", "step_templates.yaml")
-    if not os.path.exists(templates_path):
-        return StepTemplateRegistry(templates={})
+    returns_decl = getattr(flow_def, "returns", None) or {}
+    if not returns_decl:
+        return {}
+
+    namespaces = {
+        "input": inputs,
+        "context": accumulator,
+    }
+
+    assembled = {}
+    for field_name, field_spec in returns_decl.items():
+        if not isinstance(field_spec, dict):
+            continue
+
+        from_path = field_spec.get("from", "")
+        is_optional = field_spec.get("optional", False)
+
+        if not from_path:
+            continue
+
+        # Resolve the from path
+        value = _resolve_ref({"$ref": from_path}, namespaces)
+
+        if value is not None:
+            assembled[field_name] = value
+        elif not is_optional:
+            # Required field missing — log warning but don't fail
+            logger.warning(
+                "Flow %r: required return field %r (from %r) resolved to None",
+                getattr(flow_def, "flow", "unknown"),
+                field_name,
+                from_path,
+            )
+            assembled[field_name] = None
+
+    return assembled
+
+
+# ── Formatter Registry Initialization ────────────────────────────────
+
+
+def _init_formatter_registry() -> None:
+    """Populate the formatter registry from the formatters and renderers modules."""
+    global _formatter_registry
     try:
-        with open(templates_path, "r") as f:
-            raw = yaml.safe_load(f)
-        if not isinstance(raw, dict):
-            return StepTemplateRegistry(templates={})
-        return StepTemplateRegistry(**raw)
-    except Exception as e:
-        raise FlowLoadError(
-            f"Failed to load step templates from {templates_path}: {e}"
-        ) from e
+        from agent.formatters import PRE_COMPUTE_FORMATTERS
 
+        _formatter_registry.update(PRE_COMPUTE_FORMATTERS)
+    except ImportError:
+        logger.warning("Could not import formatters module — registry empty")
 
-def load_flow_with_templates(
-    flow_path: str,
-    template_registry: StepTemplateRegistry,
-) -> FlowDefinition:
-    """Load a flow YAML, expanding step templates before validation.
-
-    Steps that declare `use: template_name` are expanded against the
-    template registry using merge semantics, then validated normally.
-
-    Args:
-        flow_path: Path to the flow YAML file.
-        template_registry: The loaded StepTemplateRegistry.
-
-    Returns:
-        A validated FlowDefinition with templates expanded.
-    """
-    path = Path(flow_path)
-
-    if not path.exists():
-        raise FlowLoadError(f"Flow file not found: {path}")
-
-    if path.suffix not in (".yaml", ".yml"):
-        raise FlowLoadError(f"Flow file must be .yaml or .yml: {path}")
-
+    # Register projection renderers
     try:
-        with open(path, "r") as f:
-            raw = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        raise FlowLoadError(f"YAML parse error in {path}: {e}") from e
+        from agent.renderers import RENDERER_REGISTRY
 
-    if not isinstance(raw, dict):
-        raise FlowLoadError(
-            f"Flow file must contain a YAML mapping, got {type(raw).__name__}"
-        )
-
-    # Template expansion pass
-    for step_name, step_def in raw.get("steps", {}).items():
-        if not isinstance(step_def, dict):
-            continue
-        if "use" not in step_def:
-            continue
-
-        template_name = step_def.pop("use")
-        template = template_registry.templates.get(template_name)
-        if template is None:
-            raise FlowValidationError(
-                f"Step '{step_name}' references unknown template '{template_name}'"
-            )
-
-        merged = _merge_step_with_template(template, step_def)
-        validate_params_against_schema(
-            merged.get("params", {}),
-            template.param_schema,
-            step_name,
-            template_name,
-        )
-        raw["steps"][step_name] = merged
-
-    # Structural validation via Pydantic
-    try:
-        flow = FlowDefinition(**raw)
-    except ValidationError as e:
-        raise FlowLoadError(f"Flow definition validation error in {path}:\n{e}") from e
-
-    # Semantic validation
-    _validate_semantics(flow, path)
-
-    return flow
+        _formatter_registry.update(RENDERER_REGISTRY)
+    except ImportError:
+        pass  # renderers not yet available — non-fatal
 
 
-def _merge_step_with_template(template: StepTemplate, step_overrides: dict) -> dict:
-    """Apply merge semantics to produce a fully expanded step definition.
-
-    REPLACE — step value wins entirely:
-      action, description, flow, input_map, publishes
-
-    DEEP MERGE — step values overlay template values:
-      context (union of lists), params (step overrides keys), config (same)
-
-    ALWAYS FROM STEP — template never carries:
-      resolver, terminal, status, tail_call
-    """
-    merged: dict[str, Any] = {}
-
-    # REPLACE fields: template provides defaults, step wins entirely
-    for field in ("action", "description", "flow", "input_map", "publishes"):
-        template_val = getattr(template, field)
-        if field in step_overrides:
-            merged[field] = step_overrides[field]
-        elif template_val is not None:
-            merged[field] = copy.deepcopy(template_val)
-
-    # Context: deep merge (union of lists)
-    template_ctx = copy.deepcopy(template.context) if template.context else {}
-    step_ctx = step_overrides.get("context", {})
-    merged_required = list(
-        set(template_ctx.get("required", []) + step_ctx.get("required", []))
-    )
-    merged_optional = list(
-        set(template_ctx.get("optional", []) + step_ctx.get("optional", []))
-    )
-    if merged_required or merged_optional:
-        merged["context"] = {
-            "required": merged_required,
-            "optional": merged_optional,
-        }
-
-    # Params: deep merge (step values override matching keys)
-    template_params = copy.deepcopy(template.params) if template.params else {}
-    step_params = step_overrides.get("params", {})
-    template_params.update(step_params)
-    if template_params:
-        merged["params"] = template_params
-
-    # Config: deep merge
-    template_config = copy.deepcopy(template.config) if template.config else {}
-    step_config = step_overrides.get("config", {})
-    template_config.update(step_config)
-    if template_config:
-        merged["config"] = template_config
-
-    # Prompt: step wins if present, otherwise not set (templates don't carry prompts)
-    if "prompt" in step_overrides:
-        merged["prompt"] = step_overrides["prompt"]
-
-    # Resolver, terminal, status, tail_call: always from step
-    for field in ("resolver", "terminal", "status", "tail_call"):
-        if field in step_overrides:
-            merged[field] = step_overrides[field]
-
-    return merged
-
-
-def validate_params_against_schema(
-    params: dict[str, Any],
-    schema: dict[str, ParamSchemaEntry] | None,
-    step_name: str,
-    template_name: str,
-) -> list[str]:
-    """Validate merged params against template schema.
-
-    Returns list of warnings (non-fatal). Raises FlowValidationError on hard failures.
-    """
-    if not schema:
-        return []
-
-    warnings: list[str] = []
-
-    for param_name, entry in schema.items():
-        value = params.get(param_name)
-
-        # Check required params
-        if entry.required and value is None and entry.default is None:
-            raise FlowValidationError(
-                f"Step '{step_name}' (template '{template_name}'): "
-                f"required param '{param_name}' is missing"
-            )
-
-        # Apply defaults for missing optional params
-        if value is None and entry.default is not None:
-            params[param_name] = entry.default
-            continue
-
-        if value is None:
-            continue
-
-        # Skip Jinja2 template strings — validated at render time
-        if isinstance(value, str) and "{{" in value:
-            continue
-
-        # Type checking
-        type_map: dict[str, type | tuple] = {
-            "string": str,
-            "integer": int,
-            "float": (int, float),
-            "boolean": bool,
-            "list": list,
-            "dict": dict,
-        }
-        expected_type = type_map.get(entry.type)
-        if expected_type and not isinstance(value, expected_type):
-            raise FlowValidationError(
-                f"Step '{step_name}' param '{param_name}': "
-                f"expected {entry.type}, got {type(value).__name__}"
-            )
-
-        # Enum validation
-        if entry.enum and value not in entry.enum:
-            raise FlowValidationError(
-                f"Step '{step_name}' param '{param_name}': "
-                f"'{value}' not in allowed values {entry.enum}"
-            )
-
-        # Range validation
-        if (
-            entry.min is not None
-            and isinstance(value, (int, float))
-            and value < entry.min
-        ):
-            raise FlowValidationError(
-                f"Step '{step_name}' param '{param_name}': "
-                f"{value} is below minimum {entry.min}"
-            )
-        if (
-            entry.max is not None
-            and isinstance(value, (int, float))
-            and value > entry.max
-        ):
-            raise FlowValidationError(
-                f"Step '{step_name}' param '{param_name}': "
-                f"{value} is above maximum {entry.max}"
-            )
-
-        # List constraints
-        if entry.type == "list" and isinstance(value, list):
-            if entry.min_items is not None and len(value) < entry.min_items:
-                raise FlowValidationError(
-                    f"Step '{step_name}' param '{param_name}': "
-                    f"list has {len(value)} items, minimum is {entry.min_items}"
-                )
-            if entry.max_items is not None and len(value) > entry.max_items:
-                raise FlowValidationError(
-                    f"Step '{step_name}' param '{param_name}': "
-                    f"list has {len(value)} items, maximum is {entry.max_items}"
-                )
-
-    return warnings
+# Initialize on import
+_init_formatter_registry()

@@ -1,43 +1,43 @@
-// design_and_plan.cue — Architecture Design and Mission Planning
+// design_and_plan.cue — Architecture Design and Goal Derivation
 //
-// Single entry point for all architecture and planning work.
+// Version 5: Tier Records Architecture.
+//
+// Key changes from v4:
+//   - Plan generation removed (generate_plan, parse_plan steps deleted)
+//   - Goals ARE the plan — derive_goals is the terminal productive step
+//   - dispatch_revise removed — re-entry with existing goals re-derives them
+//   - generate_plan_fallback removed (architecture parse failure → derive_goals)
+//
 // Three deterministic paths based on drift detection:
 //
-//   Path 1 (initial): No architecture → design from scratch → derive goals → generate plan
+//   Path 1 (initial): No architecture → design from scratch → derive goals
 //   Path 2 (drift): Architecture exists but files on disk don't match →
-//                    reconcile architecture → revise plan (additive)
-//   Path 3 (no drift): Architecture matches disk → skip straight to
-//                       revise plan (additive, no expensive reconciliation)
-//
-// Goal derivation (new in v4):
-//   After architecture is established, derives project_goals in two passes:
-//   1. Deterministic structural goals from architecture modules
-//   2. Inference-derived functional goals from objective + architecture
-//   Goals are stored on MissionState and inform all downstream dispatch.
+//                    reconcile architecture → derive goals
+//   Path 3 (re-entry): Architecture matches disk, goals exist →
+//                       re-derive goals (idempotent)
 
 package ouroboros
 
+import "list"
+
 design_and_plan: #FlowDefinition & {
 	flow:    "design_and_plan"
-	version: 4
+	version: 5
 	description: """
-		Design or reconcile project architecture, derive project goals,
-		then generate or revise the task plan. Auto-detects whether full
-		architecture reconciliation is needed (drift detected) or can be
-		skipped (no drift — straight to plan revision).
+		Design or reconcile project architecture, then derive project goals.
+		Goals are the plan — no separate task list. Auto-detects whether
+		full architecture design is needed (no architecture), reconciliation
+		is needed (drift detected), or goals can be derived directly.
 		"""
 
 	context_tier: "mission_objective"
 	returns: {
 		architecture_updated: {type: "bool", from: "context.architecture_stored", optional: true}
 		goals_derived:        {type: "list", from: "context.goals",               optional: true}
-		plan_task_count:      {type: "int",  from: "context.task_count",          optional: true}
 	}
-	state_reads: ["mission.objective", "mission.architecture", "mission.plan", "mission.goals"]
 
 	input: {
 		required: ["mission_id"]
-		optional: ["existing_progress"]
 	}
 
 	defaults: config: temperature: "t*0.6"
@@ -57,7 +57,7 @@ design_and_plan: #FlowDefinition & {
 					{condition: "true", transition: "failed"},
 				]
 			}
-			publishes: ["mission", "events", "frustration"]
+			publishes: ["mission"]
 		}
 
 		scan_workspace: #StepDefinition & _templates.scan_workspace & {
@@ -97,17 +97,22 @@ design_and_plan: #FlowDefinition & {
 				rules: [
 					{condition: "result.has_architecture == false", transition: "design_initial"},
 					{condition: "result.drift_detected == true", transition: "design_reconcile"},
-					{condition: "result.has_tasks == true", transition: "dispatch_revise"},
+					// Goals exist, no drift — re-derive goals (idempotent)
+					{condition: "result.has_tasks == true", transition: "derive_goals"},
 					{condition: "true", transition: "domain_research"},
 				]
 			}
 		}
 
 		// ── Phase 2a: Initial architecture design ───────────────────
+		//
+		// Both design_initial and design_reconcile share most of their
+		// shape. Differences: reconcile has an extra pre_compute formatter
+		// (format_existing_architecture) and routes to a different parser
+		// step on success.
 
-		design_initial: #StepDefinition & {
-			action:      "inference"
-			description: "Design project architecture from scratch"
+		let _design_step = {
+			action: "inference"
 			context: {
 				required: ["mission"]
 				optional: ["project_manifest", "repo_map_formatted"]
@@ -120,13 +125,20 @@ design_and_plan: #FlowDefinition & {
 				]
 				input_keys: []
 			}
-			pre_compute: [
-				{formatter: "format_mission_meta", output_key: "mission_objective"
-					params: {mission: {$ref: "context.mission"}, field: "objective"}},
-				{formatter: "format_project_file_list", output_key: "project_file_list"
-					params: {source: {$ref: "context.project_manifest"}}},
-			]
 			config: temperature: "t*0.2"
+			publishes: ["inference_response"]
+		}
+
+		let _design_base_precompute = [
+			{formatter: "format_mission_meta", output_key: "mission_objective"
+				params: {mission: {$ref: "context.mission"}, field: "objective"}},
+			{formatter: "format_project_file_list", output_key: "project_file_list"
+				params: {source: {$ref: "context.project_manifest"}}},
+		]
+
+		design_initial: #StepDefinition & _design_step & {
+			description: "Design project architecture from scratch"
+			pre_compute: _design_base_precompute
 			resolver: {
 				type: "rule"
 				rules: [
@@ -134,43 +146,23 @@ design_and_plan: #FlowDefinition & {
 					{condition: "true", transition: "failed"},
 				]
 			}
-			publishes: ["inference_response"]
 		}
 
 		// ── Phase 2b: Architecture reconciliation (drift detected) ──
 
-		design_reconcile: #StepDefinition & {
-			action:      "inference"
+		design_reconcile: #StepDefinition & _design_step & {
 			description: "Reconcile architecture with drifted codebase"
-			context: {
-				required: ["mission"]
-				optional: ["project_manifest", "repo_map_formatted"]
-			}
-			prompt_template: {
-				template: "design_and_plan/design_architecture"
-				context_keys: [
-					"mission_objective", "repo_map_formatted",
-					"project_file_list", "existing_architecture",
-				]
-				input_keys: []
-			}
-			pre_compute: [
-				{formatter: "format_mission_meta", output_key: "mission_objective"
-					params: {mission: {$ref: "context.mission"}, field: "objective"}},
-				{formatter: "format_project_file_list", output_key: "project_file_list"
-					params: {source: {$ref: "context.project_manifest"}}},
+			pre_compute: list.Concat([_design_base_precompute, [
 				{formatter: "format_existing_architecture", output_key: "existing_architecture"
 					params: {source: {$ref: "context.mission.architecture"}}},
-			]
-			config: temperature: "t*0.2"
+			]])
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.tokens_generated > 0", transition: "parse_architecture_then_revise"},
+					{condition: "result.tokens_generated > 0", transition: "parse_architecture_reconcile"},
 					{condition: "true", transition: "failed"},
 				]
 			}
-			publishes: ["inference_response"]
 		}
 
 		// ── Phase 3: Parse and persist architecture ──────────────────
@@ -183,37 +175,25 @@ design_and_plan: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.architecture_parsed == true", transition: "domain_research"},
-					{condition: "true", transition: "generate_plan_fallback"},
+					// Architecture parse failed — try to derive goals from whatever we have
+					{condition: "true", transition: "derive_goals"},
 				]
 			}
 			publishes: ["mission", "architecture"]
 		}
 
-		parse_architecture_then_revise: #StepDefinition & {
+		parse_architecture_reconcile: #StepDefinition & {
 			action:      "parse_and_store_architecture"
-			description: "Parse updated architecture, then revise plan"
+			description: "Parse updated architecture after drift reconciliation"
 			context: required: ["mission", "inference_response"]
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.architecture_parsed == true", transition: "dispatch_revise"},
-					{condition: "true", transition: "dispatch_revise"},
+					// After reconciliation, always derive goals (re-derive from updated arch)
+					{condition: "true", transition: "derive_goals"},
 				]
 			}
 			publishes: ["mission", "architecture"]
-		}
-
-		dispatch_revise: #StepDefinition & {
-			action:      "noop"
-			description: "Dispatch plan revision — add missing tasks, reorder, or obsolete"
-			context: required: ["mission"]
-			tail_call: {
-				flow: "revise_plan"
-				input_map: {
-					mission_id:  {$ref: "input.mission_id"}
-					observation: "Review the plan for missing tasks, ordering issues, or gaps. Add tasks for data files, integration glue, or tests if needed. Reorder tasks if dependencies are wrong. Do NOT remove completed tasks."
-				}
-			}
 		}
 
 		// ── Phase 3b: Proactive domain research ─────────────────────
@@ -231,122 +211,33 @@ design_and_plan: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.status == 'success'", transition: "save_research"},
-					{condition: "true", transition: "generate_plan"},
+					{condition: "true", transition: "derive_goals"},
 				]
 			}
 			publishes: ["research_summary"]
 		}
 
 		save_research: #StepDefinition & _templates.push_note & {
+			context: optional: ["mission", "research_summary"]
 			params: {
-				category:    "domain_research"
+				category:    "codebase_observation"
 				content_key: "research_summary"
 				tags: ["proactive", "domain_knowledge"]
 				source_flow: "design_and_plan"
-				source_task: "planning"
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "generate_plan"}]
+				rules: [{condition: "true", transition: "derive_goals"}]
 			}
 		}
 
-		// ── Phase 4: Generate plan ──────────────────────────────────
-
-		generate_plan: #StepDefinition & {
-			action:      "inference"
-			description: "Generate task plan aligned to architecture blueprint"
-			context: {
-				required: ["mission", "architecture"]
-				optional: ["project_manifest"]
-			}
-			prompt_template: {
-				template: "design_and_plan/generate_plan"
-				context_keys: [
-					"mission_objective", "working_directory",
-					"architecture_listing", "project_file_list",
-				]
-				input_keys: []
-			}
-			pre_compute: [
-				{formatter: "format_mission_meta", output_key: "mission_objective"
-					params: {mission: {$ref: "context.mission"}, field: "objective"}},
-				{formatter: "format_mission_meta", output_key: "working_directory"
-					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
-				{formatter: "format_architecture_listing", output_key: "architecture_listing"
-					params: {source: {$ref: "context.architecture"}}},
-				{formatter: "format_project_file_list", output_key: "project_file_list"
-					params: {source: {$ref: "context.project_manifest"}}},
-			]
-			config: temperature: "t*0.2"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "parse_plan"},
-					{condition: "true", transition: "failed"},
-				]
-			}
-			publishes: ["inference_response"]
-		}
-
-		generate_plan_fallback: #StepDefinition & {
-			action:      "inference"
-			description: "Generate plan without structured architecture (parse failed)"
-			context: {
-				required: ["mission"]
-				optional: ["project_manifest", "repo_map_formatted"]
-			}
-			prompt_template: {
-				template: "design_and_plan/generate_plan"
-				context_keys: ["mission_objective", "working_directory", "project_file_list"]
-				input_keys: []
-			}
-			pre_compute: [
-				{formatter: "format_mission_meta", output_key: "mission_objective"
-					params: {mission: {$ref: "context.mission"}, field: "objective"}},
-				{formatter: "format_mission_meta", output_key: "working_directory"
-					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
-				{formatter: "format_project_file_list", output_key: "project_file_list"
-					params: {source: {$ref: "context.project_manifest"}}},
-			]
-			config: temperature: "t*0.2"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "parse_plan"},
-					{condition: "true", transition: "failed"},
-				]
-			}
-			publishes: ["inference_response"]
-		}
-
-		// ── Phase 5: Parse plan into tasks ──────────────────────────
-
-		parse_plan: #StepDefinition & {
-			action:      "create_plan_from_architecture"
-			description: "Parse plan JSON into task records, validated against architecture"
-			context: {
-				required: ["mission", "inference_response"]
-				optional: ["architecture"]
-			}
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.plan_created == true", transition: "derive_goals"},
-					{condition: "true", transition: "failed"},
-				]
-			}
-			publishes: ["mission"]
-		}
-
-		// ── Phase 6: Derive project goals ───────────────────────────
+		// ── Phase 4: Derive project goals ───────────────────────────
 		//
 		// Two-pass goal derivation:
 		//   Pass 1 (deterministic): structural goals from architecture modules
 		//   Pass 2 (inference): functional goals from objective + architecture
 		//
-		// Both passes happen inside the derive_goals action. The action
-		// handles the dual approach internally — one step, two passes.
+		// Goals ARE the plan. No separate task generation step.
 
 		derive_goals: #StepDefinition & {
 			action:      "derive_project_goals"
@@ -359,7 +250,7 @@ design_and_plan: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.goals_derived == true", transition: "complete"},
-					// Goals are best-effort — plan can work without them
+					// Goals are best-effort — proceed regardless
 					{condition: "true", transition: "complete"},
 				]
 			}
@@ -370,7 +261,7 @@ design_and_plan: #FlowDefinition & {
 
 		complete: #StepDefinition & {
 			action:      "noop"
-			description: "Architecture designed, goals derived, plan created/revised"
+			description: "Architecture designed, goals derived"
 			tail_call: {
 				flow: "mission_control"
 				input_map: {
@@ -383,7 +274,7 @@ design_and_plan: #FlowDefinition & {
 		failed: #StepDefinition & {
 			action:      "log_completion"
 			description: "Design and planning failed"
-			params: message: "Failed to design architecture and create plan"
+			params: message: "Failed to design architecture and derive goals"
 			terminal: true
 			status:   "failed"
 		}

@@ -1,0 +1,26 @@
+id: interact/evaluate_rules
+content: |
+  Produce the verdict based on what the session actually observed.
+
+  Use these rules:
+
+  - Ground every judgment in the terminal evidence. If no output
+    supports a claim, don't make the claim.
+  - `goal_met: true` when the observed behavior is sufficient
+    evidence that the objective was achieved — even if the session
+    didn't run every planned step.
+  - `goal_met: false` when the observed behavior directly contradicts
+    the objective OR when there isn't enough evidence to tell.
+  - `headline` is a one-line (~10-15 word) description of what
+    happened. Write it so two attempts are easy to diff: name the
+    specific failure mode concretely. "Forward movement works;
+    backward movement hangs." "Startup crashes with
+    ModuleNotFoundError on 'player'." Not "movement has issues" or
+    "something went wrong."
+  - Be specific in the summary. "The program launched and accepted
+    input; the expected greeting appeared" is useful. "It worked" is
+    not.
+
+  If the session ended with an error or a crash that's itself a
+  finding about the product, report it honestly — goal_met: false
+  with the error described — rather than forcing a generous pass.

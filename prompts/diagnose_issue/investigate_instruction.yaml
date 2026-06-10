@@ -1,0 +1,17 @@
+id: diagnose_issue/investigate_instruction
+content: |
+  Turn {context.investigation_turn} of 8.
+
+  Each turn you pick one action: `trace` to gather evidence, or
+  `conclude` to produce the diagnosis.
+
+  Response format (abstract — `symbol_ref` is `file.py:symbol`):
+      {"choice": "trace", "symbol_ref": "<file>:<qualified_symbol>"}
+      {"choice": "conclude"}
+
+  Placeholder format reference only (do NOT pick this symbol —
+  it's not in the project):
+      example.py:CreateExample._new
+
+  Each trace shows the symbol's body and every place it's called
+  from across the project. Emit one JSON action. No other text.

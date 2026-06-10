@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "validation_env_config",
+  "description": "Per-language validation command configuration, produced by set_env.detect_tooling and persisted to .agent/env.json. The root is a hybrid object: the optional top-level `interactive_prompt` is a string, while every other key is a language extension (py, js, rs, etc.) mapping to a command bundle.",
+  "type": "object",
+  "properties": {
+    "interactive_prompt": {
+      "type": "string",
+      "description": "Exact prompt string the program displays when waiting for user input. Omit or empty when the project has no interactive mode."
+    }
+  },
+  "patternProperties": {
+    "^(?!interactive_prompt$)[a-z][a-z0-9_]*$": {
+      "$ref": "#/$defs/LanguageCommands"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "LanguageCommands": {
+      "type": "object",
+      "description": "Command bundle for a single language extension. Commands are argv lists. `{file}` and `{module}` placeholders are substituted at invocation time.",
+      "properties": {
+        "install_command": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Install dependencies for this language (e.g. pip install -e . or npm install). Optional."
+        },
+        "formatter": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Auto-format the file. Optional."
+        },
+        "syntax": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Syntax / compile check. Required for every extension."
+        },
+        "import": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Verify the module can be imported/loaded. Optional."
+        },
+        "cross_import": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Verify cross-file imports resolve against project files. Optional."
+        },
+        "lint": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Lint / code-quality check, preferably auto-fixing. Optional."
+        }
+      },
+      "required": ["syntax"],
+      "additionalProperties": false
+    }
+  },
+  "x-example": {
+    "interactive_prompt": "> ",
+    "py": {
+      "install_command": ["uv", "pip", "install", "-r", "pyproject.toml"],
+      "formatter": ["ruff", "format", "-q", "{file}"],
+      "syntax": ["python", "-c", "import py_compile; py_compile.compile('{file}', doraise=True)"],
+      "import": ["python", "-c", "import {module}"],
+      "cross_import": ["python", "-c", "from {module} import *"],
+      "lint": ["ruff", "check", "--fix", "{file}"]
+    }
+  }
+}

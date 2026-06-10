@@ -16,7 +16,6 @@ from __future__ import annotations
 import html as html_lib
 import logging
 import time
-from typing import Any
 
 from agent.blueprint.ir import (
     BlueprintIR,
@@ -313,7 +312,7 @@ def _build_html(
     sections.append(_html_cover(ir))
     sections.append(_html_toc())
     sections.append(_html_legend())
-    sections.append(_html_system_diagrams(ir, mc_png, sys_png))
+    sections.append(_html_system_diagrams(mc_png, sys_png))
     sections.append(_html_system_context(ir))
     sections.append(_html_mission_lifecycle(ir))
     sections.append(_html_flow_catalog(ir, flow_pngs))
@@ -452,7 +451,6 @@ def _html_legend() -> str:
 
 
 def _html_system_diagrams(
-    ir: BlueprintIR,
     mc_png: bytes | None,
     sys_png: bytes | None,
 ) -> str:
@@ -478,7 +476,9 @@ def _html_system_diagrams(
 
 
 def _html_system_context(ir: BlueprintIR) -> str:
-    orchestrator_count = sum(1 for f in ir.flows.values() if f.category == "orchestrator")
+    orchestrator_count = sum(
+        1 for f in ir.flows.values() if f.category == "orchestrator"
+    )
     task_count = sum(1 for f in ir.flows.values() if f.category == "task")
     sub_flow_count = sum(1 for f in ir.flows.values() if f.category == "sub_flow")
     arch_count = _arch_flow_count(ir)
@@ -487,7 +487,7 @@ def _html_system_context(ir: BlueprintIR) -> str:
 <div class="page-break"></div>
 <h2>System Context</h2>
 <p><strong>Ouroboros</strong> is a flow-driven autonomous coding agent backed by LLMVP local inference.
-It operates as a pure GraphQL client — all inference flows through <code>localhost:8000/graphql</code>.</p>
+It operates as a pure GraphQL client — all inference flows through <code>localhost:8008/graphql</code>.</p>
 
 <h3>Actors</h3>
 <ul>
@@ -566,15 +566,15 @@ def _html_flow_catalog(ir: BlueprintIR, flow_pngs: dict[str, bytes]) -> str:
         html += f"<h3>{heading}</h3>\n"
         for flow_ir in sorted(flows, key=lambda f: f.name):
             png = flow_pngs.get(flow_ir.name)
-            html += _html_flow_pair(flow_ir, ir, png)
+            html += _html_flow_pair(flow_ir, png)
 
     return html
 
 
-def _html_flow_pair(flow_ir: FlowIR, ir: BlueprintIR, png: bytes | None) -> str:
+def _html_flow_pair(flow_ir: FlowIR, png: bytes | None) -> str:
     """Render a flow card + its Mermaid diagram as a paired unit."""
     html = '<div class="flow-pair">\n'
-    html += _html_flow_card(flow_ir, ir)
+    html += _html_flow_card(flow_ir)
     if png:
         html += '<div class="flow-diagram">\n'
         html += _png_img(png, "380pt")
@@ -583,7 +583,7 @@ def _html_flow_pair(flow_ir: FlowIR, ir: BlueprintIR, png: bytes | None) -> str:
     return html
 
 
-def _html_flow_card(flow_ir: FlowIR, ir: BlueprintIR) -> str:
+def _html_flow_card(flow_ir: FlowIR) -> str:
     """Render a single flow card as HTML."""
     html = '<div class="flow-card">\n'
     html += f'<h4>{_esc(flow_ir.name)} <span style="font-weight:normal;color:#888">(v{flow_ir.version})</span></h4>\n'
@@ -592,20 +592,28 @@ def _html_flow_card(flow_ir: FlowIR, ir: BlueprintIR) -> str:
     # Context Contract
     contract_parts: list[str] = []
     if flow_ir.context_tier:
-        contract_parts.append(f'<strong>Tier:</strong> <code>{_esc(flow_ir.context_tier)}</code>')
+        contract_parts.append(
+            f"<strong>Tier:</strong> <code>{_esc(flow_ir.context_tier)}</code>"
+        )
     if flow_ir.state_reads:
-        reads = ", ".join(f'<code>{_esc(r)}</code>' for r in flow_ir.state_reads[:6])
-        more = f" (+{len(flow_ir.state_reads) - 6})" if len(flow_ir.state_reads) > 6 else ""
-        contract_parts.append(f'<strong>Reads:</strong> {reads}{more}')
+        reads = ", ".join(f"<code>{_esc(r)}</code>" for r in flow_ir.state_reads[:6])
+        more = (
+            f" (+{len(flow_ir.state_reads) - 6})"
+            if len(flow_ir.state_reads) > 6
+            else ""
+        )
+        contract_parts.append(f"<strong>Reads:</strong> {reads}{more}")
     if flow_ir.returns:
-        ret_keys = ", ".join(f'<code>{_esc(k)}</code>' for k in list(flow_ir.returns.keys())[:6])
-        contract_parts.append(f'<strong>Returns:</strong> {ret_keys}')
+        ret_keys = ", ".join(
+            f"<code>{_esc(k)}</code>" for k in list(flow_ir.returns.keys())[:6]
+        )
+        contract_parts.append(f"<strong>Returns:</strong> {ret_keys}")
     if contract_parts:
         html += f'<div class="meta-line">{" · ".join(contract_parts)}</div>\n'
 
     # Persona peers
     if flow_ir.known_personas:
-        peers = ", ".join(f'<code>{_esc(p)}</code>' for p in flow_ir.known_personas)
+        peers = ", ".join(f"<code>{_esc(p)}</code>" for p in flow_ir.known_personas)
         html += f'<div class="meta-line"><strong>Peers:</strong> {peers}</div>\n'
 
     # Inputs
@@ -690,20 +698,6 @@ def _html_prompt_block(step: StepIR) -> str:
 
     html = '<div class="prompt-block">\n'
     html += f'<div class="prompt-header"><span class="sym">▷</span> PROMPT: {_esc(step.name)} ({config_str})</div>\n'
-
-    if step.prompt:
-        import re
-
-        def _highlight_inject(m: re.Match) -> str:
-            inner = m.group(1).strip()
-            return f'<span class="inject">{{← {_esc(inner)}}}</span>'
-
-        # Show full prompt text with highlighted inject points
-        prompt_text = step.prompt.strip()
-        highlighted = re.sub(r"\{\{(.+?)\}\}", _highlight_inject, prompt_text)
-        # Convert newlines to <br> for readability
-        highlighted = highlighted.replace("\n", "<br>\n")
-        html += f"<div>{highlighted}</div>\n"
 
     if step.prompt_injects:
         injects = ", ".join(

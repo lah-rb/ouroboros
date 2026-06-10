@@ -6,7 +6,6 @@ No real filesystem or subprocess access.
 
 from __future__ import annotations
 
-import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,7 +18,6 @@ from agent.effects.protocol import (
     InferenceResult,
     SearchMatch,
     SearchResults,
-    TerminalOutput,
     WriteResult,
 )
 
@@ -55,6 +53,7 @@ class MockEffects:
         files: dict[str, str] | None = None,
         commands: dict[str, CommandResult] | None = None,
         inference_responses: list[str] | None = None,
+        mission: Any = None,
     ) -> None:
         self._files: dict[str, str] = dict(files or {})
         self._commands: dict[str, CommandResult] = dict(commands or {})
@@ -66,6 +65,9 @@ class MockEffects:
         self._state: dict[str, Any] = {}  # In-memory persistence store
         # Trace events — public for test assertions
         self.trace_events: list[Any] = []
+        # Pre-load mission state for projection materialization
+        if mission is not None:
+            self._state["mission"] = mission
 
     # ── Call recording ────────────────────────────────────────────
 
@@ -224,7 +226,12 @@ class MockEffects:
         working_dir: str | None = None,
         timeout: int = 30,
     ) -> CommandResult:
-        """Return canned command result or a default failure."""
+        """Return canned command result or a default failure.
+
+        Emits :class:`CommandRun` when inside a step context, for test
+        parity with LocalEffects. See that class's run_command for the
+        rationale on step-context-gated emission.
+        """
         cmd_str = " ".join(command)
 
         # Look up by full command string or first arg
@@ -243,6 +250,24 @@ class MockEffects:
             {"command": command, "working_dir": working_dir, "timeout": timeout},
             result,
         )
+
+        from agent.trace import CommandRun, _truncate_preview, get_step_context
+
+        ctx = get_step_context()
+        if ctx is not None:
+            await self.emit_trace(
+                CommandRun(
+                    mission_id=ctx.get("mission_id", ""),
+                    cycle=ctx.get("cycle", 0),
+                    flow=ctx.get("flow", ""),
+                    step=ctx.get("step", ""),
+                    command=cmd_str,
+                    return_code=result.return_code,
+                    timed_out=getattr(result, "timed_out", False),
+                    stdout_preview=_truncate_preview(result.stdout or ""),
+                    stderr_preview=_truncate_preview(result.stderr or ""),
+                )
+            )
         return result
 
     # ── Inference ─────────────────────────────────────────────────
@@ -294,7 +319,11 @@ class MockEffects:
         return text
 
     async def start_inference_session(self, config: dict | None = None) -> str:
-        """Start a mock session — returns a sequential session ID."""
+        """Start a mock session — returns a sequential session ID.
+
+        Emits :class:`SessionStart` when inside a step context for test
+        parity with LocalEffects.
+        """
         # Ensure instance-level state
         if not hasattr(self, "_mock_sessions"):
             self._mock_sessions: dict[str, list[dict]] = {}
@@ -306,6 +335,21 @@ class MockEffects:
         self._mock_sessions[session_id] = []
         self._mock_active_sessions.add(session_id)
         self._record("start_inference_session", {"config": config}, session_id)
+
+        from agent.trace import SessionStart, get_step_context
+
+        ctx = get_step_context()
+        if ctx is not None:
+            await self.emit_trace(
+                SessionStart(
+                    mission_id=ctx.get("mission_id", ""),
+                    cycle=ctx.get("cycle", 0),
+                    flow=ctx.get("flow", ""),
+                    step=ctx.get("step", ""),
+                    session_id=session_id,
+                    config=dict(config) if config else {},
+                )
+            )
         return session_id
 
     async def session_inference(
@@ -314,7 +358,12 @@ class MockEffects:
         prompt: str,
         config_overrides: dict | None = None,
     ) -> InferenceResult:
-        """Mock session inference — returns canned response, records the turn."""
+        """Mock session inference — returns canned response, records the turn.
+
+        Emits a trace event when called from inside a bound step context
+        so tests exercising the §4.7 contextvars plumbing see the same
+        event flow as production.
+        """
         if not hasattr(self, "_mock_sessions"):
             self._mock_sessions = {}
             self._mock_active_sessions = set()
@@ -340,10 +389,34 @@ class MockEffects:
             },
             result,
         )
+
+        # Emit InferenceCall when called from inside a bound step context.
+        # Mirrors the LocalEffects behaviour for parity — tests asserting
+        # that session turns emit trace events work against either effects.
+        from agent.trace import InferenceCall, count_tokens, get_step_context
+
+        ctx = get_step_context()
+        if ctx is not None:
+            await self.emit_trace(
+                InferenceCall(
+                    mission_id=ctx.get("mission_id", ""),
+                    cycle=ctx.get("cycle", 0),
+                    flow=ctx.get("flow", ""),
+                    step=ctx.get("step", ""),
+                    tokens_in=count_tokens(prompt),
+                    tokens_out=count_tokens(result.text or ""),
+                    purpose="session_inference",
+                )
+            )
+
         return result
 
     async def end_inference_session(self, session_id: str) -> bool:
-        """End a mock session."""
+        """End a mock session.
+
+        Emits :class:`SessionEnd` when inside a step context for test
+        parity with LocalEffects.
+        """
         if not hasattr(self, "_mock_active_sessions"):
             self._mock_active_sessions = set()
 
@@ -351,6 +424,21 @@ class MockEffects:
         if found:
             self._mock_active_sessions.discard(session_id)
         self._record("end_inference_session", {"session_id": session_id}, found)
+
+        from agent.trace import SessionEnd, get_step_context
+
+        ctx = get_step_context()
+        if ctx is not None:
+            await self.emit_trace(
+                SessionEnd(
+                    mission_id=ctx.get("mission_id", ""),
+                    cycle=ctx.get("cycle", 0),
+                    flow=ctx.get("flow", ""),
+                    step=ctx.get("step", ""),
+                    session_id=session_id,
+                    success=found,
+                )
+            )
         return found
 
     # ── Persistence ───────────────────────────────────────────────
@@ -387,7 +475,6 @@ class MockEffects:
         category: str = "general",
         tags: list[str] | None = None,
         source_flow: str = "unknown",
-        source_task: str = "unknown",
     ) -> bool:
         notes = self._state.setdefault("notes", [])
         notes.append(
@@ -396,10 +483,32 @@ class MockEffects:
                 "category": category,
                 "tags": tags or [],
                 "source_flow": source_flow,
-                "source_task": source_task,
             }
         )
         self._record("push_note", {"category": category, "tags": tags}, True)
+
+        from agent.trace import (
+            NotePushed,
+            _NOTE_PREVIEW_CHARS,
+            _truncate_preview,
+            get_step_context,
+        )
+
+        ctx = get_step_context()
+        if ctx is not None:
+            await self.emit_trace(
+                NotePushed(
+                    mission_id=ctx.get("mission_id", ""),
+                    cycle=ctx.get("cycle", 0),
+                    flow=ctx.get("flow", ""),
+                    step=ctx.get("step", ""),
+                    category=category,
+                    tags=list(tags or []),
+                    source_flow=source_flow,
+                    content_preview=_truncate_preview(content, _NOTE_PREVIEW_CHARS),
+                    success=True,
+                )
+            )
         return True
 
     async def save_artifact(self, artifact: Any) -> bool:
@@ -431,81 +540,122 @@ class MockEffects:
         self._record("write_state", {"key": key}, True)
         return True
 
-    # ── Terminal sessions ─────────────────────────────────────────
+    # ── MCP server interaction ─────────────────────────────────────
 
-    async def start_terminal(
+    async def mcp_connect(
         self,
-        working_dir: str | None = None,
-        env: dict[str, str] | None = None,
+        server_name: str,
+        server_command: list[str] | None = None,
     ) -> str:
-        """Start a mock terminal session."""
-        session_id = f"mock_session_{len(self._state.get('terminals', {}))}"
-        terminals = self._state.setdefault("terminals", {})
-        terminals[session_id] = {
-            "turn_count": 0,
-            "history": [],
-            "working_dir": working_dir,
+        """Mock MCP connect — returns a fake connection ID."""
+        conn_id = (
+            f"mock_mcp_{server_name}_{len(self._state.get('mcp_connections', {}))}"
+        )
+        connections = self._state.setdefault("mcp_connections", {})
+        connections[conn_id] = {
+            "server_name": server_name,
+            "sessions": {},
         }
         self._record(
-            "start_terminal", {"working_dir": working_dir, "env": env}, session_id
+            "mcp_connect",
+            {"server_name": server_name},
+            conn_id,
         )
-        return session_id
+        return conn_id
 
-    async def send_to_terminal(
+    async def mcp_call_tool(
         self,
-        session_id: str,
-        command: str,
-        timeout: int = 30,
-    ) -> TerminalOutput:
-        """Return canned terminal output based on command lookup."""
-        terminals = self._state.get("terminals", {})
-        session = terminals.get(session_id)
-        if session is None:
-            result = TerminalOutput(
-                command=command,
-                output="ERROR: Mock terminal session not found",
-                return_code=-1,
-                turn=-1,
-            )
-            self._record("send_to_terminal", {"session_id": session_id}, result)
-            return result
+        connection_id: str,
+        tool_name: str,
+        arguments: dict | None = None,
+        timeout: float = 60.0,
+    ) -> dict:
+        """Mock MCP tool call — returns canned responses.
 
-        turn = session["turn_count"]
-        session["turn_count"] += 1
+        Configure with mcp_tool_responses in _state:
+            effects._state["mcp_tool_responses"] = {
+                "send_input": {"output": "Hello!", "status": "settled"},
+                ...
+            }
 
-        # Look up canned command result
-        cmd_result = self._commands.get(command)
-        if cmd_result is not None:
-            output = cmd_result.stdout + cmd_result.stderr
-            rc = cmd_result.return_code
+        Emits :class:`McpToolCall` when inside a step context, using the
+        same reverse-lookup on connection_id → server_name that
+        LocalEffects uses so the rendered trace reads naturally.
+        """
+        args = arguments or {}
+
+        # Check for canned tool responses
+        canned = self._state.get("mcp_tool_responses", {})
+        if tool_name in canned:
+            result = dict(canned[tool_name])
+            self._record("mcp_call_tool", {"tool": tool_name, **args}, result)
         else:
-            output = f"mock output for: {command}"
-            rc = 0
+            # Default responses per tool
+            if tool_name == "create_session":
+                session_id = f"mock_pty_{len(self._state.get('mcp_sessions', {}))}"
+                sessions = self._state.setdefault("mcp_sessions", {})
+                sessions[session_id] = {"turn_count": 0, "history": []}
+                result = {"session_id": session_id, "status": "created"}
 
-        result = TerminalOutput(
-            command=command,
-            output=output,
-            return_code=rc,
-            turn=turn,
-        )
-        session["history"].append(
-            {"command": command, "output": output, "return_code": rc, "turn": turn}
-        )
-        self._record(
-            "send_to_terminal",
-            {"session_id": session_id, "command": command},
-            result,
-        )
+            elif tool_name == "send_input":
+                session_id = args.get("session_id", "")
+                text = args.get("text", "")
+                sessions = self._state.get("mcp_sessions", {})
+                session = sessions.get(session_id, {})
+                turn = session.get("turn_count", 0)
+                session["turn_count"] = turn + 1
+
+                # Look up canned command result
+                cmd_result = self._commands.get(text.strip())
+                if cmd_result is not None:
+                    output = cmd_result.stdout + cmd_result.stderr
+                else:
+                    output = f"mock output for: {text.strip()}"
+
+                result = {"output": output, "status": "settled"}
+
+            elif tool_name == "read_output":
+                result = {"output": "", "status": "settled"}
+
+            elif tool_name == "close_session":
+                session_id = args.get("session_id", "")
+                sessions = self._state.get("mcp_sessions", {})
+                sessions.pop(session_id, None)
+                result = {"success": True, "total_turns": 0, "transcript": ""}
+
+            else:
+                result = {"content": f"mock result for tool {tool_name}"}
+
+            self._record("mcp_call_tool", {"tool": tool_name, **args}, result)
+
+        from agent.trace import McpToolCall, _truncate_preview, get_step_context
+
+        ctx = get_step_context()
+        if ctx is not None:
+            connections = self._state.get("mcp_connections", {})
+            entry = connections.get(connection_id, {})
+            server_name = entry.get("server_name") if isinstance(entry, dict) else ""
+            if not server_name:
+                server_name = connection_id
+            await self.emit_trace(
+                McpToolCall(
+                    mission_id=ctx.get("mission_id", ""),
+                    cycle=ctx.get("cycle", 0),
+                    flow=ctx.get("flow", ""),
+                    step=ctx.get("step", ""),
+                    server=server_name,
+                    tool=tool_name,
+                    arg_keys=list(args.keys()),
+                    result_preview=_truncate_preview(repr(result)),
+                )
+            )
         return result
 
-    async def close_terminal(self, session_id: str) -> bool:
-        """Close a mock terminal session."""
-        terminals = self._state.get("terminals", {})
-        found = session_id in terminals
-        if found:
-            del terminals[session_id]
-        self._record("close_terminal", {"session_id": session_id}, found)
-        return found
+    async def mcp_disconnect(self, connection_id: str) -> None:
+        """Mock MCP disconnect."""
+        connections = self._state.get("mcp_connections", {})
+        connections.pop(connection_id, None)
+        self._record("mcp_disconnect", {"connection_id": connection_id}, True)
 
     # ── Tracing ───────────────────────────────────────────────────
 

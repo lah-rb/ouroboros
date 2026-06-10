@@ -7,7 +7,7 @@ The registry maps action names (referenced in flow YAML) to their implementation
 from __future__ import annotations
 
 import os
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from agent.models import StepInput, StepOutput
 
@@ -144,79 +144,6 @@ async def action_read_files(step_input: StepInput) -> StepOutput:
         )
 
 
-async def action_write_file(step_input: StepInput) -> StepOutput:
-    """Write content to a file via the effects interface.
-
-    Requires effects to be available.
-
-    Params:
-        path: Path to write to.
-        content: Content to write (or read from context key 'content_key').
-        content_key: Context key containing the content to write.
-
-    Result:
-        write_success: bool
-    """
-    path = step_input.params.get("path", "")
-    content = step_input.params.get("content", "")
-
-    # Allow content to come from a context key
-    content_key = step_input.params.get("content_key")
-    if content_key and content_key in step_input.context:
-        content = step_input.context[content_key]
-
-    if not path:
-        return StepOutput(
-            result={"write_success": False},
-            observations="No path provided for write_file.",
-        )
-
-    if step_input.effects is None:
-        return StepOutput(
-            result={"write_success": False},
-            observations="No effects interface available for write_file.",
-        )
-
-    wr = await step_input.effects.write_file(path, content)
-    return StepOutput(
-        result={"write_success": wr.success},
-        observations=(
-            f"Wrote {wr.bytes_written} bytes to {path}"
-            if wr.success
-            else f"Write failed: {wr.error}"
-        ),
-        context_updates={"write_result": {"path": path, "success": wr.success}},
-    )
-
-
-async def action_transform(step_input: StepInput) -> StepOutput:
-    """Passthrough/transform action for testing.
-
-    Copies specified context keys to output, optionally with transformations.
-
-    Params:
-        pass_through: list of context keys to copy to context_updates.
-        set_values: dict of key→value pairs to add to context_updates.
-    """
-    context_updates = {}
-
-    # Pass through specified context keys
-    pass_through = step_input.params.get("pass_through", [])
-    for key in pass_through:
-        if key in step_input.context:
-            context_updates[key] = step_input.context[key]
-
-    # Set explicit values
-    set_values = step_input.params.get("set_values", {})
-    context_updates.update(set_values)
-
-    return StepOutput(
-        result={"transformed": True},
-        observations=f"Passed through {len(pass_through)} keys, set {len(set_values)} values.",
-        context_updates=context_updates,
-    )
-
-
 async def action_log_completion(step_input: StepInput) -> StepOutput:
     """Terminal action that logs completion and produces a summary.
 
@@ -246,100 +173,58 @@ async def action_noop(step_input: StepInput) -> StepOutput:
     )
 
 
-async def action_check_condition(step_input: StepInput) -> StepOutput:
-    """Evaluates a simple condition from params and returns the result.
-
-    Params:
-        field: The context key to check.
-        expected: The expected value.
-
-    Result:
-        condition_met: bool
-    """
-    field = step_input.params.get("field", "")
-    expected = step_input.params.get("expected")
-    actual = step_input.context.get(field)
-
-    return StepOutput(
-        result={"condition_met": actual == expected},
-        observations=f"Checked {field}: actual={actual!r}, expected={expected!r}",
-        context_updates={},
-    )
-
-
 def build_action_registry() -> ActionRegistry:
     """Create an ActionRegistry pre-loaded with built-in actions.
-
-    v2: Adds new LLM menu-based dispatch actions, removes dead heuristic
-    matchers. Keeps all working actions from research, integration,
-    diagnostic, terminal, and AST modules.
 
     Returns:
         An ActionRegistry with all built-in actions registered.
     """
-    # ── Mission control v2 actions ────────────────────────────────
+    # ── Mission control ───────────────────────────────────────────
     from agent.actions.mission_actions import (
         action_load_mission_state,
-        action_update_task_status,
         action_handle_events,
         action_finalize_mission,
         action_enter_idle,
-        action_execute_file_creation,
-        action_run_tests,
-        # NEW v2 actions
-        action_select_task_for_dispatch,
-        action_select_target_file,
-        action_start_director_session,
-        action_end_director_session,
-        action_record_dispatch,
         action_check_architecture_drift,
         action_parse_and_store_architecture,
-        action_create_plan_from_architecture,
         # Context Contract Architecture
         action_derive_project_goals,
+        # Pipeline v9 actions
+        action_check_pipeline_phase,
+        action_structural_sweep_next,
+        action_functional_sweep_next,
+        action_harvest_quality_findings,
+        action_quality_sweep_next,
+        # Fix target resolution
+        action_apply_fix_target,
     )
 
     # ── Diagnostic actions ────────────────────────────────────────
     from agent.actions.diagnostic_actions import (
         action_compile_diagnosis,
         action_create_fix_task_from_diagnosis,
-        action_read_investigation_targets,
     )
 
     # ── Integration actions ───────────────────────────────────────
     from agent.actions.integration_actions import (
         action_apply_multi_file_changes,
-        action_run_project_tests,
-        action_check_remaining_smells,
-        action_restore_file_from_context,
-        action_check_remaining_doc_tasks,
-        action_compile_integration_report,
-    )
-
-    # ── Retrospective actions ─────────────────────────────────────
-    from agent.actions.retrospective_actions import (
-        action_load_retrospective_data,
-        action_apply_retrospective_recommendations,
-        action_compose_director_report,
-        action_submit_review_to_api,
     )
 
     # ── Research actions ──────────────────────────────────────────
     from agent.actions.research_actions import (
         action_build_and_query_repomap,
-        action_run_git_investigation,
-        action_format_technical_query,
         action_validate_cross_file_consistency,
-        action_select_relevant_files,
     )
 
-    # ── Terminal session actions ───────────────────────────────────
-    from agent.actions.terminal_actions import (
-        action_start_terminal_session,
-        action_send_terminal_command,
-        action_close_terminal_session,
-        # Context Contract Architecture — batch execution for run_commands
-        action_execute_commands_batch,
+    # ── Interactive terminal actions (MCP-based) ────────────────────
+    from agent.actions.interactive_actions import (
+        action_start_interactive_session,
+        action_send_interaction,
+        action_close_interactive_session,
+        action_flush_transient_files,
+        action_relaunch_program,
+        action_execute_commands_batch_mcp,
+        action_end_inference_session,
     )
 
     # ── AST-aware editing actions ─────────────────────────────────
@@ -348,153 +233,190 @@ def build_action_registry() -> ActionRegistry:
         action_start_edit_session,
         action_select_symbol_turn,
         action_prepare_next_rewrite,
+        action_load_next_file,
+        action_write_patched_file,
+        action_build_call_graph,
         action_rewrite_symbol_turn,
+        action_capture_bail_turn,
         action_finalize_edit_session,
         action_close_edit_session,
+        action_insert_new_symbol,
+        action_prepare_insert_context,
     )
 
-    # ── Refinement actions (trimmed — removed fallback validation) ─
+    # ── Data-file surgical patching (data_ops) ───────────────────
+    from agent.actions.data_ops_actions import (
+        action_apply_data_ops,
+        action_translate_data_ops_turn,
+    )
+
+    # ── Module-frame editor (import trigger + frame edit) ─────────
+    from agent.actions.frame_actions import (
+        action_check_import_fix,
+        action_prepare_frame,
+        action_rewrite_frame_turn,
+        action_splice_frame,
+    )
+
+    # ── Refinement actions ────────────────────────────────────────
     from agent.actions.refinement_actions import (
         action_push_note,
         action_scan_project,
         action_extract_search_queries,
-        action_curl_search,
+        action_exa_search,
         action_run_validation_checks,
-        action_load_file_contents,
-        action_apply_plan_revision,
         action_log_validation_notes,
         action_execute_project_setup,
         action_apply_quality_gate_results,
-        action_validate_created_files,
     )
 
     registry = ActionRegistry()
 
     # ── Core built-in actions ─────────────────────────────────────
     registry.register("read_files", action_read_files)
-    registry.register("write_file", action_write_file)
-    registry.register("transform", action_transform)
     registry.register("log_completion", action_log_completion)
     registry.register("noop", action_noop)
-    registry.register("check_condition", action_check_condition)
 
-    # ── Mission control v2 ────────────────────────────────────────
+    # ── Mission control ────────────────────────────────────────────
     registry.register("load_mission_state", action_load_mission_state)
-    registry.register("update_task_status", action_update_task_status)
     registry.register("handle_events", action_handle_events)
     registry.register("finalize_mission", action_finalize_mission)
     registry.register("enter_idle", action_enter_idle)
-    # NEW: memoryful director session
-    registry.register("start_director_session", action_start_director_session)
-    registry.register("end_director_session", action_end_director_session)
-    # NEW: LLM menu-based dispatch (replaces configure_task_dispatch)
-    registry.register("select_task_for_dispatch", action_select_task_for_dispatch)
-    registry.register("select_target_file", action_select_target_file)
-    registry.register("record_dispatch", action_record_dispatch)
-    # NEW: architecture state management
-    registry.register(
-        "check_architecture_drift", action_check_architecture_drift
-    )
+    # Memoryful director session
+    # Architecture state management
+    registry.register("check_architecture_drift", action_check_architecture_drift)
     registry.register(
         "parse_and_store_architecture", action_parse_and_store_architecture
     )
-    registry.register(
-        "create_plan_from_architecture", action_create_plan_from_architecture
-    )
-    # Context Contract Architecture: goal derivation
+    # Goal derivation
     registry.register("derive_project_goals", action_derive_project_goals)
+    # Creation order sweep (legacy, delegates to structural_sweep_next)
+    # Pipeline v9 actions
+    registry.register("check_pipeline_phase", action_check_pipeline_phase)
+    registry.register("structural_sweep_next", action_structural_sweep_next)
+    registry.register("functional_sweep_next", action_functional_sweep_next)
+    registry.register("harvest_quality_findings", action_harvest_quality_findings)
+    registry.register("quality_sweep_next", action_quality_sweep_next)
+    # Fix target resolution — menu assembly moved to fix_target_menu projection
+    registry.register("apply_fix_target", action_apply_fix_target)
 
     # ── File operations ───────────────────────────────────────────
-    registry.register("execute_file_creation", action_execute_file_creation)
-    registry.register("run_tests", action_run_tests)
 
-    # ── Refinement (trimmed) ──────────────────────────────────────
+    # ── Refinement ────────────────────────────────────────────────
     registry.register("push_note", action_push_note)
     registry.register("scan_project", action_scan_project)
     registry.register("extract_search_queries", action_extract_search_queries)
-    registry.register("curl_search", action_curl_search)
+    registry.register("exa_search", action_exa_search)
     registry.register("run_validation_checks", action_run_validation_checks)
-    registry.register("load_file_contents", action_load_file_contents)
-    registry.register("apply_plan_revision", action_apply_plan_revision)
     registry.register("log_validation_notes", action_log_validation_notes)
     registry.register("execute_project_setup", action_execute_project_setup)
     registry.register("apply_quality_gate_results", action_apply_quality_gate_results)
-    registry.register("validate_created_files", action_validate_created_files)
-    # NOTE: run_fallback_validation REMOVED — use validate_created_files instead
-    # NOTE: accumulate_correction_history REMOVED — create no longer has correction loop
 
     # ── Diagnostic actions ────────────────────────────────────────
     registry.register("compile_diagnosis", action_compile_diagnosis)
     registry.register(
         "create_fix_task_from_diagnosis", action_create_fix_task_from_diagnosis
     )
-    registry.register("read_investigation_targets", action_read_investigation_targets)
 
     # ── Integration actions ───────────────────────────────────────
     registry.register("apply_multi_file_changes", action_apply_multi_file_changes)
-    registry.register("run_project_tests", action_run_project_tests)
-    registry.register("check_remaining_smells", action_check_remaining_smells)
-    registry.register("restore_file_from_context", action_restore_file_from_context)
-    registry.register("check_remaining_doc_tasks", action_check_remaining_doc_tasks)
-    registry.register("compile_integration_report", action_compile_integration_report)
-
-    # ── Retrospective actions ─────────────────────────────────────
-    registry.register("load_retrospective_data", action_load_retrospective_data)
-    registry.register(
-        "apply_retrospective_recommendations",
-        action_apply_retrospective_recommendations,
-    )
-    registry.register("compose_director_report", action_compose_director_report)
-    registry.register("submit_review_to_api", action_submit_review_to_api)
 
     # ── Research actions ──────────────────────────────────────────
     registry.register("build_and_query_repomap", action_build_and_query_repomap)
-    registry.register("run_git_investigation", action_run_git_investigation)
-    registry.register("format_technical_query", action_format_technical_query)
     registry.register(
         "validate_cross_file_consistency", action_validate_cross_file_consistency
     )
-    registry.register("select_relevant_files", action_select_relevant_files)
 
-    # ── Terminal session actions ───────────────────────────────────
-    registry.register("start_terminal_session", action_start_terminal_session)
-    registry.register("send_terminal_command", action_send_terminal_command)
-    registry.register("close_terminal_session", action_close_terminal_session)
-    # Context Contract Architecture: batch command execution for run_commands
-    registry.register("execute_commands_batch", action_execute_commands_batch)
+    # ── Interactive terminal actions (MCP-based) ────────────────────
+    registry.register("start_interactive_session", action_start_interactive_session)
+    registry.register("send_interaction", action_send_interaction)
+    registry.register("close_interactive_session", action_close_interactive_session)
+    registry.register("flush_transient_files", action_flush_transient_files)
+    registry.register("relaunch_program", action_relaunch_program)
+    registry.register("execute_commands_batch", action_execute_commands_batch_mcp)
+    registry.register("end_inference_session", action_end_inference_session)
 
     # ── AST-aware editing actions ─────────────────────────────────
     registry.register("extract_symbol_bodies", action_extract_symbol_bodies)
     registry.register("start_edit_session", action_start_edit_session)
     registry.register("select_symbol_turn", action_select_symbol_turn)
     registry.register("prepare_next_rewrite", action_prepare_next_rewrite)
+    registry.register("load_next_file", action_load_next_file)
+    registry.register("write_patched_file", action_write_patched_file)
+    registry.register("build_call_graph", action_build_call_graph)
+    registry.register("insert_new_symbol", action_insert_new_symbol)
+    registry.register("prepare_insert_context", action_prepare_insert_context)
     registry.register("rewrite_symbol_turn", action_rewrite_symbol_turn)
+    registry.register("capture_bail_turn", action_capture_bail_turn)
     registry.register("finalize_edit_session", action_finalize_edit_session)
     registry.register("close_edit_session", action_close_edit_session)
 
-    # ── CUE Migration: New Actions ─────────────────────────────────
+    # ── Data-file surgical patching (data_ops) ────────────────────
+    registry.register("translate_data_ops_turn", action_translate_data_ops_turn)
+    registry.register("apply_data_ops", action_apply_data_ops)
+
+    # ── Module-frame editor ───────────────────────────────────────
+    registry.register("check_import_fix", action_check_import_fix)
+    registry.register("prepare_frame", action_prepare_frame)
+    registry.register("rewrite_frame_turn", action_rewrite_frame_turn)
+    registry.register("splice_frame", action_splice_frame)
+
+    # ── Pipeline actions ──────────────────────────────────────────
     from agent.actions.pipeline_actions import (
         action_lookup_validation_env,
         action_run_validation_checks_from_env,
+        action_check_data_file,
         action_persist_validation_env,
-        action_check_retry_budget,
-        action_git_log_summary,
         action_log_validation_notes,
         # A1: Dependency coverage check
         action_check_dependency_coverage,
         action_parse_dep_check_result,
+        action_collect_env_field,
+        action_parse_inference_json,
     )
 
     registry.register("lookup_validation_env", action_lookup_validation_env)
     registry.register(
         "run_validation_checks_from_env", action_run_validation_checks_from_env
     )
+    registry.register("check_data_file", action_check_data_file)
     registry.register("persist_validation_env", action_persist_validation_env)
-    registry.register("check_retry_budget", action_check_retry_budget)
-    registry.register("git_log_summary", action_git_log_summary)
     registry.register("log_validation_notes", action_log_validation_notes)
     # A1: Dependency coverage check
     registry.register("check_dependency_coverage", action_check_dependency_coverage)
     registry.register("parse_dep_check_result", action_parse_dep_check_result)
+    registry.register("collect_env_field", action_collect_env_field)
+    registry.register("parse_inference_json", action_parse_inference_json)
+
+    # Deterministic evaluation (interact flow — run_commands path)
+    from agent.actions.pipeline_actions import action_evaluate_deterministic_result
+
+    registry.register(
+        "evaluate_deterministic_result", action_evaluate_deterministic_result
+    )
+
+    # ── Tier Records: Reporting Chain ────────────────────────────────
+    from agent.actions.reporting_actions import (
+        action_compile_directive_report,
+        action_build_directive_report,
+        action_attach_directive_report,
+    )
+
+    registry.register("compile_directive_report", action_compile_directive_report)
+    registry.register("build_directive_report", action_build_directive_report)
+    registry.register("attach_directive_report", action_attach_directive_report)
+
+    # ── Diagnosis session actions (v12: trace-and-conclude + systemic scan) ─────
+    from agent.actions.diagnosis_session_actions import (
+        action_start_diagnosis_session,
+        action_execute_symbol_trace,
+        action_conclude_diagnosis,
+        action_systemic_scan,
+    )
+
+    registry.register("start_diagnosis_session", action_start_diagnosis_session)
+    registry.register("execute_symbol_trace", action_execute_symbol_trace)
+    registry.register("conclude_diagnosis", action_conclude_diagnosis)
+    registry.register("systemic_scan", action_systemic_scan)
 
     return registry

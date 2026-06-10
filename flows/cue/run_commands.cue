@@ -1,12 +1,11 @@
 // run_commands.cue — Deterministic Command Execution (Sub-flow)
 //
-// Executes a list of shell commands in a persistent terminal session.
+// Executes a list of shell commands in a persistent PTY session via MCP.
 // Zero inference calls — purely mechanical. The caller provides the
 // exact commands to run; this flow executes them and returns output.
 //
 // Used by:
 //   - quality_gate: run the project to check if it starts
-//   - file_ops: run validation commands
 //   - project_ops: run setup commands
 //
 // For intelligent, exploratory terminal sessions where the model
@@ -16,10 +15,11 @@ package ouroboros
 
 run_commands: #FlowDefinition & {
 	flow:    "run_commands"
-	version: 1
+	version: 2
 	description: """
-		Execute shell commands deterministically. Start terminal, run
-		each command in sequence, capture output, close. Zero inference.
+		Execute shell commands deterministically via MCP terminal.
+		Start PTY session, run each command in sequence, capture output,
+		close. Zero inference.
 		"""
 
 	context_tier: "session_task"
@@ -28,7 +28,6 @@ run_commands: #FlowDefinition & {
 		exit_codes: {type: "list",   from: "context.exit_codes",  optional: true}
 		all_passed: {type: "bool",   from: "context.all_passed"}
 	}
-	state_reads: []
 
 	input: {
 		required: ["commands", "working_directory"]
@@ -40,8 +39,8 @@ run_commands: #FlowDefinition & {
 	steps: {
 
 		start_terminal: #StepDefinition & {
-			action:      "start_terminal_session"
-			description: "Start persistent shell for command execution"
+			action:      "start_interactive_session"
+			description: "Start PTY session via MCP terminal server"
 			params: {
 				working_directory: {$ref: "input.working_directory"}
 				environment_vars:  {$ref: "input.environment_vars", default: ""}
@@ -53,13 +52,13 @@ run_commands: #FlowDefinition & {
 					{condition: "true", transition: "close_failure"},
 				]
 			}
-			publishes: ["session_id"]
+			publishes: ["mcp_connection_id", "mcp_session_id"]
 		}
 
 		execute_commands: #StepDefinition & {
 			action:      "execute_commands_batch"
 			description: "Execute provided commands sequentially"
-			context: required: ["session_id"]
+			context: required: ["mcp_connection_id", "mcp_session_id"]
 			params: {
 				commands:      {$ref: "input.commands"}
 				stop_on_error: {$ref: "input.stop_on_error", default: true}
@@ -69,24 +68,24 @@ run_commands: #FlowDefinition & {
 				type: "rule"
 				rules: [{condition: "true", transition: "close_session"}]
 			}
-			publishes: ["session_id", "terminal_output", "exit_codes", "all_passed"]
+			publishes: ["mcp_session_id", "terminal_output", "exit_codes", "all_passed"]
 		}
 
 		close_session: #StepDefinition & {
-			action:      "close_terminal_session"
-			description: "Close terminal and return results"
+			action:      "close_interactive_session"
+			description: "Close PTY session and return results"
 			context: {
-				required: ["session_id"]
-				optional: ["terminal_output", "exit_codes", "all_passed"]
+				required: ["mcp_session_id"]
+				optional: ["mcp_connection_id", "terminal_output", "exit_codes", "all_passed", "inference_session_id", "session_history", "session_summary"]
 			}
 			terminal: true
 			status:   "success"
 		}
 
 		close_failure: #StepDefinition & {
-			action:      "close_terminal_session"
+			action:      "close_interactive_session"
 			description: "Terminal failed to start"
-			context: optional: ["session_id"]
+			context: optional: ["mcp_connection_id", "mcp_session_id", "terminal_output", "inference_session_id", "session_history", "session_summary"]
 			terminal: true
 			status:   "failed"
 		}

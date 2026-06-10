@@ -18,7 +18,6 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,7 +45,7 @@ from agent.blueprint.ir import (
     TailCallIR,
     TemplateIR,
 )
-from agent.models import FlowDefinition, StepDefinition
+from agent.models import FlowDefinition, StepDefinition, action_type_for
 
 
 def analyze(flows_dir: str = "flows", agent_dir: str = "agent") -> BlueprintIR:
@@ -72,7 +71,7 @@ def analyze(flows_dir: str = "flows", agent_dir: str = "agent") -> BlueprintIR:
     flow_irs: dict[str, FlowIR] = {}
     for flow_name, flow_def in flow_defs.items():
         source_file = source_map.get(flow_name, "")
-        category = _categorize_flow(flow_name, source_file)
+        category = _categorize_flow(flow_name)
         raw = raw_flow_data.get(flow_name, {})
         flow_irs[flow_name] = _flow_def_to_ir(flow_def, source_file, category, raw)
 
@@ -113,7 +112,9 @@ def analyze(flows_dir: str = "flows", agent_dir: str = "agent") -> BlueprintIR:
 # ── Flow Loading ────────────────────────────────────────────────────
 
 
-def _load_flows_from_compiled(flows_dir: str) -> tuple[dict[str, FlowDefinition], dict[str, dict]]:
+def _load_flows_from_compiled(
+    flows_dir: str,
+) -> tuple[dict[str, FlowDefinition], dict[str, dict]]:
     """Load all flows from CUE-exported compiled.json.
 
     Returns both parsed FlowDefinitions and the raw JSON dicts
@@ -177,7 +178,7 @@ def _build_source_map(flows_dir: str) -> dict[str, str]:
 
 
 # Known flow categorizations for the consolidated CUE flow set.
-_ORCHESTRATOR_FLOWS = {"mission_control", "design_and_plan", "revise_plan"}
+_ORCHESTRATOR_FLOWS = {"mission_control", "design_and_plan"}
 _TASK_FLOWS = {"file_ops", "project_ops", "interact", "diagnose_issue", "research"}
 _SUB_FLOWS = {
     "create",
@@ -185,20 +186,20 @@ _SUB_FLOWS = {
     "patch",
     "prepare_context",
     "quality_gate",
-    "run_in_terminal",
-    "capture_learnings",
-    "retrospective",
+    "run_commands",
+    "run_session",
     "set_env",
 }
 
 
-def _categorize_flow(flow_name: str, source_file: str) -> str:
+def _categorize_flow(flow_name: str) -> str:
     """Determine a flow's category.
 
     Categories:
-    - "orchestrator" — mission_control, design_and_plan, revise_plan
-    - "task" — file_write, project_ops, interact, diagnose_issue, research
-    - "sub_flow" — create_file, modify_file, prepare_context, etc.
+    - "orchestrator" — mission_control, design_and_plan
+    - "task" — file_ops, project_ops, interact, diagnose_issue, research
+    - "sub_flow" — create, rewrite, patch, prepare_context, quality_gate,
+                   run_commands, run_session, set_env
     - "test" — test_* flows
     - "unknown" — unrecognized
     """
@@ -267,8 +268,6 @@ def _flow_def_to_ir(
                     target_flow=tc_flow,
                     from_step=step_name,
                     input_map=tc_input_map_str,
-                    result_formatter=step_def.tail_call.get("result_formatter"),
-                    result_keys=step_def.tail_call.get("result_keys", []),
                 )
             )
 
@@ -341,31 +340,47 @@ def _step_def_to_ir(
 ) -> StepIR:
     """Convert a StepDefinition into a StepIR."""
     # Determine action type
-    action_type = _classify_action_type(step_def.action)
+    action_type = action_type_for(step_def.action)
 
     # Extract prompt template reference
     prompt_template_id = None
     if step_def.prompt_template:
         prompt_template_id = step_def.prompt_template.template
 
-    # Extract prompt injects from prompt_template keys or legacy inline prompt
+    # Extract prompt injects from prompt_template declared keys
     prompt_injects: list[str] = []
     if step_def.prompt_template:
-        # Collect declared context_keys and input_keys
         prompt_injects.extend(
             f"context.{k}" for k in step_def.prompt_template.context_keys
         )
         prompt_injects.extend(f"input.{k}" for k in step_def.prompt_template.input_keys)
-    elif step_def.prompt:
-        prompt_injects = _extract_jinja2_injects(step_def.prompt)
 
-    # Extract pre-compute formatter names
+    # Extract pre-compute formatter names and input.* $ref references
     pre_compute_names: list[str] = []
+    pre_compute_input_refs: list[str] = []
     if step_def.pre_compute:
         for pc in step_def.pre_compute:
             name = pc.formatter if hasattr(pc, "formatter") else pc.get("formatter", "")
             if name:
                 pre_compute_names.append(name)
+            params = pc.params if hasattr(pc, "params") else pc.get("params", {})
+            for v in (params or {}).values():
+                if isinstance(v, dict) and "$ref" in v:
+                    ref = v["$ref"]
+                    if isinstance(ref, str) and ref.startswith("input."):
+                        # Take the top-level field name (input.foo.bar → foo)
+                        pre_compute_input_refs.append(
+                            ref[len("input.") :].split(".")[0]
+                        )
+
+    # Extract input.* $ref references from step-level params
+    params_input_refs: list[str] = []
+    step_params = step_def.params if hasattr(step_def, "params") else {}
+    for v in (step_params or {}).values():
+        if isinstance(v, dict) and "$ref" in v:
+            ref = v["$ref"]
+            if isinstance(ref, str) and ref.startswith("input."):
+                params_input_refs.append(ref[len("input.") :].split(".")[0])
 
     # Build config
     config = None
@@ -389,6 +404,15 @@ def _step_def_to_ir(
     if step_def.action == "flow" and step_def.flow:
         sub_flow_target = step_def.flow
 
+    # Assemble the full publishes list: step-level publishes plus any
+    # turn-level publish_selection (menu shapes' mechanism for naming
+    # where the chosen option key lands in context).
+    publishes = list(step_def.publishes)
+    if step_def.turn is not None:
+        publish_selection = getattr(step_def.turn.response, "publish_selection", None)
+        if publish_selection and publish_selection not in publishes:
+            publishes.append(publish_selection)
+
     return StepIR(
         name=step_name,
         action=step_def.action,
@@ -396,11 +420,12 @@ def _step_def_to_ir(
         description=step_def.description,
         context_required=list(step_def.context.required),
         context_optional=list(step_def.context.optional),
-        publishes=list(step_def.publishes),
-        prompt=step_def.prompt,
+        publishes=publishes,
         prompt_template=prompt_template_id,
         prompt_injects=prompt_injects,
         pre_compute=pre_compute_names,
+        pre_compute_input_refs=pre_compute_input_refs,
+        params_input_refs=params_input_refs,
         config=config,
         resolver=resolver,
         effects=list(step_def.effects),
@@ -410,17 +435,6 @@ def _step_def_to_ir(
         tail_call_target=tail_call_target,
         sub_flow_target=sub_flow_target,
     )
-
-
-def _classify_action_type(action: str) -> str:
-    """Classify an action string into its type category."""
-    if action == "inference":
-        return "inference"
-    if action == "flow":
-        return "flow"
-    if action == "noop":
-        return "noop"
-    return "action"
 
 
 def _build_resolver_ir(step_def: StepDefinition) -> ResolverIR:
@@ -461,30 +475,6 @@ def _build_resolver_ir(step_def: StepDefinition) -> ResolverIR:
         prompt=resolver_def.prompt,
         publish_selection=resolver_def.publish_selection,
     )
-
-
-# ── Prompt Inject Extraction ──────────────────────────────────────────
-
-
-def _extract_jinja2_injects(prompt: str) -> list[str]:
-    """Extract Jinja2 variable references from an inline prompt template.
-
-    Matches {{ ... }} patterns, strips whitespace. Deduplicates while
-    preserving order. Used only for legacy inline prompts.
-    """
-    raw = [m.strip() for m in re.findall(r"\{\{(.+?)\}\}", prompt, re.DOTALL)]
-    # Deduplicate preserving order
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in raw:
-        if item not in seen:
-            seen.add(item)
-            result.append(item)
-    return result
-
-
-# Keep the old name as an alias for backward compatibility
-extract_injects = _extract_jinja2_injects
 
 
 # ── Flow Stats ────────────────────────────────────────────────────────
@@ -737,9 +727,6 @@ def _scan_template_usage(flows_dir: str) -> dict[str, list[str]]:
 
     if not cue_dir.is_dir():
         return usage
-
-    # Pattern: matches _templates.<template_name> anywhere in a step definition
-    template_ref_pattern = re.compile(r"_templates\.(\w+)\s+&")
 
     for cue_file in sorted(cue_dir.glob("*.cue")):
         if cue_file.name in ("flow.cue", "prompt.cue", "lint.cue", "templates.cue"):

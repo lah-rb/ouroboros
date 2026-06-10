@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -39,9 +38,7 @@ def load_schema(family: str) -> FormatSchema:
     """
     path = _FORMATS_DIR / f"{family}.yaml"
     if not path.is_file():
-        raise FileNotFoundError(
-            f"No format schema for family {family!r} at {path}"
-        )
+        raise FileNotFoundError(f"No format schema for family {family!r} at {path}")
 
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
@@ -72,6 +69,4 @@ def clear_cache() -> None:
 
 def available_families() -> list[str]:
     """List available format schema families."""
-    return sorted(
-        p.stem for p in _FORMATS_DIR.glob("*.yaml")
-    )
+    return sorted(p.stem for p in _FORMATS_DIR.glob("*.yaml"))

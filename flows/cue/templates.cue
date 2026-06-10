@@ -22,9 +22,9 @@ _templates: {
 		context: {
 			required: [...string] | *[]
 			optional: *[
+				"mission",
 				"inference_response",
 				"test_results",
-				"context_bundle",
 				"diagnosis",
 				"plan",
 				"reflection",
@@ -107,7 +107,7 @@ _templates: {
 
 	read_target_file: {
 		action: "read_files"
-		publishes: ["target_file", "related_files"]
+		publishes: ["target_file"]
 		params: {
 			target:           {$ref: "input.target_file_path"}
 			discover_imports: bool | *false
@@ -134,12 +134,11 @@ _templates: {
 	gather_project_context: {
 		action: "flow"
 		flow:   "prepare_context"
-		publishes: ["context_bundle", "project_manifest", "repo_map_formatted", "related_files"]
+		publishes: ["project_manifest", "repo_map_formatted"]
 		input_map: {
 			working_directory: {$ref: "input.working_directory"}
 			task_description:  {$ref: "input.flow_directive", default: ""}
 			target_file_path:  {$ref: "input.target_file_path", default: ""}
-			relevant_notes:    {$ref: "input.relevant_notes", default: ""}
 		}
 		param_schema: {
 			context_budget: {
@@ -154,45 +153,6 @@ _templates: {
 		...
 	}
 
-	// ── Learning Capture ──────────────────────────────────────
-
-	capture_learnings: {
-		action: "flow"
-		flow:   "capture_learnings"
-		input_map: {
-			task_description: {$ref: "input.task_description"}
-			target_file_path: {$ref: "input.target_file_path"}
-		}
-		param_schema: {
-			task_outcome: {
-				type:        "string"
-				required:    false
-				description: "Short summary of what happened for reflection prompt"
-			}
-			category: {
-				type:        "string"
-				required:    false
-				default:     "task_learning"
-				description: "Note category override"
-			}
-			learning_focus: {
-				type:        "string"
-				required:    false
-				default:     "general"
-				description: "Selects reflection prompt variant"
-				enum: [
-					"general",
-					"file_creation",
-					"file_modification",
-					"bug_fix",
-					"test_failure",
-					"failure_analysis",
-				]
-			}
-		}
-		...
-	}
-
 	// ── Return to Mission Control ─────────────────────────────
 
 	return_success: {
@@ -201,7 +161,7 @@ _templates: {
 			flow: "mission_control"
 			input_map: {
 				mission_id:   {$ref: "input.mission_id"}
-				last_task_id: {$ref: "input.task_id"}
+				last_goal_id: {$ref: "input.goal_id"}
 				last_status:  "success"
 			}
 			...
@@ -215,7 +175,7 @@ _templates: {
 			flow: "mission_control"
 			input_map: {
 				mission_id:   {$ref: "input.mission_id"}
-				last_task_id: {$ref: "input.task_id"}
+				last_goal_id: {$ref: "input.goal_id"}
 				last_status:  "failed"
 			}
 			...
@@ -229,7 +189,7 @@ _templates: {
 			flow: "mission_control"
 			input_map: {
 				mission_id:   {$ref: "input.mission_id"}
-				last_task_id: {$ref: "input.task_id"}
+				last_goal_id: {$ref: "input.goal_id"}
 				last_status:  "diagnosed"
 			}
 			...
@@ -287,8 +247,43 @@ _templates: {
 	// ── Search Execution ──────────────────────────────────────
 
 	execute_search: {
-		action: "curl_search"
+		action: "exa_search"
 		publishes: ["raw_search_results"]
+		...
+	}
+
+	// ── Terminal Steps ────────────────────────────────────────
+
+	terminal_success: {
+		action:   "noop"
+		terminal: true
+		status:   "success"
+		...
+	}
+
+	terminal_failure: {
+		action:   "noop"
+		terminal: true
+		status:   "failed"
+		...
+	}
+
+	// ── Return to Mission Director ────────────────────────────
+	//
+	// Tail-call back to mission_control with the standard mission_id +
+	// goal_id + last_status input_map. Callers specify last_status
+	// (and optionally description).
+
+	return_to_director: {
+		action: "noop"
+		tail_call: {
+			flow: "mission_control"
+			input_map: {
+				mission_id:   {$ref: "input.mission_id"}
+				last_goal_id: {$ref: "input.goal_id", default: ""}
+				last_status:  string
+			}
+		}
 		...
 	}
 

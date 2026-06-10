@@ -11,7 +11,6 @@ from jinja2 import (
     BaseLoader,
     ChainableUndefined,
     Environment,
-    StrictUndefined,
     TemplateSyntaxError,
     UndefinedError,
 )

@@ -1,0 +1,5 @@
+id: envelopes/symbol_python_class
+content: |
+  class ClassName:
+      def __init__(self, arg: str) -> None:
+          self.arg = arg

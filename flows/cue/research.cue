@@ -28,7 +28,6 @@ research: #FlowDefinition & {
 		queries_run:   {type: "int",    from: "context.query_count",      optional: true}
 		results_found: {type: "bool",   from: "context.has_results",      optional: true}
 	}
-	state_reads: []
 
 	input: {
 		required: ["research_query"]
@@ -45,18 +44,24 @@ research: #FlowDefinition & {
 		plan_queries: #StepDefinition & {
 			action:      "inference"
 			description: "Generate 2-3 targeted search queries from the research question"
-			prompt_template: {
-				template: "research/plan_queries"
-				context_keys: []
-				input_keys: ["research_query", "research_context"]
-			}
-			config: temperature: "t*0.2"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "extract_queries"},
-					{condition: "true", transition: "search"},
+			turn: #Turn & {
+				response_shape: "json_document"
+				sections: [
+					{type: "role", template:        "personas/research_planner"},
+					{type: "problem", ref:          {$ref: "input.research_query"}, title: "Research question"},
+					{type: "evidence", ref:         {$ref: "input.research_context"}, title: "Background context"},
+					{type: "instruction", template: "research/plan_queries_guidance"},
+					{type: "envelope"},
 				]
+				response: {
+					schema_id: "research_queries"
+				}
+				transitions: {
+					default:   "extract_queries"
+					no_answer: "search"
+				}
+				config: temperature: "t*0.6"
+				retries: 3
 			}
 			publishes: ["inference_response"]
 		}
@@ -70,7 +75,7 @@ research: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.query_count > 0", transition: "search"},
-					{condition: "true", transition: "search"},
+					{condition: "true", transition:       "search"},
 				]
 			}
 			publishes: ["search_queries"]
@@ -86,7 +91,7 @@ research: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.results_found > 0", transition: "summarize"},
-					{condition: "true", transition: "no_results"},
+					{condition: "true", transition:         "no_results"},
 				]
 			}
 		}
@@ -95,27 +100,28 @@ research: #FlowDefinition & {
 			action:      "inference"
 			description: "Distill search results into dense, actionable guidance"
 			context: required: ["raw_search_results"]
-			prompt_template: {
-				template: "research/summarize"
-				context_keys: ["raw_search_results"]
-				input_keys: ["research_query", "research_context"]
-			}
-			config: temperature: "t*0.2"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "done"},
-					{condition: "true", transition: "no_results"},
+			turn: #Turn & {
+				response_shape: "prose"
+				sections: [
+					{type: "role", template:        "personas/research_synthesizer"},
+					{type: "problem", ref:          {$ref: "input.research_query"}, title: "Research question"},
+					{type: "evidence", ref:         {$ref: "input.research_context"}, title: "Background context"},
+					{type: "evidence", ref:         {$ref: "context.raw_search_results"}, title: "Search results"},
+					{type: "instruction", template: "research/summarize_instruction"},
+					{type: "envelope"},
 				]
+				response: {}
+				transitions: {
+					default:   "done"
+					no_answer: "no_results"
+				}
+				config: temperature: "t*0.6"
+				retries: 3
 			}
 			publishes: ["research_summary"]
 		}
 
-		done: #StepDefinition & {
-			action:   "noop"
-			terminal: true
-			status:   "success"
-		}
+		done: #StepDefinition & _templates.terminal_success
 
 		no_results: #StepDefinition & {
 			action:   "noop"

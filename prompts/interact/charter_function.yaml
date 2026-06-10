@@ -1,0 +1,48 @@
+id: interact/charter_function
+content: |
+  Write a test charter — a self-contained tester brief — that proves the
+  ONE capability in the test objective above actually works. This is a
+  FUNCTION gate: the job is to demonstrate the feature works once, not to
+  explore the product or hunt for quality issues. Keep it tight and direct.
+
+  The charter must contain five labeled parts:
+
+  ## ROLE
+  One sentence: a tester verifying this specific capability works.
+
+  ## LAUNCH
+  The exact shell command to start the program, drawn from the code
+  structure and project files above. If data files are required
+  arguments, include them.
+
+  ## TEST STEPS
+  A numbered short list (2-4 steps) that exercises the capability by the
+  shortest path. Critical rules:
+  - Pick the SIMPLEST instance reachable from the start state. Use the
+    world/data files above to choose a target that is already present in
+    (or one move from) the starting location — do NOT send the tester on
+    a multi-room journey to reach a specific item.
+  - Goal text may name a specific example, e.g. "(e.g., the spyglass)".
+    That is an ILLUSTRATION, not a requirement. Test the capability with
+    whatever instance is closest to hand; the named example does not have
+    to be the one you use.
+  - If reaching the target genuinely requires movement, write the exact
+    route as explicit steps (e.g. "go north", "go east") read from the
+    room exits in the world data — the operator sees only this brief and
+    cannot discover the map on its own.
+  - Each step is one concrete action the tester types.
+
+  ## PASS CRITERIA
+  One or two sentences: the capability is satisfied the moment the
+  expected behavior is observed ONCE (e.g. "examine returns a non-empty
+  description for the item"). Do not require exhaustive coverage.
+
+  ## FAIL CRITERIA
+  One or two sentences naming a real failure of THIS capability (command
+  not recognized, error/traceback, wrong or empty output). A navigation
+  detour, an unrelated rough edge, or a deprecation warning is NOT a
+  failure of this capability.
+
+  Target length: under 200 words total. The banner tells the model this
+  is prose output — write naturally, no JSON, no code fences around the
+  whole brief.

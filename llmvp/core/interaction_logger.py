@@ -1,31 +1,40 @@
 #!/usr/bin/env python3
 """
-Interaction Logger — dual-purpose logging for review and training.
+Interaction Logger — dual-purpose logging for review and FSM regression fixtures.
 
 Writes two log streams:
   1. interactions.jsonl — minimal prompt/response pairs (existing behavior)
-  2. training_corpus.jsonl — raw model output with token IDs and
-     observation features for HMM/CRF delimiter detection training
+  2. captured_raw.json — raw model output in curated JSON array format
+     for FSM labeller regression fixtures
 
-The training stream is activated by setting collection_mode=True
-(via --collect-training CLI flag). It captures raw model output
-BEFORE any delimiter stripping, along with generation metadata.
+The capture stream is activated in two ways:
+  - collection_mode (--collect-training): runs the prompt suite,
+    captures raw outputs with prompt IDs and categories.
+  - training_log_mode (--log-training): captures raw outputs during
+    live backend serving. Every inference response is saved for later
+    annotation.
+
+Captured entries are written without ***[C]***/***[T]*** annotation
+fences. The human reviews captured_raw.json, adds fences to mark
+content and thinking phases, then copies annotated entries to
+knowledge/crf/curated.json — which serves as regression ground-truth
+for the FSM labeller's phase extraction.
 """
 
 import json
 import logging
-from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 log = logging.getLogger("llm-mvp")
 
 # ── Module state ──────────────────────────────────────────────────────
 
 _collection_mode: bool = False
+_training_log_mode: bool = False
 _model_family: str = ""
 _model_name: str = ""
+_infield_counter: int = 0
 
 
 def enable_collection_mode(model_family: str, model_name: str) -> None:
@@ -44,12 +53,32 @@ def enable_collection_mode(model_family: str, model_name: str) -> None:
     )
 
 
+def enable_training_log_mode(model_family: str, model_name: str) -> None:
+    """Enable infield training capture during live serving.
+
+    Called once at startup when --log-training is active.
+    Every raw model response is captured as a TrainingExample
+    with auto-labeler labels for later human review.
+    """
+    global _training_log_mode, _model_family, _model_name
+    _training_log_mode = True
+    _model_family = model_family
+    _model_name = model_name
+    log.info(
+        "📊 Training log mode enabled: family=%s, model=%s — "
+        "raw responses will be captured to captured_raw.json",
+        model_family,
+        model_name,
+    )
+
+
 def is_collecting() -> bool:
-    """Check if training collection mode is active."""
-    return _collection_mode
+    """Check if any training capture mode is active."""
+    return _collection_mode or _training_log_mode
 
 
 # ── Standard interaction logging ──────────────────────────────────────
+
 
 def _ensure_directory(path: Path) -> None:
     """Ensure the log directory exists."""
@@ -99,6 +128,7 @@ def log_interaction(
 
 # ── Training corpus capture ───────────────────────────────────────────
 
+
 def log_training_example(
     raw_text: str,
     prompt_id: str = "",
@@ -107,11 +137,12 @@ def log_training_example(
     config_overrides: dict | None = None,
     generation_meta: dict | None = None,
 ) -> None:
-    """Capture a raw model output for training corpus.
+    """Capture a raw model output for FSM regression curation.
 
-    Only writes when collection_mode is active. Creates a
-    TrainingExample with auto-featurization and appends to
-    the training corpus file.
+    Only writes when collection_mode is active (--collect-training).
+    Writes to ``logs/captured_raw.json`` in the curated JSON array
+    format. Entries have raw text without annotation fences — the
+    human adds ``***[C]***`` / ``***[T]***`` fences during review.
 
     Args:
         raw_text: Raw model output BEFORE any delimiter stripping.
@@ -125,31 +156,47 @@ def log_training_example(
         return
 
     try:
-        from training.corpus import TrainingExample, save_example, DEFAULT_CORPUS_PATH
-
-        example = TrainingExample(
-            model_family=_model_family,
-            model_name=_model_name,
-            prompt_id=prompt_id,
-            prompt_category=prompt_category,
-            raw_text=raw_text,
-            raw_token_ids=raw_token_ids or [],
-            config=config_overrides or {},
-            generation_meta=generation_meta or {},
-        )
-
-        # Use logging directory as base, with training subdir
+        import json
         from core.config import get_config
-        config = get_config()
-        corpus_path = config.logging.directory / "training_corpus.jsonl"
 
-        save_example(example, corpus_path)
+        config = get_config()
+        capture_path = config.logging.directory / "captured_raw.json"
+        capture_path.parent.mkdir(parents=True, exist_ok=True)
+
+        meta = generation_meta or {}
+        entry = {
+            "family": _model_family,
+            "source": f"collect-{prompt_id}" if prompt_id else "collect",
+            "notes": "NEEDS_ANNOTATION",
+            "model": _model_name,
+            "method": "collect-training",
+            "tokens": meta.get("tokens_generated", 0),
+            "stop": meta.get("stop_reason", ""),
+            "prompt_excerpt": "",
+            "raw": raw_text,
+        }
+
+        if prompt_category:
+            entry["notes"] = f"cat={prompt_category}; NEEDS_ANNOTATION"
+
+        existing: list = []
+        if capture_path.exists():
+            try:
+                with open(capture_path, encoding="utf-8") as f:
+                    existing = json.load(f)
+            except (json.JSONDecodeError, Exception):
+                existing = []
+
+        existing.append(entry)
+
+        with open(capture_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
 
         log.debug(
-            "📊 Training example captured: id=%s, category=%s, %d observations",
+            "📊 Training example captured: id=%s, category=%s, %d chars",
             prompt_id,
             prompt_category,
-            len(example.observations),
+            len(raw_text),
         )
     except Exception as exc:
         log.warning("⚠️ Failed to capture training example: %s", exc)
@@ -162,39 +209,79 @@ def log_raw_generation(
     tokens_generated: int = 0,
     prompt_text: str = "",
 ) -> None:
-    """Lightweight raw capture — called from the generation loop.
+    """Capture raw model output for FSM regression curation.
 
-    This is the minimal capture point. It records the raw output
-    and token IDs before any post-processing. The prompt_id and
-    category are filled in later by the higher-level caller
-    (log_training_example) when available.
+    Writes to ``logs/captured_raw.json`` in the same JSON array format
+    as ``knowledge/crf/curated.json``.  Captured entries have raw text
+    without ``***[X]***`` annotation fences — the human adds those
+    during review, then copies the annotated entry to curated.json as
+    a regression fixture for the FSM labeller.
 
-    When collection_mode is off, this is a no-op.
+    Fires in both collection_mode (--collect-training) and
+    training_log_mode (--log-training).
     """
-    if not _collection_mode:
+    if not _collection_mode and not _training_log_mode:
         return
 
+    global _infield_counter
+
     try:
-        from training.corpus import TrainingExample, save_example
         from core.config import get_config
 
         config = get_config()
-        corpus_path = config.logging.directory / "training_corpus.jsonl"
+        capture_path = config.logging.directory / "captured_raw.json"
+        capture_path.parent.mkdir(parents=True, exist_ok=True)
 
-        example = TrainingExample(
-            model_family=_model_family,
-            model_name=_model_name,
-            prompt_id="",  # filled by caller if available
-            prompt_category="live_capture",
-            raw_text=raw_text,
-            raw_token_ids=raw_token_ids or [],
-            generation_meta={
-                "tokens_generated": tokens_generated,
-                "stop_reason": stop_reason,
-                "prompt_length": len(prompt_text),
-            },
-        )
+        if _training_log_mode and not _collection_mode:
+            _infield_counter += 1
+            source = f"infield-{_infield_counter:04d}"
+        else:
+            source = "live-capture"
 
-        save_example(example, corpus_path)
+        entry = {
+            "family": _model_family,
+            "source": source,
+            "notes": "NEEDS_ANNOTATION",
+            "model": _model_name,
+            "method": "log-training" if _training_log_mode else "collect-training",
+            "tokens": tokens_generated,
+            "stop": stop_reason,
+            "prompt_excerpt": "",
+            "raw": raw_text,
+        }
+
+        # Add prompt excerpt for review context
+        if prompt_text:
+            excerpt = prompt_text
+            if len(excerpt) > 200:
+                excerpt = excerpt[:100] + " ... " + excerpt[-100:]
+            entry["prompt_excerpt"] = excerpt
+
+        # Read existing array, append, write back
+        # For high-throughput infield capture, this is acceptable
+        # because captures are spaced seconds apart (one per inference).
+        import json
+
+        existing: list = []
+        if capture_path.exists():
+            try:
+                with open(capture_path, encoding="utf-8") as f:
+                    existing = json.load(f)
+            except (json.JSONDecodeError, Exception):
+                existing = []
+
+        existing.append(entry)
+
+        with open(capture_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
+
+        if _training_log_mode:
+            log.debug(
+                "📊 Captured %s: %d chars raw, %d tokens → %s",
+                source,
+                len(raw_text),
+                tokens_generated,
+                capture_path,
+            )
     except Exception as exc:
         log.warning("⚠️ Failed to capture raw generation: %s", exc)

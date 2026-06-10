@@ -1,0 +1,19 @@
+id: patch/select_symbols_instruction
+content: |
+  Pick the symbol(s) to modify to satisfy the Task shown below.
+  Each rewritten symbol is validated against the file's AST before
+  write, so symbol-by-symbol edits are safer than full-file rewrites.
+
+  `__full_rewrite__` — only when the change spans most of the file
+  (imports, whole-file restructuring). Don't pick this for a bug
+  fix in one function; it regenerates everything and tends to drift
+  code unrelated to the bug.
+
+  `__bail__` — only if the Task is genuinely impossible to satisfy
+  by editing this file (wrong file, contradictory requirements).
+  Do NOT bail just because the Task feels brief or unfamiliar — the
+  Task below is your instruction; act on it.
+
+  `__done__` — you've picked everything that needs to change.
+
+  Now pick one option from the Options list below.

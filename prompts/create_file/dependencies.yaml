@@ -1,0 +1,7 @@
+id: create_file/dependencies
+content: |
+  ## Data contracts
+  {context.data_contract_block}
+
+  ## Existing files
+  {context.file_excerpts}

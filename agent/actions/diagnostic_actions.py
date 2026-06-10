@@ -7,9 +7,7 @@ targeted files for deep investigation.
 
 from __future__ import annotations
 
-import re
 import logging
-from typing import Any
 
 from agent.models import StepInput, StepOutput
 from agent.markdown_fence import extract_first_text_content
@@ -22,7 +20,11 @@ async def action_compile_diagnosis(step_input: StepInput) -> StepOutput:
 
     Reads error_analysis, hypotheses, and evaluation from context.
     Produces a structured diagnosis dict with root cause, fix recommendation,
-    rejected alternatives, and confidence assessment.
+    rejected alternatives, confidence assessment, and recommended fix flow.
+
+    The hypotheses text may contain a FIX_TYPE line indicating whether the
+    fix requires file_ops (code/data editing) or project_ops (dependency
+    installation, environment setup). Defaults to file_ops if not specified.
 
     Params:
         include_rejected_hypotheses: bool — include rejected alternatives
@@ -37,13 +39,76 @@ async def action_compile_diagnosis(step_input: StepInput) -> StepOutput:
     include_rejected = step_input.params.get("include_rejected_hypotheses", True)
     is_intractable = step_input.params.get("mark_as_intractable", False)
 
+    # Read recommended fix flow from context (set by classify_fix_type LLM menu).
+    # Falls back to "file_ops" if the menu step was skipped or produced no result.
+    recommended_flow = step_input.context.get("recommended_flow", "file_ops")
+    if recommended_flow not in ("file_ops", "project_ops"):
+        recommended_flow = "file_ops"
+    logger.info("Diagnosis recommended flow: %s", recommended_flow)
+
+    # Phase A (patch redesign): read the structured fields that
+    # conclude_diagnosis publishes from the flattened diagnosis schema.
+    # Empty-string defaults keep this tolerant of older flow paths
+    # that haven't migrated.
+    target_file = step_input.context.get("target_file", "") or ""
+    target_symbol = step_input.context.get("target_symbol", "") or ""
+    change_spec = step_input.context.get("change_spec", "") or ""
+    diagnosis_kind = step_input.context.get("diagnosis_kind", "") or ""
+    import_statement = step_input.context.get("import_statement", "") or ""
+    diagnosis_confidence = step_input.context.get("diagnosis_confidence", "") or ""
+    root_cause_struct = step_input.context.get("root_cause", "") or ""
+    # Multi-symbol patching (505 round). conclude_diagnosis publishes
+    # this when the change spans multiple symbols whose contract
+    # must stay consistent. Normalize to a list[str]; tolerate
+    # missing/malformed outputs by defaulting to empty.
+    related_symbols_raw = step_input.context.get("related_symbols", []) or []
+    if isinstance(related_symbols_raw, list):
+        related_symbols = [
+            str(s).strip() for s in related_symbols_raw if str(s).strip()
+        ]
+    elif isinstance(related_symbols_raw, str):
+        # Defensive: a single string might arrive if the model
+        # emitted one symbol without brackets. Split on commas.
+        related_symbols = [
+            s.strip() for s in related_symbols_raw.split(",") if s.strip()
+        ]
+    else:
+        related_symbols = []
+    # Cap at 6 per CONCLUDE_PROMPT's guidance; if more came back,
+    # something is off and a smaller batch is safer than a giant
+    # one.
+    related_symbols = related_symbols[:6]
+    # Dedupe while preserving order, and drop the primary target
+    # if the model helpfully re-listed it.
+    seen = {target_symbol} if target_symbol else set()
+    deduped = []
+    for s in related_symbols:
+        if s in seen:
+            continue
+        seen.add(s)
+        deduped.append(s)
+    related_symbols = deduped
+
     diagnosis = {
         "error_description": error_description,
-        "root_cause": error_analysis,
+        "root_cause": root_cause_struct or error_analysis,
         "hypotheses": hypotheses if include_rejected else "",
-        "selected_fix": hypotheses,
-        "confidence": "low" if is_intractable else "medium",
+        "selected_fix": change_spec or hypotheses,
+        "confidence": (
+            diagnosis_confidence.lower()
+            if diagnosis_confidence
+            else ("low" if is_intractable else "medium")
+        ),
         "is_intractable": is_intractable,
+        "recommended_flow": recommended_flow,
+        # Structured operation spec — the dispatcher reads these to
+        # route cleanly without regex parsing of the prose summary.
+        "target_file": target_file,
+        "target_symbol": target_symbol,
+        "related_symbols": related_symbols,
+        "change_spec": change_spec,
+        "kind": diagnosis_kind,
+        "import_statement": str(import_statement),
     }
 
     status_msg = (
@@ -52,32 +117,29 @@ async def action_compile_diagnosis(step_input: StepInput) -> StepOutput:
 
     return StepOutput(
         result={"diagnosis_complete": True, "is_intractable": is_intractable},
-        observations=f"Diagnosis assembled: {status_msg}",
+        observations=f"Diagnosis assembled: {status_msg} (recommended_flow={recommended_flow})",
         context_updates={"diagnosis": diagnosis},
     )
 
 
 async def action_create_fix_task_from_diagnosis(step_input: StepInput) -> StepOutput:
-    """Create a follow-up fix task in the mission plan from a completed diagnosis.
+    """Record a diagnosed fix as a note for the director to act on.
 
-    Reads the structured diagnosis from context, extracts the recommended fix,
-    and inserts a new TaskRecord so mission_control can dispatch it.
+    In the tier records model, the director decides what to dispatch based
+    on DirectiveReports attached to goals. This action records the diagnosis
+    details as a note so they're available in the director's context.
 
     Context required: diagnosis
-    Optional: mission (loaded from persistence if not in context)
 
     Publishes: fix_task_created
     """
-    from agent.persistence.models import TaskRecord
-    from agent.actions.mission_actions import _is_duplicate_task
-
     effects = step_input.effects
     diagnosis = step_input.context.get("diagnosis", {})
 
     if not effects or not diagnosis:
         return StepOutput(
             result={"fix_task_created": False},
-            observations="No effects or diagnosis — cannot create fix task",
+            observations="No effects or diagnosis — cannot record fix",
             context_updates={"fix_task_created": False},
         )
 
@@ -85,15 +147,7 @@ async def action_create_fix_task_from_diagnosis(step_input: StepInput) -> StepOu
     if diagnosis.get("is_intractable", False):
         return StepOutput(
             result={"fix_task_created": False},
-            observations="Diagnosis is intractable — not creating fix task",
-            context_updates={"fix_task_created": False},
-        )
-
-    mission = await effects.load_mission()
-    if not mission:
-        return StepOutput(
-            result={"fix_task_created": False},
-            observations="No mission in persistence",
+            observations="Diagnosis is intractable — not recording fix",
             context_updates={"fix_task_created": False},
         )
 
@@ -102,144 +156,40 @@ async def action_create_fix_task_from_diagnosis(step_input: StepInput) -> StepOu
     root_cause = str(diagnosis.get("root_cause", ""))
     target_file = str(step_input.context.get("target_file_path", ""))
 
-    # If no target file from input, try to extract from diagnosis text
-    if not target_file:
-        file_match = re.search(
-            r"(?:in|modify|fix|update|change)\s+[`'\"]?([a-zA-Z0-9_/.-]+\.py)[`'\"]?",
-            selected_fix,
-        )
-        if file_match:
-            target_file = file_match.group(1)
-
-    # Build description from diagnosis
-    desc_parts = []
-    if target_file:
-        desc_parts.append(f"Fix issue in {target_file}")
-    else:
-        desc_parts.append("Fix diagnosed issue")
+    # Build note content from diagnosis
+    note_parts = []
     if root_cause:
-        # Extract first substantive text from the model's markdown output
-        cause_summary = extract_first_text_content(root_cause, max_length=100)
+        cause_summary = extract_first_text_content(root_cause, max_length=200)
         if cause_summary:
-            desc_parts.append(f"— {cause_summary}")
-    fix_description = " ".join(desc_parts)
+            note_parts.append(f"Root cause: {cause_summary}")
+    if selected_fix:
+        fix_summary = extract_first_text_content(selected_fix, max_length=300)
+        if fix_summary:
+            note_parts.append(f"Recommended fix: {fix_summary}")
+    if target_file:
+        note_parts.append(f"Target: {target_file}")
 
-    # Determine flow type — route through file_ops which handles
-    # create vs modify routing and validation lifecycle
-    flow = "file_ops"
-
-    # Deduplication check
-    if _is_duplicate_task(mission, fix_description, flow, target_file):
-        return StepOutput(
-            result={"fix_task_created": False},
-            observations=f"Duplicate fix task already exists for {target_file}",
-            context_updates={"fix_task_created": False},
-        )
-
-    # Create the fix task with high priority
-    reason = f"Diagnosed root cause: {root_cause[:200]}\n\nRecommended fix: {selected_fix[:300]}"
-    task = TaskRecord(
-        description=fix_description,
-        flow=flow,
-        priority=0,  # High priority — fix should run next
-        inputs={
-            "target_file_path": target_file,
-            "reason": reason,
-        },
+    note_content = (
+        "\n".join(note_parts)
+        if note_parts
+        else "Diagnosis completed — see directive report"
     )
-    mission.plan.append(task)
-    await effects.save_mission(mission)
+
+    saved = await effects.push_note(
+        content=note_content,
+        category="failure_analysis",
+        tags=[target_file] if target_file else [],
+        source_flow="diagnose_issue",
+    )
 
     logger.info(
-        "Created fix task from diagnosis: %s (target: %s)",
-        fix_description[:60],
+        "Recorded diagnosis note: %s (target: %s)",
+        note_content[:60],
         target_file,
     )
 
     return StepOutput(
-        result={"fix_task_created": True, "fix_task_id": task.id},
-        observations=f"Created fix task: {fix_description[:80]}",
-        context_updates={"fix_task_created": True},
-    )
-
-
-async def action_read_investigation_targets(step_input: StepInput) -> StepOutput:
-    """Read full content of files identified in an investigation plan.
-
-    Parses file paths from the investigation_plan text in context,
-    reads each via effects.read_file(), and returns a deep_context dict.
-
-    Params:
-        max_files: int — maximum number of files to read (default 5)
-        max_bytes_per_file: int — max bytes per file (default 50000)
-
-    Publishes: deep_context
-    """
-    effects = step_input.effects
-    if effects is None:
-        return StepOutput(
-            result={"files_read": 0},
-            observations="No effects interface — cannot read files",
-            context_updates={"deep_context": {}},
-        )
-
-    plan_text = step_input.context.get("investigation_plan", "")
-    project_context = step_input.context.get("project_manifest", {})
-
-    max_files = int(step_input.params.get("max_files", 5))
-    max_bytes = int(step_input.params.get("max_bytes_per_file", 50000))
-
-    # Extract file paths from the plan text
-    # Match patterns like: path/to/file.py, src/module.py, etc.
-    path_pattern = r"(?:^|\s|[`\"'])([a-zA-Z0-9_./-]+\.(?:py|yaml|yml|md|toml|json|js|ts|rs|cfg|txt|ini))"
-    found_paths = re.findall(path_pattern, plan_text)
-
-    # Also check if any paths from project_manifest are mentioned
-    if project_context and isinstance(project_context, dict):
-        manifest_paths = list(project_context.keys())
-        for mp in manifest_paths:
-            # Check if the manifest path, basename, or stem appears in the plan
-            basename = mp.split("/")[-1]
-            stem = basename.rsplit(".", 1)[0] if "." in basename else basename
-            if basename in plan_text or mp in plan_text or stem in plan_text:
-                if mp not in found_paths:
-                    found_paths.append(mp)
-
-    # Deduplicate while preserving order
-    seen = set()
-    unique_paths = []
-    for p in found_paths:
-        if p not in seen:
-            seen.add(p)
-            unique_paths.append(p)
-
-    # Cap at max_files
-    targets = unique_paths[:max_files]
-
-    deep_context: dict[str, str] = {}
-    files_read = 0
-
-    for target_path in targets:
-        try:
-            fc = await effects.read_file(target_path)
-            if fc.exists:
-                content = fc.content
-                if len(content) > max_bytes:
-                    content = content[:max_bytes] + "\n# ... truncated ..."
-                deep_context[target_path] = content
-                files_read += 1
-                logger.debug(
-                    "Read investigation target: %s (%d chars)",
-                    target_path,
-                    len(content),
-                )
-            else:
-                logger.debug("Investigation target not found: %s", target_path)
-        except Exception as e:
-            logger.warning("Failed to read investigation target %s: %s", target_path, e)
-
-    return StepOutput(
-        result={"files_read": files_read, "targets_requested": len(targets)},
-        observations=f"Read {files_read}/{len(targets)} investigation targets",
-        context_updates={"deep_context": deep_context},
+        result={"fix_task_created": saved},
+        observations=f"Recorded diagnosis: {note_content[:80]}",
+        context_updates={"fix_task_created": saved},
     )

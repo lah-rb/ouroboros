@@ -27,7 +27,7 @@ prompt:
 
 generation:
   max_tokens_default: 262144
-  temperature_default: 0.6
+  temperature_default: 0.9
   top_p: 0.95
   top_k: 20
   min_p: 0.00

@@ -1,0 +1,6 @@
+id: patch/bail_capture_context
+content: |
+  You just requested to bail from this edit. The session recorded
+  your decision and is closing. Before it closes, capture your
+  reasoning so the mission record has a clear entry about why
+  this task could not be completed.

@@ -1,0 +1,7 @@
+id: rewrite/task_with_validation_errors
+content: |
+  ## Task
+  {input.flow_directive}
+
+  ## Validation errors to fix
+  {input.validation_errors}

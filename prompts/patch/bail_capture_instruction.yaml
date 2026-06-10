@@ -1,0 +1,6 @@
+id: patch/bail_capture_instruction
+content: |
+  In 1-2 sentences, explain why this task cannot be completed as
+  specified. Be concrete — what specifically is wrong (wrong file,
+  request doesn't match the code, missing prerequisite, ambiguous
+  requirements) — so the mission record has a useful entry.

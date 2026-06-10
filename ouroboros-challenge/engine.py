@@ -1,107 +1,371 @@
-"""Core game engine module.
+import sys
+from typing import Dict, Optional
 
-Provides a lightweight in‑memory engine that manages users, items and
-settings defined in :pymod:`models`.  The implementation is deliberately
-simple – it stores objects in dictionaries and offers basic CRUD helpers.
-It can be extended with persistence, event handling or a full game loop as
-required by the application.
-"""
-
-from __future__ import annotations
-
-from typing import Any, Dict, List, Optional
-
-# Import model classes from the project.  Guard against missing imports so
-# that the engine can still be imported in isolation (e.g. during early
-# development or testing).
-try:
-    from models import User, Item, Settings
-except Exception:  # pragma: no cover
-    User = Any  # type: ignore
-    Item = Any  # type: ignore
-    Settings = Any  # type: ignore
+from models import GameState, Command, Room, Item, NPC
+from parser import parse_command
 
 
 class GameEngine:
-    """Manage users, items and global settings for the game.
+    def __init__(self, world_data: dict, initial_state: GameState) -> None:
+        self.rooms: Dict[str, Room] = {}
+        self.items: Dict[str, Item] = {}
+        self.npcs: Dict[str, NPC] = {}
+        self.state: GameState = initial_state
+        self._load_world(world_data)
 
-    The engine stores objects in memory; it does not perform any I/O.
-    """
+    def _load_world(self, world_data: dict) -> None:
+        for room_id, room_data in world_data.get("rooms", {}).items():
+            room = Room(
+                id=room_id,
+                name=room_data.get("name", ""),
+                description=room_data.get("description", ""),
+                exits=room_data.get("exits", {}),
+                items=room_data.get("items", []),
+                npcs=room_data.get("npcs", []),
+            )
+            self.rooms[room_id] = room
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
-        self.settings: Settings | None = settings
-        self._users: Dict[int, User] = {}
-        self._items: Dict[int, Item] = {}
+        for item_id, item_data in world_data.get("items", {}).items():
+            item = Item(
+                id=item_id,
+                name=item_data.get("name", ""),
+                description=item_data.get("description", ""),
+                can_take=item_data.get("can_take", False),
+                can_use=item_data.get("can_use", False),
+            )
+            self.items[item_id] = item
 
-    # --------------------------------------------------------------------- #
-    # User management
-    # --------------------------------------------------------------------- #
-    def add_user(self, user: User) -> None:
-        """Add a new user to the engine.
+        for npc_id, npc_data in world_data.get("npcs", {}).items():
+            npc = NPC(
+                id=npc_id,
+                name=npc_data.get("name", ""),
+                description=npc_data.get("description", ""),
+                dialogue=npc_data.get("dialogue", {}),
+            )
+            self.npcs[npc_id] = npc
 
-        If a user with the same ``id`` already exists it will be overwritten.
-        """
-        self._users[user.id] = user
+    def _print_room_description(self) -> None:
+        current_room = self.rooms.get(self.state.current_room)
+        if not current_room:
+            print(f"Error: Current room '{self.state.current_room}' not found.")
+            return
 
-    def get_user(self, user_id: int) -> Optional[User]:
-        """Retrieve a user by its identifier."""
-        return self._users.get(user_id)
+        print(f"\n{current_room.name}")
+        print(current_room.description)
 
-    def remove_user(self, user_id: int) -> None:
-        """Remove a user from the engine.
+        if current_room.items:
+            item_names = []
+            for item_id in current_room.items:
+                item = self.items.get(item_id)
+                if item:
+                    item_names.append(item.name)
+            print(f"You see: {', '.join(item_names)}")
 
-        Also removes any items owned by this user.
-        """
-        if user_id in self._users:
-            del self._users[user_id]
-        # Clean up owned items
-        items_to_remove = [item_id for item_id, item in self._items.items() if item.owner_id == user_id]
-        for item_id in items_to_remove:
-            del self._items[item_id]
+        if current_room.npcs:
+            npc_names = []
+            for npc_id in current_room.npcs:
+                npc = self.npcs.get(npc_id)
+                if npc:
+                    npc_names.append(npc.name)
+            print(f"NPCs here: {', '.join(npc_names)}")
 
-    # --------------------------------------------------------------------- #
-    # Item management
-    # --------------------------------------------------------------------- #
-    def add_item(self, item: Item) -> None:
-        """Add a new item to the engine.
+        exits = []
+        for direction in current_room.exits:
+            if direction in ("n", "north"):
+                exits.append("north")
+            elif direction in ("s", "south"):
+                exits.append("south")
+            elif direction in ("e", "east"):
+                exits.append("east")
+            elif direction in ("w", "west"):
+                exits.append("west")
+        if exits:
+            print(f"Exits: {', '.join(exits)}")
 
-        Overwrites any existing item with the same ``id``.
-        """
-        if item.owner_id not in self._users:
-            raise ValueError(f"Owner with id {item.owner_id} does not exist.")
-        self._items[item.id] = item
+    def run(self) -> None:
+        self._print_room_description()
 
-    def get_item(self, item_id: int) -> Optional[Item]:
-        """Retrieve an item by its identifier."""
-        return self._items.get(item_id)
+        while True:
+            try:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+                line = line.rstrip("\n")
 
-    def get_items_by_user(self, user_id: int) -> List[Item]:
-        """Return a list of all items owned by the given user."""
-        return [item for item in self._items.values() if item.owner_id == user_id]
+                if line.strip().lower() in ("quit", "exit"):
+                    print("Goodbye!")
+                    break
 
-    def remove_item(self, item_id: int) -> None:
-        """Remove an item from the engine."""
-        if item_id in self._items:
-            del self._items[item_id]
+                self._process_command(line)
 
-    # --------------------------------------------------------------------- #
-    # Engine lifecycle
-    # --------------------------------------------------------------------- #
-    def start(self) -> None:
-        """Placeholder for starting any background processes.
+            except KeyboardInterrupt:
+                print("\nGoodbye!")
+                break
 
-        Currently a no‑op; present for API completeness.
-        """
-        # No background work required for the in‑memory engine.
-        pass
+    def _process_command(self, line: str) -> None:
+        words = line.lower().split()
+        if not words:
+            return
 
-    def stop(self) -> None:
-        """Placeholder for stopping background processes.
+        command = words[0]
+        noun = " ".join(words[1:]) if len(words) > 1 else None
 
-        Currently a no‑op; present for API completeness.
-        """
-        # No background work to clean up.
-        pass
+        if command in ("n", "north"):
+            self._move("north")
+        elif command in ("s", "south"):
+            self._move("south")
+        elif command in ("e", "east"):
+            self._move("east")
+        elif command in ("w", "west"):
+            self._move("west")
+        elif command == "look":
+            self._look(noun)
+        elif command in ("i", "inv", "inventory"):
+            self._inventory()
+        elif command == "take":
+            self._take(noun)
+        elif command == "drop":
+            self._drop(noun)
+        elif command == "use":
+            self._use(noun)
+        elif command == "talk":
+            self._talk(noun)
+        elif command == "help":
+            self._show_help()
+        else:
+            print(f"I don't understand '{command}'.")
 
+    def _move(self, direction: str) -> None:
+        current_room = self.rooms.get(self.state.current_room)
+        if not current_room:
+            print(f"Error: Current room '{self.state.current_room}' not found.")
+            return
 
-__all__: List[str] = ["GameEngine"]
+        if direction not in current_room.exits:
+            print(f"You can't go {direction} from here.")
+            return
+
+        next_room_id = current_room.exits[direction]
+        next_room = self.rooms.get(next_room_id)
+        if not next_room:
+            print(f"Error: Room '{next_room_id}' not found.")
+            return
+
+        self.state.current_room = next_room_id
+        self._print_room_description()
+
+    def _look(self, noun: Optional[str]) -> None:
+        if not noun:
+            self._print_room_description()
+            return
+
+        current_room = self.rooms.get(self.state.current_room)
+        if not current_room:
+            print(f"Error: Current room '{self.state.current_room}' not found.")
+            return
+
+        # Check items in current room
+        for item_id in current_room.items:
+            item = self.items.get(item_id)
+            if item and (
+                item.name.lower() == noun.lower() or item.id.lower() == noun.lower()
+            ):
+                print(f"{item.name}: {item.description}")
+                return
+
+        # Check items in inventory
+        for item_id in self.state.inventory:
+            item = self.items.get(item_id)
+            if item and (
+                item.name.lower() == noun.lower() or item.id.lower() == noun.lower()
+            ):
+                print(f"{item.name}: {item.description}")
+                return
+
+        print(f"You don't see '{noun}' here.")
+
+    def _inventory(self) -> None:
+        if self.state.inventory:
+            item_names = []
+            for item_id in self.state.inventory:
+                item = self.items.get(item_id)
+                if item:
+                    item_names.append(item.name)
+            print(f"You are carrying: {', '.join(item_names)}")
+        else:
+            print("You are not carrying anything.")
+
+    def _take(self, noun: Optional[str]) -> None:
+        if not noun:
+            print("Take what?")
+            return
+
+        current_room = self.rooms.get(self.state.current_room)
+        if not current_room:
+            print(f"Error: Current room '{self.state.current_room}' not found.")
+            return
+
+        item_to_take = None
+        item_id_to_take = None
+
+        for item_id in current_room.items:
+            item = self.items.get(item_id)
+            if item and (
+                item.name.lower() == noun.lower() or item.id.lower() == noun.lower()
+            ):
+                item_to_take = item
+                item_id_to_take = item_id
+                break
+
+        if item_to_take is None:
+            for item_id in self.state.inventory:
+                item = self.items.get(item_id)
+                if item and (
+                    item.name.lower() == noun.lower() or item.id.lower() == noun.lower()
+                ):
+                    print(f"You already have the {item.name}.")
+                    return
+
+        if item_to_take is None:
+            print(f"You don't see '{noun}' here.")
+            return
+
+        if not item_to_take.can_take:
+            print(f"You can't take the {item_to_take.name}.")
+            return
+
+        self.state.inventory.append(item_id_to_take)
+        current_room.items.remove(item_id_to_take)
+        print(f"You take the {item_to_take.name}.")
+
+    def _drop(self, noun: Optional[str]) -> None:
+        if not noun:
+            print("Drop what?")
+            return
+
+        item_to_drop = None
+        item_id_to_drop = None
+
+        for item_id in self.state.inventory:
+            item = self.items.get(item_id)
+            if item and (
+                item.name.lower() == noun.lower() or item.id.lower() == noun.lower()
+            ):
+                item_to_drop = item
+                item_id_to_drop = item_id
+                break
+
+        if item_to_drop is None:
+            print(f"You don't have the {noun}.")
+            return
+
+        self.state.inventory.remove(item_id_to_drop)
+
+        current_room = self.rooms.get(self.state.current_room)
+        if not current_room:
+            print(f"Error: Current room '{self.state.current_room}' not found.")
+            return
+
+        current_room.items.append(item_id_to_drop)
+        print(f"You drop the {item_to_drop.name}.")
+
+    def _use(self, noun: Optional[str]) -> None:
+        if not noun:
+            print("Use what?")
+            return
+
+        item_to_use = None
+        item_id_to_use = None
+
+        for item_id in self.state.inventory:
+            item = self.items.get(item_id)
+            if item and (
+                item.name.lower() == noun.lower() or item.id.lower() == noun.lower()
+            ):
+                item_to_use = item
+                item_id_to_use = item_id
+                break
+
+        if item_to_use is None:
+            print(f"You don't have the {noun}.")
+            return
+
+        if not item_to_use.can_use:
+            print(f"You can't use the {item_to_use.name}.")
+            return
+
+        print(f"You use the {item_to_use.name}.")
+        self.state.completed_actions.append(f"use_{item_id_to_use}")
+
+    def _talk(self, noun: Optional[str]) -> None:
+        if not noun:
+            print("Talk to whom?")
+            return
+
+        current_room = self.rooms.get(self.state.current_room)
+        if not current_room:
+            print(f"Error: Current room '{self.state.current_room}' not found.")
+            return
+
+        npc_to_talk = None
+        npc_id_to_talk = None
+
+        for npc_id in current_room.npcs:
+            npc = self.npcs.get(npc_id)
+            if npc and (
+                npc.name.lower() == noun.lower() or npc.id.lower() == noun.lower()
+            ):
+                npc_to_talk = npc
+                npc_id_to_talk = npc_id
+                break
+
+        if npc_to_talk is None:
+            print(f"You don't see '{noun}' here.")
+            return
+
+        print(f"{npc_to_talk.name} says: Hello! How can I help you?")
+        print("Available topics: hello, help, quest")
+
+        while True:
+            try:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+                line = line.rstrip("\n")
+
+                words = line.lower().split()
+                topic = words[0] if words else ""
+
+                if topic in ("exit", "bye"):
+                    print(f"{npc_to_talk.name} says: Goodbye!")
+                    break
+
+                if topic in npc_to_talk.dialogue:
+                    responses = npc_to_talk.dialogue[topic]
+                    if responses:
+                        print(f"{npc_to_talk.name} says: {responses[0]}")
+                    else:
+                        print(f"{npc_to_talk.name} says: ...")
+                else:
+                    print(f"{npc_to_talk.name} says: I don't know about that.")
+
+            except KeyboardInterrupt:
+                print("\nConversation ended.")
+                break
+
+    def _show_help(self) -> None:
+        """Display help information."""
+        print("Available commands:")
+        print("  n, north     - Move north")
+        print("  s, south     - Move south")
+        print("  e, east      - Move east")
+        print("  w, west      - Move west")
+        print("  look         - Look around the current room")
+        print("  look <item>  - Look at a specific item")
+        print("  i, inv, inventory - Show your inventory")
+        print("  take <item>  - Pick up an item")
+        print("  drop <item>  - Drop an item")
+        print("  use <item>   - Use an item")
+        print("  talk <npc>   - Talk to an NPC")
+        print("  help         - Show this help message")
+        print("  quit         - Quit the game")

@@ -171,7 +171,7 @@ When the model must return file content for extraction and writing to disk:
 
 ## 5. Reflection / Free-Text Prompts
 
-For prompts where the model should produce unstructured observations (capture_learnings, diagnostics, retrospective, director analysis):
+For prompts where the model should produce unstructured observations (diagnostic summaries, director analysis, session summaries):
 
 ```yaml
   - id: output_format
@@ -218,7 +218,172 @@ The resolver system (`agent/resolvers/llm_menu.py`) automatically appends option
 
 ---
 
-## 7. Role / Persona Crafting Prompts
+## 7. Session Inference Shapes
+
+Memoryful sessions are the primary mechanism for multi-turn reasoning in Ouroboros — symbol selection, file investigation, editor loops. Every call into a session has one of three shapes, and confusing them is one of the easiest ways to write a prompt that silently corrupts reasoning-model outputs.
+
+### The three shapes
+
+**1. Ask — direct inference with an expected answer.** The caller has a question and wants a text response. Free-form natural language, a plan, a diagnosis, a generated file. The response is *consumed by the caller*. Budget the tokens the answer might need.
+
+```python
+result = await effects.session_inference(session_id, prompt, {"temperature": 0.3})
+answer = result.text.strip()
+# use `answer`
+```
+
+**2. Select — menu selection with a bounded choice.** The caller needs one of a small enumerated set of outcomes. The response format is structured (JSON object or named token) and naturally self-terminating — the model writes `}` and stops. Menu selection is a specialization of "ask" that never needs a `max_tokens` cap because the format bounds the response.
+
+```python
+prompt = build_menu_prompt(options, instruction="What next?", style="direct")
+result = await effects.session_inference(session_id, prompt, {"temperature": 0.1})
+choice = extract_choice(result.text, list(options.keys()))
+```
+
+**3. Inject — context update with no response.** The caller has information the model needs (seed context, a correction notice, tool output), but nothing useful to do with a generated response. The naïve implementation — `session_inference(...)` with a small `max_tokens` cap to minimize wasted compute — is a trap on reasoning-model families. On Nemotron-3-super, `max_tokens=20` cut the model mid-reasoning, producing history fragments like `"We need to respond with 'eady' as per instr"` that poisoned every subsequent turn.
+
+Use `agent.session_injections` for this shape. The injection is queued in context and prepended to the next real inference's prompt. No wasted inference calls, no `max_tokens` cap, identical behaviour for thinking and non-thinking models.
+
+### The queue/consume pattern
+
+```python
+from agent.session_injections import consume, queue
+
+# Producer — a step that wants to add context without generating:
+updates: dict[str, Any] = {...}
+queue(updates, step_input.context, "File X could not be read — select another")
+return StepOutput(..., context_updates=updates)
+
+# Consumer — every step that calls session_inference:
+prompt, clears = consume(step_input.context, my_prompt)
+result = await effects.session_inference(session_id, prompt, params)
+return StepOutput(
+    ...,
+    context_updates={**clears, ...other updates...},
+)
+```
+
+### The rules
+
+- **Every `session_inference` call site consumes pending injections first.** This is the single rule that makes the pattern safe: any step anywhere can queue context for the next inference without coordinating with the consumer. Forget this and the queue leaks into later turns, or worse, gets replayed in unrelated flows.
+- **Never use `max_tokens` as cost control.** If you care about the response, budget enough tokens for the answer (thinking models need thousands). If you don't care about the response, you don't want an inference call — use injection.
+- **Never fire-and-forget `session_inference`.** "Run the call and ignore the result" is always wrong. Either the response matters (shape: ask) or it doesn't (shape: inject). The `max_tokens=20` ack pattern straddles both incorrectly and produces the reasoning-model pathology above.
+- **Combine shapes freely on one call.** A consumer can also be a producer — `pick_suspect_file` consumes pending injections, presents a menu, and queues a correction message if the response doesn't parse. The next menu turn sees the correction prepended.
+
+### Anti-pattern to avoid
+
+```python
+# WRONG — fire-and-forget "injection" via inference
+await effects.session_inference(
+    session_id,
+    "Investigation note: could not read file",
+    {"max_tokens": 30},  # <— reasoning-model trap
+)
+```
+
+```python
+# RIGHT — queue the injection for the next real inference
+from agent.session_injections import queue
+queue(updates, step_input.context, "Investigation note: could not read file")
+```
+
+---
+
+## 8. Tool Result Delivery
+
+When an injection is delivering the result of a tool call (a trace, a file read, an external query), it needs explicit framing. Bare context — "here are some lines from a file" — is interpreted by the model as ambient project background, not as the return value of its previous request. The model then re-requests the tool, sees the same content arrive, and re-requests again. Across six diagnose-heavy runs, **46-79% of trace requests in failing sessions were re-requests of already-traced symbols.** The model's CoT during these spins consistently said either "we need to actually trace X" (model can't see the result) or "format is wrong, retry the JSON" (model invented a rejection narrative because there was no acceptance feedback). The lower-spin runs were also the higher-success runs, with the most successful run (505) showing the lowest spin rate.
+
+This convention defines the framing for tool-result injections so the model recognizes them as such.
+
+### The two signals
+
+**Tool result framing — what the tool returned.** Wraps the actual returned content with explicit boundary markers and tool identification. Queued by the action that executed the tool (e.g. `execute_symbol_trace` queues this with the rendered trace body):
+
+```
+Observation (from your trace of `parser.py:parse_command`):
+
+def parse_command(raw: str) -> Command:
+    """Parse a raw user input line into a Command instance."""
+    ...
+
+(End of observation.)
+```
+
+**Acceptance signal — what the system did with the model's last reply.** A brief acknowledgment that the model's previous menu choice was parsed and executed. Queued universally at the menu-choice publish point in `_execute_inference_action` for any successfully-extracted choice on a session-bearing menu turn:
+
+```
+[Your previous selection of 'trace' with argument 'parser.py:parse_command' was accepted and executed.]
+```
+
+The two signals stack cleanly when both fire. Order at the start of the next prompt:
+
+```
+[Your previous selection of 'trace' with argument 'parser.py:parse_command' was accepted and executed.]
+
+Observation (from your trace of `parser.py:parse_command`):
+
+def parse_command(raw: str) -> Command:
+    ...
+
+(End of observation.)
+
+[menu envelope follows]
+```
+
+The acceptance signal addresses **format paranoia** (~74% of observed spin events): the model invents a "rejection" narrative because it has no signal that its previous JSON was good. The tool result framing addresses **result invisibility** (~24% of observed spin events): the model has the trace body in its prompt but doesn't recognize it as a tool return because the framing is ambiguous.
+
+### Why this format
+
+The `Observation:` prefix is the dominant cross-framework convention for tool returns. The original ReAct paper (Yao et al., 2022) introduced it; HotpotQA few-shot trajectories use it; LangChain's standard agent patterns use it; agent-tutorial blog posts the model has seen extensively use it. It is the single label that has the strongest training-data anchor for "this is what your tool returned" across the open-source LLM corpus. Anthropic's `tool_result` content blocks, OpenAI's `role: "tool"` messages, and Harmony's `Role.TOOL` author all serve the same purpose at the API level — but those mechanisms are below the LLMVP API surface and not directly available to us. The textual `Observation:` prefix is the closest plain-text approximation that reaches the same priors.
+
+The bracket convention `[...]` is reserved for procedural meta-signals — acceptance confirmations, system status messages, anything that's about the conversation rather than substantive content. This keeps brackets distinct from `Observation:` (which labels substantive content) and from harmony-style `<|tokens|>` (which the model could mistakenly treat as openable). When the model sees `[...]`, it should read it as system narration about the turn boundary; when it sees `Observation:`, it should read what follows as tool data.
+
+The closing marker `(End of observation.)` provides an explicit boundary so the model knows where its tool's data ends and the next turn's prompt begins. This matters when the menu envelope or other rendered turn content follows directly — without a boundary, the model can blur the result with the next instructions.
+
+### What to strip as noise
+
+Line-range annotations like `(lines 67-165)` in body headers add visual variation without semantic content. The body itself communicates what's there. Line ranges shift between cycles when files are edited, making the same logical symbol look like a different result on each delivery — encouraging the model to re-request even when the underlying code is unchanged. Strip them from:
+
+- Trace target body headers
+- Same-file reference body headers
+- Class-level data block headers
+
+Keep line numbers where they identify a **specific actionable point**, not a body range — such as upstream call sites in the "Called by" section, where `loader.py:142` tells the model exactly where the call lives in the caller's file.
+
+Within the framed observation, use `--- Subsection ---` rather than `=== Subsection ===` for internal dividers. Strong markers (`===`) are reserved for the framing itself; weaker ones for the structure inside it. This way the model's attention anchors on the framing as the outermost structure.
+
+### Anti-patterns
+
+```
+=== parser.py: parse_command (lines 67-165) ===
+def parse_command(raw: str) -> Command:
+    ...
+```
+
+This is what failed in e39, f3d, 6c2, 88c, 902. The leading `=== file: symbol ===` header looks the same as project-context headers used elsewhere in prompts. Without an `Observation:` label, the model interprets the body as ambient context and re-requests the trace. Without a closing boundary, the body bleeds into whatever comes next.
+
+```
+Here is the result of your trace:
+def parse_command(...):
+    ...
+```
+
+Better than no framing, but still weaker than the standard. "Result of your trace" doesn't have the same training-data weight as `Observation:`. Models trained on agent corpora respond more reliably to the established label.
+
+```
+[Trace returned 142 lines:]
+... body ...
+```
+
+Brackets for substantive content blurs the meta vs substance distinction. The model then has weaker priors about which bracketed content is system narration (skip in CoT) versus tool data (reason about). Reserve brackets for procedural messages.
+
+### Cross-reference
+
+This convention layers on top of Section 7's queue/consume mechanism. The queue/consume pattern is the *plumbing*; the framing here is the *shape* of what flows through. Any action that delivers tool output via `session_injections.queue` should produce content shaped like this — both the `Observation:`-framed tool result and (where applicable) the bracketed acceptance signal.
+
+---
+
+## 9. Role / Persona Crafting Prompts
 
 When a prompt must produce a *role description* for another model to inhabit (e.g., `interact/plan` crafting an `execution_persona` for `run_session`), the output quality depends on techniques borrowed from the roleplay/character-card community. These techniques are empirically validated on local models in the 7B-120B range — the same class Ouroboros targets via LLMVP.
 
@@ -284,15 +449,25 @@ The prompt that *generates* a persona (e.g., `interact/plan.yaml`) must:
 - **Separate context fields:** Splitting persona and technical context into two inputs dilutes both — the persona should be self-contained
 - **JSON-wrapped personas:** Requiring JSON output adds a parsing step and the model focuses on format compliance instead of persona quality
 
-### Persona Injection Protocol
+### Named Block Protocol (`---BLOCK---` pattern)
 
-Flow personas are defined in `flows/cue/personas.cue` using PList-style format and injected into prompts via two standard blocks:
+Named blocks use `---NAME---` delimiters to visually separate critical information that the model must attend to. The delimiter pattern creates strong attention boundaries in the prompt — the model treats block content as higher-priority than surrounding context.
+
+Use named blocks for information that is:
+- **Mandatory** — the model must conform to it, not just consider it
+- **Structurally distinct** — it's a different kind of content from the surrounding prompt
+- **High-consequence** — ignoring it causes failures that are expensive to fix
+
+Standard named blocks:
 
 **`---ACT AS---`** — The current flow's persona. Injected when a flow declares `flow_persona` in its CUE definition. Tells the model what role it's playing for this task.
 
 **`---PEERS---`** — Peer flow personas. Injected when a flow declares `known_personas: ["flow_a", "flow_b"]`. Tells the model what downstream roles will consume its output, so it can produce output they can act on directly.
 
-Implementation:
+**`---DATA CONTRACTS (MANDATORY)---`** — Data format contracts from the architecture. Injected when the target file produces or consumes data files. The model MUST use the exact key names and structure specified. Rendered by `render_data_contracts` from the `file_context` projection's `data_shapes`.
+
+### Persona Implementation
+
 - Persona definitions live in `flows/cue/personas.cue` as `_personas` (hidden, not exported)
 - Flows reference them: `flow_persona: _personas.file_ops`
 - Pre-compute formatters `format_flow_persona` and `format_known_personas` render the blocks
@@ -302,7 +477,7 @@ When adding personas to a new flow, add the definition to `personas.cue`, declar
 
 ---
 
-## 8. Section-Based Template Patterns
+## 10. Section-Based Template Patterns
 
 ### Conditional Sections
 
@@ -345,7 +520,7 @@ No expressions, no filters, no method calls. If a value is None or missing, it r
 
 ---
 
-## 9. Temperature Guidelines
+## 11. Temperature Guidelines
 
 All temperature settings use relative `t*` multipliers for cross-model portability. The `t*` system resolves as `model_default_temperature × multiplier` at inference time.
 
@@ -371,7 +546,7 @@ All temperature settings use relative `t*` multipliers for cross-model portabili
 
 ---
 
-## 10. Extraction Pipeline
+## 12. Extraction Pipeline
 
 Fenced code blocks are the universal output protocol for all structured content. Prompts should instruct models to produce fenced output — the extractors are built for it and models naturally produce it.
 
@@ -392,7 +567,7 @@ All JSON extraction calls `strip_markdown_wrapper()` which handles ```` ```json 
 
 ---
 
-## 11. Config Values Are Static
+## 13. Config Values Are Static
 
 The `config:` block in step definitions is **NOT template-rendered**. Values are passed directly to the inference engine.
 
@@ -405,7 +580,7 @@ The `t*` multiplier format is handled by `resolve_temperature()` in `agent/effec
 
 ---
 
-## 12. Retry-with-Limit via `meta.attempt`
+## 14. Retry-with-Limit via `meta.attempt`
 
 The runtime tracks step visit counts. Use `meta.attempt` in resolver conditions:
 
@@ -424,7 +599,7 @@ resolver: {
 
 ---
 
-## 13. Prompt Maintenance Checklist
+## 15. Prompt Maintenance Checklist
 
 When adding or modifying a prompt template, verify:
 
@@ -434,8 +609,8 @@ When adding or modifying a prompt template, verify:
 - [ ] **Optional sections use `when:`** — for conditional context inclusion
 - [ ] **Single output per prompt** — one file, one JSON object, or one reflection
 - [ ] **Final reinforcement line** — "Return ONLY..." as the last line for parsed outputs
-- [ ] **Fenced output** — JSON and code output use markdown fences (see §10)
+- [ ] **Fenced output** — JSON and code output use markdown fences (see §12)
 - [ ] **Temperature set appropriately** — per the guidelines table above
-- [ ] **Persona prompts follow section 7** — PList traits, concrete first action, under 300 tokens, focus last
+- [ ] **Persona prompts follow section 9** — PList traits, concrete first action, under 300 tokens, focus last
 - [ ] **Pre-computed keys documented** — comment header listing what formatters provide
 - [ ] **Consistent with the soul** — step prompt reinforces (not contradicts) SOUL.md principles

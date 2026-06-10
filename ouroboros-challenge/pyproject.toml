@@ -1,13 +1,34 @@
 [project]
-name = "my_project"
+name = "text-adventure-engine"
 version = "0.1.0"
-description = "A new Python project."
+description = "A text adventure game engine in Python"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "pydantic>=2.0",
-    "pyyaml>=6.0"
+    "pyyaml>=6.0",
 ]
 
+[project.scripts]
+text-adventure = "main:main"
+
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+# === FILE: README.md ===
+# Text Adventure Game Engine
+
+A Python-based text adventure game engine that loads game world data from YAML files.
+
+## Features
+
+- Load game world data from YAML files (rooms, items, NPCs, connections)
+- Command parser for movement, inventory management, NPC interaction
+- Game state management including player location, inventory, and NPC dialogue
+- Save and load game state to JSON
+- Command line interface with descriptive text output
+
+## Installation
+
+```bash
+pip install -e .

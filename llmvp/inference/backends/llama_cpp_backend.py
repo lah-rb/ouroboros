@@ -15,19 +15,29 @@ low-traffic periods and scaling up for concurrent load.
 import asyncio
 import contextlib
 import ctypes
+import dataclasses
 import logging
 import time
-from pathlib import Path
 from typing import Any, AsyncGenerator, Iterator, List, Optional
 
 import numpy as np
-import numpy.typing as npt
 
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from .base import BaseBackend, BackendCapabilities
+from inference.repetition import DegenerateGenerationError, RepetitionGuard
 
 log = logging.getLogger("llm-mvp")
+
+
+@dataclasses.dataclass
+class InstanceMeta:
+    """Per-instance lifecycle metadata for LRU reaping and health output."""
+
+    created_at: float
+    last_released_at: float
+    warmup_seconds: float = 0.0
+    is_primary: bool = False
 
 
 class LlamaCppBackend(BaseBackend):
@@ -55,10 +65,18 @@ class LlamaCppBackend(BaseBackend):
     """
 
     # How often the JIT scaler checks for idle instances to tear down.
-    _JIT_SCALER_INTERVAL: float = 300.0
+    # 60s (was 300): with one-per-tick LRU reaping gated on
+    # instance_idle_ttl, decay is gradual — one instance per minute,
+    # starting only after the idle TTL — instead of all-at-once.
+    _JIT_SCALER_INTERVAL: float = 60.0
 
     # Minimum seconds after a scale-up before the scaler may tear down.
     _JIT_COOLDOWN: float = 300.0
+
+    # After a scale-up aborts on drain timeout, suppress re-triggering
+    # for this long so acquirers fall back to the slow path instead of
+    # hammering the unsafe spawn.
+    _SCALE_UP_RETRY_BACKOFF: float = 30.0
 
     def __init__(self, config: Any):
         self._primary_instance: Any = None  # Owns the model weights
@@ -82,13 +100,23 @@ class LlamaCppBackend(BaseBackend):
         # acquire_instance() callers until scaling completes.
         self._scaling_gate: asyncio.Event = asyncio.Event()
         self._scaling_gate.set()  # Open by default
-        # In-flight tracking — counts instances currently checked out.
-        self._in_flight: int = 0
+        # Generation accounting: _active_generations counts GPU work
+        # units (generate/eval/load_state/save_state spans inside
+        # generation_guard). Scaling drains wait on THIS, so a pinned
+        # but idle session never blocks a scale-up. _checked_out counts
+        # pool membership only (health/logging) — a session holds a
+        # checkout for its whole life, which must not look like GPU work.
+        self._active_generations: int = 0
+        self._checked_out: int = 0
         self._drain_event: asyncio.Event = asyncio.Event()
-        self._drain_event.set()  # Initially "drained" (no in-flight)
+        self._drain_event.set()  # Initially "drained" (no generations)
         # Cooldown tracking — prevents scaler from destroying freshly
         # created instances.
         self._last_scale_up_time: float = 0.0
+        # Retry backoff after a scale-up aborted on drain timeout.
+        self._scale_up_backoff_until: float = 0.0
+        # Per-instance lifecycle metadata, keyed by id(instance).
+        self._instance_meta: dict[int, InstanceMeta] = {}
         super().__init__(config)
 
     @property
@@ -141,7 +169,7 @@ class LlamaCppBackend(BaseBackend):
         """
         import copy
 
-        from llama_cpp import internals, llama_cpp as lc
+        from llama_cpp import internals
 
         # Shallow-copy the primary to inherit all config / metadata.
         inst = copy.copy(primary)
@@ -240,13 +268,30 @@ class LlamaCppBackend(BaseBackend):
 
             static_tokens = get_static_tokens()
 
+            started = time.perf_counter()
+
             if self._static_state is not None:
                 # State already computed by the first instance — just load it.
                 llm_inst.load_state(self._static_state)
-                log.info(f"✅ Loaded pre-computed static state for pool slot #{idx}")
+                log.info(
+                    f"✅ Loaded pre-computed static state for pool slot #{idx} "
+                    f"in {time.perf_counter() - started:.2f}s"
+                )
                 return
 
             n_tokens = len(static_tokens)
+
+            if n_tokens == 0:
+                # No static tokens (--skip-knowledge) — save a clean
+                # initial state without any system prompt prefix.
+                llm_inst.reset()
+                self._static_state = llm_inst.save_state()
+                log.info(
+                    f"📝 No static tokens — saved clean initial state "
+                    f"(pool slot #{idx})"
+                )
+                return
+
             log.info(
                 f"🔄 Processing {n_tokens:,} static tokens for state "
                 f"snapshot (pool slot #{idx})…"
@@ -260,7 +305,8 @@ class LlamaCppBackend(BaseBackend):
             state_mb = self._static_state.llama_state_size / (1024 * 1024)
             log.info(
                 f"✅ State snapshot saved — {n_tokens:,} tokens, "
-                f"{state_mb:,.1f} MiB C-level state (pool slot #{idx})"
+                f"{state_mb:,.1f} MiB C-level state, static eval took "
+                f"{time.perf_counter() - started:.2f}s (pool slot #{idx})"
             )
         except Exception as exc:
             log.error(f"❌ Warm-up failed for pool slot #{idx}: {exc}")
@@ -274,9 +320,13 @@ class LlamaCppBackend(BaseBackend):
         after shared contexts are freed, helping recover
         single-instance inference speed.
         """
+        started = time.perf_counter()
         self._primary_instance.reset()
         self._primary_instance.load_state(self._static_state)
-        log.info("🔄 Re-warmed primary instance after scale-down")
+        log.info(
+            "🔄 Re-warmed primary instance after scale-down in %.2fs",
+            time.perf_counter() - started,
+        )
 
     # ------------------------------------------------------------------
     # Shared JIT scaling helpers
@@ -293,28 +343,38 @@ class LlamaCppBackend(BaseBackend):
         return instances
 
     async def _drain_in_flight(self, operation: str) -> bool:
-        """Wait for all checked-out instances to be returned.
+        """Wait for all in-flight GENERATIONS (GPU work) to complete.
 
-        Returns ``True`` if all in-flight work completed within the
-        configured ``backend_timeout``, ``False`` on timeout.
+        Pinned-but-idle checkouts (sessions between turns) do not count
+        — only active generation_guard spans hold the drain. Returns
+        ``True`` if all generations completed within the configured
+        ``backend_timeout``, ``False`` on timeout.
         """
-        if self._in_flight <= 0:
+        if self._active_generations <= 0:
             return True
 
         timeout = self.config.app.backend_timeout
         log.info(
-            f"⏳ Waiting for {self._in_flight} in-flight "
-            f"request(s) to complete before {operation}…"
+            f"⏳ Waiting for {self._active_generations} in-flight "
+            f"generation(s) to complete before {operation}…"
         )
+        started = time.perf_counter()
         try:
             await asyncio.wait_for(self._drain_event.wait(), timeout=timeout)
+            log.info(
+                "✅ Drained generations in %.2fs before %s",
+                time.perf_counter() - started,
+                operation,
+            )
             return True
         except asyncio.TimeoutError:
             log.warning(
-                "⚠️ Drain timed out after %ds during %s (in_flight=%d)",
+                "⚠️ Drain timed out after %ds during %s "
+                "(active_generations=%d, checked_out=%d)",
                 timeout,
                 operation,
-                self._in_flight,
+                self._active_generations,
+                self._checked_out,
             )
             return False
 
@@ -322,6 +382,18 @@ class LlamaCppBackend(BaseBackend):
         """Put instances back into the pool queue."""
         for inst in instances:
             self._pool_queue.put_nowait(inst)
+
+    def _register_instance(
+        self, inst: Any, is_primary: bool = False, warmup_seconds: float = 0.0
+    ) -> None:
+        """Record lifecycle metadata for a pool instance (LRU + health)."""
+        now = time.monotonic()
+        self._instance_meta[id(inst)] = InstanceMeta(
+            created_at=now,
+            last_released_at=now,
+            warmup_seconds=warmup_seconds,
+            is_primary=is_primary,
+        )
 
     async def _cancel_scaler_task(self) -> None:
         """Cancel and await the background scaler task if running."""
@@ -344,8 +416,9 @@ class LlamaCppBackend(BaseBackend):
     async def _scaling_operation(self):
         """Close the scaling gate on enter, always reopen on exit.
 
-        Prevents ``acquire_instance()`` from handing out instances
-        while a JIT scale-up or scale-down is modifying the pool.
+        Prevents ``acquire_instance()`` from handing out instances and
+        ``generation_guard()`` from starting new GPU work while a JIT
+        scale-up or scale-down is modifying the pool.
         A permanently-closed gate deadlocks the server, so the
         ``finally`` block guarantees reopening even on cancellation.
         """
@@ -354,6 +427,80 @@ class LlamaCppBackend(BaseBackend):
             yield
         finally:
             self._scaling_gate.set()
+
+    async def _gate_generation(self) -> None:
+        """Wait for the readiness + scaling gates before starting GPU work.
+
+        Uses ``scale_wait_timeout`` (not ``backend_timeout``): a waiter
+        must outlive a full scale-up (drain + N warm-ups), so its budget
+        is deliberately larger than the drain budget inside the scaling
+        operation it is waiting on.
+        """
+        timeout = getattr(self.config.resources, "scale_wait_timeout", 600)
+        if not self._ready_event.is_set():
+            try:
+                await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"Backend did not become ready within {timeout}s "
+                    "(scale_wait_timeout) — initialize() may have failed"
+                )
+        if not self._scaling_gate.is_set():
+            try:
+                await asyncio.wait_for(self._scaling_gate.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"Scaling operation did not complete within {timeout}s "
+                    "(scale_wait_timeout)"
+                )
+
+    @contextlib.asynccontextmanager
+    async def generation_guard(self, *, nested: bool = False):
+        """Mark a span of GPU work (generate, eval, load_state, save_state).
+
+        The single mechanism enforcing the pool's core invariant: no GPU
+        work concurrent with a scaling operation's spawn/warm-up/teardown.
+
+        Outer entry (``nested=False``) waits the gates, then increments
+        ``_active_generations`` with a post-increment gate re-check — if a
+        scaling op closed the gate between our wait and the increment, we
+        back out and re-wait. This is race-free because
+        ``_scaling_operation`` closes the gate BEFORE its drain reads the
+        counter, and both sides run on the event loop.
+
+        Nested entry (``nested=True`` — the generate wrappers when called
+        from inside ``session_turn``'s own guard, signalled via the
+        ``_nested_guard`` kwarg) increments WITHOUT waiting on the scaling
+        gate: the enclosing guard already holds the drain hostage, so
+        waiting would deadlock against the scaler. Nested entries only
+        balance the counter.
+
+        Nesting is an explicit flag rather than contextvar depth-tracking
+        because async-generator steps execute in the CALLER's context — a
+        stream iterated from more than one task (slow clients, handler
+        handoffs) would corrupt contextvar tokens.
+        """
+        if not nested:
+            while True:
+                await self._gate_generation()
+                self._active_generations += 1
+                self._drain_event.clear()
+                if self._scaling_gate.is_set():
+                    break  # Safe: any drain will now wait for us.
+                # Lost the race — a scaling op closed the gate after
+                # our wait. Back out and re-wait.
+                self._active_generations -= 1
+                if self._active_generations == 0:
+                    self._drain_event.set()
+        else:
+            self._active_generations += 1
+            self._drain_event.clear()
+        try:
+            yield
+        finally:
+            self._active_generations = max(0, self._active_generations - 1)
+            if self._active_generations == 0:
+                self._drain_event.set()
 
     # ------------------------------------------------------------------
     # Pool lifecycle
@@ -387,6 +534,7 @@ class LlamaCppBackend(BaseBackend):
         # Warm-up primary instance: evaluate static tokens & save snapshot.
         await run_in_threadpool(self._warm_up_instance, self._primary_instance, 0)
         self._all_instances.append(self._primary_instance)
+        self._register_instance(self._primary_instance, is_primary=True)
 
         if self._jit_enabled:
             # JIT mode: start with just the primary.  The queue is
@@ -405,13 +553,16 @@ class LlamaCppBackend(BaseBackend):
         else:
             # Eager mode: pre-allocate all instances at startup.
             for i in range(1, self._pool_size):
+                ctx_started = time.perf_counter()
                 inst = self._create_shared_instance(self._primary_instance)
                 log.info(
                     f"🔗 Created shared context for pool slot #{i} "
+                    f"in {time.perf_counter() - ctx_started:.2f}s "
                     f"(shared model weights with primary)"
                 )
                 await run_in_threadpool(self._warm_up_instance, inst, i)
                 self._all_instances.append(inst)
+                self._register_instance(inst)
 
             self._pool_queue = asyncio.Queue(maxsize=self._pool_size)
             for inst in self._all_instances:
@@ -449,6 +600,7 @@ class LlamaCppBackend(BaseBackend):
                 log.warning(f"⚠️ Error closing primary instance: {exc}")
 
         self._all_instances.clear()
+        self._instance_meta.clear()
         self._primary_instance = None
         self._pool_queue = None
         self._static_state = None
@@ -479,26 +631,12 @@ class LlamaCppBackend(BaseBackend):
         """
         timeout = self.config.app.backend_timeout
 
-        # ── Readiness gate ──────────────────────────────────────────
-        if not self._ready_event.is_set():
-            log.info("⏳ Waiting for backend readiness gate…")
-            try:
-                await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
-                raise RuntimeError(
-                    f"Backend did not become ready within {timeout}s — "
-                    "initialize() may have failed"
-                )
-
-        # ── Scaling gate ────────────────────────────────────────────
-        if not self._scaling_gate.is_set():
-            log.debug("⏳ Waiting for scaling gate…")
-            try:
-                await asyncio.wait_for(self._scaling_gate.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
-                raise RuntimeError(
-                    f"Scaling operation did not complete within {timeout}s"
-                )
+        # ── Readiness + scaling gates ───────────────────────────────
+        # Gate waits use scale_wait_timeout: a waiter must outlive a
+        # full scale-up (drain + N warm-ups), so its budget is larger
+        # than the backend_timeout that bounds the drain inside the
+        # scaling operation it is waiting on.
+        await self._gate_generation()
 
         if self._pool_queue is None:
             raise RuntimeError("Backend not initialized")
@@ -512,8 +650,14 @@ class LlamaCppBackend(BaseBackend):
             pass
 
         # --- JIT batch scale-up path --------------------------------
+        # Skipped during the retry backoff after an aborted scale-up
+        # (drain timeout) — callers fall through to the slow path and
+        # wait for a release instead of re-triggering the unsafe spawn.
         if inst is None and self._jit_enabled:
-            if len(self._all_instances) < self._jit_limit:
+            if (
+                len(self._all_instances) < self._jit_limit
+                and time.monotonic() >= self._scale_up_backoff_until
+            ):
                 await self._jit_batch_scale_up()
                 try:
                     inst = self._pool_queue.get_nowait()
@@ -531,43 +675,46 @@ class LlamaCppBackend(BaseBackend):
                     f"(active={active}, limit={self._jit_limit})"
                 )
 
-        # Track in-flight count for drain synchronisation.
-        self._in_flight += 1
-        self._drain_event.clear()
+        # Pool-membership accounting only. GPU-busy tracking lives in
+        # generation_guard — a checkout (e.g. a session pinned between
+        # turns) is not GPU work and must not block scaling drains.
+        self._checked_out += 1
 
-        # Restore the post-static-tokens state snapshot.
+        # Restore the post-static-tokens state snapshot. This is a
+        # multi-GB GPU memcpy — guard it like any other GPU work.
         if self._static_state is not None:
-            await run_in_threadpool(inst.load_state, self._static_state)
+            async with self.generation_guard():
+                await run_in_threadpool(inst.load_state, self._static_state)
             log.debug("🔄 Restored static state snapshot before request")
 
         log.debug(
-            "🔧 Acquired instance (idle=%d, total=%d, in_flight=%d)",
+            "🔧 Acquired instance (idle=%d, total=%d, checked_out=%d)",
             self._pool_queue.qsize(),
             len(self._all_instances),
-            self._in_flight,
+            self._checked_out,
         )
         return inst
 
     async def release_instance(self, inst: Any) -> None:
         """Return a used instance back to the pool (async-safe).
 
-        Decrements the in-flight counter and signals the drain event
-        when it reaches zero — this unblocks any pending scale-up or
-        scale-down operation that is waiting for all generations to
-        finish before proceeding with warm-up.
+        Decrements the checkout counter and stamps the instance's
+        last-released time for LRU reaping. Drain synchronisation is
+        handled by generation_guard, not here.
         """
         if self._pool_queue is not None:
             await self._pool_queue.put(inst)
 
-        self._in_flight = max(0, self._in_flight - 1)
-        if self._in_flight == 0:
-            self._drain_event.set()
+        self._checked_out = max(0, self._checked_out - 1)
+        meta = self._instance_meta.get(id(inst))
+        if meta is not None:
+            meta.last_released_at = time.monotonic()
 
         log.debug(
-            "🔧 Released instance (idle=%d, total=%d, in_flight=%d)",
+            "🔧 Released instance (idle=%d, total=%d, checked_out=%d)",
             self._pool_queue.qsize() if self._pool_queue else 0,
             len(self._all_instances),
-            self._in_flight,
+            self._checked_out,
         )
 
     # ------------------------------------------------------------------
@@ -627,9 +774,26 @@ class LlamaCppBackend(BaseBackend):
                 f"🔒 JIT batch scale-up: spawning " f"{target - current} instance(s)…"
             )
 
+            scale_started = time.perf_counter()
             async with self._scaling_operation():
                 # 1. Drain in-flight generations for exclusive GPU access.
-                await self._drain_in_flight("scale-up")
+                #    On timeout, ABORT: spawning contexts and running
+                #    warm-up evals concurrently with an active generation
+                #    on the same Metal device crashes ggml (assert/segv,
+                #    the "non-OOM crash" class). The drain runs BEFORE
+                #    _drain_queue, so there is nothing to requeue — just
+                #    set the retry backoff and let acquirers fall through
+                #    to the slow path until it expires.
+                if not await self._drain_in_flight("scale-up"):
+                    self._scale_up_backoff_until = (
+                        time.monotonic() + self._SCALE_UP_RETRY_BACKOFF
+                    )
+                    log.warning(
+                        "⚠️ JIT scale-up ABORTED — drain timeout; retry "
+                        "suppressed for %.0fs",
+                        self._SCALE_UP_RETRY_BACKOFF,
+                    )
+                    return  # Gate reopens via _scaling_operation's finally.
 
                 # 2. Collect all idle instances from the queue.
                 returned = self._drain_queue()
@@ -638,12 +802,18 @@ class LlamaCppBackend(BaseBackend):
                 spawned: List[Any] = []
                 for i in range(current, target):
                     try:
+                        ctx_started = time.perf_counter()
                         new_inst = self._create_shared_instance(self._primary_instance)
+                        ctx_seconds = time.perf_counter() - ctx_started
+                        warm_started = time.perf_counter()
                         await run_in_threadpool(self._warm_up_instance, new_inst, i)
+                        warm_seconds = time.perf_counter() - warm_started
                         self._all_instances.append(new_inst)
+                        self._register_instance(new_inst, warmup_seconds=warm_seconds)
                         spawned.append(new_inst)
                         log.info(
-                            f"📈 JIT batch: warmed instance #{i} "
+                            f"📈 JIT batch: instance #{i} context "
+                            f"{ctx_seconds:.2f}s + warm-up {warm_seconds:.2f}s "
                             f"({len(self._all_instances)}/{target})"
                         )
                     except Exception as exc:
@@ -657,7 +827,8 @@ class LlamaCppBackend(BaseBackend):
                 self._last_scale_up_time = time.monotonic()
 
                 log.info(
-                    f"✅ JIT batch scale-up complete "
+                    f"✅ JIT batch scale-up complete in "
+                    f"{time.perf_counter() - scale_started:.2f}s "
                     f"({len(self._all_instances)}/{target} instances, "
                     f"{self._pool_queue.qsize()} idle)"
                 )
@@ -666,89 +837,112 @@ class LlamaCppBackend(BaseBackend):
             #    counts from NOW, not from when it last woke up.
             await self._restart_scaler_task()
 
-    async def _jit_scale_down(self) -> None:
-        """Tear down all shared instances, keeping only the primary.
+    def _pick_lru_victim(self, idle: List[Any]) -> Optional[Any]:
+        """Pick the least-recently-used reapable instance, or None.
 
-        Acquires the spawn lock, closes the scaling gate, drains
-        in-flight work, destroys shared contexts, then re-warms the
-        primary for optimal single-instance GPU performance.
+        Reapable = non-primary, idle longer than ``instance_idle_ttl``.
+        Pure and synchronous for direct unit testing.
+        """
+        idle_ttl = getattr(self.config.resources, "instance_idle_ttl", 600)
+        now = time.monotonic()
+        victim: Any = None
+        victim_released = float("inf")
+        for inst in idle:
+            if inst is self._primary_instance:
+                continue
+            meta = self._instance_meta.get(id(inst))
+            released = meta.last_released_at if meta else 0.0
+            if now - released < idle_ttl:
+                continue
+            if released < victim_released:
+                victim = inst
+                victim_released = released
+        return victim
+
+    async def _jit_reap_lru_one(self) -> bool:
+        """Reap the single least-recently-used idle non-primary instance.
+
+        Replaces the old all-at-once scale-down (which caused spawn-all →
+        reap-all thrash under bursty load): at most ONE instance per
+        scaler tick, and only if it has been idle longer than
+        ``instance_idle_ttl``. The primary re-warm (Metal allocator
+        layout recovery) runs only when the pool returns to a single
+        instance. Returns True if an instance was reaped.
         """
         async with self._spawn_lock:
-            log.info("🔒 JIT scale-down: closing gate, " "tearing down idle instances…")
-
             async with self._scaling_operation():
-                # 1. Drain in-flight (safety net for the TOCTOU race
-                #    between _scaler_loop pre-checks and lock acquisition).
+                # Drain in-flight generations (safety net for the TOCTOU
+                # race between _scaler_tick pre-checks and lock acquisition).
                 if not await self._drain_in_flight("scale-down"):
-                    return  # Skip teardown — gate reopens via finally
+                    return False  # Skip teardown — gate reopens via finally
 
-                # 2. Collect all idle instances from the queue.
                 idle = self._drain_queue()
+                victim = self._pick_lru_victim(idle)
+                if victim is None:
+                    self._requeue_instances(idle)
+                    return False
 
-                # 3. Destroy all non-primary instances.
-                destroyed = 0
-                for inst in idle:
-                    if inst is not self._primary_instance:
-                        self._close_shared_context(inst)
-                        self._all_instances.remove(inst)
-                        destroyed += 1
+                idle.remove(victim)
+                self._close_shared_context(victim)
+                self._all_instances.remove(victim)
+                self._instance_meta.pop(id(victim), None)
 
-                # 4. Re-warm primary for optimal single-instance speed.
-                #    reset() + load_state() gives the Metal allocator a
-                #    chance to optimise memory layout after shared
-                #    contexts' KV caches are freed.
-                if destroyed and self._static_state is not None:
+                if len(self._all_instances) == 1 and self._static_state is not None:
                     await run_in_threadpool(self._rewarm_after_teardown)
 
-                # 5. Re-queue the primary instance.
-                self._requeue_instances([self._primary_instance])
+                self._requeue_instances(idle)
 
-                if destroyed:
-                    log.info(
-                        f"📉 JIT scale-down: destroyed {destroyed} "
-                        f"instance(s), re-warmed primary "
-                        f"(active={len(self._all_instances)})"
-                    )
+                log.info(
+                    f"📉 JIT reap: destroyed 1 LRU instance "
+                    f"(active={len(self._all_instances)})"
+                )
+                return True
+
+    async def _scaler_tick(self) -> None:
+        """One scaler decision cycle — extracted so tests can drive
+        ticks directly without sleeping through the interval."""
+        if self._pool_queue is None:
+            return
+
+        # Only scale down if we have more than 1 instance.
+        if len(self._all_instances) <= 1:
+            return
+
+        # Skip if every instance is checked out — nothing is reapable
+        # (checked-out instances are not in the queue).
+        if self._checked_out >= len(self._all_instances):
+            return
+
+        # Cooldown: skip if a batch scale-up completed recently.
+        cooldown = getattr(
+            self.config.resources, "scale_down_cooldown", self._JIT_COOLDOWN
+        )
+        elapsed = time.monotonic() - self._last_scale_up_time
+        if elapsed < cooldown:
+            log.debug(
+                f"⏭️ JIT scale-down skipped — cooldown active "
+                f"({elapsed:.0f}s / {cooldown:.0f}s)"
+            )
+            return
+
+        # Skip if any generations are in-flight — better to check
+        # again next cycle than stall active requests.
+        if self._active_generations > 0:
+            return
+
+        await self._jit_reap_lru_one()
 
     async def _scaler_loop(self) -> None:
-        """Background task that periodically tears down idle JIT instances.
+        """Background task that periodically reaps idle JIT instances.
 
-        Runs every ``_JIT_SCALER_INTERVAL`` seconds.  Each cycle
-        evaluates whether a scale-down is appropriate based on pool
-        size, in-flight count, and cooldown timer, then delegates
-        the actual teardown to ``_jit_scale_down()``.
+        Runs every ``_JIT_SCALER_INTERVAL`` seconds; each cycle reaps at
+        most one LRU instance idle beyond ``instance_idle_ttl`` (see
+        ``_scaler_tick`` / ``_jit_reap_lru_one``).
         """
         try:
             while True:
                 await asyncio.sleep(self._JIT_SCALER_INTERVAL)
-
-                if self._pool_queue is None:
-                    return
-
-                # Only scale down if we have more than 1 instance.
-                if len(self._all_instances) <= 1:
-                    continue
-
-                # Skip if all instances are busy — scaling would stall
-                # the server for the full generation time.
-                if self._in_flight >= len(self._all_instances):
-                    continue
-
-                # Cooldown: skip if a batch scale-up completed recently.
-                elapsed = time.monotonic() - self._last_scale_up_time
-                if elapsed < self._JIT_COOLDOWN:
-                    log.debug(
-                        f"⏭️ JIT scale-down skipped — cooldown active "
-                        f"({elapsed:.0f}s / {self._JIT_COOLDOWN:.0f}s)"
-                    )
-                    continue
-
-                # Skip if any requests are in-flight — better to check
-                # again next cycle than stall active requests.
-                if self._in_flight > 0:
-                    continue
-
-                await self._jit_scale_down()
+                await self._scaler_tick()
         except asyncio.CancelledError:
             return
 
@@ -825,9 +1019,22 @@ class LlamaCppBackend(BaseBackend):
         prompt_tokens: List[int],
         max_tokens: int,
         temperature: float,
+        stop_texts: List[str] | None = None,
         **kwargs,
     ) -> Iterator[str]:
         """Synchronous streaming text generation.
+
+        Args:
+            instance: Pre-acquired backend instance.
+            prompt_tokens: Tokenized prompt (static + dynamic).
+            max_tokens: Maximum tokens to generate.
+            temperature: Sampling temperature.
+            stop_texts: Optional override for stop-sequence detection.
+                When None (default), uses ``renderer.stop_tokens()`` in
+                completion mode. Session callers should pass
+                ``renderer.stop_tokens(mode="session")`` to add the
+                second-assistant-turn opener as a stop, which prevents
+                multi-turn rambling.
 
         Uses the low-level ``Llama.generate()`` method with
         ``reset=False`` so the static-context state loaded by
@@ -852,14 +1059,35 @@ class LlamaCppBackend(BaseBackend):
 
         tracker = get_tracker()
 
-        # Split prompt into static (already in KV cache) and dynamic parts
-        n_static = self._static_state.n_tokens if self._static_state else 0
+        # Split prompt into static (already in KV cache) and dynamic parts.
+        #
+        # COMPLETION path: prompt_tokens = [static prefix] + [dynamic], so we
+        # skip the prefix (already evaluated via load_state).
+        # SESSION path: prompt_tokens are PURELY incremental (the restored KV
+        # already holds static prefix + prior turns) — callers pass
+        # static_in_prompt=False so nothing is skipped. Before this flag, any
+        # session turn LONGER than the static prefix had its first n_static
+        # tokens silently amputated (turns shorter than the prefix were saved
+        # by the n_static > len fallback, which hid the bug): the model saw
+        # only the prompt tail and produced blind rewrites/refusals
+        # (45f031ac run, cycle-25 process_command placeholder splice).
+        static_in_prompt = kwargs.pop("static_in_prompt", True)
+        n_static = (
+            self._static_state.n_tokens
+            if (self._static_state and static_in_prompt)
+            else 0
+        )
         if n_static > len(prompt_tokens):
             n_static = 0  # safety fallback
         dynamic_tokens = list(prompt_tokens[n_static:])
 
-        # Context-window guard
-        total_ctx_used = n_static + len(dynamic_tokens)
+        # Context-window guard. For session turns (static_in_prompt=False)
+        # the KV base is the instance's current occupancy — static prefix
+        # plus all prior turns — not just the static prefix.
+        kv_base = n_static
+        if not static_in_prompt:
+            kv_base = int(getattr(instance, "n_tokens", 0) or 0)
+        total_ctx_used = kv_base + len(dynamic_tokens)
         if total_ctx_used >= instance._n_ctx:
             tracker.finish()
             raise ValueError(
@@ -897,12 +1125,50 @@ class LlamaCppBackend(BaseBackend):
 
         gen_kwargs = self._build_generate_kwargs(temperature)
         from formats.registry import get_renderer
-        stop_texts = get_renderer(self.config.model.family).stop_tokens()
+
+        # Use caller-provided stops when given (session mode) — otherwise
+        # default to completion-mode stops from the renderer.
+        if stop_texts is None:
+            stop_texts = get_renderer(self.config.model.family).stop_tokens()
         stop_bytes = [s.encode("utf-8") for s in stop_texts]
+        # Scan only a bounded tail for stop sequences (incremental detok keeps a
+        # cumulative byte accumulator; a freshly-emitted stop is always near the
+        # tail). Slack covers a stop split across the last couple of tokens.
+        max_stop_len = max((len(sb) for sb in stop_bytes), default=0)
+        stop_tail = max_stop_len + 8
 
         completion_tokens: List[int] = []
         returned_bytes = 0
         is_first_token = True
+
+        # Incremental detokenization (replaces O(n²) full-list detok per token):
+        # accumulate bytes and detokenize only the new token, with all preceding
+        # tokens as context so llama.cpp emits the correct piece boundary.
+        acc_bytes = b""
+        prior_tokens: List[int] = list(prompt_tokens)
+
+        # Degenerate-repetition guard (off only if explicitly disabled per-config).
+        gen_cfg = self.config.generation
+        guard: Optional[RepetitionGuard] = None
+        if gen_cfg.repetition_guard_enabled is not False:
+            from inference.repetition import (
+                DEFAULT_MAX_CYCLE_PERIOD,
+                DEFAULT_MAX_RUN,
+                DEFAULT_MIN_CYCLE_REPS,
+            )
+
+            guard = RepetitionGuard(
+                max_run=gen_cfg.repetition_max_run or DEFAULT_MAX_RUN,
+                max_cycle_period=(
+                    gen_cfg.repetition_max_cycle_period or DEFAULT_MAX_CYCLE_PERIOD
+                ),
+                min_cycle_reps=gen_cfg.repetition_min_cycle_reps
+                or DEFAULT_MIN_CYCLE_REPS,
+            )
+
+        # KV position where generation begins: generate() evals dynamic_tokens
+        # (reset=False) at [n_tokens, n_tokens+len), then samples from there.
+        gen_start_pos = instance.n_tokens + len(dynamic_tokens)
 
         try:
             for token in instance.generate(dynamic_tokens, **gen_kwargs):
@@ -921,42 +1187,62 @@ class LlamaCppBackend(BaseBackend):
                 completion_tokens.append(token)
                 tracker.record_token()
 
-                # Detokenize the full completion so far (context-aware)
-                all_text: bytes = instance.detokenize(
-                    completion_tokens, prev_tokens=prompt_tokens
-                )
+                # Degenerate-repetition guard — abort a turn that collapses into
+                # token-level repetition before it fills max_tokens (~1h hang).
+                if guard is not None:
+                    reason = guard.observe(token)
+                    if reason:
+                        raise DegenerateGenerationError(
+                            reason, tokens_generated=len(completion_tokens)
+                        )
 
-                # Stop-sequence detection — break the generation loop
-                # when the model emits a stop sequence as text tokens
-                # (rather than a native EOG token). The stop text is
-                # NOT stripped from the output — it remains in the
-                # yielded text so that downstream consumers (CRF,
-                # training corpus) see the complete model output.
-                should_stop = any(sb in all_text for sb in stop_bytes)
+                # Incremental detokenize: only the NEW token, with all prior
+                # tokens as context. A detok failure (e.g. llama_cpp "Negative
+                # size passed to PyBytes_FromStringAndSize" on a degenerate
+                # token) is converted to the same clean abort path.
+                try:
+                    piece: bytes = instance.detokenize(
+                        [token], prev_tokens=prior_tokens
+                    )
+                except Exception as e:  # noqa: BLE001 — convert to controlled abort
+                    raise DegenerateGenerationError(
+                        f"detokenization failed: {e}",
+                        tokens_generated=len(completion_tokens),
+                    ) from e
+                prior_tokens.append(token)
+                acc_bytes += piece
 
-                # Yield only the *new* bytes that form valid UTF-8.
-                # In buffer_mode, skip per-token yields entirely — we
-                # flush everything after the generation loop completes.
+                # Stop-sequence detection — break the generation loop when the
+                # model emits a stop sequence as text tokens (rather than a
+                # native EOG token). Scanned over a bounded tail; the stop text
+                # is NOT stripped — it stays in the output so downstream
+                # consumers (FSM labeller, capture log) see the full output.
+                should_stop = any(sb in acc_bytes[-stop_tail:] for sb in stop_bytes)
+
+                # Yield only the *new* bytes that form valid UTF-8. Decode the
+                # cumulative tail (never `piece` alone — a token can be a UTF-8
+                # continuation fragment). In buffer_mode, skip per-token yields.
                 if not buffer_mode:
-                    if len(all_text) > returned_bytes:
-                        new_bytes = all_text[returned_bytes:]
+                    if len(acc_bytes) > returned_bytes:
                         try:
-                            yield new_bytes.decode("utf-8")
-                            returned_bytes = len(all_text)
+                            yield acc_bytes[returned_bytes:].decode("utf-8")
+                            returned_bytes = len(acc_bytes)
                         except UnicodeDecodeError:
                             pass  # incomplete multi-byte char — wait for next token
 
                 if should_stop or len(completion_tokens) >= effective_max:
                     break
 
-            # Flush any remaining bytes (e.g. final multi-byte character
-            # or buffered-mode content).
-            if completion_tokens:
-                final_text: bytes = instance.detokenize(
-                    completion_tokens, prev_tokens=prompt_tokens
-                )
-                if len(final_text) > returned_bytes:
-                    yield final_text[returned_bytes:].decode("utf-8", errors="replace")
+            # Flush any remaining bytes (final multi-byte char or buffered-mode
+            # content). The accumulator already holds everything.
+            if acc_bytes and len(acc_bytes) > returned_bytes:
+                yield acc_bytes[returned_bytes:].decode("utf-8", errors="replace")
+
+            # Expose the generated token ids + the KV position where generation
+            # began, so the session layer can locate the reasoning span for
+            # in-place KV compaction (Factor 4 / strip_reasoning).
+            instance._last_completion_tokens = list(completion_tokens)
+            instance._last_gen_start_pos = gen_start_pos
         finally:
             tracker.finish()
 
@@ -968,15 +1254,28 @@ class LlamaCppBackend(BaseBackend):
         temperature: float,
         **kwargs,
     ) -> str:
-        """Asynchronous text generation (runs sync in thread pool)."""
-        return await run_in_threadpool(
-            self.generate_sync,
-            instance,
-            prompt_tokens,
-            max_tokens,
-            temperature,
-            **kwargs,
-        )
+        """Asynchronous text generation (runs sync in thread pool).
+
+        The async wrappers are the only sanctioned serving entry points:
+        they hold generation_guard, which enforces the pool invariant
+        (no GPU work concurrent with JIT spawn/warm-up/teardown).
+        Calling generate_sync/generate_stream_sync directly bypasses it.
+
+        ``_nested_guard=True`` (popped, never forwarded) marks a call made
+        from inside an enclosing generation_guard (session_turn) — the
+        guard then only balances the counter instead of re-waiting the
+        scaling gate, which would deadlock against a draining scaler.
+        """
+        nested = kwargs.pop("_nested_guard", False)
+        async with self.generation_guard(nested=nested):
+            return await run_in_threadpool(
+                self.generate_sync,
+                instance,
+                prompt_tokens,
+                max_tokens,
+                temperature,
+                **kwargs,
+            )
 
     async def generate_stream_async(
         self,
@@ -986,13 +1285,24 @@ class LlamaCppBackend(BaseBackend):
         temperature: float,
         **kwargs,
     ) -> AsyncGenerator[str, None]:
-        """Asynchronous streaming text generation."""
-        async for chunk in iterate_in_threadpool(
-            self.generate_stream_sync(
-                instance, prompt_tokens, max_tokens, temperature, **kwargs
-            )
-        ):
-            yield chunk
+        """Asynchronous streaming text generation.
+
+        Holds generation_guard for the stream's lifetime. If a consumer
+        abandons the stream, ``aclose()``/asyncgen finalization resumes
+        the generator and the guard's finally releases the counter —
+        bounded in the worst case by the drain timeout, which now aborts
+        scaling cleanly instead of crashing.
+
+        ``_nested_guard``: see generate_async.
+        """
+        nested = kwargs.pop("_nested_guard", False)
+        async with self.generation_guard(nested=nested):
+            async for chunk in iterate_in_threadpool(
+                self.generate_stream_sync(
+                    instance, prompt_tokens, max_tokens, temperature, **kwargs
+                )
+            ):
+                yield chunk
 
     # ------------------------------------------------------------------
     # Health & tokenization
@@ -1017,15 +1327,28 @@ class LlamaCppBackend(BaseBackend):
         else:
             status = "ok"
 
+        now = time.monotonic()
         info = {
             "status": status,
             "pool_size": self._pool_size,
             "available_instances": available,
             "active_instances": active,
-            "in_flight": self._in_flight,
+            # Active GENERATIONS (GPU-busy), not checkouts — a session
+            # pinned between turns shows in_flight 0 / checked_out 1.
+            "in_flight": self._active_generations,
+            "checked_out": self._checked_out,
             "shared_model": True,
             "hybrid_model": self._is_hybrid,
             "jit_enabled": self._jit_enabled,
+            "instances": [
+                {
+                    "age_seconds": round(now - meta.created_at, 1),
+                    "idle_seconds": round(now - meta.last_released_at, 1),
+                    "warmup_seconds": round(meta.warmup_seconds, 2),
+                    "is_primary": meta.is_primary,
+                }
+                for meta in self._instance_meta.values()
+            ],
         }
         if self._jit_enabled:
             info["jit_limit"] = self._jit_limit
@@ -1034,14 +1357,57 @@ class LlamaCppBackend(BaseBackend):
             info["static_state_bytes"] = self._static_state.llama_state_size
         return info
 
-    def tokenize(self, text: str) -> List[int]:
-        """Tokenize text using the model's tokenizer."""
+    def strip_reasoning_replay(
+        self, instance: Any, t0: int, replay_tokens: List[int]
+    ) -> bool:
+        """Truncate-and-replay reasoning strip (Factor 4): drop everything in the
+        KV from ``t0`` to the end (the turn's reasoning + raw answer), then
+        re-eval the canonical answer (``replay_tokens``) at ``t0``.
+
+        Uses only two primitives validated to behave correctly here:
+          • ``memory_seq_rm(0, t0, -1)`` — tail removal (leaves [0, t0) intact,
+            positions contiguous, pos_min unchanged).
+          • ``eval`` — re-adds the clean answer, keeping ``input_ids``/``n_tokens``
+            consistent automatically.
+
+        We deliberately avoid ``seq_add``: its large negative position shift
+        corrupted the static-prefix positions for big spans (e.g. harmony's
+        analysis channel — pos_min jumped by the shift amount). The recompute is
+        tiny (just the short answer, not history).
+
+        No-op for hybrid/recurrent models (``memory_can_shift()`` is False, e.g.
+        Qwen3.5/Qwen3-Next): their memory is a fixed recurrent state, not a
+        removable KV span, so reasoning doesn't accumulate unboundedly and
+        per-turn excision doesn't apply (and would corrupt the recurrent state).
+        """
+        ctx = instance._ctx
+        if not ctx.memory_can_shift():
+            return False
+        nt = instance.n_tokens
+        if t0 < 0 or t0 >= nt:
+            return False
+        ctx.memory_seq_rm(0, t0, -1)  # drop the tail [t0, end)
+        instance.n_tokens = t0
+        if replay_tokens:
+            instance.eval(replay_tokens)  # re-add canonical answer at t0
+        return True
+
+    def tokenize(self, text: str, special: bool = False) -> List[int]:
+        """Tokenize text using the model's tokenizer.
+
+        ``special`` parses special-token strings as canonical single tokens —
+        pass True only for trusted structural framing (see tokenize_segments).
+        """
         if self._primary_instance is not None:
-            return self._primary_instance.tokenize(text.encode("utf-8"), add_bos=False)
+            return self._primary_instance.tokenize(
+                text.encode("utf-8"), add_bos=False, special=special
+            )
 
         # Fallback: create temporary instance just for tokenization
         temp_inst = self._create_primary_instance()
-        result = temp_inst.tokenize(text.encode("utf-8"), add_bos=False)
+        result = temp_inst.tokenize(
+            text.encode("utf-8"), add_bos=False, special=special
+        )
         del temp_inst
         return result
 

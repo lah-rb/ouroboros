@@ -1,0 +1,66 @@
+# Gemma format schema — Google Gemma model family
+#
+# Gemma uses <start_of_turn>/<end_of_turn> framing with the role token
+# "model" (not "assistant"), and has NO system role — system content is
+# folded into the first user turn. Distinct from ChatML: Gemma's real
+# special tokens are <start_of_turn>/<end_of_turn>, so configuring a Gemma
+# model as family=chatml feeds it the wrong (text-spelled) framing.
+#
+# Template:
+#   <start_of_turn>user\n{system + user message}<end_of_turn>\n
+#   <start_of_turn>model\n{response}<end_of_turn>\n
+#
+# Reference: https://ai.google.dev/gemma/docs/core/prompt-structure
+
+family: gemma
+display_name: "Google Gemma"
+
+tokens:
+  msg_open: "<start_of_turn>"
+  msg_content: "\n"
+  msg_close: "<end_of_turn>"
+  gen_stop: "<end_of_turn>"
+  history_close: "<end_of_turn>"
+
+roles:
+  user: "user"
+  assistant: "model"
+
+# No system role — system content folds into the first user turn
+# (traits.fold_system_into_first_user below).
+
+thinking:
+  # Gemma-4 emits a channel reasoning preamble it produces itself:
+  #   <|channel>thought\n<channel|>{content}
+  # We do NOT inject the opener (the model config sets thinking: false), but we
+  # declare <channel|> as the content delimiter so the preamble is stripped
+  # from extracted content. NOTE: this is a minimal handling of Gemma-4's
+  # channel format — full multi-channel / tool-calling support is a follow-up.
+  style: inline_tags
+  open_tag: "<|channel>thought"
+  close_tag: "<channel|>"
+
+system_block:
+  identity: ""
+  cutoff: ""
+  reasoning_default: ""
+  channel_directive: ""
+  template: "{persona}"
+
+traits:
+  fold_system_into_first_user: true
+  supports_developer_role: false
+
+generation:
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 64
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+turn_transition:
+  needs_close: true
+  # Close the previous model turn before the next user turn. <end_of_turn>
+  # is a single special token, so the trailing newline matches Gemma's
+  # canonical "<end_of_turn>\n<start_of_turn>" boundary cleanly.
+  after_generation: "<end_of_turn>\n"

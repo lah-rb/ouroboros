@@ -1,0 +1,65 @@
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 32768
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "stepfun-step37-flash"
+  # Same lineage as 3.5: arch=step35 (supported by bundled llama.cpp b9235),
+  # ChatML framing (<|im_start|>/<|im_end|>) with always-on <think> (template
+  # hardcodes the assistant <think> opener — confirmed from GGUF metadata).
+  family: "chatml"
+  thinking: true
+  thinking_mode: medium   # reasoning effort → "Reasoning: medium" system line
+  # 198B MoE vision-language (196B LM + 1.8B ViT), ~11B active/token, 288 experts
+  # top-8, 45 blocks, 262144 native ctx. We run TEXT-ONLY — the LM split parts
+  # only; the vision projector (mmproj-step3.7-flash-f16.gguf) is intentionally
+  # NOT referenced. Split GGUF — point at part 1; llama.cpp auto-loads 2/3.
+  path: /Users/lah-rb/.lmstudio/models/stepfun-ai/Step-3.7-Flash-GGUF/Step-3.7-flash-IQ4_XS-00001-of-00003.gguf
+  n_ctx: 32768
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attention: true
+  batch_size: 512
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  # temp 0.6: Step-3.5's IQ4_XS looped on planning at temp 1.0 (StepFun's "agent"
+  # rec); 0.6 ("general" rec) fixed it. 3.7 reportedly rambles less, but 0.6 is
+  # the validated-calm starting point. top_k/repeat_penalty per ChatML/Qwen.
+  max_tokens_default: 32768
+  temperature_default: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/stepfun-step37-flash.tokens.bin"
+  token_limit: 32768
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 1
+  jit_concurrency_limit: null
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"

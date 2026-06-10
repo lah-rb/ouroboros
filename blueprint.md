@@ -1,8 +1,8 @@
 # Ouroboros Blueprint
 
-Generated: 2026-04-02T01:39:53.036818+00:00
-Source Hash: `3911447dedbc…`
-Flows: **18** | Actions: **69** | Context Keys: **69**
+Generated: 2026-04-19T17:32:39.324541+00:00
+Source Hash: `076fe9e4bf2a…`
+Flows: **15** | Actions: **55** | Context Keys: **72**
 
 ## Legend
 
@@ -52,7 +52,7 @@ Flows: **18** | Actions: **69** | Context Keys: **69**
 
 ```mermaid
 flowchart TD
-    %% mission_control v5
+    %% mission_control v9
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -64,33 +64,23 @@ flowchart TD
 
     load_state["□ load_state ⑂"]
     apply_last_result["□ apply_last_result ⑂"]
-    dispatch_retrospective[/"⟲ ∅ dispatch_retrospective"\]
     process_events["□ process_events ⑂"]
-    start_session["□ start_session ⑂"]
-    reason{{"▷ reason ⑂"}}
-    decide_flow(["∅ decide_flow ☰"])
-    select_task["□ select_task ⑂"]
-    compose_directive{{"▷ compose_directive ⑂"}}
-    resolve_target["□ resolve_target ⑂"]
-    record_and_dispatch["□ record_and_dispatch ⑂"]
-    end_session_and_dispatch["□ end_session_and_dispatch ⑂"]
-    dispatch[/"⟲ ∅ dispatch"\]
+    check_phase["□ check_phase ⑂"]
     dispatch_planning[/"⟲ ∅ dispatch_planning"\]
-    end_session_and_design["□ end_session_and_design ⑂"]
-    dispatch_design[/"⟲ ∅ dispatch_design"\]
-    dispatch_revise_plan[/"⟲ ∅ dispatch_revise_plan"\]
-    end_session_quality_checkpoint["□ end_session_quality_checkpoint ⑂"]
-    quality_checkpoint_run[["↳ quality_checkpoint_run ⑂"]]
-    end_session_quality_completion["□ end_session_quality_completion ⑂"]
-    quality_completion_run[["↳ quality_completion_run ⑂"]]
-    quality_failed_restart[/"⟲ ∅ quality_failed_restart"\]
-    end_session_deadlock["□ end_session_deadlock ⑂"]
-    check_rescue_budget["□ check_rescue_budget ⑂"]
-    rescue_research[["↳ rescue_research ⑂"]]
-    save_rescue_notes["□ save_rescue_notes ⑂"]
+    structural_sweep_next["□ structural_sweep_next ⑂"]
+    dispatch_structural_create[/"⟲ ∅ dispatch_structural_create"\]
+    dispatch_structural_fix[/"⟲ ∅ dispatch_structural_fix"\]
+    dispatch_environment_setup[/"⟲ ∅ dispatch_environment_setup"\]
+    functional_sweep_next["□ functional_sweep_next ⑂"]
+    build_fix_target_menu["□ build_fix_target_menu ⑂"]
+    resolve_fix_target(["∅ resolve_fix_target ☰"])
+    apply_fix_target["□ apply_fix_target ⑂"]
+    dispatch_functional_test[/"⟲ ∅ dispatch_functional_test"\]
+    dispatch_functional_fix[/"⟲ ∅ dispatch_functional_fix"\]
+    dispatch_quality_gate[["↳ dispatch_quality_gate ⑂"]]
+    quality_failed[/"⟲ ∅ quality_failed"\]
     completed(["◆ □ completed"])
     idle[/"⟲ □ idle"\]
-    mission_deadlocked(["◆ □ mission_deadlocked"])
     aborted(["◆ □ aborted"])
 
     style load_state stroke-width:3px,stroke:#2d5a27
@@ -99,69 +89,55 @@ flowchart TD
     load_state -->|⑂ result.mission.status == 'paused'| idle
     load_state -->|⑂ result.mission.status == 'completed'| completed
     load_state -->|⑂ always| aborted
-    apply_last_result -->|⑂ result.all_goals_complete == true| completed
-    apply_last_result -->|⑂ result.quality_gate_exhausted == true| completed
     apply_last_result -->|⑂ result.events_pending == true| process_events
     apply_last_result -->|⑂ result.needs_plan == true| dispatch_planning
-    apply_last_result -->|⑂ result.frustration_reset == true| dispatch_retrospective
-    apply_last_result -->|⑂ always| start_session
-    tc_dispatch_retrospective(("⟲ retrospective"))
-    style tc_dispatch_retrospective fill:#f0e6f6,stroke:#663399
-    dispatch_retrospective -.->|tail-call| tc_dispatch_retrospective
+    apply_last_result -->|⑂ always| check_phase
     process_events -->|⑂ result.abort_requested == true| aborted
     process_events -->|⑂ result.pause_requested == true| idle
-    process_events -->|⑂ always| start_session
-    start_session -->|⑂ result.session_started == true| reason
-    start_session -->|⑂ always| reason
-    reason -->|⑂ always| decide_flow
-    decide_flow -.->|☰ file_ops| select_task
-    decide_flow -.->|☰ diagnose_issue| select_task
-    decide_flow -.->|☰ interact| select_task
-    decide_flow -.->|☰ project_ops| select_task
-    decide_flow -.->|☰ design_and_plan| end_session_and_design
-    decide_flow -.->|☰ quality_checkpoint| end_session_quality_checkpoint
-    decide_flow -.->|☰ quality_completion| end_session_quality_completion
-    decide_flow -.->|☰ mission_deadlocked| end_session_deadlock
-    select_task -->|⑂ result.task_selected == true| resolve_target
-    select_task -->|⑂ result.infer_directive == true| compose_directive
-    select_task -->|⑂ result.no_tasks_available == true| end_session_and_design
-    select_task -->|⑂ always| end_session_and_design
-    compose_directive -->|⑂ result.tokens_generated › 0| resolve_target
-    compose_directive -->|⑂ always| end_session_and_design
-    resolve_target -->|⑂ result.target_resolved == true| record_and_dispatch
-    resolve_target -->|⑂ always| record_and_dispatch
-    record_and_dispatch -->|⑂ always| end_session_and_dispatch
-    end_session_and_dispatch -->|⑂ always| dispatch
-    tc_dispatch(("⟲ $ref:context.dispatch_config.flow"))
-    style tc_dispatch fill:#f0e6f6,stroke:#663399
-    dispatch -.->|tail-call| tc_dispatch
+    process_events -->|⑂ always| check_phase
+    check_phase -->|⑂ result.phase == 'plan'| dispatch_planning
+    check_phase -->|⑂ result.phase == 'structural'| structural_sweep_next
+    check_phase -->|⑂ result.phase == 'environment'| dispatch_environment_setup
+    check_phase -->|⑂ result.phase == 'functional'| functional_sweep_next
+    check_phase -->|⑂ result.phase == 'quality'| dispatch_quality_gate
+    check_phase -->|⑂ result.phase == 'complete'| completed
+    check_phase -->|⑂ always| dispatch_planning
     tc_dispatch_planning(("⟲ design_and_plan"))
     style tc_dispatch_planning fill:#f0e6f6,stroke:#663399
     dispatch_planning -.->|tail-call| tc_dispatch_planning
-    end_session_and_design -->|⑂ always| dispatch_design
-    tc_dispatch_design(("⟲ design_and_plan"))
-    style tc_dispatch_design fill:#f0e6f6,stroke:#663399
-    dispatch_design -.->|tail-call| tc_dispatch_design
-    tc_dispatch_revise_plan(("⟲ revise_plan"))
-    style tc_dispatch_revise_plan fill:#f0e6f6,stroke:#663399
-    dispatch_revise_plan -.->|tail-call| tc_dispatch_revise_plan
-    end_session_quality_checkpoint -->|⑂ context.mission.quality_gate_blocked == true| start_session
-    end_session_quality_checkpoint -->|⑂ always| quality_checkpoint_run
-    quality_checkpoint_run -->|⑂ result.status == 'success'| start_session
-    quality_checkpoint_run -->|⑂ always| quality_failed_restart
-    end_session_quality_completion -->|⑂ context.mission.quality_gate_blocked == true| start_session
-    end_session_quality_completion -->|⑂ always| quality_completion_run
-    quality_completion_run -->|⑂ result.status == 'success'| completed
-    quality_completion_run -->|⑂ always| quality_failed_restart
-    tc_quality_failed_restart(("⟲ mission_control"))
-    style tc_quality_failed_restart fill:#f0e6f6,stroke:#663399
-    quality_failed_restart -.->|tail-call| tc_quality_failed_restart
-    end_session_deadlock -->|⑂ always| check_rescue_budget
-    check_rescue_budget -->|⑂ result.retries_remaining == true| rescue_research
-    check_rescue_budget -->|⑂ always| mission_deadlocked
-    rescue_research -->|⑂ result.status == 'success'| save_rescue_notes
-    rescue_research -->|⑂ always| mission_deadlocked
-    save_rescue_notes -->|⑂ always| dispatch_revise_plan
+    structural_sweep_next -->|⑂ result.sweep_complete == true| check_phase
+    structural_sweep_next -->|⑂ result.needs_create == true| dispatch_structural_create
+    structural_sweep_next -->|⑂ result.needs_fix == true| dispatch_structural_fix
+    structural_sweep_next -->|⑂ always| check_phase
+    tc_dispatch_structural_create(("⟲ file_ops"))
+    style tc_dispatch_structural_create fill:#f0e6f6,stroke:#663399
+    dispatch_structural_create -.->|tail-call| tc_dispatch_structural_create
+    tc_dispatch_structural_fix(("⟲ file_ops"))
+    style tc_dispatch_structural_fix fill:#f0e6f6,stroke:#663399
+    dispatch_structural_fix -.->|tail-call| tc_dispatch_structural_fix
+    tc_dispatch_environment_setup(("⟲ project_ops"))
+    style tc_dispatch_environment_setup fill:#f0e6f6,stroke:#663399
+    dispatch_environment_setup -.->|tail-call| tc_dispatch_environment_setup
+    functional_sweep_next -->|⑂ result.sweep_complete == true| check_phase
+    functional_sweep_next -->|⑂ result.needs_test == true| dispatch_functional_test
+    functional_sweep_next -->|⑂ result.needs_fix == true| dispatch_functional_fix
+    functional_sweep_next -->|⑂ result.needs_target_resolution == true| build_fix_target_menu
+    functional_sweep_next -->|⑂ always| check_phase
+    build_fix_target_menu -->|⑂ result.menu_built == true| resolve_fix_target
+    build_fix_target_menu -->|⑂ always| check_phase
+    apply_fix_target -->|⑂ result.target_applied == true| dispatch_functional_fix
+    apply_fix_target -->|⑂ always| check_phase
+    tc_dispatch_functional_test(("⟲ interact"))
+    style tc_dispatch_functional_test fill:#f0e6f6,stroke:#663399
+    dispatch_functional_test -.->|tail-call| tc_dispatch_functional_test
+    tc_dispatch_functional_fix(("⟲ $ref:context.dispatch_config.flow"))
+    style tc_dispatch_functional_fix fill:#f0e6f6,stroke:#663399
+    dispatch_functional_fix -.->|tail-call| tc_dispatch_functional_fix
+    dispatch_quality_gate -->|⑂ result.status == 'success'| completed
+    dispatch_quality_gate -->|⑂ always| quality_failed
+    tc_quality_failed(("⟲ mission_control"))
+    style tc_quality_failed fill:#f0e6f6,stroke:#663399
+    quality_failed -.->|tail-call| tc_quality_failed
     tc_idle(("⟲ mission_control"))
     style tc_idle fill:#f0e6f6,stroke:#663399
     idle -.->|tail-call| tc_idle
@@ -184,31 +160,25 @@ flowchart TD
     style L1 fill:#f5f5f5,stroke:none,color:#555
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
-    capture_learnings["capture_learnings\n5 steps ▷1"]
-    create["create\n7 steps ▷2"]
-    design_and_plan["design_and_plan\n17 steps ▷4"]
-    diagnose_issue["diagnose_issue\n9 steps ▷2"]
-    file_ops["file_ops\n18 steps"]
-    interact["interact\n7 steps ▷2"]
-    mission_control["mission_control\n30 steps ▷2"]
+    create["create\n6 steps ▷2"]
+    design_and_plan["design_and_plan\n13 steps ▷2"]
+    diagnose_issue["diagnose_issue\n13 steps"]
+    file_ops["file_ops\n21 steps"]
+    interact["interact\n15 steps ▷2"]
+    mission_control["mission_control\n20 steps"]
     patch["patch\n10 steps"]
-    prepare_context["prepare_context\n8 steps"]
-    project_ops["project_ops\n7 steps ▷1"]
-    quality_gate["quality_gate\n15 steps ▷3"]
+    prepare_context["prepare_context\n4 steps"]
+    project_ops["project_ops\n11 steps ▷1"]
+    quality_gate["quality_gate\n17 steps ▷4"]
     research["research\n6 steps ▷2"]
-    retrospective["retrospective\n5 steps ▷1"]
-    revise_plan["revise_plan\n6 steps ▷1"]
-    rewrite["rewrite\n6 steps ▷1"]
+    rewrite["rewrite\n5 steps ▷1"]
     run_commands["run_commands\n4 steps"]
-    run_session["run_session\n7 steps ▷3"]
+    run_session["run_session\n6 steps ▷2"]
     set_env["set_env\n5 steps ▷1"]
 
-    create ==>|↳ gather_context| prepare_context
-    design_and_plan -.->|⟲ dispatch_revise| revise_plan
     design_and_plan -.->|⟲ complete| mission_control
     design_and_plan ==>|↳ domain_research| research
     diagnose_issue -.->|⟲ done| mission_control
-    diagnose_issue ==>|↳ gather_context| prepare_context
     file_ops -.->|⟲ report_success| mission_control
     file_ops ==>|↳ run_create| create
     file_ops ==>|↳ run_patch| patch
@@ -216,22 +186,21 @@ flowchart TD
     file_ops ==>|↳ run_set_env| set_env
     file_ops ==>|↳ escalate_diagnose| diagnose_issue
     interact -.->|⟲ report_success| mission_control
+    interact ==>|↳ run_deterministic| run_commands
     interact ==>|↳ gather_context| prepare_context
     interact ==>|↳ run_session| run_session
-    mission_control -.->|⟲ dispatch_retrospective| retrospective
     mission_control -.->|⟲ dispatch_planning| design_and_plan
-    mission_control -.->|⟲ dispatch_revise_plan| revise_plan
-    mission_control -.->|⟲ quality_failed_restart| mission_control
-    mission_control ==>|↳ quality_checkpoint_run| quality_gate
-    mission_control ==>|↳ rescue_research| research
+    mission_control -.->|⟲ dispatch_structural_create| file_ops
+    mission_control -.->|⟲ dispatch_environment_setup| project_ops
+    mission_control -.->|⟲ dispatch_functional_test| interact
+    mission_control -.->|⟲ quality_failed| mission_control
+    mission_control ==>|↳ dispatch_quality_gate| quality_gate
     project_ops -.->|⟲ report_success| mission_control
     project_ops ==>|↳ gather_context| prepare_context
     project_ops ==>|↳ detect_env| set_env
+    project_ops ==>|↳ run_installs| run_commands
     quality_gate ==>|↳ run_startup_check| run_commands
     quality_gate ==>|↳ run_ux_verification| run_session
-    retrospective -.->|⟲ complete| mission_control
-    retrospective ==>|↳ gather_context| prepare_context
-    revise_plan -.->|⟲ skip| mission_control
     rewrite ==>|↳ gather_context| prepare_context
 
     style mission_control fill:#e8f0e6,stroke:#2d5a27,stroke-width:3px
@@ -241,7 +210,7 @@ flowchart TD
 ## System Context
 
 **Ouroboros** is a flow-driven autonomous coding agent backed by LLMVP local inference.
-It operates as a pure GraphQL client — all inference flows through `localhost:8000/graphql`.
+It operates as a pure GraphQL client — all inference flows through `localhost:8008/graphql`.
 
 ### Actors
 - **Shop Director (User)** — Sets missions, checks in periodically via CLI.
@@ -257,11 +226,11 @@ It operates as a pure GraphQL client — all inference flows through `localhost:
 ### Flow Inventory
 | Category | Count |
 |----------|-------|
-| Orchestrator flows | 3 |
+| Orchestrator flows | 2 |
 | Task flows | 5 |
 | Sub-flows | 8 |
-| Other | 2 |
-| **Total** | **18** |
+| Other | 0 |
+| **Total** | **15** |
 
 ## Mission Lifecycle
 
@@ -270,35 +239,25 @@ Child task flows tail-call back to `mission_control` on completion, creating a c
 
 ### mission_control Steps
 
-- □ **load_state** ⑂ — Load mission state, event queue, and frustration map
-- □ **apply_last_result** ⑂ — Apply the returning flow's structured result to mission state
-- ∅ **dispatch_retrospective**  — Dispatch retrospective — task succeeded after frustration ⟲ → `retrospective`
+- □ **load_state** ⑂ — Load mission state and event queue
+- □ **apply_last_result** ⑂ — Attach returning flow's directive report to goal
 - □ **process_events** ⑂ — Process user messages, abort/pause signals
-- □ **start_session** ⑂ — Open memoryful inference session for the director cycle
-- ▷ **reason** ⑂ — Analyze mission state at goal level — reason about next action
-- ∅ **decide_flow** ☰ — Select the best action type based on analysis
-- □ **select_task** ⑂ — Select task and assemble flow_directive from goal + task
-- ▷ **compose_directive** ⑂ — Director composes a novel flow_directive via inference
-- □ **resolve_target** ⑂ — Determine target file for the dispatch
-- □ **record_and_dispatch** ⑂ — Record dispatch decision and end session
-- □ **end_session_and_dispatch** ⑂ — Close director session, then dispatch task flow
-- ∅ **dispatch**  — Dispatch to selected task flow with flow_directive ⟲ → `$ref:context.dispatch_config.flow`
-- ∅ **dispatch_planning**  — No plan exists — dispatch to design_and_plan ⟲ → `design_and_plan`
-- □ **end_session_and_design** ⑂ — Close director session before design_and_plan dispatch
-- ∅ **dispatch_design**  — Director requested architecture revision ⟲ → `design_and_plan`
-- ∅ **dispatch_revise_plan**  — Dispatch plan revision ⟲ → `revise_plan`
-- □ **end_session_quality_checkpoint** ⑂ — Close director session, then run quality checkpoint
-- ↳ **quality_checkpoint_run** ⑂ — Run quality inspection on current state
-- □ **end_session_quality_completion** ⑂ — Close director session, then run final quality gate
-- ↳ **quality_completion_run** ⑂ — Final quality gate for mission completion
-- ∅ **quality_failed_restart**  — Quality gate failed — restart with structured results ⟲ → `mission_control`
-- □ **end_session_deadlock** ⑂ — Close session before deadlock rescue attempt
-- □ **check_rescue_budget** ⑂ — Check if rescue attempt is available
-- ↳ **rescue_research** ⑂ — Diagnostic search — last attempt to find a way forward
-- □ **save_rescue_notes** ⑂ — save_rescue_notes
+- □ **check_phase** ⑂ — Determine which pipeline phase to enter based on goal statuses
+- ∅ **dispatch_planning**  — No architecture or goals — dispatch design_and_plan ⟲ → `design_and_plan`
+- □ **structural_sweep_next** ⑂ — Find next incomplete structural goal in creation order
+- ∅ **dispatch_structural_create**  — Create next file in dependency order ⟲ → `file_ops`
+- ∅ **dispatch_structural_fix**  — Fix a structural file that failed its gate ⟲ → `file_ops`
+- ∅ **dispatch_environment_setup**  — Install dependencies and verify tooling ⟲ → `project_ops`
+- □ **functional_sweep_next** ⑂ — Find next incomplete functional goal
+- □ **build_fix_target_menu** ⑂ — Build file menu for LLM fix target selection
+- ∅ **resolve_fix_target** ☰ — LLM selects which file to fix based on diagnosis
+- □ **apply_fix_target** ⑂ — Apply LLM-selected fix target to dispatch config
+- ∅ **dispatch_functional_test**  — Test a functional capability via interact ⟲ → `interact`
+- ∅ **dispatch_functional_fix**  — Fix a file identified by failed functional test ⟲ → `$ref:context.dispatch_config.flow`
+- ↳ **dispatch_quality_gate** ⑂ — Final quality gate for mission completion
+- ∅ **quality_failed**  — Quality gate failed — re-enter pipeline to find regressed goals ⟲ → `mission_control`
 - □ **completed**  — Mark mission complete ◆ `completed`
 - □ **idle**  — Wait for events ⟲ → `mission_control`
-- □ **mission_deadlocked**  — Mission deadlocked — rescue attempt exhausted ◆ `deadlocked`
 - □ **aborted**  — Mission aborted ◆ `aborted`
 
 ### Tail-Call Targets (flows that return to mission_control)
@@ -313,48 +272,40 @@ Child task flows tail-call back to `mission_control` on completion, creating a c
 - `interact` → `mission_control` (from step `report_success`)
 - `interact` → `mission_control` (from step `report_with_issues`)
 - `interact` → `mission_control` (from step `failed`)
-- `mission_control` → `mission_control` (from step `quality_failed_restart`)
+- `mission_control` → `mission_control` (from step `quality_failed`)
 - `mission_control` → `mission_control` (from step `idle`)
 - `project_ops` → `mission_control` (from step `report_success`)
 - `project_ops` → `mission_control` (from step `failed`)
-- `retrospective` → `mission_control` (from step `complete`)
-- `retrospective` → `mission_control` (from step `failed`)
-- `revise_plan` → `mission_control` (from step `skip`)
-- `revise_plan` → `mission_control` (from step `complete`)
 
 ## Flow Catalog
 
 ### Orchestrator Flows
 
-#### design_and_plan (v4)
-*Design or reconcile project architecture, derive project goals,
-then generate or revise the task plan. Auto-detects whether full
-architecture reconciliation is needed (drift detected) or can be
-skipped (no drift — straight to plan revision).*
+#### design_and_plan (v5)
+*Design or reconcile project architecture, then derive project goals.
+Goals are the plan — no separate task list. Auto-detects whether
+full architecture design is needed (no architecture), reconciliation
+is needed (drift detected), or goals can be derived directly.*
 
-**Tier:** `mission_objective` · **Reads:** `mission.objective`, `mission.architecture`, `mission.plan`, `mission.goals` · **Returns:** `architecture_updated`, `goals_derived`, `plan_task_count`
+**Tier:** `mission_objective` · **Returns:** `architecture_updated`, `goals_derived`
 **Peers:** `file_ops`, `project_ops`, `interact`
-**Inputs:** ○ mission_id · ◑ existing_progress
+**Inputs:** ○ mission_id
 **Terminal:** ◆ failed
-**Publishes:** ● mission · ● events · ● frustration · ● project_manifest · ● repo_map_formatted · ● inference_response · ● architecture · ● research_summary · ● goals
+**Publishes:** ● mission · ● project_manifest · ● repo_map_formatted · ● inference_response · ● architecture · ● research_summary · ● goals
 **Sub-flows:** ↳ research
-**Tail-calls:** ⟲ mission_control · ⟲ revise_plan
-**Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · →𓇴 read events · 𓉗 file read · 𓇴→ save mission
-**Stats:** 17 steps · ▷ 4 inference · 14 ⑂ rule
+**Tail-calls:** ⟲ mission_control
+**Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · push_note · →𓇴 read events · 𓉗 file read · 𓇴→ save mission
+**Stats:** 13 steps · ▷ 2 inference · 11 ⑂ rule
 
 **Prompts:**
 - **design_initial** ▷ (t*0.2): Design project architecture from scratch
   Injects: {← context.mission_objective}, {← context.repo_map_formatted}, {← context.project_file_list}, {← context.existing_architecture}
 - **design_reconcile** ▷ (t*0.2): Reconcile architecture with drifted codebase
   Injects: {← context.mission_objective}, {← context.repo_map_formatted}, {← context.project_file_list}, {← context.existing_architecture}
-- **generate_plan** ▷ (t*0.2): Generate task plan aligned to architecture blueprint
-  Injects: {← context.mission_objective}, {← context.working_directory}, {← context.architecture_listing}, {← context.project_file_list}
-- **generate_plan_fallback** ▷ (t*0.2): Generate plan without structured architecture (parse failed)
-  Injects: {← context.mission_objective}, {← context.working_directory}, {← context.project_file_list}
 
 ```mermaid
 flowchart TD
-    %% design_and_plan v4
+    %% design_and_plan v5
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -371,13 +322,9 @@ flowchart TD
     design_initial{{"▷ design_initial ⑂"}}
     design_reconcile{{"▷ design_reconcile ⑂"}}
     parse_architecture["□ parse_architecture ⑂"]
-    parse_architecture_then_revise["□ parse_architecture_then_revise ⑂"]
-    dispatch_revise[/"⟲ ∅ dispatch_revise"\]
+    parse_architecture_reconcile["□ parse_architecture_reconcile ⑂"]
     domain_research[["↳ domain_research ⑂"]]
     save_research["□ save_research ⑂"]
-    generate_plan{{"▷ generate_plan ⑂"}}
-    generate_plan_fallback{{"▷ generate_plan_fallback ⑂"}}
-    parse_plan["□ parse_plan ⑂"]
     derive_goals["□ derive_goals ⑂"]
     complete[/"⟲ ∅ complete"\]
     failed(["◆ □ failed"])
@@ -390,28 +337,18 @@ flowchart TD
     build_repomap -->|⑂ always| check_drift
     check_drift -->|⑂ result.has_architecture == false| design_initial
     check_drift -->|⑂ result.drift_detected == true| design_reconcile
-    check_drift -->|⑂ result.has_tasks == true| dispatch_revise
+    check_drift -->|⑂ result.has_tasks == true| derive_goals
     check_drift -->|⑂ always| domain_research
     design_initial -->|⑂ result.tokens_generated › 0| parse_architecture
     design_initial -->|⑂ always| failed
-    design_reconcile -->|⑂ result.tokens_generated › 0| parse_architecture_then_revise
+    design_reconcile -->|⑂ result.tokens_generated › 0| parse_architecture_reconcile
     design_reconcile -->|⑂ always| failed
     parse_architecture -->|⑂ result.architecture_parsed == true| domain_research
-    parse_architecture -->|⑂ always| generate_plan_fallback
-    parse_architecture_then_revise -->|⑂ result.architecture_parsed == true| dispatch_revise
-    parse_architecture_then_revise -->|⑂ always| dispatch_revise
-    tc_dispatch_revise(("⟲ revise_plan"))
-    style tc_dispatch_revise fill:#f0e6f6,stroke:#663399
-    dispatch_revise -.->|tail-call| tc_dispatch_revise
+    parse_architecture -->|⑂ always| derive_goals
+    parse_architecture_reconcile -->|⑂ always| derive_goals
     domain_research -->|⑂ result.status == 'success'| save_research
-    domain_research -->|⑂ always| generate_plan
-    save_research -->|⑂ always| generate_plan
-    generate_plan -->|⑂ result.tokens_generated › 0| parse_plan
-    generate_plan -->|⑂ always| failed
-    generate_plan_fallback -->|⑂ result.tokens_generated › 0| parse_plan
-    generate_plan_fallback -->|⑂ always| failed
-    parse_plan -->|⑂ result.plan_created == true| derive_goals
-    parse_plan -->|⑂ always| failed
+    domain_research -->|⑂ always| derive_goals
+    save_research -->|⑂ always| derive_goals
     derive_goals -->|⑂ result.goals_derived == true| complete
     derive_goals -->|⑂ always| complete
     tc_complete(("⟲ mission_control"))
@@ -421,31 +358,23 @@ flowchart TD
     style failed fill:#ffcdd2,stroke:#b71c1c
 ```
 
-#### mission_control (v5)
-*Core director flow. Orchestrates the entire agent lifecycle:
-load state → integrate last result → reason about next action →
-select task → dispatch with flow_directive. Operates at the
-project_goal level — reasons about which capability to advance.*
+#### mission_control (v9)
+*Deterministic pipeline. Computes the current phase from goal
+statuses and dispatches the appropriate work without LLM routing.
+Phases: plan → structural sweep → environment → functional sweep → quality gate.*
 
-**Tier:** `project_goal` · **Reads:** `mission.objective`, `mission.goals`, `mission.plan`, `mission.architecture`, `mission.notes`, `mission.dispatch_history` · **Returns:** `final_status`
-**Peers:** `file_ops`, `diagnose_issue`, `interact`, `project_ops`, `design_and_plan`, `quality_gate`
-**Inputs:** ○ mission_id · ◑ last_result · ◑ last_status · ◑ last_task_id
-**Terminal:** ◆ completed · ◆ deadlocked · ◆ aborted
-**Publishes:** ● mission · ● events · ● frustration · ● session_id · ● director_analysis · ● dispatch_flow_type · ● dispatch_config · ● quality_results · ● rescue_count · ● research_summary
-**Sub-flows:** ↳ quality_gate · ↳ quality_gate · ↳ research
-**Tail-calls:** ⟲ $ref:context.dispatch_config.flow · ⟲ design_and_plan · ⟲ mission_control · ⟲ retrospective · ⟲ revise_plan
-**Effects:** clear_events · end_inference_session · file_exists · ⟶ inference · 𓉗 list dir · →𓇴 load mission · →𓇴 read events · 𓇴→ save mission · session_inference · start_inference_session
-**Stats:** 30 steps · ▷ 2-3 inference · 19 ⑂ rule · 1 ☰ menu
-
-**Prompts:**
-- **reason** ▷ (t*0.6): Analyze mission state at goal level — reason about next action
-  Injects: {← context.goals_listing}, {← context.plan_listing}, {← context.architecture_summary}, {← context.last_status}, {← context.last_result} (+5 more)
-- **compose_directive** ▷ (t*0.6): Director composes a novel flow_directive via inference
-  Injects: {← context.director_analysis}, {← context.plan_listing}
+**Tier:** `project_goal` · **Returns:** `final_status`
+**Inputs:** ○ mission_id · ◑ last_result · ◑ last_status · ◑ last_goal_id
+**Terminal:** ◆ completed · ◆ aborted
+**Publishes:** ● mission · ● events · ● dispatch_config · ● fix_target_options · ● diagnosis_context · ● selected_fix_target · ● quality_results
+**Sub-flows:** ↳ quality_gate
+**Tail-calls:** ⟲ $ref:context.dispatch_config.flow · ⟲ design_and_plan · ⟲ file_ops · ⟲ interact · ⟲ mission_control · ⟲ project_ops
+**Effects:** clear_events · →𓇴 load mission · →𓇴 read events · 𓇴→ save mission
+**Stats:** 20 steps · 9 ⑂ rule · 1 ☰ menu
 
 ```mermaid
 flowchart TD
-    %% mission_control v5
+    %% mission_control v9
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -457,33 +386,23 @@ flowchart TD
 
     load_state["□ load_state ⑂"]
     apply_last_result["□ apply_last_result ⑂"]
-    dispatch_retrospective[/"⟲ ∅ dispatch_retrospective"\]
     process_events["□ process_events ⑂"]
-    start_session["□ start_session ⑂"]
-    reason{{"▷ reason ⑂"}}
-    decide_flow(["∅ decide_flow ☰"])
-    select_task["□ select_task ⑂"]
-    compose_directive{{"▷ compose_directive ⑂"}}
-    resolve_target["□ resolve_target ⑂"]
-    record_and_dispatch["□ record_and_dispatch ⑂"]
-    end_session_and_dispatch["□ end_session_and_dispatch ⑂"]
-    dispatch[/"⟲ ∅ dispatch"\]
+    check_phase["□ check_phase ⑂"]
     dispatch_planning[/"⟲ ∅ dispatch_planning"\]
-    end_session_and_design["□ end_session_and_design ⑂"]
-    dispatch_design[/"⟲ ∅ dispatch_design"\]
-    dispatch_revise_plan[/"⟲ ∅ dispatch_revise_plan"\]
-    end_session_quality_checkpoint["□ end_session_quality_checkpoint ⑂"]
-    quality_checkpoint_run[["↳ quality_checkpoint_run ⑂"]]
-    end_session_quality_completion["□ end_session_quality_completion ⑂"]
-    quality_completion_run[["↳ quality_completion_run ⑂"]]
-    quality_failed_restart[/"⟲ ∅ quality_failed_restart"\]
-    end_session_deadlock["□ end_session_deadlock ⑂"]
-    check_rescue_budget["□ check_rescue_budget ⑂"]
-    rescue_research[["↳ rescue_research ⑂"]]
-    save_rescue_notes["□ save_rescue_notes ⑂"]
+    structural_sweep_next["□ structural_sweep_next ⑂"]
+    dispatch_structural_create[/"⟲ ∅ dispatch_structural_create"\]
+    dispatch_structural_fix[/"⟲ ∅ dispatch_structural_fix"\]
+    dispatch_environment_setup[/"⟲ ∅ dispatch_environment_setup"\]
+    functional_sweep_next["□ functional_sweep_next ⑂"]
+    build_fix_target_menu["□ build_fix_target_menu ⑂"]
+    resolve_fix_target(["∅ resolve_fix_target ☰"])
+    apply_fix_target["□ apply_fix_target ⑂"]
+    dispatch_functional_test[/"⟲ ∅ dispatch_functional_test"\]
+    dispatch_functional_fix[/"⟲ ∅ dispatch_functional_fix"\]
+    dispatch_quality_gate[["↳ dispatch_quality_gate ⑂"]]
+    quality_failed[/"⟲ ∅ quality_failed"\]
     completed(["◆ □ completed"])
     idle[/"⟲ □ idle"\]
-    mission_deadlocked(["◆ □ mission_deadlocked"])
     aborted(["◆ □ aborted"])
 
     style load_state stroke-width:3px,stroke:#2d5a27
@@ -492,69 +411,55 @@ flowchart TD
     load_state -->|⑂ result.mission.status == 'paused'| idle
     load_state -->|⑂ result.mission.status == 'completed'| completed
     load_state -->|⑂ always| aborted
-    apply_last_result -->|⑂ result.all_goals_complete == true| completed
-    apply_last_result -->|⑂ result.quality_gate_exhausted == true| completed
     apply_last_result -->|⑂ result.events_pending == true| process_events
     apply_last_result -->|⑂ result.needs_plan == true| dispatch_planning
-    apply_last_result -->|⑂ result.frustration_reset == true| dispatch_retrospective
-    apply_last_result -->|⑂ always| start_session
-    tc_dispatch_retrospective(("⟲ retrospective"))
-    style tc_dispatch_retrospective fill:#f0e6f6,stroke:#663399
-    dispatch_retrospective -.->|tail-call| tc_dispatch_retrospective
+    apply_last_result -->|⑂ always| check_phase
     process_events -->|⑂ result.abort_requested == true| aborted
     process_events -->|⑂ result.pause_requested == true| idle
-    process_events -->|⑂ always| start_session
-    start_session -->|⑂ result.session_started == true| reason
-    start_session -->|⑂ always| reason
-    reason -->|⑂ always| decide_flow
-    decide_flow -.->|☰ file_ops| select_task
-    decide_flow -.->|☰ diagnose_issue| select_task
-    decide_flow -.->|☰ interact| select_task
-    decide_flow -.->|☰ project_ops| select_task
-    decide_flow -.->|☰ design_and_plan| end_session_and_design
-    decide_flow -.->|☰ quality_checkpoint| end_session_quality_checkpoint
-    decide_flow -.->|☰ quality_completion| end_session_quality_completion
-    decide_flow -.->|☰ mission_deadlocked| end_session_deadlock
-    select_task -->|⑂ result.task_selected == true| resolve_target
-    select_task -->|⑂ result.infer_directive == true| compose_directive
-    select_task -->|⑂ result.no_tasks_available == true| end_session_and_design
-    select_task -->|⑂ always| end_session_and_design
-    compose_directive -->|⑂ result.tokens_generated › 0| resolve_target
-    compose_directive -->|⑂ always| end_session_and_design
-    resolve_target -->|⑂ result.target_resolved == true| record_and_dispatch
-    resolve_target -->|⑂ always| record_and_dispatch
-    record_and_dispatch -->|⑂ always| end_session_and_dispatch
-    end_session_and_dispatch -->|⑂ always| dispatch
-    tc_dispatch(("⟲ $ref:context.dispatch_config.flow"))
-    style tc_dispatch fill:#f0e6f6,stroke:#663399
-    dispatch -.->|tail-call| tc_dispatch
+    process_events -->|⑂ always| check_phase
+    check_phase -->|⑂ result.phase == 'plan'| dispatch_planning
+    check_phase -->|⑂ result.phase == 'structural'| structural_sweep_next
+    check_phase -->|⑂ result.phase == 'environment'| dispatch_environment_setup
+    check_phase -->|⑂ result.phase == 'functional'| functional_sweep_next
+    check_phase -->|⑂ result.phase == 'quality'| dispatch_quality_gate
+    check_phase -->|⑂ result.phase == 'complete'| completed
+    check_phase -->|⑂ always| dispatch_planning
     tc_dispatch_planning(("⟲ design_and_plan"))
     style tc_dispatch_planning fill:#f0e6f6,stroke:#663399
     dispatch_planning -.->|tail-call| tc_dispatch_planning
-    end_session_and_design -->|⑂ always| dispatch_design
-    tc_dispatch_design(("⟲ design_and_plan"))
-    style tc_dispatch_design fill:#f0e6f6,stroke:#663399
-    dispatch_design -.->|tail-call| tc_dispatch_design
-    tc_dispatch_revise_plan(("⟲ revise_plan"))
-    style tc_dispatch_revise_plan fill:#f0e6f6,stroke:#663399
-    dispatch_revise_plan -.->|tail-call| tc_dispatch_revise_plan
-    end_session_quality_checkpoint -->|⑂ context.mission.quality_gate_blocked == true| start_session
-    end_session_quality_checkpoint -->|⑂ always| quality_checkpoint_run
-    quality_checkpoint_run -->|⑂ result.status == 'success'| start_session
-    quality_checkpoint_run -->|⑂ always| quality_failed_restart
-    end_session_quality_completion -->|⑂ context.mission.quality_gate_blocked == true| start_session
-    end_session_quality_completion -->|⑂ always| quality_completion_run
-    quality_completion_run -->|⑂ result.status == 'success'| completed
-    quality_completion_run -->|⑂ always| quality_failed_restart
-    tc_quality_failed_restart(("⟲ mission_control"))
-    style tc_quality_failed_restart fill:#f0e6f6,stroke:#663399
-    quality_failed_restart -.->|tail-call| tc_quality_failed_restart
-    end_session_deadlock -->|⑂ always| check_rescue_budget
-    check_rescue_budget -->|⑂ result.retries_remaining == true| rescue_research
-    check_rescue_budget -->|⑂ always| mission_deadlocked
-    rescue_research -->|⑂ result.status == 'success'| save_rescue_notes
-    rescue_research -->|⑂ always| mission_deadlocked
-    save_rescue_notes -->|⑂ always| dispatch_revise_plan
+    structural_sweep_next -->|⑂ result.sweep_complete == true| check_phase
+    structural_sweep_next -->|⑂ result.needs_create == true| dispatch_structural_create
+    structural_sweep_next -->|⑂ result.needs_fix == true| dispatch_structural_fix
+    structural_sweep_next -->|⑂ always| check_phase
+    tc_dispatch_structural_create(("⟲ file_ops"))
+    style tc_dispatch_structural_create fill:#f0e6f6,stroke:#663399
+    dispatch_structural_create -.->|tail-call| tc_dispatch_structural_create
+    tc_dispatch_structural_fix(("⟲ file_ops"))
+    style tc_dispatch_structural_fix fill:#f0e6f6,stroke:#663399
+    dispatch_structural_fix -.->|tail-call| tc_dispatch_structural_fix
+    tc_dispatch_environment_setup(("⟲ project_ops"))
+    style tc_dispatch_environment_setup fill:#f0e6f6,stroke:#663399
+    dispatch_environment_setup -.->|tail-call| tc_dispatch_environment_setup
+    functional_sweep_next -->|⑂ result.sweep_complete == true| check_phase
+    functional_sweep_next -->|⑂ result.needs_test == true| dispatch_functional_test
+    functional_sweep_next -->|⑂ result.needs_fix == true| dispatch_functional_fix
+    functional_sweep_next -->|⑂ result.needs_target_resolution == true| build_fix_target_menu
+    functional_sweep_next -->|⑂ always| check_phase
+    build_fix_target_menu -->|⑂ result.menu_built == true| resolve_fix_target
+    build_fix_target_menu -->|⑂ always| check_phase
+    apply_fix_target -->|⑂ result.target_applied == true| dispatch_functional_fix
+    apply_fix_target -->|⑂ always| check_phase
+    tc_dispatch_functional_test(("⟲ interact"))
+    style tc_dispatch_functional_test fill:#f0e6f6,stroke:#663399
+    dispatch_functional_test -.->|tail-call| tc_dispatch_functional_test
+    tc_dispatch_functional_fix(("⟲ $ref:context.dispatch_config.flow"))
+    style tc_dispatch_functional_fix fill:#f0e6f6,stroke:#663399
+    dispatch_functional_fix -.->|tail-call| tc_dispatch_functional_fix
+    dispatch_quality_gate -->|⑂ result.status == 'success'| completed
+    dispatch_quality_gate -->|⑂ always| quality_failed
+    tc_quality_failed(("⟲ mission_control"))
+    style tc_quality_failed fill:#f0e6f6,stroke:#663399
+    quality_failed -.->|tail-call| tc_quality_failed
     tc_idle(("⟲ mission_control"))
     style tc_idle fill:#f0e6f6,stroke:#663399
     idle -.->|tail-call| tc_idle
@@ -563,85 +468,27 @@ flowchart TD
     style aborted fill:#ffcdd2,stroke:#b71c1c
 ```
 
-#### revise_plan (v3)
-*Revise the mission plan based on new observations.
-Can add tasks, reorder priorities, or mark tasks obsoleted.
-Reasons at the goal level — which tasks serve which goals.*
-
-**Tier:** `project_goal` · **Reads:** `mission.objective`, `mission.plan`, `mission.goals`, `mission.architecture` · **Returns:** `revision_applied`, `tasks_added`, `tasks_reordered`, `tasks_removed`
-**Peers:** `file_ops`, `project_ops`, `interact`
-**Inputs:** ○ mission_id · ○ observation · ◑ discovered_requirement · ◑ affected_task_id
-**Publishes:** ● repo_map_formatted · ● related_files · ● inference_response · ● mission · ● revision_applied · ● revision_stats
-**Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · →𓇴 read events · 𓉗 file read · 𓇴→ save mission
-**Stats:** 6 steps · ▷ 1 inference · 4 ⑂ rule
-
-**Prompts:**
-- **evaluate_revision** ▷ (t*0.3): Determine what plan changes are needed
-  Injects: {← context.plan_listing}, {← context.repo_map_formatted}, {← context.goals_listing}, {← input.observation}, {← input.discovered_requirement}
-
-```mermaid
-flowchart TD
-    %% revise_plan v3
-
-    subgraph Legend[" "]
-        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
-        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
-    end
-    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
-    style L1 fill:#f5f5f5,stroke:none,color:#555
-    style L2 fill:#f5f5f5,stroke:none,color:#555
-
-    load_current_plan["□ load_current_plan ⑂"]
-    scan_workspace["□ scan_workspace ⑂"]
-    evaluate_revision{{"▷ evaluate_revision ⑂"}}
-    apply_revision["□ apply_revision ⑂"]
-    skip[/"⟲ □ skip"\]
-    complete[/"⟲ ∅ complete"\]
-
-    style load_current_plan stroke-width:3px,stroke:#2d5a27
-
-    load_current_plan -->|⑂ result.mission.status == 'active'| scan_workspace
-    load_current_plan -->|⑂ always| skip
-    scan_workspace -->|⑂ always| evaluate_revision
-    evaluate_revision -->|⑂ result.tokens_generated › 0| apply_revision
-    evaluate_revision -->|⑂ always| skip
-    apply_revision -->|⑂ result.revision_applied == true| complete
-    apply_revision -->|⑂ always| skip
-    tc_skip(("⟲ mission_control"))
-    style tc_skip fill:#f0e6f6,stroke:#663399
-    skip -.->|tail-call| tc_skip
-    tc_complete(("⟲ mission_control"))
-    style tc_complete fill:#f0e6f6,stroke:#663399
-    complete -.->|tail-call| tc_complete
-
-```
-
 ### Task Flows
 
-#### diagnose_issue (v4)
-*Deep issue diagnosis. Traces the error path, generates fix
-hypotheses, and creates a targeted fix task. Does not modify
-files — produces understanding and follow-up work.*
+#### diagnose_issue (v9)
+*Guided ReAct investigation. Opens a memoryful session, seeds it
+with error context, then guides the model through: (1) file
+selection from architecture modules, (2) symbol selection with
+automatic cross-file tracing, (3) optional command execution.
+Model decisions are constrained menus; evidence gathering is
+deterministic. Does not modify files.*
 
-**Tier:** `flow_directive` · **Returns:** `root_cause`, `fix_task_created`, `target_file`
-**Peers:** `file_ops`
-**Inputs:** ○ mission_id · ○ task_id · ○ flow_directive · ◑ target_file_path · ◑ error_description · ◑ error_output · ◑ working_directory · ◑ relevant_notes
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● target_file · ● error_analysis · ● hypotheses · ● diagnosis · ● fix_task_created
-**Sub-flows:** ↳ prepare_context
+**Tier:** `flow_directive` · **Returns:** `root_cause`, `fix_task_created`, `directive_report`
+**Peers:** `file_ops`, `project_ops`
+**Inputs:** ○ mission_id · ○ goal_id · ○ flow_directive · ◑ target_file_path · ◑ error_description · ◑ error_output · ◑ file_context · ◑ failed_attempts_context
+**Publishes:** ● diagnosis_session_id · ● inference_session_id · ● investigation_turn · ● suspect_file · ● diagnosis_text · ● hypotheses · ● error_analysis · ● recommended_flow · ● diagnosis · ● fix_task_created (+1 more)
 **Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · 𓉗 file read · 𓇴→ save mission
-**Stats:** 9 steps · ▷ 2 inference · 7 ⑂ rule
-
-**Prompts:**
-- **reproduce_mentally** ▷ (t*0.4): Trace the error execution path — understand, don't fix
-  Injects: {← context.target_file_content}, {← context.target_file_path}, {← context.file_excerpts}, {← input.error_description}, {← input.flow_directive} (+1 more)
-- **form_hypotheses** ▷ (t*0.8): Generate 2-3 distinct fix hypotheses
-  Injects: {← context.error_analysis}, {← context.target_file_content}, {← context.target_file_path}, {← context.peer_personas}
+**Effects:** end_inference_session · push_note · ⟶ inference · session_inference · start_inference_session
+**Stats:** 13 steps · 10 ⑂ rule · 1 ☰ menu
 
 ```mermaid
 flowchart TD
-    %% diagnose_issue v4
+    %% diagnose_issue v9
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -651,53 +498,70 @@ flowchart TD
     style L1 fill:#f5f5f5,stroke:none,color:#555
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
-    gather_context[["↳ gather_context ⑂"]]
-    check_target["□ check_target ⑂"]
-    reproduce_mentally{{"▷ reproduce_mentally ⑂"}}
-    form_hypotheses{{"▷ form_hypotheses ⑂"}}
+    start_session["□ start_session ⑂"]
+    pick_file["□ pick_file ⑂"]
+    trace_symbols["□ trace_symbols ⑂"]
+    run_command["□ run_command ⑂"]
+    classify_fix_type(["∅ classify_fix_type ☰"])
+    end_session["□ end_session ⑂"]
+    end_session_failure["□ end_session_failure ⑂"]
     compile_diagnosis["□ compile_diagnosis ⑂"]
     create_fix_task["□ create_fix_task ⑂"]
+    compile_report_done["□ compile_report_done ⑂"]
+    compile_report_failure["□ compile_report_failure ⑂"]
     done[/"⟲ ∅ done"\]
-    error_file_not_found["□ error_file_not_found ⑂"]
     failed[/"⟲ ∅ failed"\]
 
-    style gather_context stroke-width:3px,stroke:#2d5a27
+    style start_session stroke-width:3px,stroke:#2d5a27
 
-    gather_context -->|⑂ always| check_target
-    check_target -->|⑂ result.file_found == true| reproduce_mentally
-    check_target -->|⑂ always| error_file_not_found
-    reproduce_mentally -->|⑂ result.tokens_generated › 0| form_hypotheses
-    reproduce_mentally -->|⑂ always| failed
-    form_hypotheses -->|⑂ result.tokens_generated › 0| compile_diagnosis
-    form_hypotheses -->|⑂ always| failed
+    start_session -->|⑂ result.session_started == true| pick_file
+    start_session -->|⑂ always| compile_report_failure
+    pick_file -->|⑂ result.file_selected == true| trace_symbols
+    pick_file -->|⑂ result.needs_command == true| run_command
+    pick_file -->|⑂ always| end_session_failure
+    trace_symbols -->|⑂ result.investigation_complete == true and result.concluded == true| classify_fix_type
+    trace_symbols -->|⑂ result.wrong_file == true| pick_file
+    trace_symbols -->|⑂ result.needs_more_symbols == true| trace_symbols
+    trace_symbols -->|⑂ result.needs_command == true| run_command
+    trace_symbols -->|⑂ result.concluded == true| classify_fix_type
+    trace_symbols -->|⑂ always| end_session_failure
+    run_command -->|⑂ result.concluded == true| classify_fix_type
+    run_command -->|⑂ result.needs_another_command == true| run_command
+    run_command -->|⑂ result.wrong_file == true| pick_file
+    run_command -->|⑂ always| end_session_failure
+    classify_fix_type -.->|☰ file_ops| end_session
+    classify_fix_type -.->|☰ project_ops| end_session
+    end_session -->|⑂ always| compile_diagnosis
+    end_session_failure -->|⑂ always| compile_report_failure
     compile_diagnosis -->|⑂ always| create_fix_task
-    create_fix_task -->|⑂ always| done
+    create_fix_task -->|⑂ always| compile_report_done
+    compile_report_done -->|⑂ always| done
+    compile_report_failure -->|⑂ always| failed
     tc_done(("⟲ mission_control"))
     style tc_done fill:#f0e6f6,stroke:#663399
     done -.->|tail-call| tc_done
-    error_file_not_found -->|⑂ always| failed
     tc_failed(("⟲ mission_control"))
     style tc_failed fill:#f0e6f6,stroke:#663399
     failed -.->|tail-call| tc_failed
 
 ```
 
-#### file_ops (v1)
+#### file_ops (v2)
 *File operations lifecycle. Routes to create/patch/rewrite,
 validates output, self-corrects on failure, reports to
 mission_control via structured returns.*
 
 **Tier:** `flow_directive` · **Returns:** `target_file`, `files_changed`, `write_action`, `edit_summary`, `validation`, `bail_reason`
-**Inputs:** ○ mission_id · ○ task_id · ○ target_file_path · ○ flow_directive · ◑ working_directory · ◑ relevant_notes · ◑ mode · ◑ prompt_variant
-**Publishes:** ● files_changed · ● target_file · ● related_files · ● edit_summary · ● bail_reason · ● validation_commands · ● validation_results
+**Inputs:** ○ mission_id · ○ goal_id · ○ target_file_path · ○ flow_directive · ◑ working_directory · ◑ file_context · ◑ mode · ◑ prompt_variant
+**Publishes:** ● files_changed · ● target_file · ● edit_summary · ● bail_reason · ● validation_commands · ● validation_results · ● validation_output · ● directive_report
 **Sub-flows:** ↳ create · ↳ patch · ↳ rewrite · ↳ set_env · ↳ rewrite · ↳ diagnose_issue
 **Tail-calls:** ⟲ mission_control
-**Effects:** →𓇴 load mission · push_note · 𓉗 file read · ⌘ command · 𓇴→ save mission
-**Stats:** 18 steps · 14 ⑂ rule
+**Effects:** push_note · 𓉗 file read · ⌘ command · ⟶ inference
+**Stats:** 21 steps · 17 ⑂ rule
 
 ```mermaid
 flowchart TD
-    %% file_ops v1
+    %% file_ops v2
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -721,9 +585,12 @@ flowchart TD
     check_diagnose_budget(["∅ check_diagnose_budget ⑂"])
     escalate_diagnose[["↳ escalate_diagnose ⑂"]]
     log_and_report_success["□ log_and_report_success ⑂"]
+    compile_report_success["□ compile_report_success ⑂"]
+    compile_report_failure["□ compile_report_failure ⑂"]
     report_success[/"⟲ ∅ report_success"\]
     report_failure[/"⟲ ∅ report_failure"\]
     report_diagnosed[/"⟲ ∅ report_diagnosed"\]
+    compile_report_bail["□ compile_report_bail ⑂"]
     report_bail[/"⟲ □ report_bail"\]
 
     style check_exists stroke-width:3px,stroke:#2d5a27
@@ -732,35 +599,37 @@ flowchart TD
     check_exists -->|⑂ result.file_found == true| read_target
     check_exists -->|⑂ always| run_create
     run_create -->|⑂ result.status == 'success'| lookup_env
-    run_create -->|⑂ always| report_failure
+    run_create -->|⑂ always| compile_report_failure
     read_target -->|⑂ result.file_found == true| extract_symbols
-    read_target -->|⑂ always| report_failure
+    read_target -->|⑂ always| compile_report_failure
     extract_symbols -->|⑂ result.symbols_extracted › 0| run_patch
     extract_symbols -->|⑂ always| run_rewrite
     run_patch -->|⑂ result.status == 'success'| lookup_env
     run_patch -->|⑂ result.status == 'full_rewrite_requested'| run_rewrite
-    run_patch -->|⑂ result.status == 'unchanged'| report_bail
-    run_patch -->|⑂ result.status == 'bail'| report_bail
-    run_patch -->|⑂ always| report_failure
+    run_patch -->|⑂ result.status == 'unchanged'| compile_report_bail
+    run_patch -->|⑂ result.status == 'bail'| compile_report_bail
+    run_patch -->|⑂ always| compile_report_failure
     run_rewrite -->|⑂ result.status == 'success'| lookup_env
-    run_rewrite -->|⑂ always| report_failure
+    run_rewrite -->|⑂ always| compile_report_failure
     lookup_env -->|⑂ result.env_found == true| run_checks
-    lookup_env -->|⑂ result.skip_validation == true| report_success
+    lookup_env -->|⑂ result.skip_validation == true| compile_report_success
     lookup_env -->|⑂ always| run_set_env
     run_set_env -->|⑂ result.status == 'success' and meta.attempt ‹= 1| lookup_env
-    run_set_env -->|⑂ always| report_success
-    run_checks -->|⑂ result.all_passing == true| report_success
+    run_set_env -->|⑂ always| compile_report_success
+    run_checks -->|⑂ result.all_passing == true| compile_report_success
     run_checks -->|⑂ result.syntax_failed == true| check_retry
     run_checks -->|⑂ result.has_issues == true| log_and_report_success
     check_retry -->|⑂ meta.attempt ‹= 2| self_correct
     check_retry -->|⑂ always| check_diagnose_budget
     self_correct -->|⑂ result.status == 'success'| run_checks
-    self_correct -->|⑂ always| report_failure
+    self_correct -->|⑂ always| compile_report_failure
     check_diagnose_budget -->|⑂ meta.attempt ‹= 1| escalate_diagnose
-    check_diagnose_budget -->|⑂ always| report_failure
+    check_diagnose_budget -->|⑂ always| compile_report_failure
     escalate_diagnose -->|⑂ result.status == 'success'| report_diagnosed
-    escalate_diagnose -->|⑂ always| report_failure
-    log_and_report_success -->|⑂ always| report_success
+    escalate_diagnose -->|⑂ always| compile_report_failure
+    log_and_report_success -->|⑂ always| compile_report_success
+    compile_report_success -->|⑂ always| report_success
+    compile_report_failure -->|⑂ always| report_failure
     tc_report_success(("⟲ mission_control"))
     style tc_report_success fill:#f0e6f6,stroke:#663399
     report_success -.->|tail-call| tc_report_success
@@ -770,34 +639,35 @@ flowchart TD
     tc_report_diagnosed(("⟲ mission_control"))
     style tc_report_diagnosed fill:#f0e6f6,stroke:#663399
     report_diagnosed -.->|tail-call| tc_report_diagnosed
+    compile_report_bail -->|⑂ always| report_bail
     tc_report_bail(("⟲ mission_control"))
     style tc_report_bail fill:#f0e6f6,stroke:#663399
     report_bail -.->|tail-call| tc_report_bail
 
 ```
 
-#### interact (v2)
-*Use the product. Run it, interact with it, observe behavior,
-test specific features. Returns observations to the director.
-Plans an execution persona, then dispatches run_session.*
+#### interact (v4)
+*Route product interaction to the appropriate sub-flow.
+Deterministic goals use run_commands + exit code evaluation (zero inference).
+Exploratory goals use persona-driven run_session + inference evaluation.*
 
-**Tier:** `flow_directive` · **Returns:** `session_summary`, `commands_run`, `issues_found`
-**Inputs:** ○ mission_id · ○ task_id · ○ flow_directive · ◑ working_directory · ◑ relevant_notes
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● execution_persona · ● terminal_output · ● session_summary · ● inference_response
-**Sub-flows:** ↳ prepare_context · ↳ run_session
+**Tier:** `flow_directive` · **Returns:** `terminal_output`, `commands_run`, `evaluation_result`, `directive_report`
+**Inputs:** ○ mission_id · ○ goal_id · ○ flow_directive · ◑ working_directory · ◑ interaction_context · ◑ interaction_mode · ◑ run_command · ◑ interactive_prompt
+**Publishes:** ● terminal_output · ● all_passed · ● project_manifest · ● repo_map_formatted · ● execution_persona · ● inference_session_id · ● inference_response · ● goal_met · ● directive_report
+**Sub-flows:** ↳ run_commands · ↳ prepare_context · ↳ run_session
 **Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference
-**Stats:** 7 steps · ▷ 2 inference · 4 ⑂ rule
+**Effects:** end_inference_session · ⟶ inference
+**Stats:** 15 steps · ▷ 2 inference · 12 ⑂ rule
 
 **Prompts:**
 - **plan_interaction** ▷ (t*0.4): Craft execution persona and session context
-  Injects: {← context.project_file_list}, {← context.repo_map_formatted}, {← input.flow_directive}, {← input.relevant_notes}
+  Injects: {← context.project_file_list}, {← context.repo_map_formatted}, {← context.interaction_brief}, {← input.flow_directive}
 - **evaluate_outcome** ▷ (t*0.2): Evaluate whether the product worked correctly
-  Injects: {← context.session_summary}, {← context.terminal_output}, {← input.flow_directive}
+  Injects: {← context.terminal_output}, {← input.flow_directive}
 
 ```mermaid
 flowchart TD
-    %% interact v2
+    %% interact v4
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -807,22 +677,41 @@ flowchart TD
     style L1 fill:#f5f5f5,stroke:none,color:#555
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
+    check_mode(["∅ check_mode ⑂"])
+    run_deterministic[["↳ run_deterministic ⑂"]]
+    evaluate_deterministic["□ evaluate_deterministic ⑂"]
     gather_context[["↳ gather_context ⑂"]]
     plan_interaction{{"▷ plan_interaction ⑂"}}
     run_session[["↳ run_session ⑂"]]
     evaluate_outcome{{"▷ evaluate_outcome ⑂"}}
+    parse_evaluation["□ parse_evaluation ⑂"]
+    end_eval_session_success["□ end_eval_session_success ⑂"]
+    end_eval_session_failure["□ end_eval_session_failure ⑂"]
+    compile_report_success["□ compile_report_success ⑂"]
+    compile_report_failure["□ compile_report_failure ⑂"]
     report_success[/"⟲ ∅ report_success"\]
     report_with_issues[/"⟲ ∅ report_with_issues"\]
     failed[/"⟲ ∅ failed"\]
 
-    style gather_context stroke-width:3px,stroke:#2d5a27
+    style check_mode stroke-width:3px,stroke:#2d5a27
 
+    check_mode -->|⑂ input.get⟮'interaction_mode', ''⟯ == 'deterministic'| run_deterministic
+    check_mode -->|⑂ always| gather_context
+    run_deterministic -->|⑂ always| evaluate_deterministic
+    evaluate_deterministic -->|⑂ result.goal_met == true| compile_report_success
+    evaluate_deterministic -->|⑂ always| compile_report_failure
     gather_context -->|⑂ always| plan_interaction
     plan_interaction -->|⑂ result.tokens_generated › 0| run_session
     plan_interaction -->|⑂ always| failed
     run_session -->|⑂ always| evaluate_outcome
-    evaluate_outcome -->|⑂ result.tokens_generated › 0 and ''goal_met': true' in str⟮result.get⟮'text', ''⟯⟯.lower⟮⟯.replace⟮' ', ''⟯| report_success
-    evaluate_outcome -->|⑂ always| report_with_issues
+    evaluate_outcome -->|⑂ result.tokens_generated › 0| parse_evaluation
+    evaluate_outcome -->|⑂ always| compile_report_failure
+    parse_evaluation -->|⑂ result.get⟮'goal_met'⟯ == true| end_eval_session_success
+    parse_evaluation -->|⑂ always| end_eval_session_failure
+    end_eval_session_success -->|⑂ always| compile_report_success
+    end_eval_session_failure -->|⑂ always| compile_report_failure
+    compile_report_success -->|⑂ always| report_success
+    compile_report_failure -->|⑂ always| report_with_issues
     tc_report_success(("⟲ mission_control"))
     style tc_report_success fill:#f0e6f6,stroke:#663399
     report_success -.->|tail-call| tc_report_success
@@ -839,17 +728,17 @@ flowchart TD
 *Initialize project tooling and structure. Creates config files,
 directories, installs dependencies, and detects validation tooling.*
 
-**Tier:** `flow_directive` · **Returns:** `setup_complete`, `files_changed`, `env_detected`
-**Inputs:** ○ mission_id · ○ task_id · ○ flow_directive · ◑ working_directory · ◑ relevant_notes · ◑ setup_focus
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response
-**Sub-flows:** ↳ prepare_context · ↳ set_env
+**Tier:** `flow_directive` · **Returns:** `setup_complete`, `files_changed`, `env_detected`, `directive_report`
+**Inputs:** ○ mission_id · ○ goal_id · ○ flow_directive · ◑ working_directory · ◑ project_setup_context · ◑ setup_focus
+**Publishes:** ● project_manifest · ● repo_map_formatted · ● inference_response · ● install_commands · ● all_passed · ● directive_report
+**Sub-flows:** ↳ prepare_context · ↳ set_env · ↳ run_commands
 **Tail-calls:** ⟲ mission_control
 **Effects:** file_exists · ⟶ inference · 𓉗 file read · ⌘ command · 𓉗 file write
-**Stats:** 7 steps · ▷ 1 inference · 5 ⑂ rule
+**Stats:** 11 steps · ▷ 1 inference · 9 ⑂ rule
 
 **Prompts:**
 - **plan_setup** ▷ (t*0.3): Determine what setup actions are needed
-  Injects: {← context.project_file_list}, {← input.flow_directive}, {← input.setup_focus}, {← input.relevant_notes}
+  Injects: {← context.project_file_list}, {← context.setup_brief}, {← input.flow_directive}, {← input.setup_focus}
 
 ```mermaid
 flowchart TD
@@ -868,6 +757,10 @@ flowchart TD
     write_files["□ write_files ⑂"]
     run_setup_commands["□ run_setup_commands ⑂"]
     detect_env[["↳ detect_env ⑂"]]
+    collect_installs["□ collect_installs ⑂"]
+    run_installs[["↳ run_installs ⑂"]]
+    build_report_success["□ build_report_success ⑂"]
+    build_report_failure["□ build_report_failure ⑂"]
     report_success[/"⟲ ∅ report_success"\]
     failed[/"⟲ ∅ failed"\]
 
@@ -875,11 +768,17 @@ flowchart TD
 
     gather_context -->|⑂ always| plan_setup
     plan_setup -->|⑂ result.tokens_generated › 0| write_files
-    plan_setup -->|⑂ always| failed
+    plan_setup -->|⑂ always| build_report_failure
     write_files -->|⑂ result.files_written › 0| run_setup_commands
     write_files -->|⑂ always| run_setup_commands
     run_setup_commands -->|⑂ always| detect_env
-    detect_env -->|⑂ always| report_success
+    detect_env -->|⑂ always| collect_installs
+    collect_installs -->|⑂ result.commands_found == true| run_installs
+    collect_installs -->|⑂ always| build_report_success
+    run_installs -->|⑂ context.get⟮'all_passed'⟯ == true| build_report_success
+    run_installs -->|⑂ always| build_report_failure
+    build_report_success -->|⑂ always| report_success
+    build_report_failure -->|⑂ always| failed
     tc_report_success(("⟲ mission_control"))
     style tc_report_success fill:#f0e6f6,stroke:#663399
     report_success -.->|tail-call| tc_report_success
@@ -898,7 +797,7 @@ search queries, executes them, and returns a summary.*
 **Inputs:** ○ research_query · ◑ research_context · ◑ max_results
 **Terminal:** ◆ success · ◆ empty
 **Publishes:** ● inference_response · ● search_queries · ● raw_search_results · ● research_summary
-**Effects:** ⟶ inference · ⌘ command
+**Effects:** ⟶ inference · mcp_call_tool · mcp_connect
 **Stats:** 6 steps · ▷ 2 inference · 4 ⑂ rule
 
 **Prompts:**
@@ -942,72 +841,28 @@ flowchart TD
 
 ### Sub-flows
 
-#### capture_learnings (v3)
-*Reflect on completed work and persist observations as mission
-notes. Reads source file, generates reflection, saves as note.*
-
-**Tier:** `session_task` · **Returns:** `learning_captured`
-**Inputs:** ○ task_description · ◑ target_file_path · ◑ task_outcome
-**Terminal:** ◆ skipped · ◆ success
-**Publishes:** ● source_file · ● inference_response
-**Effects:** ⟶ inference · →𓇴 load mission · 𓉗 file read · 𓇴→ save mission
-**Stats:** 5 steps · ▷ 1 inference · 3 ⑂ rule
-
-**Prompts:**
-- **reflect** ▷ (t*0.5): Reflect on what was learned from this task
-  Injects: {← context.source_file_content}, {← input.task_description}, {← input.task_outcome}
-
-```mermaid
-flowchart TD
-    %% capture_learnings v3
-
-    subgraph Legend[" "]
-        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
-        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
-    end
-    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
-    style L1 fill:#f5f5f5,stroke:none,color:#555
-    style L2 fill:#f5f5f5,stroke:none,color:#555
-
-    read_source["□ read_source ⑂"]
-    reflect{{"▷ reflect ⑂"}}
-    save_note["□ save_note ⑂"]
-    skip(["◆ ∅ skip"])
-    complete(["◆ ∅ complete"])
-
-    style read_source stroke-width:3px,stroke:#2d5a27
-
-    read_source -->|⑂ result.file_found == true| reflect
-    read_source -->|⑂ always| skip
-    reflect -->|⑂ result.tokens_generated › 0| save_note
-    reflect -->|⑂ always| skip
-    save_note -->|⑂ always| complete
-
-    style complete fill:#c8e6c9,stroke:#2d5a27
-```
-
-#### create (v1)
-*Create a new source file. Gathers project context, generates
-content via inference, writes to disk. Called by file_ops
-when the target file does not exist.*
+#### create (v2)
+*Create a new source file. Uses file_context projection for
+architecture-guided dependency content, generates content via
+inference, writes to disk. Called by file_ops when the target
+file does not exist.*
 
 **Tier:** `session_task` · **Returns:** `files_changed`
-**Inputs:** ○ mission_id · ○ task_id · ○ target_file_path · ○ flow_directive · ◑ working_directory · ◑ relevant_notes · ◑ prompt_variant
+**Inputs:** ○ mission_id · ○ goal_id · ○ target_file_path · ○ flow_directive · ◑ file_context · ◑ prompt_variant
 **Terminal:** ◆ success · ◆ failed
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response
-**Sub-flows:** ↳ prepare_context
+**Publishes:** ● inference_response
 **Effects:** ⟶ inference · 𓉗 file read · 𓉗 file write
-**Stats:** 7 steps · ▷ 2 inference · 5 ⑂ rule
+**Stats:** 6 steps · ▷ 2 inference · 4 ⑂ rule
 
 **Prompts:**
 - **generate_content** ▷ (t*0.4): Generate file content
-  Injects: {← context.repo_map_formatted}, {← context.file_excerpts}, {← input.flow_directive}, {← input.target_file_path}, {← input.relevant_notes}
+  Injects: {← context.file_excerpts}, {← context.architecture_spec}, {← context.data_contract_block}, {← input.flow_directive}, {← input.target_file_path}
 - **generate_tests** ▷ (t*0.4): Generate test file content
-  Injects: {← context.repo_map_formatted}, {← context.file_excerpts}, {← input.flow_directive}, {← input.target_file_path}, {← input.relevant_notes}
+  Injects: {← context.file_excerpts}, {← context.architecture_spec}, {← context.data_contract_block}, {← input.flow_directive}, {← input.target_file_path}
 
 ```mermaid
 flowchart TD
-    %% create v1
+    %% create v2
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -1017,7 +872,6 @@ flowchart TD
     style L1 fill:#f5f5f5,stroke:none,color:#555
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
-    gather_context[["↳ gather_context ⑂"]]
     select_prompt(["∅ select_prompt ⑂"])
     generate_content{{"▷ generate_content ⑂"}}
     generate_tests{{"▷ generate_tests ⑂"}}
@@ -1025,9 +879,8 @@ flowchart TD
     done(["◆ ∅ done"])
     failed(["◆ ∅ failed"])
 
-    style gather_context stroke-width:3px,stroke:#2d5a27
+    style select_prompt stroke-width:3px,stroke:#2d5a27
 
-    gather_context -->|⑂ always| select_prompt
     select_prompt -->|⑂ input.get⟮'prompt_variant'⟯ == 'test_generation'| generate_tests
     select_prompt -->|⑂ always| generate_content
     generate_content -->|⑂ result.tokens_generated › 0| write_files
@@ -1047,7 +900,7 @@ menu, rewrites each selected symbol in a memoryful inference
 session. The most precise file operation available.*
 
 **Tier:** `session_task` · **Returns:** `files_changed`, `edit_summary`, `bail_reason`
-**Inputs:** ○ file_path · ○ file_content · ○ symbol_table · ○ symbol_menu_options · ○ flow_directive · ◑ mode · ◑ relevant_notes · ◑ working_directory · ◑ validation_errors
+**Inputs:** ○ file_path · ○ file_content · ○ symbol_table · ○ symbol_menu_options · ○ flow_directive · ◑ mode · ◑ file_context · ◑ working_directory · ◑ validation_errors
 **Terminal:** ◆ success · ◆ unchanged · ◆ full_rewrite_requested · ◆ bail · ◆ failed
 **Publishes:** ● edit_session_id · ● selected_symbols · ● file_content · ● file_path · ● mode · ● selection_turn · ● rewrite_queue · ● current_symbol · ● file_content_updated · ● files_changed (+2 more)
 **Effects:** end_inference_session · session_inference · start_inference_session · 𓉗 file write
@@ -1097,21 +950,22 @@ flowchart TD
     style session_failed fill:#ffcdd2,stroke:#b71c1c
 ```
 
-#### prepare_context (v3)
-*Deterministic context preparation. Scans workspace, builds AST
-repo map, grabs git summary, selects relevant files, and loads
-content. Zero inference calls.*
+#### prepare_context (v4)
+*Lightweight project scan. Walks the workspace to build a file
+manifest and AST-based dependency map. Zero inference calls.
+File content loading is handled by projection materializers
+with architecture-guided selection.*
 
-**Tier:** `session_task` · **Returns:** `context_bundle`, `project_manifest`, `repo_map_formatted`
-**Inputs:** ○ working_directory · ○ task_description · ◑ target_file_path · ◑ context_budget · ◑ relevant_notes
+**Tier:** `session_task` · **Returns:** `project_manifest`, `repo_map_formatted`
+**Inputs:** ○ working_directory · ○ task_description · ◑ target_file_path
 **Terminal:** ◆ success
-**Publishes:** ● project_manifest · ● repo_map_formatted · ● related_files · ● git_summary · ● selected_files · ● context_bundle
-**Effects:** 𓉗 list dir · 𓉗 file read · ⌘ command
-**Stats:** 8 steps · 6 ⑂ rule
+**Publishes:** ● project_manifest · ● repo_map_formatted
+**Effects:** 𓉗 list dir · 𓉗 file read
+**Stats:** 4 steps · 2 ⑂ rule
 
 ```mermaid
 flowchart TD
-    %% prepare_context v3
+    %% prepare_context v4
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -1123,10 +977,6 @@ flowchart TD
 
     scan_workspace["□ scan_workspace ⑂"]
     build_repomap["□ build_repomap ⑂"]
-    git_summary["□ git_summary ⑂"]
-    select_relevant["□ select_relevant ⑂"]
-    load_selected["□ load_selected ⑂"]
-    load_fallback["□ load_fallback ⑂"]
     empty_project(["◆ ∅ empty_project"])
     complete(["◆ ∅ complete"])
 
@@ -1134,13 +984,7 @@ flowchart TD
 
     scan_workspace -->|⑂ result.file_count › 0| build_repomap
     scan_workspace -->|⑂ result.file_count == 0| empty_project
-    build_repomap -->|⑂ always| git_summary
-    git_summary -->|⑂ always| select_relevant
-    select_relevant -->|⑂ result.files_selected › 0| load_selected
-    select_relevant -->|⑂ always| load_fallback
-    load_selected -->|⑂ result.files_loaded › 0| complete
-    load_selected -->|⑂ always| load_fallback
-    load_fallback -->|⑂ always| complete
+    build_repomap -->|⑂ always| complete
 
     style empty_project fill:#c8e6c9,stroke:#2d5a27
     style complete fill:#c8e6c9,stroke:#2d5a27
@@ -1153,21 +997,23 @@ flowchart TD
    run_session (UX verification, completion mode only)
 3. Summary — LLM reviews all results and determines pass/fail*
 
-**Tier:** `mission_objective` · **Reads:** `mission.objective` · **Returns:** `verdict`, `blocking_issues`, `check_results`, `terminal_output`, `dep_coverage`
-**Inputs:** ○ working_directory · ○ mission_id · ◑ mission_objective · ◑ architecture_run_command · ◑ mode
+**Tier:** `mission_objective` · **Returns:** `verdict`, `blocking_issues`, `check_results`, `terminal_output`, `dep_coverage`
+**Inputs:** ○ working_directory · ○ mission_id · ◑ mission_objective · ◑ architecture_run_command · ◑ architecture · ◑ mode
 **Terminal:** ◆ success · ◆ failed
-**Publishes:** ● project_manifest · ● cross_file_summary · ● inference_response · ● validation_results · ● dep_check_imports · ● dep_check_manifest · ● dep_check_skipped · ● dep_coverage_result · ● dep_coverage_issues · ● terminal_output (+2 more)
+**Publishes:** ● project_manifest · ● cross_file_summary · ● inference_response · ● validation_results · ● dep_check_imports · ● dep_check_manifest · ● dep_coverage_result · ● terminal_output · ● inference_session_id · ● ux_session_assessment (+1 more)
 **Sub-flows:** ↳ run_commands · ↳ run_session
-**Effects:** ⟶ inference · 𓉗 list dir · →𓇴 load mission · 𓉗 file read · ⌘ command · 𓇴→ save mission
-**Stats:** 15 steps · ▷ 3 inference · 12 ⑂ rule
+**Effects:** end_inference_session · ⟶ inference · 𓉗 list dir · push_note · 𓉗 file read · ⌘ command
+**Stats:** 17 steps · ▷ 4 inference · 14 ⑂ rule
 
 **Prompts:**
 - **plan_checks** ▷ (t*0.0): LLM plans deterministic validation checks (imports, lint)
   Injects: {← context.project_listing}, {← input.working_directory}
 - **analyze_deps** ▷ (t*0.0): LLM checks whether all imports are covered by declared dependencies
   Injects: {← context.dep_check_imports}, {← context.dep_check_manifest}
+- **evaluate_ux_session** ▷ (t*0.2): Assess UX session — the model already has full context in KV cache
+  Injects: {← input.mission_objective}
 - **summarize** ▷ (t*0.1): Summarize all quality results into actionable findings
-  Injects: {← context.validation_summary}, {← context.project_file_list}, {← context.cross_file_summary}, {← context.terminal_output}, {← context.session_summary} (+2 more)
+  Injects: {← context.validation_summary}, {← context.project_file_list}, {← context.cross_file_summary}, {← context.terminal_output}, {← context.ux_session_assessment} (+4 more)
 
 ```mermaid
 flowchart TD
@@ -1191,6 +1037,8 @@ flowchart TD
     check_mode_for_behavioral(["∅ check_mode_for_behavioral ⑂"])
     run_startup_check[["↳ run_startup_check ⑂"]]
     run_ux_verification[["↳ run_ux_verification ⑂"]]
+    evaluate_ux_session{{"▷ evaluate_ux_session ⑂"}}
+    end_ux_session["□ end_ux_session ⑂"]
     summarize{{"▷ summarize ⑂"}}
     evaluate_results["□ evaluate_results ⑂"]
     gate_pass(["◆ ∅ gate_pass"])
@@ -1213,9 +1061,11 @@ flowchart TD
     parse_dep_result -->|⑂ always| gate_fail
     check_mode_for_behavioral -->|⑂ input.get⟮'mode', 'completion'⟯ == 'completion'| run_startup_check
     check_mode_for_behavioral -->|⑂ always| summarize
-    run_startup_check -->|⑂ result.status == 'success' and result.result.get⟮'all_passed', false⟯ == true| run_ux_verification
+    run_startup_check -->|⑂ result.status == 'success' and result.all_passed == true| run_ux_verification
     run_startup_check -->|⑂ always| summarize
-    run_ux_verification -->|⑂ always| summarize
+    run_ux_verification -->|⑂ always| evaluate_ux_session
+    evaluate_ux_session -->|⑂ always| end_ux_session
+    end_ux_session -->|⑂ always| summarize
     summarize -->|⑂ result.tokens_generated › 0| evaluate_results
     summarize -->|⑂ always| pass_empty
     evaluate_results -->|⑂ result.all_passing == true| gate_pass
@@ -1224,78 +1074,29 @@ flowchart TD
 
     style gate_pass fill:#c8e6c9,stroke:#2d5a27
     style gate_fail fill:#ffcdd2,stroke:#b71c1c
-    style pass_empty fill:#c8e6c9,stroke:#2d5a27
+    style pass_empty fill:#ffcdd2,stroke:#b71c1c
 ```
 
-#### retrospective (v5)
-*Capture learnings from frustration recovery — what worked after struggling.*
+#### rewrite (v2)
+*Replace an existing file's entire content via inference.
+Uses file_context projection for target content and dependency
+context. Generates a complete replacement and writes to disk.*
 
-**Tier:** `project_goal` · **Returns:** `learning_captured`
-**Inputs:** ○ mission_id · ◑ task_id · ◑ goal_context · ◑ working_directory · ◑ target_file_path · ◑ relevant_notes · ◑ trigger_reason
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● inference_response
+**Tier:** `session_task` · **Returns:** `files_changed`
+**Inputs:** ○ mission_id · ○ goal_id · ○ target_file_path · ○ flow_directive · ◑ working_directory · ◑ file_context · ◑ validation_errors
+**Terminal:** ◆ success · ◆ failed
+**Publishes:** ● project_manifest · ● repo_map_formatted · ● inference_response
 **Sub-flows:** ↳ prepare_context
-**Tail-calls:** ⟲ mission_control
-**Effects:** ⟶ inference · →𓇴 load mission · 𓇴→ save mission
+**Effects:** ⟶ inference · 𓉗 file read · 𓉗 file write
 **Stats:** 5 steps · ▷ 1 inference · 3 ⑂ rule
 
 **Prompts:**
-- **execute** ▷ (t*0.4): Analyze what was tried, what failed, what ultimately worked
-  Injects: {← context.repo_map_formatted}, {← context.file_listing}, {← input.trigger_reason}, {← input.goal_context}, {← input.relevant_notes}
-
-```mermaid
-flowchart TD
-    %% retrospective v5
-
-    subgraph Legend[" "]
-        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
-        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
-    end
-    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
-    style L1 fill:#f5f5f5,stroke:none,color:#555
-    style L2 fill:#f5f5f5,stroke:none,color:#555
-
-    gather_context[["↳ gather_context ⑂"]]
-    execute{{"▷ execute ⑂"}}
-    save_note["□ save_note ⑂"]
-    complete[/"⟲ ∅ complete"\]
-    failed[/"⟲ ∅ failed"\]
-
-    style gather_context stroke-width:3px,stroke:#2d5a27
-
-    gather_context -->|⑂ always| execute
-    execute -->|⑂ result.tokens_generated › 0| save_note
-    execute -->|⑂ always| failed
-    save_note -->|⑂ always| complete
-    tc_complete(("⟲ mission_control"))
-    style tc_complete fill:#f0e6f6,stroke:#663399
-    complete -.->|tail-call| tc_complete
-    tc_failed(("⟲ mission_control"))
-    style tc_failed fill:#f0e6f6,stroke:#663399
-    failed -.->|tail-call| tc_failed
-
-```
-
-#### rewrite (v1)
-*Replace an existing file's entire content via inference.
-Reads the current file, generates a complete replacement,
-writes to disk. Used when surgical patching is unavailable
-or a structural change is needed.*
-
-**Tier:** `session_task` · **Returns:** `files_changed`
-**Inputs:** ○ mission_id · ○ task_id · ○ target_file_path · ○ flow_directive · ◑ working_directory · ◑ relevant_notes · ◑ validation_errors
-**Terminal:** ◆ success · ◆ failed
-**Publishes:** ● context_bundle · ● project_manifest · ● repo_map_formatted · ● related_files · ● target_file · ● inference_response
-**Sub-flows:** ↳ prepare_context
-**Effects:** ⟶ inference · 𓉗 file read · 𓉗 file write
-**Stats:** 6 steps · ▷ 1 inference · 4 ⑂ rule
-
-**Prompts:**
 - **generate_rewrite** ▷ (t*0.3): Generate complete file replacement
-  Injects: {← context.target_file_content}, {← context.file_excerpts}, {← input.flow_directive}, {← input.target_file_path}, {← input.relevant_notes} (+1 more)
+  Injects: {← context.target_file_content}, {← context.file_excerpts}, {← context.architecture_spec}, {← context.data_contract_block}, {← input.flow_directive} (+2 more)
 
 ```mermaid
 flowchart TD
-    %% rewrite v1
+    %% rewrite v2
 
     subgraph Legend[" "]
         L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
@@ -1306,7 +1107,6 @@ flowchart TD
     style L2 fill:#f5f5f5,stroke:none,color:#555
 
     gather_context[["↳ gather_context ⑂"]]
-    read_target["□ read_target ⑂"]
     generate_rewrite{{"▷ generate_rewrite ⑂"}}
     write_file["□ write_file ⑂"]
     done(["◆ ∅ done"])
@@ -1314,9 +1114,7 @@ flowchart TD
 
     style gather_context stroke-width:3px,stroke:#2d5a27
 
-    gather_context -->|⑂ always| read_target
-    read_target -->|⑂ result.file_found == true| generate_rewrite
-    read_target -->|⑂ always| failed
+    gather_context -->|⑂ always| generate_rewrite
     generate_rewrite -->|⑂ result.tokens_generated › 0| write_file
     generate_rewrite -->|⑂ always| failed
     write_file -->|⑂ result.files_written › 0| done
@@ -1324,6 +1122,105 @@ flowchart TD
 
     style done fill:#c8e6c9,stroke:#2d5a27
     style failed fill:#ffcdd2,stroke:#b71c1c
+```
+
+#### run_commands (v2)
+*Execute shell commands deterministically via MCP terminal.
+Start PTY session, run each command in sequence, capture output,
+close. Zero inference.*
+
+**Tier:** `session_task` · **Returns:** `output`, `exit_codes`, `all_passed`
+**Inputs:** ○ commands · ○ working_directory · ◑ timeout · ◑ environment_vars · ◑ stop_on_error
+**Terminal:** ◆ success · ◆ failed
+**Publishes:** ● mcp_connection_id · ● mcp_session_id · ● terminal_output · ● exit_codes · ● all_passed
+**Effects:** end_inference_session · mcp_call_tool · mcp_connect · start_inference_session
+**Stats:** 4 steps · 2 ⑂ rule
+
+```mermaid
+flowchart TD
+    %% run_commands v2
+
+    subgraph Legend[" "]
+        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
+        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
+    end
+    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
+    style L1 fill:#f5f5f5,stroke:none,color:#555
+    style L2 fill:#f5f5f5,stroke:none,color:#555
+
+    start_terminal["□ start_terminal ⑂"]
+    execute_commands["□ execute_commands ⑂"]
+    close_session(["◆ □ close_session"])
+    close_failure(["◆ □ close_failure"])
+
+    style start_terminal stroke-width:3px,stroke:#2d5a27
+
+    start_terminal -->|⑂ result.session_started == true| execute_commands
+    start_terminal -->|⑂ always| close_failure
+    execute_commands -->|⑂ always| close_session
+
+    style close_session fill:#c8e6c9,stroke:#2d5a27
+    style close_failure fill:#ffcdd2,stroke:#b71c1c
+```
+
+#### run_session (v3)
+*Interactive terminal session driven by an execution persona.
+The model acts as a user — tries things, observes, adapts.
+Multi-turn with memoryful inference session. Uses PTY via MCP
+for true interactive program support.
+
+The inference session is kept alive after the PTY closes so
+the calling flow can run evaluation in the same KV cache context.
+The caller is responsible for ending the inference session.*
+
+**Tier:** `session_task` · **Returns:** `terminal_output`, `commands_run`, `inference_session_id`
+**Inputs:** ○ execution_persona · ○ working_directory · ◑ environment_vars · ◑ expected_prompt
+**Terminal:** ◆ success · ◆ failed
+**Publishes:** ● mcp_connection_id · ● mcp_session_id · ● inference_session_id · ● session_history · ● inference_response · ● terminal_output
+**Effects:** end_inference_session · ⟶ inference · mcp_call_tool · mcp_connect · start_inference_session
+**Stats:** 6 steps · ▷ 2-3 inference · 3 ⑂ rule · 1 ☰ menu
+
+**Prompts:**
+- **plan_interaction** ▷ (t*0.6): Model decides what to do next — shell command, send input, or close
+  Injects: {← context.session_history}, {← context.last_turn}, {← input.execution_persona}, {← input.session_context}
+- **evaluate** ▷ (t*0.3): Model evaluates whether to continue exploring or close
+  Injects: {← context.last_command_output}, {← context.turn_count}, {← input.execution_persona}
+
+```mermaid
+flowchart TD
+    %% run_session v3
+
+    subgraph Legend[" "]
+        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
+        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
+    end
+    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
+    style L1 fill:#f5f5f5,stroke:none,color:#555
+    style L2 fill:#f5f5f5,stroke:none,color:#555
+
+    start_session["□ start_session ⑂"]
+    plan_interaction{{"▷ plan_interaction ⑂"}}
+    execute_interaction["□ execute_interaction ⑂"]
+    evaluate{{"▷ evaluate ☰"}}
+    close_session(["◆ □ close_session"])
+    close_failure(["◆ □ close_failure"])
+
+    style start_session stroke-width:3px,stroke:#2d5a27
+
+    start_session -->|⑂ result.session_started == true| plan_interaction
+    start_session -->|⑂ always| close_failure
+    plan_interaction -->|⑂ result.tokens_generated › 0| execute_interaction
+    plan_interaction -->|⑂ always| close_failure
+    execute_interaction -->|⑂ result.session_done == true| close_session
+    execute_interaction -->|⑂ result.stuck_detected == true| close_session
+    execute_interaction -->|⑂ result.process_exited == true| close_session
+    execute_interaction -->|⑂ result.command_sent == true| evaluate
+    execute_interaction -->|⑂ always| close_failure
+    evaluate -.->|☰ continue_interaction| plan_interaction
+    evaluate -.->|☰ close_session| close_session
+
+    style close_session fill:#c8e6c9,stroke:#2d5a27
+    style close_failure fill:#ffcdd2,stroke:#b71c1c
 ```
 
 #### set_env (v2)
@@ -1372,267 +1269,161 @@ flowchart TD
     style failed fill:#ffcdd2,stroke:#b71c1c
 ```
 
-### Other Flows
-
-#### run_commands (v1)
-*Execute shell commands deterministically. Start terminal, run
-each command in sequence, capture output, close. Zero inference.*
-
-**Tier:** `session_task` · **Returns:** `output`, `exit_codes`, `all_passed`
-**Inputs:** ○ commands · ○ working_directory · ◑ timeout · ◑ environment_vars · ◑ stop_on_error
-**Terminal:** ◆ success · ◆ failed
-**Publishes:** ● session_id · ● terminal_output · ● exit_codes · ● all_passed
-**Effects:** ⌘ close terminal · end_inference_session · ⌘ terminal cmd · start_inference_session · ⌘ terminal
-**Stats:** 4 steps · 2 ⑂ rule
-
-```mermaid
-flowchart TD
-    %% run_commands v1
-
-    subgraph Legend[" "]
-        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
-        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
-    end
-    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
-    style L1 fill:#f5f5f5,stroke:none,color:#555
-    style L2 fill:#f5f5f5,stroke:none,color:#555
-
-    start_terminal["□ start_terminal ⑂"]
-    execute_commands["□ execute_commands ⑂"]
-    close_session(["◆ □ close_session"])
-    close_failure(["◆ □ close_failure"])
-
-    style start_terminal stroke-width:3px,stroke:#2d5a27
-
-    start_terminal -->|⑂ result.session_started == true| execute_commands
-    start_terminal -->|⑂ always| close_failure
-    execute_commands -->|⑂ always| close_session
-
-    style close_session fill:#c8e6c9,stroke:#2d5a27
-    style close_failure fill:#ffcdd2,stroke:#b71c1c
-```
-
-#### run_session (v1)
-*Exploratory terminal session driven by an execution persona.
-The model acts as a user — tries things, observes, adapts.
-Multi-turn with memoryful inference session.*
-
-**Tier:** `session_task` · **Returns:** `session_summary`, `terminal_output`, `commands_run`
-**Inputs:** ○ execution_persona · ○ working_directory · ◑ max_turns · ◑ environment_vars
-**Terminal:** ◆ success · ◆ failed
-**Publishes:** ● session_id · ● inference_session_id · ● session_history · ● inference_response · ● session_summary · ● terminal_output · ● terminal_status
-**Effects:** ⌘ close terminal · end_inference_session · ⟶ inference · ⌘ terminal cmd · start_inference_session · ⌘ terminal
-**Stats:** 7 steps · ▷ 3-4 inference · 4 ⑂ rule · 1 ☰ menu
-
-**Prompts:**
-- **plan_next_command** ▷ (t*0.6): Model decides what to do next based on persona and observations
-  Injects: {← context.session_history}, {← input.execution_persona}, {← input.session_context}
-- **evaluate** ▷ (t*0.3): Model evaluates whether to continue exploring or close
-  Injects: {← context.last_command_output}, {← context.turn_count}, {← input.execution_persona}
-- **summarize_and_close** ▷ (t*0.3): Produce a structured summary of the session before closing
-  Injects: {← context.session_history}, {← input.execution_persona}
-
-```mermaid
-flowchart TD
-    %% run_session v1
-
-    subgraph Legend[" "]
-        L1["▷ Inference  □ Action  ↳ Sub-flow  ∅ Noop"]
-        L2["⑂ Rule resolver  ☰ LLM menu  ◆ Terminal  ⟲ Tail-call"]
-    end
-    style Legend fill:#f5f5f5,stroke:#ccc,stroke-width:1px
-    style L1 fill:#f5f5f5,stroke:none,color:#555
-    style L2 fill:#f5f5f5,stroke:none,color:#555
-
-    start_session["□ start_session ⑂"]
-    plan_next_command{{"▷ plan_next_command ⑂"}}
-    execute_command["□ execute_command ⑂"]
-    evaluate{{"▷ evaluate ☰"}}
-    summarize_and_close{{"▷ summarize_and_close ⑂"}}
-    close_session(["◆ □ close_session"])
-    close_failure(["◆ □ close_failure"])
-
-    style start_session stroke-width:3px,stroke:#2d5a27
-
-    start_session -->|⑂ result.session_started == true| plan_next_command
-    start_session -->|⑂ always| close_failure
-    plan_next_command -->|⑂ result.tokens_generated › 0| execute_command
-    plan_next_command -->|⑂ always| close_failure
-    execute_command -->|⑂ result.stuck_detected == true| summarize_and_close
-    execute_command -->|⑂ result.command_sent == true| evaluate
-    execute_command -->|⑂ always| close_failure
-    evaluate -.->|☰ continue_interaction| plan_next_command
-    evaluate -.->|☰ close_session| summarize_and_close
-    summarize_and_close -->|⑂ always| close_session
-
-    style close_session fill:#c8e6c9,stroke:#2d5a27
-    style close_failure fill:#ffcdd2,stroke:#b71c1c
-```
-
 
 ## Context Key Dictionary
 
 | Key | Published By | Consumed By | Consumers | Audit Flags |
 |-----|-------------|-------------|-----------|-------------|
-| `all_passed` | `run_commands.execute_commands` | `run_commands.close_session` | 1 | single_consumer |
-| `architecture` | `design_and_plan.parse_architecture`, `design_and_plan.parse_architecture_then_revise` | `design_and_plan.generate_plan`, `design_and_plan.parse_plan`, `design_and_plan.derive_goals` | 3 | single_consumer |
-| `bail_reason` | `file_ops.run_patch`, `patch.capture_bail_reason`, `patch.close_bail` | `file_ops.report_bail`, `patch.close_bail` | 2 | — |
-| `context_bundle` | `create.gather_context`, `diagnose_issue.gather_context`, `interact.gather_context` (+5) | `create.generate_content`, `create.generate_tests`, `diagnose_issue.reproduce_mentally` (+4) | 7 | — |
+| `all_passed` | `interact.run_deterministic`, `project_ops.run_installs`, `run_commands.execute_commands` | `interact.evaluate_deterministic`, `run_commands.close_session` | 2 | — |
+| `architecture` | `design_and_plan.parse_architecture`, `design_and_plan.parse_architecture_reconcile` | `design_and_plan.derive_goals` | 1 | single_consumer |
+| `bail_reason` | `file_ops.run_patch`, `patch.capture_bail_reason`, `patch.close_bail` | `file_ops.compile_report_failure`, `file_ops.compile_report_bail`, `file_ops.report_bail` (+1) | 4 | — |
 | `cross_file_summary` | `quality_gate.cross_file_check` | `quality_gate.plan_checks`, `quality_gate.summarize` | 2 | single_consumer |
 | `current_symbol` | `patch.begin_rewrites`, `patch.rewrite_symbol` | `patch.rewrite_symbol`, `patch.capture_bail_reason` | 2 | single_consumer |
 | `dep_check_imports` | `quality_gate.gather_dep_info` | `quality_gate.analyze_deps` | 1 | single_consumer |
 | `dep_check_manifest` | `quality_gate.gather_dep_info` | `quality_gate.analyze_deps` | 1 | single_consumer |
-| `dep_check_skipped` | `quality_gate.gather_dep_info` |  | 0 | never_consumed |
-| `dep_coverage_issues` | `quality_gate.parse_dep_result` |  | 0 | never_consumed |
 | `dep_coverage_result` | `quality_gate.parse_dep_result` |  | 0 | never_consumed |
-| `diagnosis` | `diagnose_issue.compile_diagnosis` | `diagnose_issue.create_fix_task` | 1 | single_consumer |
-| `director_analysis` | `mission_control.reason` | `mission_control.decide_flow`, `mission_control.select_task`, `mission_control.compose_directive` (+4) | 7 | single_consumer |
-| `dispatch_config` | `mission_control.select_task`, `mission_control.compose_directive`, `mission_control.resolve_target` | `mission_control.resolve_target`, `mission_control.record_and_dispatch`, `mission_control.end_session_and_dispatch` (+1) | 4 | single_consumer |
-| `dispatch_flow_type` | `mission_control.decide_flow` | `mission_control.select_task`, `mission_control.compose_directive` | 2 | single_consumer, conditionally_published |
+| `diagnosis` | `diagnose_issue.compile_diagnosis` | `diagnose_issue.create_fix_task`, `diagnose_issue.compile_report_done` | 2 | single_consumer |
+| `diagnosis_context` | `mission_control.build_fix_target_menu` | `mission_control.resolve_fix_target` | 1 | single_consumer |
+| `diagnosis_session_id` | `diagnose_issue.start_session` | `diagnose_issue.pick_file`, `diagnose_issue.trace_symbols`, `diagnose_issue.run_command` | 3 | single_consumer |
+| `diagnosis_text` | `diagnose_issue.trace_symbols`, `diagnose_issue.run_command` | `diagnose_issue.classify_fix_type`, `diagnose_issue.compile_diagnosis`, `diagnose_issue.compile_report_done` (+1) | 4 | single_consumer |
+| `directive_report` | `diagnose_issue.compile_report_done`, `diagnose_issue.compile_report_failure`, `file_ops.compile_report_success` (+6) | `diagnose_issue.done`, `diagnose_issue.failed`, `file_ops.report_success` (+6) | 9 | — |
+| `dispatch_config` | `mission_control.structural_sweep_next`, `mission_control.functional_sweep_next`, `mission_control.apply_fix_target` | `mission_control.dispatch_structural_create`, `mission_control.dispatch_structural_fix`, `mission_control.build_fix_target_menu` (+4) | 7 | single_consumer |
 | `edit_session_id` | `patch.start_session` | `patch.select_symbols`, `patch.rewrite_symbol`, `patch.finalize` (+4) | 7 | single_consumer |
-| `edit_summary` | `file_ops.run_patch`, `patch.finalize`, `patch.no_changes_needed` (+1) | `file_ops.report_success` | 1 | single_consumer |
+| `edit_summary` | `file_ops.run_patch`, `patch.finalize`, `patch.no_changes_needed` (+1) | `file_ops.compile_report_success`, `file_ops.report_success`, `file_ops.compile_report_bail` | 3 | single_consumer |
 | `env_config` | `set_env.persist_env` |  | 0 | never_consumed |
-| `error_analysis` | `diagnose_issue.reproduce_mentally` | `diagnose_issue.form_hypotheses`, `diagnose_issue.compile_diagnosis`, `diagnose_issue.create_fix_task` | 3 | single_consumer |
-| `error_description` |  | `diagnose_issue.compile_diagnosis` | 1 | — |
-| `events` | `design_and_plan.load_mission`, `mission_control.load_state` | `mission_control.apply_last_result`, `mission_control.process_events` | 2 | single_consumer |
+| `error_analysis` | `diagnose_issue.trace_symbols`, `diagnose_issue.run_command` | `diagnose_issue.compile_diagnosis`, `diagnose_issue.create_fix_task` | 2 | single_consumer |
+| `error_description` |  | `diagnose_issue.start_session`, `diagnose_issue.compile_diagnosis` | 2 | — |
+| `error_output` |  | `diagnose_issue.start_session` | 1 | — |
+| `events` | `mission_control.load_state` | `mission_control.apply_last_result`, `mission_control.process_events` | 2 | single_consumer |
 | `execution_persona` | `interact.plan_interaction` |  | 0 | never_consumed |
 | `exit_codes` | `run_commands.execute_commands` | `run_commands.close_session` | 1 | single_consumer |
+| `failed_attempts_context` |  | `diagnose_issue.start_session` | 1 | — |
 | `file_content` | `patch.start_session` | `patch.start_session`, `patch.rewrite_symbol`, `patch.capture_bail_reason` | 3 | single_consumer |
 | `file_content_updated` | `patch.rewrite_symbol` | `patch.rewrite_symbol`, `patch.finalize` | 2 | single_consumer |
+| `file_context` |  | `diagnose_issue.start_session`, `diagnose_issue.pick_file`, `diagnose_issue.trace_symbols` (+1) | 4 | — |
 | `file_path` | `patch.start_session` | `patch.start_session`, `patch.rewrite_symbol`, `patch.finalize` (+1) | 4 | single_consumer |
-| `files_changed` | `file_ops.run_create`, `file_ops.run_patch`, `file_ops.run_rewrite` (+2) | `file_ops.lookup_env`, `file_ops.report_success`, `project_ops.run_setup_commands` (+1) | 4 | — |
-| `fix_task_created` | `diagnose_issue.create_fix_task` |  | 0 | never_consumed |
-| `flow_directive` |  | `patch.start_session` | 1 | — |
-| `frustration` | `design_and_plan.load_mission`, `mission_control.load_state`, `mission_control.apply_last_result` | `mission_control.apply_last_result`, `mission_control.process_events`, `mission_control.reason` (+2) | 5 | single_consumer |
-| `git_summary` | `prepare_context.git_summary` |  | 0 | never_consumed |
+| `files_changed` | `file_ops.run_create`, `file_ops.run_patch`, `file_ops.run_rewrite` (+2) | `file_ops.lookup_env`, `file_ops.compile_report_success`, `file_ops.report_success` (+4) | 7 | — |
+| `fix_target_options` | `mission_control.build_fix_target_menu` | `mission_control.resolve_fix_target` | 1 | single_consumer |
+| `fix_task_created` | `diagnose_issue.create_fix_task` | `diagnose_issue.compile_report_done` | 1 | single_consumer |
+| `flow_directive` |  | `diagnose_issue.start_session`, `patch.start_session` | 2 | — |
+| `goal_met` | `interact.parse_evaluation` |  | 0 | never_consumed |
 | `goals` | `design_and_plan.derive_goals` |  | 0 | never_consumed |
-| `hypotheses` | `diagnose_issue.form_hypotheses` | `diagnose_issue.compile_diagnosis` | 1 | single_consumer |
-| `inference_response` | `capture_learnings.reflect`, `create.generate_content`, `create.generate_tests` (+16) | `create.write_files`, `design_and_plan.parse_architecture`, `design_and_plan.parse_architecture_then_revise` (+12) | 15 | conditionally_published |
-| `inference_session_id` | `run_session.start_session` | `run_session.plan_next_command`, `run_session.evaluate`, `run_session.summarize_and_close` (+2) | 5 | single_consumer |
-| `last_result` |  | `mission_control.apply_last_result`, `mission_control.reason` | 2 | — |
-| `last_status` |  | `mission_control.apply_last_result`, `mission_control.reason` | 2 | — |
-| `last_task_id` |  | `mission_control.apply_last_result` | 1 | — |
-| `mission` | `design_and_plan.load_mission`, `design_and_plan.parse_architecture`, `design_and_plan.parse_architecture_then_revise` (+7) | `design_and_plan.check_drift`, `design_and_plan.design_initial`, `design_and_plan.design_reconcile` (+34) | 37 | — |
+| `hypotheses` | `diagnose_issue.trace_symbols`, `diagnose_issue.run_command` | `diagnose_issue.classify_fix_type`, `diagnose_issue.compile_diagnosis` | 2 | single_consumer |
+| `inference_response` | `create.generate_content`, `create.generate_tests`, `design_and_plan.design_initial` (+11) | `create.write_files`, `design_and_plan.parse_architecture`, `design_and_plan.parse_architecture_reconcile` (+12) | 15 | conditionally_published |
+| `inference_session_id` | `diagnose_issue.start_session`, `interact.run_session`, `quality_gate.run_ux_verification` (+3) | `diagnose_issue.classify_fix_type`, `diagnose_issue.end_session`, `diagnose_issue.end_session_failure` (+11) | 14 | — |
+| `install_commands` | `project_ops.collect_installs` |  | 0 | never_consumed |
+| `investigation_turn` | `diagnose_issue.start_session`, `diagnose_issue.pick_file`, `diagnose_issue.trace_symbols` (+1) | `diagnose_issue.pick_file`, `diagnose_issue.trace_symbols`, `diagnose_issue.run_command` | 3 | single_consumer |
+| `last_goal_id` |  | `mission_control.apply_last_result` | 1 | — |
+| `last_result` |  | `mission_control.apply_last_result` | 1 | — |
+| `last_status` |  | `mission_control.apply_last_result` | 1 | — |
+| `mcp_connection_id` | `run_commands.start_terminal`, `run_session.start_session` | `run_commands.execute_commands`, `run_commands.close_session`, `run_commands.close_failure` (+3) | 6 | — |
+| `mcp_session_id` | `run_commands.start_terminal`, `run_commands.execute_commands`, `run_session.start_session` (+1) | `run_commands.execute_commands`, `run_commands.close_session`, `run_commands.close_failure` (+5) | 8 | — |
+| `mission` | `design_and_plan.load_mission`, `design_and_plan.parse_architecture`, `design_and_plan.parse_architecture_reconcile` (+4) | `design_and_plan.check_drift`, `design_and_plan.design_initial`, `design_and_plan.design_reconcile` (+25) | 28 | — |
 | `mode` | `patch.start_session` | `patch.start_session`, `patch.rewrite_symbol`, `patch.capture_bail_reason` | 3 | single_consumer |
-| `project_manifest` | `create.gather_context`, `design_and_plan.scan_workspace`, `diagnose_issue.gather_context` (+8) | `create.generate_content`, `create.generate_tests`, `design_and_plan.check_drift` (+18) | 21 | — |
-| `quality_results` | `mission_control.quality_checkpoint_run`, `mission_control.quality_completion_run`, `quality_gate.evaluate_results` | `mission_control.quality_failed_restart`, `mission_control.completed` | 2 | single_consumer |
+| `project_manifest` | `design_and_plan.scan_workspace`, `interact.gather_context`, `prepare_context.scan_workspace` (+4) | `design_and_plan.check_drift`, `design_and_plan.design_initial`, `design_and_plan.design_reconcile` (+9) | 12 | — |
+| `quality_results` | `mission_control.dispatch_quality_gate`, `quality_gate.evaluate_results` | `mission_control.quality_failed`, `mission_control.completed` | 2 | single_consumer |
 | `raw_search_results` | `research.search` | `research.summarize` | 1 | single_consumer |
-| `related_files` | `create.gather_context`, `diagnose_issue.gather_context`, `file_ops.read_target` (+7) | `create.generate_content`, `create.generate_tests`, `prepare_context.select_relevant` (+3) | 6 | — |
-| `relevant_notes` |  | `patch.start_session` | 1 | — |
-| `repo_map_formatted` | `create.gather_context`, `design_and_plan.build_repomap`, `diagnose_issue.gather_context` (+6) | `create.generate_content`, `create.generate_tests`, `design_and_plan.design_initial` (+8) | 11 | — |
-| `rescue_count` | `mission_control.check_rescue_budget` |  | 0 | never_consumed |
-| `research_summary` | `design_and_plan.domain_research`, `mission_control.rescue_research`, `research.summarize` |  | 0 | never_consumed |
-| `revision_applied` | `revise_plan.apply_revision`, `revise_plan.skip` |  | 0 | never_consumed |
-| `revision_stats` | `revise_plan.apply_revision` |  | 0 | never_consumed |
+| `recommended_flow` | `diagnose_issue.classify_fix_type` | `diagnose_issue.compile_diagnosis` | 1 | single_consumer, conditionally_published |
+| `repo_map_formatted` | `design_and_plan.build_repomap`, `interact.gather_context`, `prepare_context.build_repomap` (+2) | `design_and_plan.design_initial`, `design_and_plan.design_reconcile`, `interact.plan_interaction` (+2) | 5 | — |
+| `research_summary` | `design_and_plan.domain_research`, `research.summarize` | `design_and_plan.save_research` | 1 | single_consumer |
 | `rewrite_queue` | `patch.begin_rewrites`, `patch.rewrite_symbol` | `patch.rewrite_symbol`, `patch.capture_bail_reason` | 2 | single_consumer |
 | `search_queries` | `research.extract_queries` | `research.search` | 1 | single_consumer |
-| `selected_files` | `prepare_context.select_relevant` | `prepare_context.load_selected` | 1 | single_consumer |
+| `selected_fix_target` | `mission_control.resolve_fix_target` | `mission_control.apply_fix_target` | 1 | single_consumer, conditionally_published |
 | `selected_symbols` | `patch.start_session`, `patch.select_symbols` | `patch.select_symbols`, `patch.begin_rewrites`, `patch.finalize` | 3 | single_consumer |
 | `selection_turn` | `patch.select_symbols` | `patch.select_symbols` | 1 | single_consumer |
-| `session_history` | `run_session.start_session`, `run_session.execute_command` | `run_session.plan_next_command`, `run_session.execute_command`, `run_session.evaluate` (+3) | 6 | single_consumer |
-| `session_id` | `mission_control.start_session`, `run_commands.start_terminal`, `run_commands.execute_commands` (+2) | `mission_control.reason`, `mission_control.compose_directive`, `mission_control.record_and_dispatch` (+14) | 17 | — |
-| `session_summary` | `interact.run_session`, `quality_gate.run_ux_verification`, `run_session.summarize_and_close` (+1) | `interact.evaluate_outcome`, `interact.report_success`, `interact.report_with_issues` (+2) | 5 | — |
-| `source_file` | `capture_learnings.read_source` | `capture_learnings.reflect` | 1 | single_consumer |
+| `session_history` | `run_session.start_session`, `run_session.execute_interaction` | `run_commands.close_session`, `run_commands.close_failure`, `run_session.plan_interaction` (+4) | 7 | — |
+| `session_summary` |  | `interact.compile_report_success`, `interact.compile_report_failure`, `interact.report_success` (+5) | 8 | — |
+| `setup_result` |  | `project_ops.build_report_success` | 1 | — |
+| `suspect_file` | `diagnose_issue.pick_file` | `diagnose_issue.trace_symbols` | 1 | single_consumer |
 | `symbol_menu_options` |  | `patch.start_session`, `patch.select_symbols` | 2 | — |
 | `symbol_table` |  | `patch.start_session`, `patch.begin_rewrites` | 2 | — |
-| `target_file` | `diagnose_issue.check_target`, `file_ops.read_target`, `rewrite.read_target` | `diagnose_issue.reproduce_mentally`, `diagnose_issue.form_hypotheses`, `diagnose_issue.compile_diagnosis` (+3) | 6 | — |
-| `target_file_path` |  | `design_and_plan.build_repomap`, `prepare_context.build_repomap`, `revise_plan.scan_workspace` | 3 | — |
-| `terminal_output` | `interact.run_session`, `quality_gate.run_startup_check`, `quality_gate.run_ux_verification` (+3) | `interact.evaluate_outcome`, `interact.report_success`, `interact.report_with_issues` (+2) | 5 | — |
-| `terminal_status` | `run_session.close_session`, `run_session.close_failure` |  | 0 | never_consumed |
+| `target_file` | `file_ops.read_target` | `file_ops.extract_symbols` | 1 | single_consumer |
+| `target_file_path` |  | `design_and_plan.build_repomap`, `diagnose_issue.create_fix_task`, `prepare_context.build_repomap` | 3 | — |
+| `terminal_output` | `interact.run_deterministic`, `interact.run_session`, `quality_gate.run_startup_check` (+4) | `interact.evaluate_deterministic`, `interact.evaluate_outcome`, `interact.compile_report_success` (+9) | 12 | — |
+| `ux_session_assessment` | `quality_gate.evaluate_ux_session` | `quality_gate.summarize` | 1 | single_consumer |
 | `validation_commands` | `file_ops.lookup_env` | `file_ops.run_checks` | 1 | single_consumer |
 | `validation_errors` |  | `patch.start_session` | 1 | — |
-| `validation_results` | `file_ops.run_checks`, `quality_gate.execute_checks` | `file_ops.self_correct`, `file_ops.escalate_diagnose`, `file_ops.log_and_report_success` (+3) | 6 | — |
+| `validation_output` | `file_ops.run_checks` | `file_ops.escalate_diagnose` | 1 | single_consumer |
+| `validation_results` | `file_ops.run_checks`, `quality_gate.execute_checks` | `file_ops.self_correct`, `file_ops.escalate_diagnose`, `file_ops.log_and_report_success` (+5) | 8 | — |
 | `working_directory` |  | `patch.start_session` | 1 | — |
 
 ## Action Registry
 
 | Action | Module | Effects Used | Referenced By |
 |--------|--------|-------------|---------------|
+| `apply_fix_target` | `agent.actions.mission_actions` | save_mission | `mission_control.apply_fix_target` |
 | `apply_multi_file_changes` | `agent.actions.integration_actions` | read_file, write_file | `create.write_files`, `project_ops.write_files`, `rewrite.write_file` |
-| `apply_plan_revision` | `agent.actions.refinement_actions` | save_mission | `revise_plan.apply_revision` |
-| `apply_quality_gate_results` | `agent.actions.refinement_actions` | load_mission, save_mission | `quality_gate.evaluate_results` |
-| `apply_retrospective_recommendations` | `agent.actions.retrospective_actions` | load_mission, save_mission | — |
-| `build_and_query_repomap` | `agent.actions.research_actions` | list_directory, read_file | `design_and_plan.build_repomap`, `prepare_context.build_repomap`, `revise_plan.scan_workspace` |
+| `apply_quality_gate_results` | `agent.actions.refinement_actions` | push_note | `quality_gate.evaluate_results` |
+| `attach_directive_report` | `agent.actions.reporting_actions` | save_mission | `mission_control.apply_last_result` |
+| `build_and_query_repomap` | `agent.actions.research_actions` | list_directory, read_file | `design_and_plan.build_repomap`, `prepare_context.build_repomap` |
+| `build_directive_report` | `agent.actions.reporting_actions` | — | `project_ops.build_report_success`, `project_ops.build_report_failure` |
+| `build_fix_target_menu` | `agent.actions.mission_actions` | — | `mission_control.build_fix_target_menu` |
 | `check_architecture_drift` | `agent.actions.mission_actions` | — | `design_and_plan.check_drift` |
-| `check_condition` | `agent.actions.registry` | — | — |
 | `check_dependency_coverage` | `agent.actions.pipeline_actions` | read_file | `quality_gate.gather_dep_info` |
-| `check_remaining_doc_tasks` | `agent.actions.integration_actions` | — | — |
-| `check_remaining_smells` | `agent.actions.integration_actions` | — | — |
-| `check_retry_budget` | `agent.actions.pipeline_actions` | — | `mission_control.check_rescue_budget` |
+| `check_pipeline_phase` | `agent.actions.mission_actions` | — | `mission_control.check_phase` |
 | `close_edit_session` | `agent.actions.ast_actions` | end_inference_session | `patch.no_changes_needed`, `patch.close_full_rewrite`, `patch.close_bail` |
-| `close_terminal_session` | `agent.actions.terminal_actions` | close_terminal, end_inference_session | `run_commands.close_session`, `run_commands.close_failure`, `run_session.close_session` (+1) |
+| `close_interactive_session` | `agent.actions.interactive_actions` | mcp_call_tool, end_inference_session | `run_commands.close_session`, `run_commands.close_failure`, `run_session.close_session` (+1) |
+| `collect_env_field` | `agent.actions.pipeline_actions` | — | `project_ops.collect_installs` |
 | `compile_diagnosis` | `agent.actions.diagnostic_actions` | — | `diagnose_issue.compile_diagnosis` |
-| `compile_integration_report` | `agent.actions.integration_actions` | load_mission, save_mission | — |
-| `compose_director_report` | `agent.actions.retrospective_actions` | push_event | — |
-| `create_fix_task_from_diagnosis` | `agent.actions.diagnostic_actions` | load_mission, save_mission | `diagnose_issue.create_fix_task` |
-| `create_plan_from_architecture` | `agent.actions.mission_actions` | save_mission | `design_and_plan.parse_plan` |
-| `curl_search` | `agent.actions.refinement_actions` | run_command | `research.search` |
+| `compile_directive_report` | `agent.actions.reporting_actions` | run_inference | `diagnose_issue.compile_report_done`, `diagnose_issue.compile_report_failure`, `file_ops.compile_report_success` (+4) |
+| `create_fix_task_from_diagnosis` | `agent.actions.diagnostic_actions` | push_note | `diagnose_issue.create_fix_task` |
 | `derive_project_goals` | `agent.actions.mission_actions` | run_inference, save_mission | `design_and_plan.derive_goals` |
-| `end_director_session` | `agent.actions.mission_actions` | end_inference_session | `mission_control.end_session_and_dispatch`, `mission_control.end_session_and_design`, `mission_control.end_session_quality_checkpoint` (+2) |
+| `end_inference_session` | `agent.actions.interactive_actions` | end_inference_session | `diagnose_issue.end_session`, `diagnose_issue.end_session_failure`, `interact.end_eval_session_success` (+2) |
 | `enter_idle` | `agent.actions.mission_actions` | — | `mission_control.idle` |
-| `execute_commands_batch` | `agent.actions.terminal_actions` | send_to_terminal | `run_commands.execute_commands` |
-| `execute_file_creation` | `agent.actions.mission_actions` | write_file, file_exists | — |
+| `evaluate_deterministic_result` | `agent.actions.pipeline_actions` | — | `interact.evaluate_deterministic` |
+| `exa_search` | `agent.actions.refinement_actions` | mcp_connect, mcp_call_tool | `research.search` |
+| `execute_commands_batch` | `agent.actions.interactive_actions` | mcp_call_tool | `run_commands.execute_commands` |
 | `execute_project_setup` | `agent.actions.refinement_actions` | file_exists, run_command, write_file | `project_ops.run_setup_commands` |
 | `extract_search_queries` | `agent.actions.refinement_actions` | — | `research.extract_queries` |
 | `extract_symbol_bodies` | `agent.actions.ast_actions` | — | `file_ops.extract_symbols` |
 | `finalize_edit_session` | `agent.actions.ast_actions` | write_file, end_inference_session | `patch.finalize` |
-| `finalize_mission` | `agent.actions.mission_actions` | save_mission | `mission_control.completed`, `mission_control.mission_deadlocked`, `mission_control.aborted` |
-| `format_technical_query` | `agent.actions.research_actions` | — | — |
-| `git_log_summary` | `agent.actions.pipeline_actions` | run_command | `prepare_context.git_summary` |
+| `finalize_mission` | `agent.actions.mission_actions` | save_mission | `mission_control.completed`, `mission_control.aborted` |
+| `functional_sweep_next` | `agent.actions.mission_actions` | save_mission | `mission_control.functional_sweep_next` |
 | `handle_events` | `agent.actions.mission_actions` | clear_events, save_mission | `mission_control.process_events` |
-| `load_file_contents` | `agent.actions.refinement_actions` | read_file | `prepare_context.load_selected`, `prepare_context.load_fallback` |
-| `load_mission_state` | `agent.actions.mission_actions` | load_mission, read_events | `design_and_plan.load_mission`, `mission_control.load_state`, `revise_plan.load_current_plan` |
-| `load_retrospective_data` | `agent.actions.retrospective_actions` | load_mission, list_artifacts, load_artifact | — |
+| `load_mission_state` | `agent.actions.mission_actions` | load_mission, read_events | `design_and_plan.load_mission`, `mission_control.load_state` |
 | `log_completion` | `agent.actions.registry` | — | `design_and_plan.failed` |
 | `log_validation_notes` | `agent.actions.pipeline_actions` | push_note | `file_ops.log_and_report_success` |
 | `lookup_validation_env` | `agent.actions.pipeline_actions` | — | `file_ops.lookup_env` |
 | `noop` | `agent.actions.registry` | — | — |
-| `parse_and_store_architecture` | `agent.actions.mission_actions` | save_mission | `design_and_plan.parse_architecture`, `design_and_plan.parse_architecture_then_revise` |
+| `parse_and_store_architecture` | `agent.actions.mission_actions` | save_mission | `design_and_plan.parse_architecture`, `design_and_plan.parse_architecture_reconcile` |
 | `parse_dep_check_result` | `agent.actions.pipeline_actions` | — | `quality_gate.parse_dep_result` |
+| `parse_inference_json` | `agent.actions.pipeline_actions` | — | `interact.parse_evaluation` |
 | `persist_validation_env` | `agent.actions.pipeline_actions` | — | `set_env.persist_env` |
+| `pick_suspect_file` | `agent.actions.diagnosis_session_actions` | session_inference | `diagnose_issue.pick_file` |
 | `prepare_next_rewrite` | `agent.actions.ast_actions` | — | `patch.begin_rewrites` |
-| `push_note` | `agent.actions.refinement_actions` | load_mission, save_mission | `capture_learnings.save_note`, `design_and_plan.save_research`, `file_ops.report_bail` (+2) |
-| `read_files` | `agent.actions.registry` | read_file | `capture_learnings.read_source`, `diagnose_issue.check_target`, `file_ops.check_exists` (+2) |
-| `read_investigation_targets` | `agent.actions.diagnostic_actions` | read_file | — |
-| `record_dispatch` | `agent.actions.mission_actions` | save_mission | `mission_control.record_and_dispatch` |
-| `restore_file_from_context` | `agent.actions.integration_actions` | write_file | — |
+| `push_note` | `agent.actions.refinement_actions` | push_note | `design_and_plan.save_research`, `file_ops.report_bail` |
+| `read_files` | `agent.actions.registry` | read_file | `file_ops.check_exists`, `file_ops.read_target` |
 | `rewrite_symbol_turn` | `agent.actions.ast_actions` | session_inference | `patch.rewrite_symbol`, `patch.capture_bail_reason` |
-| `run_git_investigation` | `agent.actions.research_actions` | run_command | — |
-| `run_project_tests` | `agent.actions.integration_actions` | run_command, list_directory | — |
-| `run_tests` | `agent.actions.mission_actions` | run_command | — |
+| `run_investigation_command` | `agent.actions.diagnosis_session_actions` | session_inference | `diagnose_issue.run_command` |
 | `run_validation_checks` | `agent.actions.refinement_actions` | run_command | `quality_gate.execute_checks` |
 | `run_validation_checks_from_env` | `agent.actions.pipeline_actions` | run_command | `file_ops.run_checks` |
-| `scan_project` | `agent.actions.refinement_actions` | list_directory, read_file | `design_and_plan.scan_workspace`, `diagnose_issue.error_file_not_found`, `prepare_context.scan_workspace` (+2) |
-| `select_relevant_files` | `agent.actions.research_actions` | — | `prepare_context.select_relevant` |
+| `scan_project` | `agent.actions.refinement_actions` | list_directory, read_file | `design_and_plan.scan_workspace`, `prepare_context.scan_workspace`, `quality_gate.scan_project` (+1) |
+| `select_and_trace_symbols` | `agent.actions.diagnosis_session_actions` | session_inference | `diagnose_issue.trace_symbols` |
 | `select_symbol_turn` | `agent.actions.ast_actions` | session_inference | `patch.select_symbols` |
-| `select_target_file` | `agent.actions.mission_actions` | file_exists, list_directory, session_inference | `mission_control.resolve_target` |
-| `select_task_for_dispatch` | `agent.actions.mission_actions` | save_mission, session_inference | `mission_control.select_task` |
-| `send_terminal_command` | `agent.actions.terminal_actions` | send_to_terminal | `run_session.execute_command` |
-| `start_director_session` | `agent.actions.mission_actions` | start_inference_session | `mission_control.start_session` |
-| `start_edit_session` | `agent.actions.ast_actions` | start_inference_session, session_inference | `patch.start_session` |
-| `start_terminal_session` | `agent.actions.terminal_actions` | start_terminal, start_inference_session, send_to_terminal | `run_commands.start_terminal`, `run_session.start_session` |
-| `submit_review_to_api` | `agent.actions.retrospective_actions` | escalate_to_api | — |
-| `transform` | `agent.actions.registry` | — | `revise_plan.skip` |
-| `update_task_status` | `agent.actions.mission_actions` | save_mission | `mission_control.apply_last_result` |
-| `validate_created_files` | `agent.actions.refinement_actions` | run_command | — |
+| `send_interaction` | `agent.actions.interactive_actions` | mcp_call_tool | `run_session.execute_interaction` |
+| `start_diagnosis_session` | `agent.actions.diagnosis_session_actions` | start_inference_session | `diagnose_issue.start_session` |
+| `start_edit_session` | `agent.actions.ast_actions` | start_inference_session | `patch.start_session` |
+| `start_interactive_session` | `agent.actions.interactive_actions` | mcp_connect, mcp_call_tool, start_inference_session | `run_commands.start_terminal`, `run_session.start_session` |
+| `structural_sweep_next` | `agent.actions.mission_actions` | save_mission | `mission_control.structural_sweep_next` |
 | `validate_cross_file_consistency` | `agent.actions.research_actions` | list_directory, read_file | `quality_gate.cross_file_check` |
-| `write_file` | `agent.actions.registry` | write_file | — |
 
 ## Step Templates
 
 | Template | Action | Used By |
 |----------|--------|---------|
-| `capture_learnings` | `flow` | — |
 | `cross_file_check` | `validate_cross_file_consistency` | `quality_gate.cross_file_check` |
-| `execute_search` | `curl_search` | `research.search` |
+| `execute_search` | `exa_search` | `research.search` |
 | `extract_symbols` | `extract_symbol_bodies` | `file_ops.extract_symbols` |
-| `gather_project_context` | `flow` | `create.gather_context`, `diagnose_issue.gather_context`, `interact.gather_context`, `project_ops.gather_context`, `retrospective.gather_context` (+1) |
-| `load_mission` | `load_mission_state` | `design_and_plan.load_mission`, `mission_control.load_state`, `revise_plan.load_current_plan` |
-| `push_note` | `push_note` | `capture_learnings.save_note`, `design_and_plan.save_research`, `mission_control.save_rescue_notes` |
-| `read_target_file` | `read_files` | `file_ops.read_target`, `rewrite.read_target` |
+| `gather_project_context` | `flow` | `interact.gather_context`, `project_ops.gather_context`, `rewrite.gather_context` |
+| `load_mission` | `load_mission_state` | `design_and_plan.load_mission`, `mission_control.load_state` |
+| `push_note` | `push_note` | `design_and_plan.save_research` |
+| `read_target_file` | `read_files` | `file_ops.read_target` |
 | `return_diagnosed` | `noop` | — |
 | `return_failed` | `noop` | — |
 | `return_success` | `noop` | — |
-| `scan_workspace` | `scan_project` | `design_and_plan.scan_workspace`, `diagnose_issue.error_file_not_found`, `quality_gate.scan_project`, `set_env.scan` |
+| `return_to_director` | `noop` | `diagnose_issue.done`, `diagnose_issue.failed`, `file_ops.report_success`, `file_ops.report_failure`, `file_ops.report_diagnosed` (+5) |
+| `scan_workspace` | `scan_project` | `design_and_plan.scan_workspace`, `quality_gate.scan_project`, `set_env.scan` |
+| `terminal_failure` | `noop` | `patch.session_failed`, `quality_gate.gate_fail`, `quality_gate.pass_empty` |
+| `terminal_success` | `noop` | `prepare_context.empty_project`, `quality_gate.gate_pass` |
 | `write_file` | `execute_file_creation` | — |
 | `write_files` | `apply_multi_file_changes` | `create.write_files`, `project_ops.write_files`, `rewrite.write_file` |

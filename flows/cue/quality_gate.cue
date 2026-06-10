@@ -31,14 +31,18 @@ quality_gate: #FlowDefinition & {
 		terminal_output: {type: "string", from: "context.terminal_output",         optional: true}
 		dep_coverage:    {type: "dict",   from: "context.dep_coverage_result",     optional: true}
 	}
-	state_reads: ["mission.objective"]
+
+	projections: {
+		quality_overview: _projections.quality_overview
+	}
+
 
 	input: {
 		required: ["working_directory", "mission_id"]
 		optional: [
 			"mission_objective",
 			"architecture_run_command",
-			"architecture", // raw architecture object for objective validation
+			"architecture",
 			"mode", // "checkpoint" or "completion", default "completion"
 		]
 	}
@@ -127,7 +131,7 @@ quality_gate: #FlowDefinition & {
 					{condition: "true", transition: "analyze_deps"},
 				]
 			}
-			publishes: ["dep_check_imports", "dep_check_manifest", "dep_check_skipped"]
+			publishes: ["dep_check_imports", "dep_check_manifest"]
 		}
 
 		analyze_deps: #StepDefinition & {
@@ -161,7 +165,7 @@ quality_gate: #FlowDefinition & {
 					{condition: "true", transition: "gate_fail"},
 				]
 			}
-			publishes: ["dep_coverage_result", "dep_coverage_issues"]
+			publishes: ["dep_coverage_result"]
 		}
 
 		// ── Phase 2: Behavioral validation (completion mode only) ───
@@ -188,14 +192,10 @@ quality_gate: #FlowDefinition & {
 			description: "Run the project to verify it starts without errors"
 			flow:        "run_commands"
 			context: optional: ["project_manifest"]
-			pre_compute: [{
-				formatter: "format_run_context", output_key: "run_context"
-				params: {
-					run_command:  {$ref: "input.architecture_run_command", default: ""}
-					working_dir:  {$ref: "input.working_directory"}
-					manifest:     {$ref: "context.project_manifest", default: ""}
-				}
-			}]
+			// Note: formerly had a `format_run_context` pre_compute
+			// producing `run_context`, but nothing in this step or
+			// downstream ever consumed it (verified by orphan-
+			// pre_compute scan). Deleted 76d-round.
 			input_map: {
 				commands:          [{$ref: "input.architecture_run_command", default: "echo 'no run command configured'"}]
 				working_directory: {$ref: "input.working_directory"}
@@ -206,30 +206,117 @@ quality_gate: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					// If startup fails, skip UX verification — no point exploring broken code
-					{condition: "result.status == 'success' and result.result.get('all_passed', false) == true", transition: "run_ux_verification"},
+					// all_passed comes from the sub-flow's context (execute_commands_batch publishes it)
+					// Gate on result.status only — the proven action:flow propagation
+					// path (used across file_ops/design_and_plan). The previous gate also
+					// required result.all_passed, but run_commands surfaces all_passed via
+					// its `returns` block, which the runtime buries under result["_returns"]
+					// (unreadable by _DotDict's underscore rule) and which the publish-
+					// extraction can't lift out either — so the AND was permanently false
+					// and the entire UX phase never ran. status=='success' means the startup
+					// command completed; if the program runs-but-crashes the explorer simply
+					// reports the crash (a valid quality finding), and a terminal that fails
+					// to start yields status!='success' and still skips. Robust, no _returns.
+					{condition: "result.status == 'success'", transition: "plan_ux_charter"},
 					{condition: "true", transition: "summarize"},
 				]
 			}
 			publishes: ["terminal_output"]
 		}
 
-		// Phase 2b: Does it work well? (persona-driven UX verification)
+		// Phase 2b-i: Author the EXPLORER charter (quality gate's counterpart
+		// to the function gate's charter_function). Replaces the former inline
+		// one-line persona with a real, product-aware exploration brief so the
+		// quality gate is where curiosity-driven probing lives — not the
+		// function sweep. Output text becomes execution_persona for run_session.
+		plan_ux_charter: #StepDefinition & {
+			action:      "inference"
+			description: "Author an exploratory UX charter for the quality session"
+			context: {
+				required: ["project_manifest"]
+			}
+			prompt_template: {
+				template: "quality_gate/charter_explore"
+				context_keys: ["project_listing"]
+				input_keys: ["mission_objective", "architecture_run_command"]
+			}
+			pre_compute: [{
+				formatter:  "format_project_listing"
+				output_key: "project_listing"
+				params: {source: {$ref: "context.project_manifest"}}
+			}]
+			config: temperature: "t*0.5"
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "run_ux_verification"}]
+			}
+			publishes: ["execution_persona"]
+		}
+
+		// Phase 2b-ii: Does it work well? (persona-driven UX verification)
 		run_ux_verification: #StepDefinition & {
 			action:      "flow"
 			description: "Persona-driven UX exploration — find inconsistencies"
 			flow:        "run_session"
 			input_map: {
-				execution_persona: "You are a QA tester. The project just started successfully. Interact with it briefly — try 2-3 basic operations to verify core functionality works. Report any errors, crashes, or unexpected behavior."
+				execution_persona: {$ref: "context.execution_persona", default: "You are a QA tester exploring the product. Try the core features, then probe richer scenarios, and report any errors, confusing output, or rough edges."}
 				working_directory: {$ref: "input.working_directory"}
-				max_turns:         5
+				// No turn budget. run_session never honored the old
+				// max_turns: 5 anyway (not a declared input), and the
+				// gate is the LAST verification before mission completion
+				// — its session must run the full charter. Termination is
+				// the operator's `close` choice plus the runtime
+				// safeguards (stuck_detected, process_exited).
 			}
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "true", transition: "summarize"},
+					{condition: "true", transition: "evaluate_ux_session"},
 				]
 			}
-			publishes: ["terminal_output", "session_summary"]
+			publishes: ["terminal_output", "inference_session_id"]
+		}
+
+		// Evaluate UX session inside the same memoryful session that
+		// drove the terminal interaction. The model has full context.
+		evaluate_ux_session: #StepDefinition & {
+			action:      "inference"
+			description: "Assess UX session — the model already has full context in KV cache"
+			context: optional: ["inference_session_id", "terminal_output"]
+			prompt_template: {
+				template: "quality_gate/evaluate_ux_session"
+				context_keys: []
+				input_keys: ["mission_objective"]
+			}
+			config: temperature: "t*0.2"
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "end_ux_session"}]
+			}
+			publishes: ["ux_session_assessment"]
+		}
+
+		// Release the inference session now that assessment is captured.
+		end_ux_session: #StepDefinition & {
+			action:      "end_inference_session"
+			description: "Release run_session inference session"
+			context: optional: ["inference_session_id"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "flush_transient_ux"}]
+			}
+		}
+
+		// Test isolation: delete architecture-declared transient files the
+		// UX session's program run may have written (see interact.cue's
+		// flush_transient_* steps for the rationale).
+		flush_transient_ux: #StepDefinition & {
+			action:      "flush_transient_files"
+			description: "Delete architecture-declared transient files (test isolation)"
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "summarize"}]
+			}
 		}
 
 		// ── Phase 3: Summary and verdict ───────────────────────────
@@ -239,13 +326,15 @@ quality_gate: #FlowDefinition & {
 			description: "Summarize all quality results into actionable findings"
 			context: optional: [
 				"validation_results", "project_manifest",
-				"cross_file_summary", "terminal_output", "session_summary",
+				"cross_file_summary", "terminal_output",
+				"ux_session_assessment",
 			]
 			prompt_template: {
 				template: "quality_gate/summarize"
 				context_keys: [
 					"validation_summary", "project_file_list",
-					"cross_file_summary", "terminal_output", "session_summary",
+					"cross_file_summary", "terminal_output",
+					"ux_session_assessment",
 					"architecture_summary",
 				]
 				input_keys: ["mission_objective", "mode", "architecture"]
@@ -283,7 +372,7 @@ quality_gate: #FlowDefinition & {
 			description: "Parse quality summary and determine pass/fail"
 			context: {
 				required: ["inference_response"]
-				optional: ["validation_results", "project_manifest"]
+				optional: ["validation_results", "project_manifest", "mission"]
 			}
 			resolver: {
 				type: "rule"
@@ -298,25 +387,16 @@ quality_gate: #FlowDefinition & {
 
 		// ── Terminal states ────────────────────────────────────────
 
-		gate_pass: #StepDefinition & {
-			action: "noop"
+		gate_pass: #StepDefinition & _templates.terminal_success & {
 			description: "Project passes quality gate"
-			terminal: true
-			status:   "success"
 		}
 
-		gate_fail: #StepDefinition & {
-			action: "noop"
+		gate_fail: #StepDefinition & _templates.terminal_failure & {
 			description: "Project has quality issues needing attention"
-			terminal: true
-			status:   "failed"
 		}
 
-		pass_empty: #StepDefinition & {
-			action: "noop"
+		pass_empty: #StepDefinition & _templates.terminal_failure & {
 			description: "No files to check or could not plan checks"
-			terminal: true
-			status:   "failed"
 		}
 	}
 

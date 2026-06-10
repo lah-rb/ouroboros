@@ -128,6 +128,32 @@ def render_summary(events: list[dict], trace_path: str) -> str:
     lines.append(f"  Inference calls: {total_inference}")
     lines.append(f"  Tokens in:  {total_tok_in:,} (avg {avg_in:,}/call)")
     lines.append(f"  Tokens out: {total_tok_out:,} (avg {avg_out:,}/call)")
+
+    # Observability-layer counts. Zero is a meaningful signal here — the
+    # instrumentation is new (see §4.7 plumbing + Tier 2 events), so
+    # "0 session_start events" in a trace may mean "ran before
+    # instrumentation landed" rather than "no sessions happened."
+    # Rendering the counts even when zero makes that unambiguous.
+    session_starts = sum(1 for e in events if e["event_type"] == "session_start")
+    session_ends = sum(1 for e in events if e["event_type"] == "session_end")
+    commands = sum(1 for e in events if e["event_type"] == "command_run")
+    command_timeouts = sum(
+        1
+        for e in events
+        if e["event_type"] == "command_run" and e.get("timed_out", False)
+    )
+    mcp_calls = sum(1 for e in events if e["event_type"] == "mcp_tool_call")
+    mcp_errors = sum(
+        1 for e in events if e["event_type"] == "mcp_tool_call" and e.get("error", "")
+    )
+    notes = sum(1 for e in events if e["event_type"] == "note_pushed")
+
+    lines.append(f"  Sessions: {session_starts} started, {session_ends} ended")
+    timeout_note = f", {command_timeouts} timed out" if command_timeouts else ""
+    lines.append(f"  Commands: {commands}{timeout_note}")
+    mcp_err_note = f", {mcp_errors} errors" if mcp_errors else ""
+    lines.append(f"  MCP tool calls: {mcp_calls}{mcp_err_note}")
+    lines.append(f"  Notes pushed: {notes}")
     lines.append("")
 
     # Resolver decisions
@@ -265,6 +291,77 @@ def render_detail(events: list[dict], trace_path: str) -> str:
                 f"({e.get('child_duration_ms', 0):.0f}ms)"
             )
 
+        elif et == "session_start":
+            lines.append(
+                f"    ◈ session_start {e.get('session_id', '')!r} "
+                f"(config={e.get('config', {})})"
+            )
+
+        elif et == "session_end":
+            status = "ok" if e.get("success", False) else "no-op"
+            lines.append(
+                f"    ◇ session_end {e.get('session_id', '')!r} "
+                f"[{status}] ({e.get('wall_ms', 0):.0f}ms)"
+            )
+
+        elif et == "command_run":
+            timed_out = " TIMEOUT" if e.get("timed_out", False) else ""
+            lines.append(
+                f"    $ {e.get('command', '')} "
+                f"→ rc={e.get('return_code', 0)}{timed_out} "
+                f"({e.get('wall_ms', 0):.0f}ms)"
+            )
+            stdout_prev = e.get("stdout_preview", "")
+            if stdout_prev.strip():
+                out_lines = stdout_prev.splitlines()
+                lines.append("      stdout:")
+                for ol in out_lines[:15]:
+                    lines.append(f"        {ol}")
+                if len(out_lines) > 15:
+                    lines.append(f"        ... ({len(out_lines) - 15} more lines)")
+            stderr_prev = e.get("stderr_preview", "")
+            if stderr_prev.strip():
+                err_lines = stderr_prev.splitlines()
+                lines.append("      stderr:")
+                for el in err_lines[:15]:
+                    lines.append(f"        {el}")
+                if len(err_lines) > 15:
+                    lines.append(f"        ... ({len(err_lines) - 15} more lines)")
+
+        elif et == "mcp_tool_call":
+            error = e.get("error", "")
+            status = "error" if error else "ok"
+            lines.append(
+                f"    ⊕ mcp {e.get('server', '')}/{e.get('tool', '')} "
+                f"args={e.get('arg_keys', [])} "
+                f"[{status}] ({e.get('wall_ms', 0):.0f}ms)"
+            )
+            if error:
+                lines.append(f"      error: {error}")
+            result_prev = e.get("result_preview", "")
+            if result_prev.strip():
+                rp_lines = result_prev.splitlines()
+                lines.append("      result:")
+                for rl in rp_lines[:10]:
+                    lines.append(f"        {rl}")
+                if len(rp_lines) > 10:
+                    lines.append(f"        ... ({len(rp_lines) - 10} more lines)")
+
+        elif et == "note_pushed":
+            ok_mark = "✓" if e.get("success", True) else "✗"
+            lines.append(
+                f"    📝 note [{e.get('category', '')}] "
+                f"{ok_mark} tags={e.get('tags', [])} "
+                f"source={e.get('source_flow', '')!r}"
+            )
+            preview = e.get("content_preview", "")
+            if preview.strip():
+                p_lines = preview.splitlines()
+                for pl in p_lines[:6]:
+                    lines.append(f"      │ {pl}")
+                if len(p_lines) > 6:
+                    lines.append(f"      │ ... ({len(p_lines) - 6} more lines)")
+
         elif et == "step_end":
             resolver_sym = {"rule": "⑂", "llm_menu": "☰"}.get(
                 e.get("resolver_type", ""), "→"
@@ -292,9 +389,7 @@ def render_detail(events: list[dict], trace_path: str) -> str:
     return "\n".join(lines)
 
 
-def _derive_output_path(
-    events: list[dict], fmt: str, output_override: str | None
-) -> str:
+def _derive_output_path(events: list[dict], output_override: str | None) -> str:
     """Derive the output file path for the trace report."""
     if output_override:
         return output_override
@@ -338,7 +433,7 @@ def cmd_trace(args: argparse.Namespace) -> None:
         return
 
     # Write to file (default behavior)
-    output_path = _derive_output_path(events, fmt, output_override)
+    output_path = _derive_output_path(events, output_override)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(content)
         f.write("\n")

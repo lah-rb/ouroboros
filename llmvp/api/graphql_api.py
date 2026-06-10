@@ -36,8 +36,6 @@ from core.inference import (
 from core.lifecycle import initialize_server_async, shutdown_server_async
 from core.session_manager import (
     SessionManager,
-    SessionInfo as _SessionInfo,
-    SessionEvent as _SessionEvent,
 )
 
 # Set up logging
@@ -87,11 +85,27 @@ class ThinkingResponse:
 
 @strawberry.type
 class CompletionResponse:
-    """Non-streaming completion response."""
+    """Non-streaming completion response.
+
+    ``truncated`` is a derived flag — set when ``tokens_generated`` meets
+    or exceeds the effective ``max_tokens`` for the request (the caller's
+    override if supplied, else the config default). It signals that the
+    model's output was cut off by the token budget rather than ending on
+    an EOS or stop sequence. A truncated response may contain a
+    partially-completed reasoning chain, an unclosed channel/delimiter
+    sequence, or silently empty content after FSM stripping.
+
+    Callers log this for observability; they do not have to handle it
+    specially. See the asymmetry fix in session_completion /
+    session_turn (Apr 2026) — before that fix, session turns silently
+    capped at 256 tokens regardless of the configured default, which
+    produced silent empty responses on reasoning-heavy turns.
+    """
 
     text: str
     tokens_generated: int
     finished: bool = True
+    truncated: bool = False
 
 
 @strawberry.type
@@ -264,9 +278,22 @@ class Query:
         The pinned instance retains KV cache state between turns.
         Each turn's prompt contains only NEW content — the model
         remembers prior turns via the preserved KV cache.
+
+        ``max_tokens`` resolution mirrors the completion path (see
+        core/inference.py):
+          1. caller's explicit override, else
+          2. ``config.generation.max_tokens_default``, else
+          3. hard floor of 256.
+        Previously this was hardcoded ``request.max_tokens or 256``,
+        which silently capped session turns at 256 regardless of the
+        configured default — causing reasoning-heavy turns to be cut
+        off mid-analysis on Harmony-channel families (the model never
+        transitioned to the final channel, so the FSM stripped the
+        whole response and returned empty). Keep this in sync with
+        session_turn below and with core/inference.py's fallback chain.
         """
         mgr = _get_session_manager()
-        max_tokens = request.max_tokens or 256
+        max_tokens = request.max_tokens or config.generation.max_tokens_default or 256
         temperature = request.temperature or 0.7
         text, tokens = await mgr.session_turn_complete(
             session_id=request.session_id,
@@ -275,7 +302,13 @@ class Query:
             temperature=temperature,
             grammar=request.grammar,
         )
-        return CompletionResponse(text=text, tokens_generated=tokens, finished=True)
+        truncated = tokens >= max_tokens
+        return CompletionResponse(
+            text=text,
+            tokens_generated=tokens,
+            finished=True,
+            truncated=truncated,
+        )
 
     @strawberry.field
     async def completion(
@@ -291,9 +324,17 @@ class Query:
             use_tools: Enable tool-augmented inference (model can call tools)
 
         Returns:
-            CompletionResponse with generated text
+            CompletionResponse with generated text.
+            ``truncated`` is set when ``tokens_generated`` meets or exceeds
+            the effective ``max_tokens`` the request resolved to (see
+            core/inference.py:run_completion for the fallback chain).
+            We recompute the effective value here to derive the flag —
+            ``run_completion`` itself stays free of API-shape concerns.
         """
         run_fn = run_tool_completion if use_tools else run_completion
+        effective_max = (
+            request.max_tokens or config.generation.max_tokens_default or 256
+        )
         answer, tokens_generated = await run_fn(
             prompt=request.prompt,
             max_tokens=request.max_tokens,
@@ -304,6 +345,7 @@ class Query:
             text=answer,
             tokens_generated=tokens_generated,
             finished=True,
+            truncated=tokens_generated >= effective_max,
         )
 
     @strawberry.field
@@ -475,9 +517,16 @@ class Subscription:
         The pinned instance retains KV cache state between turns.
         Each turn's prompt contains only NEW content — the model
         remembers prior turns via the preserved KV cache.
+
+        See session_completion above for ``max_tokens`` resolution
+        rationale — the same chain applies here (explicit override →
+        config default → hard floor of 256). The streaming path does
+        not return a truncation flag (the response is chunked; clients
+        can measure their own received token count against max_tokens
+        if they care).
         """
         mgr = _get_session_manager()
-        max_tokens = request.max_tokens or 256
+        max_tokens = request.max_tokens or config.generation.max_tokens_default or 256
         temperature = request.temperature or 0.7
         async for chunk in mgr.session_turn(
             session_id=request.session_id,

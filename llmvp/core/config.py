@@ -8,11 +8,10 @@ and global access patterns.
 """
 
 import logging
-import os
 from pathlib import Path
-from typing import Optional, List, Union
+from typing import Optional, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # --------------------------------------------------------------------
 # 1️⃣ Configuration Models (Pydantic)
@@ -23,7 +22,7 @@ class ModelConfig(BaseModel):
     """Configuration for the LLM model architecture."""
 
     name: str
-    family: str                    # Format schema family: "harmony", "chatml", etc.
+    family: str  # Format schema family: "harmony", "chatml", "tekken"
     path: Path
     n_ctx: int
     n_gpu_layers: int
@@ -31,6 +30,24 @@ class ModelConfig(BaseModel):
     verbose: bool
     flash_attention: bool = False
     batch_size: int = 64
+    thinking: bool = True  # Master on/off: gates the <think>/[THINK] opening
+    # Reasoning effort level rendered as a "Reasoning: <level>" line in the
+    # system block (harmony + Step/chatml). None → use the family default.
+    # Inert for binary families (tekken/Mistral use the `thinking` bool only).
+    thinking_mode: Optional[str] = None
+
+    @field_validator("thinking_mode")
+    @classmethod
+    def _validate_thinking_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        normalized = v.strip().lower()
+        allowed = {"none", "low", "medium", "high"}
+        if normalized not in allowed:
+            raise ValueError(
+                f"thinking_mode must be one of {sorted(allowed)} or null, got {v!r}"
+            )
+        return normalized
 
 
 class PromptConfig(BaseModel):
@@ -41,8 +58,8 @@ class PromptConfig(BaseModel):
     persona file path for developer instructions.
     """
 
-    persona_file: Optional[Path] = None   # Path to SOUL.md or equivalent
-    tools_file: Optional[Path] = None     # Path to tools definition file
+    persona_file: Optional[Path] = None  # Path to SOUL.md or equivalent
+    tools_file: Optional[Path] = None  # Path to tools definition file
 
 
 class GenerationConfig(BaseModel):
@@ -56,6 +73,16 @@ class GenerationConfig(BaseModel):
     min_p: Optional[float] = None
     presence_penalty: Optional[float] = None
     repeat_penalty: Optional[float] = None
+
+    # Degenerate-repetition guard (see llmvp/inference/repetition.py). Aborts a
+    # turn that collapses into token-level repetition (e.g. the Gemma-4 defect)
+    # instead of letting it fill max_tokens (~1h hang). On by default for every
+    # model; set ``repetition_guard_enabled: false`` per-config to disable. Not a
+    # llama.cpp sampler param — sampler defaults are untouched.
+    repetition_guard_enabled: Optional[bool] = None  # None => enabled
+    repetition_max_run: Optional[int] = None  # default 48 (see repetition.py)
+    repetition_max_cycle_period: Optional[int] = None  # default 8
+    repetition_min_cycle_reps: Optional[int] = None  # default 12
 
 
 class KnowledgeConfig(BaseModel):
@@ -91,6 +118,20 @@ class ResourcesConfig(BaseModel):
     cpu_threads: int
     max_concurrent_requests: int
     jit_concurrency_limit: Optional[int] = None  # null = pre-allocate all at startup
+    # Max seconds a request waits on the scaling gate (acquire + every
+    # generation start) while a JIT scale-up/down runs. Distinct from
+    # backend_timeout, which bounds the readiness wait, the slow-path
+    # queue wait, and the drain INSIDE scaling operations — a waiter
+    # must outlive drain + N warm-ups, so this is deliberately larger.
+    scale_wait_timeout: int = 600
+    # Min seconds a JIT instance must sit idle before the scaler may
+    # reap it (one instance per tick, LRU first). The real thrash
+    # protection — a recently-used instance can never be reaped.
+    instance_idle_ttl: int = 600
+    # Min seconds after a batch scale-up before the scaler may reap at
+    # all (belt-and-braces on top of instance_idle_ttl). Test configs
+    # lower this so reap cycles are observable in minutes, not hours.
+    scale_down_cooldown: int = 300
 
 
 class ToolsConfig(BaseModel):

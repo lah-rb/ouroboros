@@ -223,7 +223,7 @@ def stop_background_server():
             os.remove(PID_FILE)
 
 
-def run_server(host: str, port: int, log_level: str, skip_token_load: bool = False):
+def run_server(host: str, port: int, log_level: str, skip_knowledge: bool = False):
     """
     Run the GraphQL API server.
 
@@ -231,14 +231,24 @@ def run_server(host: str, port: int, log_level: str, skip_token_load: bool = Fal
         host: Server host
         port: Server port
         log_level: Logging level
-        skip_token_load: Skip loading static tokens (for testing)
+        skip_knowledge: Start without SOUL.md persona or tools
     """
     import uvicorn
 
     log = logging.getLogger("llm-mvp")
     log.info(f"🚀 Starting LLMvp GraphQL API on {host}:{port}")
 
-    # Note: Server initialization is handled by api/graphql_api.py startup event
+    # Set the flag BEFORE uvicorn spawns the app — the startup event
+    # reads it from the lifecycle module since uvicorn doesn't provide
+    # a way to pass parameters to ASGI startup events.
+    if skip_knowledge:
+        from core.lifecycle import set_skip_knowledge
+
+        set_skip_knowledge(True)
+        log.info(
+            "📝 --skip-knowledge active: using bare format template "
+            "(no persona/tools)"
+        )
 
     uvicorn.run(
         "api.graphql_api:app",
@@ -279,9 +289,18 @@ def main():
 
     # Other options
     parser.add_argument(
-        "--skip-token-load",
+        "--skip-knowledge",
         action="store_true",
-        help="Skip loading static tokens (for testing only)",
+        help="Start without SOUL.md persona or tools — uses bare format "
+        "template only. Useful for --collect-training to avoid persona "
+        "contaminating raw model output.",
+    )
+    parser.add_argument(
+        "--log-training",
+        action="store_true",
+        help="Capture raw model responses to captured_raw.json during serving. "
+        "Compatible with --backend. Captured examples can be annotated "
+        "and added to knowledge/crf/curated.json as FSM regression fixtures.",
     )
 
     args = parser.parse_args()
@@ -291,9 +310,64 @@ def main():
         success = stop_background_server()
         return 0 if success else 1
 
+    # Activate infield training capture if requested
+    if args.log_training:
+        from core.interaction_logger import enable_training_log_mode
+
+        # Family resolution order (most→least authoritative):
+        #   1. config.model.family — the runtime source of truth.
+        #      This is what the FSM labeler actually uses during
+        #      inference, so the capture tag should match it. Model
+        #      names change often (vendor releases a "v2", renames
+        #      a checkpoint, etc.); name-based heuristics drift but
+        #      the config is explicit.
+        #   2. Name heuristics — used only as a fallback when
+        #      config.model.family is missing or literally the
+        #      string "unknown". These provide a last-chance guess
+        #      but should never override an explicit config value.
+        #   3. "unknown" — final fallback; surfaced as a warning so
+        #      the operator knows the capture won't be family-tagged
+        #      correctly.
+        model_name = config.model.name if config else "unknown"
+        config_family = (config.model.family if config else "").strip()
+
+        if config_family and config_family != "unknown":
+            family = config_family
+        else:
+            name_lower = model_name.lower()
+            if "gpt-oss" in name_lower:
+                family = "gpt-oss"
+            elif "qwen" in name_lower:
+                family = "qwen3"
+            elif "devstral" in name_lower or "mistral" in name_lower:
+                family = "tekken"
+            elif "nemotron" in name_lower:
+                # Nemotron uses ChatML chat template with prefilled
+                # thinking (output stream contains </think> without
+                # a matching <think> opener; the opener is primed by
+                # the template). Same handling as qwen3.5.
+                family = "chatml"
+            else:
+                family = "unknown"
+                log.warning(
+                    "Training capture: could not determine family for "
+                    "model=%r (config.family=%r). Captures will be "
+                    "tagged 'unknown' and skipped by FSM fixture loaders. "
+                    "Set model.family explicitly in your LLMVP config.",
+                    model_name,
+                    config_family,
+                )
+
+        enable_training_log_mode(family, model_name)
+        log.info(
+            "📊 Infield training capture active — raw responses will be "
+            "saved to captured_raw.json (family=%s)",
+            family,
+        )
+
     # Handle background start
     if args.backend:
-        proc = start_background_server()
+        start_background_server()
         return 0
 
     # Start the GraphQL server
@@ -301,7 +375,7 @@ def main():
         host=config.app.host,
         port=config.app.port,
         log_level=config.app.log_level,
-        skip_token_load=args.skip_token_load,
+        skip_knowledge=args.skip_knowledge,
     )
 
     return 0

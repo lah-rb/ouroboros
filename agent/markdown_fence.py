@@ -93,59 +93,179 @@ def _is_meaningful_content(content: str) -> bool:
     return True
 
 
+def _looks_like_empty_fence(raw_content: str) -> bool:
+    """Detect raw content that is just markdown fence markers with no body.
+
+    Matches patterns like:
+        ```python\\n```
+        ```\\n```
+        ``` python \\n ```
+        ~~~yaml\\n~~~
+
+    These occur when the LLM wraps an intentionally empty file
+    (e.g., ``__init__.py``) in markdown fences.  The fence extractor
+    correctly returns no content, but the caller needs to distinguish
+    "empty fence" (write empty file) from "no fence at all" (use raw text).
+    """
+    stripped = raw_content.strip()
+    # Remove all whitespace, backticks, tildes, and common language tags
+    residue = stripped
+    for char in "`~ \t\n\r":
+        residue = residue.replace(char, "")
+    # After stripping fence characters and whitespace, only a language
+    # tag (e.g., "python", "yaml") should remain — or nothing at all.
+    lang_tags = {
+        "python",
+        "yaml",
+        "yml",
+        "json",
+        "toml",
+        "javascript",
+        "js",
+        "typescript",
+        "ts",
+        "rust",
+        "go",
+        "java",
+        "c",
+        "cpp",
+        "sh",
+        "bash",
+        "markdown",
+        "md",
+        "txt",
+        "ini",
+        "cfg",
+        "xml",
+        "html",
+        "css",
+        "sql",
+        "ruby",
+        "rb",
+        "perl",
+        "lua",
+        "r",
+        "swift",
+        "kotlin",
+        "scala",
+        "php",
+    }
+    return residue.lower() in lang_tags or residue == ""
+
+
+# Pattern matching the FILE marker as the first line inside a fenced
+# block. Tolerates multiple comment prefixes so the same protocol works
+# across languages: `#` (Python, TOML, YAML, Makefile, Markdown), `//`
+# (JS/TS/C family), `--` (SQL, Lua), or no prefix at all.
+_FILE_MARKER_RE = re.compile(r"^\s*(?:#|//|--)?\s*===\s*FILE:\s*(.+?)\s*===\s*$")
+
+
 def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str]]:
-    """Parse text containing === FILE: path === markers with fenced content.
+    """Parse text containing fenced code blocks with `# === FILE: path ===`
+    markers as the first comment line inside each fence.
 
     This is the main entry point for multi-file LLM output parsing.
-    Splits on FILE markers first, then uses markdown-it-py to extract
-    the fenced content from each section.
+    Scans every fenced block for a FILE marker on its first line; when
+    present, strips that line from the block body and uses the captured
+    path. Blocks without a marker fall back to `fallback_path` (useful
+    for single-file sites where the path comes from the flow input).
 
     Deduplicates by path: first meaningful block wins. This prevents
     LLM-generated duplicate FILE markers (e.g., an echo of prompt
     instructions) from overwriting valid content.
+
+    The marker pattern tolerates comment styles `#`, `//`, `--`, or
+    none at all — the FILE marker works regardless of which language
+    tag the fence uses.
 
     Returns list of (path, content) tuples.
     """
     blocks: list[tuple[str, str]] = []
     seen_paths: set[str] = set()
 
-    # Split on === FILE: ... === markers
-    marker_pattern = r"===\s*FILE:\s*(.+?)\s*===\s*\n"
-    parts = re.split(marker_pattern, text)
+    for fenced in extract_fenced_blocks(text):
+        body = fenced.content
+        if not body:
+            # Empty fence — could be an intentionally empty file if the
+            # caller supplied a fallback_path (single-file site).
+            # Without a path, we skip.
+            if fallback_path and fallback_path not in seen_paths:
+                blocks.append((fallback_path, ""))
+                seen_paths.add(fallback_path)
+            continue
 
-    # parts[0] = before first marker (discard)
-    # parts[1] = path, parts[2] = content, parts[3] = path, ...
-    i = 1
-    while i + 1 < len(parts):
-        file_path = parts[i].strip()
-        raw_content = parts[i + 1]
+        # Peek at the first non-blank line for a FILE marker.
+        lines = body.split("\n")
+        first_nonblank_idx = None
+        for idx, line in enumerate(lines):
+            if line.strip():
+                first_nonblank_idx = idx
+                break
 
-        # Extract code from fenced blocks
-        fenced = extract_fenced_blocks(raw_content)
-        if fenced:
-            # Use the first (usually only) fenced block
-            content = fenced[0].content
+        if first_nonblank_idx is None:
+            # All blank — treat as empty fence.
+            if fallback_path and fallback_path not in seen_paths:
+                blocks.append((fallback_path, ""))
+                seen_paths.add(fallback_path)
+            continue
+
+        marker = _FILE_MARKER_RE.match(lines[first_nonblank_idx])
+        if marker:
+            file_path = marker.group(1).strip()
+            # Strip the marker line (and any leading blanks before it)
+            # from the body so the written file contains only the
+            # actual source code.
+            remaining_lines = lines[first_nonblank_idx + 1 :]
+            # Trim one trailing newline that may have been introduced
+            # by the split — but preserve intentional trailing blank
+            # lines. Strip only leading blanks from the remainder so
+            # the file starts at the first substantive line.
+            while remaining_lines and not remaining_lines[0].strip():
+                remaining_lines.pop(0)
+            content = "\n".join(remaining_lines).rstrip() + "\n"
+            if content == "\n":
+                content = ""
         else:
-            # No fences — use raw content stripped
-            content = raw_content.strip()
-
-        if file_path and _is_meaningful_content(content):
-            # First-write-wins: skip duplicate paths
-            if file_path not in seen_paths:
-                blocks.append((file_path, content))
-                seen_paths.add(file_path)
-            else:
+            # No marker — use fallback_path if provided.
+            if not fallback_path:
                 logger.debug(
-                    "Skipping duplicate FILE block for %r (first block kept)",
-                    file_path,
+                    "Fenced block with no FILE marker and no fallback_path; "
+                    "skipping. Fence language tag: %r",
+                    fenced.language,
                 )
-        i += 2
+                continue
+            file_path = fallback_path
+            content = body.strip()
+            if content and not content.endswith("\n"):
+                content += "\n"
 
-    # Fallback: no FILE markers — treat as single file
+        if not file_path:
+            continue
+        if file_path in seen_paths:
+            logger.debug(
+                "Skipping duplicate FILE block for %r (first block kept)",
+                file_path,
+            )
+            continue
+
+        if content or _is_meaningful_content(body):
+            blocks.append((file_path, content))
+            seen_paths.add(file_path)
+
+    # Final fallback: no fences extracted. Two sub-cases:
+    #   - An intentionally empty fence (```lang\n```) — the LLM meant an
+    #     empty file. Detected via _looks_like_empty_fence.
+    #   - Bare text with no fences — legacy behavior, wrap in the file.
+    # Both require a fallback_path to know where to write.
     if not blocks and fallback_path:
-        content = strip_fences(text)
-        if _is_meaningful_content(content):
-            blocks = [(fallback_path, content)]
+        if _looks_like_empty_fence(text):
+            blocks = [(fallback_path, "")]
+        else:
+            content = strip_fences(text)
+            if _is_meaningful_content(content):
+                if not content.endswith("\n"):
+                    content += "\n"
+                blocks = [(fallback_path, content)]
 
     return blocks
 

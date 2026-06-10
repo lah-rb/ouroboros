@@ -1,0 +1,20 @@
+id: rewrite/project_and_architecture
+content: |
+  ## Project structure
+  {context.file_excerpts}
+
+  ## Architecture & import conventions
+  {context.architecture_spec}
+
+  {context.data_contract_block}
+
+  Preserve compatibility with these signatures and conventions when
+  rewriting. The current file sits inside this ecosystem — other files
+  import from it expecting the existing contract to hold.
+
+  If a data contract is shown above, it is binding: your code must
+  read and write data files using exactly those key names and
+  structures. A rewrite that "fixes" the code by introducing new
+  required keys (e.g. demanding a `player_location` field that
+  isn't in the contract) silently breaks the data side and is
+  worse than the original bug.

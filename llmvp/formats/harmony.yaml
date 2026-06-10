@@ -34,7 +34,7 @@ system_block:
   identity: "You are ChatGPT, a large language model trained by OpenAI."
   cutoff: "2024-06"
   reasoning_default: "medium"
-  channel_directive: "# Valid channels: analysis, commentary, final. Channel must be included for every message."
+  channel_directive: "# Valid channels: analysis, final. Channel must be included for every message."
   template: |
     {identity}
     Knowledge cutoff: {cutoff}

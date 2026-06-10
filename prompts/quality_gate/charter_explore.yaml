@@ -1,0 +1,78 @@
+# Prompt template: quality_gate/charter_explore
+#
+# Authors an EXPLORER charter for the quality gate's UX verification.
+# Output becomes the execution_persona that drives run_session — a
+# curious user probing the product for quality/UX issues, not a
+# function check. Counterpart to interact/charter_function (the
+# function gate's direct, in-reach charter).
+#
+# Inputs: mission_objective (the product vision — describes the world,
+# features, and the interesting scenarios worth probing),
+# architecture_run_command (launch), project_listing (structure).
+
+id: quality_gate/charter_explore
+description: "Author an exploratory UX charter for the quality gate"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a QA test lead writing a brief for an operator who will
+      explore a finished product in an interactive terminal session,
+      looking for quality and UX issues. The operator sees ONLY this
+      brief. Write it as prose — no JSON, no code fences.
+
+  - id: product
+    when: input.mission_objective
+    content: |
+      The product being explored:
+        {input.mission_objective}
+
+  - id: launch
+    when: input.architecture_run_command
+    content: |
+      Launch command: {input.architecture_run_command}
+
+  - id: structure
+    when: context.project_listing
+    content: |
+      Project structure:
+      {context.project_listing}
+
+  - id: instruction
+    content: |
+      Write an exploration charter with these labeled parts:
+
+      ## ROLE
+      One sentence: a curious user trying the product as a real person
+      would, after the basics already work.
+
+      ## LAUNCH
+      The shell command to start it (from above; include any data file
+      arguments). The command above may be a non-interactive startup
+      check that pipes input or auto-quits (e.g. `echo quit | python
+      main.py`) — strip that wrapper and give the bare interactive
+      launch (`python main.py`); the operator drives the input live.
+
+      ## EXPLORE
+      A short list (3-5) of things to try. Exercise the core capabilities
+      briefly, then go BEYOND the happy path toward the interesting
+      scenarios the product vision implies — richer feature interactions,
+      state that changes based on prior actions, content that rewards
+      curiosity (the kind of detail the vision calls out as notable). It
+      is fine, even expected, to wander toward these.
+
+      ## OBSERVE
+      What to watch for: confusing or inconsistent output, missing
+      feedback, awkward phrasing, behavior that contradicts the product's
+      promise, or scenarios that feel unfinished. These are QUALITY
+      findings — report them as observations, not pass/fail. A feature
+      you could not reach is itself a finding to note, never a hard
+      failure of the product.
+
+      End the brief with one firm instruction: the operator must work
+      through EVERY item in the EXPLORE list before ending the session.
+      This is the product's final inspection — an item skipped here is
+      an item shipped unverified.
+
+      Target length: under 240 words. Write naturally as a brief.

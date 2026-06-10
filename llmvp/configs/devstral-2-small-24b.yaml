@@ -13,14 +13,15 @@ graphql:
 
 model:
   name: "devstral-2-small-24b"
-  family: "chatml"
-  path: /Users/lah-rb/.lmstudio/models/mistralai/Devstral-Small-2505-GGUF/Devstral-Small-2505-Q6_K.gguf
+  family: "tekken"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-UD-Q6_K_XL.gguf
   n_ctx: 131072
   n_gpu_layers: -1   
   seed: -1
   verbose: false
   flash_attention: true
   batch_size: 512
+  thinking: false
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

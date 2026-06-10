@@ -1,0 +1,31 @@
+==================== CONFIRM: devstral-2-small-24b ====================
+✅ Got 1704 tokens – writing to /Users/lah-rb/Repos/ouroboros/llmvp/data/devstral-2-small-24b.tokens.bin
+  t 1 REAL  ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.0s :: '```json\n{"choice": "trace"}\n```'
+  t 2 REAL  ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.0s :: '```json\n{"choice": "trace"}\n```'
+  t 3 REAL  ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.1s :: '```json\n{"choice": "trace"}\n```'
+  t 4 REAL  ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     0.9s :: '```json\n{"choice": "trace"}\n```'
+  t 5 REAL  ok          tok=11   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  1.1s :: '```json\n{"choice": "conclude"}\n```'
+  t 6 REAL  ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.0s :: '```json\n{"choice": "trace"}\n```'
+  t 7 REAL  ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.0s :: '```json\n{"choice": "trace"}\n```'
+# SUMMARY (per arm)
+  REAL  prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+  CLEAN prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+  ASIM  prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+==================== CONFIRM: gpt-oss-120b-a5 ====================
+✅ Got 1710 tokens – writing to /Users/lah-rb/Repos/ouroboros/llmvp/data/gpt-oss-120b-a5.tokens.bin
+  t 1 REAL  ok          tok=159  halluc=0 rep=0 raw_choice=trace     fsm=trace     3.4s :: '<|channel|>analysis<|message|>The user asks: "Debugging step 1. Pick O'
+  t 2 REAL  ok          tok=64   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.4s :: '<|channel|>analysis<|message|>We need to output trace again.<|end|><|s'
+  t 3 REAL  ok          tok=184  halluc=0 rep=1 raw_choice=trace     fsm=trace     3.7s :: '<|channel|>analysis<|message|>Again trace.<|end|><|start|>assistant<|c'
+  t 4 REAL  ok          tok=131  halluc=0 rep=0 raw_choice=trace     fsm=trace     3.0s :: '<|channel|>analysis<|message|>We already concluded. But user asks step'
+  t 5 REAL  ok          tok=36   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.1s :: '<|channel|>analysis<|message|>Now step 5, we should give trace (since '
+  t 6 REAL  ok          tok=39   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  1.2s :: '<|channel|>analysis<|message|>Now step 6, after steps 1-5 we should co'
+  t 7 REAL  ok          tok=60   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  1.5s :: '<|channel|>analysis<|message|>Now step 7 after conclusion, maybe we sh'
+# SUMMARY (per arm)
+  REAL  prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+  CLEAN prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+  ASIM  prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+==================== RE-PREPROCESS: mistral-small-4-119b-a6 ====================
+✅ Got 1703 tokens – writing to /Users/lah-rb/Repos/ouroboros/llmvp/data/mistral-small-4-119b-a6.tokens.bin
+==================== RE-PREPROCESS: nemotron-3-super ====================
+✅ Got 1705 tokens – writing to /Users/lah-rb/Repos/ouroboros/llmvp/data/nemotron-3-super.tokens.bin
+CONFIRM DONE

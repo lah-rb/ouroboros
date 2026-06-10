@@ -6,10 +6,17 @@ grammar — works naturally with Harmony channel models where grammar
 constraints conflict with special token generation.
 
 Extraction pipeline:
-  1. CRF strips delimiters/thinking (server-side, already done by inference)
-  2. Parse the choice from the response via extract_choice()
+  1. FSM strips delimiters/thinking (server-side, already done by inference)
+  2. Parse the JSON choice from the response via extract_choice()
   3. Retry loop (3 attempts) for robustness
   4. default_transition as final safety net
+
+JSON-only extraction: if the model cannot produce a valid JSON object
+with a "choice" key, the response is rejected. No substring matching,
+no fuzzy heuristics. Models that cannot produce simple JSON are not fit
+for agent work. Parse failures surface upstream issues (delimiter
+stripping, prompt clarity, thinking token leakage) instead of silently
+masking them.
 
 Supports both static options (defined in CUE) and dynamic options
 (read from a context key via options_from).
@@ -17,11 +24,10 @@ Supports both static options (defined in CUE) and dynamic options
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 import time
 from typing import Any
+
 
 from agent.trace import InferenceCall, count_tokens
 
@@ -40,15 +46,15 @@ class LLMMenuResolverError(Exception):
 def extract_choice(response: str, valid_options: list[str]) -> str | None:
     """Extract a choice from a model response against known option names.
 
-    Tries multiple strategies in order of reliability:
-      1. JSON object with a choice key: {"choice": "option_name"}
-      2. Bare JSON string: "option_name"
-      3. Exact match: response text IS an option name
-      4. Line-anchored match: option name appears as a distinct word/token
-      5. Substring containment (longest match wins to avoid false positives)
+    JSON-only extraction: parses the response as JSON (with minor repair
+    for common LLM quirks like trailing commas or missing quotes), then
+    looks for a "choice" key whose value matches a valid option.
+
+    If the model did not produce a valid JSON object with a "choice" key,
+    returns None — letting the retry loop and default_transition handle it.
 
     Args:
-        response: The model's response text (already CRF-stripped).
+        response: The model's response text (already FSM-stripped).
         valid_options: List of valid option names/keys.
 
     Returns:
@@ -57,53 +63,17 @@ def extract_choice(response: str, valid_options: list[str]) -> str | None:
     if not response or not valid_options:
         return None
 
-    text = response.strip()
+    from agent.llm_json import parse_llm_json
 
-    # Strategy 1: JSON object — {"choice": "option_name"}
-    json_match = re.search(r'\{[^{}]*\}', text)
-    if json_match:
-        try:
-            data = json.loads(json_match.group())
-            for key in ("choice", "selection", "option", "answer", "pick"):
-                val = data.get(key, "")
-                if val:
-                    found = _match_option(str(val), valid_options)
-                    if found:
-                        return found
-        except (json.JSONDecodeError, AttributeError):
-            pass
+    data = parse_llm_json(response)
+    if not isinstance(data, dict):
+        return None
 
-    # Strategy 2: Bare JSON string — "option_name"
-    quoted_match = re.search(r'"([^"]+)"', text)
-    if quoted_match:
-        found = _match_option(quoted_match.group(1), valid_options)
-        if found:
-            return found
+    choice = data.get("choice")
+    if not choice:
+        return None
 
-    # Strategy 3: Exact match (case-insensitive, underscore/space normalized)
-    found = _match_option(text, valid_options)
-    if found:
-        return found
-
-    # Strategy 4: Line-anchored — option name on its own line or after punctuation
-    text_lower = text.lower().replace("-", "_")
-    for opt in sorted(valid_options, key=len, reverse=True):
-        opt_lower = opt.lower()
-        # Word boundary match
-        pattern = (
-            r'(?:^|[\s,.:;!?\-])\s*'
-            + re.escape(opt_lower)
-            + r'(?:$|[\s,.:;!?\-])'
-        )
-        if re.search(pattern, text_lower):
-            return opt
-
-    # Strategy 5: Substring containment (longest match first)
-    for opt in sorted(valid_options, key=len, reverse=True):
-        if opt.lower() in text_lower:
-            return opt
-
-    return None
+    return _match_option(str(choice), valid_options)
 
 
 def _match_option(candidate: str, valid_options: list[str]) -> str | None:
@@ -197,42 +167,93 @@ def _build_options_list(
     return options
 
 
-def _build_menu_prompt(
-    resolver_prompt: str | None,
+def build_menu_prompt(
     options: dict[str, str],
-    step_output_text: str | None = None,
+    *,
+    context_line: str = "",
+    instruction: str = "",
+    style: str = "named",
 ) -> str:
-    """Build the menu prompt asking for a JSON choice.
+    """Build a standardized menu prompt for LLM selection.
+
+    Public API — used by both the CUE resolver path (_build_menu_prompt)
+    and inline menu builders in mission_actions.py.
+
+    Follows the --- ACTION REQUIRED --- menu schema:
+      1. Header with action signal
+      2. Optional context summary line
+      3. Optional instruction
+      4. Options in the chosen style
+      5. JSON response instruction
+      6. Input affordance cursor (>)
+
+    Args:
+        options: Mapping of option_key → description.
+        context_line: One-line situational summary (optional).
+        instruction: Directive text before the options (optional).
+        style: How to render options:
+            "named"   — "1) file_ops — desc"  (key is a semantic name, number is visual aid)
+            "indexed" — "1) desc"             (key IS a number, description is the full label)
+            "direct"  — "models.py — desc"    (key is the value itself, no numbering)
 
     Returns:
-        The prompt text.
+        The complete menu prompt string.
     """
-    lines = []
+    lines = ["--- ACTION REQUIRED ---"]
 
-    if step_output_text:
-        lines.append("Here is what just happened:")
-        lines.append(step_output_text[:1500])
-        lines.append("")
+    if context_line:
+        lines.append(context_line)
 
-    if resolver_prompt:
-        lines.append(resolver_prompt)
+    lines.append("")
+
+    if instruction:
+        lines.append(instruction)
         lines.append("")
 
     lines.append("Choose ONE of these options:")
     lines.append("")
 
-    for name, description in options.items():
-        lines.append(f"  - {name}: {description}")
+    for i, (name, description) in enumerate(options.items(), 1):
+        if style == "named":
+            # "1) file_ops         — Create, modify, refactor..."
+            lines.append(f"  {i}) {name:17s} — {description}")
+        elif style == "indexed":
+            # "1) [pending] Create data models module → models.py"
+            lines.append(f"  {name}) {description}")
+        else:  # "direct"
+            # "models.py            — models.py"
+            lines.append(f"  {name:20s} — {description}")
 
     lines.append("")
-    lines.append(
-        'Respond with ONLY a JSON object: {"choice": "<option_name>"}'
-    )
-    lines.append(
-        f"Valid option names: {', '.join(options.keys())}"
-    )
+    lines.append('Respond with {"choice": "<option_name>"}')
+    lines.append("> ")
 
     return "\n".join(lines)
+
+
+def _build_menu_prompt(
+    resolver_prompt: str | None,
+    options: dict[str, str],
+    step_output_text: str | None = None,
+) -> str:
+    """Build a menu prompt for the CUE resolver path.
+
+    Wraps build_menu_prompt with backward-compatible handling of
+    step_output_text and resolver_prompt fields from CUE definitions.
+
+    Returns:
+        The prompt text.
+    """
+    # Build context line from step output (skip noop sentinels)
+    context_line = ""
+    if step_output_text and "no-op" not in step_output_text.lower():
+        context_line = step_output_text[:200]
+
+    return build_menu_prompt(
+        options,
+        context_line=context_line,
+        instruction=resolver_prompt or "",
+    )
 
 
 async def resolve_llm_menu(
@@ -245,7 +266,7 @@ async def resolve_llm_menu(
     """Resolve transition by asking the LLM to choose from a menu of options.
 
     Asks the model to respond with a JSON object naming its choice.
-    The CRF handles delimiter stripping on the server side. The response
+    The FSM handles delimiter stripping on the server side. The response
     is parsed with extract_choice() which tries JSON parsing, quoted
     string extraction, and fuzzy matching as fallbacks.
 
@@ -288,7 +309,11 @@ async def resolve_llm_menu(
         try:
             from agent.template import render_template
 
-            template_vars = {"context": context, "input": {}, "meta": meta}
+            # The accumulator contains flow inputs alongside context keys.
+            # Pass it as both context and input so templates can reference
+            # either namespace: {{context.diagnosis_context}} or
+            # {{input.flow_directive}} both resolve correctly.
+            template_vars = {"context": context, "input": context, "meta": meta}
             resolver_prompt = render_template(resolver_prompt, template_vars)
         except Exception as e:
             logger.warning("Failed to render resolver prompt template: %s", e)
@@ -363,21 +388,26 @@ async def resolve_llm_menu(
             )
             infer_start = time.monotonic()
 
-        # Build the prompt — on retries, add a correction prefix
+        # Build the prompt — on retries, add correction with examples
         attempt_prompt = prompt
         if attempt > 0:
+            example_option = option_names[0] if option_names else "option_name"
             attempt_prompt = (
-                f"Your previous response was not valid "
-                f"(got: {repr(last_response[:40])}). "
-                f"You MUST respond with a JSON object like "
-                f'{{"choice": "<option_name>"}} where option_name is one of: '
-                f"{', '.join(option_names)}.\n\n"
+                f"Your previous response was:\n"
+                f"  {repr(last_response[:100])}\n\n"
+                f"This is NOT valid. You must respond with ONLY a JSON object.\n\n"
+                f"WRONG (extra text before JSON):\n"
+                f'  Continue.{{"choice": "{example_option}"}}\n\n'
+                f"WRONG (wrong key or structure):\n"
+                f'  {{"action": "read_output"}}\n\n'
+                f"CORRECT:\n"
+                f'  {{"choice": "{example_option}"}}\n\n'
+                f"Valid choices: {', '.join(option_names)}\n\n"
+                f"Respond with ONLY the JSON object, nothing else.\n"
             )
 
         if session_id and hasattr(effects, "session_inference"):
-            result = await effects.session_inference(
-                session_id, attempt_prompt, config
-            )
+            result = await effects.session_inference(session_id, attempt_prompt, config)
         else:
             result = await effects.run_inference(attempt_prompt, config)
 
@@ -402,6 +432,7 @@ async def resolve_llm_menu(
                     purpose="llm_menu_resolve",
                     prompt_content=_prompt_content,
                     response_content=_response_content,
+                    truncated=getattr(result, "truncated", False),
                 )
             )
 
@@ -428,7 +459,7 @@ async def resolve_llm_menu(
             if publish_key:
                 context[publish_key] = choice
 
-            return _resolve_option_target(choice, resolver_def, options)
+            return _resolve_option_target(choice, resolver_def)
 
         # Invalid response — will retry if attempts remain
         logger.warning(
@@ -481,114 +512,7 @@ async def resolve_llm_menu(
     fallback = next(iter(options))
     if publish_key:
         context[publish_key] = fallback
-    return _resolve_option_target(fallback, resolver_def, options)
-
-
-async def resolve_llm_multi_select(
-    resolver_def: dict,
-    step_output: Any,
-    context: dict,
-    meta: dict,
-    effects: Any = None,
-) -> str:
-    """Multi-select resolver — single-turn JSON response.
-
-    Instead of a memoryful session with per-letter turns, asks the model
-    to respond with all selections in one JSON object:
-      {"choices": ["option_a", "option_b"]}
-
-    This is simpler, cheaper (one inference call), and doesn't need a
-    session. The model can think naturally before emitting the JSON.
-
-    The selected items are stored in meta['_multi_select_result'] for
-    the runtime to inject into context_updates.
-
-    Args:
-        resolver_def: The resolver definition with options and prompt.
-        step_output: The output from the step's action.
-        context: The current context accumulator.
-        meta: Flow execution metadata (will receive _multi_select_result).
-        effects: Effects interface (must have inference methods).
-
-    Returns:
-        The transition target (from 'target' field, or 'items_selected'/'none_selected').
-    """
-    if effects is None:
-        raise LLMMenuResolverError(
-            "LLM multi-select resolver requires effects interface."
-        )
-
-    options = _build_options_list(resolver_def, context)
-    if not options:
-        raise LLMMenuResolverError("No options available for multi-select.")
-
-    option_names = list(options.keys())
-
-    # Build the multi-select prompt
-    lines = []
-    resolver_prompt = resolver_def.get("prompt")
-    if resolver_prompt:
-        lines.append(resolver_prompt)
-        lines.append("")
-
-    lines.append("Available options:")
-    for name, desc in options.items():
-        lines.append(f"  - {name}: {desc}")
-
-    lines.append("")
-    lines.append(
-        "Select one or more options. Respond with a JSON object:\n"
-        '  {"choices": ["option_a", "option_b"]}\n'
-        'Use an empty list if none apply: {"choices": []}'
-    )
-    lines.append(f"Valid option names: {', '.join(option_names)}")
-
-    prompt = "\n".join(lines)
-
-    config = {"temperature": 0.1}
-
-    # Session-aware
-    session_id = (
-        context.get("inference_session_id")
-        or context.get("edit_session_id")
-        or context.get("session_id")
-    )
-
-    if session_id and hasattr(effects, "session_inference"):
-        result = await effects.session_inference(session_id, prompt, config)
-    else:
-        result = await effects.run_inference(prompt, config)
-
-    selected: list[str] = []
-    if result.text:
-        text = result.text.strip()
-
-        # Try JSON parse for {"choices": [...]}
-        json_match = re.search(r'\{[^{}]*\}', text)
-        if json_match:
-            try:
-                data = json.loads(json_match.group())
-                choices_raw = data.get("choices", data.get("selected", []))
-                if isinstance(choices_raw, list):
-                    for item in choices_raw:
-                        matched = _match_option(str(item), option_names)
-                        if matched and matched not in selected:
-                            selected.append(matched)
-            except (json.JSONDecodeError, AttributeError):
-                pass
-
-        # Fallback: try to find option names mentioned in the text
-        if not selected:
-            text_lower = text.lower()
-            for opt in option_names:
-                if opt.lower() in text_lower:
-                    selected.append(opt)
-
-    # Store selections in meta for the runtime to inject
-    meta["_multi_select_result"] = selected
-
-    # Determine transition target
-    return _resolve_multi_select_target(selected, resolver_def)
+    return _resolve_option_target(fallback, resolver_def)
 
 
 def _resolve_multi_select_target(
@@ -613,15 +537,29 @@ def _resolve_multi_select_target(
 def _resolve_option_target(
     choice: str,
     resolver_def: dict,
-    options: dict[str, str],
 ) -> str:
     """Resolve the chosen option to a transition target step name.
 
-    For static options, the option may have an explicit 'target' field.
-    If not, the option name itself is the step name.
+    Two modes (set via 'mode' field in resolver_def):
 
-    For dynamic options (options_from), the option name/id is the step name.
+      "route" (default) — the choice determines the transition. For static
+          options, an explicit 'target' field overrides the option key.
+          For dynamic options, the option key is used as the step name.
+
+      "select" — the choice is a data value (already published via
+          publish_selection). Transition always goes to default_transition.
+          Used for dynamic menus where option keys are filenames, goal IDs,
+          or other non-step data.
     """
+    mode = resolver_def.get("mode", "route")
+
+    if mode == "select":
+        default = resolver_def.get("default_transition")
+        if default:
+            return default
+        raise LLMMenuResolverError("llm_menu mode='select' requires default_transition")
+
+    # mode == "route": option key determines the transition
     static_options = resolver_def.get("options", {})
 
     if choice in static_options:

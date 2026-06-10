@@ -87,12 +87,25 @@ class CommandResult:
 
 @dataclass
 class InferenceResult:
-    """Result of an inference call."""
+    """Result of an inference call.
+
+    ``truncated`` indicates the generation was cut off by the max_tokens
+    budget rather than ending on an EOS or stop sequence. A truncated
+    response may have unclosed channel markers, a partial reasoning
+    chain, or (on channel-family models) silently empty ``text`` after
+    FSM stripping. Callers log this for observability; most do not
+    need to handle it specially.
+
+    See llmvp/core/session_manager.py::session_turn_complete for how
+    the flag is derived (generated_tokens >= max_tokens) and
+    llmvp/api/graphql_api.py for the parallel completion-path wiring.
+    """
 
     text: str
     tokens_generated: int
     finished: bool = True
     error: str | None = None
+    truncated: bool = False
 
 
 # ── Terminal output limits ────────────────────────────────────────────
@@ -118,7 +131,9 @@ omitted. This preserves:
 """
 
 
-def truncate_terminal_output(output: str, limit: int = TERMINAL_OUTPUT_MAX_CHARS) -> str:
+def truncate_terminal_output(
+    output: str, limit: int = TERMINAL_OUTPUT_MAX_CHARS
+) -> str:
     """Truncate terminal output preserving head and tail.
 
     Args:
@@ -140,17 +155,6 @@ def truncate_terminal_output(output: str, limit: int = TERMINAL_OUTPUT_MAX_CHARS
         + f"\n\n... [{omitted} chars omitted] ...\n\n"
         + output[-tail_size:]
     )
-
-
-@dataclass
-class TerminalOutput:
-    """Result of sending a command to a persistent terminal session."""
-
-    command: str
-    output: str
-    return_code: int  # -1 if still running or timed out
-    turn: int
-    timed_out: bool = False
 
 
 @dataclass
@@ -411,53 +415,54 @@ class Effects(Protocol):
         """
         ...
 
-    # ── Terminal sessions ─────────────────────────────────────────
+    # ── MCP server interaction ───────────────────────────────────
 
-    async def start_terminal(
+    async def mcp_connect(
         self,
-        working_dir: str | None = None,
-        env: dict[str, str] | None = None,
+        server_name: str,
+        server_command: list[str] | None = None,
     ) -> str:
-        """Start a persistent shell subprocess.
+        """Connect to an MCP server (launching it if needed).
+
+        For well-known servers (e.g., "terminal"), the implementation
+        manages the subprocess lifecycle automatically. For custom
+        servers, provide the launch command.
 
         Args:
-            working_dir: Working directory for the shell (relative to effects working_dir).
-            env: Additional environment variables.
+            server_name: Name of the server (e.g., "terminal").
+            server_command: Command to launch the server (optional for
+                well-known servers).
 
         Returns:
-            A session_id string identifying the running terminal.
+            A connection_id for subsequent mcp_call_tool calls.
         """
         ...
 
-    async def send_to_terminal(
+    async def mcp_call_tool(
         self,
-        session_id: str,
-        command: str,
-        timeout: int = 30,
-    ) -> TerminalOutput:
-        """Send a command to a running terminal session and wait for output.
-
-        The command runs in the persistent shell subprocess. Output is captured
-        until a completion marker is detected or timeout is reached.
+        connection_id: str,
+        tool_name: str,
+        arguments: dict | None = None,
+        timeout: float = 60.0,
+    ) -> dict:
+        """Call a tool on a connected MCP server.
 
         Args:
-            session_id: The session ID from start_terminal().
-            command: The shell command to execute.
-            timeout: Seconds to wait for command completion.
+            connection_id: The connection from mcp_connect().
+            tool_name: Name of the tool to call.
+            arguments: Tool arguments.
+            timeout: Timeout in seconds.
 
         Returns:
-            TerminalOutput with command, output, return_code, and turn number.
+            Tool result as a dict.
         """
         ...
 
-    async def close_terminal(self, session_id: str) -> bool:
-        """Close a terminal session and clean up the subprocess.
+    async def mcp_disconnect(self, connection_id: str) -> None:
+        """Disconnect from an MCP server.
 
         Args:
-            session_id: The session ID to close.
-
-        Returns:
-            True if the session was found and closed.
+            connection_id: The connection to close.
         """
         ...
 

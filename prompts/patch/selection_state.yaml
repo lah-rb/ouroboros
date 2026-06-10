@@ -1,0 +1,4 @@
+id: patch/selection_state
+content: |
+  ## Selected so far
+  {context.selection_state_rendered}

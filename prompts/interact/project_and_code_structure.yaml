@@ -1,0 +1,7 @@
+id: interact/project_and_code_structure
+content: |
+  ## Project files
+  {context.project_file_list}
+
+  ## Code structure
+  {context.repo_map_formatted}

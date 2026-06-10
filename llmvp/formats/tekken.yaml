@@ -1,0 +1,93 @@
+# Mistral Instruct format schema — Mistral / Devstral model family
+#
+# Covers Mistral Small 3.x, Mistral Small 4, Devstral 2, and Magistral.
+# Uses V3 Tekken tokenizer with [INST]/[/INST] framing and dedicated
+# [SYSTEM_PROMPT]/[/SYSTEM_PROMPT] system blocks.
+#
+# Thinking: Mistral Small 4 supports hybrid reasoning via [THINK]/[/THINK]
+# control tokens (inline_tags style). Devstral 2 and Mistral Small 3.x
+# do not produce thinking — set reasoning_effort="none" for those.
+#
+# Reference: https://huggingface.co/mistralai/Mistral-Small-4-119B-2603
+# Reference: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503
+# Reference: https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512
+# Reference: https://docs.mistral.ai/cookbooks/concept-deep-dive-tokenization-chat_templates
+# Reference: https://docs.mistral.ai/capabilities/reasoning/native
+#
+# Template (V3 Tekken):
+#   <s>[SYSTEM_PROMPT]system content[/SYSTEM_PROMPT][INST]user message[/INST]assistant response</s>[INST]next user[/INST]
+#
+# With thinking (Mistral Small 4, reasoning_effort=high):
+#   <s>[SYSTEM_PROMPT]system content[/SYSTEM_PROMPT][INST]user message[/INST][THINK]reasoning[/THINK]response</s>
+
+family: tekken
+display_name: "Mistral Tekken V3 (Mistral/Devstral)"
+
+tokens:
+  # Default tokens (used when no role_tokens override applies).
+  # For Mistral the user role uses [INST]/[/INST] and system uses
+  # [SYSTEM_PROMPT]/[/SYSTEM_PROMPT], so these defaults mainly
+  # serve as fallbacks.
+  msg_open: "[INST]"
+  msg_content: ""
+  msg_close: "[/INST]"
+  gen_stop: "</s>"
+  history_close: "</s>"
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: "assistant"
+
+# Per-role token overrides — this is how Mistral's asymmetric
+# role structure is expressed without subclassing the renderer.
+role_tokens:
+  system:
+    msg_open: "[SYSTEM_PROMPT]"
+    msg_content: ""
+    msg_close: "[/SYSTEM_PROMPT]"
+  user:
+    msg_open: "[INST]"
+    msg_content: ""
+    msg_close: "[/INST]"
+  assistant:
+    # Assistant has no framing tokens — bare text followed by </s>
+    msg_open: ""
+    msg_content: ""
+    msg_close: "</s>"
+
+thinking:
+  # Mistral Small 4 uses [THINK]/[/THINK] control tokens for reasoning.
+  # Devstral 2 and Mistral Small 3.x don't think — the FSM handles
+  # the case where these tokens are absent by starting in CONTENT phase
+  # for this family (see core.fsm_labeller families_without_thinking).
+  style: inline_tags
+  open_tag: "[THINK]"
+  close_tag: "[/THINK]"
+
+system_block:
+  identity: "You are a helpful assistant."
+  cutoff: ""
+  reasoning_default: ""
+  channel_directive: ""
+  template: "{identity}\n{persona}"
+
+traits:
+  fold_system_into_first_user: false
+  supports_developer_role: false
+
+generation:
+  temperature: 0.7
+  top_p: 0.95
+  top_k: 0
+  min_p: 0.0
+  repeat_penalty: 1.05
+
+turn_transition:
+  needs_close: true
+  # Close the previous assistant turn with </s> before the next [INST].
+  # The model's gen_stop (</s>) is broken on EOG before it enters the KV
+  # cache, so the session must re-insert it here — otherwise assistant
+  # turns run straight into [INST] with no close and the model loses the
+  # turn boundary (devstral degraded at turn 2 without this).
+  after_generation: "</s>"

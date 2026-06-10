@@ -24,8 +24,12 @@ dependencies = [
     "websockets>=14.0",
     "llama-cpp-python",
     "numpy>=1.26.0",
-    "python-crfsuite>=0.9.10",
 ]
 
 [tool.uv.sources]
-llama-cpp-python = { git = "https://github.com/JamePeng/llama-cpp-python.git", rev = "a184583e908cc138fd15794986b3581521fb9b0c" }
+llama-cpp-python = { git = "https://github.com/JamePeng/llama-cpp-python.git", rev = "d37951799450b6461ac73160630371c9d1d36065" }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.16",
+]

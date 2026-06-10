@@ -1,0 +1,11 @@
+id: add_symbol/target_and_outline
+content: |
+  ## Target
+  File: {input.file_path}
+  New symbol to add: {input.target_symbol}
+
+  ## What the symbol should do
+  {input.change_spec}
+
+  ## Current file outline
+  {context.file_outline_block}

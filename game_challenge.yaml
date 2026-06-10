@@ -20,7 +20,7 @@ llmvp_endpoint: "http://localhost:8008/graphql"
 pre_create:
   - "rm -rf /tmp/ouroboros-challenge && mkdir /tmp/ouroboros-challenge"
   - "touch ~/Repos/ouroboros/llmvp/logs/interactions.jsonl && rm ~/Repos/ouroboros/llmvp/logs/interactions.jsonl"
-  - "cue vet ./flows/cue && cue export ./flows/cue/ --out json > flows/compiled.json"
+  - "uv run ouroboros.py cue-compile"
 
 post_create:
   - "cd ~/Repos/ouroboros && uv run ouroboros.py start --working-dir /tmp/ouroboros-challenge --trace-thinking --trace-prompts"

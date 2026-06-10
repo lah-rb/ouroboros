@@ -7,7 +7,6 @@ static knowledge base tokens.
 """
 
 import mmap
-from pathlib import Path
 from typing import List
 
 # Local imports
@@ -54,18 +53,15 @@ class StaticTokensManager:
         """
         Get the loaded static tokens.
 
+        Returns an empty list if tokens were not loaded (e.g. when
+        --skip-knowledge is active). Callers should handle the
+        empty case gracefully — the model will operate without a
+        system prompt prefix.
+
         Returns:
-            List[int]: Static token IDs
-
-        Raises:
-            RuntimeError: If tokens not loaded
+            List[int]: Static token IDs (may be empty)
         """
-        if self._static_tokens_list is None or not self._static_tokens_list:
-            raise RuntimeError(
-                "Static tokens not loaded. Call load_static_buffer() first."
-            )
-
-        return self._static_tokens_list
+        return self._static_tokens_list or []
 
     def cleanup(self) -> None:
         """Clean up memory-mapped resources."""

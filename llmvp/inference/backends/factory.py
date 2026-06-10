@@ -16,7 +16,6 @@ import asyncio
 import logging
 from typing import Any, Optional
 
-from .base import BaseBackend
 from .llama_cpp_backend import LlamaCppBackend
 
 log = logging.getLogger("llm-mvp")

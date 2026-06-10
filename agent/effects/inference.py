@@ -27,6 +27,7 @@ query Completion($request: CompletionRequest!) {
         text
         tokensGenerated
         finished
+        truncated
     }
 }
 """
@@ -72,6 +73,7 @@ query SessionCompletion($request: SessionTurnRequest!) {
         text
         tokensGenerated
         finished
+        truncated
     }
 }
 """
@@ -151,6 +153,22 @@ def resolve_temperature(
     raise InferenceError(f"Invalid temperature type: {type(value).__name__}")
 
 
+# Hard ceilings on tokens a single generation may produce before the health
+# watchdog cancels it as a runaway. They bound the Qwen3-Next repetition bug
+# (unclamped Gated-DeltaNet decay) which otherwise generates to max_tokens
+# (262k) — observed as both a ~79-min session hang AND a ~20-min completion
+# (whole-file rewrite) runaway. The stall watchdog can't catch these: a
+# repetition loop keeps tokens *advancing*, so only a token ceiling stops it.
+#
+# Two tiers because legitimate output sizes differ:
+#   - session turns (diagnosis menus ~64 tok, conclude ~1-2k, AST symbol edits
+#     a few k) never approach 32k.
+#   - completions (whole-file rewrites, multi-file scaffolds) legitimately reach
+#     ~10-24k, so the ceiling sits higher with headroom — still far below 262k.
+SESSION_RUNAWAY_TOKEN_CEILING = 32768
+COMPLETION_RUNAWAY_TOKEN_CEILING = 49152
+
+
 class InferenceEffect:
     """GraphQL client for LLMVP inference.
 
@@ -165,7 +183,7 @@ class InferenceEffect:
 
     def __init__(
         self,
-        endpoint: str = "http://localhost:8000/graphql",
+        endpoint: str = "http://localhost:8008/graphql",
         model_default_temperature: float = 0.7,
     ) -> None:
         self._endpoint = endpoint
@@ -308,13 +326,21 @@ class InferenceEffect:
             "variables": {"request": request_vars},
         }
 
-        # Use the watchdog-backed request for non-session inference
-        return await self._request_with_health_watchdog(client, request_body)
+        # Use the watchdog-backed request for non-session inference. The
+        # completion ceiling bounds a runaway whole-file/scaffold generation
+        # (the stall watchdog misses it — a repetition loop keeps emitting).
+        return await self._request_with_health_watchdog(
+            client,
+            request_body,
+            runaway_token_ceiling=COMPLETION_RUNAWAY_TOKEN_CEILING,
+        )
 
     async def _request_with_health_watchdog(
         self,
         client: httpx.AsyncClient,
         request_body: dict,
+        response_key: str = "completion",
+        runaway_token_ceiling: int | None = None,
     ) -> InferenceResult:
         """Execute an inference request with health-polling watchdog.
 
@@ -323,11 +349,18 @@ class InferenceEffect:
         2. Concurrently run a watchdog that polls LLMVP health every 30s.
         3. If health shows tokens stalled for 60s+ (two consecutive polls
            with no token increase), cancel the request — the model is stuck.
-        4. If health shows tokens increasing, the watchdog stays quiet and
-           lets the request complete naturally.
+        4. If a ``runaway_token_ceiling`` is set and the live token count
+           crosses it, cancel — the model is looping/runaway even though it's
+           still "productively" emitting tokens (the stall check alone misses
+           this; it's how the Qwen3-Next decay-clamp repetition hangs).
+        5. If health shows tokens increasing under the ceiling, the watchdog
+           stays quiet and lets the request complete naturally.
+
+        ``response_key`` selects the GraphQL payload field — "completion" for
+        normal completions, "sessionCompletion" for memoryful session turns.
 
         This means productive long generations (large files) are never
-        killed prematurely, but stuck generations are caught within ~90s.
+        killed prematurely, but stuck *and* runaway generations are caught.
         """
 
         async def _do_request() -> InferenceResult:
@@ -349,11 +382,12 @@ class InferenceEffect:
                         error=f"GraphQL errors: {error_msg}",
                     )
 
-                completion = data["data"]["completion"]
+                completion = data["data"][response_key]
                 return InferenceResult(
                     text=completion["text"],
                     tokens_generated=completion["tokensGenerated"],
                     finished=completion["finished"],
+                    truncated=completion.get("truncated", False),
                 )
 
             except httpx.ConnectError as e:
@@ -418,6 +452,19 @@ class InferenceEffect:
                     eval_dur = health.get("evalDuration")
 
                     if gen_active:
+                        if runaway_token_ceiling and tokens > runaway_token_ceiling:
+                            # Tokens still advancing, but past the sane ceiling
+                            # for this request type — a runaway/repetition loop
+                            # (stall detection alone never fires on these).
+                            logger.warning(
+                                "Health watchdog: runaway generation — %d tokens "
+                                "exceeds ceiling %d (phase=%s) — cancelling request",
+                                tokens,
+                                runaway_token_ceiling,
+                                phase,
+                            )
+                            request_task.cancel()
+                            return
                         if tokens > last_token_count:
                             # Model is actively generating — reset stall tracking
                             last_token_count = tokens
@@ -433,9 +480,10 @@ class InferenceEffect:
                             # Still evaluating prompt — log but don't cancel yet
                             logger.info(
                                 "Health watchdog: still in eval phase, "
-                                "%.0fs elapsed, prompt=%d tok",
+                                "%.0fs elapsed, prompt=%d tok, eval_dur=%s",
                                 elapsed or 0,
                                 prompt_toks,
+                                eval_dur,
                             )
                             # Cancel if eval takes unreasonably long (>300s)
                             if elapsed and elapsed > 300:
@@ -491,13 +539,13 @@ class InferenceEffect:
         try:
             result = await request_task
         except asyncio.CancelledError:
-            # Watchdog cancelled us — return a stall error
-            logger.error("Inference cancelled by health watchdog (generation stalled)")
+            # Watchdog cancelled us — stalled or runaway
+            logger.error("Inference cancelled by health watchdog (stalled or runaway)")
             result = InferenceResult(
                 text="",
                 tokens_generated=0,
                 finished=False,
-                error="Generation stalled (no new tokens for 60s+)",
+                error="Generation aborted by watchdog (stall or runaway)",
             )
         finally:
             watchdog_task.cancel()
@@ -574,42 +622,23 @@ class InferenceEffect:
                 if grammar is not None:
                     request_vars["grammar"] = grammar
 
-        try:
-            response = await client.post(
-                self._endpoint,
-                json={
-                    "query": SESSION_COMPLETION_QUERY,
-                    "variables": {"request": request_vars},
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
+        request_body = {
+            "query": SESSION_COMPLETION_QUERY,
+            "variables": {"request": request_vars},
+        }
 
-            if "errors" in data:
-                error_msg = "; ".join(e.get("message", str(e)) for e in data["errors"])
-                logger.error("Session turn errors: %s", error_msg)
-                return InferenceResult(
-                    text="",
-                    tokens_generated=0,
-                    finished=False,
-                    error=f"Session turn errors: {error_msg}",
-                )
-
-            completion = data["data"]["sessionCompletion"]
-            return InferenceResult(
-                text=completion["text"],
-                tokens_generated=completion["tokensGenerated"],
-                finished=completion["finished"],
-            )
-
-        except Exception as e:
-            logger.error("Session turn error: %s", e)
-            return InferenceResult(
-                text="",
-                tokens_generated=0,
-                finished=False,
-                error=f"Session turn error: {e}",
-            )
+        # Route through the same health watchdog as completions. The session
+        # path previously fired a raw POST on the timeout=None client with no
+        # guard, so a stuck or runaway turn (e.g. the Qwen3-Next long-context
+        # decay-clamp repetition loop) could hang the agent indefinitely until
+        # an external kill. The ceiling bounds runaways; stall detection bounds
+        # stuck instances — protecting all diagnosis reasoning + AST edits.
+        return await self._request_with_health_watchdog(
+            client,
+            request_body,
+            response_key="sessionCompletion",
+            runaway_token_ceiling=SESSION_RUNAWAY_TOKEN_CEILING,
+        )
 
     async def end_session(self, session_id: str) -> bool:
         """End a memoryful session via GraphQL mutation."""

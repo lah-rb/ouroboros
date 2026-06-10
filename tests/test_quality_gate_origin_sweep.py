@@ -1,0 +1,177 @@
+"""quality_gate-origin findings route differently than design goals.
+
+Three fixes the goal-driven validation forced (one injected startup crash
+spawned 10 duplicate goals and thrashed ~10 false-pass/re-gate rounds before a
+fix landed):
+
+1. ``_quality_finding_signature`` anchors on the code locus (Python files +
+   dotted/snake_case identifiers) so the gate's rephrasings of ONE defect
+   ("references undefined X" / "raises NameError for X" / "crashes with X") map
+   to ONE signature -> ONE goal, instead of one per round.
+2. ``action_functional_sweep_next`` goes diagnose-FIRST for quality_gate-origin
+   goals — the gate already confirmed the defect, so re-reproducing it via
+   interact (which mis-frames a bug report as "verify this works") is skipped.
+3. The post-fix interact re-test uses defect-resolution polarity for
+   quality_gate-origin goals ("verify the defect no longer occurs"), not the
+   design-goal "verify the described behavior works correctly".
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from agent.actions.mission_actions import (
+    _functional_retest_directive,
+    _quality_finding_signature,
+    action_functional_sweep_next,
+    action_harvest_quality_findings,
+)
+from agent.effects.mock import MockEffects
+from agent.models import FlowMeta, StepInput
+from agent.persistence.models import (
+    DirectiveReport,
+    GoalRecord,
+    MissionConfig,
+    MissionState,
+)
+
+
+def _mission(goals=None) -> MissionState:
+    return MissionState(
+        objective="t",
+        status="active",
+        goals=goals if goals is not None else [],
+        config=MissionConfig(working_directory="/tmp/x"),
+    )
+
+
+def _si(mission, **ctx) -> StepInput:
+    return StepInput(
+        context={"mission": mission, **ctx},
+        params={},
+        meta=FlowMeta(flow_name="mission_control", step_id="x"),
+        effects=MockEffects(),
+    )
+
+
+def _qg(*tasks) -> dict:
+    return {"quality_results": {"all_passing": False, "fix_tasks": list(tasks)}}
+
+
+# ── Fix 1: signature is robust to the gate's rephrasing of one defect ──────
+
+# The exact rephrasings the live validation produced for the single injected
+# `_GOALDRIVEN_VALIDATION_SENTINEL` startup crash.
+_SENTINEL_VARIANTS = [
+    "main.py line 24 references undefined _GOALDRIVEN_VALIDATION_SENTINEL",
+    "main.py line 24 references undefined variable _GOALDRIVEN_VALIDATION_SENTINEL",
+    "main.py raises NameError for undefined '_GOALDRIVEN_VALIDATION_SENTINEL'",
+    "main.py crashes on startup with NameError: _GOALDRIVEN_VALIDATION_SENTINEL",
+    "main.py line 99 references undefined variable `_GOALDRIVEN_VALIDATION_SENTINEL`",
+]
+
+
+def test_signature_collapses_rephrasings_of_one_defect():
+    sigs = {_quality_finding_signature({"issue": v}) for v in _SENTINEL_VARIANTS}
+    assert len(sigs) == 1  # 10 dup goals in the wild -> exactly one now
+    # anchored on file + symbol, line numbers dropped (they shift after edits)
+    (only,) = sigs
+    assert "main.py" in only and "_goaldriven_validation_sentinel" in only
+    assert "line" not in only and "99" not in only
+
+
+def test_signature_keeps_distinct_findings_distinct():
+    a = _quality_finding_signature({"issue": "the `use` command has no effect"})
+    b = _quality_finding_signature({"issue": "NPC dialogue branching is not tested"})
+    c = _quality_finding_signature({"issue": "Kitchen room has no items"})
+    assert len({a, b, c}) == 3
+
+
+def test_signature_prose_fallback_when_no_code_anchor():
+    # No .py / dotted / snake_case token -> normalized prose key (still stable).
+    s = _quality_finding_signature({"issue": "Only 3 of 6 rooms were verified"})
+    assert s == "only 3 of 6 rooms were verified"
+
+
+@pytest.mark.asyncio
+async def test_harvest_dedups_rephrased_defect_into_one_goal():
+    """The acute bug: 5 rephrasings of one crash must yield ONE goal, not 5."""
+    m = _mission()
+    for v in _SENTINEL_VARIANTS:
+        await action_harvest_quality_findings(
+            _si(m, **_qg({"issue": v, "class": "functional"}))
+        )
+        # each round, all prior goals are still incomplete (being worked), so the
+        # rephrase is skipped as in-flight
+        for g in m.goals:
+            g.status = "incomplete"
+    qg = [g for g in m.goals if g.origin == "quality_gate"]
+    assert len(qg) == 1
+
+
+# ── Fix 2: quality_gate-origin functional goals go diagnose-first ─────────
+
+
+def _fgoal(origin: str, reports=None) -> GoalRecord:
+    return GoalRecord(
+        description="main.py crashes on startup with NameError",
+        type="functional",
+        status="incomplete",
+        origin=origin,
+        interaction_mode="exploratory",
+        reports=reports or [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_quality_gate_functional_goal_diagnoses_first():
+    g = _fgoal("quality_gate")
+    out = await action_functional_sweep_next(_si(_mission([g])))
+    assert out.result.get("needs_fix") is True  # -> diagnose, not interact
+    dc = out.context_updates["dispatch_config"]
+    assert dc["flow"] == "diagnose_issue"
+    assert dc["goal_id"] == g.id
+
+
+@pytest.mark.asyncio
+async def test_design_functional_goal_still_reproduces_via_interact():
+    """Regression guard: design-origin goals keep interact-first (reproduce)."""
+    g = _fgoal("design")
+    out = await action_functional_sweep_next(_si(_mission([g])))
+    assert out.result.get("needs_test") is True
+    dc = out.context_updates["dispatch_config"]
+    assert dc["flow"] == "interact"
+
+
+# ── Fix 3: post-fix re-test directive polarity ───────────────────────────
+
+
+def test_retest_polarity_quality_gate_is_defect_resolution():
+    g = _fgoal("quality_gate")
+    d = _functional_retest_directive(g, after="fix").lower()
+    assert "defect" in d and "no longer" in d
+    assert "works correctly" not in d  # the polarity that false-passed crashes
+
+
+def test_retest_polarity_design_is_capability_verification():
+    g = _fgoal("design")
+    d = _functional_retest_directive(g, after="fix").lower()
+    assert "works correctly" in d
+    assert "no longer" not in d
+
+
+@pytest.mark.asyncio
+async def test_quality_gate_goal_retests_with_defect_polarity_after_fix():
+    """After a successful file_ops, a quality_gate functional goal re-tests with
+    defect-resolution framing (end-to-end through the sweep, not just the helper)."""
+    g = _fgoal(
+        "quality_gate",
+        reports=[
+            DirectiveReport(flow="file_ops", status="success", summary="removed line")
+        ],
+    )
+    out = await action_functional_sweep_next(_si(_mission([g])))
+    assert out.result.get("needs_test") is True
+    dc = out.context_updates["dispatch_config"]
+    assert dc["flow"] == "interact"
+    assert "no longer" in dc["flow_directive"].lower()

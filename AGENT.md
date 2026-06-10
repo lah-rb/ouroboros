@@ -11,13 +11,28 @@ All inference requests go through LLMVP's GraphQL API over HTTP.
 
 ## Critical Rules
 
-- **Pure GraphQL client** — Ouroboros NEVER imports Python modules from LLMVP. All inference goes through HTTP to `localhost:8000/graphql`. If you feel tempted to `from llmvp import ...`, stop — that is always wrong.
+- **Pure GraphQL client** — Ouroboros NEVER imports Python modules from LLMVP. All inference goes through HTTP to `localhost:8008/graphql`. If you feel tempted to `from llmvp import ...`, stop — that is always wrong.
 - **uv for everything** — NEVER call `python`, `pip`, or `pip install` directly. Always prefix with `uv run` or use `uv add`.
 - **Effects interface for all side effects** — Actions never directly touch filesystem, network, or subprocess. Always go through the `effects` parameter on `StepInput`.
 - **Pydantic v2 strict validation** — All data models use Pydantic v2. No raw dicts for structured data crossing boundaries.
 - **Async callables** — All actions have signature `async (StepInput) -> StepOutput`. No exceptions.
 - **CUE for flow logic, Python for behavior** — Flow structure (steps, transitions, context) lives in CUE. Action implementation lives in Python. Never mix.
 - **Use `black` for formatting** — Run `uv run black .` before every test run.
+- **Use `ruff` for linting** — Run `uv run ruff check .` alongside `black`. Auto-fix the mechanical categories with `uv run ruff check --fix`. The rules `F401` (unused imports), `F821` (undefined names), `F841` (unused locals), `E402` (import order), and `E741` (ambiguous names) catch real wiring bugs, not just style issues — do not disable them locally to silence a warning, fix the underlying issue.
+- **Never truncate or cap LLM output** — Do NOT apply character limits, line caps, `[:N]` slicing, or `max_tokens` ceilings to content that will be parsed downstream (JSON responses, verification results, plan arrays, goal lists). Truncated JSON is unparseable JSON. If you encounter existing truncation in a parsing path, report it as a bug. Display-only contexts (trace logs, observation strings, UI summaries) may use truncation for readability, but anything that feeds into `json.loads`, `json_repair`, or structured extraction must receive the complete response.
+- **Never ask for bare text responses** — All machine-parsed model output must use fenced JSON (```` ```json ```` blocks) or the `{"choice": "..."}` menu format. Never prompt the model to respond with a bare string, file path, or unstructured text that will be parsed programmatically. Small/sparse models fail at bare text compliance ~50% of the time. Use `parse_llm_json()` from `agent/llm_json.py` for all extraction. See `PROMPTING_CONVENTIONS.md` §3 for the fenced JSON protocol.
+
+---
+
+## Project Character
+
+Ouroboros is **unpublished**. There are no downstream users, no compatibility guarantees, and no migration windows to honor. This has direct implications for how changes should be made:
+
+- **Prefer clean-break, big-bang transitions over gradual migrations.** When a concept is being replaced, delete the old version in the same change that introduces the new one. Do not leave "kept for backward compatibility" shims, dual-path code, or feature flags guarding deprecated behavior — if the old path is dead, remove it fully. Comments marking code as "legacy" or "for migration" are an anti-pattern here; they become lies the moment the migration completes and noise that obscures what the code actually does.
+- **Expect cleanup as part of every feature change.** A feature change is not complete until its footprint is clean: unused imports are removed, superseded code paths are deleted, stale documentation is updated, orphan prompts/flows/actions are pruned, and lint categories pass cleanly. Lint, smoke, and the CLI smoke are the verification fence — if any of them regress, the change isn't done. The lint tooling (both `ouroboros.py lint` and `dev/lint_flows.py`) is calibrated to surface this kind of drift; treat new warnings as defects to resolve, not noise to tolerate.
+- **Favor consolidation over proliferation.** When two pieces of code do similar things, collapse them rather than adding a third. When a concept has grown three call sites, extract it. When a helper is only used once and the caller is clear, inline it. The goal is a codebase that stays small enough for a single reader to hold in their head.
+
+These norms apply to AI-directed changes as much as to human ones. If a change appears to be "too large" because it spans feature code, flow definitions, prompts, and docs — that is usually the right size, not a red flag.
 
 ---
 
@@ -28,11 +43,11 @@ All inference requests go through LLMVP's GraphQL API over HTTP.
 | Flow logic (step order, transitions, routing) | `flows/cue/*.cue` | Rebuild with `uv run ouroboros.py cue-compile` |
 | New action behavior | `agent/actions/` | Register in `agent/actions/registry.py` |
 | Prompt wording for local model | `prompts/<flow>/<step>.yaml` | `PROMPTING_CONVENTIONS.md` for standards |
-| Step templates (reusable step configs) | `flows/cue/templates.cue` | `agent/loader_v2.py` (merge logic) |
+| Step templates (reusable step configs) | `flows/cue/templates.cue` | `agent/loader.py` (merge logic) |
 | Data models or schemas | `agent/models.py` or `agent/persistence/models.py` | |
-| How flows are loaded/validated | `agent/loader_v2.py` | |
+| How flows are loaded/validated | `agent/loader.py` | |
 | Template rendering (Jinja2 for prompts) | `agent/template.py` | |
-| `$ref` resolution (structural fields) | `agent/loader_v2.py` | `flows/cue/flow.cue` (`#Ref` schema) |
+| `$ref` resolution (structural fields) | `agent/loader.py` | `flows/cue/flow.cue` (`#Ref` schema) |
 | Pre-compute formatters / result formatters | `agent/formatters.py` | `flows/cue/prompt.cue` (formatter registry) |
 | LLMVP inference integration | `agent/effects/inference.py` | |
 | Mission state / persistence | `agent/persistence/` | |
@@ -42,9 +57,9 @@ All inference requests go through LLMVP's GraphQL API over HTTP.
 | Mission YAML config | `agent/mission_config.py` | `ouroboros.py` |
 | Runtime tracing / trace events | `agent/trace.py`, `agent/trace_cli.py` | |
 | Architecture / design decisions | `IMPLEMENTATION.md` | |
-| Prompt quality / conventions | `PROMPTING_CONVENTIONS.md` | `dev/claude-skill-writing-patterns.md` |
+| Prompt quality / conventions | `PROMPTING_CONVENTIONS.md` | |
 | Static analysis of flow contracts | `dev/lint_flows.py` | `uv run ouroboros.py lint-flows` |
-| Tests | `tests/test_contracts.py` | `dev/smoke_test.py` via `uv run ouroboros.py smoke` |
+| Smoke testing | `dev/smoke_test.py` | `uv run ouroboros.py smoke` |
 
 ---
 
@@ -119,10 +134,6 @@ uv run ouroboros.py trace [--mission <id>] [--format summary|detail]
 
 # Generate architectural blueprint (Markdown and/or PDF)
 uv run ouroboros.py blueprint [--format pdf|md] [--output <dir>]
-
-# Visualize flow definitions as diagrams
-uv run ouroboros.py visualize [flow_name] [--format mermaid|dot]
-                              [--output <file>] [--svg <file>] [--detailed]
 ```
 
 ---
@@ -144,7 +155,7 @@ objective: "Build a REST API for user management"   # required
 
 working_dir: "."                                     # default: cwd
 effects_profile: local                               # local | git_managed | dry_run
-llmvp_endpoint: "http://localhost:8000/graphql"
+llmvp_endpoint: "http://localhost:8008/graphql"
 
 principles:
   - "Keep functions small and focused"
@@ -176,32 +187,69 @@ python ouroboros.py start            uv run ouroboros.py start
 
 ---
 
+## External Services
+
+Ouroboros composes with external services through the MCP (Model Context Protocol) pattern. Each service is a subprocess launched on demand and spoken to via stdio. Services are declared in `agent/effects/local.py`'s `_MCP_SERVERS` registry.
+
+### Registry shape
+
+Each entry is a dict with at least `command` (the subprocess argv) and optionally `env_from_file` (a mapping from environment variable name to the path of a file whose contents become that variable's value):
+
+```python
+_MCP_SERVERS: dict[str, dict[str, Any]] = {
+    "terminal": {
+        "command": [sys.executable, "-m", "mcp_servers.terminal"],
+    },
+    "exa": {
+        "command": ["npx", "-y", "exa-mcp-server",
+                    "--tools=web_search_exa,get_code_context_exa"],
+        "env_from_file": {"EXA_API_KEY": "~/.exa_key"},
+    },
+}
+```
+
+`env_from_file` values may use `~` for the user home directory. Files are read once at connect time, stripped of surrounding whitespace, and merged into the subprocess environment. If any declared file is missing or empty, `mcp_connect` raises immediately with a clear message naming the missing key — research calls that depend on the service will structurally fall through to the `no_results` branch rather than burning retries against a broken server.
+
+### Current services
+
+| Service | Purpose | Requires |
+|---------|---------|----------|
+| `terminal` | PTY sessions for interactive program testing | nothing (in-tree `mcp_servers.terminal`) |
+| `exa` | Web search + content fetch for the `research` flow | `~/.exa_key` containing an Exa API key, and `npx` on PATH |
+
+To add a new service, drop an entry into `_MCP_SERVERS` and write an action that calls `effects.mcp_connect(name)` + `effects.mcp_call_tool(conn_id, tool, args)`. See `agent/actions/interactive_actions.py` for the established consumption pattern.
+
+---
+
 ## Development Cycle
 
 **ALWAYS follow this sequence when making changes:**
 
-1. **Test** → `uv run pytest tests/ -v`
-   - Run the full suite first. Only narrow with `-k "test_name"` after full suite passes.
-   - CRITICAL: If any tests fail, stop, investigate, fix, then resume the original objective.
+1. **Code**
 
-2. **Code**
+2. **Format** → `uv run black .`
+   - Do NOT skip — Black reformatting can change line numbers that affect any test assertions and downstream diffs.
 
-3. **Format** → `uv run black .`
-   - Do NOT skip — Black reformatting can change line numbers that affect test assertions.
+3. **Lint** → `uv run ruff check .`
+   - Auto-fix what's safe: `uv run ruff check --fix`.
+   - Investigate every remaining warning — F841 in particular surfaces dropped wiring, not stylistic noise.
 
-4. **Test** → `uv run pytest tests/ -v`
+4. **Test** → `uv run pytest tests/ -v` if tests exist for the touched code.
 
 5. **Compile flows** → `uv run ouroboros.py cue-compile` (if CUE files changed)
+   - `flows/compiled.json` is gitignored — it's a build artifact regenerated from `flows/cue/*.cue`. Fresh checkouts will not have it until compiled. Mission YAML configs typically handle this in `pre_create`.
 
 6. **Smoke test** → `uv run ouroboros.py smoke` (for flow/action changes)
 
-7. **Verify live** → `uv run ouroboros.py mission create --mission_config <test_config>`
+7. **Flow linter** → `uv run ouroboros.py lint-flows` (for flow/action changes)
+
+8. **Verify live** → `uv run ouroboros.py mission create --mission_config <test_config>`
    - The above command is all-in-one: cleans, creates, and starts the agent.
    - Requires a running LLMVP server.
 
-8. **If tests fail** → Read the error output, fix the specific failure, return to step 1.
+Smoke (`uv run ouroboros.py smoke`) is the fastest signal that the full flow set still loads and begins execution cleanly. It catches most structural regressions without needing a live LLMVP server.
 
-**IMPORTANT:** Steps 5-7 are not optional for feature work. Unit tests passing does not guarantee the agent cycle works end-to-end.
+Unit tests passing (when they exist) does not guarantee the agent cycle works end-to-end. Live verification is the only real test for feature work touching flows, actions, or prompts.
 
 ---
 
@@ -220,11 +268,11 @@ uv run llmvp.py --stop        # stops the backend
 ### Health Check / Test Completion
 
 ```bash
-curl -X POST http://localhost:8000/graphql \
+curl -X POST http://localhost:8008/graphql \
   -H "Content-Type: application/json" \
   -d '{"query": "query { health { status poolSize availableInstances } }"}'
 
-curl -X POST http://localhost:8000/graphql \
+curl -X POST http://localhost:8008/graphql \
   -H "Content-Type: application/json" \
   -d '{"query": "query { completion(request: { prompt: \"Hello!\", maxTokens: 50, temperature: 0.7 }) { text tokensGenerated finished } }"}'
 ```
@@ -233,7 +281,7 @@ curl -X POST http://localhost:8000/graphql \
 
 LLMVP pre-tokenizes a knowledge base file into a binary token buffer (`data/<model>.tokens.bin`) at preprocessing time. At server startup, this buffer is memory-mapped and prepended to every inference call as a static prefix. The model evaluates these tokens once on first use, and the KV cache snapshot is reused for all subsequent calls — making the universal context effectively free at inference time.
 
-The knowledge base is composed from a model-specific wrapper template (`llmvp/knowledge/<model>-wrapper.txt`) that includes `SOUL.md` via `{{ouroboros_universal_prompt.md}}` placeholder substitution. To update the universal context after editing the soul or knowledge files:
+The knowledge base is composed from a model-specific wrapper template (`llmvp/knowledge/<model>-wrapper.txt`) that includes `SOUL.md` via `{{SOUL.md}}` placeholder substitution. To update the universal context after editing the soul or knowledge files:
 
 ```bash
 cd ouroboros/llmvp
@@ -256,44 +304,21 @@ For full architectural design, see `IMPLEMENTATION.md`. Key concepts:
 - **Resolvers** — Rule-based (restricted `eval()`, no builtins) or LLM menu (GBNF grammar-constrained choice, supports `publish_selection`).
 - **Tail calls** — Replace an external agent loop. Child flows tail-call back to `mission_control`, creating a continuous cycle. Structured returns (not prose) flow back as `last_result`.
 - **Effects interface** — All side effects (file I/O, subprocess, inference, persistence, terminal sessions, tracing) go through a swappable protocol. `LocalEffects` for production, `MockEffects` for testing.
-- **Frustration system** — Per-task counter that gates escalation. Cheap retries first, expensive escalation only after repeated failure.
-- **`$ref` resolution** — Typed references in structural fields (params, input_map, tail_call) resolved at runtime by `loader_v2.py`. Replaces Jinja2 `{{ }}` in flow definitions.
+- **Circuit breakers** — Multiple targeted safety valves (dispatch-repeat detection, rework budgets, quality-gate exhaustion, cycle budget) limit runaway behavior. The per-task frustration counter has been deprecated; see `IMPLEMENTATION.md` §2.6 and §4.6 for the planned unified replacement.
+- **`$ref` resolution** — Typed references in structural fields (params, input_map, tail_call) resolved at runtime by `loader.py`. Replaces Jinja2 `{{ }}` in flow definitions.
 - **Prompt templates** — Section-based YAML files in `prompts/` referenced by CUE flows via `prompt_template`. Pre-compute formatters handle complex data formatting.
 
-### Flow Inventory (18 flows, 169 steps, 61 actions)
+### Flow Organization
 
-**Orchestrator / Planning:**
+Flows are grouped by role in the agent cycle. For the current flow set, run `uv run ouroboros.py cue-compile` and inspect `flows/compiled.json`, or read the CUE source in `flows/cue/`.
 
-| Flow | Tier | Steps | Purpose |
-|------|------|-------|---------|
-| `mission_control` v5 | project_goal | 30 | Core director — load state → integrate result → reason → select task → dispatch |
-| `design_and_plan` v4 | mission_objective | 17 | Design/reconcile architecture, derive goals, generate plan |
-| `revise_plan` v3 | project_goal | 6 | Add/reorder/remove tasks based on new observations |
-| `retrospective` v5 | project_goal | 5 | Capture learnings from frustration recovery |
+**Orchestrator flows** operate above any single task. They shape the mission — designing architecture, selecting goals, reasoning about what to work on next. `mission_control` is the always-present hub; `design_and_plan` runs at mission start and when architecture drift is detected.
 
-**Task Flows (dispatched by mission_control):**
+**Flow-directive flows** are the dispatchable units of work. They receive a specific directive (target file + intent) from `mission_control` and execute it, reporting back a structured `DirectiveReport`. Each handles one class of work: source files, project infrastructure, investigation, behavioral testing. They are the layer where inference-heavy reasoning happens and where diagnosis-on-failure originates.
 
-| Flow | Tier | Steps | Purpose |
-|------|------|-------|---------|
-| `file_ops` v1 | flow_directive | 18 | File lifecycle — routes to create/patch/rewrite, validates, self-corrects |
-| `diagnose_issue` v4 | flow_directive | 9 | Deep issue investigation without modifying files |
-| `interact` v2 | flow_directive | 7 | Run the software, test features, observe behavior |
-| `project_ops` v4 | flow_directive | 7 | Project infrastructure — deps, config, directory structure |
+**Sub-flows** are mechanical execution units invoked synchronously via `action: flow`. They have no agency — they do a specific job and return structured data. `create`/`rewrite`/`patch` are the three modes of file modification; `prepare_context` builds the workspace view most flows need; `run_commands` and `run_session` wrap terminal interaction; `quality_gate` performs structural and behavioral validation.
 
-**Sub-flows (invoked via `action: flow`):**
-
-| Flow | Tier | Steps | Invoked By |
-|------|------|-------|------------|
-| `create` v1 | session_task | 7 | `file_ops` — generate new file |
-| `patch` v1 | session_task | 10 | `file_ops` — AST-parsed surgical symbol editing |
-| `rewrite` v1 | session_task | 6 | `file_ops` — complete file replacement |
-| `run_commands` v1 | session_task | 4 | `quality_gate` — batch command execution |
-| `run_session` v1 | session_task | 7 | `interact`, `quality_gate` — multi-turn terminal session |
-| `prepare_context` v3 | session_task | 8 | Most task flows — scan workspace, build repo map |
-| `quality_gate` v5 | mission_objective | 12 | `mission_control` — structural + behavioral validation |
-| `research` v2 | session_task | 6 | `design_and_plan`, `mission_control` — search and summarize |
-| `capture_learnings` v3 | session_task | 5 | `retrospective` — reflect and persist observations |
-| `set_env` v2 | session_task | 5 | `file_ops` — detect validation tooling |
+The full inventory is derivable from `flows/cue/` at any time. Referring to it in this document would invite drift — the CUE source is the source of truth.
 
 ---
 

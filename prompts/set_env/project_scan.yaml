@@ -1,0 +1,6 @@
+id: set_env/project_scan
+content: |
+  Working directory: {input.working_directory}
+
+  Project files:
+  {context.project_file_list}

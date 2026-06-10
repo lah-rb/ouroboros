@@ -1,0 +1,114 @@
+rooms:
+  - id: entrance_hall
+    name: Dusty Entrance Hall
+    description: A grand hall choked with dust and cobwebs. Faded tapestries hang in tatters from the walls, and a massive stone staircase leads upward. The air smells of old parchment and decay.
+    exits:
+      north: study
+      upstairs: observation_deck
+    items: []
+    npcs: []
+
+  - id: study
+    name: Cluttered Study
+    description: A chaotic room filled with scattered books, ink-stained parchment, and glass vials containing strange powders. A large oak desk dominates the center, covered in arcane diagrams and half-finished spells.
+    exits:
+      south: entrance_hall
+      downstairs: basement
+    items: []
+    npcs: []
+
+  - id: laboratory
+    name: Glowing Arcane Laboratory
+    description: A room bathed in an eerie blue light emanating from floating orbs suspended by chains. Alchemical equipment lines the walls, and a large cauldron bubbles with unidentifiable substances.
+    exits:
+      west: basement
+    items: []
+    npcs: []
+
+  - id: observation_deck
+    name: Crumbling Observation Deck
+    description: A circular platform open to the sky, surrounded by cracked stone balustrades. The clouds swirl unnaturally below, and a strange wind carries whispers on the air.
+    exits:
+      downstairs: entrance_hall
+    items: []
+    npcs: []
+
+  - id: basement
+    name: Hidden Basement
+    description: A damp, narrow chamber lit by a single flickering lantern. In the corner sits a heavy iron chest with a complex lock mechanism. The walls are lined with ancient runes that pulse faintly.
+    exits:
+      upstairs: study
+      east: laboratory
+    items: []
+    npcs: []
+
+  - id: summoning_chamber
+    name: Sealed Summoning Chamber
+    description: A circular chamber with a massive sigil etched into the floor. The walls are lined with obsidian pillars that hum with latent power. A heavy iron door stands sealed at the far end.
+    exits:
+      west: basement
+    items: []
+    npcs: []
+
+items:
+  - id: crystal_orb
+    name: Cracked Crystal Orb
+    description: A translucent crystal orb that pulses with a faint blue light. A hairline crack runs through its center, and it emits a low, resonant hum when held.
+    can_take: true
+    can_use: true
+
+  - id: tattered_journal
+    name: Tattered Journal
+    description: A worn leather journal with water-stained pages. The entries are written in a hurried scrawl, filled with cryptic notes about forbidden rituals and warnings of impending doom.
+    can_take: true
+    can_use: true
+
+  - id: brass_compass
+    name: Brass Compass
+    description: An ornate brass compass with intricate engravings. Instead of pointing north, its needle spins erratically, always orienting toward the nearest source of danger.
+    can_take: true
+    can_use: true
+
+  - id: elixir_vial
+    name: Shimmering Liquid Vial
+    description: A small glass vial containing a liquid that shifts through iridescent colors. A label in faded ink reads: 'Elixir of Clarity'.
+    can_take: true
+    can_use: true
+
+npcs:
+  - id: spectral_librarian
+    name: Spectral Librarian
+    description: A translucent figure in tattered academic robes, hovering near the entrance hall. Their eyes hold ancient sorrow, and they shimmer with faint light.
+    dialogue:
+      introduction:
+        - "At last... someone has come. I have waited so long for a visitor."
+        - library_tales
+      library_tales:
+        - "This tower was once a bastion of knowledge. Then came the fire that consumed the upper floors."
+        - tragic_event
+      tragic_event:
+        - "The fire took everything. My body, my books... my purpose. Only my spirit remains."
+        - current_state
+      current_state:
+        - "I guard the knowledge that remains, though I can no longer touch it."
+        - farewell
+      farewell:
+        - "May you find what you seek in these halls... if you dare to look."
+        - null
+
+  - id: nervous_apprentice
+    name: Nervous Apprentice Wizard
+    description: A young man in a stained apprentice's robe, huddled behind a stack of crates in the basement. He jumps at every sound and wipes his brow constantly.
+    dialogue:
+      introduction:
+        - "Please, don't hurt me! I didn't mean to be here when it happened!"
+        - explain_riddle
+      explain_riddle:
+        - "The master's chamber is sealed. I know how to open it, but I need to solve the riddle first."
+        - ask_for_help
+      ask_for_help:
+        - "The riddle is: 'I speak without a mouth and hear without ears. I have no body, but I come alive with wind. What am I?'"
+        - riddle_solution
+      riddle_solution:
+        - "If you know the answer, tell me and I'll unlock the summoning chamber."
+        - null

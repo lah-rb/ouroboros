@@ -27,7 +27,6 @@ from agent.persistence.models import (
     MissionConfig,
     MissionState,
     NoteRecord,
-    TaskRecord,
 )
 
 
@@ -100,7 +99,7 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
     llmvp_endpoint = (
         args.llmvp_endpoint
         or (yaml_config.llmvp_endpoint if yaml_config else None)
-        or "http://localhost:8000/graphql"
+        or "http://localhost:8008/graphql"
     )
 
     principles = (
@@ -127,44 +126,16 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
 
     mission = MissionState(objective=objective, principles=principles, config=config)
 
-    # Add initial tasks if provided
+    # Add initial task descriptions as notes (goals are derived by the agent)
     if tasks_list:
-        from agent.actions.mission_actions import (
-            _infer_flow_from_description,
-            _derive_source_for_tests,
-        )
-
-        for i, task_desc in enumerate(tasks_list):
-            inferred_flow = _infer_flow_from_description(task_desc)
-
-            # Extract target_file_path from description
-            import re as _re
-
-            file_match = _re.search(
-                r"(?:in|for|to|create|modify|update|fix)\s+[`'\"]*([a-zA-Z0-9_/.-]+\.(?:py|js|ts|yaml|yml|md|toml|json|rs|cfg|txt))[`'\"]*",
-                task_desc,
-                _re.IGNORECASE,
+        for task_desc in tasks_list:
+            mission.notes.append(
+                NoteRecord(
+                    content=task_desc,
+                    category="requirement_discovered",
+                    source_flow="cli_create",
+                )
             )
-            target_file = file_match.group(1) if file_match else ""
-
-            task_inputs = {
-                "reason": task_desc,
-                "target_file_path": target_file,
-            }
-
-            # For create_tests: target = source file, test_file_path = output
-            if inferred_flow == "create_tests" and target_file:
-                source_file = _derive_source_for_tests(target_file, task_desc)
-                task_inputs["target_file_path"] = source_file
-                task_inputs["test_file_path"] = target_file
-
-            task = TaskRecord(
-                description=task_desc,
-                flow=inferred_flow,
-                priority=i,
-                inputs=task_inputs,
-            )
-            mission.plan.append(task)
 
     pm.save_mission(mission)
 
@@ -175,10 +146,10 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
     print(f"   Effects: {config.effects_profile}")
     if principles:
         print(f"   Principles: {', '.join(principles)}")
-    if mission.plan:
-        print(f"   Tasks: {len(mission.plan)}")
-        for t in mission.plan:
-            print(f"     - [{t.status}] {t.description}")
+    if tasks_list:
+        print(f"   Notes from tasks: {len(tasks_list)}")
+        for desc in tasks_list:
+            print(f"     - {desc}")
     print(f"   State: {pm.agent_dir}/mission.json")
 
     # ── Run post_create commands after mission creation ───────
@@ -220,15 +191,20 @@ def cmd_mission_status(args: argparse.Namespace) -> None:
     print(f"  Effects: {mission.config.effects_profile}")
     print(f"  LLMVP: {mission.config.llmvp_endpoint}")
 
-    if mission.plan:
-        print(f"\n  Tasks ({len(mission.plan)}):")
-        for t in mission.plan:
-            frustration_str = (
-                f" [frustration: {t.frustration}]" if t.frustration > 0 else ""
+    if mission.goals:
+        complete = sum(1 for g in mission.goals if g.status == "complete")
+        print(f"\n  Goals ({complete}/{len(mission.goals)} complete):")
+        for g in mission.goals:
+            type_tag = f" [{g.type}]" if g.type == "functional" else ""
+            files_str = (
+                f" → {', '.join(g.associated_files)}" if g.associated_files else ""
             )
-            print(f"    [{t.status:12s}] {t.description}{frustration_str}")
-            if t.summary:
-                print(f"                  Summary: {t.summary}")
+            print(f"    [{g.status:10s}] {g.description}{type_tag}{files_str}")
+            if g.reports:
+                last = g.reports[-1]
+                print(
+                    f"                  Last report: {last.flow} ({last.status}) — {last.summary[:80]}"
+                )
 
     events = pm.read_events()
     if events:
@@ -256,7 +232,7 @@ def cmd_mission_pause(args: argparse.Namespace) -> None:
 
     event = Event(type="pause", payload={"reason": "User requested pause via CLI"})
     pm.push_event(event)
-    print(f"⏸  Pause event pushed. Mission will pause at next cycle.")
+    print("⏸  Pause event pushed. Mission will pause at next cycle.")
 
 
 def cmd_mission_resume(args: argparse.Namespace) -> None:
@@ -273,7 +249,7 @@ def cmd_mission_resume(args: argparse.Namespace) -> None:
         pm.save_mission(mission)
         event = Event(type="resume", payload={"reason": "User resumed via CLI"})
         pm.push_event(event)
-        print(f"▶  Mission resumed.")
+        print("▶  Mission resumed.")
     elif mission.status == "active":
         print("Mission is already active.")
     else:
@@ -292,7 +268,60 @@ def cmd_mission_abort(args: argparse.Namespace) -> None:
 
     event = Event(type="abort", payload={"reason": "User aborted via CLI"})
     pm.push_event(event)
-    print(f"🛑 Abort event pushed. Mission will abort at next cycle.")
+    print("🛑 Abort event pushed. Mission will abort at next cycle.")
+
+
+def cmd_mission_reopen(args: argparse.Namespace) -> None:
+    """Reopen a finished mission so `start` can run it again.
+
+    A completed (or aborted) mission can't be restarted — its status is
+    terminal. Reopen flips it back to 'active'. Phase is a pure function of
+    goal state (see action_check_pipeline_phase), so what runs next follows
+    automatically: with every goal already complete the agent goes straight to
+    the quality gate (a clean re-run); add new scope first (Phase 2) and it
+    works those goals before re-gating. Use `mission resume` for a *paused*
+    mission — this is only for terminal states.
+    """
+    working_dir = os.path.realpath(args.working_dir or os.getcwd())
+    pm = PersistenceManager(working_dir)
+    mission = pm.load_mission()
+    if mission is None:
+        print("No mission found.")
+        print(f"  (looked in {pm.agent_dir}/)")
+        sys.exit(1)
+
+    if mission.status == "active":
+        print("Mission is already active — just run `start`.")
+        return
+    if mission.status == "paused":
+        print(
+            "Mission is paused. Use `mission resume` (reopen is for finished missions)."
+        )
+        sys.exit(1)
+    if mission.status not in ("completed", "aborted"):
+        print(f"Mission is '{mission.status}'. Nothing to reopen.")
+        sys.exit(1)
+
+    prior = mission.status
+    mission.status = "active"
+    mission.reopen_count += 1
+    pm.save_mission(mission)
+    pm.push_event(
+        Event(
+            type="reopen",
+            payload={"from_status": prior, "reopen_count": mission.reopen_count},
+        )
+    )
+
+    incomplete = [g for g in mission.goals if g.status == "incomplete"]
+    print(f"♻  Mission reopened (was '{prior}', reopen #{mission.reopen_count}).")
+    if incomplete:
+        print(
+            f"   {len(incomplete)} incomplete goal(s) — `start` will work them, then re-gate."
+        )
+    else:
+        print("   All goals complete — `start` will re-run the quality gate.")
+    print("   Run: ouroboros.py start --working-dir " + working_dir)
 
 
 def cmd_mission_message(args: argparse.Namespace) -> None:
@@ -309,7 +338,7 @@ def cmd_mission_message(args: argparse.Namespace) -> None:
     pm.push_event(event)
 
     # Also add as a note to mission state
-    note = NoteRecord(content=message, source="user")
+    note = NoteRecord(content=message, source_flow="user_message")
     mission.notes.append(note)
     pm.save_mission(mission)
 
@@ -343,73 +372,6 @@ def cmd_mission_history(args: argparse.Namespace) -> None:
             print(f"               Time: {artifact.timestamp}")
         else:
             print(f"  {filename}")
-
-
-def cmd_visualize(args: argparse.Namespace) -> None:
-    """Visualize flow definitions as Mermaid or DOT diagrams."""
-    from agent.loader import load_all_flows
-    from agent.visualize import (
-        flow_to_mermaid,
-        flow_to_dot,
-        all_flows_to_mermaid,
-        all_flows_to_dot,
-        render_to_svg,
-    )
-
-    flows_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flows")
-    registry = load_all_flows(flows_dir)
-
-    fmt = args.format or "mermaid"
-    flow_name = args.flow_name
-
-    if flow_name and flow_name != "--all":
-        # Single flow
-        if flow_name not in registry:
-            print(f"Error: Flow '{flow_name}' not found.")
-            print(f"Available flows: {', '.join(sorted(registry.keys()))}")
-            sys.exit(1)
-        flow_def = registry[flow_name]
-        if fmt == "dot":
-            output = flow_to_dot(flow_def)
-        else:
-            output = flow_to_mermaid(flow_def)
-    else:
-        # All flows (system view)
-        if fmt == "dot":
-            output = all_flows_to_dot(registry)
-        else:
-            output = all_flows_to_mermaid(registry, show_internal_steps=args.detailed)
-
-    # ── SVG export ────────────────────────────────────────────
-    svg_path = args.svg
-    # Auto-detect: if --output ends in .svg, treat it as SVG export
-    if not svg_path and args.output and args.output.endswith(".svg"):
-        svg_path = args.output
-
-    if svg_path:
-        try:
-            render_to_svg(output, source_format=fmt, output_path=svg_path)
-            print(f"✅ Rendered SVG to {svg_path}")
-        except RuntimeError as e:
-            print(f"Error: {e}")
-            sys.exit(1)
-        return
-
-    # ── Text output (Mermaid / DOT source) ────────────────────
-    if args.output:
-        with open(args.output, "w") as f:
-            if fmt == "mermaid" and args.output.endswith(".md"):
-                f.write(f"# Ouroboros Flow Diagrams\n\n")
-                if flow_name and flow_name != "--all":
-                    f.write(f"## {flow_name}\n\n")
-                else:
-                    f.write(f"## System View\n\n")
-                f.write(f"```mermaid\n{output}\n```\n")
-            else:
-                f.write(output)
-        print(f"✅ Wrote {fmt} diagram to {args.output}")
-    else:
-        print(output)
 
 
 def cmd_lint(args: argparse.Namespace) -> None:
@@ -473,7 +435,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         format="%(levelname)-5s | %(message)s",
     )
 
-    print(f"🚀 Starting Ouroboros agent")
+    print("🚀 Starting Ouroboros agent")
     print(f"   Mission: {mission.id}")
     print(f"   Objective: {mission.objective}")
     print(f"   Working dir: {working_dir}")
@@ -512,7 +474,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         print(f"Agent terminated: {result.status}")
         print(f"Steps: {' → '.join(result.steps_executed)}")
         if result.observations:
-            print(f"Observations:")
+            print("Observations:")
             for obs in result.observations[-5:]:
                 print(f"  {obs}")
         print(f"{'=' * 60}")
@@ -549,7 +511,8 @@ def cmd_cue_compile(args: argparse.Namespace) -> None:
         try:
             subprocess.run(
                 [candidate, "version"],
-                capture_output=True, check=True,
+                capture_output=True,
+                check=True,
             )
             cue_bin = candidate
             break
@@ -564,7 +527,9 @@ def cmd_cue_compile(args: argparse.Namespace) -> None:
     print("Validating CUE schemas...")
     result = subprocess.run(
         [cue_bin, "vet", "."],
-        capture_output=True, text=True, cwd=cue_dir,
+        capture_output=True,
+        text=True,
+        cwd=cue_dir,
     )
     if result.returncode != 0:
         print(f"CUE validation failed:\n{result.stderr}")
@@ -574,7 +539,9 @@ def cmd_cue_compile(args: argparse.Namespace) -> None:
     print("Exporting flows to JSON...")
     result = subprocess.run(
         [cue_bin, "export", ".", "--out", "json"],
-        capture_output=True, text=True, cwd=cue_dir,
+        capture_output=True,
+        text=True,
+        cwd=cue_dir,
     )
     if result.returncode != 0:
         print(f"CUE export failed:\n{result.stderr}")
@@ -617,7 +584,7 @@ def cmd_cue_compile(args: argparse.Namespace) -> None:
                         )
 
     if errors:
-        print(f"\n⚠️  Structural issues found:")
+        print("\n⚠️  Structural issues found:")
         for e in errors:
             print(e)
         sys.exit(1)
@@ -640,7 +607,9 @@ def cmd_lint_flows(args: argparse.Namespace) -> None:
         else os.path.join(project_root, "flows", "compiled.json")
     )
     if not os.path.exists(compiled_path):
-        print(f"Error: {compiled_path} not found. Run 'ouroboros.py cue-compile' first.")
+        print(
+            f"Error: {compiled_path} not found. Run 'ouroboros.py cue-compile' first."
+        )
         sys.exit(1)
 
     cmd = [sys.executable, lint_script]
@@ -668,12 +637,31 @@ def cmd_smoke(args: argparse.Namespace) -> None:
 
     compiled_path = os.path.join(project_root, "flows", "compiled.json")
     if not os.path.exists(compiled_path):
-        print(f"Error: {compiled_path} not found. Run 'ouroboros.py cue-compile' first.")
+        print(
+            f"Error: {compiled_path} not found. Run 'ouroboros.py cue-compile' first."
+        )
         sys.exit(1)
 
     env = os.environ.copy()
     env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")
     result = subprocess.run([sys.executable, smoke_script], cwd=project_root, env=env)
+    sys.exit(result.returncode)
+
+
+def cmd_cli_smoke(args: argparse.Namespace) -> None:
+    """Exercise --help on every subcommand; catches import-chain rot."""
+    import subprocess
+
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(project_root, "dev", "cli_smoke.py")
+
+    if not os.path.exists(script):
+        print(f"Error: CLI smoke script not found: {script}")
+        sys.exit(1)
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run([sys.executable, script], cwd=project_root, env=env)
     sys.exit(result.returncode)
 
 
@@ -739,7 +727,7 @@ def main() -> None:
     lint_p.set_defaults(func=cmd_lint)
 
     # ── cue-compile subcommand ────────────────────────────────────
-    cue_p = subparsers.add_parser(
+    subparsers.add_parser(
         "cue-compile", help="Validate CUE schemas and compile flows to compiled.json"
     )
 
@@ -747,31 +735,18 @@ def main() -> None:
     lf_p = subparsers.add_parser(
         "lint-flows", help="Run comprehensive flow context linter"
     )
-    lf_p.add_argument(
-        "--verbose", action="store_true", help="Show all checks"
-    )
+    lf_p.add_argument("--verbose", action="store_true", help="Show all checks")
     lf_p.add_argument(
         "--compiled", help="Path to compiled.json (default: flows/compiled.json)"
     )
 
     # ── smoke subcommand ──────────────────────────────────────────
-    smoke_p = subparsers.add_parser(
-        "smoke", help="Run smoke test suite against compiled flows"
-    )
+    subparsers.add_parser("smoke", help="Run smoke test suite against compiled flows")
 
-    # ── visualize subcommand ──────────────────────────────────────
-    viz_p = subparsers.add_parser("visualize", help="Visualize flow definitions")
-    viz_p.add_argument("flow_name", nargs="?", help="Flow name (omit for all flows)")
-    viz_p.add_argument(
-        "--format", choices=["mermaid", "dot"], default="mermaid", help="Output format"
-    )
-    viz_p.add_argument("--output", help="Write to file instead of stdout")
-    viz_p.add_argument(
-        "--svg",
-        help="Export as SVG image (requires mmdc for Mermaid, dot for Graphviz)",
-    )
-    viz_p.add_argument(
-        "--detailed", action="store_true", help="Show internal steps in system view"
+    # ── cli-smoke subcommand ──────────────────────────────────────
+    subparsers.add_parser(
+        "cli-smoke",
+        help="Exercise --help on every subcommand (catches import rot)",
     )
 
     # ── mission subcommand ────────────────────────────────────────
@@ -812,6 +787,13 @@ def main() -> None:
     abort_p = mission_sub.add_parser("abort", help="Abort the mission")
     abort_p.add_argument("--working-dir", help="Working directory (default: cwd)")
 
+    # mission reopen
+    reopen_p = mission_sub.add_parser(
+        "reopen",
+        help="Reopen a finished (completed/aborted) mission so `start` can run again",
+    )
+    reopen_p.add_argument("--working-dir", help="Working directory (default: cwd)")
+
     # mission message
     msg_p = mission_sub.add_parser("message", help="Send a message to the agent")
     msg_p.add_argument("message", help="Message text")
@@ -841,8 +823,8 @@ def main() -> None:
         cmd_lint_flows(args)
     elif args.command == "smoke":
         cmd_smoke(args)
-    elif args.command == "visualize":
-        cmd_visualize(args)
+    elif args.command == "cli-smoke":
+        cmd_cli_smoke(args)
     elif args.command == "mission":
         dispatch = {
             "create": cmd_mission_create,
@@ -850,6 +832,7 @@ def main() -> None:
             "pause": cmd_mission_pause,
             "resume": cmd_mission_resume,
             "abort": cmd_mission_abort,
+            "reopen": cmd_mission_reopen,
             "message": cmd_mission_message,
             "history": cmd_mission_history,
         }

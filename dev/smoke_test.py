@@ -14,20 +14,19 @@ current flow names, proper mock data shapes).
 import asyncio
 import json
 import sys
-import traceback
 from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent.models import FlowDefinition, StepInput, FlowMeta
-from agent.actions.registry import ActionRegistry, build_action_registry
+from agent.models import FlowDefinition
+from agent.actions.registry import build_action_registry
 from agent.effects.mock import MockEffects
 from agent.effects.protocol import CommandResult
 from agent.persistence.models import (
     MissionState,
     MissionConfig,
-    TaskRecord,
+    GoalRecord,
     ArchitectureState,
 )
 from agent.runtime import execute_flow
@@ -43,26 +42,20 @@ def make_mock_mission(with_architecture=False, with_plan=True):
         config=config,
     )
     if with_plan:
-        mission.plan = [
-            TaskRecord(
-                id="task-001",
+        mission.goals = [
+            GoalRecord(
+                id="goal-001",
                 description="Create main.py with basic TODO class",
-                flow="create",
-                status="pending",
-                inputs={
-                    "target_file_path": "main.py",
-                    "reason": "Create main.py with basic TODO class",
-                },
+                type="structural",
+                status="incomplete",
+                associated_files=["main.py"],
             ),
-            TaskRecord(
-                id="task-002",
+            GoalRecord(
+                id="goal-002",
                 description="Create test_main.py",
-                flow="create",
-                status="pending",
-                inputs={
-                    "target_file_path": "test_main.py",
-                    "reason": "Create test_main.py",
-                },
+                type="structural",
+                status="incomplete",
+                associated_files=["test_main.py"],
             ),
         ]
     if with_architecture:
@@ -107,7 +100,7 @@ def make_effects(mission=None, inference_responses=None):
             "b",  # LLM menu selection
             "Mock analysis response",
             '{"revision_needed": false}',
-            '[]',  # empty check list
+            "[]",  # empty check list
             '{"verdict": "pass", "blocking_issues": [], "summary": "All good"}',
             '{"missing_dependencies": []}',
             "Mock plan response",
@@ -127,7 +120,6 @@ FLOW_INPUTS = {
     "mission_control": {
         "mission_id": "test-mission-001",
     },
-
     # Planning
     "design_and_plan": {
         "mission_id": "test-mission-001",
@@ -136,76 +128,97 @@ FLOW_INPUTS = {
         "mission_id": "test-mission-001",
         "observation": "Need to add database support",
     },
-
     # File operations (Context Contract Architecture — require flow_directive)
     "file_ops": {
         "mission_id": "test-mission-001",
-        "task_id": "task-001",
+        "goal_id": "goal-001",
         "target_file_path": "main.py",
         "flow_directive": "Create the main TODO application entry point with a Todo class that supports add, remove, and list operations.",
         "working_directory": "/tmp/test-project",
     },
     "create": {
         "mission_id": "test-mission-001",
-        "task_id": "task-001",
+        "goal_id": "goal-001",
         "target_file_path": "main.py",
         "flow_directive": "Create main.py with a Todo class supporting CRUD operations.",
         "working_directory": "/tmp/test-project",
     },
     "rewrite": {
         "mission_id": "test-mission-001",
-        "task_id": "task-001",
+        "goal_id": "goal-001",
         "target_file_path": "main.py",
         "flow_directive": "Rewrite main.py to add save/load methods to the Todo class.",
         "working_directory": "/tmp/test-project",
     },
     "patch": {
         "file_path": "main.py",
+        "file_content": "class Todo:\n    def save(self):\n        pass\n",
+        "symbol_table": [
+            {
+                "name": "Todo.save",
+                "kind": "method",
+                "signature": "def save(self)",
+                "line": 2,
+                "end_line": 3,
+                "body": "    def save(self):\n        pass\n",
+                "parent": "Todo",
+            }
+        ],
+        "target_symbol": "Todo.save",
+        "change_spec": "Write the Todo instance state to a JSON file at self.path.",
+        "flow_directive": "Implement the save() method.",
+        "working_directory": "/tmp/test-project",
+    },
+    # Phase D (patch redesign) — new sub-flow for inserting symbols
+    # that diagnose names but the file's AST doesn't contain yet.
+    "add_symbol": {
+        "file_path": "main.py",
         "file_content": "class Todo:\n    pass\n",
         "symbol_table": [
             {
                 "name": "Todo",
-                "type": "class",
-                "start_line": 1,
+                "kind": "class",
+                "signature": "class Todo",
+                "line": 1,
                 "end_line": 2,
                 "body": "class Todo:\n    pass\n",
+                "parent": "",
             }
         ],
-        "symbol_menu_options": [
-            {"id": "Todo", "description": "class Todo"},
-            {"id": "__done__", "description": "DONE — finish selection"},
-            {"id": "__full_rewrite__", "description": "Full rewrite instead of patch"},
-        ],
         "flow_directive": "Add a save() method to the Todo class.",
+        "target_symbol": "Todo.save",
+        "change_spec": "Write the Todo instance to a JSON file at self.path.",
         "working_directory": "/tmp/test-project",
     },
-
     # Diagnostics
     "diagnose_issue": {
         "mission_id": "test-mission-001",
-        "task_id": "task-001",
+        "goal_id": "goal-001",
         "flow_directive": "Investigate why importing main.py fails with ModuleNotFoundError.",
         "target_file_path": "main.py",
         "error_output": "ModuleNotFoundError: No module named 'todo'",
         "working_directory": "/tmp/test-project",
+        # Projection stubs — smoke bypasses loop.py's _materialize_projections,
+        # so any projection the flow consumes must be pre-seeded here.
+        "pick_file_menu": [
+            {"id": "main.py", "description": "main.py — entry point [defines: main]"},
+            {"id": "todo.py", "description": "todo.py — Todo model [defines: Todo]"},
+        ],
     },
-
     # Project infrastructure
     "project_ops": {
         "mission_id": "test-mission-001",
-        "task_id": "task-001",
+        "goal_id": "goal-001",
         "flow_directive": "Set up project structure with pyproject.toml and install dependencies.",
         "working_directory": "/tmp/test-project",
     },
-
     # Interactive testing
     "interact": {
         "mission_id": "test-mission-001",
-        "task_id": "task-001",
+        "goal_id": "goal-001",
         "flow_directive": "Run the TODO app and verify that adding and listing items works correctly.",
         "working_directory": "/tmp/test-project",
     },
-
     # Quality and validation
     "quality_gate": {
         "mission_id": "test-mission-001",
@@ -218,7 +231,6 @@ FLOW_INPUTS = {
         "target_file_path": "main.py",
         "working_directory": "/tmp/test-project",
     },
-
     # Context and research
     "prepare_context": {
         "working_directory": "/tmp/test-project",
@@ -229,18 +241,16 @@ FLOW_INPUTS = {
         "research_query": "Python TODO app best practices",
         "research_context": "Building a simple TODO app",
     },
-
     # Retrospective and learnings
     "retrospective": {
         "mission_id": "test-mission-001",
-        "task_id": "task-001",
+        "goal_id": "goal-001",
         "trigger_reason": "Task completed after overcoming difficulty",
     },
     "capture_learnings": {
         "task_description": "Created main.py with TODO class",
         "target_file_path": "main.py",
     },
-
     # Terminal sub-flows
     "run_commands": {
         "commands": ["echo 'hello'"],
@@ -254,9 +264,7 @@ FLOW_INPUTS = {
 
 # Flows that need special max_steps limits (complex sub-flow invocations
 # or mock data shape limitations)
-FLOW_MAX_STEPS = {
-    "patch": 5,          # select_symbol_turn with limited mock session
-}
+FLOW_MAX_STEPS = {}
 
 # Flows where hitting max_steps is expected with mock effects
 # (exploratory loops that need real LLM menu responses to terminate)
@@ -287,7 +295,7 @@ async def smoke_test_flow(flow_name, flow_def, registry, all_flows, max_steps=15
         # MaxStepsExceeded is expected for exploratory loop flows
         # when running with mock effects (no real LLM to pick "done")
         if flow_name in EXPECTED_MAX_STEPS and "MaxStepsExceeded" in type(e).__name__:
-            return True, None, [f"(loop hit max_steps — expected with mocks)"]
+            return True, None, ["(loop hit max_steps — expected with mocks)"]
         return False, f"{type(e).__name__}: {e}", []
 
 
@@ -295,7 +303,9 @@ async def main():
     # Load compiled.json
     compiled_path = Path("flows/compiled.json")
     if not compiled_path.exists():
-        print("ERROR: flows/compiled.json not found. Run 'ouroboros.py cue-compile' first.")
+        print(
+            "ERROR: flows/compiled.json not found. Run 'ouroboros.py cue-compile' first."
+        )
         sys.exit(1)
 
     with open(compiled_path) as f:
@@ -337,7 +347,7 @@ async def main():
     print(f"Results: {passed} passed, {failed} failed out of {len(flows)} flows")
 
     if errors:
-        print(f"\nFailures:")
+        print("\nFailures:")
         for name, err in errors:
             print(f"  {name}: {err}")
 

@@ -8,8 +8,8 @@ write contention. Atomic writes via temp+rename ensure crash safety.
 from agent.persistence.models import (
     MissionState,
     MissionConfig,
-    TaskRecord,
-    AttemptRecord,
+    DirectiveReport,
+    GoalRecord,
     NoteRecord,
     Event,
     FlowArtifact,
@@ -19,8 +19,8 @@ from agent.persistence.manager import PersistenceManager
 __all__ = [
     "MissionState",
     "MissionConfig",
-    "TaskRecord",
-    "AttemptRecord",
+    "DirectiveReport",
+    "GoalRecord",
     "NoteRecord",
     "Event",
     "FlowArtifact",

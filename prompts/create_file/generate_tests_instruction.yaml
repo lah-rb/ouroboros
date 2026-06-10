@@ -1,0 +1,15 @@
+id: create_file/generate_tests_instruction
+content: |
+  Generate a complete test file for the target. Tests must:
+
+  - Exercise the public API described in the data contracts — every
+    documented behavior has a test
+  - Cover happy paths, edge cases, and realistic error conditions
+  - Import from the existing files as shown in the excerpts — use the
+    real module paths, not placeholder imports
+  - Use pytest conventions (function-based tests, fixtures as needed,
+    parameterize for table-driven cases)
+
+  Every assertion is concrete. Every test runs to completion without
+  network, filesystem mutations outside tmp_path, or environment
+  dependencies. No skipped tests, no "write later" stubs.

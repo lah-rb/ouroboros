@@ -10,9 +10,6 @@ from agent.blueprint.ir import (
     BlueprintIR,
     FlowIR,
     StepIR,
-    ActionIR,
-    ContextKeyIR,
-    TemplateIR,
 )
 
 # ── Symbol Constants ──────────────────────────────────────────────────
@@ -160,7 +157,9 @@ def _render_system_diagrams(ir: BlueprintIR) -> str:
 
 def _render_system_context(ir: BlueprintIR) -> str:
     # Count categories
-    orchestrator_count = sum(1 for f in ir.flows.values() if f.category == "orchestrator")
+    orchestrator_count = sum(
+        1 for f in ir.flows.values() if f.category == "orchestrator"
+    )
     task_count = sum(1 for f in ir.flows.values() if f.category == "task")
     sub_flow_count = sum(1 for f in ir.flows.values() if f.category == "sub_flow")
     other_count = sum(1 for f in ir.flows.values() if f.category in ("unknown", "test"))
@@ -168,7 +167,7 @@ def _render_system_context(ir: BlueprintIR) -> str:
     return f"""## System Context
 
 **Ouroboros** is a flow-driven autonomous coding agent backed by LLMVP local inference.
-It operates as a pure GraphQL client — all inference flows through `localhost:8000/graphql`.
+It operates as a pure GraphQL client — all inference flows through `localhost:8008/graphql`.
 
 ### Actors
 - **Shop Director (User)** — Sets missions, checks in periodically via CLI.
@@ -285,7 +284,11 @@ def _render_flow_card(flow_ir: FlowIR, ir: BlueprintIR) -> str:
         contract_parts.append(f"**Tier:** `{flow_ir.context_tier}`")
     if flow_ir.state_reads:
         reads = ", ".join(f"`{r}`" for r in flow_ir.state_reads[:6])
-        more = f" (+{len(flow_ir.state_reads) - 6})" if len(flow_ir.state_reads) > 6 else ""
+        more = (
+            f" (+{len(flow_ir.state_reads) - 6})"
+            if len(flow_ir.state_reads) > 6
+            else ""
+        )
         contract_parts.append(f"**Reads:** {reads}{more}")
     if flow_ir.returns:
         ret_keys = ", ".join(f"`{k}`" for k in list(flow_ir.returns.keys())[:6])
@@ -425,9 +428,9 @@ def _summarize_flow_effects(flow_ir: FlowIR, ir: BlueprintIR) -> list[str]:
         "save_artifact": f"{SYM_PERSIST_WRITE} save artifact",
         "read_state": f"{SYM_PERSIST_READ} read state",
         "write_state": f"{SYM_PERSIST_WRITE} write state",
-        "start_terminal": f"{SYM_SUBPROCESS} terminal",
-        "send_to_terminal": f"{SYM_SUBPROCESS} terminal cmd",
-        "close_terminal": f"{SYM_SUBPROCESS} close terminal",
+        "start_interactive_session": f"{SYM_SUBPROCESS} terminal (MCP)",
+        "send_interaction": f"{SYM_SUBPROCESS} terminal interact",
+        "close_interactive_session": f"{SYM_SUBPROCESS} close terminal",
     }
 
     seen: set[str] = set()

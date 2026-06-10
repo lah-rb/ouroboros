@@ -1,0 +1,15 @@
+id: create_file/generate_content_instruction
+content: |
+  Generate the complete content for the target file. The implementation
+  must:
+
+  - Fully satisfy the task description above
+  - Honor every signature, type, and field in the data contracts —
+    these are the observable surface the rest of the system expects
+  - Work with the existing files as shown in their excerpts —
+    imports, call conventions, shared utilities
+  - Fit cleanly into the architecture sketched above
+
+  Write production-quality code — every function complete, every import
+  correct, every branch realized. No placeholders, no TODOs, no
+  "implement this later."

@@ -1,24 +1,20 @@
-"""Refinement phase actions — push_note, scan_project, curl_search,
-run_validation_checks, load_file_contents, apply_plan_revision.
+"""Refinement phase actions — push_note, scan_project, exa_search,
+run_validation_checks, load_file_contents, apply_quality_gate_results.
 
-These actions power the shared sub-flows introduced in the intermediate
-refinement phase: prepare_context, validate_output, capture_learnings,
-research_context, and revise_plan.
+These actions power refinement steps across the task flows: note
+persistence, project scanning, web search (via Exa MCP), validation
+execution, file loading, and quality-gate result application.
 """
 
 from __future__ import annotations
 
 import fnmatch
-import json
 import logging
-import os
 import re
-import urllib.parse
-from typing import Any
-
-logger = logging.getLogger(__name__)
 
 from agent.models import StepInput, StepOutput
+
+logger = logging.getLogger(__name__)
 
 # ── shared utilities ──────────────────────────────────────────────────
 
@@ -65,6 +61,13 @@ def extract_code_from_response(text: str) -> str:
     4. Fall back to raw response
 
     Returns the best-effort extracted code.
+
+    Whitespace handling is deliberate: we strip wrapper/outer whitespace
+    (e.g., blank lines before the fence) but NEVER leading whitespace
+    within a code block. The first line of an extracted block may be
+    indented — most commonly a decorator or method inside a class body —
+    and that indentation carries meaning for downstream splice logic.
+    Only trailing whitespace is safe to remove.
     """
     text = str(text).strip()
 
@@ -87,13 +90,13 @@ def extract_code_from_response(text: str) -> str:
     # Strategy 1: Single clean fenced block
     single_match = re.match(r"^```(?:\w+)?\s*\n([\s\S]*?)```\s*$", text)
     if single_match:
-        return single_match.group(1).strip()
+        return single_match.group(1).rstrip()
 
     # Strategy 2: Find the largest fenced code block
     blocks = re.findall(r"```(?:\w+)?\s*\n([\s\S]*?)```", text)
     if blocks:
         largest = max(blocks, key=len)
-        return largest.strip()
+        return largest.rstrip()
 
     # Strategy 3: Remove obvious non-code lines
     lines = text.splitlines()
@@ -124,7 +127,7 @@ def extract_code_from_response(text: str) -> str:
 
     # If we stripped lines, return the cleaned version
     if len(code_lines) < len(lines):
-        return "\n".join(code_lines).strip()
+        return "\n".join(code_lines).rstrip()
 
     # Strategy 4: Return as-is
     return text
@@ -133,56 +136,11 @@ def extract_code_from_response(text: str) -> str:
 # ── push_note ─────────────────────────────────────────────────────────
 
 
-async def action_accumulate_correction_history(step_input: StepInput) -> StepOutput:
-    """Accumulate correction attempt history for retry loops.
-
-    Tracks what errors occurred and what fixes were attempted so the
-    correction step can avoid repeating the same failed approach.
-
-    Publishes: correction_history (list of dicts with error + fix_summary)
-    """
-    existing = step_input.context.get("correction_history", [])
-    validation = step_input.context.get("validation_results", {})
-
-    errors = []
-    if isinstance(validation, list):
-        for check in validation:
-            if isinstance(check, dict) and not check.get("passed"):
-                errors.append(
-                    f"{check.get('name', '?')}: "
-                    f"{check.get('stderr', check.get('stdout', ''))[:200]}"
-                )
-    elif isinstance(validation, dict):
-        for check in validation.get("checks", []):
-            if not check.get("passed"):
-                errors.append(
-                    f"{check.get('name', '?')}: "
-                    f"{check.get('stderr', check.get('stdout', ''))[:200]}"
-                )
-
-    last_response = step_input.context.get("inference_response", "")
-    fix_summary = (
-        last_response[:200]
-        if isinstance(last_response, str)
-        else str(last_response)[:200]
-    )
-
-    updated = list(existing) + [
-        {"error": "; ".join(errors), "fix_summary": fix_summary}
-    ]
-
-    return StepOutput(
-        result={"history_length": len(updated)},
-        observations=f"Correction history: {len(updated)} attempts recorded",
-        context_updates={"correction_history": updated},
-    )
-
-
 async def action_push_note(step_input: StepInput) -> StepOutput:
     """Persist an observation to mission state notes.
 
-    Reads note content from a configurable context key.
-    Categorizes and tags for retrieval by prepare_context and create_plan.
+    Reads note content from a configurable context key, then delegates
+    persistence to effects.push_note.
     """
     effects = step_input.effects
     params = step_input.params
@@ -200,27 +158,30 @@ async def action_push_note(step_input: StepInput) -> StepOutput:
             context_updates={"note_saved": False},
         )
 
-    from agent.persistence.models import NoteRecord
+    content_str = str(content).strip()
+    category = params.get("category", "general")
+    # Tags may arrive with empty strings when a producer used a $ref
+    # with default: "" (e.g. file_ops report_bail's target_file_path
+    # tag — empty when diagnose dispatched without a target). Drop
+    # them here so downstream consumers filtering by note.tags don't
+    # have to defend against "" matching everything.
+    raw_tags = params.get("tags", [])
+    tags = [str(t) for t in raw_tags if t]
 
-    note = NoteRecord(
-        content=str(content).strip(),
-        category=params.get("category", "general"),
-        tags=params.get("tags", []),
-        source_flow=params.get("source_flow", "unknown"),
-        source_task=params.get("source_task", "unknown"),
-    )
-
+    saved = False
     if effects:
-        mission = await effects.load_mission()
-        if mission:
-            mission.notes.append(note)
-            await effects.save_mission(mission)
+        saved = await effects.push_note(
+            content=content_str,
+            category=category,
+            tags=tags,
+            source_flow=params.get("source_flow", "unknown"),
+        )
 
     return StepOutput(
-        result={"note_saved": True},
-        observations=f"Saved note: category={note.category}, "
-        f"tags={note.tags}, length={len(note.content)}",
-        context_updates={"note_saved": True},
+        result={"note_saved": saved},
+        observations=f"Saved note: category={category}, "
+        f"tags={tags}, length={len(content_str)}",
+        context_updates={"note_saved": saved},
     )
 
 
@@ -327,7 +288,9 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
         parts.append("\n".join(docstring_lines))
 
     # Imports
-    imports = [l.strip() for l in lines if l.strip().startswith(("import ", "from "))]
+    imports = [
+        line.strip() for line in lines if line.strip().startswith(("import ", "from "))
+    ]
     if imports:
         parts.append("\n".join(imports[:15]))
 
@@ -392,24 +355,41 @@ async def action_extract_search_queries(step_input: StepInput) -> StepOutput:
     )
 
 
-# ── curl_search ───────────────────────────────────────────────────────
+# ── exa_search ────────────────────────────────────────────────────────
 
 
-async def action_curl_search(step_input: StepInput) -> StepOutput:
-    """Execute web searches via curl and return raw results.
+async def action_exa_search(step_input: StepInput) -> StepOutput:
+    """Execute web searches via the Exa MCP server.
 
-    Parses search queries from context.search_queries (set by
-    extract_search_queries) or falls back to params.query (set
-    directly by the research flow's input_map).
-    Fetches results via DuckDuckGo lite, extracts text.
+    Parses search queries from ``context.search_queries`` (set by
+    extract_search_queries) or falls back to ``params.query`` (set
+    directly by the research flow's input_map). Calls the Exa MCP
+    server's ``web_search_exa`` tool for each query. Exa bundles content
+    for the top results into the response, so no separate fetch step is
+    needed.
+
+    If the Exa API key file (``~/.exa_key``) is missing, ``mcp_connect``
+    raises ``FileNotFoundError`` immediately — caught here and reported
+    as zero results so the research flow's ``no_results`` branch takes
+    over structurally rather than crashing the cycle.
+
+    Publishes:
+        raw_search_results: list of ``{query, url, content}`` dicts,
+            shape preserved from the prior search backend so the
+            ``summarize`` prompt template is unchanged.
     """
     effects = step_input.effects
-    queries_raw = (
-        step_input.context.get("search_queries", "")
-        or step_input.params.get("query", "")
-    )
-    max_queries = int(step_input.params.get("max_queries", 2))
-    timeout = int(step_input.params.get("timeout", 15))
+    # search_queries may arrive in two shapes:
+    #   1) a parsed list[str] from the extract_search_queries step
+    #   2) a raw string — e.g. the fallback path when extract was skipped,
+    #      or when the caller's input_map passed the research_query
+    #      directly via params.query.
+    # Earlier versions unconditionally str()'d the list here, which
+    # produced its Python repr ("['q1', 'q2']") and caused Exa to
+    # search for that literal string — observed in the e75 run.
+    search_queries_ctx = step_input.context.get("search_queries")
+    max_queries = int(step_input.params.get("max_queries", 3))
+    num_results = int(step_input.params.get("num_results", 5))
 
     if not effects:
         return StepOutput(
@@ -418,8 +398,20 @@ async def action_curl_search(step_input: StepInput) -> StepOutput:
             context_updates={"raw_search_results": []},
         )
 
-    # Parse queries from inference response
-    parsed_queries = _parse_search_queries(queries_raw, max_queries)
+    # Normalize to a list of query strings without going through a
+    # stringification round-trip.
+    parsed_queries: list[str]
+    if isinstance(search_queries_ctx, list):
+        # Already a structured list from extract_search_queries.
+        parsed_queries = [str(q).strip() for q in search_queries_ctx if str(q).strip()][
+            :max_queries
+        ]
+    else:
+        # Fallback to raw string from context or params.query — the
+        # path taken when extract_queries was skipped (empty inference
+        # response) or the caller supplied a direct query.
+        raw = search_queries_ctx or step_input.params.get("query", "") or ""
+        parsed_queries = _parse_search_queries(str(raw), max_queries)
 
     if not parsed_queries:
         return StepOutput(
@@ -428,51 +420,207 @@ async def action_curl_search(step_input: StepInput) -> StepOutput:
             context_updates={"raw_search_results": []},
         )
 
-    results = []
+    # Connect to Exa MCP. Any FileNotFoundError here means the key file
+    # isn't set up — fail the search structurally so the flow can route
+    # through its no_results branch.
+    try:
+        conn_id = await effects.mcp_connect("exa")
+    except FileNotFoundError as e:
+        logger.warning("Exa MCP unavailable: %s", e)
+        return StepOutput(
+            result={"results_found": 0},
+            observations=f"Exa MCP unavailable: {e}",
+            context_updates={"raw_search_results": []},
+        )
+    except Exception as e:
+        logger.error("Exa MCP connect failed: %s", e)
+        return StepOutput(
+            result={"results_found": 0},
+            observations=f"Exa MCP connect failed: {e}",
+            context_updates={"raw_search_results": []},
+        )
+
+    results: list[dict] = []
     for query in parsed_queries:
-        encoded = urllib.parse.quote_plus(query)
-        cmd = [
-            "curl",
-            "-s",
-            "-L",
-            "--max-time",
-            str(timeout),
-            "-A",
-            "Mozilla/5.0",
-            f"https://lite.duckduckgo.com/lite/?q={encoded}",
-        ]
-        cmd_result = await effects.run_command(cmd, timeout=timeout + 5)
-        if cmd_result.return_code == 0 and cmd_result.stdout:
-            text = _extract_text_from_html(cmd_result.stdout)
-            if text.strip():
-                results.append(
-                    {
-                        "query": query,
-                        "url": f"duckduckgo: {query}",
-                        "content": text[:3000],
-                    }
-                )
+        try:
+            mcp_result = await effects.mcp_call_tool(
+                conn_id,
+                "web_search_exa",
+                {"query": query, "numResults": num_results},
+            )
+        except Exception as e:
+            logger.warning("Exa search failed for %r: %s", query, e)
+            continue
+
+        for hit in _extract_exa_hits(mcp_result):
+            content = hit.get("content", "").strip()
+            if not content:
+                continue
+            results.append(
+                {
+                    "query": query,
+                    "url": hit.get("url", ""),
+                    "title": hit.get("title", ""),
+                    "content": content,
+                }
+            )
 
     return StepOutput(
         result={"results_found": len(results)},
-        observations=f"Searched {len(parsed_queries)} queries, "
+        observations=f"Searched {len(parsed_queries)} queries via Exa, "
         f"got {len(results)} results",
         context_updates={"raw_search_results": results},
     )
 
 
+def _extract_exa_hits(mcp_result: object) -> list[dict]:
+    """Normalize an Exa MCP tool response into a flat list of hit dicts.
+
+    Exa's MCP server returns results in a text-formatted envelope: a
+    dict ``{"content": "<formatted string>"}`` where the string contains
+    one hit per block separated by ``\\n\\n---\\n\\n``, each block formatted as::
+
+        Title: <title>
+        URL: <url>
+        Published: <date or N/A>
+        Author: <author or N/A>
+        Highlights:
+        <content body, multi-line>
+
+    We also accept several defensive alternative shapes so a minor SDK
+    shift or response-format change doesn't silently drop all results:
+
+    - ``{"content": "<formatted string>"}`` — Exa's current format
+    - ``{"results": [...]}`` — direct list of hit dicts
+    - ``{"content": [{"type": "text", "text": "..."}]}`` — MCP envelope
+      with content blocks (may contain JSON-serialized payload)
+    - ``list[dict]`` — already unwrapped
+
+    Each returned hit has ``url``, ``title``, and ``content`` keys
+    (empty strings when absent).
+    """
+    import json as _json
+
+    def _normalize_hits(raw: object) -> list[dict]:
+        if isinstance(raw, dict):
+            raw_list = raw.get("results") or raw.get("hits") or []
+        elif isinstance(raw, list):
+            raw_list = raw
+        else:
+            return []
+        out: list[dict] = []
+        for item in raw_list:
+            if not isinstance(item, dict):
+                continue
+            # Exa uses "text" for the content body when extraction is
+            # bundled; older responses used "content". Accept both.
+            content = item.get("text") or item.get("content") or ""
+            out.append(
+                {
+                    "url": str(item.get("url", "")),
+                    "title": str(item.get("title", "")),
+                    "content": str(content),
+                }
+            )
+        return out
+
+    def _parse_exa_text_format(text: str) -> list[dict]:
+        """Parse Exa's formatted text envelope into hit dicts.
+
+        Splits on ``\\n---\\n`` (with optional blank-line padding) to
+        get per-hit blocks. Within each block, the fields Title/URL/
+        Published/Author appear on their own lines; ``Highlights:`` is
+        followed by a multi-line content body that runs to end-of-block.
+        """
+        import re as _re
+
+        if not text or not isinstance(text, str):
+            return []
+
+        # Split on --- separators. Use a regex so we tolerate any
+        # surrounding whitespace around the separator.
+        blocks = _re.split(r"\n\s*---\s*\n", text)
+        hits: list[dict] = []
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+            title = ""
+            url = ""
+            content_lines: list[str] = []
+            in_highlights = False
+            for line in block.split("\n"):
+                if in_highlights:
+                    content_lines.append(line)
+                    continue
+                stripped = line.strip()
+                if stripped.startswith("Title:"):
+                    title = stripped[len("Title:") :].strip()
+                elif stripped.startswith("URL:"):
+                    url = stripped[len("URL:") :].strip()
+                elif stripped.startswith("Highlights:"):
+                    # Everything after this line is content body.
+                    in_highlights = True
+                # Published:/Author: are metadata we don't use downstream.
+            content = "\n".join(content_lines).strip()
+            if title or url or content:
+                hits.append({"title": title, "url": url, "content": content})
+        return hits
+
+    # Case 1: Exa's text-envelope format — dict with "content" string
+    if isinstance(mcp_result, dict):
+        content_field = mcp_result.get("content")
+        if isinstance(content_field, str) and content_field:
+            hits = _parse_exa_text_format(content_field)
+            if hits:
+                return hits
+
+    # Case 2: already-unwrapped dict/list with structured hit list
+    if isinstance(mcp_result, (dict, list)):
+        hits = _normalize_hits(mcp_result)
+        if hits:
+            return hits
+
+    # Case 3: MCP envelope with content blocks (list of {type, text})
+    content_blocks = None
+    if isinstance(mcp_result, dict):
+        content_blocks = mcp_result.get("content")
+    elif hasattr(mcp_result, "content"):
+        content_blocks = getattr(mcp_result, "content")
+
+    if isinstance(content_blocks, list):
+        for block in content_blocks:
+            text = None
+            if isinstance(block, dict):
+                text = block.get("text")
+            elif hasattr(block, "text"):
+                text = getattr(block, "text")
+            if not text:
+                continue
+            # Try JSON first (structured payload in the text block)
+            try:
+                parsed = _json.loads(text)
+            except (ValueError, TypeError):
+                # Not JSON — try Exa's text format
+                hits = _parse_exa_text_format(text)
+                if hits:
+                    return hits
+                continue
+            hits = _normalize_hits(parsed)
+            if hits:
+                return hits
+
+    return []
+
+
 def _parse_search_queries(raw: str, max_queries: int) -> list[str]:
     """Extract search query strings from inference response."""
-    raw = strip_markdown_wrapper(str(raw))
-    # Try JSON array extraction — greedy to find outermost brackets
-    json_match = re.search(r"\[[\s\S]*\]", str(raw))
-    if json_match:
-        try:
-            items = json.loads(json_match.group())
-            queries = [str(item).strip() for item in items if str(item).strip()]
-            return queries[:max_queries]
-        except json.JSONDecodeError:
-            pass
+    from agent.llm_json import parse_llm_json
+
+    data = parse_llm_json(raw)
+    if isinstance(data, list):
+        queries = [str(item).strip() for item in data if str(item).strip()]
+        return queries[:max_queries]
 
     # Fallback: treat each non-empty line as a query
     lines = str(raw).strip().splitlines()
@@ -482,19 +630,6 @@ def _parse_search_queries(raw: str, max_queries: int) -> list[str]:
         if line and len(line) > 3 and len(line) < 200:
             queries.append(line)
     return queries[:max_queries]
-
-
-def _extract_text_from_html(html: str) -> str:
-    """Extract readable text from HTML, removing tags."""
-    text = re.sub(r"<script[^>]*>[\s\S]*?</script>", "", html)
-    text = re.sub(r"<style[^>]*>[\s\S]*?</style>", "", text)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    text = text.replace("&amp;", "&")
-    text = text.replace("&lt;", "<")
-    text = text.replace("&gt;", ">")
-    text = text.replace("&quot;", '"')
-    return text
 
 
 # ── run_validation_checks ─────────────────────────────────────────────
@@ -578,324 +713,29 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
 
 def _parse_validation_strategy(raw: str, max_checks: int) -> list[dict]:
     """Extract validation checks from LLM response (JSON object)."""
-    raw = strip_markdown_wrapper(str(raw))
-    json_match = re.search(r"\{[\s\S]*\}", raw)
-    if json_match:
-        try:
-            strategy = json.loads(json_match.group())
-            checks = strategy.get("checks", [])
-            return [c for c in checks if isinstance(c, dict) and "command" in c][
-                :max_checks
-            ]
-        except json.JSONDecodeError:
-            pass
+    from agent.llm_json import parse_llm_json
+
+    data = parse_llm_json(raw)
+    if isinstance(data, dict):
+        checks = data.get("checks", [])
+        return [c for c in checks if isinstance(c, dict) and "command" in c][
+            :max_checks
+        ]
     return []
 
 
 # ── load_file_contents ────────────────────────────────────────────────
 
 
-async def action_load_file_contents(step_input: StepInput) -> StepOutput:
-    """Load full file contents for selected files.
-
-    Selection sources (in priority order):
-    1. selected_files — deterministic list from select_relevant_files
-    2. related_files — AST dependency graph from repomap
-    3. file_selection — structured {file, reason, priority} objects
-
-    Fallback strategy (target_plus_neighbors): loads the target file
-    and files in the same directory when no selection data is available.
-
-    Returns a context_bundle with loaded file contents, manifest summary,
-    and import graph for cross-module awareness.
-    """
-    effects = step_input.effects
-    selection_raw = step_input.context.get("file_selection", "")
-    manifest = step_input.context.get("project_manifest", {})
-    budget = int(step_input.params.get("budget", 8))
-    strategy = step_input.params.get("strategy")
-    target = step_input.params.get("target")
-    mission_objective = step_input.params.get("mission_objective", "")
-
-    # Get repomap-determined related files for hybrid selection
-    related_files = step_input.context.get("related_files", [])
-
-    if not effects:
-        return StepOutput(
-            result={"files_loaded": 0},
-            context_updates={
-                "context_bundle": {
-                    "files": [],
-                    "manifest_summary": {},
-                    "mission_objective": mission_objective,
-                }
-            },
-        )
-
-    files_to_load: list[str] = []
-    seen: set[str] = set()
-
-    if strategy == "target_plus_neighbors":
-        if target and target in manifest:
-            files_to_load.append(target)
-            seen.add(target)
-        target_dir = os.path.dirname(target) if target else ""
-        for fp in manifest:
-            if fp not in seen and os.path.dirname(fp) == target_dir:
-                files_to_load.append(fp)
-                seen.add(fp)
-                if len(files_to_load) >= budget:
-                    break
-    else:
-        # ── Hybrid selection ──────────────────────────────────────
-        # Phase 0: Deterministic selected_files from select_relevant_files
-        # (AST graph + heuristics — list of file paths)
-        selected_files = step_input.context.get("selected_files", [])
-        if selected_files and isinstance(selected_files, list):
-            for fp in selected_files:
-                if isinstance(fp, str) and fp in manifest and fp not in seen:
-                    files_to_load.append(fp)
-                    seen.add(fp)
-                    if len(files_to_load) >= budget:
-                        break
-
-        # Phase 1: Include repomap-related files (actual dependency graph)
-        if related_files and isinstance(related_files, list):
-            for fp in related_files:
-                if fp in manifest and fp not in seen:
-                    files_to_load.append(fp)
-                    seen.add(fp)
-                    if len(files_to_load) >= budget:
-                        break
-
-        # Phase 2: Fill remaining budget with LLM-selected files
-        selected = _parse_file_selection(selection_raw, budget)
-        for s in selected:
-            fp = s["file"]
-            if fp not in seen:
-                files_to_load.append(fp)
-                seen.add(fp)
-                if len(files_to_load) >= budget:
-                    break
-
-    loaded = []
-
-    for filepath in files_to_load[:budget]:
-        try:
-            content = await effects.read_file(filepath)
-            if content.exists:
-                loaded.append(
-                    {
-                        "path": filepath,
-                        "content": content.content,
-                        "size": len(content.content),
-                    }
-                )
-            else:
-                loaded.append({"path": filepath, "content": "(not found)", "size": 0})
-        except Exception as e:
-            loaded.append({"path": filepath, "content": f"(error: {e})", "size": 0})
-
-    # Build import graph from loaded files for cross-module awareness
-    import_graph = _extract_import_graph(loaded)
-
-    context_bundle: dict[str, Any] = {
-        "files": loaded,
-        "manifest_summary": {fp: sig[:100] for fp, sig in list(manifest.items())[:20]},
-    }
-
-    # Always include mission_objective so downstream steps retain the goal
-    if mission_objective:
-        context_bundle["mission_objective"] = mission_objective
-
-    # Include import graph so models understand cross-module dependencies
-    if import_graph:
-        context_bundle["import_graph"] = import_graph
-
-    return StepOutput(
-        result={"files_loaded": len(loaded)},
-        observations=f"Loaded {len(loaded)} files: "
-        + ", ".join(f["path"] for f in loaded),
-        context_updates={"context_bundle": context_bundle},
-    )
-
-
-def _extract_import_graph(loaded_files: list[dict]) -> str:
-    """Extract import relationships from loaded Python files.
-
-    Produces a compact summary like:
-        game/engine.py imports → game.models, game.parser, yaml, json
-        game/parser.py imports → game.models, re
-        game/models.py imports → dataclasses
-
-    This helps models understand cross-module dependencies at a glance
-    without reading full file contents.
-    """
-    lines = []
-    for file_info in loaded_files:
-        path = file_info.get("path", "")
-        content = file_info.get("content", "")
-        if not path.endswith(".py") or not content or content.startswith("("):
-            continue
-        imports = []
-        for line in content.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("import "):
-                # import foo, bar → [foo, bar]
-                modules = stripped[7:].split(",")
-                for m in modules:
-                    m = m.strip().split(" as ")[0].strip()
-                    if m:
-                        imports.append(m)
-            elif stripped.startswith("from ") and " import " in stripped:
-                # from foo.bar import baz → foo.bar
-                module = stripped[5:].split(" import ")[0].strip()
-                if module and not module.startswith("."):
-                    imports.append(module)
-                elif module.startswith("."):
-                    # Relative import — resolve to approximate module path
-                    imports.append(f"(relative) {module}")
-        if imports:
-            # Deduplicate while preserving order
-            seen = set()
-            unique = []
-            for imp in imports:
-                if imp not in seen:
-                    seen.add(imp)
-                    unique.append(imp)
-            lines.append(f"{path} imports → {', '.join(unique)}")
-    return "\n".join(lines)
-
-
-def _parse_file_selection(raw: str, budget: int) -> list[dict]:
-    """Parse LLM file selection response into structured list."""
-    raw = strip_markdown_wrapper(str(raw))
-    # CRITICAL: Use greedy match to find outermost brackets
-    json_match = re.search(r"\[[\s\S]*\]", raw)
-    if json_match:
-        try:
-            items = json.loads(json_match.group())
-            valid = [
-                item for item in items if isinstance(item, dict) and "file" in item
-            ]
-            valid.sort(key=lambda x: x.get("priority", 99))
-            return valid[:budget]
-        except json.JSONDecodeError:
-            pass
-    return []
-
-
 # ── apply_plan_revision ───────────────────────────────────────────────
-
-
-async def action_apply_plan_revision(step_input: StepInput) -> StepOutput:
-    """Apply plan revision from LLM analysis.
-
-    Handles: adding new tasks, reprioritizing, marking obsolete.
-    Preserves completed and in_progress task states.
-    """
-    effects = step_input.effects
-    mission = step_input.context.get("mission")
-    revision_raw = step_input.context.get("inference_response", "")
-
-    if not mission:
-        return StepOutput(
-            result={"revision_applied": False},
-            observations="No mission in context",
-        )
-
-    revision = _parse_revision(revision_raw)
-
-    if not revision or not revision.get("revision_needed", False):
-        return StepOutput(
-            result={"revision_applied": False},
-            observations="No revision needed",
-        )
-
-    from agent.persistence.models import TaskRecord
-
-    changes: list[str] = []
-
-    # Add new tasks (with deduplication)
-    from agent.actions.mission_actions import _is_duplicate_task
-
-    for new_task in revision.get("add_tasks", []):
-        if not isinstance(new_task, dict) or "description" not in new_task:
-            continue
-        desc = new_task["description"]
-        flow = new_task.get("flow", "create")
-        # B5: Normalize stale flow names from model memory
-        from agent.actions.mission_actions import _FLOW_NAME_REMAP
-        flow = _FLOW_NAME_REMAP.get(flow, flow)
-        inputs = new_task.get("inputs", {})
-
-        # target_file_path may be at the top level (from the template
-        # example format) or inside inputs — check both.
-        target_file = (
-            new_task.get("target_file_path", "")
-            or inputs.get("target_file_path", "")
-        )
-        # Ensure target_file_path lands in inputs for downstream dispatch
-        if target_file and "target_file_path" not in inputs:
-            inputs["target_file_path"] = target_file
-
-        if _is_duplicate_task(mission, desc, flow, target_file):
-            changes.append(f"Skipped duplicate task: {desc[:60]}")
-            continue
-
-        task = TaskRecord(
-            description=desc,
-            flow=flow,
-            priority=new_task.get("priority", len(mission.plan)),
-            inputs=inputs,
-            depends_on=new_task.get("depends_on", []),
-        )
-        mission.plan.append(task)
-        changes.append(f"Added task: {task.description}")
-
-    # Reprioritize
-    for repri in revision.get("reprioritize", []):
-        task_id = repri.get("task_id")
-        new_priority = repri.get("new_priority")
-        if task_id is None or new_priority is None:
-            continue
-        for task in mission.plan:
-            if task.id == task_id and task.status in ("pending", "failed"):
-                task.priority = new_priority
-                changes.append(f"Reprioritized {task_id} to {new_priority}")
-
-    # Mark obsolete
-    for task_id in revision.get("obsolete", []):
-        for task in mission.plan:
-            if task.id == task_id and task.status in ("pending", "failed"):
-                task.status = "complete"
-                task.summary = "Obsoleted by plan revision"
-                changes.append(f"Obsoleted {task_id}")
-
-    if effects and changes:
-        await effects.save_mission(mission)
-
-    return StepOutput(
-        result={"revision_applied": len(changes) > 0},
-        observations=(
-            f"Applied {len(changes)} plan changes: " + "; ".join(changes)
-            if changes
-            else "No changes applied"
-        ),
-        context_updates={"mission": mission},
-    )
 
 
 def _parse_revision(raw: str) -> dict:
     """Parse revision plan from LLM response."""
-    raw = strip_markdown_wrapper(str(raw))
-    json_match = re.search(r"\{[\s\S]*\}", raw)
-    if json_match:
-        try:
-            return json.loads(json_match.group())
-        except json.JSONDecodeError:
-            pass
-    return {}
+    from agent.llm_json import parse_llm_json
+
+    data = parse_llm_json(raw)
+    return data if isinstance(data, dict) else {}
 
 
 # ── log_validation_notes ──────────────────────────────────────────────
@@ -945,175 +785,22 @@ async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
             context_updates={"lint_notes_saved": len(warnings) == 0},
         )
 
-    from agent.persistence.models import NoteRecord
-
     note_content = "Lint/quality warnings to fix:\n" + "\n".join(warnings)
-    note = NoteRecord(
+    saved = await effects.push_note(
         content=note_content,
         category="lint_warning",
         tags=["lint", "quality", "auto-captured"],
         source_flow="validate_output",
-        source_task="unknown",
     )
 
-    mission = await effects.load_mission()
-    if mission:
-        mission.notes.append(note)
-        await effects.save_mission(mission)
-
     return StepOutput(
-        result={"notes_logged": len(warnings)},
+        result={"notes_logged": len(warnings) if saved else 0},
         observations=f"Logged {len(warnings)} lint warnings as mission notes",
-        context_updates={"lint_notes_saved": True},
+        context_updates={"lint_notes_saved": saved},
     )
 
 
 # ── run_fallback_validation ───────────────────────────────────────────
-
-
-async def action_run_fallback_validation(step_input: StepInput) -> StepOutput:
-    """Fallback validation when LLM strategy fails to parse.
-
-    Runs language-appropriate syntax and import checks based on file extension.
-    No LLM involved — purely heuristic.
-    """
-    effects = step_input.effects
-    file_path = step_input.params.get("file_path", "")
-
-    if not effects or not file_path:
-        return StepOutput(
-            result={"all_required_passing": True, "checks_run": 0},
-            observations="No effects or file_path — skipping fallback validation",
-            context_updates={"validation_results": []},
-        )
-
-    results = []
-    all_required_passing = True
-
-    if file_path.endswith(".py"):
-        # Tier 1: Syntax check
-        syntax_result = await effects.run_command(
-            [
-                "python",
-                "-c",
-                f"import py_compile; py_compile.compile('{file_path}', doraise=True)",
-            ],
-            timeout=30,
-        )
-        syntax_passed = syntax_result.return_code == 0
-        results.append(
-            {
-                "name": "syntax check (fallback)",
-                "passed": syntax_passed,
-                "required": True,
-                "tier": "syntax",
-                "stdout": syntax_result.stdout[:500],
-                "stderr": syntax_result.stderr[:500],
-                "return_code": syntax_result.return_code,
-            }
-        )
-        if not syntax_passed:
-            all_required_passing = False
-
-        # Tier 2: Import check (only if syntax passed)
-        if syntax_passed:
-            module_name = _filepath_to_module(file_path)
-            if module_name:
-                import_result = await effects.run_command(
-                    ["python", "-c", f"import {module_name}"],
-                    timeout=30,
-                )
-                import_passed = import_result.return_code == 0
-                results.append(
-                    {
-                        "name": "import check (fallback)",
-                        "passed": import_passed,
-                        "required": True,
-                        "tier": "execution",
-                        "stdout": import_result.stdout[:500],
-                        "stderr": import_result.stderr[:500],
-                        "return_code": import_result.return_code,
-                    }
-                )
-                if not import_passed:
-                    all_required_passing = False
-
-    elif file_path.endswith((".js", ".jsx", ".ts", ".tsx")):
-        # Basic syntax check for JS/TS
-        check_result = await effects.run_command(
-            ["node", "--check", file_path],
-            timeout=30,
-        )
-        passed = check_result.return_code == 0
-        results.append(
-            {
-                "name": "syntax check (fallback)",
-                "passed": passed,
-                "required": True,
-                "tier": "syntax",
-                "stdout": check_result.stdout[:500],
-                "stderr": check_result.stderr[:500],
-                "return_code": check_result.return_code,
-            }
-        )
-        if not passed:
-            all_required_passing = False
-
-    elif file_path.endswith((".yaml", ".yml")):
-        # YAML syntax check
-        yaml_result = await effects.run_command(
-            [
-                "python",
-                "-c",
-                f"import yaml; yaml.safe_load(open('{file_path}'))",
-            ],
-            timeout=30,
-        )
-        passed = yaml_result.return_code == 0
-        results.append(
-            {
-                "name": "yaml syntax check (fallback)",
-                "passed": passed,
-                "required": True,
-                "tier": "syntax",
-                "stdout": yaml_result.stdout[:500],
-                "stderr": yaml_result.stderr[:500],
-                "return_code": yaml_result.return_code,
-            }
-        )
-        if not passed:
-            all_required_passing = False
-
-    else:
-        # Unknown file type — just check it exists
-        exists = await effects.file_exists(file_path)
-        results.append(
-            {
-                "name": "file exists check (fallback)",
-                "passed": exists,
-                "required": True,
-                "tier": "syntax",
-                "stdout": "",
-                "stderr": "" if exists else f"File not found: {file_path}",
-                "return_code": 0 if exists else 1,
-            }
-        )
-        if not exists:
-            all_required_passing = False
-
-    return StepOutput(
-        result={
-            "all_required_passing": all_required_passing,
-            "checks_run": len(results),
-            "checks_passed": sum(1 for r in results if r["passed"]),
-        },
-        observations="Fallback validation: {}".format(
-            ", ".join(
-                f"{r['name']}={'PASS' if r['passed'] else 'FAIL'}" for r in results
-            ),
-        ),
-        context_updates={"validation_results": results},
-    )
 
 
 # ── execute_project_setup ─────────────────────────────────────────────
@@ -1232,24 +919,21 @@ async def action_execute_project_setup(step_input: StepInput) -> StepOutput:
 
 def _parse_setup_plan(raw: str) -> dict:
     """Parse setup plan from LLM response."""
-    raw = strip_markdown_wrapper(raw)
-    json_match = re.search(r"\{[\s\S]*\}", raw)
-    if json_match:
-        try:
-            return json.loads(json_match.group())
-        except json.JSONDecodeError:
-            pass
-    return {}
+    from agent.llm_json import parse_llm_json
+
+    data = parse_llm_json(raw)
+    return data if isinstance(data, dict) else {}
 
 
 # ── apply_quality_gate_results ────────────────────────────────────────
 
 
 async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput:
-    """Parse quality gate summary and create fix tasks if needed.
+    """Parse quality gate summary and record issues for the director.
 
-    Reads the LLM summary of project-wide validation, extracts fix_tasks,
-    adds them to the mission plan, and returns pass/fail status.
+    Reads the LLM summary of project-wide validation, extracts issues,
+    records them as notes, and returns pass/fail status. The director
+    decides what to dispatch based on quality_results in context.
     """
     effects = step_input.effects
     raw = step_input.context.get("inference_response", "")
@@ -1281,76 +965,22 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
     all_passing = summary.get("all_passing", True)
     fix_tasks = summary.get("fix_tasks", [])
 
-    # If quality gate failed, increment attempts counter and add fix tasks
+    # If quality gate failed, record issues as notes for the director
     if not all_passing and effects:
-        from agent.persistence.models import TaskRecord
-
-        mission = await effects.load_mission()
-        # Build set of known files from project_manifest for existence check
-        known_files = set()
-        manifest = step_input.context.get("project_manifest", {})
-        if isinstance(manifest, dict):
-            known_files = set(manifest.keys())
-
-        if mission:
-            mission.quality_gate_attempts += 1
-            existing_descriptions = {t.description for t in mission.plan}
-            # Also check semantic duplicates: same flow + same target file
-            existing_targets = {
-                (t.flow, t.inputs.get("target_file_path", ""))
-                for t in mission.plan
-                if t.status != "complete"
-            }
-            added = 0
-            skipped = 0
-            for ft in fix_tasks or []:
-                if not isinstance(ft, dict) or "description" not in ft:
-                    continue
-                # Skip if an identical task already exists
-                if ft["description"] in existing_descriptions:
-                    skipped += 1
-                    continue
-
-                target_file = ft.get("file", "")
-                flow = ft.get("flow", "rewrite")
-                issue_text = ft.get("issue", ft["description"])
-
-                # ── Fix 16: Infer target + flow from error type ──────
-                target_file, flow = _infer_fix_target(
-                    issue_text, target_file, flow, known_files
-                )
-
-                # Skip semantic duplicates (same flow + same file)
-                if (flow, target_file) in existing_targets:
-                    skipped += 1
-                    continue
-                # For file_write (create) tasks, allow targeting non-existent files
-                # For modify tasks, skip non-existent files
-                if flow != "file_ops" and target_file and known_files and target_file not in known_files:
-                    logger.warning(
-                        "Quality gate: skipping fix task for non-existent file %s",
-                        target_file,
-                    )
-                    skipped += 1
-                    continue
-                # Cap at 5 new tasks per gate run
-                if added >= 5:
-                    break
-                task = TaskRecord(
-                    description=ft["description"],
-                    flow=flow,
-                    priority=len(mission.plan),
-                    inputs={
-                        "target_file_path": target_file,
-                        "reason": issue_text,
-                    },
-                )
-                mission.plan.append(task)
-                existing_targets.add((flow, target_file))
-                added += 1
-
-            # Always save — at minimum the quality_gate_attempts counter changed
-            await effects.save_mission(mission)
+        for ft in fix_tasks or []:
+            if not isinstance(ft, dict) or "description" not in ft:
+                continue
+            issue_text = ft.get("issue", ft["description"])
+            target_file = ft.get("file", "")
+            note_content = f"Quality gate issue: {issue_text}"
+            if target_file:
+                note_content += f" (file: {target_file})"
+            await effects.push_note(
+                content=note_content,
+                category="failure_analysis",
+                tags=[target_file] if target_file else [],
+                source_flow="quality_gate",
+            )
 
     return StepOutput(
         result={
@@ -1373,238 +1003,49 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
 def _parse_quality_summary(raw: str) -> dict:
     """Parse quality gate summary from LLM response.
 
-    The prompt asks for: {verdict, blocking_issues, warnings, summary}.
+    The prompt asks for: {verdict, blocking_issues, summary}.
     The action expects: {all_passing, fix_tasks, summary}.
     This function normalizes the LLM format to the internal format.
     """
-    raw = strip_markdown_wrapper(raw)
-    json_match = re.search(r"\{[\s\S]*\}", raw)
-    if json_match:
-        try:
-            parsed = json.loads(json_match.group())
-        except json.JSONDecodeError:
-            return {}
+    from agent.llm_json import parse_llm_json
 
-        # Normalize: translate "verdict" to "all_passing" if present
-        if "verdict" in parsed and "all_passing" not in parsed:
-            verdict = str(parsed["verdict"]).lower().strip()
-            parsed["all_passing"] = verdict == "pass"
+    parsed = parse_llm_json(raw)
+    if not isinstance(parsed, dict):
+        return {}
 
-        # Normalize: translate "blocking_issues" to "fix_tasks" if present
-        if "blocking_issues" in parsed and "fix_tasks" not in parsed:
-            fix_tasks = []
-            for issue in parsed.get("blocking_issues", []):
-                if isinstance(issue, str):
-                    fix_tasks.append({"description": issue, "issue": issue})
-                elif isinstance(issue, dict):
-                    fix_tasks.append(issue)
-            parsed["fix_tasks"] = fix_tasks
+    # Normalize: translate "verdict" to "all_passing" if present
+    if "verdict" in parsed and "all_passing" not in parsed:
+        verdict = str(parsed["verdict"]).lower().strip()
+        parsed["all_passing"] = verdict == "pass"
 
-        return parsed
-    return {}
+    # Normalize: translate "blocking_issues" to "fix_tasks" if present. Each
+    # issue carries a `class` ("functional" | "quality") that the harvester uses
+    # to route the finding to the right goal type. Strings (legacy) and objects
+    # without a class default to "functional" — the safer bias, since a
+    # functional goal gets a real interact re-test rather than complete-on-patch.
+    if "blocking_issues" in parsed and "fix_tasks" not in parsed:
+        fix_tasks = []
+        for issue in parsed.get("blocking_issues", []):
+            if isinstance(issue, str):
+                fix_tasks.append(
+                    {"description": issue, "issue": issue, "class": "functional"}
+                )
+            elif isinstance(issue, dict):
+                text = issue.get("issue") or issue.get("description") or ""
+                cls = str(issue.get("class", "")).lower().strip()
+                if cls not in ("functional", "quality"):
+                    cls = "functional"
+                task = dict(issue)
+                task.setdefault("description", text)
+                task.setdefault("issue", text)
+                task["class"] = cls
+                fix_tasks.append(task)
+        parsed["fix_tasks"] = fix_tasks
 
-
-def _infer_fix_target(
-    issue_text: str,
-    target_file: str,
-    flow: str,
-    known_files: set[str],
-) -> tuple[str, str]:
-    """Infer the correct target file and flow from a quality gate issue.
-
-    Fix 16: Ensures fix tasks target the right file based on error type:
-    - Missing file errors → target the missing file with file_write (create)
-    - Import errors → target the file that defines the missing symbol
-    - Build/packaging issues → use project_ops flow
-
-    Returns (target_file, flow) tuple, possibly modified from inputs.
-    """
-    issue_lower = issue_text.lower()
-
-    # ── Missing file errors → create the file ─────────────────────
-    missing_file_keywords = (
-        "failed to read",
-        "no such file",
-        "filenotfounderror",
-        "file not found",
-        "not found:",
-        "missing file",
-    )
-    if any(kw in issue_lower for kw in missing_file_keywords):
-        # Extract the missing filename from the issue text
-        # Patterns: "Failed to read YAML file world_data.yaml"
-        #           "FileNotFoundError: config.json"
-        #           "No such file: data/rooms.yaml"
-        file_match = re.search(
-            r"(?:file|read|open|load|found:?)\s+[`'\"]?"
-            r"([a-zA-Z0-9_/.-]+\.\w{1,5})[`'\"]?",
-            issue_text,
-            re.IGNORECASE,
-        )
-        if file_match:
-            target_file = file_match.group(1)
-        flow = "file_ops"
-        return target_file, flow
-
-    # ── Import errors → target the module that should define the symbol ─
-    if "importerror" in issue_lower or "cannot import" in issue_lower:
-        # Pattern: "cannot import name 'Connection' from 'models'"
-        # → target models.py, not the importing file
-        import_match = re.search(
-            r"cannot import.*from\s+['\"]?([a-zA-Z0-9_.]+)['\"]?",
-            issue_text,
-            re.IGNORECASE,
-        )
-        if import_match:
-            module = import_match.group(1)
-            # Convert module path to file path
-            candidate = module.replace(".", "/") + ".py"
-            if candidate in known_files:
-                target_file = candidate
-            else:
-                # Try just the last component
-                simple = module.split(".")[-1] + ".py"
-                for kf in known_files:
-                    if kf.endswith(simple):
-                        target_file = kf
-                        break
-        flow = "file_ops"  # modify if exists, create if not
-        return target_file, flow
-
-    # ── Build/packaging warnings → project_ops ────────────────────
-    build_keywords = (
-        "build error",
-        "packaging",
-        "setuptools",
-        "pip install",
-        "dependency",
-        "requirements",
-    )
-    if any(kw in issue_lower for kw in build_keywords):
-        flow = "project_ops"
-        return target_file, flow
-
-    return target_file, flow
+    return parsed
 
 
 # ── validate_created_files ────────────────────────────────────────────
-
-
-async def action_validate_created_files(step_input: StepInput) -> StepOutput:
-    """Validate all files in context.files_changed.
-
-    For each file:
-    - Skip non-code files (.md, .yaml, .json, .toml, .txt, .csv, .cfg, .ini, .env)
-    - Run syntax check (required)
-    - Run import check (non-blocking)
-
-    Aggregates into a single status:
-    - 'success': all files pass all checks
-    - 'issues': all files pass syntax but some have import issues
-    - 'failed': any file fails syntax check
-
-    Publishes: validation_results (list of per-check results across all files)
-    """
-    effects = step_input.effects
-    files_changed = step_input.context.get("files_changed", [])
-
-    if not files_changed:
-        return StepOutput(
-            result={"status": "success"},
-            observations="No files to validate",
-            context_updates={"validation_results": []},
-        )
-
-    if not effects:
-        return StepOutput(
-            result={"status": "skipped"},
-            observations="No effects interface — validation skipped (NOT assumed pass)",
-            context_updates={"validation_results": []},
-        )
-
-    all_results = []
-    any_syntax_failed = False
-    any_issues = False
-
-    skip_extensions = {
-        "md",
-        "yaml",
-        "yml",
-        "json",
-        "toml",
-        "txt",
-        "csv",
-        "cfg",
-        "ini",
-        "env",
-    }
-
-    for file_path in files_changed:
-        # Skip non-code files
-        ext = file_path.rsplit(".", 1)[-1] if "." in file_path else ""
-        if ext in skip_extensions:
-            continue
-
-        # Syntax check
-        if ext == "py":
-            result = await effects.run_command(
-                [
-                    "python",
-                    "-c",
-                    f"import py_compile; py_compile.compile('{file_path}', doraise=True)",
-                ],
-                timeout=30,
-            )
-            check = {
-                "name": f"syntax: {file_path}",
-                "passed": result.return_code == 0,
-                "stdout": result.stdout[:500],
-                "stderr": result.stderr[:500],
-                "tier": "syntax",
-                "required": True,
-            }
-            all_results.append(check)
-            if not check["passed"]:
-                any_syntax_failed = True
-
-            # Import check (non-blocking)
-            module_name = _filepath_to_module(file_path)
-            if module_name:
-                result = await effects.run_command(
-                    ["python", "-c", f"import {module_name}"],
-                    timeout=30,
-                )
-                check = {
-                    "name": f"import: {file_path}",
-                    "passed": result.return_code == 0,
-                    "stdout": result.stdout[:500],
-                    "stderr": result.stderr[:500],
-                    "tier": "execution",
-                    "required": False,
-                }
-                all_results.append(check)
-                if not check["passed"]:
-                    any_issues = True
-
-    # Determine aggregate status
-    if any_syntax_failed:
-        status = "failed"
-    elif any_issues:
-        status = "issues"
-    else:
-        status = "success"
-
-    return StepOutput(
-        result={
-            "status": status,
-            "all_required_passing": not any_syntax_failed,
-            "total_checks": len(all_results),
-            "passed": sum(1 for r in all_results if r["passed"]),
-            "failed": sum(1 for r in all_results if not r["passed"]),
-        },
-        observations=f"Validated {len(files_changed)} files: {status}",
-        context_updates={"validation_results": all_results},
-    )
 
 
 # ── filepath_to_module helper ─────────────────────────────────────────

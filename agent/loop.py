@@ -19,14 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from agent.actions.registry import build_action_registry
-from agent.loader_v2 import (
-    load_flow_json,
+from agent.loader import (
     resolve_value,
     resolve_input_map,
-    format_result,
     assemble_returns,
-    FlowLoadError,
 )
+from agent.errors import FlowRuntimeError
 from agent.models import FlowDefinition, FlowResult
 from agent.runtime import execute_flow, init_prompt_renderer
 from agent.tail_call import FlowOutcome, FlowTailCall, FlowTermination
@@ -35,15 +33,87 @@ from agent.trace import CycleStart, CycleEnd
 logger = logging.getLogger(__name__)
 
 
-def _load_flows(flows_dir: str) -> dict[str, FlowDefinition]:
-    """Load all flows from CUE-exported JSON.
+async def _materialize_projections(
+    flow_def: FlowDefinition,
+    inputs: dict[str, Any],
+    effects: Any,
+) -> dict[str, Any]:
+    """Materialize projections declared by the flow.
 
-    Expects either:
-      - flows_dir/compiled.json  (single file with all flows)
-      - flows_dir/cue/*.json     (individual flow files)
+    For each projection in flow_def.projections, resolves params from
+    the current inputs, calls the registered materializer against
+    MissionState, and injects the result as an additional input.
+
+    This is the single point where MissionState is loaded for read
+    purposes. Actions that need to mutate state still receive mission
+    through the context accumulator (Pattern A).
 
     Args:
-        flows_dir: Directory containing flow definitions.
+        flow_def: The flow about to execute.
+        inputs: Current flow inputs (for $ref resolution).
+        effects: Effects interface (for load_mission).
+
+    Returns:
+        Augmented inputs dict with projection results injected.
+    """
+    if not flow_def.projections:
+        return inputs
+
+    from agent.projections import materialize
+
+    mission = await effects.load_mission()
+    if not mission:
+        logger.warning(
+            "Flow %r declares projections but no mission found — skipping",
+            flow_def.flow,
+        )
+        return inputs
+
+    augmented = dict(inputs)
+    for proj_name, proj_def in flow_def.projections.items():
+        materializer_name = proj_def.get("materializer", "")
+        raw_params = proj_def.get("params", {})
+        required = proj_def.get("required", True)
+
+        # Resolve $ref params against current inputs
+        resolved_params = resolve_input_map(
+            raw_params,
+            {
+                "input": inputs,
+                "context": {},
+                "meta": {},
+            },
+        )
+
+        try:
+            projected = materialize(materializer_name, mission, resolved_params)
+            augmented[proj_name] = projected
+            logger.debug(
+                "Materialized projection %r for flow %r",
+                proj_name,
+                flow_def.flow,
+            )
+        except Exception as e:
+            if required:
+                raise RuntimeError(
+                    f"Required projection {proj_name!r} failed for "
+                    f"flow {flow_def.flow!r}: {e}"
+                ) from e
+            logger.warning(
+                "Optional projection %s failed for flow %s: %s",
+                proj_name,
+                flow_def.flow,
+                e,
+            )
+
+    return augmented
+
+
+def _load_flows(flows_dir: str) -> dict[str, FlowDefinition]:
+    """Load all flows from CUE-exported compiled.json.
+
+    Args:
+        flows_dir: Directory containing flows/compiled.json.
 
     Returns:
         Dict of flow_name → FlowDefinition.
@@ -51,36 +121,30 @@ def _load_flows(flows_dir: str) -> dict[str, FlowDefinition]:
     flows_dir = Path(flows_dir)
     flows: dict[str, FlowDefinition] = {}
 
-    # Option 1: Single compiled.json (output of `cue export --out json`)
     compiled = flows_dir / "compiled.json"
-    if compiled.exists():
-        with open(compiled) as f:
-            data = json.load(f)
-
-        # compiled.json contains a dict of flow_name → flow_definition
-        if isinstance(data, dict):
-            for name, flow_data in data.items():
-                if isinstance(flow_data, dict) and "flow" in flow_data:
-                    try:
-                        flow = FlowDefinition(**flow_data)
-                        flows[flow.flow] = flow
-                    except Exception as e:
-                        logger.error("Failed to load flow %r: %s", name, e)
-        logger.info("Loaded %d flows from %s", len(flows), compiled)
+    if not compiled.exists():
+        logger.error(
+            "compiled.json not found in %s — run 'ouroboros.py cue-compile' first",
+            flows_dir,
+        )
         return flows
 
-    # Option 2: Individual JSON files
-    cue_dir = flows_dir / "cue"
-    json_dir = cue_dir if cue_dir.exists() else flows_dir
+    with open(compiled) as f:
+        data = json.load(f)
 
-    for json_path in sorted(json_dir.glob("*.json")):
-        try:
-            flow = load_flow_json(json_path)
-            flows[flow.flow] = flow
-        except FlowLoadError as e:
-            logger.error("Failed to load %s: %s", json_path, e)
+    if not isinstance(data, dict):
+        logger.error("compiled.json is not a dict of flow_name → flow_definition")
+        return flows
 
-    logger.info("Loaded %d flows from %s", len(flows), json_dir)
+    for name, flow_data in data.items():
+        if isinstance(flow_data, dict) and "flow" in flow_data:
+            try:
+                flow = FlowDefinition(**flow_data)
+                flows[flow.flow] = flow
+            except Exception as e:
+                logger.error("Failed to load flow %r: %s", name, e)
+
+    logger.info("Loaded %d flows from %s", len(flows), compiled)
     return flows
 
 
@@ -119,10 +183,11 @@ def _resolve_tail_call(
         resolved_inputs = resolve_input_map(input_map, namespaces)
 
         # Assemble structured returns as last_result
-        # Replaces the old format_result() prose string mechanism
         if flow_def.returns and "last_result" not in resolved_inputs:
             structured_result = assemble_returns(
-                flow_def, flow_result.context, inputs,
+                flow_def,
+                flow_result.context,
+                inputs,
             )
             if structured_result:
                 resolved_inputs["last_result"] = structured_result
@@ -178,8 +243,21 @@ async def run_agent(
 
     logger.info("Agent starting: flow=%r, mission=%s", entry_flow, mission_id)
 
-    while cycle < max_cycles:
-        cycle += 1
+    # Track consecutive entry_flow runs to catch self-loops
+    consecutive_entry = 0
+    max_consecutive_entry = max_cycles + 3  # generous headroom
+
+    while True:
+        # Safety: catch entry flow self-loops
+        if current_flow == entry_flow:
+            consecutive_entry += 1
+            if consecutive_entry > max_consecutive_entry:
+                raise RuntimeError(
+                    f"Entry flow {entry_flow!r} ran {consecutive_entry} times "
+                    f"without dispatching work. Possible infinite loop."
+                )
+        else:
+            consecutive_entry = 0
 
         if current_flow not in registry:
             raise RuntimeError(
@@ -214,6 +292,13 @@ async def run_agent(
         }
 
         try:
+            # Materialize projections before flow execution
+            instrumented_inputs = await _materialize_projections(
+                flow_def,
+                instrumented_inputs,
+                effects,
+            )
+
             flow_result = await execute_flow(
                 flow_def=flow_def,
                 inputs=instrumented_inputs,
@@ -221,29 +306,60 @@ async def run_agent(
                 effects=effects,
                 flow_registry=registry,
             )
+            outcome = _resolve_tail_call(flow_result, flow_def, instrumented_inputs)
+        except FlowRuntimeError as exc:
+            # A flow could not execute correctly — its infinite-loop safety
+            # tripped (MaxStepsExceeded) or it routed to a step whose required
+            # context wasn't satisfied (MissingContextError/MissingInputError).
+            # Don't crash the whole mission: treat it as a failed cycle and
+            # return to the entry flow so it can re-plan or park. The cycle
+            # budget still bounds total work, so a persistently-broken flow
+            # degrades to a paused mission rather than a hard error that loses
+            # all progress. (Overnight suites died to single flow crashes —
+            # a looping diagnose, then a data-file self-correct — before this.)
+            # Genuine code bugs (bare exceptions) still propagate below.
+            if effects and hasattr(effects, "flush_traces"):
+                await effects.flush_traces()
+            logger.warning(
+                "Flow %r raised a flow-runtime error — failing this cycle and "
+                "returning to %r so the mission continues. (%s)",
+                current_flow,
+                entry_flow,
+                exc,
+            )
+            failed_inputs: dict[str, Any] = {
+                "mission_id": mission_id,
+                "last_status": "failed",
+            }
+            if "goal_id" in current_inputs:
+                failed_inputs["goal_id"] = current_inputs["goal_id"]
+            outcome = FlowTailCall(target_flow=entry_flow, inputs=failed_inputs)
         except Exception:
             if effects and hasattr(effects, "flush_traces"):
                 await effects.flush_traces()
             raise
-
-        outcome = _resolve_tail_call(flow_result, flow_def, instrumented_inputs)
 
         # ── Context Tier Enforcement (belt-and-suspenders) ───────
         # CUE validates at compile time; this catches dynamic violations.
         if isinstance(outcome, FlowTailCall) and outcome.target_flow in registry:
             target_def = registry[outcome.target_flow]
             target_tier = getattr(target_def, "context_tier", "")
-            if target_tier == "flow_directive" and "flow_directive" not in outcome.inputs:
+            if (
+                target_tier == "flow_directive"
+                and "flow_directive" not in outcome.inputs
+            ):
                 logger.warning(
                     "Tier violation: flow %r requires flow_directive but none "
                     "provided by tail-call from %r",
-                    outcome.target_flow, current_flow,
+                    outcome.target_flow,
+                    current_flow,
                 )
             if target_tier == "session_task" and "mission_objective" in outcome.inputs:
                 logger.warning(
                     "Tier noise: flow %r operates at session_task tier but "
                     "received mission_objective from %r — this context will be ignored",
-                    outcome.target_flow, current_flow,
+                    outcome.target_flow,
+                    current_flow,
                 )
 
         # ── Trace: CycleEnd + flush ──────────────────────────────
@@ -278,13 +394,45 @@ async def run_agent(
             outcome.delay_seconds,
         )
 
+        # ── Cycle budget check ───────────────────────────────────
+        # Count work flow executions (everything except the entry flow).
+        # The entry flow runs for free — it's bookkeeping (recording
+        # results, picking next task). The budget limits how many work
+        # flows actually execute.
+        #
+        # Check AFTER a work flow completes, before following the
+        # tail-call. The entry flow will have already run and recorded
+        # the result by the time we reach the next work flow dispatch.
+        if current_flow != entry_flow:
+            cycle += 1
+        if cycle >= max_cycles and outcome.target_flow != entry_flow:
+            # Budget exhausted with work still pending. Park the mission as
+            # paused so `mission resume` / `start` can pick it up later, rather
+            # than leaving it 'active' after the error exit. General by design:
+            # a budget-exhausted mission being resumable is strictly better than
+            # erroring + left active — applies to any long sweep, and is what
+            # lets the quality-fix loop continue across `--max-cycles` windows.
+            try:
+                _m = await effects.load_mission()
+                if _m is not None and getattr(_m, "status", "") == "active":
+                    _m.status = "paused"
+                    await effects.save_mission(_m)
+                    logger.info(
+                        "Budget exhausted (%d cycles) — parked mission %s as paused",
+                        cycle,
+                        mission_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to park mission as paused on budget exhaustion"
+                )
+            raise RuntimeError(
+                f"Agent completed {cycle} work cycle(s). Cycle limit: {max_cycles}. "
+                f"Mission parked as paused — resume with `mission resume` or `start`."
+            )
+
         if outcome.delay_seconds and outcome.delay_seconds > 0:
             await asyncio.sleep(outcome.delay_seconds)
 
         current_flow = outcome.target_flow
         current_inputs = outcome.inputs
-
-    raise RuntimeError(
-        f"Agent exceeded maximum cycle count ({max_cycles}). "
-        f"Last flow: {current_flow!r}."
-    )

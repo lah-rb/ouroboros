@@ -1,0 +1,21 @@
+id: research/plan_queries_guidance
+content: |
+  Generate 2-3 short, targeted search queries (3-8 words each) for this
+  research question. Don't restate the question as a query — think like
+  a skilled developer searching for relevant domain knowledge.
+
+  Good query categories:
+
+  - **User experience insights** — what do users enjoy, what makes a
+    product engaging. Example: `what makes NPC dialogue engaging`
+  - **Architecture patterns** — efficient approaches others have used.
+    Example: `entity component system game python`
+  - **Domain-specific techniques** — specialized knowledge for this
+    problem space. Example: `branching dialogue tree data structure`
+  - **Common pitfalls** — what goes wrong in similar projects.
+    Example: `circular import python game engine`
+  - **Library best practices** — how to use specific tools well.
+    Example: `pydantic nested model yaml deserialization`
+
+  Aim for specific and actionable. Avoid broad strokes like
+  `build X in python` or keyword-soup queries.

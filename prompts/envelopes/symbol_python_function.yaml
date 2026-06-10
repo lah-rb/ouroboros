@@ -1,0 +1,4 @@
+id: envelopes/symbol_python_function
+content: |
+  def function_name(arg: str) -> int:
+      return 42

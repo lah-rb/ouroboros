@@ -29,8 +29,13 @@ thinking:
 system_block:
   identity: "You are a helpful assistant."
   reasoning_default: ""
+  # Step-3.5/3.7 express reasoning effort exactly like Harmony: a
+  # "Reasoning: <level>\n\n" line at the very top of the system message
+  # (mirrors their GGUF chat template). Driven by model.thinking_mode; stays
+  # empty for generic chatml/Qwen, which never set thinking_mode.
+  reasoning_prefix: "Reasoning: {reasoning}\n\n"
   channel_directive: ""
-  template: "{identity}\n{persona}"
+  template: "{reasoning_prefix}{identity}\n{persona}"
 
 traits:
   fold_system_into_first_user: false
@@ -45,4 +50,16 @@ generation:
 
 turn_transition:
   needs_close: true
-  after_generation: "\n"
+  # Close the previous assistant turn before opening the next user turn.
+  # The model's gen_stop (<|im_end|>) is broken on EOG before it enters the
+  # KV cache, so the session must re-insert it here — otherwise assistant
+  # turns run straight into <|im_start|>user with no close and the model
+  # loses the turn boundary after a few turns.
+  #
+  # NO trailing newline: framing is tokenized as plain text (not special
+  # tokens), and ">\n" merges into a single token (397) whereas the bare
+  # ">" is token 29. The canonical multi-turn boundary the model expects is
+  # "<|im_end|><|im_start|>" (">" == 29). Appending "\n" produces "...|>\n"
+  # which the model cannot cleanly reproduce/stop on, causing it to emit
+  # "<|im_end|" forever (runaway). Match the canonical boundary exactly.
+  after_generation: "<|im_end|>"

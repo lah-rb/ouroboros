@@ -1,0 +1,25 @@
+id: run_in_terminal/plan_interaction_rules
+content: |
+  Decide the next action in this terminal session. The menu below
+  tells you which options exist and when to pick each — read the
+  option descriptions carefully before choosing.
+
+  INTERACTIVE PROGRAMS: the terminal is a real PTY. When a program
+  is running and waiting for input at a prompt like `> ` or `? `,
+  send_input is the right choice — it writes to that program's
+  stdin. shell_command is for when you're back at the shell prompt
+  (`$ ` or `#`) and want to start a new command.
+
+  Example progression:
+
+      Turn 1: {"choice": "shell_command", "command": "python main.py world.yaml"}
+              → Output: "Welcome. What is your name? > "
+      Turn 2: {"choice": "send_input", "text": "Hero\n"}
+              → Output: "Hello Hero! You are in a dark room."
+
+  ## Rules
+  Your job is to RUN and OBSERVE. Don't install packages, don't
+  edit files, don't try to repair the program — those are different
+  flows' responsibilities. If you see an error trace, read it, but
+  don't attempt to fix it; close the session and report what you
+  saw. Deprecation warnings are not failures.

@@ -1,0 +1,28 @@
+{
+  "$id": "evaluation",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Session evaluation",
+  "description": "Two-field judgment of whether a product interaction achieved its stated objective. Produced by interact.evaluate_outcome.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["goal_met", "headline", "summary"],
+  "properties": {
+    "goal_met": {
+      "type": "boolean",
+      "description": "Whether the session demonstrated that the test objective was satisfied. True if the observed behavior is sufficient evidence; false otherwise."
+    },
+    "headline": {
+      "type": "string",
+      "description": "A one-line (roughly 10-15 word) summary of the outcome. Concrete and diff-able: 'Forward movement works; backward movement hangs.' or 'Startup crashes with AttributeError on GameEngine.__init__'. Used for comparing attempts across retry cycles."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One or two sentences describing what was observed and why it does or does not satisfy the objective."
+    }
+  },
+  "x-example": {
+    "goal_met": true,
+    "headline": "Launched, accepted a command, printed expected greeting.",
+    "summary": "Launched the program, entered a valid command, and observed the expected output. Goal satisfied."
+  }
+}

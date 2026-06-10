@@ -42,12 +42,12 @@ def extract_key_access_patterns(
     Falls back to regex when tree-sitter is unavailable.
     """
     try:
-        return _extract_keys_tree_sitter(source, file_path)
+        return _extract_keys_tree_sitter(source)
     except Exception:
         return _extract_keys_regex(source)
 
 
-def _extract_keys_tree_sitter(source: str, file_path: str) -> dict[str, list[str]]:
+def _extract_keys_tree_sitter(source: str) -> dict[str, list[str]]:
     """Extract key access patterns using tree-sitter AST traversal."""
     try:
         import tree_sitter_python as tspython
@@ -168,6 +168,469 @@ def format_key_patterns(patterns: dict[str, list[str]], file_path: str = "") -> 
         if len(keys) > 0:
             lines.append(f"  {func}: {', '.join(keys)}")
     return "\n".join(lines)
+
+
+# ── Data-load detection (which data file does this code read?) ─────────
+
+# Callables whose argument carries a data-file path. The path almost always
+# appears as a string literal arg to open(...) (e.g. yaml.safe_load(open(p)))
+# or directly to a loader; we detect the literal and also the bare-Name case
+# (open(DATA_PATH)) for the caller to resolve via extract_module_constants.
+_DATA_LOADERS = {
+    "open",
+    "yaml.safe_load",
+    "yaml.load",
+    "json.load",
+    "json.loads",
+    "tomllib.load",
+    "tomllib.loads",
+    "toml.load",
+    "safe_load",
+}
+_DATA_PATH_SUFFIXES = (".yaml", ".yml", ".json", ".toml")
+
+
+def find_data_loads(source: str, file_path: str = "") -> list[dict]:
+    """Find data-file load sites in a Python source / symbol body.
+
+    Detects string-literal data paths (``open("world_data.yaml")``) and the
+    module-constant case (``open(DATA_PATH)`` where ``DATA_PATH = "..."``) —
+    the latter returned unresolved for the caller to resolve via
+    :func:`extract_module_constants`. The complement to the code-symbol trace:
+    it locates the *data* a symbol reads, which the symbol-reference walk
+    cannot see. Falls back to regex when tree-sitter is unavailable.
+
+    Returns deduped ``[{"path": str|None, "raw_arg": str, "resolved": bool,
+    "loader": str}]``.
+    """
+    try:
+        return _find_data_loads_tree_sitter(source)
+    except Exception:
+        return _find_data_loads_regex(source)
+
+
+def _find_data_loads_tree_sitter(source: str) -> list[dict]:
+    import tree_sitter_python as tspython
+    from tree_sitter import Language, Parser
+
+    lang = Language(tspython.language())
+    parser = Parser(lang)
+    tree = parser.parse(source.encode("utf-8"))
+
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(path: str | None, raw: str, resolved: bool, loader: str) -> None:
+        key = (path or raw or "").strip()
+        if not key or key in seen:
+            return
+        seen.add(key)
+        out.append(
+            {"path": path, "raw_arg": raw, "resolved": resolved, "loader": loader}
+        )
+
+    def _walk(node: Any) -> None:
+        # String literal ending in a data extension → a resolved data path.
+        if node.type == "string":
+            val = node.text.decode("utf-8", "replace").strip("'\"")
+            if val.endswith(_DATA_PATH_SUFFIXES):
+                _add(val, val, True, "literal")
+        # open()/loader call with a bare Name arg → unresolved module constant.
+        elif node.type == "call":
+            fn = node.child_by_field_name("function")
+            fname = fn.text.decode("utf-8", "replace") if fn is not None else ""
+            bare = fname.rsplit(".", 1)[-1] if "." in fname else fname
+            if fname in _DATA_LOADERS or bare in _DATA_LOADERS:
+                args = node.child_by_field_name("arguments")
+                if args is not None:
+                    for arg in args.children:
+                        if arg.type == "identifier":
+                            _add(
+                                None,
+                                arg.text.decode("utf-8", "replace"),
+                                False,
+                                fname or "open",
+                            )
+        for child in node.children:
+            _walk(child)
+
+    _walk(tree.root_node)
+    return out
+
+
+def _find_data_loads_regex(source: str) -> list[dict]:
+    out: list[dict] = []
+    seen: set[str] = set()
+    for m in re.finditer(r"""["']([^"']+\.(?:ya?ml|json|toml))["']""", source):
+        val = m.group(1)
+        if val not in seen:
+            seen.add(val)
+            out.append(
+                {"path": val, "raw_arg": val, "resolved": True, "loader": "literal"}
+            )
+    return out
+
+
+def extract_module_constants(source: str) -> dict[str, str]:
+    """Top-level ``NAME = "string-literal"`` assignments.
+
+    Used to resolve ``open(DATA_PATH)`` where ``DATA_PATH = "world_data.yaml"``
+    is defined at module scope. Only string-valued, module-level. Falls back to
+    regex when tree-sitter is unavailable.
+    """
+    try:
+        return _extract_module_constants_tree_sitter(source)
+    except Exception:
+        return _extract_module_constants_regex(source)
+
+
+def _extract_module_constants_tree_sitter(source: str) -> dict[str, str]:
+    import tree_sitter_python as tspython
+    from tree_sitter import Language, Parser
+
+    lang = Language(tspython.language())
+    parser = Parser(lang)
+    tree = parser.parse(source.encode("utf-8"))
+    consts: dict[str, str] = {}
+    for child in tree.root_node.children:  # module scope only
+        if child.type != "expression_statement" or not child.children:
+            continue
+        assign = child.children[0]
+        if assign.type != "assignment":
+            continue
+        left = assign.child_by_field_name("left")
+        right = assign.child_by_field_name("right")
+        if (
+            left is not None
+            and left.type == "identifier"
+            and right is not None
+            and right.type == "string"
+        ):
+            name = left.text.decode("utf-8", "replace")
+            consts[name] = right.text.decode("utf-8", "replace").strip("'\"")
+    return consts
+
+
+def _extract_module_constants_regex(source: str) -> dict[str, str]:
+    consts: dict[str, str] = {}
+    for line in source.splitlines():
+        m = re.match(r"""([A-Za-z_]\w*)\s*=\s*["']([^"']+)["']\s*$""", line)
+        if m:  # no leading indent ⇒ module level
+            consts[m.group(1)] = m.group(2)
+    return consts
+
+
+# A call to a structured-data parser. Distinctive names (no false positives),
+# so a regex is enough. Signals "this code parses data" even when the path is
+# a PARAMETER (``def load(filepath): yaml.safe_load(open(filepath))``) — the
+# single most common loader shape, where the path literal lives at the call
+# site, not the body. The caller then surfaces the project's data files.
+_DATA_PARSE_CALL_RE = re.compile(
+    r"(?:yaml\.safe_load|yaml\.load|json\.loads?|tomllib\.loads?|toml\.load|"
+    r"\bsafe_load)\s*\("
+)
+
+
+def parses_data(source: str) -> bool:
+    """True if the source contains a structured-data parse call (yaml/json/toml)."""
+    return bool(_DATA_PARSE_CALL_RE.search(source))
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Level 1b: Model-attribute access + model definitions (the model-layer hop)
+# ══════════════════════════════════════════════════════════════════════
+#
+# The dict-key extractor above sees ``data["dialogue"]``. When a loader parses a
+# data file into typed model instances and gameplay code reads ATTRIBUTES
+# (``npc.dialogue_nodes``), that access is invisible to it. These helpers expose
+# the model side: which attributes a symbol reads, and how project model classes
+# map field → type — enough to connect ``npc.dialogue_nodes`` back to the data.
+
+
+def extract_attr_reads(source: str) -> dict[str, list[str]]:
+    """Map function/method name → attribute names it READS (not method calls).
+
+    ``node.text`` and ``npc.dialogue_nodes`` are attribute reads; ``x.get(...)``
+    and ``items.append(...)`` are calls and are excluded. The complement to
+    :func:`extract_key_access_patterns` for model-instance access. Falls back to
+    regex when tree-sitter is unavailable.
+    """
+    try:
+        return _extract_attr_reads_tree_sitter(source)
+    except Exception:
+        return _extract_attr_reads_regex(source)
+
+
+def _extract_attr_reads_tree_sitter(source: str) -> dict[str, list[str]]:
+    import tree_sitter_python as tspython
+    from tree_sitter import Language, Parser
+
+    lang = Language(tspython.language())
+    parser = Parser(lang)
+    tree = parser.parse(source.encode("utf-8"))
+
+    results: dict[str, list[str]] = {}
+
+    def _walk(node: Any, func_name: str) -> None:
+        if node.type in ("function_definition", "method_definition"):
+            nm = node.child_by_field_name("name")
+            if nm:
+                func_name = nm.text.decode("utf-8")
+
+        if node.type == "attribute":
+            attr = node.child_by_field_name("attribute")
+            # Skip when this attribute is the function being CALLED (x.method()).
+            # Compare by byte span — child_by_field_name returns a fresh wrapper,
+            # so an `is` identity check would never match.
+            parent = node.parent
+            is_called = False
+            if parent is not None and parent.type == "call":
+                fn = parent.child_by_field_name("function")
+                if fn is not None and (fn.start_byte, fn.end_byte) == (
+                    node.start_byte,
+                    node.end_byte,
+                ):
+                    is_called = True
+            if attr is not None and not is_called:
+                name = attr.text.decode("utf-8")
+                results.setdefault(func_name, [])
+                if name not in results[func_name]:
+                    results[func_name].append(name)
+
+        for child in node.children:
+            _walk(child, func_name)
+
+    _walk(tree.root_node, "(module-level)")
+    return results
+
+
+def _extract_attr_reads_regex(source: str) -> dict[str, list[str]]:
+    results: dict[str, list[str]] = {}
+    current = "(module-level)"
+    func_re = re.compile(r"^\s*def\s+([A-Za-z_]\w*)\s*\(")
+    # `.attr` only when the WHOLE name is followed by a non-word, non-`(` char
+    # (or end) — excludes method calls (`.strip(`) without truncating the name.
+    attr_re = re.compile(r"\.([A-Za-z_]\w*)(?=[^\w(]|$)")
+    for line in source.splitlines():
+        m = func_re.match(line)
+        if m:
+            current = m.group(1)
+            continue
+        for am in attr_re.finditer(line):
+            name = am.group(1)
+            results.setdefault(current, [])
+            if name not in results[current]:
+                results[current].append(name)
+    return results
+
+
+def extract_model_defs(source: str) -> dict[str, dict]:
+    """Parse class definitions → ``{ClassName: {"fields": {name: type_str},
+    "bases": [str], "decorators": [str]}}``.
+
+    Only class-level annotated fields (``name: type`` / ``name: type = ...``) are
+    captured — method locals are ignored. Used to map a read attribute back to
+    the model that owns it and to follow field types through containers. Falls
+    back to a light regex when tree-sitter is unavailable.
+    """
+    try:
+        return _extract_model_defs_tree_sitter(source)
+    except Exception:
+        return _extract_model_defs_regex(source)
+
+
+def _extract_model_defs_tree_sitter(source: str) -> dict[str, dict]:
+    import tree_sitter_python as tspython
+    from tree_sitter import Language, Parser
+
+    lang = Language(tspython.language())
+    parser = Parser(lang)
+    tree = parser.parse(source.encode("utf-8"))
+    out: dict[str, dict] = {}
+
+    def _decorators(cls_node: Any) -> list[str]:
+        decs: list[str] = []
+        parent = cls_node.parent
+        if parent is not None and parent.type == "decorated_definition":
+            for ch in parent.children:
+                if ch.type == "decorator":
+                    decs.append(
+                        ch.text.decode("utf-8").lstrip("@").split("(")[0].strip()
+                    )
+        return decs
+
+    def _bases(cls_node: Any) -> list[str]:
+        sup = cls_node.child_by_field_name("superclasses")
+        if sup is None:
+            return []
+        return [
+            c.text.decode("utf-8")
+            for c in sup.children
+            if c.type in ("identifier", "attribute")
+        ]
+
+    def _fields(cls_node: Any) -> dict[str, str]:
+        body = cls_node.child_by_field_name("body")
+        fields: dict[str, str] = {}
+        if body is None:
+            return fields
+        for stmt in body.children:
+            # A class-level annotation parses as expression_statement > assignment
+            # carrying a `type` field (with or without a `right` default).
+            node = stmt
+            if stmt.type == "expression_statement" and stmt.children:
+                node = stmt.children[0]
+            if node.type == "assignment":
+                left = node.child_by_field_name("left")
+                typ = node.child_by_field_name("type")
+                if left is not None and left.type == "identifier" and typ is not None:
+                    fields[left.text.decode("utf-8")] = typ.text.decode("utf-8")
+        return fields
+
+    def _walk(node: Any) -> None:
+        if node.type == "class_definition":
+            nm = node.child_by_field_name("name")
+            if nm is not None:
+                out[nm.text.decode("utf-8")] = {
+                    "fields": _fields(node),
+                    "bases": _bases(node),
+                    "decorators": _decorators(node),
+                }
+        for child in node.children:
+            _walk(child)
+
+    _walk(tree.root_node)
+    return out
+
+
+def _extract_model_defs_regex(source: str) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    current: str | None = None
+    base_indent = 0
+    cls_re = re.compile(r"^(\s*)class\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?\s*:")
+    field_re = re.compile(r"^(\s+)([A-Za-z_]\w*)\s*:\s*([^=\n]+?)\s*(?:=.*)?$")
+    for line in source.splitlines():
+        cm = cls_re.match(line)
+        if cm:
+            current = cm.group(2)
+            base_indent = len(cm.group(1))
+            bases = [b.strip() for b in (cm.group(3) or "").split(",") if b.strip()]
+            out[current] = {"fields": {}, "bases": bases, "decorators": []}
+            continue
+        if current is None:
+            continue
+        fm = field_re.match(line)
+        if fm and len(fm.group(1)) > base_indent and "def " not in line:
+            # one level of indent past the class — a class body field
+            if len(fm.group(1)) <= base_indent + 8:
+                out[current]["fields"][fm.group(2)] = fm.group(3).strip()
+        elif line.strip() and not line[:1].isspace():
+            current = None  # dedent to module level
+    return out
+
+
+def element_type(type_str: str) -> str:
+    """Innermost element type of a possibly-generic annotation.
+
+    ``Dict[str, DialogueNode]`` → ``DialogueNode``; ``List[NPC]`` → ``NPC``;
+    ``Optional[Room]`` → ``Room``; ``NPC`` → ``NPC``.
+    """
+    t = (type_str or "").strip().strip("'\"")
+    if "[" in t and t.endswith("]"):
+        inner = t[t.index("[") + 1 : -1]
+        parts = _split_top_level(inner)
+        if parts:
+            return element_type(parts[-1])
+    return t.split(".")[-1].strip()
+
+
+def find_model_instantiation_keys(source: str, model_names: set[str]) -> dict[str, str]:
+    """Map model class → the data key its instances are built from.
+
+    A loader like ``for r in data["rooms"]: Room(...)`` ties ``Room`` to the key
+    ``rooms``; a nested ``for n in r["npcs"]: NPC(...)`` ties ``NPC`` to ``npcs``.
+    Pins the data-file location a model originates from. Tree-sitter, regex
+    fallback. Returns only models found instantiated inside a keyed loop.
+    """
+    try:
+        return _find_model_instantiation_keys_tree_sitter(source, model_names)
+    except Exception:
+        return {}
+
+
+def _subscript_or_get_key(node: Any) -> str | None:
+    """First string key in a `x["key"]` subscript or `x.get("key")` within node."""
+    if node is None:
+        return None
+    if node.type == "subscript":
+        for ch in node.children:
+            if ch.type == "string":
+                return ch.text.decode("utf-8", "replace").strip("'\"")
+    if node.type == "call":
+        fn = node.child_by_field_name("function")
+        if fn is not None and fn.type == "attribute":
+            mth = fn.child_by_field_name("attribute")
+            if mth is not None and mth.text.decode("utf-8") in ("get", "pop"):
+                args = node.child_by_field_name("arguments")
+                if args is not None:
+                    for a in args.children:
+                        if a.type == "string":
+                            return a.text.decode("utf-8", "replace").strip("'\"")
+    for ch in node.children:
+        k = _subscript_or_get_key(ch)
+        if k:
+            return k
+    return None
+
+
+def _find_model_instantiation_keys_tree_sitter(
+    source: str, model_names: set[str]
+) -> dict[str, str]:
+    import tree_sitter_python as tspython
+    from tree_sitter import Language, Parser
+
+    lang = Language(tspython.language())
+    parser = Parser(lang)
+    tree = parser.parse(source.encode("utf-8"))
+    out: dict[str, str] = {}
+
+    def _walk(node: Any, key_stack: list[str]) -> None:
+        stack = key_stack
+        if node.type == "for_statement":
+            right = node.child_by_field_name("right")
+            k = _subscript_or_get_key(right)
+            stack = key_stack + ([k] if k else [])
+        if node.type == "call":
+            fn = node.child_by_field_name("function")
+            if fn is not None and fn.type == "identifier":
+                cls = fn.text.decode("utf-8")
+                if cls in model_names and cls not in out and stack:
+                    out[cls] = stack[-1]  # nearest enclosing keyed loop
+        for child in node.children:
+            _walk(child, stack)
+
+    _walk(tree.root_node, [])
+    return out
+
+
+def _split_top_level(s: str) -> list[str]:
+    """Split on top-level commas, respecting [] nesting."""
+    parts: list[str] = []
+    depth = 0
+    cur = ""
+    for ch in s:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur)
+    return [p.strip() for p in parts if p.strip()]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -300,7 +763,7 @@ def _describe_shape(value: Any, depth: int = 0, max_depth: int = 4) -> str:
             is_homogeneous = (
                 all(
                     isinstance(value[k], dict) and set(value[k].keys()) == first_keys
-                    for k in keys[:4]
+                    for k in keys
                 )
                 if first_keys
                 else False
@@ -311,7 +774,7 @@ def _describe_shape(value: Any, depth: int = 0, max_depth: int = 4) -> str:
                 is_homogeneous = all(
                     isinstance(value[k], dict)
                     and len(set(value[k].keys()) & first_keys) >= len(first_keys) * 0.7
-                    for k in keys[:4]
+                    for k in keys
                 )
 
             if is_homogeneous:
@@ -321,7 +784,7 @@ def _describe_shape(value: Any, depth: int = 0, max_depth: int = 4) -> str:
         # Non-dict values or heterogeneous — check for simple homogeneity
         if len(keys) >= 2:
             shapes = set()
-            for k in keys[:3]:
+            for k in keys:
                 shapes.add(_describe_shape(value[k], depth + 1, max_depth))
             if len(shapes) == 1:
                 val_shape = _describe_shape(first_val, depth + 1, max_depth)
@@ -329,7 +792,7 @@ def _describe_shape(value: Any, depth: int = 0, max_depth: int = 4) -> str:
 
         # Heterogeneous dict — show all keys
         parts = []
-        for key in keys[:8]:
+        for key in keys:
             child_shape = _describe_shape(value[key], depth + 1, max_depth)
             parts.append(f"{key}: {child_shape}")
         if len(keys) > 8:
@@ -346,23 +809,20 @@ def _describe_shape(value: Any, depth: int = 0, max_depth: int = 4) -> str:
 
 def build_schema_context(
     files: dict[str, str],
-    max_chars: int = 1500,
 ) -> str:
     """Build a combined schema context from all project files.
 
     Extracts Level 1 (key-access patterns) from code files and
     Level 2 (structural skeletons) from data files. Returns a
-    compact string suitable for direct inclusion in prompts.
+    string suitable for direct inclusion in prompts.
 
     Args:
         files: Dictionary mapping file paths to file contents.
-        max_chars: Maximum characters for the output.
 
     Returns:
         Formatted schema context string, or empty string if nothing extracted.
     """
     sections: list[str] = []
-    chars_used = 0
 
     data_extensions = {".yaml", ".yml", ".json", ".toml"}
     code_extensions = {".py", ".js", ".ts", ".rs"}
@@ -373,9 +833,8 @@ def build_schema_context(
         if ext not in data_extensions:
             continue
         skeleton = extract_data_skeleton(content, file_path)
-        if skeleton and chars_used + len(skeleton) < max_chars:
+        if skeleton:
             sections.append(skeleton)
-            chars_used += len(skeleton) + 1
 
     # Level 1 — key-access patterns from code files
     for file_path, content in sorted(files.items()):
@@ -385,9 +844,8 @@ def build_schema_context(
         patterns = extract_key_access_patterns(content, file_path)
         if patterns:
             formatted = format_key_patterns(patterns, file_path)
-            if formatted and chars_used + len(formatted) < max_chars:
+            if formatted:
                 sections.append(formatted)
-                chars_used += len(formatted) + 1
 
     if not sections:
         return ""

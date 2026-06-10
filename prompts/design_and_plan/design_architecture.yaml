@@ -54,7 +54,13 @@ sections:
       Produce a SINGLE authoritative blueprint that defines:
 
       1. **Execution Convention**: How to run the project. Specify:
-         - The command to run the application (e.g., `python main.py`)
+         - The `run_command`: a **non-interactive startup check** that verifies
+           the program launches, all imports resolve, and initial setup works,
+           then exits cleanly within a few seconds. It MUST NOT block waiting
+           for user input. For programs that read stdin (games, REPLs, CLI tools),
+           pipe minimal input so the process exits, e.g., `echo "quit" | python main.py`
+           or `printf "\\n" | python main.py`. For web servers or daemons, use a
+           command that starts and immediately stops, e.g., `python -c "from app import create_app; create_app()"`.
          - The import scheme: flat (`from models import X`), package
            (`from src.models import X`), or relative (`from .models import X`)
          - Whether `__init__.py` files are needed
@@ -70,13 +76,44 @@ sections:
       4. **Interface Contracts**: For each cross-module dependency,
          specify caller, callee, symbol name, and expected signature.
 
-      5. **Data Shapes**: For data files (YAML, JSON, config) and the code that
-         reads them, specify the expected structure. This ensures the file that
-         writes/defines the data and the file that reads/loads it agree on format.
-         Getting this wrong causes runtime crashes. Be explicit.
+      5. **Data Shapes**: For data files (YAML, JSON, config) that the program
+         reads at startup, specify the structure the code expects. This prevents
+         code-data mismatches that cause runtime crashes. Only include **input
+         data** — files that exist before the program runs (world definitions,
+         config). Runtime output files (save files) belong in State Contracts
+         below, not here.
 
-      6. **Creation Order**: Dependency-sorted. Files with no project imports
+      6. **State Contracts**: The canonical representation of runtime state
+         that MORE THAN ONE module reads or writes, plus the schema of any
+         state the program persists (save files). For each, pick ONE canonical
+         representation and state it exactly — e.g. does an inventory hold
+         id strings or full objects? Every module must conform to it.
+         Include:
+         - Shared mutable state: the type of each field, exactly
+           (e.g. "Room.items: list of item_id strings — never Item objects").
+         - Persisted state: the full schema of what gets written and
+           restored (e.g. save JSON: every key and its value type).
+         Without this, each file's author guesses independently and the
+         mismatches surface as runtime crashes that are expensive to trace.
+
+         Also list `transient_files`: every file the program CREATES at
+         runtime (save files, caches, logs), as names or glob patterns
+         relative to the project root. These are automatically deleted
+         between test sessions so one test's leftover state cannot
+         contaminate the next. NEVER list input data files (world
+         definitions, config) here — only program-generated output.
+
+      7. **Creation Order**: Dependency-sorted. Files with no project imports
          come first. Entry points come last.
+
+      8. **Infrastructure files**: Do NOT include boilerplate or tooling files
+         in `modules` or `creation_order`. These are files that exist to satisfy
+         language or framework conventions but contain no project logic — package
+         markers (`__init__.py`), empty re-export barrels (`mod.rs`, `index.ts`),
+         directory placeholders (`.gitkeep`), or framework scaffolding. The
+         pipeline creates these automatically from the `init_files` flag and
+         directory layout. Only list files that contain meaningful logic, data
+         definitions, or application entry points.
 
   - id: output_format
     content: |
@@ -84,7 +121,7 @@ sections:
       ```json
       {
         "execution": {
-          "run_command": "python main.py",
+          "run_command": "echo quit | python main.py",
           "import_scheme": "flat",
           "init_files": false,
           "working_directory": "project root"
@@ -95,6 +132,12 @@ sections:
             "responsibility": "Data classes for rooms, items, NPCs",
             "defines": ["Room", "Item", "NPC"],
             "imports_from": {}
+          },
+          {
+            "file": "engine.py",
+            "responsibility": "Game loop and room navigation",
+            "defines": ["GameEngine"],
+            "imports_from": {"models": ["Room", "Item", "NPC"]}
           }
         ],
         "interfaces": [
@@ -112,6 +155,21 @@ sections:
             "structure": "rooms: list of {id: str, name: str, ...}"
           }
         ],
+        "state_shapes": [
+          {
+            "name": "Room.items",
+            "owner": "models.py",
+            "consumed_by": "engine.py, loader.py",
+            "structure": "list of item_id strings — never Item objects"
+          },
+          {
+            "name": "save file JSON",
+            "owner": "engine.py",
+            "consumed_by": "engine.py",
+            "structure": "{current_room_id: str, inventory: [item_id], rooms: {room_id: {items: [item_id]}}}"
+          }
+        ],
+        "transient_files": ["savegame.json", "*.save.json"],
         "creation_order": ["models.py", "parser.py", "engine.py", "main.py"],
         "notes": "Brief notes on design rationale"
       }
@@ -123,5 +181,23 @@ sections:
       {"execution": {"run_command": "..."}, ...}
       ```
       I chose a flat import scheme because...
+
+      ✅ CORRECT — only real project files in modules and creation_order:
+      ```json
+      "modules": [
+        {"file": "models.py", "responsibility": "Data classes", ...},
+        {"file": "engine.py", "responsibility": "Game loop", ...}
+      ],
+      "creation_order": ["models.py", "engine.py", "main.py"]
+      ```
+
+      ❌ WRONG — do not include infrastructure/boilerplate files as modules:
+      ```json
+      "modules": [
+        {"file": "__init__.py", "responsibility": "Package marker", "defines": [], ...}
+      ],
+      "creation_order": ["models.py", "engine.py", "main.py"]
+      ```
+      These are created automatically — listing them causes pipeline errors.
 
       Return ONLY the fenced JSON.

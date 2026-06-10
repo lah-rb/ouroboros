@@ -47,8 +47,7 @@ function name minus the `action_` prefix. E.g., `action_read_files` → register
 2. Shared sub-flows are invoked via `action: flow` from parent steps.
 3. They should be focused and reusable — one clear responsibility.
 4. Document inputs/outputs clearly since multiple parent flows will depend on the contract.
-5. Add to the flow inventory in `IMPLEMENTATION.md` §3.
-6. Rebuild: `uv run ouroboros.py cue-compile`.
+5. Rebuild: `uv run ouroboros.py cue-compile`.
 
 ---
 
@@ -56,7 +55,7 @@ function name minus the `action_` prefix. E.g., `action_read_files` → register
 
 1. **Create** `agent/resolvers/<type_name>.py` with a `resolve()` function.
 2. **Register** in `agent/resolvers/__init__.py` dispatcher.
-3. **Update** `agent/loader_v2.py` validation to accept the new resolver type.
+3. **Update** `agent/loader.py` validation to accept the new resolver type.
 4. Add tests in `tests/`.
 
 The resolver receives the step output, context accumulator, resolver definition, and
@@ -103,22 +102,40 @@ steps: {
 ```
 
 The loader merges template fields with step-level overrides at load time. Step-level
-values always win. See `agent/loader_v2.py` for merge logic.
+values always win. See `agent/loader.py` for merge logic.
 
 ---
 
 ## Development Cycle
 
-**ALWAYS follow this sequence (also documented in `AGENT.md`):**
+**See `AGENT.md` for the full development cycle.** In summary: code → format with
+`black` → lint with `ruff check` (auto-fix with `--fix`) → test where tests exist →
+`cue-compile` on CUE changes → `ouroboros.py smoke` → `ouroboros.py lint-flows` →
+live verification via `mission create --mission_config <test_config>`.
 
-1. `uv run pytest tests/ -v` — run full test suite first.
-2. Make code changes.
-3. `uv run black .` — format (Black can change line numbers affecting assertions).
-4. `uv run pytest tests/ -v` — verify changes pass.
-5. `uv run ouroboros.py mission create --mission_config test_config` — live verification.
-6. If tests fail → investigate → fix → return to step 1.
+Live verification is the only real test for feature work touching flows, actions, or
+prompts — smoke tests load flows and begin execution without inference, which catches
+structural regressions but not semantic ones.
 
-Step 5 is NOT optional for feature work.
+---
+
+## Output Preservation Policy
+
+**Never truncate, cap, or slice content that will be parsed downstream.**
+
+This applies to any data flowing into `json.loads`, `json_repair.loads`, structured extraction, or any parser. Truncated JSON is unparseable JSON, and the silent fallbacks that follow (default-to-true verification, empty plan arrays, skipped goals) cause cascading failures across the mission lifecycle.
+
+**Never ask the model for bare text responses that will be parsed programmatically.**
+
+All machine-parsed model output must use fenced JSON (```` ```json ```` blocks) or the `{"choice": "..."}` menu format. Use `parse_llm_json()` from `agent/llm_json.py` for all extraction. Bare text prompts ("respond with the file path, e.g.: engine.py") fail at ~50% rates on sparse MoE models due to EOS token leakage, JSON wrapping, and chat template bleed. If you need a string value from the model, wrap it in a JSON field: `{"file": "engine.py"}` not `engine.py`.
+
+Specific anti-patterns to avoid:
+- `response[:N]` before JSON parsing
+- `max_tokens` set too low on inference calls that produce structured output
+- `content[:500]` on error output that feeds into diagnosis or rework directives
+- `text[:200]` on verification evidence that determines pass/fail
+
+If you encounter existing truncation in a code path that parses the result, **report it as a bug**. Display-only truncation (trace logs, observation strings, UI summaries) is fine — the test is whether anything downstream will try to parse the truncated content as structured data.
 
 ---
 
@@ -129,9 +146,9 @@ Step 5 is NOT optional for feature work.
 | Flow names | snake_case | `rewrite`, `research_context` |
 | Step names | snake_case | `gather_context`, `plan_change` |
 | Action names | snake_case | `read_files`, `load_mission_state` |
-| Context keys | snake_case | `target_file`, `mission`, `frustration` |
+| Context keys | snake_case | `target_file`, `mission`, `flow_directive` |
 | Python modules | snake_case | `terminal_actions.py`, `mission_config.py` |
-| Test files | `test_<module>.py` | `test_contracts.py` |
+| Test files | `test_<module>.py` | `test_flow_loader.py` |
 | Pydantic models | PascalCase | `FlowDefinition`, `StepInput`, `MissionState` |
 
 ---

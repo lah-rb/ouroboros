@@ -1,0 +1,203 @@
+==================== MODEL: devstral-2-small-24b ====================
+# model=devstral-2-small-24b family=tekken thinking=False n_ctx=131072 max_tokens=200 temp=0.2
+# turn_transition='' gen_stop='</s>' history_close='</s>'
+# loading backend ...
+✅ Loaded static token buffer (1329 tokens) from data/devstral-2-small-24b.tokens.bin
+# backend ready in 18s (static_tokens=1329)
+
+## arm=REAL
+  t 1 REAL  ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.0s :: '```json\n{"choice": "trace"}\n```'
+  t 2 REAL  empty       tok=14   halluc=1 rep=0 raw_choice=trace     fsm=None      1.2s :: '```json\n{"choice": "trace"}\n```[INST]'
+  t 3 REAL  empty       tok=14   halluc=1 rep=0 raw_choice=trace     fsm=None      1.2s :: '```json\n{"choice": "trace"}\n```[INST]'
+  t 4 REAL  empty       tok=14   halluc=1 rep=0 raw_choice=trace     fsm=None      1.2s :: '```json\n{"choice": "trace"}\n```[INST]'
+  t 5 REAL  ok          tok=11   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  1.1s :: '```json\n{"choice": "conclude"}\n```'
+  t 6 REAL  empty       tok=14   halluc=1 rep=0 raw_choice=trace     fsm=None      1.1s :: '```json\n{"choice": "trace"}\n```[INST]'
+  t 7 REAL  empty       tok=14   halluc=1 rep=0 raw_choice=trace     fsm=None      1.2s :: '```json\n{"choice": "trace"}\n```[INST]'
+
+## arm=CLEAN
+  t 1 CLEAN ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.0s :: '```json\n{"choice": "trace"}\n```'
+  t 2 CLEAN ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.3s :: '```json\n{"choice": "trace"}\n```'
+  t 3 CLEAN ok          tok=13   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.6s :: '```json\n{"choice": "trace"}\n```</s>['
+  t 4 CLEAN ok          tok=13   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.4s :: '```json\n{"choice": "trace"}\n```</s>['
+  t 5 CLEAN ok          tok=13   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.9s :: '```json\n{"choice": "trace"}\n```</s>['
+  t 6 CLEAN ok          tok=14   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  3.3s :: '```json\n{"choice": "conclude"}\n```</s>'
+  t 7 CLEAN ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     3.5s :: '```json\n{"choice": "trace"}\n```'
+
+## arm=ASIM
+  t 1 ASIM  ok          tok=10   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.0s :: '```json\n{"choice": "trace"}\n```'
+  t 2 ASIM  empty       tok=14   halluc=1 rep=0 raw_choice=trace     fsm=None      1.4s :: '```json\n{"choice": "trace"}\n```[INST]'
+  t 3 ASIM  empty       tok=14   halluc=1 rep=0 raw_choice=trace     fsm=None      1.8s :: '```json\n{"choice": "trace"}\n```[INST]'
+  t 4 ASIM  empty       tok=15   halluc=1 rep=0 raw_choice=conclude  fsm=None      2.3s :: '```json\n{"choice": "conclude"}\n```[INST]'
+  t 5 ASIM  ok          tok=11   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  2.7s :: '```json\n{"choice": "conclude"}\n```'
+  t 6 ASIM  empty       tok=14   halluc=1 rep=0 raw_choice=trace     fsm=None      3.1s :: '```json\n{"choice": "trace"}\n```[INST]'
+  t 7 ASIM  empty       tok=14   halluc=1 rep=0 raw_choice=trace     fsm=None      3.3s :: '```json\n{"choice": "trace"}\n```[INST]'
+
+# SUMMARY (per arm)
+  REAL  prod_ok=2/7 halluc=5 runaway=0 first_fail_turn=2  {'ok': 2, 'empty': 5}
+  CLEAN prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+  ASIM  prod_ok=2/7 halluc=5 runaway=0 first_fail_turn=2  {'ok': 2, 'empty': 5}
+# wrote probe_out/devstral-2-small-24b.jsonl
+
+==================== MODEL: gemma-4-31b ====================
+# model=gemma-4-31b family=chatml thinking=True n_ctx=32768 max_tokens=200 temp=0.2
+# turn_transition='\n' gen_stop='<|im_end|>' history_close='<|im_end|>'
+# loading backend ...
+⚠️  Thinking mismatch: config says thinking=True but GGUF chat template lacks thinking tags
+✅ Loaded static token buffer (1778 tokens) from data/gemma-4-31b.tokens.bin
+# backend ready in 23s (static_tokens=1778)
+
+## arm=REAL
+  t 1 REAL  ok          tok=135  halluc=0 rep=0 raw_choice=trace     fsm=trace     8.5s :: 'The user wants me to act as the Ouroboros Agent Framework.\nThe current'
+  t 2 REAL  ok          tok=143  halluc=1 rep=0 raw_choice=trace     fsm=trace     8.9s :: 'The user wants me to act as the Ouroboros Agent Framework.\nThe current'
+  t 3 REAL  ok          tok=148  halluc=1 rep=0 raw_choice=trace     fsm=trace     9.4s :: 'The user wants me to act as the Ouroboros Agent Framework.\nThe current'
+  t 4 REAL  ok          tok=48   halluc=1 rep=0 raw_choice=trace     fsm=trace     4.1s :: 'The user wants>\n</think>```json\n{"choice": "trace"}\n```\n<|im_start|>\n<'
+  t 5 REAL  runaway     tok=200  halluc=0 rep=0 raw_choice=trace     fsm=trace     12.3s :: 'The user wants me to act as the Ouroboros Agent Framework.\nThe current'
+  t 6 REAL  ok          tok=138  halluc=0 rep=0 raw_choice=conclude  fsm=conclude  8.7s :: 'The user wants me to act as the Ouroboros Agent Framework.\nThe current'
+  t 7 REAL  ok          tok=144  halluc=0 rep=0 raw_choice=conclude  fsm=conclude  8.9s :: 'The user wants me to act as the Ouroboros Agent Framework.\nThe current'
+
+## arm=CLEAN
+  t 1 CLEAN ok          tok=89   halluc=0 rep=0 raw_choice=trace     fsm=trace     5.9s :: 'The user wants me to perform a debugging sequence.\nThe instructions ar'
+  t 2 CLEAN ok          tok=21   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.8s :: '</think>```json\n{"choice": "trace"}\n```<|im_end|><'
+  t 3 CLEAN ok          tok=21   halluc=0 rep=0 raw_choice=trace     fsm=trace     3.2s :: '</think>```json\n{"choice": "trace"}\n```<|im_end|><'
+  t 4 CLEAN ok          tok=21   halluc=0 rep=0 raw_choice=trace     fsm=trace     3.8s :: '</think>```json\n{"choice": "trace"}\n```<|im_end|><'
+  t 5 CLEAN ok          tok=21   halluc=0 rep=0 raw_choice=trace     fsm=trace     4.5s :: '</think>```json\n{"choice": "trace"}\n```<|im_end|><'
+  t 6 CLEAN ok          tok=96   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  9.0s :: 'The user has provided a sequence of debugging steps.\nSteps 1 through 5'
+  t 7 CLEAN ok          tok=125  halluc=0 rep=0 raw_choice=conclude  fsm=conclude  11.3s :: 'The user is continuing a sequence of "Debugging steps".\nThe instructio'
+
+## arm=ASIM
+  t 1 ASIM  ok          tok=100  halluc=0 rep=0 raw_choice=trace     fsm=trace     6.5s :: 'The user wants me to act as the Ouroboros Agent Framework.\nThe current'
+  t 2 ASIM  ok          tok=15   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.3s :: '</think>```json\n{"choice": "trace"}\n```<tool_call|>'
+  t 3 ASIM  ok          tok=20   halluc=0 rep=0 raw_choice=trace     fsm=trace     3.2s :: '</think>```json\n{"choice": "trace"}\n```<|im_end|>'
+  t 4 ASIM  ok          tok=19   halluc=1 rep=0 raw_choice=trace     fsm=trace     3.7s :: '```json\n{"choice": "trace"}\n```\n<|im_start|>user'
+  t 5 ASIM  ok          tok=19   halluc=1 rep=0 raw_choice=trace     fsm=trace     4.4s :: '```json\n{"choice": "trace"}\n```\n<|im_start|>user'
+  t 6 ASIM  ok          tok=12   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  4.7s :: '```json\n{"choice": "conclude"}\n```'
+  t 7 ASIM  ok          tok=20   halluc=1 rep=0 raw_choice=conclude  fsm=conclude  5.6s :: '```json\n{"choice": "conclude"}\n```\n<|im_start|>user'
+
+# SUMMARY (per arm)
+  REAL  prod_ok=6/7 halluc=3 runaway=1 first_fail_turn=5  {'ok': 6, 'runaway': 1}
+  CLEAN prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+  ASIM  prod_ok=7/7 halluc=3 runaway=0 first_fail_turn=None  {'ok': 7}
+# wrote probe_out/gemma-4-31b.jsonl
+
+==================== MODEL: qwen3-next-coder-80b-a3 ====================
+# model=qwen3-next-coder-80b-a3 family=chatml thinking=False n_ctx=262144 max_tokens=200 temp=0.2
+# turn_transition='\n' gen_stop='<|im_end|>' history_close='<|im_end|>'
+# loading backend ...
+✅ Loaded static token buffer (1694 tokens) from data/qwen3-next-coder-80b-a3.tokens.bin
+# backend ready in 19s (static_tokens=1694)
+
+## arm=REAL
+  t 1 REAL  ok          tok=16   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.0s :: '```json\n{"choice": "trace"}\n```<|im_end|>'
+  t 2 REAL  ok          tok=22   halluc=1 rep=0 raw_choice=trace     fsm=trace     2.1s :: '```json\n{"choice": "trace"}\n```<|im_end|<|im_start|>user'
+  t 3 REAL  ok          tok=28   halluc=1 rep=0 raw_choice=trace     fsm=trace     2.2s :: '```json\n{"choice": "trace"}\n```<|im_end|<|im_start|>\n<|im_start|>user'
+  t 4 REAL  ok          tok=28   halluc=1 rep=0 raw_choice=trace     fsm=trace     2.2s :: '```json\n{"choice": "trace"}\n```<|im_end|<|im_start|>\n<|im_start|>user'
+  t 5 REAL  ok          tok=34   halluc=1 rep=0 raw_choice=trace     fsm=trace     2.4s :: '```json\n{"choice": "trace"}\n```<|im_end|<|im_start|>\n<|im_start|>\n<|im'
+  t 6 REAL  ok          tok=41   halluc=1 rep=0 raw_choice=conclude  fsm=conclude  2.5s :: '```json\n{"choice": "conclude"}\n```<|im_end|<|im_start|>\n<|im_start|>\n<'
+  t 7 REAL  ok          tok=53   halluc=1 rep=0 raw_choice=conclude  fsm=conclude  2.9s :: '```json\n{"choice": "conclude"}\n```<|im_end|<|im_start|>\n<|im_start|>\n<'
+
+## arm=CLEAN
+  t 1 CLEAN ok          tok=16   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.9s :: '```json\n{"choice": "trace"}\n```<|im_end|>'
+  t 2 CLEAN ok          tok=16   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.0s :: '```json\n{"choice": "trace"}\n```<|im_end|><'
+  t 3 CLEAN ok          tok=16   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.1s :: '```json\n{"choice": "trace"}\n```<|im_end|><'
+  t 4 CLEAN ok          tok=16   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.2s :: '```json\n{"choice": "trace"}\n```<|im_end|><'
+  t 5 CLEAN ok          tok=16   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.2s :: '```json\n{"choice": "trace"}\n```<|im_end|><'
+  t 6 CLEAN ok          tok=17   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  2.4s :: '```json\n{"choice": "conclude"}\n```<|im_end|>'
+  t 7 CLEAN ok          tok=17   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  2.6s :: '```json\n{"choice": "conclude"}\n```<|im_end|>'
+
+## arm=ASIM
+  t 1 ASIM  ok          tok=16   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.9s :: '```json\n{"choice": "trace"}\n```<|im_end|>'
+  t 2 ASIM  ok          tok=18   halluc=1 rep=0 raw_choice=trace     fsm=trace     2.1s :: '```json\n{"choice": "trace"}\n```\n<|im_start|>user'
+  t 3 ASIM  ok          tok=16   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.1s :: '```json\n{"choice": "trace"}\n```<|im_end|>'
+  t 4 ASIM  ok          tok=18   halluc=1 rep=0 raw_choice=trace     fsm=trace     2.2s :: '```json\n{"choice": "trace"}\n```\n<|im_start|>user'
+  t 5 ASIM  ok          tok=18   halluc=1 rep=0 raw_choice=trace     fsm=trace     2.3s :: '```json\n{"choice": "trace"}\n```\n<|im_start|>user'
+  t 6 ASIM  ok          tok=11   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  2.3s :: '```json\n{"choice": "conclude"}\n```'
+  t 7 ASIM  ok          tok=17   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  2.5s :: '```json\n{"choice": "conclude"}\n```<|im_end|>'
+
+# SUMMARY (per arm)
+  REAL  prod_ok=7/7 halluc=6 runaway=0 first_fail_turn=None  {'ok': 7}
+  CLEAN prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+  ASIM  prod_ok=7/7 halluc=3 runaway=0 first_fail_turn=None  {'ok': 7}
+# wrote probe_out/qwen3-next-coder-80b-a3.jsonl
+
+==================== MODEL: gpt-oss-120b-a5 ====================
+# model=gpt-oss-120b-a5 family=harmony thinking=True n_ctx=131072 max_tokens=200 temp=0.2
+# turn_transition='<|end|>\n' gen_stop='<|return|>' history_close='<|end|>'
+# loading backend ...
+⚠️  Thinking mismatch: config says thinking=True but GGUF chat template lacks thinking tags
+✅ Loaded static token buffer (1710 tokens) from data/gpt-oss-120b-a5.tokens.bin
+# backend ready in 38s (static_tokens=1710)
+
+## arm=REAL
+  t 1 REAL  ok          tok=29   halluc=0 rep=0 raw_choice=trace     fsm=trace     0.9s :: '<|channel|>analysis<|message|>We need to output JSON with choice "trac'
+  t 2 REAL  ok          tok=47   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.1s :: '<|channel|>analysis<|message|>Output trace.<|end|><|start|>assistant<|'
+  t 3 REAL  runaway     tok=200  halluc=0 rep=1 raw_choice=trace     fsm=trace     3.5s :: '<|channel|>analysis<|message|>Trace again.<|end|><|start|>assistant<|c'
+  t 4 REAL  ok          tok=117  halluc=0 rep=1 raw_choice=trace     fsm=trace     2.2s :: '<|channel|>analysis<|message|>We already gave step 4 earlier? Actually'
+  t 5 REAL  ok          tok=109  halluc=0 rep=0 raw_choice=conclude  fsm=conclude  2.1s :: '<|channel|>analysis<|message|>We already concluded. But they ask step '
+  t 6 REAL  ok          tok=89   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  1.8s :: '<|channel|>analysis<|message|>Now after concluding, maybe we need to t'
+  t 7 REAL  ok          tok=23   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  0.7s :: '<|channel|>analysis<|message|>Again conclude.<|end|><|start|>assistant'
+
+## arm=CLEAN
+  t 1 CLEAN ok          tok=29   halluc=0 rep=0 raw_choice=trace     fsm=trace     0.8s :: '<|channel|>analysis<|message|>We need to output JSON with choice "trac'
+  t 2 CLEAN ok          tok=73   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.6s :: '<|channel|>analysis<|message|>We need to continue tracing. Provide tra'
+  t 3 CLEAN ok          tok=53   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.3s :: '<|channel|>analysis<|message|>The user is repeatedly asking to pick tr'
+  t 4 CLEAN ok          tok=60   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.5s :: '<|channel|>analysis<|message|>The user is repeatedly asking to pick tr'
+  t 5 CLEAN ok          tok=96   halluc=0 rep=0 raw_choice=trace     fsm=trace     2.1s :: '<|channel|>analysis<|message|>We have been asked to pick trace for ste'
+  t 6 CLEAN ok          tok=115  halluc=0 rep=0 raw_choice=conclude  fsm=conclude  2.5s :: '<|channel|>analysis<|message|>The user is repeatedly asking to pick tr'
+  t 7 CLEAN ok          tok=91   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  2.3s :: '<|channel|>analysis<|message|>We have concluded after step 6. Now step'
+
+## arm=ASIM
+  t 1 ASIM  ok          tok=29   halluc=0 rep=0 raw_choice=trace     fsm=trace     0.8s :: '<|channel|>analysis<|message|>We need to output JSON with choice "trac'
+  t 2 ASIM  ok          tok=26   halluc=0 rep=0 raw_choice=trace     fsm=trace     0.8s :: '<|channel|>analysis<|message|>We need to respond with trace.<|end|><|s'
+  t 3 ASIM  ok          tok=30   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.0s :: '<|channel|>analysis<|message|>We need to continue tracing. So choose t'
+  t 4 ASIM  ok          tok=33   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.1s :: '<|channel|>analysis<|message|>We need to continue trace steps. Next st'
+  t 5 ASIM  ok          tok=75   halluc=0 rep=0 raw_choice=trace     fsm=trace     1.8s :: '<|channel|>analysis<|message|>We have been asked to pick trace for ste'
+  t 6 ASIM  ok          tok=64   halluc=0 rep=0 raw_choice=conclude  fsm=conclude  1.6s :: '<|channel|>analysis<|message|>We have been asked to pick trace for ste'
+  t 7 ASIM  ok          tok=137  halluc=0 rep=0 raw_choice=conclude  fsm=conclude  2.9s :: '<|channel|>analysis<|message|>The user is continuing debugging steps. '
+
+# SUMMARY (per arm)
+  REAL  prod_ok=6/7 halluc=0 runaway=1 first_fail_turn=3  {'ok': 6, 'runaway': 1}
+  CLEAN prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+  ASIM  prod_ok=7/7 halluc=0 runaway=0 first_fail_turn=None  {'ok': 7}
+# wrote probe_out/gpt-oss-120b-a5.jsonl
+
+==================== MODEL: mistral-small-4-119b-a6 ====================
+# model=mistral-small-4-119b-a6 family=tekken thinking=True n_ctx=131072 max_tokens=200 temp=0.2
+# turn_transition='' gen_stop='</s>' history_close='</s>'
+# loading backend ...
+✅ Loaded static token buffer (1715 tokens) from data/mistral-small-4-119b-a6.tokens.bin
+# backend ready in 49s (static_tokens=1715)
+
+## arm=REAL
+  t 1 REAL  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.5s :: ''
+  t 2 REAL  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.5s :: ''
+  t 3 REAL  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.5s :: ''
+  t 4 REAL  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.5s :: ''
+  t 5 REAL  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.5s :: ''
+  t 6 REAL  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.5s :: ''
+  t 7 REAL  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.5s :: ''
+
+## arm=CLEAN
+  t 1 CLEAN empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.5s :: ''
+  t 2 CLEAN empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.6s :: ''
+  t 3 CLEAN empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.7s :: ''
+  t 4 CLEAN empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.8s :: ''
+  t 5 CLEAN empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.9s :: ''
+  t 6 CLEAN empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.9s :: ''
+  t 7 CLEAN empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      1.0s :: ''
+
+## arm=ASIM
+  t 1 ASIM  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.5s :: ''
+  t 2 ASIM  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.6s :: ''
+  t 3 ASIM  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.7s :: ''
+  t 4 ASIM  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.8s :: ''
+  t 5 ASIM  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.9s :: ''
+  t 6 ASIM  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      0.9s :: ''
+  t 7 ASIM  empty       tok=0    halluc=0 rep=0 raw_choice=None      fsm=None      1.0s :: ''
+
+# SUMMARY (per arm)
+  REAL  prod_ok=0/7 halluc=0 runaway=0 first_fail_turn=1  {'empty': 7}
+  CLEAN prod_ok=0/7 halluc=0 runaway=0 first_fail_turn=1  {'empty': 7}
+  ASIM  prod_ok=0/7 halluc=0 runaway=0 first_fail_turn=1  {'empty': 7}
+# wrote probe_out/mistral-small-4-119b-a6.jsonl
+
+ALL DONE

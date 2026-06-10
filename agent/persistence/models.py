@@ -1,4 +1,9 @@
-"""Pydantic models for persistence — mission state, tasks, events, artifacts.
+"""Pydantic models for persistence — mission state, goals, events, artifacts.
+
+Tier Records Architecture (v5):
+  - DirectiveReport: structured report from a flow_directive execution
+  - GoalRecord: project goal with binary status and accumulated reports
+  - MissionState: top-level state, goals are the plan
 
 Every persisted JSON file includes schema_version for future migrations.
 """
@@ -30,39 +35,67 @@ class MissionConfig(BaseModel):
     effects_profile: Literal["local", "git_managed", "dry_run"] = "local"
     escalation_budget_usd: float | None = None
     escalation_tokens_used: int = 0
-    llmvp_endpoint: str = "http://localhost:8000/graphql"
+    llmvp_endpoint: str = "http://localhost:8008/graphql"
 
 
-# ── Task & Attempt Records ────────────────────────────────────────────
+# ── Directive Reports ─────────────────────────────────────────────────
 
 
-class AttemptRecord(BaseModel):
-    """Record of a single attempt to execute a task's flow."""
+class DirectiveReport(BaseModel):
+    """Structured report from a flow_directive execution.
 
-    timestamp: str = Field(default_factory=_now_iso)
-    flow: str = ""
-    status: str = ""
-    summary: str = ""
-    error: str | None = None
+    Produced by flow_directive flows (file_ops, diagnose_issue, interact,
+    project_ops) before tail-calling back to mission_control. Attached to
+    the GoalRecord that the dispatch was advancing.
 
+    Inference-based flows (file_ops, diagnose_issue, interact) produce
+    the summary via a summarization action step. Mechanical flows
+    (project_ops) build the report directly from returns data.
 
-class TaskRecord(BaseModel):
-    """A single task within a mission plan."""
+    Lifecycle: reports accumulate on a goal while it is incomplete.
+    Once the goal passes its completion gate, reports are archived in
+    place — the projection stops surfacing them in active director context.
+    """
 
-    id: str = Field(default_factory=_new_id)
-    description: str
-    flow: str = ""
-    inputs: dict[str, Any] = Field(default_factory=dict)
-    status: Literal["pending", "in_progress", "complete", "failed", "blocked"] = (
-        "pending"
+    flow: str  # which flow produced this ("file_ops", "interact", etc.)
+    status: str  # "success" | "failed" | "partial"
+    summary: str  # what happened, in natural language
+    headline: str = (
+        ""  # one-line ~10-15 word summary for before/after diffing across retry cycles
     )
-    depends_on: list[str] = Field(default_factory=list)
-    priority: int = 0
-    frustration: int = 0
-    attempts: list[AttemptRecord] = Field(default_factory=list)
-    summary: str | None = None
-    escalation_bundle: dict[str, Any] | None = None
-    goal_id: str = ""  # Links task to its parent GoalRecord
+    files_affected: list[str] = Field(default_factory=list)
+    checks_passed: list[str] = Field(default_factory=list)
+    checks_failed: list[str] = Field(default_factory=list)
+    terminal_output: str = ""
+    recommended_flow: str = ""  # "file_ops" or "project_ops", set by diagnose_issue
+    # Phase A (patch redesign) — structured operation spec from the flat
+    # diagnosis schema. The dispatcher reads target_file/target_symbol
+    # directly rather than parsing the prose summary. Empty defaults keep
+    # non-diagnose reports clean.
+    target_file: str = ""
+    target_symbol: str = ""
+    # Multi-symbol patching (505 round). When a diagnosis involves
+    # changing a contract that crosses symbol boundaries (rename an
+    # attribute, change a method signature, restructure a dataclass),
+    # the diagnosis can now emit a list of co-dependent symbols that
+    # must change alongside ``target_symbol`` to
+    # keep the contract consistent. file_ops threads these into
+    # patch's rewrite_queue so all related symbols are rewritten in
+    # one atomic batch, with each rewrite seeing the prior rewrites'
+    # final bodies as context. Empty list means the change is
+    # genuinely local to ``target_symbol`` — the default for all
+    # reports that don't come from diagnose or don't surface related
+    # symbols.
+    related_symbols: list[str] = Field(default_factory=list)
+    change_spec: str = ""
+    # "fix" | "enhancement" | "new_file" | "import_fix" (diagnose only)
+    diagnosis_kind: str = ""
+    # Structured import-fix declaration: the exact literal statement to
+    # insert when diagnosis_kind == "import_fix" (e.g. "from commands
+    # import InventoryCommand"). file_ops routes on this — no heuristic
+    # extraction from prose. Empty for all other kinds.
+    import_statement: str = ""
+    timestamp: str = Field(default_factory=_now_iso)
 
 
 # ── Goals ─────────────────────────────────────────────────────────────
@@ -71,27 +104,73 @@ class TaskRecord(BaseModel):
 class GoalRecord(BaseModel):
     """A project goal — functional capability or structural deliverable.
 
-    Goals sit between the mission objective (too broad for tactical
-    decisions) and individual tasks (too narrow for strategic reasoning).
-    The director reasons at the goal level: which capability to advance,
-    whether an approach is working, when to redesign vs retry.
+    Goals ARE the plan. The director reasons at the goal level: which
+    capability to advance, whether an approach is working, when to
+    redesign vs retry.
 
     Derived by design_and_plan in two passes:
       1. Deterministic structural goals from architecture modules
       2. Inference-derived functional goals from objective + architecture
 
-    Goal-level frustration is derived, not stored: if >50% of a goal's
-    associated tasks have frustration >= 3, the goal is "blocked."
+    Structural goals have associated_files linked to architecture ModuleSpecs.
+    Their completion gate checks files exist, exports match, imports match.
+
+    Functional goals describe user-facing capabilities with no direct file
+    association. They are verified by behavioral testing (interact flow)
+    and director judgment.
+
+    Reports accumulate as flow_directive dispatches complete work against
+    this goal. The director sees per-goal progress narratives.
     """
 
     id: str = Field(default_factory=_new_id)
     description: str
-    type: Literal["structural", "functional"] = "structural"
-    status: Literal["pending", "in_progress", "complete", "blocked", "revised"] = (
-        "pending"
-    )
+    # "quality" goals are discovered by the quality gate (origin="quality_gate")
+    # for issues with no clean interact re-test — they complete on a successful
+    # patch (action_quality_sweep_next). functional/structural goals keep their
+    # existing verification (interact / file+export gate).
+    type: Literal["structural", "functional", "quality"] = "structural"
+    status: Literal["incomplete", "complete"] = "incomplete"
     associated_files: list[str] = Field(default_factory=list)
-    associated_task_ids: list[str] = Field(default_factory=list)
+    reports: list[DirectiveReport] = Field(default_factory=list)
+    failed_attempts: list["FailedAttempt"] = Field(default_factory=list)
+    interaction_mode: Literal["deterministic", "exploratory"] | None = None
+    # Provenance: "design" (planned at build time) vs "quality_gate" (harvested
+    # from a gate finding). finding_signature is the normalized finding text —
+    # dedups goal CREATION (don't recreate an existing finding's goal) and lets
+    # the harvester re-open a completed goal whose finding the gate re-reports
+    # (the fix didn't hold). See action_harvest_quality_findings.
+    origin: str = "design"
+    finding_signature: str = ""
+    # Structural import gate: set once a structural goal's import failure has
+    # been surfaced to the model for a fix-or-defer decision, so it isn't
+    # re-litigated (prevents looping on an expected first-pass cross-module
+    # import). See structural_block_reason in agent/actions/reporting_actions.py.
+    import_reviewed: bool = False
+
+
+class FailedAttempt(BaseModel):
+    """Record of a fix attempt that was rejected or failed.
+
+    Accumulated on a GoalRecord when file_ops bails (editor determines
+    the target file doesn't need changes) or when a fix attempt fails.
+    Cleared when the goal transitions to 'complete'.
+
+    The diagnose_issue flow receives these as context so it can avoid
+    recommending the same approach again.
+    """
+
+    target_file: str
+    target_symbol: str = (
+        ""  # added 2d7 round: the specific symbol the patch targeted, if any — lets diagnose's ## Prior attempts section see "function X has been patched 3 times without effect, try a different function"
+    )
+    flow: str  # "file_ops", "project_ops"
+    reason: str  # bail reason or error summary
+    diagnosis_summary: str  # the diagnosis that led to this attempt
+    pre_headline: str = (
+        ""  # headline from the interact that triggered this attempt's diagnose cycle — captures the test's state *before* the patch, enabling before/after comparison when the fix doesn't hold
+    )
+    timestamp: str = Field(default_factory=_now_iso)
 
 
 # ── Notes ─────────────────────────────────────────────────────────────
@@ -119,7 +198,6 @@ class NoteRecord(BaseModel):
     ] = "general"
     tags: list[str] = Field(default_factory=list)
     source_flow: str = "unknown"
-    source_task: str = "unknown"
     timestamp: str = Field(default_factory=_now_iso)
 
 
@@ -184,6 +262,59 @@ class DataShapeContract(BaseModel):
         )
 
 
+class StateShapeContract(BaseModel):
+    """A canonical-representation contract for runtime/persisted state.
+
+    Data shapes cover designed INPUT files (world.yaml → loader); state
+    shapes cover the EMERGENT contracts that otherwise only exist
+    implicitly across symbols: the in-memory state model (e.g. "does
+    Room.items hold Item objects or item_id strings?") and the schema of
+    state the program persists (save files). Without a written-down
+    canonical answer, per-file authors guess independently and diagnoses
+    side with whichever consumer crashed most recently — the save/load
+    oscillation class (qwen3.5 run: Room.items flipped objects↔ids in
+    opposite fixes).
+    """
+
+    # What is being contracted, e.g. "GameState.inventory" or
+    # "save file JSON" — the name authors and diagnosers will recognize.
+    name: str = ""
+    # Where the canonical definition lives (e.g. "models.py"), or the
+    # file that writes it for persisted state (e.g. "saver.py").
+    owner: str = ""
+    # Files that must agree with this representation.
+    consumed_by: str = ""
+    # Compact canonical shape, e.g. "list of item_id strings (never
+    # Item objects)" or "{current_room_id: str, inventory: [item_id]}".
+    structure: str = ""
+
+    @field_validator("name", "owner", "consumed_by", "structure", mode="before")
+    @classmethod
+    def _coerce_to_str(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v) if v else ""
+        if isinstance(v, dict):
+            import json as _json
+
+            try:
+                return _json.dumps(v, default=str)
+            except Exception:
+                return str(v)
+        return str(v)
+
+    @classmethod
+    def from_llm_dict(cls, d: dict) -> "StateShapeContract":
+        """Construct from raw LLM output, tolerating field-name drift."""
+        return cls(
+            name=d.get("name") or d.get("state") or "",
+            owner=d.get("owner") or d.get("defined_by") or d.get("file") or "",
+            consumed_by=d.get("consumed_by") or d.get("consumers") or "",
+            structure=d.get("structure") or d.get("shape") or "",
+        )
+
+
 class ModuleSpec(BaseModel):
     """Specification for a single module in the project architecture."""
 
@@ -209,7 +340,36 @@ class ArchitectureState(BaseModel):
     creation_order: list[str] = Field(default_factory=list)
     interfaces: list[InterfaceContract] = Field(default_factory=list)
     data_shapes: list[DataShapeContract] = Field(default_factory=list)
+    # Canonical runtime/persisted state contracts — see StateShapeContract.
+    state_shapes: list[StateShapeContract] = Field(default_factory=list)
+    # Files the program CREATES at runtime (saves, caches, logs) — names
+    # or fnmatch globs, relative to the working directory. Deterministically
+    # deleted after each behavioral test session (interact / quality-gate UX)
+    # so one test's side effects can't contaminate the next (the gemma
+    # state.json poison class). Never list input data files here.
+    transient_files: list[str] = Field(default_factory=list)
     notes: str = ""
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def _coerce_notes(cls, v):
+        """Tolerate models that emit ``notes`` as structured data.
+
+        Some models (e.g. Mistral) return ``notes`` as a dict
+        (``{"design_rationale": "..."}``) or a list instead of a plain string.
+        Strict validation used to crash the whole mission at cycle 0 in
+        design_and_plan. Coerce any non-string shape into a readable string so
+        planning proceeds regardless of how the model framed its notes.
+        """
+        if v is None:
+            return ""
+        if isinstance(v, str):
+            return v
+        if isinstance(v, dict):
+            return "; ".join(f"{k}: {val}" for k, val in v.items())
+        if isinstance(v, (list, tuple)):
+            return "; ".join(str(item) for item in v)
+        return str(v)
 
     def canonical_files(self) -> list[str]:
         """Return the ordered list of canonical file paths."""
@@ -226,11 +386,12 @@ class ArchitectureState(BaseModel):
 
 
 class DispatchRecord(BaseModel):
-    """Record of a dispatch decision — used for deduplication."""
+    """Record of a completed dispatch — appended by attach_directive_report
+    when a flow's DirectiveReport lands; director_overview renders the last 5."""
 
     cycle: int = 0
     flow: str = ""
-    task_id: str = ""
+    goal_id: str = ""
     target_file_path: str = ""
     result_status: str = ""
     timestamp: str = Field(default_factory=_now_iso)
@@ -240,23 +401,31 @@ class DispatchRecord(BaseModel):
 
 
 class MissionState(BaseModel):
-    """Top-level mission state — serialized to .agent/mission.json."""
+    """Top-level mission state — serialized to .agent/mission.json.
+
+    Goals are the plan. The director dispatches flows against goals,
+    not pre-planned task items. Progress is tracked via DirectiveReports
+    attached to GoalRecords.
+    """
 
     id: str = Field(default_factory=_new_id)
     status: Literal["active", "paused", "completed", "aborted"] = "active"
     objective: str
     principles: list[str] = Field(default_factory=list)
     goals: list[GoalRecord] = Field(default_factory=list)
-    plan: list[TaskRecord] = Field(default_factory=list)
     notes: list[NoteRecord] = Field(default_factory=list)
     architecture: ArchitectureState | None = None
     dispatch_history: list[DispatchRecord] = Field(default_factory=list)
+    environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
+    # How many times this mission has been reopened after reaching a terminal
+    # state (completed/aborted) via `mission reopen`. 0 = original run. Stamped
+    # onto goals added in a later generation so reports can distinguish scope
+    # added after the first completion. See cmd_mission_reopen.
+    reopen_count: int = 0
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)
     config: MissionConfig
-    quality_gate_attempts: int = 0
-    quality_gate_blocked: bool = False
-    schema_version: int = 3
+    schema_version: int = 5
 
 
 # ── Events ────────────────────────────────────────────────────────────
@@ -273,6 +442,7 @@ class Event(BaseModel):
         "abort",
         "pause",
         "resume",
+        "reopen",
         "mission_complete",
     ] = "user_message"
     timestamp: str = Field(default_factory=_now_iso)
@@ -286,10 +456,10 @@ class FlowArtifact(BaseModel):
     """Artifact from a completed flow execution — saved to .agent/history/."""
 
     flow_name: str
-    task_id: str
+    goal_id: str = ""
     status: str
     result: dict[str, Any] = Field(default_factory=dict)
     steps_executed: list[str] = Field(default_factory=list)
     observations: list[str] = Field(default_factory=list)
     timestamp: str = Field(default_factory=_now_iso)
-    schema_version: int = 1
+    schema_version: int = 2

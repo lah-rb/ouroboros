@@ -1,0 +1,41 @@
+# Prompt template: quality_gate/evaluate_ux_session
+#
+# Evaluates the UX verification session for the quality gate.
+#
+# This prompt runs inside the SAME memoryful inference session that
+# drove the terminal interaction. The model already has full context
+# from every turn in its KV cache.
+#
+# The assessment is fed as one input to the quality gate's summarize
+# step, alongside deterministic check results and cross-file analysis.
+
+id: quality_gate/evaluate_ux_session
+description: "Assess UX session for quality gate — in-session evaluation"
+
+sections:
+
+  - id: transition
+    content: |
+      ---TERMINAL CLOSED---
+
+      The UX verification session is now complete. No more commands will be sent.
+
+  - id: goal
+    when: input.mission_objective
+    content: |
+      The project's mission objective is:
+        {input.mission_objective}
+
+  - id: instructions
+    content: |
+      Based on everything you observed during this session, provide a brief
+      assessment of the project's functional quality. Cover:
+
+      1. Did the program start and respond to input?
+      2. Did core features work as expected?
+      3. Were there any errors, crashes, or unexpected behavior?
+      4. Any usability issues (confusing output, missing feedback)?
+
+      Write 3-5 sentences. Be specific — mention actual commands you tried
+      and what happened. This assessment will be combined with other quality
+      checks (lint, imports, cross-file consistency) to make a final verdict.

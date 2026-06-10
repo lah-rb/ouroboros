@@ -130,10 +130,12 @@ class _BackendTokenizerWrapper:
     def __init__(self, backend):
         self.backend = backend
 
-    def tokenize(self, text: bytes, add_bos: bool = False) -> List[int]:
+    def tokenize(
+        self, text: bytes, add_bos: bool = False, special: bool = False
+    ) -> List[int]:
         """Tokenize text (bytes to match llama.cpp interface)."""
         text_str = text.decode("utf-8") if isinstance(text, bytes) else text
-        return self.backend.tokenize(text_str)
+        return self.backend.tokenize(text_str, special=special)
 
     def detokenize(self, ids: List[int]) -> bytes:
         """Detokenize IDs (returns bytes to match llama.cpp interface)."""
@@ -154,13 +156,24 @@ def create_tokenizer() -> Any:
     return get_cached_tokenizer()
 
 
-def tokenize_text(tokenizer: Any, text: str) -> List[int]:
+def tokenize_text(
+    tokenizer: Any, text: str, add_bos: bool = False, special: bool = False
+) -> List[int]:
     """
     Tokenize text using the provided tokenizer.
 
     Args:
         tokenizer: Tokenizer instance (llama_cpp.Llama or transformers tokenizer)
         text: Text to tokenize
+        add_bos: If True, prepend the BOS token. Should be True when
+                 tokenizing the static prefix (system prompt) since
+                 the model expects BOS as the very first token.
+        special: If True, parse special-token strings (e.g. ``<|im_end|>``)
+                 as their canonical single special tokens. Use True ONLY for
+                 trusted structural framing produced by the renderer; use
+                 False for user/model content so embedded special-token
+                 strings stay literal text and cannot forge a turn boundary.
+                 Prefer ``tokenize_segments`` which sets this per segment.
 
     Returns:
         List[int]: Token IDs
@@ -168,12 +181,55 @@ def tokenize_text(tokenizer: Any, text: str) -> List[int]:
     # Handle different tokenizer interfaces
     if hasattr(tokenizer, "tokenize"):
         # llama.cpp interface
-        return tokenizer.tokenize(text.encode("utf-8"), add_bos=False)
+        try:
+            return tokenizer.tokenize(
+                text.encode("utf-8"), add_bos=add_bos, special=special
+            )
+        except TypeError:
+            # Backend wrapper / older signature without ``special``.
+            return tokenizer.tokenize(text.encode("utf-8"), add_bos=add_bos)
     elif hasattr(tokenizer, "encode"):
         # transformers interface
-        return tokenizer.encode(text, add_special_tokens=False)
+        return tokenizer.encode(text, add_special_tokens=add_bos)
     else:
         raise ValueError(f"Unknown tokenizer type: {type(tokenizer)}")
+
+
+def tokenize_segments(
+    tokenizer: Any,
+    segments: List[tuple],
+    add_bos: bool = False,
+) -> List[int]:
+    """Tokenize a list of (text, is_framing) segments.
+
+    Framing segments (is_framing=True) are tokenized with special-token
+    parsing on; content segments (is_framing=False) are tokenized as plain
+    text. This keeps structural tokens canonical (single special tokens, the
+    in-distribution form the model was trained on) while ensuring untrusted
+    content cannot inject control tokens. ``add_bos`` applies to the first
+    non-empty segment only.
+
+    Args:
+        tokenizer: Tokenizer instance.
+        segments: List of (text, is_framing) tuples from the renderer's
+                  ``*_segments`` methods.
+        add_bos: Prepend BOS to the very first emitted token.
+
+    Returns:
+        List[int]: Concatenated token IDs.
+    """
+    ids: List[int] = []
+    first = True
+    for text, is_framing in segments:
+        if not text:
+            continue
+        ids.extend(
+            tokenize_text(
+                tokenizer, text, add_bos=(add_bos and first), special=is_framing
+            )
+        )
+        first = False
+    return ids
 
 
 def detokenize(tokenizer: Any, ids: List[int]) -> str:
@@ -222,6 +278,9 @@ def build_full_prompt(user_prompt: str, tokenizer: Any) -> List[int]:
     from formats.registry import get_renderer
 
     renderer = get_renderer(get_config().model.family)
-    rendered = renderer.render_user(user_prompt) + renderer.render_generation_prompt()
+    segments = (
+        renderer.render_user_segments(user_prompt)
+        + renderer.render_generation_prompt_segments()
+    )
 
-    return tokenize_text(tokenizer, rendered)
+    return tokenize_segments(tokenizer, segments)

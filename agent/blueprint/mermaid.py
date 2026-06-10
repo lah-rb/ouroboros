@@ -11,7 +11,6 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import Any
 
 from agent.blueprint.ir import BlueprintIR, FlowIR, StepIR
 
@@ -65,13 +64,6 @@ def _sanitize(text: str) -> str:
     text = " ".join(text.split())
     for char, replacement in _MERMAID_SPECIAL.items():
         text = text.replace(char, replacement)
-    return text
-
-
-def _truncate(text: str, max_len: int = 40) -> str:
-    """Truncate text with ellipsis."""
-    if len(text) > max_len:
-        return text[: max_len - 3] + "..."
     return text
 
 

@@ -24,7 +24,6 @@ set_env: #FlowDefinition & {
 	returns: {
 		env_detected: {type: "bool", from: "context.env_config", optional: true}
 	}
-	state_reads: []
 
 	input: {
 		required: ["working_directory", "mission_id"]
@@ -46,23 +45,29 @@ set_env: #FlowDefinition & {
 			action:      "inference"
 			description: "Infer validation commands for this project's languages"
 			context: required: ["project_manifest"]
-			prompt_template: {
-				template: "set_env/detect_tooling"
-				context_keys: ["project_file_list"]
-				input_keys: ["target_file_path", "working_directory"]
+			turn: #Turn & {
+				response_shape: "json_document"
+				sections: [
+					{type: "role", template:        "personas/env_detector"},
+					{type: "evidence", template:    "set_env/project_scan"},
+					{type: "problem", ref:          {$ref: "input.target_file_path"}, title: "Target file"},
+					{type: "instruction", template: "set_env/detect_tooling_rules"},
+					{type: "envelope"},
+				]
+				response: {
+					schema_id: "validation_env_config"
+				}
+				transitions: {
+					default:   "persist_env"
+					no_answer: "failed"
+				}
+				config: temperature: "t*0.0"
+				retries: 3
 			}
 			pre_compute: [{
 				formatter: "format_project_file_list", output_key: "project_file_list"
 				params: {source: {$ref: "context.project_manifest"}}
 			}]
-			config: temperature: "t*0.0"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "persist_env"},
-					{condition: "true", transition: "failed"},
-				]
-			}
 			publishes: ["inference_response"]
 		}
 
@@ -80,17 +85,8 @@ set_env: #FlowDefinition & {
 			publishes: ["env_config"]
 		}
 
-		done: #StepDefinition & {
-			action:   "noop"
-			terminal: true
-			status:   "success"
-		}
-
-		failed: #StepDefinition & {
-			action:   "noop"
-			terminal: true
-			status:   "failed"
-		}
+		done: #StepDefinition & _templates.terminal_success
+		failed: #StepDefinition & _templates.terminal_failure
 	}
 
 	entry: "scan"

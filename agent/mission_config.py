@@ -21,9 +21,8 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -48,7 +47,7 @@ class MissionYAMLConfig(BaseModel):
     # Optional mission settings
     working_dir: str = "."
     effects_profile: Literal["local", "git_managed", "dry_run"] = "local"
-    llmvp_endpoint: str = "http://localhost:8000/graphql"
+    llmvp_endpoint: str = "http://localhost:8008/graphql"
     principles: list[str] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
 

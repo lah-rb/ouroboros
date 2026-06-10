@@ -1,64 +1,57 @@
-"""Data models for the project.
-
-This module defines Pydantic v2 data models that can be used throughout the
-application for validation, serialization and type‑checking.
-
-The models are deliberately simple and generic so they can serve as a
-starting point for the rest of the codebase.
-"""
-
-from __future__ import annotations
-
-from typing import List, Optional
-
-from pydantic import BaseModel, EmailStr, Field
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 
-class User(BaseModel):
-    """Representation of an application user."""
+@dataclass
+class Room:
+    """Represents a game location."""
 
-    id: int = Field(..., description="Unique identifier of the user.")
-    username: str = Field(..., min_length=3, max_length=30, description="Login name.")
-    email: EmailStr = Field(..., description="User's e‑mail address.")
-    is_active: bool = Field(default=True, description="Indicates if the user is active.")
-    full_name: Optional[str] = Field(
-        default=None,
-        description="Optional full name of the user.",
-    )
-
-    model_config = {
-        "json_schema_extra": {"example": {"id": 1, "username": "alice", "email": "alice@example.com"}},
-    }
+    id: str
+    name: str
+    description: str
+    exits: Dict[str, str]  # direction -> room_id
+    items: List[str]  # list of item IDs
+    npcs: List[str]  # list of NPC IDs
 
 
-class Item(BaseModel):
-    """A generic item owned by a user."""
+@dataclass
+class Item:
+    """Represents a game item."""
 
-    id: int = Field(..., description="Unique identifier of the item.")
-    owner_id: int = Field(..., description="Identifier of the owning user.")
-    name: str = Field(..., min_length=1, description="Human‑readable name of the item.")
-    description: Optional[str] = Field(default=None, description="Optional detailed description.")
-    tags: List[str] = Field(default_factory=list, description="List of tags associated with the item.")
-    price_cents: int = Field(..., ge=0, description="Price in cents; non‑negative integer.")
-
-    model_config = {
-        "json_schema_extra": {"example": {"id": 10, "owner_id": 1, "name": "Widget", "price_cents": 1999}},
-    }
+    id: str
+    name: str
+    description: str
+    can_take: bool
+    can_use: bool
 
 
-class Settings(BaseModel):
-    """Application configuration settings."""
+@dataclass
+class NPC:
+    """Represents a non-player character."""
 
-    debug: bool = Field(default=False, description="Enable debug mode.")
-    allowed_hosts: List[str] = Field(
-        default_factory=lambda: ["*"],
-        description="List of hostnames/IPs the app may serve.",
-    )
-    secret_key: str = Field(..., min_length=32, description="Secret key for cryptographic signing.")
-
-    model_config = {
-        "json_schema_extra": {"example": {"debug": True, "allowed_hosts": ["localhost"], "secret_key": "a"*32}},
-    }
+    id: str
+    name: str
+    description: str
+    dialogue: Dict[str, List[str]]  # topic -> [responses]
 
 
-__all__ = ["User", "Item", "Settings"]
+@dataclass
+class GameState:
+    """Represents the current state of the game."""
+
+    current_room: str
+    inventory: List[str] = field(default_factory=list)
+    completed_actions: List[str] = field(default_factory=list)
+    flags: Dict[str, bool] = field(default_factory=dict)
+    room_descriptions_seen: Dict[str, bool] = field(default_factory=dict)
+
+
+@dataclass
+class Command:
+    """Represents a parsed player command."""
+
+    verb: str
+    noun: Optional[str] = None
+    raw: str = ""
+    valid: bool = True
+    error_message: Optional[str] = None

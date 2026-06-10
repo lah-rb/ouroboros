@@ -11,10 +11,7 @@ import tempfile
 from core.config import (
     ModelConfig,
     PromptConfig,
-    GenerationConfig,
     KnowledgeConfig,
-    AppConfig,
-    ResourcesConfig,
     Config,
     _read_pointer_file,
     _default_config_path,
@@ -22,7 +19,6 @@ from core.config import (
     get_config,
     set_config,
 )
-
 
 # ── Config Model Tests ─────────────────────────────────────────────
 
@@ -184,7 +180,8 @@ def test_format_renderer_harmony():
     output = r.render_system(persona="Test persona", date="2026-01-01")
     assert "<|start|>system<|message|>" in output
     assert "<|start|>developer<|message|>" in output
-    assert "# Valid channels: analysis, commentary, final" in output
+    # Channel directive comes from harmony.yaml's system_block.channel_directive.
+    assert "# Valid channels: analysis, final" in output
     assert "Reasoning: medium" in output
     assert "Test persona" in output
 
@@ -195,8 +192,11 @@ def test_format_renderer_harmony():
     gen = r.render_generation_prompt()
     assert gen == "<|start|>assistant"
 
-    # Stop tokens
-    assert r.stop_tokens() == ["<|return|>"]
+    # Stop tokens — completion mode stops on gen_stop plus fake user turn
+    assert r.stop_tokens() == ["<|return|>", "<|start|>user"]
+    # Session mode currently matches completion mode (the assistant
+    # opener was removed after e75 — see stop_tokens() design note)
+    assert r.stop_tokens(mode="session") == ["<|return|>", "<|start|>user"]
 
     # Delimiter pattern
     assert r.delimiter_pattern() == "<|channel|>final*<|message|>"
@@ -230,14 +230,84 @@ def test_format_renderer_chatml():
     assert "<|im_start|>assistant" in gen
     assert "<think>" in gen
 
-    # Stop tokens
-    assert r.stop_tokens() == ["<|im_end|>"]
+    # Stop tokens — completion mode stops on im_end plus fake user turn
+    assert r.stop_tokens() == ["<|im_end|>", "<|im_start|>user"]
+    # Session mode currently matches completion mode (the assistant
+    # opener was removed after e75 — see stop_tokens() design note)
+    assert r.stop_tokens(mode="session") == ["<|im_end|>", "<|im_start|>user"]
 
     # Delimiter
     assert r.delimiter_pattern() == "</think>"
 
     # Developer override is empty for ChatML
     assert r.render_developer("anything") == ""
+
+
+# ── thinking_mode (reasoning effort) ───────────────────────────────
+
+
+def _model_cfg(**overrides):
+    base = {
+        "name": "t",
+        "family": "harmony",
+        "path": "/tmp/m.gguf",
+        "n_ctx": 4096,
+        "n_gpu_layers": -1,
+        "seed": -1,
+        "verbose": False,
+    }
+    base.update(overrides)
+    return ModelConfig(**base)
+
+
+def test_thinking_mode_validation():
+    """thinking_mode accepts none/low/medium/high (+None), normalizes, rejects junk."""
+    assert _model_cfg().thinking_mode is None  # default — preserves old behavior
+    for level in ("none", "low", "medium", "high"):
+        assert _model_cfg(thinking_mode=level).thinking_mode == level
+    # case-insensitive + whitespace normalization
+    assert _model_cfg(thinking_mode=" High ").thinking_mode == "high"
+    with pytest.raises(Exception):
+        _model_cfg(thinking_mode="ultra")
+
+
+def test_harmony_reasoning_driven_by_config():
+    """Harmony's inline {reasoning} slot reflects the passed level; default=medium."""
+    from formats.registry import get_renderer, clear_cache
+
+    clear_cache()
+    r = get_renderer("harmony")
+    assert "Reasoning: high" in r.render_system(reasoning="high")
+    # None falls back to the family reasoning_default ("medium")
+    assert "Reasoning: medium" in r.render_system(reasoning=None)
+
+
+def test_chatml_reasoning_prefix_gated():
+    """Step/chatml render a top-of-system 'Reasoning:' prefix only when a level
+    is set; generic Qwen (reasoning=None) stays byte-identical to before."""
+    from formats.registry import get_renderer, clear_cache
+
+    clear_cache()
+    r = get_renderer("chatml")
+
+    with_level = r.render_system(persona="P", reasoning="medium")
+    assert "Reasoning: medium" in with_level
+    # prefix sits at the very top of the system content (before identity)
+    assert with_level.index("Reasoning: medium") < with_level.index("helpful assistant")
+
+    # Qwen path: no thinking_mode → no Reasoning line at all
+    without = r.render_system(persona="P", reasoning=None)
+    assert "Reasoning:" not in without
+
+
+def test_tekken_reasoning_mode_inert():
+    """Binary families (Mistral/tekken) never render a Reasoning line — effort
+    is the `thinking` bool, not a level."""
+    from formats.registry import get_renderer, clear_cache
+
+    clear_cache()
+    r = get_renderer("tekken")
+    assert "Reasoning:" not in r.render_system(persona="P", reasoning="high")
 
 
 def test_format_renderer_assistant_history():

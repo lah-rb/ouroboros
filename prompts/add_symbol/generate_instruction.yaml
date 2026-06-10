@@ -1,0 +1,29 @@
+id: add_symbol/generate_instruction
+content: |
+  Produce the complete source code for the new symbol. Your output
+  must be ONLY the new symbol — no surrounding class, no imports,
+  no other code.
+
+  - If the target is a method (qualified name like `Example.do_thing`),
+    output just the method definition. The splicer will place it
+    inside the parent class at the right indentation.
+  - If the target is a top-level function (bare name like `load_config`),
+    output the function definition at module-level indentation.
+  - Start with any decorators (`@cached`, `@staticmethod`, etc.) on
+    their own lines above the `def` statement.
+  - Then the `def` statement with full signature (parameters, type
+    hints, return type).
+  - Then the complete body.
+
+  Format reference (do NOT reproduce this literally — produce the
+  real symbol for this task):
+
+      def example_method(self, arg: ExampleType) -> ExampleReturn:
+          """One-line docstring describing what this does."""
+          # real implementation here
+          return result
+
+  The symbol should implement exactly what the change_spec describes.
+  Do not add speculative features. Use APIs that exist in the file
+  outline and dependency signatures above — do not invent new methods
+  on objects you haven't seen.

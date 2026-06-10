@@ -1,0 +1,11 @@
+id: research/summarize_instruction
+content: |
+  Synthesize the search results into 2-3 paragraphs of practical
+  guidance. Focus on:
+
+  - Specific techniques or patterns that apply to this project
+  - Common pitfalls to avoid
+  - Concrete implementation recommendations
+
+  Do not include source URLs, article titles, or meta-commentary.
+  Write as if briefing a developer who needs to act on this now.

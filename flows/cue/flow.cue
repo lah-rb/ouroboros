@@ -3,7 +3,8 @@
 // Context Contract Architecture. Every flow declares:
 //   - context_tier: what level of context it operates at
 //   - returns: structured data it produces at termination
-//   - state_reads: what it loads from persistence (auditability)
+//   - projections: typed read models materialized from persistence
+//   - completion_gate: how to verify output before commitment
 //
 // Zero-Jinja flow definitions. All structural data plumbing uses typed
 // references resolved by the Python runtime. Prompt templates live in
@@ -35,13 +36,12 @@ import "list"
 // Tier hierarchy (each narrows context for the scope below it):
 //
 //   mission_objective  — Full mission picture. design_and_plan, quality_gate.
-//   project_goal       — Which capability to advance. mission_control, revise_plan,
-//                         retrospective.
+//   project_goal       — Which capability to advance. mission_control.
 //   flow_directive     — What to do right now. file_ops, interact, diagnose_issue,
 //                         project_ops.
 //   session_task       — Mechanical execution. run_commands, run_session,
-//                         ast_edit_session, create_file, modify_file, set_env,
-//                         capture_learnings, research, prepare_context.
+//                         create, rewrite, patch, set_env, research,
+//                         prepare_context.
 
 #ContextTier: "mission_objective" | "project_goal" | "flow_directive" | "session_task"
 
@@ -123,6 +123,16 @@ import "list"
 	options_from?:       string
 	include_step_output: bool | *false
 	default_transition?: string
+
+	// Menu mode:
+	//   "route"  (default) — the chosen option key determines the transition
+	//                        target. Option keys are step names or have explicit
+	//                        'target' fields.
+	//   "select" — the choice is a data value published via publish_selection.
+	//              Transition always goes to default_transition regardless of
+	//              which option was chosen. Use for dynamic menus where option
+	//              keys are filenames, goal IDs, or other non-step data.
+	mode: *"route" | "select"
 
 	// When set, the selected option's key is published to the context
 	// accumulator under this name. Enables a single downstream step to
@@ -223,8 +233,16 @@ import "list"
 	params: {[string]: _} | *{}
 
 	// Prompt template reference (replaces inline prompt blocks)
-	// Required when action == "inference"
+	// Required when action == "inference" and `turn` is not set.
 	prompt_template?: #PromptTemplate
+
+	// Turn declaration — the new inference-step format introduced by
+	// Step C migration. When present, replaces prompt_template + config
+	// + resolver for inference steps. See turn.cue for #Turn.
+	//
+	// Inference steps must have exactly one of `prompt_template` or
+	// `turn`. Non-inference steps must have neither.
+	turn?: #Turn
 
 	// Pre-compute steps — run registered Python formatters before
 	// template rendering. Each formatter reads from input/context,
@@ -269,9 +287,13 @@ import "list"
 		status: string
 	}
 
-	// Inference steps must reference a prompt template
+	// Inference steps need either a legacy prompt_template OR a turn.
+	// Exactly one of these carries the render spec; the other is absent.
+	// The turn-based form arrives via Step C migration (see turn.cue).
 	if action == "inference" {
-		prompt_template: #PromptTemplate
+		if turn == _|_ {
+			prompt_template: #PromptTemplate
+		}
 	}
 
 	// Flow steps must name their target flow
@@ -279,9 +301,11 @@ import "list"
 		flow: string
 	}
 
-	// Non-terminal steps need a resolver unless they have a tail_call
-	// (noop + tail_call is the standard routing pattern)
-	if terminal == false && tail_call == _|_ {
+	// Non-terminal steps need a resolver unless:
+	//   - they tail-call (noop + tail_call is the standard routing pattern)
+	//   - they declare a turn (turn.transitions carries routing directly;
+	//     resolver would be redundant for turn-based inference steps)
+	if terminal == false && tail_call == _|_ && turn == _|_ {
 		resolver: #Resolver
 	}
 }
@@ -321,6 +345,30 @@ import "list"
 	fallback: "reorganize" | "summarize" | "abort" | *"reorganize"
 }
 
+// ── State Projections ──────────────────────────────────────────
+//
+// A projection is a typed, purpose-built view of persistence state.
+// Flows declare which projections they need. The runtime materializes
+// them from MissionState before flow execution begins.
+//
+// Unlike state_reads (removed — was documentation-only), projections are:
+//   1. Typed — CUE validates the shape at compile time
+//   2. Materialized — Python computes them from source state
+//   3. Contracted — consuming flow and materializer agree on shape
+//   4. Auditable — runtime logs what was projected and when
+
+#ProjectionSchema: {
+	// Python materializer function name (registered in projections.py)
+	materializer: string & =~"^[a-z][a-z0-9_]*$"
+
+	// Parameters the materializer needs — resolved from dispatch context.
+	// Uses same $ref resolution as input_map.
+	params: {[string]: _} | *{}
+
+	// Whether this projection must succeed for the flow to execute.
+	required: bool | *true
+}
+
 #FlowDefinition: {
 	flow:        string & =~"^[a-z][a-z0-9_]*$"
 	version:     int & >= 1
@@ -330,14 +378,17 @@ import "list"
 	//
 	// context_tier: What level of downward context this flow operates at.
 	// returns: Structured data produced at termination.
-	// state_reads: Persistence paths loaded at runtime (auditability).
+	// projections: Typed read models materialized from MissionState.
 	//
 	// Together these form the flow's contract: what it receives, what
-	// it loads, and what it hands back. The runtime validates all three.
+	// it loads, and what it hands back.
 
 	context_tier: #ContextTier
 	returns:      #FlowReturns
-	state_reads:  [...string] | *[]  // e.g. ["mission.objective", "mission.architecture"]
+
+	// Projections this flow consumes from persistence state.
+	// Each key becomes a flow input, materialized by the runtime.
+	projections: {[string]: #ProjectionSchema} | *{}
 
 	input:    #FlowInput    | *{required: [], optional: []}
 	defaults: #FlowDefaults | *{config: {}}

@@ -1,0 +1,4 @@
+id: create_file/task
+content: |
+  ## Task
+  {input.flow_directive}

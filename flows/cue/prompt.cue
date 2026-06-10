@@ -155,14 +155,7 @@ package ouroboros
 //   format_plan_listing:
 //     Input:  context.mission.plan (list of task dicts)
 //     Output: Multi-line string, one line per task with status and metadata
-//     Used by: mission_control/reason, revise_plan/evaluate_revision
-//
-//   format_file_excerpts:
-//     Input:  context.context_bundle.files (list of file dicts)
-//     Params: exclude (file path to skip), max_chars (per-file truncation)
-//     Output: Multi-line string with file path headers and truncated content
-//     Used by: create_file/generate_content, modify_file/full_rewrite,
-//              diagnose_issue/reproduce_mentally
+//     Used by: mission_control/reason
 //
 //   format_architecture_listing:
 //     Input:  context.architecture (architecture state dict)
@@ -177,31 +170,14 @@ package ouroboros
 //   format_session_history:
 //     Input:  context.session_history (list of command/output dicts)
 //     Output: Multi-line string with command, output, and exit codes
-//     Used by: run_in_terminal/plan_next_command
+//     Used by: run_session/plan_next_command
 //
-//   format_dispatch_history:
-//     Input:  context.mission.dispatch_history (list of dispatch records)
-//     Params: limit (how many recent entries, default 5)
-//     Output: Multi-line string with flow, target, status per dispatch
-//     Used by: mission_control/reason
-//
-//   format_notes:
-//     Input:  context.mission.notes (list of note dicts)
-//     Params: limit (how many recent notes, default 5)
-//     Output: Multi-line string with category and truncated content
-//     Used by: mission_control/reason
-//
-//   format_frustration_landscape:
-//     Input:  context.frustration (dict of task_id → level)
-//     Output: Multi-line string listing tasks with non-zero frustration,
-//             or "All tasks at zero frustration."
-//     Used by: mission_control/reason
+// See agent/formatters.py for the full registry.
 //
 // Adding a new formatter:
-//   1. Define the function in agent/prompt_formatters.py
-//   2. Register it in the formatter registry
-//   3. Document it in this file
-//   4. Reference the output key in prompt template sections
+//   1. Define the function in agent/formatters.py
+//   2. Register it in PRE_COMPUTE_FORMATTERS
+//   3. Reference the output key in prompt template sections
 
 // ── Formatter Declaration ───────────────────────────────────────────
 //
@@ -210,23 +186,19 @@ package ouroboros
 //
 // Example in CUE flow definition:
 //
-//   generate_content: #StepDefinition & {
+//   reason_step: #StepDefinition & {
 //       action: "inference"
-//       context: required: ["architecture"]
-//                optional: ["context_bundle", "repo_map_formatted"]
+//       context: required: ["mission"]
 //       prompt_template: {
-//           template: "create_file/generate_content"
-//           context_keys: ["repo_map_formatted", "file_excerpts"]
-//           input_keys: ["task_description", "target_file_path", "reason",
-//                        "mission_objective", "relevant_notes"]
+//           template: "mission_control/reason"
+//           context_keys: ["plan_listing"]
+//           input_keys: ["mission_objective"]
 //       }
 //       pre_compute: [{
-//           formatter: "format_file_excerpts"
-//           output_key: "file_excerpts"
+//           formatter: "format_plan_listing"
+//           output_key: "plan_listing"
 //           params: {
-//               source: {$ref: "context.context_bundle.files"}
-//               exclude: {$ref: "input.target_file_path"}
-//               max_chars: 1500
+//               plan: {$ref: "context.mission.plan"}
 //           }
 //       }]
 //   }

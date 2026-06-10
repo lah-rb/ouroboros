@@ -1,0 +1,16 @@
+id: rewrite/generate_rewrite_instruction
+content: |
+  Rewrite the current file to satisfy the task and resolve any
+  validation errors listed above.
+
+  Preservation rules — these govern what stays intact:
+
+  - Preserve all functionality not related to the modification
+  - Do not remove functions, classes, or methods unrelated to the fix
+  - Do not rename symbols other code imports from this file
+  - The output file should be comparable in size to the current file;
+    a large size reduction suggests accidental deletions
+
+  Scope discipline: make the specific change requested. Don't refactor
+  unrelated code, reorganize imports, or "improve" things the task
+  didn't ask about. Keep the diff tight.

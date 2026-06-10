@@ -1,0 +1,5 @@
+id: interact/test_objective_bounded
+content: |
+  ---TEST OBJECTIVE---
+  {input.flow_directive}
+  ---END TEST OBJECTIVE---

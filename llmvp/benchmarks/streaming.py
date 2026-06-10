@@ -12,7 +12,9 @@ Usage:
 """
 
 import asyncio
+import contextlib
 import json
+import sys
 import time
 import statistics
 import random
@@ -706,6 +708,249 @@ class GraphQLBenchmarkRunner(BaseBenchmarkRunner):
         self._calculate_metrics(request)
 
 
+class SessionStressRunner:
+    """Session-aware live stress test for JIT pool scaling.
+
+    Drives the exact collision the original JIT validation never
+    exercised: memoryful sessions (pinned instances, multi-turn KV
+    state) live WHILE stateless completions force a batch scale-up,
+    then an idle window long enough for the scaler to reap, then a
+    second burst to re-scale — the full thrash cycle.
+
+    Phases:
+      1. burst1   — K session workers (start → M turns → end) mixed
+                    with stateless completions, total concurrency >
+                    pool size → forces scale-up under live sessions.
+      2. verify   — health poll must show activeInstances grew.
+      3. idle     — sleep past instance_idle_ttl; health poll must
+                    show the pool shrank (reap observed).
+      4. burst2   — repeat phase 1 against the reaped pool.
+
+    Hard assertions: zero GraphQL/transport errors, scale-up AND reap
+    both observed. ``run()`` returns False on any failure so main()
+    can exit nonzero — this is a gate, not just a report.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        sessions: int,
+        turns: int,
+        completions: int,
+        concurrency: int,
+        max_tokens: int,
+        temperature: float,
+        idle_wait: float,
+        session_ttl: int,
+    ):
+        self.graphql_url = base_url.rstrip("/") + "/graphql"
+        self.sessions = sessions
+        self.turns = turns
+        self.completions = completions
+        self.concurrency = concurrency
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.idle_wait = idle_wait
+        self.session_ttl = session_ttl
+        self.client = httpx.AsyncClient(timeout=600.0)
+        self.errors: List[str] = []
+        # latencies[phase][kind] -> list of seconds
+        self.latencies: Dict[str, Dict[str, List[float]]] = {}
+        self.health_timeline: List[Dict[str, Any]] = []
+        self.peak_active = 0
+
+    async def _gql(self, query: str, variables: Optional[dict] = None) -> dict:
+        resp = await self.client.post(
+            self.graphql_url,
+            json={"query": query, "variables": variables or {}},
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        if payload.get("errors"):
+            raise RuntimeError(f"GraphQL errors: {payload['errors']}")
+        return payload["data"]
+
+    async def _health(self) -> dict:
+        data = await self._gql(
+            "query { health { status poolSize availableInstances "
+            "activeInstances inFlight jitEnabled } }"
+        )
+        h = data["health"]
+        h["t"] = time.monotonic()
+        self.health_timeline.append(h)
+        self.peak_active = max(self.peak_active, h["activeInstances"])
+        return h
+
+    def _record(self, phase: str, kind: str, seconds: float) -> None:
+        self.latencies.setdefault(phase, {}).setdefault(kind, []).append(seconds)
+
+    async def _session_worker(self, phase: str, idx: int, prompts: List[str]) -> None:
+        try:
+            data = await self._gql(
+                "mutation Start($config: SessionConfig) "
+                "{ startSession(config: $config) { sessionId } }",
+                {"config": {"ttlSeconds": self.session_ttl}},
+            )
+            sid = data["startSession"]["sessionId"]
+            for t in range(self.turns):
+                started = time.perf_counter()
+                await self._gql(
+                    "query SC($request: SessionTurnRequest!) "
+                    "{ sessionCompletion(request: $request) "
+                    "{ text tokensGenerated truncated } }",
+                    {
+                        "request": {
+                            "sessionId": sid,
+                            "prompt": prompts[(idx + t) % len(prompts)],
+                            "maxTokens": self.max_tokens,
+                            "temperature": self.temperature,
+                        }
+                    },
+                )
+                self._record(phase, "session_turn", time.perf_counter() - started)
+            await self._gql(
+                "mutation End($sid: String!) { endSession(sessionId: $sid) }",
+                {"sid": sid},
+            )
+        except Exception as e:  # noqa: BLE001 - recorded as a hard failure
+            self.errors.append(f"{phase} session#{idx}: {e}")
+
+    async def _completion_worker(
+        self, phase: str, idx: int, prompts: List[str], semaphore: asyncio.Semaphore
+    ) -> None:
+        async with semaphore:
+            try:
+                started = time.perf_counter()
+                await self._gql(
+                    "query C($request: CompletionRequest!) "
+                    "{ completion(request: $request) "
+                    "{ text tokensGenerated finished } }",
+                    {
+                        "request": {
+                            "prompt": prompts[idx % len(prompts)],
+                            "maxTokens": self.max_tokens,
+                            "temperature": self.temperature,
+                        }
+                    },
+                )
+                self._record(phase, "completion", time.perf_counter() - started)
+            except Exception as e:  # noqa: BLE001 - recorded as a hard failure
+                self.errors.append(f"{phase} completion#{idx}: {e}")
+
+    async def _health_poller(self, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            with contextlib.suppress(Exception):
+                await self._health()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=2.0)
+
+    async def _burst(self, phase: str, prompts: List[str]) -> None:
+        console.print(
+            f"🌊 {phase}: {self.sessions} session(s) × {self.turns} turn(s) "
+            f"+ {self.completions} completion(s) (concurrency {self.concurrency})",
+            style="bold green",
+        )
+        stop = asyncio.Event()
+        poller = asyncio.create_task(self._health_poller(stop))
+        semaphore = asyncio.Semaphore(self.concurrency)
+        workers = [
+            self._session_worker(phase, i, prompts) for i in range(self.sessions)
+        ] + [
+            self._completion_worker(phase, i, prompts, semaphore)
+            for i in range(self.completions)
+        ]
+        await asyncio.gather(*workers)
+        stop.set()
+        await poller
+
+    @staticmethod
+    def _pct(values: List[float], pct: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        k = min(len(ordered) - 1, int(round((pct / 100.0) * (len(ordered) - 1))))
+        return ordered[k]
+
+    def _report(self) -> None:
+        table = Table(title="Session Stress — latency by phase")
+        for col in ("phase", "kind", "n", "p50 s", "p95 s", "max s"):
+            table.add_column(col)
+        for phase, kinds in self.latencies.items():
+            for kind, values in kinds.items():
+                table.add_row(
+                    phase,
+                    kind,
+                    str(len(values)),
+                    f"{self._pct(values, 50):.2f}",
+                    f"{self._pct(values, 95):.2f}",
+                    f"{max(values):.2f}" if values else "-",
+                )
+        console.print(table)
+        sizes = [h["activeInstances"] for h in self.health_timeline]
+        console.print(
+            f"📊 pool size over time: min={min(sizes)} max={max(sizes)} "
+            f"(samples={len(sizes)})"
+        )
+
+    async def run(self) -> bool:
+        baseline = await self._health()
+        if not baseline["jitEnabled"]:
+            console.print(
+                "❌ Server is not in JIT mode — session stress requires a "
+                "config with jit_concurrency_limit set",
+                style="red",
+            )
+            return False
+        baseline_active = baseline["activeInstances"]
+        prompts = get_random_prompts(max(self.sessions + self.completions, 3))
+
+        await self._burst("burst1", prompts)
+        post_burst = await self._health()
+
+        console.print(f"😴 idle {self.idle_wait:.0f}s (waiting for reap)…")
+        await asyncio.sleep(self.idle_wait)
+        post_idle = await self._health()
+
+        await self._burst("burst2", prompts)
+        final = await self._health()
+
+        self._report()
+
+        ok = True
+        if self.errors:
+            ok = False
+            console.print(f"❌ {len(self.errors)} error(s):", style="red")
+            for err in self.errors[:10]:
+                console.print(f"   {err}", style="red")
+        if self.peak_active <= baseline_active:
+            ok = False
+            console.print(
+                f"❌ scale-up not observed (baseline={baseline_active}, "
+                f"peak={self.peak_active})",
+                style="red",
+            )
+        if post_idle["activeInstances"] >= max(post_burst["activeInstances"], 2):
+            ok = False
+            console.print(
+                f"❌ reap not observed (post-burst={post_burst['activeInstances']}, "
+                f"post-idle={post_idle['activeInstances']})",
+                style="red",
+            )
+        if final["status"] not in ("ok", "scaling"):
+            ok = False
+            console.print(f"❌ final health status: {final['status']}", style="red")
+        if ok:
+            console.print(
+                "✅ Session stress passed — scale-up under live sessions, "
+                "reap on idle, re-scale, zero errors",
+                style="bold green",
+            )
+        return ok
+
+    async def cleanup(self) -> None:
+        await self.client.aclose()
+
+
 def load_prompts_from_file(prompts_file: str = "benchmarks/prompts.yaml") -> List[str]:
     """Load prompts from YAML file."""
     try:
@@ -952,7 +1197,67 @@ def main():
         "--live", action="store_true", help="Enable live streaming visualization"
     )
 
+    parser.add_argument(
+        "--sessions",
+        type=int,
+        default=0,
+        help="Session-stress mode: number of concurrent memoryful sessions "
+        "to mix with stateless completions (0 = mode off). Requires a "
+        "JIT-enabled server config.",
+    )
+
+    parser.add_argument(
+        "--turns",
+        type=int,
+        default=3,
+        help="Turns per session in session-stress mode",
+    )
+
+    parser.add_argument(
+        "--session-ttl",
+        type=int,
+        default=120,
+        help="Session TTL seconds in session-stress mode",
+    )
+
+    parser.add_argument(
+        "--idle-wait",
+        type=float,
+        default=90.0,
+        help="Idle seconds between bursts in session-stress mode — must "
+        "exceed the server's instance_idle_ttl + scaler interval for the "
+        "reap assertion to hold",
+    )
+
     args = parser.parse_args()
+
+    # ── Session-stress mode (JIT pool scaling gate) ──────────────────
+    if args.sessions > 0:
+        console.print(
+            "🧪 Session-stress mode: scale-up under live sessions → idle "
+            "reap → re-scale",
+            style="bold cyan",
+        )
+        stress = SessionStressRunner(
+            base_url=args.url,
+            sessions=args.sessions,
+            turns=args.turns,
+            completions=args.requests,
+            concurrency=args.concurrency,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            idle_wait=args.idle_wait,
+            session_ttl=args.session_ttl,
+        )
+
+        async def _run_stress() -> bool:
+            try:
+                return await stress.run()
+            finally:
+                await stress.cleanup()
+
+        ok = asyncio.run(_run_stress())
+        sys.exit(0 if ok else 1)
 
     # Generate benchmark requests
     try:

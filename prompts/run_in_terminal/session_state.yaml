@@ -1,0 +1,7 @@
+id: run_in_terminal/session_state
+content: |
+  ## Session history
+  {context.session_history}
+
+  ## Last turn
+  {context.last_turn}

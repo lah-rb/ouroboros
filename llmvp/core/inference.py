@@ -8,17 +8,19 @@ This module provides a single source of truth for all LLM operations.
 Now uses the pluggable backend system for backend-agnostic inference.
 """
 
-import asyncio
 import logging
+import re
 from typing import AsyncGenerator, List, Optional, Tuple
-
-from starlette.concurrency import run_in_threadpool
 
 # Local imports
 from core.config import get_config
 from inference.backends.factory import get_backend, initialize_backend_async
 from preprocessing.static_tokens import manager as static_tokens_manager
-from inference.tokenizer import get_cached_tokenizer, tokenize_text, build_full_prompt
+from inference.tokenizer import (
+    get_cached_tokenizer,
+    tokenize_segments,
+    build_full_prompt,
+)
 from core.interaction_logger import log_interaction
 from formats.registry import get_renderer as _get_format_renderer
 
@@ -78,70 +80,76 @@ def _find_delimiter(pattern: "re.Pattern", text: str) -> "re.Match | None":
 
 # Note: _compile_delimiter_pattern and _find_delimiter above are still
 # used by session_manager.session_turn() for streaming delimiter detection.
-# They are NOT used by _strip_delimiter, which is CRF-only.
+# They are NOT used by _strip_delimiter, which uses the FSM labeller.
 
-# Module-level CRF model path cache
-_crf_model_path: "str | None" = None
-_crf_model_checked: bool = False
+# Module-level FSM family cache — determined once from config at first use.
+_fsm_family: "str | None" = None
 
 
-def _get_crf_model_path() -> "str | None":
-    """Return the path to a trained CRF model if available."""
-    global _crf_model_path, _crf_model_checked
-    if not _crf_model_checked:
-        _crf_model_checked = True
-        try:
-            candidate = config.logging.directory / "delim_crf.model"
-            if candidate.exists():
-                _crf_model_path = str(candidate)
-                log.info("🎯 CRF delimiter model loaded from %s", candidate)
-            else:
-                log.warning(
-                    "⚠️ No CRF model at %s — delimiter stripping disabled. "
-                    "Run 'uv run llmvp.py --train-crf' to train one.",
-                    candidate,
-                )
-        except Exception as e:
-            log.error("Could not check for CRF model: %s", e)
-    return _crf_model_path
+def _get_fsm_family() -> str:
+    """Return the model family name to drive FSM phase transitions.
+
+    Reads from ``config.model.family`` once on first call. The family
+    determines the FSM's initial phase (Harmony/ChatML start in DELIM
+    and transition on channel markers; Tekken/Mistral start directly in
+    CONTENT since their generation stream has no thinking markers).
+    """
+    global _fsm_family
+    if _fsm_family is None:
+        _fsm_family = config.model.family
+    return _fsm_family
 
 
 def _strip_delimiter(text: str) -> str:
-    """Strip delimiter token from model output using the trained CRF.
+    """Strip delimiter tokens from model output using the FSM labeller.
 
-    The CRF is the sole delimiter detection strategy. If no trained
-    model exists, logs an error and returns the text as-is (no silent
-    regex fallback that could mask issues).
+    The FSM walks the atom stream produced by ``training.featurizer``
+    and emits a D/T/C/E label per atom based on the current phase.
+    Content atoms (phase = CONTENT) are concatenated and returned;
+    thinking atoms (phase = THINKING) are forwarded to the generation
+    tracker side-channel.
+
+    Unlike the previous CRF-based implementation, the FSM is:
+      - Deterministic: same input always produces the same output.
+      - Grammar-correct: <|end|> always resets to DELIM, so multi-turn
+        rambling cannot leak analysis prose into content.
+      - Zero-dependency at inference time: no model file to load,
+        no training artifact to ship.
 
     Args:
-        text: Raw model output
+        text: Raw model output.
 
     Returns:
-        str: Cleaned response text (content phase only)
+        Cleaned response text (content phase only). Empty string if no
+        content phase was detected.
     """
-    delim = _get_delimiter()
-    if not delim:
+    # Gemma-4 emits a channel reasoning preamble (<|channel>thought ... <channel|>)
+    # that the atom-based FSM does not model. The real content reliably follows
+    # the last <channel|>, so split on it directly. (Full Gemma-4 channel/tool
+    # support is a follow-up; this just strips the preamble from extracted text.)
+    if _get_fsm_family() == "gemma":
+        marker = "<channel|>"
+        if marker in text:
+            return text.rsplit(marker, 1)[-1].strip()
         return text.strip()
 
-    crf_path = _get_crf_model_path()
-    if crf_path is None:
-        log.error(
-            "❌ No CRF delimiter model found. "
-            "Run 'uv run llmvp.py --train-crf' to train one. "
-            "Returning raw text — delimiters will leak."
-        )
+    delim = _get_delimiter()
+    if not delim:
+        # No delimiter pattern configured for this family — nothing to
+        # strip. Return as-is after basic whitespace trim.
         return text.strip()
 
     try:
-        from training.crf import crf_extract_content, crf_extract_phases
+        from core.fsm_labeller import fsm_extract_phases
         from core.generation_tracker import get_tracker
 
-        phases = crf_extract_phases(crf_path, text)
-        content = phases.get("content", "").strip()
-        thinking = phases.get("thinking", "").strip()
+        family = _get_fsm_family()
+        phases = fsm_extract_phases(text, family=family)
+        content = phases.get("C", "").strip()
+        thinking = phases.get("T", "").strip()
 
         log.debug(
-            "CRF extraction: input=%r → content=%r thinking=%r",
+            "FSM extraction: input=%r → content=%r thinking=%r",
             text[:80] if len(text) > 80 else text,
             content[:80] if len(content) > 80 else content,
             thinking[:40] if len(thinking) > 40 else thinking,
@@ -149,13 +157,28 @@ def _strip_delimiter(text: str) -> str:
 
         if thinking:
             tracker = get_tracker()
+            # Dual-path: streaming inference calls append_thinking
+            # during the stream (while ``active`` is True), then
+            # finish() promotes thinking_content to _last_thinking.
+            # Session inference yields raw chunks unchanged and
+            # reaches this FSM extraction AFTER finish() has already
+            # run, so _last_thinking was captured empty. promote_thinking
+            # writes the FSM-extracted text directly to _last_thinking
+            # so the GraphQL thinking endpoint returns it. We still
+            # append here for live status queries that happen between
+            # FSM extraction and the next generation's start() call.
             tracker.append_thinking(thinking)
             tracker.mark_thinking_complete()
+            tracker.promote_thinking(thinking)
 
         return content
 
     except Exception as e:
-        log.error("❌ CRF extraction failed: %s — returning raw text", e)
+        # FSM failures are unexpected — the labeller is deterministic
+        # and shouldn't raise on well-formed or even malformed input.
+        # If it does, log prominently and return raw text so the caller
+        # can still see something rather than silently empty output.
+        log.error("❌ FSM extraction failed: %s — returning raw text", e)
         return text.strip()
 
 
@@ -230,8 +253,6 @@ async def run_completion(
     temperature = temperature or config.generation.temperature_default or 0.7
 
     static_tokens = static_tokens_manager.get_static_tokens()
-    if not static_tokens:
-        raise RuntimeError("Static buffer not loaded")
 
     # Build complete prompt BEFORE acquiring instance to minimize pool hold time
     tokenizer = get_cached_tokenizer()
@@ -270,6 +291,7 @@ async def run_completion(
 
         # Capture raw output for training before any post-processing
         from core.interaction_logger import log_raw_generation
+
         log_raw_generation(
             raw_text=answer,
             tokens_generated=_approximate_token_count(answer),
@@ -278,7 +300,14 @@ async def run_completion(
         )
 
         # Strip delimiter if configured
+        # Right before _strip_delimiter
+        log.info(
+            "run_completion: raw answer len=%d, first100=%r", len(answer), answer[:100]
+        )
         answer = _strip_delimiter(answer)
+        log.info(
+            "run_completion: after strip len=%d, first100=%r", len(answer), answer[:100]
+        )
 
         # Approximate token count
         tokens_generated = _approximate_token_count(answer)
@@ -320,8 +349,6 @@ async def run_raw_completion(
     temperature = temperature or config.generation.temperature_default or 0.7
 
     static_tokens = static_tokens_manager.get_static_tokens()
-    if not static_tokens:
-        raise RuntimeError("Static buffer not loaded")
 
     tokenizer = get_cached_tokenizer()
     dynamic_ids = build_full_prompt(prompt, tokenizer)
@@ -393,8 +420,6 @@ async def stream_completion(
     temperature = temperature or config.generation.temperature_default or 0.7
 
     static_tokens = static_tokens_manager.get_static_tokens()
-    if not static_tokens:
-        raise RuntimeError("Static buffer not loaded")
 
     # Build complete prompt BEFORE acquiring instance to minimize pool hold time
     tokenizer = get_cached_tokenizer()
@@ -474,7 +499,10 @@ async def stream_completion(
 
         # Capture raw output for training (full text including thinking)
         from core.interaction_logger import log_raw_generation
-        full_raw = buffer + "".join(captured_chunks) if delim else "".join(captured_chunks)
+
+        full_raw = (
+            buffer + "".join(captured_chunks) if delim else "".join(captured_chunks)
+        )
         if full_raw:
             log_raw_generation(
                 raw_text=full_raw,
@@ -502,23 +530,27 @@ async def stream_completion(
 
 
 def _build_messages_tokens(messages: list, tokenizer) -> list:
-    """Tokenize a multi-turn message list using the format renderer."""
+    """Tokenize a multi-turn message list using the format renderer.
+
+    Built from (text, is_framing) segments so structural framing tokenizes as
+    canonical special tokens while message content stays plain text.
+    """
     renderer = _get_format_renderer(config.model.family)
-    parts = []
+    segments: list = []
     for msg in messages:
         role = msg.get("role", "user")
         content = str(msg.get("content", ""))
         if role == "system":
-            parts.append(renderer.render_message("system", content))
+            segments += renderer.render_message_segments("system", content)
         elif role == "assistant":
-            parts.append(renderer.render_assistant_history(content))
+            segments += renderer.render_assistant_history_segments(content)
         elif role == "tool":
             # Tool results rendered as user messages for simplicity
-            parts.append(renderer.render_user(content))
+            segments += renderer.render_user_segments(content)
         else:
-            parts.append(renderer.render_user(content))
-    parts.append(renderer.render_generation_prompt())
-    return tokenize_text(tokenizer, "".join(parts))
+            segments += renderer.render_user_segments(content)
+    segments += renderer.render_generation_prompt_segments()
+    return tokenize_segments(tokenizer, segments)
 
 
 async def run_tool_completion(

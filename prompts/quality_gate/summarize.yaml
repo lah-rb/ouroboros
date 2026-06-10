@@ -4,7 +4,7 @@
 # Pre-computed: validation_summary (from format_validation_results),
 #               project_file_list (from format_project_file_list),
 #               architecture_summary (from format_architecture_summary)
-# Context: cross_file_summary, terminal_output, session_summary
+# Context: cross_file_summary, terminal_output, ux_session_assessment
 
 id: quality_gate/summarize
 description: "Summarize validation results into a pass/fail verdict"
@@ -51,10 +51,10 @@ sections:
       {context.terminal_output}
 
   - id: ux_summary
-    when: context.session_summary
+    when: context.ux_session_assessment
     content: |
       UX verification session:
-      {context.session_summary}
+      {context.ux_session_assessment}
 
   - id: files
     when: context.project_file_list
@@ -71,16 +71,34 @@ sections:
       - Project does not implement the mission objective → "fail"
       - Architecture specifies modules or files that do not exist → "fail"
       - No source files exist at all → "fail"
-      - Style/lint warnings alone → "pass" with warnings
+      - Style/lint warnings alone → "pass"
       - All checks passed AND project addresses the mission objective → "pass"
 
       ✅ CORRECT:
+      Each blocking issue MUST be an object with an `issue` (specific, one
+      sentence — name the command/file/behavior) and a `class`:
+      - `"functional"` — a broken behavior a play-test could verify (a command
+        errors or does the wrong thing, save/load, movement, dialogue logic, an
+        item/room that can't be reached). DEFAULT to this when unsure.
+      - `"quality"` — a cosmetic/content issue a play-test can't cleanly verify
+        (grammar, wording, a flavor inconsistency).
+
+      EVIDENCE RULE — broken requires observation. Only report a behavior
+      as broken/not-functional if the evidence above SHOWS it failing (an
+      error, wrong output, a crash). If the UX session simply did not
+      exercise a feature, that feature is UNTESTED, not broken — report it
+      as `{"issue": "untested: <feature> was not exercised by the UX
+      session", "class": "functional"}` so it gets verified by a play-test,
+      and never claim it does not work.
+
       ```json
       {
         "verdict": "fail",
-        "blocking_issues": ["SyntaxError in main.py line 42", "ImportError: missing module utils"],
-        "warnings": ["No type hints in parser.py"],
-        "summary": "Two syntax errors block the build."
+        "blocking_issues": [
+          {"issue": "the `use` command has no effect on any item", "class": "functional"},
+          {"issue": "\"Martha the Caretaker are here\" should read \"is here\"", "class": "quality"}
+        ],
+        "summary": "Use is unimplemented; one grammar error."
       }
       ```
 

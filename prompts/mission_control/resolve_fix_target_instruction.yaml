@@ -1,0 +1,8 @@
+id: mission_control/resolve_fix_target_instruction
+content: |
+  Based on the diagnosis above, which project file most likely needs
+  to be fixed? Each option lists the file path, its responsibility,
+  and key symbols it defines — use the symbol list to disambiguate
+  when multiple files could plausibly match.
+
+  Select the single file most strongly implicated by the diagnosis.

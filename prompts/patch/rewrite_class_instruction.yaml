@@ -1,0 +1,20 @@
+id: patch/rewrite_class_instruction
+content: |
+  {context.already_rewritten_block}
+  {context.call_graph_block}
+  Rewrite this class completely. Your output must be the full class
+  definition as it will appear in the file:
+
+  - Start with any decorators (`@foo`, `@bar(...)`) on their own
+    lines above the class statement
+  - Then the `class` statement itself, with its full signature
+    (bases, metaclass, generics — exactly as needed)
+  - Then the complete class body — every method, class variable,
+    inner class, and nested function
+  - Preserve indentation as it will appear in the file (class body
+    indented one level; method bodies indented two levels)
+  - Do NOT include anything outside the class (imports, other
+    top-level code, surrounding comments)
+
+  The splicer uses AST positions to place your output — a partial
+  class or method-only response will fail the replacement.

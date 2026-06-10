@@ -1,0 +1,5 @@
+id: envelopes/symbol_python_variable
+content: |
+  VARIABLE_NAME: dict[str, str] = {
+      "key": "value",
+  }

@@ -1,9 +1,7 @@
-"""Pre-compute and result formatter implementations.
+"""Pre-compute formatter implementations.
 
 Pre-compute formatters transform raw context data into prompt-ready strings.
-Result formatters build human-readable tail_call messages.
-
-Both are registered by name and invoked by loader_v2.py.
+Registered by name and invoked by loader.py before template rendering.
 Signature: (params: dict, namespaces: dict) -> str
 """
 
@@ -20,80 +18,9 @@ def format_plan_listing(params: dict, namespaces: dict) -> str:
     plan = params.get("source") or []
     if not plan:
         return "No plan exists yet."
-    lines = []
-    for i, task in enumerate(plan):
-        if isinstance(task, dict):
-            status, desc = task.get("status", "pending"), task.get("description", "")
-            flow, target = task.get("flow", ""), task.get("inputs", {}).get(
-                "target_file_path", ""
-            )
-            frust = task.get("frustration", 0)
-        elif hasattr(task, "status"):
-            status, desc, flow = task.status, task.description, task.flow or ""
-            target = (task.inputs or {}).get("target_file_path", "")
-            frust = getattr(task, "frustration", 0)
-        else:
-            continue
-        parts = [f"{i+1:2d}. [{status:11s}]"]
-        if flow:
-            parts.append(f"{flow:15s}")
-        if target:
-            parts.append(f"→ {target}")
-        parts.append(desc[:70])
-        if frust > 0:
-            parts.append(f"[frustration: {frust}]")
-        lines.append(" ".join(parts))
-    return "\n".join(lines)
-
-
-def format_frustration_landscape(params: dict, namespaces: dict) -> str:
-    frust = params.get("source") or {}
-    if not frust:
-        return "No frustration tracked."
-    if isinstance(frust, dict):
-        lines = [
-            f"  {k}: {v}"
-            for k, v in frust.items()
-            if isinstance(v, (int, float)) and v > 0
-        ]
-        return "\n".join(lines) if lines else "All frustration levels at 0."
-    return str(frust)[:500]
-
-
-def format_dispatch_history(params: dict, namespaces: dict) -> str:
-    history = params.get("source") or []
-    limit = params.get("limit", 5)
-    if not history:
-        return ""
-    recent = history[-limit:] if isinstance(history, list) else []
-    lines = []
-    for entry in recent:
-        if isinstance(entry, dict):
-            lines.append(
-                f"  {entry.get('flow', '?')}: {entry.get('task_description', '')[:50]}"
-            )
-        else:
-            lines.append(f"  {str(entry)[:60]}")
-    return "\n".join(lines)
-
-
-def format_notes(params: dict, namespaces: dict) -> str:
-    notes = params.get("source") or []
-    limit = params.get("limit", 5)
-    if not notes:
-        return ""
-    recent = notes[-limit:] if isinstance(notes, list) else []
-    lines = []
-    for note in recent:
-        if isinstance(note, dict):
-            lines.append(
-                f"  [{note.get('category', '')}] {note.get('content', '')[:150]}"
-            )
-        elif hasattr(note, "category"):
-            lines.append(f"  [{note.category}] {note.content[:150]}")
-        else:
-            lines.append(f"  {str(note)[:150]}")
-    return "\n".join(lines)
+    # STUB: Task system removed. This formatter is kept as a no-op
+    # until CUE flows that reference it are updated in Phase 6.
+    return "Plan listing unavailable — task system removed, goals are the plan."
 
 
 def format_architecture_summary(params: dict, namespaces: dict) -> str:
@@ -112,7 +39,7 @@ def format_architecture_summary(params: dict, namespaces: dict) -> str:
             f"Import scheme: {arch.import_scheme}. Run command: {arch.run_command}. "
             f"Modules: {', '.join(modules)}."
         )
-    return str(arch)[:300]
+    return str(arch)
 
 
 def format_architecture_listing(params: dict, namespaces: dict) -> str:
@@ -173,28 +100,6 @@ def format_mission_meta(params: dict, namespaces: dict) -> str:
     return str(current)
 
 
-def format_cycle_status(params: dict, namespaces: dict) -> str:
-    return "true" if not params.get("last_status") else ""
-
-
-def format_file_excerpts(params: dict, namespaces: dict) -> str:
-    files = params.get("source") or []
-    exclude = params.get("exclude", "")
-    max_chars = params.get("max_chars", 1500)
-    if not files:
-        return ""
-    lines = []
-    for f in files:
-        path = f.get("path", "") if isinstance(f, dict) else getattr(f, "path", "")
-        content = (
-            f.get("content", "") if isinstance(f, dict) else getattr(f, "content", "")
-        )
-        if path == exclude:
-            continue
-        lines.extend([f"──── {path} ────", content[:max_chars], ""])
-    return "\n".join(lines)
-
-
 def format_project_file_list(params: dict, namespaces: dict) -> str:
     manifest = params.get("source") or {}
     if not manifest:
@@ -203,7 +108,7 @@ def format_project_file_list(params: dict, namespaces: dict) -> str:
         return "\n".join(f"- {p}" for p in manifest.keys())
     if isinstance(manifest, list):
         return "\n".join(f"- {item}" for item in manifest)
-    return str(manifest)[:500]
+    return str(manifest)
 
 
 def format_project_listing(params: dict, namespaces: dict) -> str:
@@ -214,7 +119,7 @@ def format_project_listing(params: dict, namespaces: dict) -> str:
     for filepath, sig in manifest.items():
         lines.append(f"- {filepath}")
         if sig:
-            lines.append(f"  {str(sig)[:120]}")
+            lines.append(f"  {str(sig)}")
     return "\n".join(lines)
 
 
@@ -232,7 +137,7 @@ def format_validation_results(params: dict, namespaces: dict) -> str:
             for key in ("stdout", "stderr"):
                 val = check.get(key, "")
                 if val:
-                    lines.append(f"  {key}: {val[:200]}")
+                    lines.append(f"  {key}: {val}")
     return "\n".join(lines)
 
 
@@ -244,7 +149,9 @@ def format_session_history(params: dict, namespaces: dict) -> str:
     for entry in history:
         if not isinstance(entry, dict):
             continue
-        lines.append(f"[Turn {entry.get('turn','?')}] $ {entry.get('command','')}")
+        # Support both run_commands entries ('command') and interactive entries ('input')
+        cmd = entry.get("command") or entry.get("input", "")
+        lines.append(f"[Turn {entry.get('turn','?')}] $ {cmd}")
         if entry.get("output"):
             lines.append(entry["output"])
         if entry.get("return_code", 0) != 0:
@@ -255,28 +162,39 @@ def format_session_history(params: dict, namespaces: dict) -> str:
     return "\n".join(lines)
 
 
-def format_last_command(params: dict, namespaces: dict) -> str:
+def format_last_turn(params: dict, namespaces: dict) -> str:
+    """Format the most recent turn with ---LAST TURN--- attention block.
+
+    Creates a prominent block around the last interaction so the model
+    can quickly orient to its current state in a multi-step session.
+    """
     history = params.get("source") or []
     if not history:
         return ""
     last = history[-1] if isinstance(history, list) else history
-    if isinstance(last, dict):
-        lines = [
-            f"[Turn {last.get('turn','?')}] $ {last.get('command','')}",
-            last.get("output", ""),
-        ]
-        if last.get("return_code", 0) != 0:
-            lines.append(f"(exit code: {last['return_code']})")
-        return "\n".join(lines)
-    return str(last)[:500]
+    if not isinstance(last, dict):
+        return ""
 
+    action = last.get("action", "")
+    cmd = last.get("command") or last.get("input", "")
+    output = last.get("output", "")
 
-def format_turn_count(params: dict, namespaces: dict) -> str:
-    return str(len(params.get("source") or []))
+    lines = ["---LAST TURN---"]
+    if action == "shell_command":
+        lines.append(f"[Turn {last.get('turn', '?')}] $ {cmd}")
+    elif action == "send_input":
+        lines.append(f"[Turn {last.get('turn', '?')}] > {cmd}")
+    elif action == "read_output":
+        lines.append(f"[Turn {last.get('turn', '?')}] (read_output)")
+    else:
+        lines.append(f"[Turn {last.get('turn', '?')}] ({action}) {cmd}")
 
-
-def format_file_listing(params: dict, namespaces: dict) -> str:
-    return format_file_excerpts(params, namespaces)
+    if output:
+        lines.append(output)
+    if last.get("return_code", 0) != 0:
+        lines.append(f"(exit code: {last['return_code']})")
+    lines.append("---END LAST TURN---")
+    return "\n".join(lines)
 
 
 def extract_field(params: dict, namespaces: dict) -> str:
@@ -291,44 +209,6 @@ def extract_field(params: dict, namespaces: dict) -> str:
     return ""
 
 
-def format_architecture_for_quality(params: dict, namespaces: dict) -> str:
-    return format_architecture_summary(params, namespaces)
-
-
-def format_repo_map(params: dict, namespaces: dict) -> str:
-    """Pass through the pre-formatted repo map string.
-
-    The repo map (tree-sitter symbol signatures + structure) provides
-    complete interface contracts for all project files without dumping
-    full file contents. Used by full_rewrite to give the LLM visibility
-    into cross-file interfaces.
-    """
-    source = params.get("source", "")
-    if isinstance(source, str):
-        return source
-    return str(source) if source else ""
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Result formatters — REMOVED
-# ══════════════════════════════════════════════════════════════════════
-#
-# Result formatters (the _r_* functions and RESULT_FORMATTERS registry)
-# have been removed as part of the Context Contract Architecture.
-# Flows now declare structured `returns` in their CUE definitions,
-# and the runtime assembles them via assemble_returns() in loader_v2.py.
-# The director's prompt template formats the structured dict for display.
-#
-# NOTE: The persistence system for relevant_notes uses Option A
-# (declared inputs with explicit semantics). This should be re-evaluated
-# alongside a comprehensive persistence system audit.
-
-
-# ══════════════════════════════════════════════════════════════════════
-# New formatters for Context Contract Architecture
-# ══════════════════════════════════════════════════════════════════════
-
-
 def format_goals_listing(params: dict, namespaces: dict) -> str:
     """Format GoalRecords for director reasoning prompt."""
     goals = params.get("source") or []
@@ -340,52 +220,18 @@ def format_goals_listing(params: dict, namespaces: dict) -> str:
             status = goal.get("status", "pending")
             desc = goal.get("description", "")
             gtype = goal.get("type", "structural")
-            gid = goal.get("id", "?")
             files = goal.get("associated_files", [])
         elif hasattr(goal, "status"):
             status, desc, gtype = goal.status, goal.description, goal.type
-            gid = goal.id
             files = getattr(goal, "associated_files", [])
         else:
             continue
-        parts = [f"{i+1:2d}. [{status:11s}] ({gtype[:5]})"]
-        parts.append(desc[:80])
+        parts = [f"{i+1:2d}. [{status:11s}] ({gtype})"]
+        parts.append(desc)
         if files:
-            parts.append(f"  files: {', '.join(files[:5])}")
+            parts.append(f"  files: {', '.join(files)}")
         lines.append(" ".join(parts))
     return "\n".join(lines)
-
-
-def format_structured_result(params: dict, namespaces: dict) -> str:
-    """Format a structured returns dict for the director reasoning prompt.
-
-    Converts the structured last_result dict into a readable summary.
-    Unlike the old result formatters, this is a single generic formatter
-    that works for any flow's returns.
-    """
-    source = params.get("source")
-    if not source:
-        return ""
-    if isinstance(source, str):
-        return source  # Already a string (legacy compatibility)
-    if not isinstance(source, dict):
-        return str(source)[:500]
-
-    lines = []
-    for key, value in source.items():
-        if value is None:
-            continue
-        if isinstance(value, list):
-            if value:
-                lines.append(f"  {key}: {', '.join(str(v) for v in value[:10])}")
-        elif isinstance(value, dict):
-            # Compact dict representation
-            lines.append(f"  {key}: {str(value)[:200]}")
-        elif isinstance(value, bool):
-            lines.append(f"  {key}: {'yes' if value else 'no'}")
-        else:
-            lines.append(f"  {key}: {str(value)[:200]}")
-    return "\n".join(lines) if lines else ""
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -428,7 +274,7 @@ def format_run_context(params: dict, namespaces: dict) -> str:
 
         file_list = [f for f in filenames if not f.startswith(".")]
         if file_list:
-            lines.append(f"Project files: {', '.join(sorted(file_list)[:15])}")
+            lines.append(f"Project files: {', '.join(sorted(file_list))}")
 
     return "\n".join(lines) if lines else ""
 
@@ -441,108 +287,460 @@ def format_run_context(params: dict, namespaces: dict) -> str:
 _persona_cache: dict[str, str] | None = None
 
 
-def _load_personas() -> dict[str, str]:
-    """Load persona definitions from compiled.json, cached after first call."""
-    global _persona_cache
-    if _persona_cache is not None:
-        return _persona_cache
-
-    import json
-    from pathlib import Path
-
-    _persona_cache = {}
-    for candidate in [Path("flows/compiled.json"), Path("ouroboros/flows/compiled.json")]:
-        if candidate.exists():
-            with open(candidate) as f:
-                data = json.load(f)
-            for name, flow_data in data.items():
-                if isinstance(flow_data, dict) and "flow_persona" in flow_data:
-                    _persona_cache[name] = flow_data["flow_persona"].strip()
-            break
-    return _persona_cache
-
-
-def format_flow_persona(params: dict, namespaces: dict) -> str:
-    """Format the ---ACT AS--- block for the current flow's persona.
-
-    Params:
-        source: The flow_persona string (from $ref to the flow definition).
-
-    Returns:
-        Formatted ---ACT AS--- block, or empty string if no persona.
-    """
-    persona = params.get("source", "")
-    if not persona:
-        return ""
-    return f"---ACT AS---\n{persona.strip()}"
-
-
-def format_known_personas(params: dict, namespaces: dict) -> str:
-    """Format the ---PEERS--- block with persona descriptions of peer flows.
-
-    Params:
-        source: List of flow names whose personas to include.
-
-    Returns:
-        Formatted ---PEERS--- block, or empty string if no peers.
-    """
-    flow_names = params.get("source") or []
-    if not flow_names:
-        return ""
-
-    personas = _load_personas()
-    blocks = []
-    for name in flow_names:
-        if isinstance(name, str) and name in personas:
-            blocks.append(personas[name])
-
-    if not blocks:
-        return ""
-    return "---PEERS---\n" + "\n\n".join(blocks)
-
-
-def format_dep_coverage_issues(params: dict, namespaces: dict) -> str:
-    """Format dependency coverage issues for the quality gate summarizer."""
-    issues = params.get("source") or []
-    if not issues:
-        return ""
-    if isinstance(issues, list):
-        return "\n".join(str(i) for i in issues)
-    return str(issues)[:2000]
-
-
 PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_plan_listing": format_plan_listing,
-    "format_frustration_landscape": format_frustration_landscape,
-    "format_dispatch_history": format_dispatch_history,
-    "format_notes": format_notes,
     "format_architecture_summary": format_architecture_summary,
     "format_architecture_listing": format_architecture_listing,
     "format_existing_architecture": format_existing_architecture,
     "format_mission_meta": format_mission_meta,
-    "format_cycle_status": format_cycle_status,
-    "format_file_excerpts": format_file_excerpts,
     "format_project_file_list": format_project_file_list,
     "format_project_listing": format_project_listing,
     "format_validation_results": format_validation_results,
     "format_session_history": format_session_history,
-    "format_last_command": format_last_command,
-    "format_turn_count": format_turn_count,
-    "format_file_listing": format_file_listing,
-    "format_architecture_for_quality": format_architecture_for_quality,
-    "format_repo_map": format_repo_map,
+    "format_last_turn": format_last_turn,
     "format_run_context": format_run_context,
     "extract_field": extract_field,
-    # New formatters for Context Contract Architecture
     "format_goals_listing": format_goals_listing,
-    "format_structured_result": format_structured_result,
-    # Persona formatters
-    "format_flow_persona": format_flow_persona,
-    "format_known_personas": format_known_personas,
-    # A1: Dependency coverage
-    "format_dep_coverage_issues": format_dep_coverage_issues,
+    # Structural context formatters (Phase B — patch redesign)
+    "format_file_outline": lambda params, namespaces: _format_file_outline(
+        params, namespaces
+    ),
+    "format_call_graph": lambda params, namespaces: _format_call_graph(
+        params, namespaces
+    ),
+    # Multi-symbol patching (505 round): renders the other symbols
+    # already rewritten in this batch so the current rewrite sees
+    # what its co-dependents finalized to.
+    "format_already_rewritten": lambda params, namespaces: _format_already_rewritten(
+        params, namespaces
+    ),
 }
 
-# RESULT_FORMATTERS removed — replaced by structured returns declarations.
-# See assemble_returns() in loader_v2.py.
-RESULT_FORMATTERS: dict[str, Any] = {}
+
+# ══════════════════════════════════════════════════════════════════════
+# Structural context formatters (Phase B — patch redesign)
+# ══════════════════════════════════════════════════════════════════════
+
+
+def _extract_docstring(body: str) -> str:
+    """Pull the first docstring from a function/method/class body.
+
+    Looks for the first triple-quoted string literal that appears
+    immediately after a ``def``/``class`` line. Returns only the
+    first line of the docstring, trimmed. Empty if no docstring.
+    """
+    if not body:
+        return ""
+    lines = body.splitlines()
+    # Skip past def/class signature lines (may continue across multiple
+    # lines for long signatures). Find the first line after the ':'
+    # terminator of the signature.
+    sig_done = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not sig_done:
+            if stripped.endswith(":") and (
+                stripped.startswith("def ")
+                or stripped.startswith("async def ")
+                or stripped.startswith("class ")
+                or (
+                    i > 0
+                    and (stripped == ":" or ") -> " in stripped or "):" in stripped)
+                )
+            ):
+                sig_done = True
+                continue
+            if not (
+                stripped.startswith(("def ", "async def ", "class ", "@"))
+                or stripped == ""
+                or stripped.startswith(("(", ")", ","))
+                or ":" in stripped
+            ):
+                # First non-signature, non-decorator line without ':'
+                # probably means the signature is simpler than expected.
+                sig_done = True
+            else:
+                continue
+        # After signature
+        if not stripped:
+            continue
+        if stripped.startswith(('"""', "'''")):
+            # Extract first line of docstring
+            quote = stripped[:3]
+            inner = stripped[3:]
+            if quote in inner:  # Single-line docstring
+                return inner.split(quote, 1)[0].strip()
+            return inner.strip() or (lines[i + 1].strip() if i + 1 < len(lines) else "")
+        # First statement is not a docstring
+        return ""
+    return ""
+
+
+def _format_file_outline(params: dict, namespaces: dict) -> str:
+    """Render a file's symbol outline with signatures and docstrings.
+
+    Given a ``symbol_table`` as produced by ``extract_symbol_bodies``,
+    returns a compact outline block suitable for prompt injection:
+
+        class GameEngine:
+          __init__(self, world: World)
+            Initialize engine with world data
+          process_command(self, command: Command) -> Optional[bool]
+          _handle_move(self, command: Command) -> str
+            Handle direction command; return room description
+
+    Params:
+      symbol_table: list of dicts with name, kind, signature, body, parent.
+      target_file (optional): filename to title the outline block with.
+      highlight_symbol (optional): qualified name of a symbol to mark
+        with an arrow; used when the caller knows the rewrite target.
+
+    Returns empty string if the symbol_table is empty or malformed —
+    callers render this as an optional section.
+    """
+    symbol_table = params.get("symbol_table") or []
+    target_file = params.get("target_file", "") or ""
+    highlight = params.get("highlight_symbol", "") or ""
+
+    if not isinstance(symbol_table, list) or not symbol_table:
+        return ""
+
+    # Group by parent — classes collect their methods; free functions
+    # live under parent="" at the top level.
+    by_parent: dict[str, list[dict]] = {}
+    classes: dict[str, dict] = {}
+    for sym in symbol_table:
+        if not isinstance(sym, dict):
+            continue
+        parent = sym.get("parent", "") or ""
+        if sym.get("kind") == "class":
+            classes[sym.get("name", "")] = sym
+            by_parent.setdefault(sym.get("name", ""), [])
+        else:
+            by_parent.setdefault(parent, []).append(sym)
+
+    lines: list[str] = []
+    if target_file:
+        lines.append(f"## File outline — {target_file}")
+    else:
+        lines.append("## File outline")
+    lines.append("")
+
+    # Classes first, with their methods nested
+    for cls_name in sorted(classes):
+        cls_sig = (
+            classes[cls_name].get("signature", f"class {cls_name}").strip().rstrip(":")
+        )
+        marker = "  ← target" if cls_name == highlight else ""
+        lines.append(f"{cls_sig}:{marker}")
+        ds = _extract_docstring(classes[cls_name].get("body", ""))
+        if ds:
+            lines.append(f"    {ds}")
+        for method in by_parent.get(cls_name, []):
+            name = method.get("name", "")
+            sig = (method.get("signature", "") or "").strip().rstrip(":")
+            mark = "  ← target" if name == highlight else ""
+            lines.append(f"  {sig}{mark}")
+            ds = _extract_docstring(method.get("body", ""))
+            if ds:
+                lines.append(f"      {ds}")
+        lines.append("")
+
+    # Module-level (non-class) functions
+    top_level = by_parent.get("", [])
+    if top_level:
+        for fn in top_level:
+            name = fn.get("name", "")
+            sig = (fn.get("signature", "") or "").strip().rstrip(":")
+            mark = "  ← target" if name == highlight else ""
+            lines.append(f"{sig}{mark}")
+            ds = _extract_docstring(fn.get("body", ""))
+            if ds:
+                lines.append(f"    {ds}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _format_call_graph(params: dict, namespaces: dict) -> str:
+    """Render the direct call graph for a target symbol.
+
+    Given project files + a target symbol name, returns:
+
+        ## Call graph — GameEngine._handle_move
+
+        Called from:
+          engine.py:process_command
+              if action == Action.MOVE:
+                  return self._handle_move(command)
+
+        Calls into:
+          self.current_room.get_exit(direction)
+          self.rooms.get(exit_obj.target_room_id)
+          self._describe_current_room()
+
+    Params:
+      target_symbol: qualified name (e.g. "GameEngine._handle_move").
+      target_file: file where the target lives (filters callees from
+        references collected inside the target's own body).
+      symbol_table: list of dicts with body fields — used to locate
+        the target's body for callee extraction.
+      project_files: dict of {file_path: content} for cross-file
+        caller search. If absent, only the target file is searched.
+
+    Returns empty string when target_symbol is absent or no call
+    sites are found — callers render as optional section.
+    """
+    target_symbol = (params.get("target_symbol", "") or "").strip()
+    target_file = params.get("target_file", "") or ""
+    symbol_table = params.get("symbol_table") or []
+    project_files = params.get("project_files") or {}
+
+    if not target_symbol:
+        return ""
+
+    # Extract the bare method/function name from a qualified name —
+    # cross-file references typically don't carry the class qualifier.
+    bare_name = target_symbol.rsplit(".", 1)[-1]
+
+    # ── Find the target's body for callee extraction ────────────
+    target_body = ""
+    target_line_range: tuple[int, int] | None = None
+    for sym in symbol_table:
+        if isinstance(sym, dict) and sym.get("name") == target_symbol:
+            target_body = sym.get("body", "") or ""
+            line = sym.get("line")
+            end_line = sym.get("end_line")
+            if isinstance(line, int) and isinstance(end_line, int):
+                target_line_range = (line, end_line)
+            break
+
+    # ── Find callers across project files ───────────────────────
+    callers: list[tuple[str, str, str]] = []  # (file, context_line, snippet)
+
+    # Build a simple search across project files. We look for the bare
+    # name as a word, prefer hits that look like function calls
+    # (`<name>(` pattern). Skip the target file's own body to avoid
+    # listing the definition itself as a caller.
+    import re
+
+    call_pattern = re.compile(r"\b" + re.escape(bare_name) + r"\s*\(")
+    for fp, content in project_files.items():
+        if not isinstance(content, str) or not content:
+            continue
+        for i, line in enumerate(content.splitlines(), start=1):
+            if not call_pattern.search(line):
+                continue
+            # Skip the def line itself
+            stripped = line.strip()
+            if stripped.startswith(("def ", "async def ")):
+                continue
+            # Skip lines within the target's own body (self-reference)
+            if fp == target_file and target_line_range is not None:
+                if target_line_range[0] <= i <= target_line_range[1]:
+                    continue
+            # Look up which symbol this caller line falls in, if we have
+            # a symbol_table for this file. Prefer the innermost (smallest
+            # line range) match — methods sit inside classes, and we want
+            # the method as the caller, not the enclosing class.
+            context = f"{fp}:{i}"
+            if fp == target_file and symbol_table:
+                best_range = None
+                for sym in symbol_table:
+                    if not isinstance(sym, dict):
+                        continue
+                    ln = sym.get("line")
+                    el = sym.get("end_line")
+                    if isinstance(ln, int) and isinstance(el, int) and ln <= i <= el:
+                        span = el - ln
+                        if best_range is None or span < best_range[0]:
+                            best_range = (span, sym.get("name", "?"))
+                if best_range is not None:
+                    context = f"{fp}:{best_range[1]}"
+            callers.append((fp, context, stripped))
+
+    # Deduplicate by (context, snippet) — same call line twice would be rare
+    # but possible after refactors
+    seen: set[tuple[str, str]] = set()
+    uniq_callers: list[tuple[str, str, str]] = []
+    for c in callers:
+        key = (c[1], c[2])
+        if key not in seen:
+            seen.add(key)
+            uniq_callers.append(c)
+    # Limit: 10 call sites is plenty; more becomes noise
+    uniq_callers = uniq_callers[:10]
+
+    # ── Extract callees from target body ────────────────────────
+    # Heuristic: look for `self.<name>(` and `<namespace>.<name>(` patterns.
+    # Skip built-ins and dunders to keep signal-to-noise high.
+    callees: list[str] = []
+    seen_callees: set[str] = set()
+    if target_body:
+        # self.method(...) pattern
+        self_method_pat = re.compile(r"self\.(\w+)\s*\(")
+        # <name>.<method>(...) pattern, where <name> is not `self`
+        attr_method_pat = re.compile(r"(\w+)\.(\w+)\s*\(")
+
+        for line in target_body.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith(
+                ("#", "def ", "async def ", "class ")
+            ):
+                continue
+            for m in self_method_pat.finditer(line):
+                snippet = f"self.{m.group(1)}(...)"
+                if snippet not in seen_callees:
+                    seen_callees.add(snippet)
+                    callees.append(snippet)
+            for m in attr_method_pat.finditer(line):
+                ns, meth = m.group(1), m.group(2)
+                if ns in ("self", "cls"):  # handled above
+                    continue
+                if meth.startswith("__") and meth.endswith("__"):  # dunders
+                    continue
+                snippet = f"{ns}.{meth}(...)"
+                if snippet not in seen_callees:
+                    seen_callees.add(snippet)
+                    callees.append(snippet)
+
+    # Keep the callee list focused — 15 is plenty
+    callees = callees[:15]
+
+    # ── Format the output block ─────────────────────────────────
+    if not uniq_callers and not callees:
+        return ""
+
+    lines: list[str] = [f"## Call graph — {target_symbol}", ""]
+    if uniq_callers:
+        lines.append("Called from:")
+        for _fp, context, snippet in uniq_callers:
+            lines.append(f"  {context}")
+            lines.append(f"    {snippet}")
+        lines.append("")
+    if callees:
+        lines.append("Calls into:")
+        for c in callees:
+            lines.append(f"  {c}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Multi-symbol patching (505 round) — already-rewritten context
+# ══════════════════════════════════════════════════════════════════════
+
+
+def _format_already_rewritten(params: dict, namespaces: dict) -> str:
+    """Render the list of symbols already rewritten in this batch.
+
+    When diagnose supplies ``related_symbols``, ``prepare_next_rewrite``
+    seeds the queue with the primary target plus those related
+    symbols. As ``rewrite_symbol_turn`` drains the queue, each
+    successful rewrite appends its final body to
+    ``context.already_rewritten`` under a file-qualified key
+    ("path.py:Class.method" — rendered verbatim, so cross-file batches
+    read naturally). This formatter reads that dict and renders it as a
+    context block so subsequent rewrites in the same batch see what
+    their co-dependents finalized to.
+
+    Empty when no rewrites have landed yet (the first symbol in the
+    queue sees nothing), or when diagnose didn't supply related
+    symbols (single-symbol rewrites don't need this context).
+
+    The turn template places this block BEFORE the current symbol so
+    the model reads it as established context before authoring the
+    next rewrite.
+    """
+    ctx = namespaces.get("context", {}) or {}
+    already = ctx.get("already_rewritten") or {}
+    if not already or not isinstance(already, dict):
+        return ""
+
+    lines = ["## Other symbols already changed in this batch", ""]
+    lines.append(
+        "These have been rewritten in this same edit session. "
+        "Match the attribute names, method signatures, and return "
+        "shapes they establish."
+    )
+    lines.append("")
+
+    for qname, body in already.items():
+        if not body:
+            continue
+        # Normalize: show just the signature plus the first few body
+        # lines if the body is long. Full body is sometimes big (large
+        # class), and the purpose here is contract visibility, not
+        # redundant re-authoring.
+        body_str = body.rstrip()
+        body_lines = body_str.splitlines()
+        if len(body_lines) <= 20:
+            display = body_str
+        else:
+            # Show first 18 lines + tail marker
+            display = "\n".join(body_lines[:18]) + "\n    # ... (truncated)"
+        lines.append(f"### {qname}")
+        lines.append("")
+        lines.append("```python")
+        lines.append(display)
+        lines.append("```")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Step C Batch E — patch flow formatters
+# ══════════════════════════════════════════════════════════════════════
+
+
+def select_rewrite_instruction_template(params: dict, namespaces: dict) -> str:
+    """Site #10a: dynamic template selection by symbol kind.
+
+    Reads the symbol's `kind` field and emits the ID of the
+    appropriate instruction template. The turn's instruction section
+    uses `template: {$ref: "context.kind_instruction_template"}`
+    to resolve this at render time.
+
+    Unknown kinds fall back to the function template — less wrong
+    than a class template for anything else.
+    """
+    source = params.get("source")
+    if isinstance(source, dict):
+        kind = source.get("kind", "")
+    else:
+        kind = getattr(source, "kind", "")
+    if kind == "class":
+        return "patch/rewrite_class_instruction"
+    return "patch/rewrite_function_instruction"
+
+
+def format_selection_state(params: dict, namespaces: dict) -> str:
+    """Site #11: running "Selected so far" list rendered as evidence.
+
+    Reads `selected_symbols` from params and emits a short
+    human-readable list. Returns empty string when nothing is
+    selected yet — the evidence section's ref will then omit
+    naturally.
+    """
+    selected = params.get("selected") or []
+    if not selected:
+        return ""
+    names: list[str] = []
+    for entry in selected:
+        if isinstance(entry, dict):
+            name = entry.get("name") or entry.get("id") or ""
+        else:
+            name = str(entry)
+        if name:
+            names.append(name)
+    if not names:
+        return ""
+    return ", ".join(names)
+
+
+PRE_COMPUTE_FORMATTERS["select_rewrite_instruction_template"] = (
+    select_rewrite_instruction_template
+)
+PRE_COMPUTE_FORMATTERS["format_selection_state"] = format_selection_state

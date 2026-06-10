@@ -194,10 +194,14 @@ def check_unguarded_cycles(
 ) -> list[LintResult]:
     """Detect cycles in step graphs that lack loop guards.
 
-    A cycle is considered guarded if at least one step has:
-      - A resolver condition referencing meta.attempt, OR
-      - An action with an internal context-based counter guard
-        (e.g., selection_turn in action_select_symbol_turn)
+    A cycle is considered guarded if any of the following hold:
+      - At least one step has a resolver condition referencing meta.attempt, OR
+      - At least one step's action has an internal context-based counter guard
+        (e.g., selection_turn in action_select_symbol_turn), OR
+      - EVERY step in the cycle has at least one transition target OUTSIDE
+        the cycle — meaning the cycle can always be exited from any member.
+        This matches the common pattern where an LLM menu or rule-based
+        resolver keeps looping until a "done"/"abandon" option is chosen.
 
     Unguarded cycles are WARNING; they may still be safe if bounded
     by LLM behavior, but deserve scrutiny.
@@ -215,6 +219,7 @@ def check_unguarded_cycles(
         cycles = _find_cycles(adj)
 
         for cycle in cycles:
+            cycle_set = set(cycle)
             guarded = False
 
             for step_name in cycle:
@@ -235,6 +240,31 @@ def check_unguarded_cycles(
 
                 if guarded:
                     break
+
+            # Non-cyclic-exit check: if every cycle member can eventually
+            # reach a step outside the cycle (via any path), the loop is
+            # bounded — the flow can always escape. A cycle is unguarded
+            # only when it's a terminal strongly-connected component with
+            # no exit path at all.
+            if not guarded:
+
+                def _reaches_outside(start: str, cycle_set: set[str]) -> bool:
+                    """True if any path from start leaves cycle_set."""
+                    seen: set[str] = set()
+                    stack = [start]
+                    while stack:
+                        node = stack.pop()
+                        if node in seen:
+                            continue
+                        seen.add(node)
+                        for t in adj.get(node, []):
+                            if t not in cycle_set:
+                                return True
+                            stack.append(t)
+                    return False
+
+                if all(_reaches_outside(m, cycle_set) for m in cycle):
+                    guarded = True
 
             if not guarded:
                 cycle_str = " \u2192 ".join(cycle + [cycle[0]])
@@ -336,6 +366,14 @@ def check_publish_consume_chains(flows: dict) -> list[LintResult]:
             for key in step_def.get("publishes", []):
                 all_published.setdefault(key, []).append(step_name)
 
+            # Turn-based menu steps use publish_selection as their
+            # authoritative publisher for the chosen option key.
+            turn = step_def.get("turn")
+            if turn:
+                sel = (turn.get("response") or {}).get("publish_selection")
+                if sel:
+                    all_published.setdefault(sel, []).append(step_name)
+
             ctx = step_def.get("context", {})
             all_consumed.update(ctx.get("required", []))
             all_consumed.update(ctx.get("optional", []))
@@ -377,6 +415,225 @@ def check_publish_consume_chains(flows: dict) -> list[LintResult]:
                         ),
                     )
                 )
+
+    return results
+
+
+# ── Check 3b: Path-reachability of required context ──────────────────
+
+
+# Short-circuit evaluation states for resolver rule conditions.
+# TRUE: this rule fires on the current path — subsequent rules don't.
+# FALSE: this rule can't fire — skip, continue to next rule.
+# UNKNOWN: could fire or not — the rule's target is possible, and so
+#   are subsequent rules (because if UNKNOWN doesn't fire at runtime,
+#   the next rule gets evaluated).
+_COND_TRUE = "TRUE"
+_COND_FALSE = "FALSE"
+_COND_UNKNOWN = "UNKNOWN"
+
+# Condition shapes we can evaluate statically. All others are UNKNOWN.
+_COND_CONTEXT_GET = re.compile(r"""^\s*context\.get\(\s*['"]([^'"]+)['"]\s*\)\s*$""")
+_COND_NOT_CONTEXT_GET = re.compile(
+    r"""^\s*not\s+context\.get\(\s*['"]([^'"]+)['"]\s*\)\s*$"""
+)
+
+
+def _evaluate_condition(cond: str, published: frozenset[str]) -> str:
+    """Evaluate a resolver rule condition against the known-published set.
+
+    Returns one of ``_COND_TRUE`` / ``_COND_FALSE`` / ``_COND_UNKNOWN``.
+
+    Supported shapes:
+      * ``true`` — always fires.
+      * ``context.get('X')`` — fires iff X is in ``published``. When X
+        is not published along the path being walked, the branch is
+        statically unreachable and the walker can skip it.
+      * ``not context.get('X')`` — inverse.
+
+    Any other shape (conditions involving step result fields,
+    comparisons, boolean composition) is reported as UNKNOWN. The
+    walker treats UNKNOWN as "might fire" — the target is explored,
+    and subsequent rules are also explored (since at runtime the
+    condition may evaluate false and the next rule gets its chance).
+    This preserves soundness: real paths are never pruned, only
+    provably-unreachable ones are.
+    """
+    cond = (cond or "").strip()
+    if cond == "true":
+        return _COND_TRUE
+
+    m = _COND_CONTEXT_GET.match(cond)
+    if m:
+        key = m.group(1)
+        return _COND_TRUE if key in published else _COND_FALSE
+
+    m = _COND_NOT_CONTEXT_GET.match(cond)
+    if m:
+        key = m.group(1)
+        return _COND_FALSE if key in published else _COND_TRUE
+
+    return _COND_UNKNOWN
+
+
+def _resolver_possible_targets(resolver: dict, published: frozenset[str]) -> list[str]:
+    """Return transition targets reachable from a rule resolver given
+    the currently published context, honoring rule order and short-
+    circuit semantics (first TRUE rule wins, subsequent rules skipped).
+    """
+    targets: list[str] = []
+    for rule in (resolver or {}).get("rules", []) or []:
+        cond = rule.get("condition", "")
+        t = rule.get("transition")
+        if not t:
+            continue
+        state = _evaluate_condition(cond, published)
+        if state == _COND_TRUE:
+            targets.append(t)
+            break  # short-circuit: subsequent rules don't run
+        elif state == _COND_FALSE:
+            continue
+        else:
+            # UNKNOWN: might fire at runtime, or might fall through.
+            # Explore this target AND keep walking the remaining rules
+            # because they're both possible.
+            targets.append(t)
+    return targets
+
+
+def check_path_reachability(flows: dict) -> list[LintResult]:
+    """Verify that on *every* execution path reaching step X, all of
+    X's required context keys are produced by some earlier step.
+
+    This is stronger than check_publish_consume_chains, which only
+    verifies "some step in the flow publishes this key." That's
+    insufficient: the post-a85 diagnose_issue trace showed pick_action
+    routing __conclude__ → end_session → compile_diagnosis, where
+    compile_diagnosis needs `hypotheses`, which only force_conclude
+    publishes — but force_conclude wasn't on that path. The flow
+    compiled clean, per-step existence passed, but the execution
+    crashed at runtime with MissingContextError.
+
+    Algorithm: DFS from flow.entry, tracking the accumulated set of
+    keys published by steps visited so far. When we arrive at a step,
+    any of its required keys not in the accumulated set is a gap.
+    The (step, frozen-published-set) tuple is memoized to keep the
+    walk tractable on flows with cycles — once we've certified a
+    state, we don't re-explore it.
+
+    Flow inputs are seeded into the initial published set, since
+    they're available throughout the flow. Ambient context keys
+    (session_injections, inference_session_id) are also seeded
+    because the runtime treats them as flow-wide regardless of
+    whether any step publishes them.
+
+    Rule-resolver branches are evaluated via _evaluate_condition so
+    branches guarded on ``context.get('X')`` are only considered
+    reachable when X has actually been published along the current
+    path. This is the difference between "publisher exists somewhere
+    in the flow" and "publisher has run by the time we get here."
+    """
+    # Keep in sync with _AMBIENT_CONTEXT_KEYS in agent/runtime.py.
+    # Adding a key in one place and forgetting the other would
+    # re-introduce the a85-class bug, so we pin this set here with
+    # an explicit import fallback.
+    ambient_keys = frozenset({"session_injections", "inference_session_id"})
+    try:
+        from agent.runtime import _AMBIENT_CONTEXT_KEYS as _runtime_ambient
+
+        ambient_keys = frozenset(_runtime_ambient)
+    except Exception:
+        pass
+
+    results: list[LintResult] = []
+
+    for flow_name, flow_def in _iter_flows(flows):
+        steps = flow_def["steps"]
+        entry = flow_def.get("entry")
+        if not entry or entry not in steps:
+            continue
+
+        seed = set(_flow_input_keys(flow_def)) | set(ambient_keys)
+
+        def publishes_of(step_name: str) -> set[str]:
+            step = steps.get(step_name, {})
+            out = set(step.get("publishes", []) or [])
+            turn = step.get("turn")
+            if turn:
+                sel = (turn.get("response") or {}).get("publish_selection")
+                if sel:
+                    out.add(sel)
+                    # menu_compound publishes {sel}_arg for the chosen
+                    # option's argument — match runtime _extract_menu_arg.
+                    if turn.get("response_shape") == "menu_compound":
+                        out.add(f"{sel}_arg")
+            return out
+
+        def required_of(step_name: str) -> set[str]:
+            step = steps.get(step_name, {})
+            return set((step.get("context") or {}).get("required", []) or [])
+
+        def successors_of(step_name: str, published: frozenset[str]) -> list[str]:
+            step = steps.get(step_name, {})
+            targets: list[str] = []
+            resolver = step.get("resolver") or {}
+            if resolver.get("type") == "rule" or resolver.get("rules"):
+                targets.extend(_resolver_possible_targets(resolver, published))
+            turn = step.get("turn") or {}
+            transitions = turn.get("transitions") or {}
+            if transitions.get("default"):
+                targets.append(transitions["default"])
+            if transitions.get("no_answer"):
+                targets.append(transitions["no_answer"])
+            for tgt in (transitions.get("options") or {}).values():
+                if tgt:
+                    targets.append(tgt)
+            return targets
+
+        # Per-flow gap set: (step, missing_keys_tuple) → sample_path.
+        # Deduplicated so a cycle doesn't produce thousands of identical
+        # findings.
+        gaps: dict[tuple[str, tuple[str, ...]], tuple[str, ...]] = {}
+        visited: set[tuple[str, frozenset]] = set()
+
+        def walk(step_name: str, published: frozenset, path: tuple[str, ...]) -> None:
+            key = (step_name, published)
+            if key in visited:
+                return
+            visited.add(key)
+
+            if step_name not in steps:
+                # Transition target to a step that doesn't exist — a
+                # separate check flags this; skip to avoid noise here.
+                return
+
+            req = required_of(step_name)
+            missing = tuple(sorted(req - published))
+            if missing:
+                gap_key = (step_name, missing)
+                if gap_key not in gaps:
+                    gaps[gap_key] = path + (step_name,)
+
+            new_published = published | publishes_of(step_name)
+            for succ in successors_of(step_name, new_published):
+                walk(succ, new_published, path + (step_name,))
+
+        walk(entry, frozenset(seed), ())
+
+        for (step_name, missing), sample_path in gaps.items():
+            results.append(
+                LintResult(
+                    level="ERROR",
+                    flow=flow_name,
+                    step=step_name,
+                    check="required_key_not_reachable",
+                    message=(
+                        f"required context {list(missing)} not published on "
+                        f"every path reaching this step. Example gap path: "
+                        f"{' -> '.join(sample_path)}"
+                    ),
+                )
+            )
 
     return results
 
@@ -433,25 +690,35 @@ def check_prompt_parser_contracts(
         prompt_only = prompt_keys - parser_keys
         parser_only = parser_keys - prompt_keys
 
-        if prompt_only or parser_only:
-            details = []
-            if prompt_only:
-                details.append(
-                    f"prompt defines {sorted(prompt_only)} " f"but parser ignores them"
-                )
-            if parser_only:
-                details.append(
-                    f"parser reads {sorted(parser_only)} "
-                    f"but prompt doesn't define them"
-                )
-
+        # Prompt-side orphans (WARNING): model generates fields nothing reads.
+        # This is wasted generation — a real quality issue.
+        if prompt_only:
             results.append(
                 LintResult(
                     level="WARNING",
                     flow=prompt_path.split("/")[0],
                     step=None,
                     check="prompt_parser_mismatch",
-                    message=f"{prompt_path}: {'; '.join(details)}",
+                    message=(
+                        f"{prompt_path}: prompt defines {sorted(prompt_only)} "
+                        f"but parser ignores them"
+                    ),
+                )
+            )
+        # Parser-side orphans (INFO): parser reads keys not in the prompt
+        # example. Often legitimate — normalized/synthesized keys (e.g.,
+        # verdict → all_passing). Worth surfacing but not a quality bug.
+        if parser_only:
+            results.append(
+                LintResult(
+                    level="INFO",
+                    flow=prompt_path.split("/")[0],
+                    step=None,
+                    check="prompt_parser_mismatch",
+                    message=(
+                        f"{prompt_path}: parser reads {sorted(parser_only)} "
+                        f"but prompt doesn't define them (likely normalized)"
+                    ),
                 )
             )
 
@@ -479,7 +746,10 @@ def _extract_json_keys_from_prompt(prompt_text: str) -> set[str]:
 
 
 def _extract_parser_reads(source: str, func_name: str) -> set[str]:
-    """Extract dict keys read by .get("key") in a function.
+    """Extract dict keys read by .get("key"), parsed["key"], or 'key' in parsed
+    inside a function body. Also scans the immediate caller(s) of this function
+    for reads on the returned dict — a common pattern is a parser that returns
+    a normalized dict and a caller that consumes the normalized fields.
 
     Correctly bounds the function body by finding the next def/async def
     at the same or lesser indentation level.
@@ -505,8 +775,53 @@ def _extract_parser_reads(source: str, func_name: str) -> set[str]:
 
     func_body = source[func_start:func_end]
 
+    # .get("key") / .get('key')
     for match in re.finditer(r'\.get\(["\'](\w+)["\']', func_body):
         keys.add(match.group(1))
+    # parsed["key"] / parsed['key'] — any name followed by subscript access
+    for match in re.finditer(r'\w+\[["\'](\w+)["\']\]', func_body):
+        keys.add(match.group(1))
+    # "key" in parsed / 'key' in parsed — membership tests
+    for match in re.finditer(r'["\'](\w+)["\']\s+in\s+\w+', func_body):
+        keys.add(match.group(1))
+
+    # Caller chain: find functions that call this parser and bind its return
+    # to a name, then scan those functions' bodies for reads of that name.
+    # Pattern: "<varname> = <parser_func>(...)" — the varname holds the
+    # normalized dict; any .get/subscript/in on varname counts as a read.
+    call_pattern = re.compile(rf"(\w+)\s*=\s*{re.escape(func_name)}\s*\(")
+    for m in call_pattern.finditer(source):
+        varname = m.group(1)
+        # Locate the calling function's body (same bounding logic)
+        call_pos = m.start()
+        # Find the enclosing function definition
+        caller_start = -1
+        for dm in re.finditer(r"(?:async )?def \w+", source[:call_pos]):
+            caller_start = dm.start()
+        if caller_start < 0:
+            continue
+        caller_line_start = source.rfind("\n", 0, caller_start) + 1
+        caller_indent = caller_start - caller_line_start
+        caller_end = len(source)
+        for dm in pattern.finditer(source, caller_start + 10):
+            if len(dm.group(1)) <= caller_indent:
+                caller_end = dm.start()
+                break
+        caller_body = source[caller_start:caller_end]
+
+        # Read patterns on the bound varname specifically.
+        for match in re.finditer(
+            rf'\b{re.escape(varname)}\.get\(["\'](\w+)["\']', caller_body
+        ):
+            keys.add(match.group(1))
+        for match in re.finditer(
+            rf'\b{re.escape(varname)}\[["\'](\w+)["\']\]', caller_body
+        ):
+            keys.add(match.group(1))
+        for match in re.finditer(
+            rf'["\'](\w+)["\']\s+in\s+{re.escape(varname)}\b', caller_body
+        ):
+            keys.add(match.group(1))
 
     return keys
 
@@ -765,6 +1080,96 @@ def _extract_input_refs(step_def: dict) -> set[str]:
     return refs
 
 
+# ── Strategy 8: Pydantic model drift ────────────────────────────────
+
+
+def check_pydantic_model_drift(flows: dict) -> list[LintResult]:
+    """Check that all fields in compiled.json are accepted by Pydantic models.
+
+    Compares the keys present in compiled flow JSON against the fields
+    declared on the corresponding Pydantic models (FlowDefinition,
+    StepDefinition, ResolverDefinition). Any key present in the JSON
+    but missing from the Pydantic model would be silently dropped at
+    load time, which can cause subtle bugs.
+    """
+    # Ensure agent package is importable (linter may run from dev/ or project root)
+
+    project_root = str(Path(__file__).resolve().parent.parent)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    try:
+        from agent.models import FlowDefinition, StepDefinition, ResolverDefinition
+    except ImportError as e:
+        return [
+            LintResult(
+                level="WARNING",
+                flow="(global)",
+                step=None,
+                check="pydantic_drift",
+                message=f"Could not import agent.models — skipping drift check: {e}",
+            )
+        ]
+
+    flow_fields = set(FlowDefinition.model_fields.keys())
+    step_fields = set(StepDefinition.model_fields.keys())
+    resolver_fields = set(ResolverDefinition.model_fields.keys())
+
+    results: list[LintResult] = []
+
+    for flow_name, flow_def in flows.items():
+        if not isinstance(flow_def, dict) or "steps" not in flow_def:
+            continue
+
+        # Check flow-level keys
+        for key in flow_def:
+            if key == "steps":
+                continue
+            if key not in flow_fields:
+                results.append(
+                    LintResult(
+                        level="ERROR",
+                        flow=flow_name,
+                        step=None,
+                        check="pydantic_drift",
+                        message=f"CUE field '{key}' not in FlowDefinition model — will be silently dropped",
+                    )
+                )
+
+        # Check step-level keys
+        for step_name, step_def in flow_def.get("steps", {}).items():
+            if not isinstance(step_def, dict):
+                continue
+            for key in step_def:
+                if key not in step_fields:
+                    results.append(
+                        LintResult(
+                            level="ERROR",
+                            flow=flow_name,
+                            step=step_name,
+                            check="pydantic_drift",
+                            message=f"CUE field '{key}' not in StepDefinition model — will be silently dropped",
+                        )
+                    )
+
+            # Check resolver keys
+            resolver = step_def.get("resolver")
+            if isinstance(resolver, dict):
+                for key in resolver:
+                    if key not in resolver_fields:
+                        results.append(
+                            LintResult(
+                                level="ERROR",
+                                flow=flow_name,
+                                step=step_name,
+                                check="pydantic_drift",
+                                message=f"CUE resolver field '{key}' not in ResolverDefinition model — will be silently dropped",
+                            )
+                        )
+
+    return results
+
+
 # ── Main ─────────────────────────────────────────────────────────────
 
 
@@ -805,6 +1210,10 @@ def lint(
     # Strategy 3: Publish/consume chains
     results.extend(check_publish_consume_chains(flows))
 
+    # Strategy 3b: Path reachability of required context (stronger —
+    # catches gaps where the publisher exists but isn't on the taken path)
+    results.extend(check_path_reachability(flows))
+
     # Strategy 4: Prompt/parser contracts
     results.extend(check_prompt_parser_contracts(prompts, actions))
 
@@ -816,6 +1225,9 @@ def lint(
 
     # Ported 7: Resolver conventions
     results.extend(check_resolver_conventions(flows))
+
+    # Strategy 8: Pydantic model drift (CUE fields vs Pydantic fields)
+    results.extend(check_pydantic_model_drift(flows))
 
     if not verbose:
         results = [r for r in results if r.level != "INFO"]

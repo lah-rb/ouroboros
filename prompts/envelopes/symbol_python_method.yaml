@@ -1,0 +1,4 @@
+id: envelopes/symbol_python_method
+content: |
+  def method_name(self, arg: str) -> int:
+      return 42

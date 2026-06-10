@@ -13,8 +13,35 @@ import re
 from typing import Any
 
 from agent.models import StepInput, StepOutput
+from agent.actions.reporting_actions import structural_block_reason
 
 logger = logging.getLogger(__name__)
+
+
+def _regress_startup_goal(mission) -> bool:
+    """Re-open the 'Program starts cleanly' startup goal after a file edit.
+
+    The startup goal is uniquely marked ``interaction_mode == "deterministic"``
+    (see action_derive_project_goals) and is verified by actually running the
+    program (run_startup_check). When a file is edited we regress it alongside
+    the file's structural goal, so the startup check re-runs — catching an edit
+    that broke a previously-passing startup, and verifying a fix that should make
+    it pass. Only mutates ``status``. Returns True if a complete startup goal was
+    regressed.
+    """
+    for g in mission.goals:
+        if (
+            getattr(g, "type", "") == "functional"
+            and getattr(g, "interaction_mode", None) == "deterministic"
+            and getattr(g, "status", "") == "complete"
+        ):
+            g.status = "incomplete"
+            logger.info(
+                "Regressed startup goal (re-verify after edit): %s",
+                getattr(g, "description", "")[:60],
+            )
+            return True
+    return False
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -23,9 +50,9 @@ logger = logging.getLogger(__name__)
 
 
 async def action_load_mission_state(step_input: StepInput) -> StepOutput:
-    """Load mission state, event queue, and frustration map from persistence.
+    """Load mission state and event queue from persistence.
 
-    Publishes: mission, events, frustration
+    Publishes: mission, events
     """
     effects = step_input.effects
     if not effects:
@@ -43,217 +70,15 @@ async def action_load_mission_state(step_input: StepInput) -> StepOutput:
 
     events = await effects.read_events()
 
-    # Build frustration map from tasks
-    frustration = {}
-    for task in mission.plan:
-        frustration[task.id] = task.frustration
-
     return StepOutput(
         result={"mission": {"status": mission.status}},
         observations=f"Loaded mission {mission.id}: {mission.status}, "
-        f"{len(mission.plan)} tasks, {len(events)} events",
+        f"{len(mission.goals)} goals, {len(events)} events",
         context_updates={
             "mission": mission,
             "events": events,
-            "frustration": frustration,
         },
     )
-
-
-async def action_update_task_status(step_input: StepInput) -> StepOutput:
-    """Apply the returning flow's outcome to mission state.
-
-    Reads last_result, last_status, last_task_id from input to update
-    the corresponding task's status and frustration level.
-    """
-    effects = step_input.effects
-    mission = step_input.context.get("mission")
-    frustration = dict(step_input.context.get("frustration", {}))
-
-    if not mission:
-        return StepOutput(
-            result={
-                "needs_plan": True,
-                "task_completed": False,
-                "events_pending": False,
-            },
-            observations="No mission in context",
-            context_updates={"mission": mission, "frustration": frustration},
-        )
-
-    last_status = step_input.context.get("last_status", "")
-    last_task_id = step_input.context.get("last_task_id", "")
-    last_result = step_input.context.get("last_result", "")
-
-    # Check if plan exists
-    if not mission.plan:
-        return StepOutput(
-            result={
-                "needs_plan": True,
-                "task_completed": False,
-                "events_pending": False,
-            },
-            observations="Mission has no plan — needs planning",
-            context_updates={"mission": mission, "frustration": frustration},
-        )
-
-    # Check for pending events
-    events = step_input.context.get("events", [])
-    if events:
-        return StepOutput(
-            result={
-                "needs_plan": False,
-                "task_completed": False,
-                "events_pending": True,
-            },
-            observations=f"{len(events)} events pending",
-            context_updates={"mission": mission, "frustration": frustration},
-        )
-
-    # Apply last result to task
-    task_completed = False
-    frustration_was_elevated = False
-    quality_gate_exhausted = False
-
-    # Handle quality gate failure status — not tied to a specific task
-    if last_status == "quality_failed":
-        # Set the blocked flag so the quality gate cannot re-run
-        # until actual fix work (file_ops, patch, rewrite, create, interact) completes.
-        mission.quality_gate_blocked = True
-
-        # Check for exhaustion: if blocked AND too many gate attempts,
-        # the mission is deadlocked.
-        actionable = [
-            t
-            for t in mission.plan
-            if t.status in ("pending", "failed") and t.frustration < 5
-        ]
-
-        if not actionable and mission.quality_gate_attempts >= 3:
-            quality_gate_exhausted = True
-            logger.info(
-                "Quality gate exhausted: %d attempts, 0 actionable tasks",
-                mission.quality_gate_attempts,
-            )
-    elif last_status in ("success", "completed"):
-        # Unblock the quality gate when real fix work has completed.
-        # Check that the last dispatched flow was a work flow, not
-        # just a director cycle or planning step.
-        last_dispatch = (
-            mission.dispatch_history[-1]
-            if mission.dispatch_history
-            else None
-        )
-        last_flow = last_dispatch.flow if last_dispatch else ""
-        if last_flow in ("file_ops", "patch", "rewrite", "create", "interact", "project_ops"):
-            mission.quality_gate_blocked = False
-
-    if last_task_id:
-        from agent.persistence.models import AttemptRecord
-
-        for task in mission.plan:
-            if task.id == last_task_id:
-                prev_frustration = task.frustration
-
-                if last_status in ("success", "completed"):
-                    task.status = "complete"
-                    task.summary = (
-                        str(last_result)[:200] if last_result else "Completed"
-                    )
-                    task.frustration = 0
-                    task_completed = True
-                    frustration_was_elevated = prev_frustration > 0
-                elif last_status in ("abandoned", "failed"):
-                    task.status = "failed"
-                    task.frustration = min(task.frustration + 1, 5)
-                    task.summary = str(last_result)[:200] if last_result else "Failed"
-
-                # Record the attempt — store full error output for diagnosis
-                error_output = None
-                if last_status in ("abandoned", "failed", "diagnosed"):
-                    error_output = str(last_result) if last_result else None
-                task.attempts.append(
-                    AttemptRecord(
-                        flow=task.flow,
-                        status=last_status or "unknown",
-                        summary=str(last_result)[:200] if last_result else "",
-                        error=error_output,
-                    )
-                )
-
-                frustration[task.id] = task.frustration
-                break
-
-    # Save updated state
-    if effects:
-        await effects.save_mission(mission)
-
-    # ── Check goal-level completion ──────────────────────────────
-    # If all goals are complete (or no goals exist yet), signal it.
-    # The director uses this as a termination signal: all_goals_complete
-    # means the mission can proceed to final quality gate.
-    all_goals_complete = False
-    if hasattr(mission, "goals") and mission.goals:
-        all_goals_complete = all(
-            g.status == "complete" for g in mission.goals
-        )
-        # Also update goal statuses based on task completion
-        _update_goal_statuses(mission)
-
-    return StepOutput(
-        result={
-            "needs_plan": False,
-            "task_completed": task_completed,
-            "events_pending": False,
-            "frustration_reset": frustration_was_elevated and task_completed,
-            "quality_gate_exhausted": quality_gate_exhausted,
-            "all_goals_complete": all_goals_complete,
-        },
-        observations=f"Updated task {last_task_id[:8] if last_task_id else 'none'}: "
-        f"status={last_status}, completed={task_completed}"
-        + (", QUALITY GATE EXHAUSTED" if quality_gate_exhausted else "")
-        + (", ALL GOALS COMPLETE" if all_goals_complete else ""),
-        context_updates={"mission": mission, "frustration": frustration},
-    )
-
-
-def _update_goal_statuses(mission) -> None:
-    """Update goal statuses based on associated task completion and frustration.
-
-    A goal is:
-      - "complete" when ALL associated tasks are complete
-      - "in_progress" when at least one task is in_progress or complete
-      - "blocked" when >50% of associated tasks have frustration >= 3
-      - "pending" otherwise
-    """
-    if not hasattr(mission, "goals") or not mission.goals:
-        return
-
-    task_map = {t.id: t for t in mission.plan} if hasattr(mission, "plan") else {}
-
-    for goal in mission.goals:
-        if goal.status in ("revised",):
-            continue  # Don't auto-update revised goals
-
-        if not goal.associated_task_ids:
-            continue
-
-        tasks = [task_map[tid] for tid in goal.associated_task_ids if tid in task_map]
-        if not tasks:
-            continue
-
-        all_complete = all(t.status == "complete" for t in tasks)
-        any_active = any(t.status in ("in_progress", "complete") for t in tasks)
-        frustrated_count = sum(1 for t in tasks if t.frustration >= 3)
-        is_blocked = frustrated_count > len(tasks) / 2
-
-        if all_complete:
-            goal.status = "complete"
-        elif is_blocked:
-            goal.status = "blocked"
-        elif any_active:
-            goal.status = "in_progress"
-        # else: stays "pending"
 
 
 async def action_handle_events(step_input: StepInput) -> StepOutput:
@@ -283,7 +108,10 @@ async def action_handle_events(step_input: StepInput) -> StepOutput:
             if msg:
                 user_messages.append(msg)
 
-    # Append user messages as notes
+    # Append user messages as notes.
+    # NOTE: This action mutates multiple mission fields (status, notes) and
+    # persists once at the end. We can't use effects.push_note here because
+    # that reloads mission from disk, losing our status edits.
     if user_messages:
         from agent.persistence.models import NoteRecord
 
@@ -313,599 +141,13 @@ async def action_handle_events(step_input: StepInput) -> StepOutput:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# NEW: LLM Menu Task Selection (replaces _find_best_task_for_flow)
+# Memoryful Session Management for mission_control
 # ══════════════════════════════════════════════════════════════════════
-
-
-async def action_select_task_for_dispatch(step_input: StepInput) -> StepOutput:
-    """Present actionable tasks as an LLM menu for selection.
-
-    Uses the memoryful mission_control session. The model has already
-    seen the mission state and produced its analysis — now it picks
-    which specific task to work on.
-
-    Reads: context.mission, context.session_id, context.director_analysis
-    Publishes: selected_task (TaskRecord), dispatch_flow (str)
-    """
-    effects = step_input.effects
-    mission = step_input.context.get("mission")
-    session_id = step_input.context.get("session_id", "")
-
-    if not mission or not effects:
-        return StepOutput(
-            result={"task_selected": False},
-            observations="No mission or effects for task selection",
-        )
-
-    # Build list of actionable tasks (pending or failed with frustration < 5)
-    actionable = [
-        t
-        for t in mission.plan
-        if t.status in ("pending", "failed")
-        and t.frustration < 5
-        and _dependencies_met(t, mission)
-    ]
-
-    if not actionable:
-        # Distinguish: are all tasks genuinely complete, or are some
-        # still pending/in_progress but blocked by unmet dependencies?
-        incomplete = [
-            t for t in mission.plan
-            if t.status not in ("complete",)
-        ]
-        all_complete = len(incomplete) == 0
-
-        # Also detect stale in_progress tasks (set in_progress but never
-        # attempted in the last N cycles) and reset them to pending so
-        # they become actionable again.
-        for t in mission.plan:
-            if t.status == "in_progress":
-                # If a task has been in_progress but has no recent attempts,
-                # it was likely abandoned during a diagnosis detour
-                logger.warning(
-                    "Resetting stale in_progress task to pending: %s",
-                    t.description[:60],
-                )
-                t.status = "pending"
-
-        # After reset, re-check if any tasks are now actionable
-        newly_actionable = [
-            t for t in mission.plan
-            if t.status in ("pending", "failed")
-            and t.frustration < 5
-            and _dependencies_met(t, mission)
-        ]
-        if newly_actionable:
-            # Save the reset and continue with these tasks
-            if effects:
-                await effects.save_mission(mission)
-            # Fall through to the normal selection logic below
-            # by replacing the empty actionable list
-            actionable = newly_actionable
-            logger.info(
-                "Reset stale tasks — %d tasks now actionable",
-                len(actionable),
-            )
-        else:
-            if effects:
-                await effects.save_mission(mission)
-
-            return StepOutput(
-                result={
-                    "task_selected": False,
-                    "no_actionable_tasks": True,
-                    "all_tasks_complete": all_complete,
-                },
-                observations="All tasks complete" if all_complete
-                else f"No actionable tasks — {len(incomplete)} tasks blocked or in_progress",
-            )
-
-    # Build the menu prompt — use task IDs as option names for JSON selection
-    task_options = {}
-    lines = ["Select the task to work on next:\n"]
-    for task in actionable:
-        frust = f" [frustration: {task.frustration}]" if task.frustration > 0 else ""
-        target = task.inputs.get("target_file_path", "")
-        target_str = f" → {target}" if target else ""
-        desc = f"[{task.status}] {task.description}{target_str}{frust}"
-        lines.append(f"  - {task.id}: {desc}")
-        task_options[task.id] = desc
-
-    lines.append("")
-    lines.append(
-        "Pick the most impactful task. "
-        'Respond with ONLY a JSON object: {"choice": "<task_id>"}'
-    )
-    lines.append(f"Valid task IDs: {', '.join(task_options.keys())}")
-    prompt = "\n".join(lines)
-
-    from agent.resolvers.llm_menu import extract_choice
-
-    try:
-        result = await effects.session_inference(
-            session_id,
-            prompt,
-            {"temperature": 0.1},
-        )
-        response = result.text.strip() if result.text else ""
-    except Exception as e:
-        logger.error("Task selection failed: %s", e)
-        response = ""
-
-    # Extract the chosen task ID from the response
-    chosen_id = extract_choice(response, list(task_options.keys()))
-    selected = None
-    if chosen_id:
-        for task in actionable:
-            if task.id == chosen_id:
-                selected = task
-                break
-
-    # Fallback: first actionable task
-    if selected is None:
-        selected = actionable[0]
-        logger.warning(
-            "Task selection fallback to first task (response was %r)",
-            response[:60],
-        )
-
-    # Mark as in_progress
-    for task in mission.plan:
-        if task.id == selected.id:
-            task.status = "in_progress"
-            break
-
-    if effects:
-        await effects.save_mission(mission)
-
-    # ── Assemble partial dispatch_config ──────────────────────
-    # Contains everything except target_file_path (resolved by
-    # select_target_file in the next step).
-    dispatch_flow_type = step_input.context.get("dispatch_flow_type", "")
-    dispatch_flow = dispatch_flow_type or selected.flow or "file_ops"
-
-    # Assemble flow_directive from goal + task
-    task_desc = selected.description or ""
-    goal_context = ""
-    goal_id = getattr(selected, "goal_id", "") or (selected.inputs or {}).get("goal_id", "")
-    if goal_id and hasattr(mission, "goals"):
-        for goal in mission.goals:
-            if goal.id == goal_id:
-                goal_context = goal.description
-                break
-
-    if goal_context and task_desc:
-        flow_directive = f"{task_desc} — serving goal: {goal_context}"
-    else:
-        flow_directive = task_desc or (selected.inputs or {}).get("reason", "") or "No directive specified"
-
-    # Gather relevant_notes (architecture + recent observations)
-    # NOTE: Uses Option A — re-evaluate alongside persistence audit.
-    relevant_notes = ""
-    if hasattr(mission, "notes") and mission.notes:
-        recent = sorted(mission.notes, key=lambda n: n.timestamp, reverse=True)[:8]
-        relevant_notes = "\n".join(f"[{n.category}] {n.content[:200]}" for n in recent)
-
-    if mission.architecture:
-        arch = mission.architecture
-        arch_summary = (
-            f"Import scheme: {arch.import_scheme}. "
-            f"Run command: {arch.run_command}. "
-            f"Modules: {', '.join(arch.canonical_files())}."
-        )
-        if relevant_notes:
-            relevant_notes = f"[architecture] {arch_summary}\n{relevant_notes}"
-        else:
-            relevant_notes = f"[architecture] {arch_summary}"
-
-    # Determine prompt variant for specialized generation
-    prompt_variant = ""
-    if dispatch_flow == "file_ops":
-        desc_lower = selected.description.lower()
-        target_lower = ((selected.inputs or {}).get("target_file_path", "") or "").lower()
-        if (
-            any(kw in desc_lower for kw in ["test", "create tests", "write tests"])
-            or target_lower.startswith("tests/")
-            or "/test_" in target_lower
-        ):
-            prompt_variant = "test_generation"
-
-    partial_config = {
-        "flow": dispatch_flow,
-        "task_id": selected.id,
-        "flow_directive": flow_directive,
-        "working_directory": mission.config.working_directory,
-        "target_file_path": (selected.inputs or {}).get("target_file_path", ""),
-        "relevant_notes": relevant_notes,
-        "mission_id": mission.id,
-        "prompt_variant": prompt_variant,
-    }
-
-    # For diagnose_issue: extract error context from the task's attempt history
-    if dispatch_flow == "diagnose_issue":
-        error_description = selected.description
-        error_output = ""
-        if hasattr(selected, "attempts") and selected.attempts:
-            for attempt in reversed(selected.attempts):
-                if attempt.error:
-                    error_output = attempt.error
-                    break
-                if attempt.summary and not error_output:
-                    error_output = attempt.summary
-        if not error_output:
-            for task in mission.plan:
-                if task.status == "failed" and task.attempts:
-                    for attempt in reversed(task.attempts):
-                        if attempt.error:
-                            error_output = attempt.error
-                            break
-                    if error_output:
-                        break
-        partial_config["error_description"] = error_description
-        partial_config["error_output"] = error_output
-
-    return StepOutput(
-        result={"task_selected": True},
-        observations=f"Selected task: {selected.description[:60]}",
-        context_updates={
-            "dispatch_config": partial_config,
-        },
-    )
-
-
-def _dependencies_met(task, mission) -> bool:
-    """Check if all task dependencies are satisfied (complete)."""
-    if not task.depends_on:
-        return True
-    completed_ids = {t.id for t in mission.plan if t.status == "complete"}
-    return all(dep_id in completed_ids for dep_id in task.depends_on)
-
-
-# ══════════════════════════════════════════════════════════════════════
-# NEW: LLM Menu File Selection (replaces _derive_file_path_from_description)
-# ══════════════════════════════════════════════════════════════════════
-
-
-async def action_select_target_file(step_input: StepInput) -> StepOutput:
-    """Resolve target file for the dispatch.
-
-    Reads the partial dispatch_config from select_task_for_dispatch.
-    If a target_file_path is already set and valid, passes through.
-    Otherwise presents project files as an LLM menu for selection.
-
-    Reads: context.dispatch_config, context.session_id, context.mission
-    Publishes: dispatch_config (with target_file_path resolved)
-    """
-    effects = step_input.effects
-    mission = step_input.context.get("mission")
-    session_id = step_input.context.get("session_id", "")
-    dispatch_config = step_input.context.get("dispatch_config", {})
-
-    if not mission or not effects or not dispatch_config:
-        return StepOutput(
-            result={"target_resolved": False},
-            observations="Missing context for file selection",
-        )
-
-    target_path = dispatch_config.get("target_file_path", "")
-    dispatch_flow = dispatch_config.get("flow", "file_ops")
-    working_dir = dispatch_config.get("working_directory", "") or mission.config.working_directory
-    task_desc = dispatch_config.get("flow_directive", "")
-
-    # Check if we need file selection (only for flows that target existing files)
-    # file_ops handles its own create/modify routing internally.
-    # diagnose_issue needs an existing file to analyze.
-    # interact and project_ops are project-level, no file targeting.
-    needs_existing_file = dispatch_flow in {
-        "diagnose_issue",
-    }
-
-    # ── Fast paths: target already resolved ─────────────────────
-
-    # If we have a valid path and the flow doesn't need to verify existence, pass through
-    if target_path and not needs_existing_file:
-        dispatch_config["target_file_path"] = target_path
-        return StepOutput(
-            result={"target_resolved": True},
-            observations=f"Target file from task: {target_path}",
-            context_updates={"dispatch_config": dispatch_config},
-        )
-
-    # Empty target for file_ops/interact/project_ops: pass through.
-    # file_ops will route to create (which infers from flow_directive).
-    # interact and project_ops are project-level, no file needed.
-    if not target_path and not needs_existing_file:
-        return StepOutput(
-            result={"target_resolved": True},
-            observations=f"No target file specified — flow will infer from directive",
-            context_updates={"dispatch_config": dispatch_config},
-        )
-
-    # For existing-file flows, validate the path exists
-    if target_path and needs_existing_file:
-        full_path = os.path.join(working_dir, target_path)
-        if await effects.file_exists(full_path):
-            dispatch_config["target_file_path"] = target_path
-            return StepOutput(
-                result={"target_resolved": True},
-                observations=f"Target file verified: {target_path}",
-                context_updates={"dispatch_config": dispatch_config},
-            )
-        # Path invalid — fall through to menu selection
-
-    # ── Menu path: need to select a file ──────────────────────
-
-    # Scan project for available files
-    file_list = []
-    try:
-        listing = await effects.list_directory(".", recursive=True)
-        if listing.exists:
-            file_list = [
-                e.path
-                for e in listing.entries
-                if e.is_file
-                and not e.path.startswith(".")
-                and not e.name.startswith(".")
-                and "__pycache__" not in e.path
-                and e.name.endswith(
-                    (
-                        ".py",
-                        ".yaml",
-                        ".yml",
-                        ".json",
-                        ".toml",
-                        ".md",
-                        ".js",
-                        ".ts",
-                        ".rs",
-                        ".html",
-                        ".css",
-                        ".cfg",
-                        ".txt",
-                    )
-                )
-            ]
-    except Exception as e:
-        logger.warning("Failed to list project files: %s", e)
-
-    # Also include files from architecture if available
-    if mission.architecture:
-        for arch_file in mission.architecture.canonical_files():
-            if arch_file not in file_list:
-                file_list.append(arch_file)
-
-    if not file_list:
-        if not needs_existing_file:
-            # No files on disk — keep whatever target_path we have (might be from architecture)
-            return StepOutput(
-                result={"target_resolved": True},
-                observations=f"No files on disk, using target: {target_path or '(none)'}",
-                context_updates={"dispatch_config": dispatch_config},
-            )
-        return StepOutput(
-            result={"target_resolved": False, "error": "no_project_files"},
-            observations=f"No project files found for {dispatch_flow}.",
-        )
-
-    # Present file menu via memoryful session — JSON-based selection
-    # Build option map: use file paths as option keys
-    file_options = {}
-    lines = [f"Select the target file for this {dispatch_flow} task:"]
-    lines.append(f"Task: {task_desc}\n")
-
-    truncated_list = file_list[:19]
-    for filepath in truncated_list:
-        lines.append(f"  - {filepath}")
-        file_options[filepath] = filepath
-
-    # Add "create new file" escape hatch for flows that target existing files
-    create_option_key = "__create_new__"
-    if needs_existing_file and truncated_list:
-        lines.append(f"  - {create_option_key}: The file I need doesn't exist yet")
-        file_options[create_option_key] = "CREATE NEW FILE"
-
-    lines.append("")
-    lines.append(
-        "Pick the file that best matches the task. "
-        'Respond with ONLY a JSON object: {"choice": "<file_path>"}'
-    )
-    lines.append(f"Valid file paths: {', '.join(file_options.keys())}")
-    prompt = "\n".join(lines)
-
-    from agent.resolvers.llm_menu import extract_choice
-
-    try:
-        result = await effects.session_inference(
-            session_id,
-            prompt,
-            {"temperature": 0.1},
-        )
-        response = result.text.strip() if result.text else ""
-    except Exception as e:
-        logger.error("File selection failed: %s", e)
-        # Fall through with whatever path we have
-        return StepOutput(
-            result={"target_resolved": bool(target_path)},
-            observations=f"File selection failed: {e}, using: {target_path or '(none)'}",
-            context_updates={"dispatch_config": dispatch_config},
-        )
-
-    chosen = extract_choice(response, list(file_options.keys()))
-
-    # Handle "create new file" selection
-    if chosen == create_option_key:
-        create_prompt = (
-            f"You chose to create a new file instead of modifying an existing one.\n"
-            f"Task: {task_desc}\n\n"
-            f"What file path should be created? "
-            f"Reply with ONLY the file path (e.g., loader.py or src/utils.py), nothing else."
-        )
-        try:
-            create_result = await effects.session_inference(
-                session_id,
-                create_prompt,
-                {"temperature": 0.1, "max_tokens": 30},
-            )
-            new_path = create_result.text.strip().strip("'\"` \n")
-            new_path = new_path.splitlines()[0].strip() if new_path else ""
-        except Exception as e:
-            logger.error("Create file path prompt failed: %s", e)
-            new_path = ""
-
-        if new_path:
-            logger.info(
-                "File selection redirected: %s → file_ops (create) for %s",
-                dispatch_flow,
-                new_path,
-            )
-            dispatch_config["flow"] = "file_ops"
-            dispatch_config["target_file_path"] = new_path
-            return StepOutput(
-                result={"target_resolved": True},
-                observations=f"Redirected to file_ops create: {new_path}",
-                context_updates={"dispatch_config": dispatch_config},
-            )
-        logger.warning("Create redirect failed — no path given, using first file")
-        chosen = None  # Fall through to default
-
-    # Resolve the selected file path
-    if chosen and chosen in file_list:
-        selected_path = chosen
-    else:
-        # Fallback: first file
-        selected_path = file_list[0]
-        if chosen:
-            logger.warning(
-                "File selection response %r not in file_list, using first: %s",
-                chosen,
-                selected_path,
-            )
-    dispatch_config["target_file_path"] = selected_path
-
-    return StepOutput(
-        result={"target_resolved": True},
-        observations=f"Selected file: {selected_path}",
-        context_updates={"dispatch_config": dispatch_config},
-    )
-
-
-# ══════════════════════════════════════════════════════════════════════
-# NEW: Memoryful Session Management for mission_control
-# ══════════════════════════════════════════════════════════════════════
-
-
-async def action_start_director_session(step_input: StepInput) -> StepOutput:
-    """Start a memoryful inference session for the director cycle.
-
-    The session persists across reason → select_task → select_target_file,
-    giving the model conversational context for all three decisions.
-    """
-    effects = step_input.effects
-    if not effects:
-        return StepOutput(
-            result={"session_started": False},
-            observations="No effects — cannot start director session",
-        )
-
-    try:
-        session_id = await effects.start_inference_session({"ttl_seconds": 300})
-    except Exception as e:
-        logger.error("Failed to start director session: %s", e)
-        return StepOutput(
-            result={"session_started": False},
-            observations=f"Failed to start director session: {e}",
-        )
-
-    if not session_id:
-        logger.warning("Director session returned empty session_id — falling back to stateless")
-        return StepOutput(
-            result={"session_started": False},
-            observations="Director session returned empty session_id",
-            context_updates={"session_id": ""},
-        )
-
-    logger.info("Director session started: %s", session_id)
-
-    return StepOutput(
-        result={"session_started": True},
-        observations=f"Director session started: {session_id}",
-        context_updates={"session_id": session_id},
-    )
-
-
-async def action_end_director_session(step_input: StepInput) -> StepOutput:
-    """End the memoryful director session before dispatching."""
-    effects = step_input.effects
-    session_id = step_input.context.get("session_id", "")
-
-    if effects and session_id:
-        try:
-            await effects.end_inference_session(session_id)
-        except Exception as e:
-            logger.warning("Failed to end director session: %s", e)
-
-    return StepOutput(
-        result={},
-        observations="Director session ended",
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════
 # NEW: Dispatch History Tracking
 # ══════════════════════════════════════════════════════════════════════
-
-
-async def action_record_dispatch(step_input: StepInput) -> StepOutput:
-    """Record the current dispatch in history for deduplication.
-
-    Also checks for repeated dispatches and adds warnings to context.
-    """
-    effects = step_input.effects
-    mission = step_input.context.get("mission")
-    dispatch_config = step_input.context.get("dispatch_config", {})
-
-    if not mission or not dispatch_config:
-        return StepOutput(result={}, observations="No dispatch to record")
-
-    from agent.persistence.models import DispatchRecord
-
-    record = DispatchRecord(
-        flow=dispatch_config.get("flow", ""),
-        task_id=dispatch_config.get("task_id", ""),
-        target_file_path=dispatch_config.get("target_file_path", ""),
-    )
-
-    # Check for repeated dispatches
-    recent = mission.dispatch_history[-5:] if mission.dispatch_history else []
-    repeat_count = sum(
-        1 for r in recent if r.flow == record.flow and r.task_id == record.task_id
-    )
-
-    mission.dispatch_history.append(record)
-
-    # Trim history to last 20
-    if len(mission.dispatch_history) > 20:
-        mission.dispatch_history = mission.dispatch_history[-20:]
-
-    if effects:
-        await effects.save_mission(mission)
-
-    dispatch_warning = ""
-    if repeat_count >= 2:
-        dispatch_warning = (
-            f"WARNING: This exact dispatch ({record.flow} on task "
-            f"{record.task_id[:8]}) has been attempted {repeat_count} times "
-            f"in recent cycles. Consider a different approach."
-        )
-
-    return StepOutput(
-        result={"repeat_count": repeat_count},
-        observations=dispatch_warning or "Dispatch recorded",
-        context_updates={
-            "mission": mission,
-            "dispatch_warning": dispatch_warning,
-        },
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -947,7 +189,7 @@ async def action_check_architecture_drift(step_input: StepInput) -> StepOutput:
         )
 
     has_architecture = mission.architecture is not None
-    has_tasks = len(mission.plan) > 0
+    has_tasks = len(mission.goals) > 0
 
     if not has_architecture:
         return StepOutput(
@@ -964,10 +206,21 @@ async def action_check_architecture_drift(step_input: StepInput) -> StepOutput:
 
     # Get project files from manifest, excluding infrastructure
     infrastructure = {
-        "pyproject.toml", "setup.cfg", "setup.py", "requirements.txt",
-        "uv.lock", "README.md", "readme.md", "CHANGELOG.md",
-        ".gitignore", ".editorconfig", ".flake8", ".pre-commit-config.yaml",
-        "Makefile", "Dockerfile", "docker-compose.yml",
+        "pyproject.toml",
+        "setup.cfg",
+        "setup.py",
+        "requirements.txt",
+        "uv.lock",
+        "README.md",
+        "readme.md",
+        "CHANGELOG.md",
+        ".gitignore",
+        ".editorconfig",
+        ".flake8",
+        ".pre-commit-config.yaml",
+        "Makefile",
+        "Dockerfile",
+        "docker-compose.yml",
     }
     infrastructure_prefixes = (".", "tests/", "test_", "__pycache__/")
     infrastructure_suffixes = ("__init__.py",)
@@ -1001,7 +254,8 @@ async def action_check_architecture_drift(step_input: StepInput) -> StepOutput:
             "drift_detected": drift_detected,
             "new_files": new_on_disk,
         },
-        observations=drift_summary or f"No drift — architecture matches disk ({len(arch_files)} files)",
+        observations=drift_summary
+        or f"No drift — architecture matches disk ({len(arch_files)} files)",
         context_updates={"drift_summary": drift_summary},
     )
 
@@ -1015,6 +269,12 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
     effects = step_input.effects
     mission = step_input.context.get("mission")
     response = step_input.context.get("inference_response", "")
+    logger.info(
+        "parse_arch: response type=%s, len=%d, first100=%s",
+        type(response).__name__,
+        len(response),
+        repr(response[:100]),
+    )
 
     if not mission or not response:
         return StepOutput(
@@ -1027,29 +287,17 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
         ModuleSpec,
         InterfaceContract,
         DataShapeContract,
+        StateShapeContract,
     )
-    from agent.actions.refinement_actions import strip_markdown_wrapper
+    from agent.llm_json import parse_llm_json
 
     # Parse JSON from response
-    cleaned = strip_markdown_wrapper(response)
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError:
-        # Try to extract JSON object
-        match = re.search(r"\{[\s\S]*\}", cleaned)
-        if match:
-            try:
-                data = json.loads(match.group())
-            except json.JSONDecodeError:
-                return StepOutput(
-                    result={"architecture_parsed": False},
-                    observations="Failed to parse architecture JSON",
-                )
-        else:
-            return StepOutput(
-                result={"architecture_parsed": False},
-                observations="No JSON object found in architecture response",
-            )
+    data = parse_llm_json(response)
+    if not isinstance(data, dict):
+        return StepOutput(
+            result={"architecture_parsed": False},
+            observations="Failed to parse architecture JSON",
+        )
 
     # Build ArchitectureState
     execution = data.get("execution", {})
@@ -1079,6 +327,14 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
     for ds in data.get("data_shapes", []):
         data_shapes.append(DataShapeContract.from_llm_dict(ds))
 
+    state_shapes = []
+    for ss in data.get("state_shapes", []):
+        state_shapes.append(StateShapeContract.from_llm_dict(ss))
+
+    transient_files = [
+        str(t).strip() for t in data.get("transient_files", []) if str(t).strip()
+    ]
+
     arch = ArchitectureState(
         import_scheme=execution.get("import_scheme", "flat"),
         run_command=execution.get("run_command", ""),
@@ -1088,6 +344,8 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
         creation_order=data.get("creation_order", [m.file for m in modules]),
         interfaces=interfaces,
         data_shapes=data_shapes,
+        state_shapes=state_shapes,
+        transient_files=transient_files,
         notes=data.get("notes", ""),
     )
 
@@ -1106,7 +364,17 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
             f"  {ds.file} → {ds.consumed_by}: {ds.structure}" for ds in arch.data_shapes
         ]
         arch_summary += "\nData shapes:\n" + "\n".join(shape_lines)
+    if arch.state_shapes:
+        state_lines = [
+            f"  {ss.name} (owner {ss.owner}, consumers {ss.consumed_by}): "
+            f"{ss.structure}"
+            for ss in arch.state_shapes
+        ]
+        arch_summary += "\nState contracts:\n" + "\n".join(state_lines)
 
+    # NOTE: This action writes mission.architecture and appends a note in
+    # the same cycle, persisting once. effects.push_note would reload from
+    # disk between the two writes and lose the architecture edit.
     mission.notes.append(
         NoteRecord(
             content=arch_summary,
@@ -1130,217 +398,15 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
     )
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Plan Creation (cleaned up, receives architecture as structured input)
-# ══════════════════════════════════════════════════════════════════════
-
-
-async def action_create_plan_from_architecture(step_input: StepInput) -> StepOutput:
-    """Parse the LLM's plan response into TaskRecords.
-
-    Unlike v1, this version receives the architecture as structured state
-    and validates that task target_file_paths match the architecture's
-    canonical file list.
-
-    Reads: context.mission, context.inference_response, context.architecture
-    Writes: mission.plan
-    """
-    effects = step_input.effects
-    mission = step_input.context.get("mission")
-    response = step_input.context.get("inference_response", "")
-    architecture = step_input.context.get(
-        "architecture",
-        getattr(mission, "architecture", None) if mission else None,
-    )
-
-    if not mission:
-        return StepOutput(
-            result={"plan_created": False},
-            observations="No mission in context",
-        )
-
-    tasks = _parse_task_list(response, architecture)
-
-    if not tasks:
-        from agent.persistence.models import TaskRecord
-
-        tasks = [
-            TaskRecord(
-                description=f"Implement: {mission.objective}",
-                flow="create",
-                inputs={"target_file_path": "", "reason": mission.objective},
-            )
-        ]
-
-    mission.plan = tasks
-
-    if effects:
-        await effects.save_mission(mission)
-
-    return StepOutput(
-        result={"plan_created": True, "task_count": len(tasks)},
-        observations=f"Created plan with {len(tasks)} tasks: "
-        + ", ".join(t.description[:50] for t in tasks),
-        context_updates={"mission": mission},
-    )
-
-
-def _parse_task_list(
-    response: str,
-    architecture: Any | None = None,
-) -> list:
-    """Parse an LLM response into TaskRecord objects.
-
-    If architecture is available, validates target_file_path against
-    the canonical file list.
-    """
-    from agent.persistence.models import TaskRecord
-    from agent.actions.refinement_actions import strip_markdown_wrapper
-
-    tasks = []
-    response = strip_markdown_wrapper(response)
-
-    # Extract JSON array
-    json_match = re.search(r"\[[\s\S]*\]", response)
-    if not json_match:
-        return tasks
-
-    try:
-        items = json.loads(json_match.group())
-    except json.JSONDecodeError:
-        return tasks
-
-    # Get canonical file list from architecture
-    arch_files = set()
-    if architecture:
-        arch_files = set(
-            architecture.canonical_files()
-            if hasattr(architecture, "canonical_files")
-            else []
-        )
-
-    desc_to_id = {}
-
-    for i, item in enumerate(items):
-        if not isinstance(item, dict):
-            continue
-
-        desc = item.get("description", str(item))
-        item_inputs = item.get("inputs", {}) or {}
-        filename = item_inputs.get("target_file_path", "")
-
-        # Validate against architecture if available
-        if filename and arch_files and filename not in arch_files:
-            basename = os.path.basename(filename)
-            for arch_file in arch_files:
-                if os.path.basename(arch_file) == basename:
-                    logger.info(
-                        "Plan path %r corrected to architecture path %r",
-                        filename,
-                        arch_file,
-                    )
-                    filename = arch_file
-                    break
-
-        # Infer flow from description (lightweight hint)
-        flow = item.get("flow") or _infer_flow_hint(desc)
-        # B5: Normalize stale flow names the model may produce from memory
-        flow = _FLOW_NAME_REMAP.get(flow, flow)
-
-        task_inputs = {
-            "target_file_path": filename or "",
-            "reason": desc,
-        }
-
-        for k, v in item_inputs.items():
-            if k not in task_inputs and v:
-                task_inputs[k] = v
-
-        task = TaskRecord(
-            description=desc,
-            flow=flow,
-            priority=i,
-            inputs=task_inputs,
-        )
-        desc_to_id[desc] = task.id
-        tasks.append(task)
-
-    # Resolve depends_on
-    for i, item in enumerate(items):
-        if isinstance(item, dict) and i < len(tasks):
-            raw_deps = item.get("depends_on", [])
-            if isinstance(raw_deps, list):
-                resolved = []
-                for dep_desc in raw_deps:
-                    if isinstance(dep_desc, str):
-                        dep_id = desc_to_id.get(dep_desc)
-                        if not dep_id:
-                            for d, tid in desc_to_id.items():
-                                if dep_desc in d or d in dep_desc:
-                                    dep_id = tid
-                                    break
-                        if dep_id:
-                            resolved.append(dep_id)
-                tasks[i].depends_on = resolved
-
-    return tasks
-
-
 # B5: Stale flow names the model sometimes produces from memory.
 # Maps old names → current canonical names.
 _FLOW_NAME_REMAP: dict[str, str] = {
     "file_write": "file_ops",
-    "create_file": "create",
+    "create_file": "file_ops",
+    "create": "file_ops",
     "modify_file": "rewrite",
     "ast_edit_session": "patch",
 }
-
-
-def _infer_flow_hint(desc: str) -> str:
-    """Lightweight flow hint from description. Used as a default that
-    mission_control can override at dispatch time.
-
-    Condensed flow set:
-      file_ops      — create, modify, refactor, document, explore, manage, review
-      diagnose_issue  — investigate code issues
-      interact        — run and use the product, test features
-      project_ops     — manage project infrastructure, deps, config
-    """
-    d = desc.lower()
-
-    if any(kw in d for kw in ["diagnose", "debug", "investigate root cause"]):
-        return "diagnose_issue"
-    if any(
-        kw in d
-        for kw in [
-            "run the",
-            "verify",
-            "end-to-end",
-            "validate",
-            "test the",
-            "interact",
-            "try the",
-            "use the",
-        ]
-    ):
-        return "interact"
-    if any(
-        kw in d
-        for kw in [
-            "setup",
-            "initialize",
-            "configure",
-            "project init",
-            "dependency",
-            "package",
-            "install",
-        ]
-    ):
-        return "project_ops"
-
-    # Everything else routes through file_ops — it handles create, modify,
-    # refactor, document, explore, manage packages, review, and tests.
-    return "file_ops"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1388,134 +454,6 @@ async def action_enter_idle(step_input: StepInput) -> StepOutput:
 # ══════════════════════════════════════════════════════════════════════
 
 
-async def action_execute_file_creation(step_input: StepInput) -> StepOutput:
-    """Parse the LLM's file content response and write file(s) to disk.
-
-    Fails clearly if no target_file_path is available.
-    """
-    effects = step_input.effects
-    if not effects:
-        return StepOutput(
-            result={"write_success": False, "error": "no_effects"},
-            observations="No effects interface — cannot write files",
-        )
-
-    target = step_input.params.get("target_file_path", "") or step_input.context.get(
-        "target_file_path", ""
-    )
-    response = step_input.context.get("inference_response", "")
-
-    if not target and not response:
-        return StepOutput(
-            result={"write_success": False, "error": "no_target_or_content"},
-            observations="No target file path or content to write",
-        )
-
-    code = _extract_code(response)
-    if not code.strip():
-        return StepOutput(
-            result={"write_success": False, "error": "empty_content"},
-            observations="Inference produced empty content — nothing to write",
-        )
-
-    wr = await effects.write_file(target, code)
-
-    if not wr.success:
-        return StepOutput(
-            result={"write_success": False, "error": wr.error},
-            observations=f"Failed to write {target}: {wr.error}",
-        )
-
-    # Post-write verification
-    exists = await effects.file_exists(target)
-    if not exists:
-        return StepOutput(
-            result={"write_success": False, "error": "ghost_write"},
-            observations=f"Write reported success but {target} not found on disk",
-        )
-
-    return StepOutput(
-        result={"write_success": True, "path": target},
-        observations=f"Created {target} ({wr.bytes_written} bytes)",
-        context_updates={"files_changed": [target]},
-    )
-
-
-def _extract_code(response: str) -> str:
-    """Extract code content from an LLM response, stripping markdown fences."""
-    if not response:
-        return ""
-
-    lines = response.strip().splitlines()
-    if lines and lines[0].startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-
-    return "\n".join(lines) + "\n"
-
-
-async def action_run_tests(step_input: StepInput) -> StepOutput:
-    """Run a test command and report results.
-
-    Returns explicit 'skipped' status when effects are unavailable.
-    """
-    effects = step_input.effects
-    if not effects:
-        return StepOutput(
-            result={"all_passing": False, "status": "skipped"},
-            observations="No effects — tests skipped (NOT assumed pass)",
-        )
-
-    cmd = step_input.params.get("command", ["python", "-c", "print('OK')"])
-    if isinstance(cmd, str):
-        cmd = cmd.split()
-
-    result = await effects.run_command(cmd, timeout=60)
-
-    all_passing = result.return_code == 0
-    return StepOutput(
-        result={
-            "all_passing": all_passing,
-            "status": "passed" if all_passing else "failed",
-            "return_code": result.return_code,
-            "stdout": result.stdout[:500],
-            "stderr": result.stderr[:500],
-        },
-        observations=f"Tests {'passed' if all_passing else 'failed'}: rc={result.return_code}",
-    )
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Helpers
-# ══════════════════════════════════════════════════════════════════════
-
-
-def _is_duplicate_task(
-    mission, description: str, flow: str, target_file: str = ""
-) -> bool:
-    """Check if a substantially similar task already exists."""
-    desc_lower = description.lower()
-    for task in mission.plan:
-        if task.status == "complete":
-            continue
-        task_target = task.inputs.get("target_file_path", "")
-        if flow == task.flow and target_file and task_target == target_file:
-            return True
-        if desc_lower == task.description.lower():
-            return True
-    return False
-
-
-# Backward compat stubs for ouroboros.py CLI
-def _infer_flow_from_description(desc: str) -> str:
-    return _infer_flow_hint(desc)
-
-
-def _derive_source_for_tests(test_path: str, desc: str) -> str:
-    return ""
-
-
 # ══════════════════════════════════════════════════════════════════════
 # Goal Derivation (Context Contract Architecture)
 # ══════════════════════════════════════════════════════════════════════
@@ -1537,6 +475,11 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
     effects = step_input.effects
     mission = step_input.context.get("mission")
     architecture = step_input.context.get("architecture")
+    logger.info(
+        "derive_goals: architecture type=%s, value=%s",
+        type(architecture).__name__,
+        repr(architecture)[:200] if architecture else "None",
+    )
 
     if not effects or not mission:
         return StepOutput(
@@ -1551,14 +494,15 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
     if hasattr(mission, "objective"):
         objective = mission.objective
         modules = (
-            architecture.modules if architecture and hasattr(architecture, "modules")
+            architecture.modules
+            if architecture and hasattr(architecture, "modules")
             else []
         )
         data_shapes = (
-            architecture.data_shapes if architecture and hasattr(architecture, "data_shapes")
+            architecture.data_shapes
+            if architecture and hasattr(architecture, "data_shapes")
             else []
         )
-        plan = mission.plan if hasattr(mission, "plan") else []
     elif isinstance(mission, dict):
         objective = mission.get("objective", "")
         arch = mission.get("architecture") or architecture or {}
@@ -1568,7 +512,6 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
         else:
             modules = getattr(arch, "modules", [])
             data_shapes = getattr(arch, "data_shapes", [])
-        plan = mission.get("plan", [])
     else:
         return StepOutput(
             result={"goals_derived": False},
@@ -1596,92 +539,198 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
         )
         goals.append(goal)
 
+    # Track files already covered by module goals to avoid duplicates
+    covered_files = {f for g in goals for f in g.associated_files}
+
+    # Collect data file goals — we'll enrich them with content briefs
+    data_file_goals = []
     for ds in data_shapes:
         if isinstance(ds, dict):
             file_path = ds.get("file", "")
             consumed_by = ds.get("consumed_by", "")
+            structure = ds.get("structure", "")
         else:
             file_path = getattr(ds, "file", "")
             consumed_by = getattr(ds, "consumed_by", "")
+            structure = getattr(ds, "structure", "")
 
         if not file_path:
             continue
 
+        # Skip if this file already has a module goal (1a deduplication)
+        if file_path in covered_files:
+            continue
+        covered_files.add(file_path)
+
+        data_file_goals.append(
+            {
+                "file_path": file_path,
+                "consumed_by": consumed_by,
+                "structure": structure,
+            }
+        )
+
+    # ── Pass 1b: Content briefs for data files ───────────────────
+    # Generate creative content requirements for data files that need
+    # substantive content (world definitions, game data, etc.).
+    # Runs at t*1.0 — community default temperature for creative work.
+    if effects and objective and data_file_goals:
+        data_summary = "\n".join(
+            f"- {d['file_path']} (consumed by {d['consumed_by']}): {d['structure'][:200]}"
+            for d in data_file_goals
+        )
+        content_brief_prompt = (
+            f"Mission objective:\n{objective}\n\n"
+            f"Data files to create:\n{data_summary}\n\n"
+            f"For each data file, write a CONTENT BRIEF — a short natural language "
+            f"description of what interesting, substantive content should go in the file. "
+            f"Focus on making the content engaging and meeting the quantitative "
+            f"requirements from the mission objective (e.g., number of rooms, items, NPCs).\n\n"
+            f"Do NOT describe the file format or structure — that is already defined. "
+            f"Describe WHAT the content should be: names, descriptions, relationships, "
+            f"and any creative elements that make it interesting.\n\n"
+            f"Return a JSON object mapping file paths to content brief strings.\n"
+            f'Example: {{"world.yaml": "Create a mysterious castle with at least 6 rooms '
+            f"including a dungeon, throne room, and secret garden. Include 4 items such as "
+            f"a magic lantern and enchanted key. Add 2 NPCs: a wise old wizard with branching "
+            f"dialogue about the castle's history, and a suspicious guard who challenges "
+            f'the player."}}\n\n'
+            f"Return ONLY the fenced JSON."
+        )
+
+        try:
+            brief_result = await effects.run_inference(
+                prompt=content_brief_prompt,
+                config_overrides={"temperature": "t*1.0"},
+            )
+            if brief_result.text:
+                from agent.llm_json import parse_llm_json
+
+                briefs = parse_llm_json(brief_result.text)
+                if isinstance(briefs, dict):
+                    for d in data_file_goals:
+                        if d["file_path"] in briefs:
+                            d["content_brief"] = briefs[d["file_path"]]
+                            logger.info(
+                                "Content brief for %s: %s",
+                                d["file_path"],
+                                d["content_brief"][:80],
+                            )
+        except Exception as e:
+            logger.warning("Content brief generation failed: %s", e)
+
+    # Create GoalRecords for data files with enriched descriptions
+    for d in data_file_goals:
+        content_brief = d.get("content_brief", "")
+        if content_brief:
+            description = f"Create {d['file_path']} with content: {content_brief}"
+        else:
+            description = (
+                f"Create data file {d['file_path']} "
+                f"(consumed by {d['consumed_by']})"
+            )
+
         goal = GoalRecord(
-            description=f"Data file {file_path} consumed by {consumed_by}",
+            description=description,
             type="structural",
-            associated_files=[file_path],
+            associated_files=[d["file_path"]],
         )
         goals.append(goal)
 
     # ── Pass 2: Inference-derived functional goals ──
     if effects and objective:
         structural_summary = "\n".join(
-            f"- {g.description} ({', '.join(g.associated_files)})"
-            for g in goals
+            f"- {g.description} ({', '.join(g.associated_files)})" for g in goals
         )
         prompt = (
+            f"You are a goal decomposition module in an automated coding pipeline. "
+            f"Your output will be parsed by a JSON extractor. Return ONLY a JSON "
+            f"array inside a fenced code block — no explanation, no commentary.\n\n"
             f"Given these structural goals:\n{structural_summary}\n\n"
             f"And the mission objective:\n{objective}\n\n"
-            f"What functional capabilities should the project deliver? "
-            f"Each goal should describe a user-facing capability, not a file or module.\n\n"
-            f"Produce 3-5 functional goals as a JSON array of strings.\n"
-            f"Example: [\"Players can navigate between rooms using cardinal directions\", "
-            f"\"NPC dialogue branches based on player choices\"]\n\n"
-            f"Return ONLY the JSON array."
+            f"Derive the functional goals — user-facing capabilities the project "
+            f"must deliver. Each goal will be tested independently in an "
+            f"interactive session, so follow these rules:\n\n"
+            f"GRANULARITY: Each goal must test exactly ONE capability that can "
+            f"pass or fail on its own, without requiring other untested "
+            f"capabilities to work. Do NOT combine multiple capabilities with "
+            f"'and'. If a feature has basic and advanced aspects, split them "
+            f"into separate goals.\n\n"
+            f"ORDERING: Return goals from simplest/most foundational to most "
+            f"complex/integrative. Basic capabilities that other features "
+            f"depend on must come first. Goals that require multiple systems "
+            f"working together (integration tests, end-to-end scenarios) "
+            f"must come last.\n\n"
+            f"Produce 4-7 functional goals as a JSON array of strings.\n\n"
+            f"\u2705 CORRECT — for a calculator app:\n"
+            f"```json\n"
+            f"[\n"
+            f'  "User can enter numbers and see them displayed",\n'
+            f'  "Basic arithmetic operations produce correct results",\n'
+            f'  "Error messages appear for invalid input like division by zero",\n'
+            f'  "Calculation history persists across multiple operations",\n'
+            f'  "User can recall and reuse previous results in new calculations"\n'
+            f"]\n"
+            f"```\n"
+            f"Each goal tests one thing, ordered from basic to advanced. "
+            f"The last goal implicitly requires earlier capabilities to work.\n\n"
+            f"\u274c WRONG — do not add explanation or combine capabilities:\n"
+            f"Here are the functional goals based on the architecture:\n"
+            f"```json\n"
+            f'["Users can enter data and perform calculations and see history"]\n'
+            f"```\n"
+            f"This combines three capabilities into one goal.\n\n"
+            f"Return ONLY the fenced JSON array."
         )
 
         try:
             result = await effects.run_inference(
                 prompt=prompt,
-                config_overrides={"temperature": 0.4, "max_tokens": 500},
+                # NOTE: No max_tokens cap — truncated JSON arrays are
+                # unparseable. See AGENT.md output preservation policy.
+                config_overrides={"temperature": 0.4},
             )
             if result.text:
-                # Parse JSON array from response
-                import json as _json
-                text = result.text.strip()
-                # Strip markdown fences if present
-                if text.startswith("```"):
-                    text = re.sub(r"^```\w*\n?", "", text)
-                    text = re.sub(r"\n?```$", "", text)
-                    text = text.strip()
+                from agent.llm_json import parse_llm_json
 
-                try:
-                    functional_goals = _json.loads(text)
-                    if isinstance(functional_goals, list):
-                        for desc in functional_goals:
-                            if isinstance(desc, str) and desc.strip():
-                                goals.append(GoalRecord(
+                functional_goals = parse_llm_json(result.text)
+                if isinstance(functional_goals, list):
+                    for desc in functional_goals:
+                        if isinstance(desc, str) and desc.strip():
+                            goals.append(
+                                GoalRecord(
                                     description=desc.strip(),
                                     type="functional",
-                                ))
-                except _json.JSONDecodeError:
-                    logger.warning("Could not parse functional goals JSON: %s", text[:200])
+                                )
+                            )
+                else:
+                    logger.warning(
+                        "Could not parse functional goals from response: %s",
+                        result.text[:200],
+                    )
         except Exception as e:
             logger.warning("Functional goal inference failed: %s", e)
 
-    # ── Link tasks to goals by file association ──
-    for task in plan:
-        if isinstance(task, dict):
-            task_target = task.get("inputs", {}).get("target_file_path", "")
-            task_id = task.get("id", "")
-        else:
-            task_target = (task.inputs or {}).get("target_file_path", "")
-            task_id = task.id
+    # ── Pass 3: Synthetic startup goal ──
+    # If the architecture defines a run_command, inject a deterministic
+    # startup verification goal as the FIRST functional goal. This ensures
+    # the program starts cleanly before any interactive testing begins.
+    # The interact flow routes this to run_commands (not run_session).
+    run_command = ""
+    if architecture and hasattr(architecture, "run_command"):
+        run_command = getattr(architecture, "run_command", "") or ""
+    elif isinstance(architecture, dict):
+        run_command = architecture.get("run_command", "") or ""
 
-        if not task_target or not task_id:
-            continue
-
-        for goal in goals:
-            if task_target in goal.associated_files:
-                if task_id not in goal.associated_task_ids:
-                    goal.associated_task_ids.append(task_id)
-                # Set goal_id on task
-                if isinstance(task, dict):
-                    task["goal_id"] = goal.id
-                elif hasattr(task, "goal_id"):
-                    task.goal_id = goal.id
-                break  # First matching goal wins
+    if run_command:
+        startup_goal = GoalRecord(
+            description="Program starts cleanly and exits without errors",
+            type="functional",
+            interaction_mode="deterministic",
+        )
+        # Insert before other functional goals
+        structural_count = sum(1 for g in goals if g.type == "structural")
+        goals.insert(structural_count, startup_goal)
 
     # ── Persist goals on mission state ──
     goal_dicts = [g.model_dump() for g in goals]
@@ -1702,6 +751,1303 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
         context_updates={
             "goals": goal_dicts,
             "mission": mission,
-            "task_count": len(plan),
         },
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Creation Order Sweep
+# ══════════════════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Pipeline Phase Actions (mission_control v9)
+# ══════════════════════════════════════════════════════════════════════
+
+
+def _get_working_dir(mission: Any) -> str:
+    """Extract working directory from mission, handling object and dict forms."""
+    if hasattr(mission, "config") and hasattr(mission.config, "working_directory"):
+        return mission.config.working_directory
+    if isinstance(mission, dict):
+        return mission.get("config", {}).get("working_directory", "")
+    return ""
+
+
+def _get_sweep_files(arch: Any) -> list[str]:
+    """Build the ordered list of files: creation_order ∪ modules ∪ data_shapes.
+
+    Uses creation_order for sequencing, but unions with all module files
+    to catch any that were listed in modules but omitted from the order
+    (e.g., __init__.py).  Data shape files are appended last.
+    """
+    ordered = (
+        list(arch.creation_order)
+        if hasattr(arch, "creation_order") and arch.creation_order
+        else [m.file for m in arch.modules] if hasattr(arch, "modules") else []
+    )
+    seen = set(ordered)
+
+    # Add any module files not already in creation_order
+    if hasattr(arch, "modules"):
+        for m in arch.modules:
+            f = m.file if hasattr(m, "file") else m.get("file", "")
+            if f and f not in seen:
+                ordered.append(f)
+                seen.add(f)
+
+    # Add data_shape files not already covered
+    if hasattr(arch, "data_shapes"):
+        for ds in arch.data_shapes:
+            f = ds.file if hasattr(ds, "file") else ds.get("file", "")
+            if f and f not in seen:
+                ordered.append(f)
+                seen.add(f)
+
+    return ordered
+
+
+async def action_check_pipeline_phase(step_input: StepInput) -> StepOutput:
+    """Compute the current pipeline phase from mission state.
+
+    Phase determination (checked in order):
+      1. No architecture or no goals → 'plan'
+      2. Any incomplete structural goal → 'structural'
+      3. Environment not verified → 'environment'
+      4. Startup not verified → 'verify'
+      5. Any incomplete functional goal → 'functional'
+      6. All goals complete → 'quality'
+
+    Context required: mission
+    """
+    mission = step_input.context.get("mission")
+
+    if not mission:
+        return StepOutput(
+            result={"phase": "plan"},
+            observations="No mission — needs planning",
+        )
+
+    arch = getattr(mission, "architecture", None)
+    if not arch:
+        return StepOutput(
+            result={"phase": "plan"},
+            observations="No architecture — needs planning",
+        )
+
+    goals = getattr(mission, "goals", [])
+    if not goals:
+        return StepOutput(
+            result={"phase": "plan"},
+            observations="No goals — needs planning",
+        )
+
+    structural = [g for g in goals if g.type == "structural"]
+    functional = [g for g in goals if g.type == "functional"]
+    quality = [g for g in goals if g.type == "quality"]
+    structural_incomplete = [g for g in structural if g.status == "incomplete"]
+    functional_incomplete = [g for g in functional if g.status == "incomplete"]
+    quality_incomplete = [g for g in quality if g.status == "incomplete"]
+
+    if structural_incomplete:
+        return StepOutput(
+            result={"phase": "structural"},
+            observations=f"Structural phase: {len(structural_incomplete)}/{len(structural)} incomplete",
+        )
+
+    # All structural done — check environment
+    env_verified = getattr(mission, "environment_verified", False)
+    if not env_verified:
+        return StepOutput(
+            result={"phase": "environment"},
+            observations="All structural goals complete — environment needs verification",
+        )
+
+    if functional_incomplete:
+        return StepOutput(
+            result={"phase": "functional"},
+            observations=f"Functional phase: {len(functional_incomplete)}/{len(functional)} incomplete",
+        )
+
+    # Quality goals are harvested from gate findings (origin="quality_gate") for
+    # issues with no clean interact re-test; they're worked AFTER functional so
+    # the build is otherwise sound. functional/structural quality-origin goals
+    # are caught by the checks above and ride those sweeps.
+    if quality_incomplete:
+        return StepOutput(
+            result={"phase": "quality_fix"},
+            observations=f"Quality-fix phase: {len(quality_incomplete)}/{len(quality)} incomplete",
+        )
+
+    # All goals complete
+    return StepOutput(
+        result={"phase": "quality"},
+        observations="All goals complete — ready for quality gate",
+    )
+
+
+async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
+    """Find the next incomplete structural goal and determine what it needs.
+
+    Walks creation_order + data_shapes. For each incomplete structural goal:
+      - File missing on disk → needs_create=True
+      - File exists but goal incomplete (last report failed) → needs_fix=True
+      - File exists and last report clean → mark complete, continue
+
+    Context required: mission
+    Publishes: dispatch_config
+    """
+    mission = step_input.context.get("mission")
+    effects = step_input.effects
+
+    if not mission:
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="No mission — skip sweep",
+        )
+
+    arch = getattr(mission, "architecture", None)
+    if not arch:
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="No architecture — skip sweep",
+        )
+
+    sweep_files = _get_sweep_files(arch)
+    working_dir = _get_working_dir(mission)
+
+    if not sweep_files or not working_dir:
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="No files or working directory — skip sweep",
+        )
+
+    # Walk files in order, find the first incomplete structural goal
+    for file_path in sweep_files:
+        # Find the goal for this file
+        goal = None
+        for g in mission.goals:
+            if g.type == "structural" and file_path in (g.associated_files or []):
+                goal = g
+                break
+
+        if goal is None:
+            continue  # No goal for this file — skip
+
+        if goal.status == "complete":
+            continue  # Already done
+
+        # Goal is incomplete — check what it needs
+        full_path = os.path.join(working_dir, file_path)
+        file_exists = os.path.isfile(full_path)
+
+        if not file_exists:
+            # File doesn't exist — create it.
+            # Use the goal description as the directive — for data files,
+            # this contains the content brief with creative requirements.
+            directive = goal.description
+            if not directive or directive == file_path:
+                directive = (
+                    f"Create {file_path} according to the architecture specification."
+                )
+
+            dispatch_config = {
+                "goal_id": goal.id,
+                "goal_description": goal.description,
+                "goal_type": "structural",
+                "goal_files": [file_path],
+                "flow": "file_ops",
+                "target_file_path": file_path,
+                "flow_directive": directive,
+                "recent_reports": [],
+            }
+            logger.info("Structural sweep: creating %s", file_path)
+            return StepOutput(
+                result={"sweep_complete": False, "needs_create": True},
+                observations=f"Structural sweep: {file_path} does not exist — creating",
+                context_updates={"dispatch_config": dispatch_config},
+            )
+
+        # File exists but goal is incomplete — check if we can auto-complete
+        # based on the latest report, or if it needs fixing
+        block_reason = None
+        if goal.reports:
+            last_report = goal.reports[-1]
+            report_flow = getattr(last_report, "flow", "")
+            report_status = getattr(last_report, "status", "")
+            checks_failed = getattr(last_report, "checks_failed", [])
+
+            # Gate: syntax always blocks; a never-reviewed import failure blocks
+            # for one fix-or-defer decision pass; lint is optional. See
+            # structural_block_reason.
+            block_reason = structural_block_reason(goal, checks_failed)
+
+            if (
+                report_flow == "file_ops"
+                and report_status == "success"
+                and block_reason is None
+            ):
+                # Required checks pass — auto-complete this goal
+                goal.status = "complete"
+                logger.info("Structural sweep: %s auto-completed", file_path)
+                if effects:
+                    await effects.save_mission(mission)
+                continue  # Move to next file
+
+        # File exists, goal incomplete, needs fixing
+        # Build a fix directive from the last report if available
+        fix_directive = f"Fix issues in {file_path}."
+        if block_reason == "import" and goal.reports:
+            # Surface the import failure as a fix-or-defer DECISION, and mark it
+            # reviewed so it won't be re-litigated (one pass only).
+            last = goal.reports[-1]
+            goal.import_reviewed = True
+            # Persist the one-shot flag NOW so a reload next cycle doesn't
+            # re-trigger the review (which would loop).
+            if effects:
+                await effects.save_mission(mission)
+            fix_directive = (
+                f"{file_path} compiles but FAILS TO IMPORT "
+                f"({', '.join(getattr(last, 'checks_failed', []))}). "
+                f"Decide: if this is a real import bug — a wrong or relative "
+                f"import path (e.g. 'from .x' with no package), a circular "
+                f"import, or importing a name that does not exist — FIX it now. "
+                f"If it fails ONLY because a project module you depend on has "
+                f"not been created yet, make NO change; it will resolve once "
+                f"that module exists. {getattr(last, 'summary', '')[:200]}"
+            )
+            logger.info("Structural sweep: import review for %s", file_path)
+        elif goal.reports:
+            last = goal.reports[-1]
+            if getattr(last, "checks_failed", []):
+                fix_directive = (
+                    f"Fix validation issues in {file_path}: "
+                    f"{', '.join(last.checks_failed)}"
+                )
+            elif getattr(last, "summary", ""):
+                fix_directive = f"Fix {file_path}: {last.summary[:200]}"
+
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "structural",
+            "goal_files": [file_path],
+            "flow": "file_ops",
+            "target_file_path": file_path,
+            "flow_directive": fix_directive,
+            "recent_reports": [],
+        }
+        logger.info("Structural sweep: fixing %s", file_path)
+        return StepOutput(
+            result={"sweep_complete": False, "needs_fix": True},
+            observations=f"Structural sweep: {file_path} needs fixing",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+
+    # All structural goals are complete
+    if effects:
+        await effects.save_mission(mission)
+
+    return StepOutput(
+        result={"sweep_complete": True},
+        observations="Structural sweep complete — all files created and validated",
+    )
+
+
+async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
+    """Find the next incomplete functional goal and determine what it needs.
+
+    For each incomplete functional goal (in derivation order):
+      - No interact report yet → needs_test=True (dispatch interact)
+      - Last interact succeeded (goal_met) → mark complete, continue
+      - Last interact failed → needs_fix=True (dispatch diagnose_issue)
+      - Last report was a fix attempt → needs_test=True (re-test after fix)
+
+    When no goal can be advanced (all tested, all fix targets unknown),
+    returns sweep_complete=True to break the loop and advance to quality gate.
+
+    Context required: mission
+    Publishes: dispatch_config
+    """
+    mission = step_input.context.get("mission")
+    effects = step_input.effects
+
+    if not mission:
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="No mission — skip functional sweep",
+        )
+
+    functional = [g for g in mission.goals if g.type == "functional"]
+    incomplete = [g for g in functional if g.status == "incomplete"]
+
+    if not incomplete:
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="All functional goals complete",
+        )
+
+    # Get run_command from architecture for deterministic goals
+    arch = getattr(mission, "architecture", None)
+    run_command = ""
+    if arch:
+        run_command = getattr(arch, "run_command", "") or ""
+
+    # Load interactive_prompt from env config (set by set_env). Read via effects
+    # so the path resolves against the mission working_directory, not the agent
+    # process cwd (a bare relative Path read the repo's own .agent/).
+    interactive_prompt = ""
+    if effects is not None:
+        try:
+            fc = await effects.read_file(".agent/env.json")
+            if getattr(fc, "exists", False):
+                env_data = json.loads(getattr(fc, "content", "") or "") or {}
+                interactive_prompt = env_data.get("interactive_prompt", "")
+        except Exception:
+            pass  # Non-critical — prompt detection falls back to heuristics
+
+    # Track whether we can make progress on any goal
+    made_progress = False
+
+    for goal in incomplete:
+        # Determine interaction mode from goal metadata
+        goal_mode = getattr(goal, "interaction_mode", None) or ""
+
+        # Check the latest report to determine what this goal needs
+        if not goal.reports:
+            # quality_gate-origin goals are ALREADY-CONFIRMED defects (the gate
+            # found them). Re-reproducing one via interact mis-frames a bug
+            # report as a capability to "verify works" and stochastically
+            # false-passes (the goal-driven validation thrashed a startup crash
+            # through ~10 false-pass/re-gate rounds before a diagnose finally
+            # ran). Go straight to diagnose -> file_ops; the post-fix interact
+            # re-test (defect-resolution polarity) is the real verification.
+            if getattr(goal, "origin", "design") == "quality_gate":
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "functional",
+                    "goal_files": goal.associated_files or [],
+                    "flow": "diagnose_issue",
+                    "target_file_path": "",
+                    "flow_directive": (
+                        "A quality-gate review reported this defect. Diagnose the "
+                        "root cause and identify the specific file and symbol to "
+                        "change:\n" + goal.description
+                    ),
+                    "what_happened": goal.description,
+                    "error_headline": goal.description[:80],
+                }
+                logger.info(
+                    "Functional sweep: diagnosing reported defect %s",
+                    goal.description[:50],
+                )
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_fix": True},
+                    observations=f"Functional sweep: diagnosing reported defect '{goal.description[:50]}'",
+                    context_updates={"dispatch_config": dispatch_config},
+                )
+            # design-origin: reproduce/verify the capability via interact
+            dispatch_config = {
+                "goal_id": goal.id,
+                "goal_description": goal.description,
+                "goal_type": "functional",
+                "goal_files": goal.associated_files or [],
+                "flow": "interact",
+                "target_file_path": "",
+                "flow_directive": (
+                    f"Test this capability: {goal.description}\n"
+                    f"Run the program and verify the described behavior works correctly."
+                ),
+                "interaction_mode": goal_mode,
+                "run_command": run_command if goal_mode == "deterministic" else "",
+                "interactive_prompt": interactive_prompt,
+            }
+            logger.info("Functional sweep: testing %s", goal.description[:50])
+            return StepOutput(
+                result={"sweep_complete": False, "needs_test": True},
+                observations=f"Functional sweep: testing '{goal.description[:50]}'",
+                context_updates={"dispatch_config": dispatch_config},
+            )
+
+        last_report = goal.reports[-1]
+        report_flow = getattr(last_report, "flow", "")
+        report_status = getattr(last_report, "status", "")
+
+        # interact success means goal_met was true (the flow routes on this)
+        if report_flow == "interact" and report_status == "success":
+            goal.status = "complete"
+            if hasattr(goal, "failed_attempts"):
+                goal.failed_attempts.clear()
+            logger.info("Functional sweep: '%s' completed", goal.description[:50])
+            if effects:
+                await effects.save_mission(mission)
+            made_progress = True
+            continue
+
+        # Last report was file_ops — check if it succeeded or failed
+        if report_flow == "file_ops":
+            from agent.persistence.models import FailedAttempt
+
+            # Record every file_ops completion as an attempt, regardless
+            # of status.  A "successful" fix that doesn't resolve the
+            # test failure is just as important a signal as a bail —
+            # both indicate the diagnosis targeted the wrong file or
+            # the wrong aspect of the problem.
+            fops_summary = getattr(last_report, "summary", "no details")
+            fops_files = getattr(last_report, "files_affected", [])
+            fops_target = fops_files[0] if fops_files else ""
+            # Prefer the structured target_symbol on the report
+            # (populated by Phase A from the flat diagnosis schema).
+            # If absent — older cycles pre-redesign — leave blank; the
+            # diagnose seed's target-repeat detection then just matches
+            # on target_file alone, still useful.
+            fops_target_symbol = getattr(last_report, "target_symbol", "") or ""
+
+            # Find the diagnosis that led to this attempt, and the
+            # interact that triggered that diagnosis — we capture its
+            # headline as "pre_headline" so the next diagnose cycle
+            # can render before/after regression comparisons.
+            prior_diag_summary = ""
+            prior_interact_headline = ""
+            saw_diag = False
+            for prev_report in reversed(goal.reports[:-1]):
+                flow = getattr(prev_report, "flow", "")
+                if flow == "diagnose_issue" and not prior_diag_summary:
+                    prior_diag_summary = getattr(prev_report, "summary", "")
+                    saw_diag = True
+                elif saw_diag and flow == "interact":
+                    prior_interact_headline = getattr(prev_report, "headline", "")
+                    break
+
+            goal.failed_attempts.append(
+                FailedAttempt(
+                    target_file=fops_target,
+                    target_symbol=fops_target_symbol,
+                    flow="file_ops",
+                    reason=fops_summary,
+                    diagnosis_summary=prior_diag_summary,
+                    pre_headline=prior_interact_headline,
+                )
+            )
+
+            if report_status == "success":
+                # Fix applied — re-test to see if it actually resolved
+                # the functional failure
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "functional",
+                    "goal_files": goal.associated_files or [],
+                    "flow": "interact",
+                    "target_file_path": "",
+                    "flow_directive": _functional_retest_directive(goal, after="fix"),
+                    "interaction_mode": goal_mode,
+                    "run_command": run_command if goal_mode == "deterministic" else "",
+                    "interactive_prompt": interactive_prompt,
+                }
+                logger.info(
+                    "Functional sweep: re-testing %s after fix", goal.description[:50]
+                )
+                if effects:
+                    await effects.save_mission(mission)
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_test": True},
+                    observations=f"Functional sweep: re-testing '{goal.description[:50]}' after fix",
+                    context_updates={"dispatch_config": dispatch_config},
+                )
+            else:
+                # Fix failed (bail or error) — re-diagnose with
+                # accumulated attempt context
+
+                # Serialize all attempts for the renderer
+                failed_attempts_data = [
+                    {
+                        "target_file": a.target_file,
+                        "target_symbol": getattr(a, "target_symbol", ""),
+                        "flow": a.flow,
+                        "reason": a.reason,
+                        "diagnosis_summary": a.diagnosis_summary,
+                        "pre_headline": getattr(a, "pre_headline", ""),
+                    }
+                    for a in goal.failed_attempts
+                ]
+
+                terminal_output = getattr(last_report, "terminal_output", "")
+                # This path triggers after a file_ops that bailed or
+                # errored without ever running a functional test — so
+                # the last report is file_ops, not interact. No fresh
+                # headline to compare against; the new seed will show
+                # Prior attempts without a Before/After pair.
+                error_description = (
+                    f"Previous fix attempts failed for: {goal.description}\n\n"
+                    f"The editor rejected these targets — re-diagnose with a "
+                    f"different approach or different file.\n"
+                )
+
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "functional",
+                    "goal_files": [],
+                    "flow": "diagnose_issue",
+                    "target_file_path": "",
+                    "flow_directive": error_description,
+                    "error_output": terminal_output,
+                    "what_happened": getattr(last_report, "summary", ""),
+                    "error_headline": getattr(last_report, "headline", ""),
+                    "failed_attempts_context": failed_attempts_data,
+                }
+                logger.info(
+                    "Functional sweep: re-diagnosing '%s' after %d failed attempt(s)",
+                    goal.description[:50],
+                    len(goal.failed_attempts),
+                )
+                if effects:
+                    await effects.save_mission(mission)
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_fix": True},
+                    observations=f"Functional sweep: re-diagnosing '{goal.description[:50]}' after bail ({len(goal.failed_attempts)} failed attempts)",
+                    context_updates={"dispatch_config": dispatch_config},
+                )
+
+        # Last report was project_ops — env/dep fix applied, re-test
+        if report_flow == "project_ops":
+            if report_status == "success":
+                # Environment fix applied — re-test the goal
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "functional",
+                    "goal_files": goal.associated_files or [],
+                    "flow": "interact",
+                    "target_file_path": "",
+                    "flow_directive": _functional_retest_directive(
+                        goal, after="environment fix"
+                    ),
+                    "interaction_mode": goal_mode,
+                    "run_command": run_command if goal_mode == "deterministic" else "",
+                    "interactive_prompt": interactive_prompt,
+                }
+                logger.info(
+                    "Functional sweep: re-testing %s after project_ops fix",
+                    goal.description[:50],
+                )
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_test": True},
+                    observations=f"Functional sweep: re-testing '{goal.description[:50]}' after project_ops",
+                    context_updates={"dispatch_config": dispatch_config},
+                )
+            else:
+                # project_ops failed — re-diagnose to find a different approach
+                error_description = (
+                    f"Environment fix failed for: {goal.description}\n\n"
+                    f"project_ops reported: {getattr(last_report, 'summary', 'no details')[:500]}\n"
+                )
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "functional",
+                    "goal_files": [],
+                    "flow": "diagnose_issue",
+                    "target_file_path": "",
+                    "flow_directive": error_description,
+                    "what_happened": getattr(last_report, "summary", ""),
+                    "error_headline": getattr(last_report, "headline", ""),
+                }
+                logger.info(
+                    "Functional sweep: re-diagnosing %s after project_ops failure",
+                    goal.description[:50],
+                )
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_fix": True},
+                    observations=f"Functional sweep: re-diagnosing '{goal.description[:50]}' after project_ops failure",
+                    context_updates={"dispatch_config": dispatch_config},
+                )
+
+        # Last report was diagnose_issue — extract fix target and dispatch
+        if report_flow == "diagnose_issue":
+            diag_summary = getattr(last_report, "summary", "")
+            diag_files = getattr(last_report, "files_affected", [])
+            recommended_flow = (
+                getattr(last_report, "recommended_flow", "") or "file_ops"
+            )
+
+            # Phase A (patch redesign) — read structured operation spec
+            # from the report. Diagnose's flat schema gives us the
+            # target_file + optional target_symbol + change_spec
+            # directly; we prefer these over the legacy files_affected
+            # derivation. file_ops routes internally: path doesn't
+            # exist → create; path exists + symbol in AST → patch;
+            # path exists + symbol absent → add_symbol (Phase D);
+            # otherwise → rewrite.
+            struct_target_file = getattr(last_report, "target_file", "") or ""
+            struct_target_symbol = getattr(last_report, "target_symbol", "") or ""
+            struct_change_spec = getattr(last_report, "change_spec", "") or ""
+            struct_kind = getattr(last_report, "diagnosis_kind", "") or ""
+            # Structured import-fix declaration — literal statement
+            # accompanying kind == "import_fix"; file_ops's
+            # check_import_fix routes on it.
+            struct_import_statement = getattr(last_report, "import_statement", "") or ""
+            # Multi-symbol patching (505 round). When diagnose
+            # emits a list of co-dependent symbols, we thread them
+            # through to file_ops → patch so the rewrite_queue
+            # picks them up alongside target_symbol. Empty list
+            # means the change is local to target_symbol, which is
+            # the majority of cases.
+            struct_related_symbols = list(
+                getattr(last_report, "related_symbols", []) or []
+            )
+
+            # b75 regression guard — the model sometimes emits
+            # placeholder markers from the CONCLUDE_PROMPT example
+            # ('path/to/file.py', '<file>') or hedging tokens
+            # ('UNKNOWN', 'N/A', '?') when it can't identify a target.
+            # Treat these as empty so downstream sees the absence
+            # rather than a bogus path.
+            _junk_target_tokens = {
+                "",
+                "unknown",
+                "n/a",
+                "?",
+                "path/to/file.py",
+                "path/to/file",
+                "<file>",
+                "<path>",
+                "<real_path_in_this_project>",
+                "<classname.method_or_function_name>",
+            }
+            if struct_target_file.strip().lower() in _junk_target_tokens:
+                logger.warning(
+                    "Functional sweep: diagnose returned junk target_file %r "
+                    "(kind=%r, recommended_flow=%r); treating as empty",
+                    struct_target_file,
+                    struct_kind,
+                    recommended_flow,
+                )
+                struct_target_file = ""
+            if struct_target_symbol.strip().lower() in _junk_target_tokens:
+                struct_target_symbol = ""
+
+            # Evasion-loop guard — b75 showed 5 cycles thrashing when
+            # diagnose couldn't identify a target and fell through to
+            # recommended_flow=project_ops with a generic "gather more
+            # evidence" change_spec. project_ops then edits README /
+            # pyproject.toml cosmetically, interact still fails, next
+            # diagnose produces the same evasion. If diagnose couldn't
+            # name a target AND the change_spec is meta-advice rather
+            # than a real project_ops directive, fail the goal's
+            # current attempt cleanly so the mission moves on.
+            _evasion_spec_markers = (
+                "obtain",
+                "gather",
+                "provide concrete",
+                "collect additional",
+                "more diagnostic",
+                "additional evidence",
+            )
+            change_spec_lower = struct_change_spec.strip().lower()
+            looks_like_evasion = (
+                not struct_target_file
+                and recommended_flow == "project_ops"
+                and any(
+                    change_spec_lower.startswith(marker)
+                    for marker in _evasion_spec_markers
+                )
+            )
+            if looks_like_evasion:
+                logger.warning(
+                    "Functional sweep: diagnose evaded with empty target + "
+                    "generic 'gather evidence' change_spec (%r); skipping "
+                    "project_ops dispatch for '%s'",
+                    struct_change_spec[:80],
+                    goal.description[:50],
+                )
+                if effects:
+                    await effects.save_mission(mission)
+                return StepOutput(
+                    result={"sweep_complete": False, "skip_goal": True},
+                    observations=(
+                        f"Functional sweep: diagnose produced no actionable "
+                        f"target for '{goal.description[:50]}'; skipping "
+                        f"this cycle to avoid thrash"
+                    ),
+                    context_updates={},
+                )
+
+            # If diagnosis recommends project_ops (dependency/env fix),
+            # dispatch directly — no file target needed.
+            if recommended_flow == "project_ops":
+                fix_directive = (
+                    f"Fix the environment/dependency issue that prevents: {goal.description}\n"
+                    f"Diagnosis: {diag_summary[:500]}"
+                )
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "functional",
+                    "goal_files": [],
+                    "flow": "project_ops",
+                    "target_file_path": "",
+                    "flow_directive": fix_directive,
+                }
+                logger.info(
+                    "Functional sweep: dispatching project_ops from diagnosis for '%s'",
+                    goal.description[:50],
+                )
+                if effects:
+                    await effects.save_mission(mission)
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_fix": True},
+                    observations=f"Functional sweep: project_ops fix for '{goal.description[:50]}'",
+                    context_updates={"dispatch_config": dispatch_config},
+                )
+
+            # file_ops path. Prefer structured target_file from the
+            # flat diagnosis; fall back to legacy files_affected[0]
+            # only when the diagnose session ran under an older path
+            # that didn't populate the structured field.
+            fix_target = struct_target_file or (diag_files[0] if diag_files else "")
+
+            if fix_target:
+                # Diagnosis explicitly named a file — use it directly
+                for sg in mission.goals:
+                    if sg.type == "structural" and fix_target in (
+                        sg.associated_files or []
+                    ):
+                        if sg.status == "complete":
+                            sg.status = "incomplete"
+                            logger.info(
+                                "Functional sweep: regressed structural goal for %s",
+                                fix_target,
+                            )
+                        break
+
+                # Editing a file can break (or fix) the program's startup —
+                # re-open the startup goal so the startup check re-runs.
+                _regress_startup_goal(mission)
+
+                fix_directive = (
+                    f"Fix the issue in {fix_target} that prevents: {goal.description}\n"
+                    f"Diagnosis: {diag_summary[:500]}"
+                )
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "functional",
+                    "goal_files": [fix_target],
+                    "flow": "file_ops",
+                    "target_file_path": fix_target,
+                    "flow_directive": fix_directive,
+                    # Phase A / D — structured fields for file_ops
+                    # routing. target_symbol lets file_ops choose
+                    # patch (symbol exists in AST) vs add_symbol
+                    # (symbol missing from AST). change_spec feeds
+                    # each sub-flow's authoring prompt.
+                    "target_symbol": struct_target_symbol,
+                    "change_spec": struct_change_spec,
+                    "diagnosis_kind": struct_kind,
+                    "import_statement": struct_import_statement,
+                    # Multi-symbol patching (505 round). Passed
+                    # through file_ops input_map → patch input_map
+                    # → prepare_next_rewrite, which seeds the
+                    # rewrite queue with the primary target plus
+                    # these related symbols so they're all
+                    # rewritten in one atomic batch with shared
+                    # context.
+                    "related_symbols": struct_related_symbols,
+                }
+                logger.info(
+                    "Functional sweep: applying fix to %s from diagnosis", fix_target
+                )
+                if effects:
+                    await effects.save_mission(mission)
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_fix": True},
+                    observations=f"Functional sweep: applying diagnosis fix to {fix_target}",
+                    context_updates={"dispatch_config": dispatch_config},
+                )
+            else:
+                # No explicit file target — let LLM select from project files
+                logger.info(
+                    "Functional sweep: diagnosis for '%s' needs target resolution via LLM menu",
+                    goal.description[:50],
+                )
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "functional",
+                    "goal_files": [],
+                    "flow": "file_ops",
+                    "target_file_path": "",
+                    "flow_directive": (
+                        f"Fix the issue that prevents: {goal.description}\n"
+                        f"Diagnosis: {diag_summary[:500]}"
+                    ),
+                    "diagnosis_summary": diag_summary,
+                }
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_target_resolution": True},
+                    observations=f"Functional sweep: needs LLM to select fix target for '{goal.description[:50]}'",
+                    context_updates={"dispatch_config": dispatch_config},
+                )
+
+        # interact failed — dispatch diagnose_issue to identify root cause
+        # and the correct file to fix. Diagnosis uses LLM analysis of the
+        # error context rather than fragile regex on tracebacks.
+        terminal_output = getattr(last_report, "terminal_output", "")
+        summary = getattr(last_report, "summary", "")
+        headline = getattr(last_report, "headline", "")
+
+        error_description = (
+            f"Functional test failed for: {goal.description}\n\n"
+            f"Test summary: {summary}\n"
+        )
+
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": [],
+            "flow": "diagnose_issue",
+            "target_file_path": "",
+            "flow_directive": error_description,
+            "error_output": terminal_output,
+            # Structured fields for the new diagnose seed (Goal /
+            # What happened / Prior attempts). The seed-building
+            # action reads these directly instead of re-parsing
+            # error_description.
+            "what_happened": summary,
+            "error_headline": headline,
+        }
+
+        # Pass accumulated attempt history so the diagnosis model
+        # knows what has already been tried (even if those attempts
+        # reported "success" but didn't resolve the test failure).
+        if goal.failed_attempts:
+            dispatch_config["failed_attempts_context"] = [
+                {
+                    "target_file": a.target_file,
+                    "target_symbol": getattr(a, "target_symbol", ""),
+                    "flow": a.flow,
+                    "reason": a.reason,
+                    "diagnosis_summary": a.diagnosis_summary,
+                    "pre_headline": getattr(a, "pre_headline", ""),
+                }
+                for a in goal.failed_attempts
+            ]
+
+        logger.info(
+            "Functional sweep: diagnosing '%s' after interact failure",
+            goal.description[:50],
+        )
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": False, "needs_fix": True},
+            observations=f"Functional sweep: diagnosing '{goal.description[:50]}'",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+
+    # All functional goals visited — did we make progress?
+    if effects:
+        await effects.save_mission(mission)
+
+    if made_progress:
+        # Some goals completed this pass — check again
+        return StepOutput(
+            result={"sweep_complete": False, "needs_test": False, "needs_fix": False},
+            observations="Functional sweep: some goals completed, re-checking",
+        )
+
+    # No progress possible — all goals either complete or stuck
+    # Advance to quality gate rather than looping
+    return StepOutput(
+        result={"sweep_complete": True},
+        observations="Functional sweep: no further progress possible — advancing to quality gate",
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Quality findings -> classified goals (harvest) + quality sweep
+# ══════════════════════════════════════════════════════════════════════
+#
+# When the quality gate fails, action_harvest_quality_findings turns each
+# finding (quality_results.fix_tasks, labelled functional|quality by summarize)
+# into a goal. Functional findings ride functional_sweep_next (diagnose -> fix
+# -> interact re-test); quality (cosmetic/content) findings ride
+# action_quality_sweep_next (diagnose -> file_ops -> complete-on-patch). Bounded
+# by the mission cycle budget; dedup is at goal CREATION (finding_signature), and
+# a completed goal whose finding the gate re-reports is re-opened for a retry.
+
+# Placeholder/hedge tokens diagnose emits when it can't name a real target.
+# Kept local (duplicates the functional sweep's guard) to avoid touching the
+# hot functional path.
+_JUNK_TARGET_TOKENS = {
+    "",
+    "unknown",
+    "n/a",
+    "?",
+    "path/to/file.py",
+    "path/to/file",
+    "<file>",
+    "<path>",
+    "<real_path_in_this_project>",
+    "<classname.method_or_function_name>",
+}
+
+
+# Code-locus anchors for the finding signature: Python filenames, and
+# dotted/snake_case identifiers (must contain a '.' or '_' joining alnum runs,
+# so plain English words don't match). Line numbers are stripped first — they
+# shift after edits and the model phrases them inconsistently.
+_SIG_LINE_NO = re.compile(r"\bline\s+\d+\b", re.I)
+_SIG_PY_FILE = re.compile(r"\b[\w-]+\.py\b")
+_SIG_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:[._][A-Za-z0-9_]+)+")
+
+
+def _quality_finding_signature(fix_task: Any) -> str:
+    """Stable dedup key for a quality finding, robust to LLM rephrasing.
+
+    The gate re-reports the SAME defect with different framing each round
+    ("references undefined X" / "raises NameError for X" / "crashes on startup
+    with X"), so a literal-text key spawns a fresh goal every round and burns
+    the whole cycle budget (the goal-driven validation produced 10 duplicate
+    goals for one injected crash). Anchor instead on the code locus the finding
+    names — Python filenames and dotted/snake_case identifiers — which survive
+    rephrasing. Fall back to normalized prose only when the finding names no
+    code anchor (rare; those don't recur as duplicates in practice)."""
+    text = _quality_finding_text(fix_task)
+    if not text:
+        return ""
+    low = _SIG_LINE_NO.sub(" ", text.lower())
+    anchors = {
+        a
+        for a in (set(_SIG_PY_FILE.findall(low)) | set(_SIG_IDENT.findall(low)))
+        if len(a) >= 4 and a not in _JUNK_TARGET_TOKENS
+    }
+    if anchors:
+        return "|".join(sorted(anchors))
+    return " ".join(low.split())[:200]
+
+
+def _quality_finding_text(fix_task: Any) -> str:
+    if isinstance(fix_task, dict):
+        return str(fix_task.get("issue") or fix_task.get("description") or "").strip()
+    return str(fix_task).strip()
+
+
+def _functional_retest_directive(goal: Any, *, after: str) -> str:
+    """interact re-test directive after a fix, polarity-correct per goal origin.
+
+    A design-origin functional goal's description is a CAPABILITY to verify
+    ("player can pick up items") — "verify the described behavior works" is
+    right. A quality_gate-origin goal's description is a DEFECT report
+    ("main.py crashes on startup") — verifying that "works correctly" is
+    nonsense and false-passes, so frame it as defect-resolution instead."""
+    desc = getattr(goal, "description", "")
+    if getattr(goal, "origin", "design") == "quality_gate":
+        return (
+            f"A quality-gate review reported this defect: {desc}\n"
+            f"A {after} was just applied. Run the program and verify the defect "
+            f"NO LONGER occurs — the program runs and the affected behavior is "
+            f"correct. If the defect still reproduces, report failure."
+        )
+    return (
+        f"Re-test this capability after a {after}: {desc}\n"
+        f"Run the program and verify the described behavior works correctly."
+    )
+
+
+def _rget(report: Any, key: str, default: Any = "") -> Any:
+    """Read a field from a directive report that may be a dict or a model."""
+    if isinstance(report, dict):
+        return report.get(key, default)
+    return getattr(report, key, default)
+
+
+def _diag_dispatch_from_quality_finding(
+    issue: str, *, goal_id: str = "", file_hint: str = ""
+) -> dict:
+    """diagnose_issue dispatch_config for a quality goal's finding (free-text).
+    goal_id binds the diagnosis report back to the quality goal."""
+    issue = str(issue).strip()
+    return {
+        "goal_id": goal_id,
+        "goal_description": issue,
+        "goal_type": "quality",
+        "goal_files": [],
+        "flow": "diagnose_issue",
+        "target_file_path": str(file_hint or ""),
+        "flow_directive": (
+            "A quality-gate review found this issue. Diagnose the root cause "
+            "and identify the specific file and symbol to change:\n" + issue
+        ),
+        "what_happened": issue,
+        "error_headline": issue[:80],
+    }
+
+
+def _fileops_dispatch_from_quality_diagnosis(
+    report: Any, *, goal_id: str = "", goal_description: str = ""
+) -> dict | None:
+    """Map a diagnose_issue report (dict OR DirectiveReport) to a file_ops
+    dispatch_config for a quality goal. None when diagnose produced no actionable
+    file target (junk token / no target / project_ops)."""
+    recommended = (str(_rget(report, "recommended_flow", "")) or "file_ops").strip()
+    target_file = str(_rget(report, "target_file", "") or "").strip()
+    target_symbol = str(_rget(report, "target_symbol", "") or "").strip()
+    if target_file.lower() in _JUNK_TARGET_TOKENS:
+        target_file = ""
+    if target_symbol.lower() in _JUNK_TARGET_TOKENS:
+        target_symbol = ""
+    if recommended == "project_ops" or not target_file:
+        return None
+    summary = str(_rget(report, "summary", ""))
+    return {
+        "goal_id": goal_id,
+        "goal_description": goal_description or "quality finding",
+        "goal_type": "quality",
+        "goal_files": [target_file],
+        "flow": "file_ops",
+        "target_file_path": target_file,
+        "flow_directive": f"Fix the quality issue in {target_file}:\n{summary[:500]}",
+        "target_symbol": target_symbol,
+        "change_spec": str(_rget(report, "change_spec", "") or ""),
+        "diagnosis_kind": str(_rget(report, "diagnosis_kind", "") or ""),
+        "import_statement": str(_rget(report, "import_statement", "") or ""),
+        "related_symbols": list(_rget(report, "related_symbols", []) or []),
+    }
+
+
+async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
+    """Turn quality-gate findings into goals — one per finding, classified by the
+    summarize ``class``. Reached from dispatch_quality_gate on failure.
+
+    Per finding (keyed by normalized signature):
+      - no existing goal      -> create a new incomplete goal (type = class)
+      - existing & complete   -> RE-OPEN it (the fix didn't hold; retry — bounded
+                                 only by the mission cycle budget)
+      - existing & incomplete -> skip (already being worked)
+
+    Result: ``harvested`` (-> check_phase routes the new goals to their sweeps)
+    or ``done`` (gate failed but produced no findings -> finalize).
+    """
+    from agent.persistence.models import GoalRecord
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission:
+        return StepOutput(result={"done": True}, observations="No mission — finalize")
+
+    quality_results = step_input.context.get("quality_results") or {}
+    fix_tasks = (
+        (quality_results.get("fix_tasks") or [])
+        if isinstance(quality_results, dict)
+        else []
+    )
+    if not fix_tasks:
+        return StepOutput(
+            result={"done": True},
+            observations="Quality gate failed but produced no findings — finalizing",
+        )
+
+    by_sig = {
+        getattr(g, "finding_signature", ""): g
+        for g in mission.goals
+        if getattr(g, "finding_signature", "")
+    }
+    created = reopened = skipped = 0
+    for task in fix_tasks:
+        sig = _quality_finding_signature(task)
+        if not sig:
+            continue
+        cls = (
+            "quality"
+            if (isinstance(task, dict) and task.get("class") == "quality")
+            else "functional"
+        )
+        existing = by_sig.get(sig)
+        if existing is not None:
+            if existing.status == "complete":
+                existing.status = "incomplete"
+                reopened += 1
+            else:
+                skipped += 1
+            continue
+        mission.goals.append(
+            GoalRecord(
+                description=_quality_finding_text(task) or "quality finding",
+                type=cls,
+                status="incomplete",
+                origin="quality_gate",
+                finding_signature=sig,
+                interaction_mode="exploratory" if cls == "functional" else None,
+            )
+        )
+        created += 1
+
+    if effects:
+        await effects.save_mission(mission)
+
+    logger.info(
+        "Quality harvest: %d new + %d reopened goal(s) (%d already in flight)",
+        created,
+        reopened,
+        skipped,
+    )
+    # created+reopened>0 at gate time (the gate only runs when all goals are
+    # complete, so a fresh finding is new or matches a completed goal). skipped
+    # is a safety branch; either way there are now incomplete goals to work, so
+    # re-enter phase routing.
+    return StepOutput(
+        result={"harvested": True},
+        observations=(
+            f"Quality gate: harvested {created} new + {reopened} reopened goal(s) "
+            f"({skipped} already in flight)"
+        ),
+    )
+
+
+async def action_quality_sweep_next(step_input: StepInput) -> StepOutput:
+    """Work the next incomplete ``quality`` goal: diagnose -> file_ops -> complete
+    on a successful patch (quality goals have no clean interact re-test). Mirror
+    of action_functional_sweep_next, goal-centric (reads goal.reports).
+
+    Result: ``needs_fix`` (+ dispatch_config) | else -> check_phase (which routes
+    to the next quality goal, or to the re-gate once all are complete).
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission:
+        return StepOutput(result={"sweep_complete": True}, observations="No mission")
+
+    goal = next(
+        (g for g in mission.goals if g.type == "quality" and g.status == "incomplete"),
+        None,
+    )
+    if goal is None:
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="Quality sweep: all quality goals complete — re-gating",
+        )
+
+    last = goal.reports[-1] if goal.reports else None
+    last_flow = _rget(last, "flow", "") if last is not None else ""
+
+    # After file_ops: the patch landed -> complete (no interact re-test for a
+    # cosmetic/content fix). Re-evaluate via check_phase for the next goal.
+    if last_flow == "file_ops":
+        goal.status = "complete"
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": False},
+            observations=f"Quality sweep: '{goal.description[:50]}' patched — complete",
+        )
+
+    # After diagnose: map to a file_ops fix.
+    if last_flow == "diagnose_issue":
+        fileops = _fileops_dispatch_from_quality_diagnosis(
+            last, goal_id=goal.id, goal_description=goal.description
+        )
+        if fileops:
+            return StepOutput(
+                result={"needs_fix": True},
+                observations=f"Quality sweep: patching {fileops['target_file_path']}",
+                context_updates={"dispatch_config": fileops},
+            )
+        # Diagnose found no actionable target. Best-effort complete to avoid a
+        # within-sweep spin; the next gate run re-reports it and the harvester
+        # re-opens it for a fresh attempt (budget-bounded across rounds).
+        goal.status = "complete"
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": False},
+            observations=(
+                f"Quality sweep: no target for '{goal.description[:50]}' — "
+                f"best-effort complete (gate will re-report if unfixed)"
+            ),
+        )
+
+    # Fresh goal (no diagnose yet) -> diagnose it.
+    return StepOutput(
+        result={"needs_fix": True},
+        observations=f"Quality sweep: diagnosing '{goal.description[:50]}'",
+        context_updates={
+            "dispatch_config": _diag_dispatch_from_quality_finding(
+                goal.description, goal_id=goal.id
+            )
+        },
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Fix Target Resolution
+# ══════════════════════════════════════════════════════════════════════
+#
+# The menu assembly logic formerly in action_build_fix_target_menu
+# moved to the `project_fix_target_menu` projection (see
+# agent/projections.py). The resolve_fix_target step now reads the
+# pre-composed option list via options_from.projection; no helper
+# action step is required.
+
+
+async def action_apply_fix_target(step_input: StepInput) -> StepOutput:
+    """Apply the LLM-selected fix target to the dispatch_config.
+
+    Reads the selected file from context (published by the LLM menu's
+    publish_selection), updates dispatch_config with the target, and
+    regresses the structural goal for that file.
+
+    Context required: mission, dispatch_config, selected_fix_target
+    """
+    mission = step_input.context.get("mission")
+    effects = step_input.effects
+    dispatch_config = step_input.context.get("dispatch_config", {})
+    selected_file = step_input.context.get("selected_fix_target", "")
+
+    if not selected_file or not mission:
+        return StepOutput(
+            result={"target_applied": False},
+            observations="No selected file or mission",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+
+    # Update dispatch_config with the selected target
+    dispatch_config["target_file_path"] = selected_file
+    dispatch_config["goal_files"] = [selected_file]
+
+    # Update the flow_directive to mention the target file
+    diagnosis = dispatch_config.get("diagnosis_summary", "")
+    goal_desc = dispatch_config.get("goal_description", "")
+    dispatch_config["flow_directive"] = (
+        f"Fix the issue in {selected_file} that prevents: {goal_desc}\n"
+        f"Diagnosis: {diagnosis[:500]}"
+    )
+
+    # Regress the structural goal for the selected file
+    for sg in mission.goals:
+        if sg.type == "structural" and selected_file in (sg.associated_files or []):
+            if sg.status == "complete":
+                sg.status = "incomplete"
+                logger.info(
+                    "Fix target resolution: regressed structural goal for %s",
+                    selected_file,
+                )
+            break
+
+    # Re-open the startup goal too, so the startup check re-verifies after the edit.
+    _regress_startup_goal(mission)
+
+    if effects:
+        await effects.save_mission(mission)
+
+    logger.info("Fix target resolution: selected %s", selected_file)
+
+    return StepOutput(
+        result={"target_applied": True},
+        observations=f"Fix target resolved: {selected_file}",
+        context_updates={"dispatch_config": dispatch_config},
     )
