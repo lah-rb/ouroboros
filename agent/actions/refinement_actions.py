@@ -11,6 +11,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 import re
+from typing import Any
 
 from agent.models import StepInput, StepOutput
 
@@ -949,6 +950,7 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
         return StepOutput(
             result={
                 "all_passing": all_passing,
+                "has_findings": False,
                 "issues_found": len(failed_checks),
             },
             observations=f"Quality gate: {'PASS' if all_passing else 'FAIL'} "
@@ -965,8 +967,15 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
     all_passing = summary.get("all_passing", True)
     fix_tasks = summary.get("fix_tasks", [])
 
+    # Completion mode verifies findings before harvest; notes for the
+    # survivors are pushed by apply_verification_results so refuted
+    # claims never land in the mission record as failure_analysis.
+    # Checkpoint mode has no verification loop and keeps note-pushing here.
+    mode = str(step_input.inputs.get("mode", "completion") or "completion")
+    defer_notes = mode == "completion" and bool(fix_tasks)
+
     # If quality gate failed, record issues as notes for the director
-    if not all_passing and effects:
+    if not all_passing and effects and not defer_notes:
         for ft in fix_tasks or []:
             if not isinstance(ft, dict) or "description" not in ft:
                 continue
@@ -985,6 +994,7 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
     return StepOutput(
         result={
             "all_passing": all_passing,
+            "has_findings": len(fix_tasks or []) > 0,
             "issues_found": summary.get("failed", 0),
             "fix_tasks_added": len(fix_tasks) if not all_passing else 0,
         },
@@ -1028,7 +1038,13 @@ def _parse_quality_summary(raw: str) -> dict:
         for issue in parsed.get("blocking_issues", []):
             if isinstance(issue, str):
                 fix_tasks.append(
-                    {"description": issue, "issue": issue, "class": "functional"}
+                    {
+                        "description": issue,
+                        "issue": issue,
+                        "class": "functional",
+                        "repro": [],
+                        "expected": "",
+                    }
                 )
             elif isinstance(issue, dict):
                 text = issue.get("issue") or issue.get("description") or ""
@@ -1039,10 +1055,40 @@ def _parse_quality_summary(raw: str) -> dict:
                 task.setdefault("description", text)
                 task.setdefault("issue", text)
                 task["class"] = cls
+                task["repro"] = _normalize_repro(issue.get("repro"))
+                task["expected"] = str(issue.get("expected") or "")[:300]
                 fix_tasks.append(task)
         parsed["fix_tasks"] = fix_tasks
 
     return parsed
+
+
+# Repro sequences longer than this are truncated — a defect that needs more
+# than 10 stdin lines to demonstrate is not a usable gate probe.
+_MAX_REPRO_COMMANDS = 10
+
+
+def _normalize_repro(raw: Any) -> list[str]:
+    """Coerce a finding's repro to a clean list of stdin lines.
+
+    A bare string becomes a one-line repro; anything that is neither a
+    string nor a list yields [] (the finding is then handled by the
+    no-repro policy at verification time).
+    """
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    lines = [str(item).strip() for item in raw]
+    lines = [ln for ln in lines if ln]
+    if len(lines) > _MAX_REPRO_COMMANDS:
+        logger.warning(
+            "Finding repro truncated from %d to %d lines",
+            len(lines),
+            _MAX_REPRO_COMMANDS,
+        )
+        lines = lines[:_MAX_REPRO_COMMANDS]
+    return lines
 
 
 # ── validate_created_files ────────────────────────────────────────────

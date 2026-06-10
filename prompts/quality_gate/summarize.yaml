@@ -93,6 +93,16 @@ sections:
       - `"quality"` — a cosmetic/content issue a play-test can't cleanly verify
         (grammar, wording, a flavor inconsistency).
 
+      Every `"functional"` issue MUST also carry:
+      - `"repro"` — a JSON array of the exact lines to type into the running
+        program, in order, that demonstrates the problem. The program is
+        launched automatically — do NOT include the run command. At most 10
+        lines. For an `untested:` finding, the repro is the sequence that
+        exercises the feature.
+      - `"expected"` — one sentence: what should happen, or what was observed
+        failing.
+      (`"quality"` issues need neither field.)
+
       EVIDENCE RULE — broken requires observation. Only report a behavior
       as broken/not-functional if the evidence above SHOWS it failing (an
       error, wrong output, a crash). If the UX session simply did not
@@ -111,12 +121,19 @@ sections:
       {
         "verdict": "fail",
         "blocking_issues": [
-          {"issue": "the `use` command has no effect on any item", "class": "functional"},
+          {"issue": "the `use` command has no effect on any item",
+           "class": "functional",
+           "repro": ["take lantern", "use lantern"],
+           "expected": "using the lantern should light the room; instead nothing happens"},
           {"issue": "\"Martha the Caretaker are here\" should read \"is here\"", "class": "quality"}
         ],
         "summary": "Use is unimplemented; one grammar error."
       }
       ```
+
+      ❌ WRONG — repro must not include the launch command, and must be an array:
+      {"repro": ["python main.py", "take lantern"], ...}
+      {"repro": "take lantern", ...}
 
       ❌ WRONG — do not add explanation outside the JSON:
       After reviewing the results, the project has issues:
