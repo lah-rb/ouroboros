@@ -36,6 +36,10 @@ class MissionConfig(BaseModel):
     escalation_budget_usd: float | None = None
     escalation_tokens_used: int = 0
     llmvp_endpoint: str = "http://localhost:8008/graphql"
+    # Which flow set runs this mission (agent/flow_sets.py registry).
+    # Selects the controller flow and phase derivation; additive default
+    # keeps pre-flow-set mission.json files loading unchanged.
+    flow_set: str = "code_core"
 
 
 # ── Directive Reports ─────────────────────────────────────────────────

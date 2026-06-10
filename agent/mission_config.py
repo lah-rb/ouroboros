@@ -48,6 +48,7 @@ class MissionYAMLConfig(BaseModel):
     working_dir: str = "."
     effects_profile: Literal["local", "git_managed", "dry_run"] = "local"
     llmvp_endpoint: str = "http://localhost:8008/graphql"
+    flow_set: str = "code_core"
     principles: list[str] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
 
@@ -59,6 +60,18 @@ class MissionYAMLConfig(BaseModel):
     def validate_objective_not_empty(self) -> "MissionYAMLConfig":
         if not self.objective.strip():
             raise ValueError("objective must not be empty")
+        return self
+
+    @model_validator(mode="after")
+    def validate_flow_set_registered(self) -> "MissionYAMLConfig":
+        # Fail fast at create time; runtime lookups fall back instead.
+        from agent.flow_sets import FLOW_SETS
+
+        if self.flow_set not in FLOW_SETS:
+            raise ValueError(
+                f"unknown flow_set {self.flow_set!r} — "
+                f"known sets: {sorted(FLOW_SETS)}"
+            )
         return self
 
 

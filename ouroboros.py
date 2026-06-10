@@ -102,6 +102,17 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         or "http://localhost:8008/graphql"
     )
 
+    flow_set = (
+        getattr(args, "flow_set", None)
+        or (yaml_config.flow_set if yaml_config else None)
+        or "code_core"
+    )
+    from agent.flow_sets import FLOW_SETS
+
+    if flow_set not in FLOW_SETS:
+        print(f"Error: unknown flow set '{flow_set}' — known: {sorted(FLOW_SETS)}")
+        sys.exit(1)
+
     principles = (
         args.principles or (yaml_config.principles if yaml_config else None) or []
     )
@@ -122,6 +133,7 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         working_directory=working_dir,
         effects_profile=effects_profile,
         llmvp_endpoint=llmvp_endpoint,
+        flow_set=flow_set,
     )
 
     mission = MissionState(objective=objective, principles=principles, config=config)
@@ -144,6 +156,7 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
     print(f"   Objective: {mission.objective}")
     print(f"   Working dir: {working_dir}")
     print(f"   Effects: {config.effects_profile}")
+    print(f"   Flow set: {config.flow_set}")
     if principles:
         print(f"   Principles: {', '.join(principles)}")
     if tasks_list:
@@ -456,6 +469,13 @@ def cmd_start(args: argparse.Namespace) -> None:
     flows_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flows")
     prompts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 
+    # Entry flow derives from the mission's flow set (registry, not
+    # persisted — getattr keeps pre-flow-set mission.json files working).
+    from agent.flow_sets import get_flow_set
+
+    flow_set = get_flow_set(getattr(mission.config, "flow_set", "code_core"))
+    print(f"   Flow set: {flow_set.name} (entry: {flow_set.entry_flow})")
+
     # Run the agent loop
     from agent.loop import run_agent
 
@@ -466,6 +486,7 @@ def cmd_start(args: argparse.Namespace) -> None:
                 effects=effects,
                 flows_dir=flows_dir,
                 prompts_dir=prompts_dir,
+                entry_flow=flow_set.entry_flow,
                 max_cycles=args.max_cycles,
             )
         )
@@ -833,6 +854,10 @@ def main() -> None:
         "--effects-profile", choices=["local", "git_managed", "dry_run"]
     )
     create_p.add_argument("--llmvp-endpoint", help="LLMVP GraphQL endpoint URL")
+    create_p.add_argument(
+        "--flow-set",
+        help="Flow set to run the mission with (default: code_core)",
+    )
     create_p.add_argument("--tasks", nargs="*", help="Initial task descriptions")
 
     # mission status
