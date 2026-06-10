@@ -175,6 +175,33 @@ async def action_build_and_query_repomap(step_input: StepInput) -> StepOutput:
 # ── validate_cross_file_consistency ───────────────────────────────────
 
 
+def _import_bound_names(statement: str) -> set[str]:
+    """Names an import statement binds in the importing module.
+
+    ``from m import a, b as c`` → {m, a, c}; ``import x.y as z`` → {z};
+    ``import x.y`` → {x}. Python-only (stdlib ast); non-Python import
+    statements parse-fail and contribute nothing — same behavior as
+    before this helper existed.
+    """
+    import ast as _ast
+
+    names: set[str] = set()
+    try:
+        tree = _ast.parse(statement.strip())
+    except SyntaxError:
+        return names
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, _ast.ImportFrom):
+            if node.module:
+                names.add(node.module.split(".")[0])
+            for alias in node.names:
+                names.add(alias.asname or alias.name)
+    return names
+
+
 async def action_validate_cross_file_consistency(step_input: StepInput) -> StepOutput:
     """Deterministic cross-file consistency check using tree-sitter repomap.
 
@@ -256,12 +283,25 @@ async def action_validate_cross_file_consistency(step_input: StepInput) -> StepO
     # Step 3: Analyze for issues
     issues: list[dict[str, Any]] = []
 
-    # Build global definition index: name → list of (file, kind)
-    global_defs: dict[str, list[tuple[str, str]]] = {}
+    # Two separate indexes — they answer different questions:
+    #   known_names      — "could this reference resolve at runtime?"
+    #                      (everything: defs of every kind, methods,
+    #                      dunders, AND imported names — an import IS
+    #                      structural evidence the name resolves)
+    #   module_level_defs — "do two files claim the same module-level
+    #                      name?" (duplicates check: functions/classes
+    #                      only — no methods, no dunders, no variables)
+    known_names: set[str] = set()
+    module_level_defs: dict[str, list[tuple[str, str]]] = {}
     for fp, info in repo_map.files.items():
         for defn in info.definitions:
             if defn.kind == "import":
+                # The repo map stores the WHOLE import statement as the
+                # definition name — parse out the names it binds, since
+                # an import is structural evidence those names resolve.
+                known_names |= _import_bound_names(defn.name)
                 continue
+            known_names.add(defn.name)
             # Methods belong to their class's namespace — two classes in
             # different files each defining __init__/execute/etc. is not
             # a cross-file collision. Only module-level names share a
@@ -274,12 +314,19 @@ async def action_validate_cross_file_consistency(step_input: StepInput) -> StepO
             # Structural filter — no curated per-language list to maintain.
             if defn.name.startswith("__") and defn.name.endswith("__"):
                 continue
-            if defn.name not in global_defs:
-                global_defs[defn.name] = []
-            global_defs[defn.name].append((fp, defn.kind))
+            # Module-level variables with the same name across files are
+            # harmless under module namespaces (logger, _PATTERNS, …) and
+            # idiomatic. Within-file duplicates are caught by the splice
+            # and frame-editor guards. Only functions/classes can collide
+            # meaningfully across files.
+            if defn.kind == "variable":
+                continue
+            if defn.name not in module_level_defs:
+                module_level_defs[defn.name] = []
+            module_level_defs[defn.name].append((fp, defn.kind))
 
     # Check 1: Duplicate definitions (same name in multiple files)
-    for name, locations in global_defs.items():
+    for name, locations in module_level_defs.items():
         if len(locations) > 1:
             # Filter: only flag if same kind (two classes named X, etc.)
             kinds = set(k for _, k in locations)
@@ -295,11 +342,22 @@ async def action_validate_cross_file_consistency(step_input: StepInput) -> StepO
                     }
                 )
 
-    # Check 2: Unresolved references
-    defined_names = set(global_defs.keys())
+    # Check 2: Unresolved references. A name is resolvable if any project
+    # file defines it (flat-import reach), any file imports it — the
+    # import statement itself is structural evidence the name resolves
+    # (typing.List, pathlib.Path, third-party) — or it is a Python
+    # builtin (runtime-derived from dir(builtins), no curated list;
+    # exception classes were the last noise class). What survives is
+    # high-signal: referenced, never defined, never imported, not built in.
+    import builtins as _builtins
+
+    py_builtins = set(dir(_builtins))
     for fp, info in repo_map.files.items():
+        is_python = fp.endswith(".py")
         for ref in info.references:
-            if ref.name not in defined_names:
+            if is_python and ref.name in py_builtins:
+                continue
+            if ref.name not in known_names:
                 # Only flag if it looks like a project symbol (not stdlib)
                 # Skip short names and common patterns
                 if len(ref.name) > 2 and not ref.name[0].isupper():
@@ -312,7 +370,7 @@ async def action_validate_cross_file_consistency(step_input: StepInput) -> StepO
                             "file": fp,
                             "line": ref.line,
                             "severity": "info",
-                            "message": f"'{ref.name}' referenced in {fp}:{ref.line} but not defined in any project file",
+                            "message": f"'{ref.name}' referenced in {fp}:{ref.line} but not defined or imported in any project file",
                         }
                     )
 

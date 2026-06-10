@@ -83,3 +83,65 @@ async def test_genuine_module_level_collision_still_flagged():
     assert out.result["files_checked"] == 2
     flagged = {d["symbol"] for d in _duplicate_issues(out)}
     assert "parse_command" in flagged
+
+
+_LOGGER_A = "import logging\nlogger = logging.getLogger(__name__)\n\ndef run_a():\n    return 1\n"
+_LOGGER_B = "import logging\nlogger = logging.getLogger(__name__)\n\ndef run_b():\n    return 2\n"
+
+
+@pytest.mark.asyncio
+async def test_module_level_variables_not_flagged_as_duplicates():
+    # logger-in-every-module is idiomatic; cross-file variable shadowing
+    # is harmless under module namespaces.
+    out = await action_validate_cross_file_consistency(
+        _si({"a.py": _LOGGER_A, "b.py": _LOGGER_B})
+    )
+    flagged = {d["symbol"] for d in _duplicate_issues(out)}
+    assert "logger" not in flagged
+
+
+_TYPED = (
+    "from typing import List\n"
+    "from pathlib import Path\n\n"
+    "def collect(paths: List[str]) -> List[Path]:\n"
+    "    return [Path(p) for p in paths]\n"
+)
+
+_GHOST = (
+    "def use_ghost():\n"
+    "    try:\n"
+    "        return GhostClass()\n"
+    "    except ValueError:\n"
+    "        raise RuntimeError('boom')\n"
+)
+
+
+def _unresolved(out) -> set:
+    results = out.context_updates.get("cross_file_results", {})
+    return {
+        i["symbol"]
+        for i in results.get("issues", [])
+        if i.get("type") == "unresolved_reference"
+    }
+
+
+@pytest.mark.asyncio
+async def test_imported_names_are_resolvable_not_flagged():
+    # The import statement is structural evidence the name resolves —
+    # typing.List / pathlib.Path noise dominated the old count (43/43
+    # false on the a21a8c workspace).
+    out = await action_validate_cross_file_consistency(_si({"m.py": _TYPED}))
+    unresolved = _unresolved(out)
+    assert "List" not in unresolved
+    assert "Path" not in unresolved
+
+
+@pytest.mark.asyncio
+async def test_truly_undefined_reference_still_flagged_builtins_excluded():
+    out = await action_validate_cross_file_consistency(
+        _si({"m.py": _TYPED, "g.py": _GHOST})
+    )
+    unresolved = _unresolved(out)
+    assert "GhostClass" in unresolved  # genuine — flagged
+    assert "ValueError" not in unresolved  # builtin — runtime-derived skip
+    assert "RuntimeError" not in unresolved

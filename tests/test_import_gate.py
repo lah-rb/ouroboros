@@ -19,7 +19,7 @@ def _goal(
     gtype="structural",
     reviewed=False,
     flow="file_ops",
-    status="success"
+    status="success",
 ):
     g = GoalRecord(description="loads world", type=gtype)
     g.import_reviewed = reviewed

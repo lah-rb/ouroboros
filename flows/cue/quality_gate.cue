@@ -336,6 +336,7 @@ quality_gate: #FlowDefinition & {
 					"cross_file_summary", "terminal_output",
 					"ux_session_assessment",
 					"architecture_summary",
+					"verified_behaviors_block",
 				]
 				input_keys: ["mission_objective", "mode", "architecture"]
 			}
@@ -354,6 +355,15 @@ quality_gate: #FlowDefinition & {
 					formatter:  "format_architecture_summary"
 					output_key: "architecture_summary"
 					params: {source: {$ref: "input.architecture"}}
+				},
+				{
+					// Verified play-tested behaviors — the summarize prompt
+					// forbids reporting these as untested/broken without
+					// fresh failing evidence (prevents the untested→reopen
+					// ping-pong on completed functional goals).
+					formatter:  "format_verified_behaviors"
+					output_key: "verified_behaviors_block"
+					params: {source: {$ref: "input.quality_overview"}}
 				},
 			]
 			config: temperature: "t*0.1"

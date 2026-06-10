@@ -362,12 +362,25 @@ def project_quality_overview(mission: MissionState, params: dict) -> dict:
     """
     arch = mission.architecture
 
+    # Behaviors with a verified passing play-test. The gate's summarize
+    # turn receives these with a do-not-relitigate rule: without it, a
+    # UX session that happens not to re-tour a verified feature causes
+    # an "untested: X" finding whose signature RE-OPENS the completed
+    # goal (the harvester's fix-didn't-hold logic) — verified work would
+    # ping-pong on every gate pass that doesn't re-exercise everything.
+    verified_behaviors = [
+        g.description
+        for g in mission.goals
+        if g.type == "functional" and g.status == "complete"
+    ]
+
     if not arch:
         return {
             "modules": [],
             "interfaces": [],
             "data_shapes": [],
             "state_shapes": [],
+            "verified_behaviors": verified_behaviors,
             "run_command": "",
             "objective": mission.objective,
             "creation_order": [],
@@ -381,6 +394,7 @@ def project_quality_overview(mission: MissionState, params: dict) -> dict:
         "interfaces": [_interface_to_dict(iface) for iface in arch.interfaces],
         "data_shapes": [_data_shape_to_dict(ds) for ds in arch.data_shapes],
         "state_shapes": _state_shapes_to_dicts(arch),
+        "verified_behaviors": verified_behaviors,
         "run_command": arch.run_command,
         "objective": mission.objective,
         "creation_order": list(arch.creation_order),

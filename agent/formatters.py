@@ -123,6 +123,26 @@ def format_project_listing(params: dict, namespaces: dict) -> str:
     return "\n".join(lines)
 
 
+def format_verified_behaviors(params: dict, namespaces: dict) -> str:
+    """Render the verified-behaviors list from the quality_overview projection.
+
+    Fed to the quality gate's summarize turn with a do-not-relitigate
+    rule: behaviors with a verified passing play-test must not be
+    reported as untested or broken just because the latest UX session
+    didn't happen to re-tour them — without this, "untested: X" findings
+    re-open completed goals on every gate pass (the harvester's
+    fix-didn't-hold logic) and verified work ping-pongs forever.
+    """
+    overview = params.get("source") or {}
+    behaviors = overview.get("verified_behaviors") if isinstance(overview, dict) else []
+    if not behaviors:
+        return ""
+    lines = ["Behaviors with a VERIFIED passing play-test:"]
+    for b in behaviors:
+        lines.append(f"- {b}")
+    return "\n".join(lines)
+
+
 def format_validation_results(params: dict, namespaces: dict) -> str:
     results = params.get("source") or []
     if not results:
@@ -296,6 +316,7 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_project_file_list": format_project_file_list,
     "format_project_listing": format_project_listing,
     "format_validation_results": format_validation_results,
+    "format_verified_behaviors": format_verified_behaviors,
     "format_session_history": format_session_history,
     "format_last_turn": format_last_turn,
     "format_run_context": format_run_context,

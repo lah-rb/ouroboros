@@ -6697,7 +6697,8 @@
             "cross_file_summary",
             "terminal_output",
             "ux_session_assessment",
-            "architecture_summary"
+            "architecture_summary",
+            "verified_behaviors_block"
           ],
           "input_keys": [
             "mission_objective",
@@ -6730,6 +6731,15 @@
             "params": {
               "source": {
                 "$ref": "input.architecture"
+              }
+            }
+          },
+          {
+            "formatter": "format_verified_behaviors",
+            "output_key": "verified_behaviors_block",
+            "params": {
+              "source": {
+                "$ref": "input.quality_overview"
               }
             }
           }

@@ -56,6 +56,16 @@ sections:
       UX verification session:
       {context.ux_session_assessment}
 
+  - id: verified_behaviors
+    when: context.verified_behaviors_block
+    content: |
+      {context.verified_behaviors_block}
+
+      These behaviors already passed a dedicated play-test. Do NOT report
+      them as untested or broken just because this UX session did not
+      revisit them — only report one if the evidence above shows it
+      failing NOW.
+
   - id: files
     when: context.project_file_list
     content: |
@@ -90,6 +100,12 @@ sections:
       as `{"issue": "untested: <feature> was not exercised by the UX
       session", "class": "functional"}` so it gets verified by a play-test,
       and never claim it does not work.
+
+      Unresolved-reference counts in the cross-file consistency report are
+      INFORMATIONAL ONLY — the resolver cannot see builtins, the standard
+      library, or third-party imports, so the count is dominated by names
+      that resolve fine at runtime. NEVER report unresolved references as
+      a blocking issue. (Duplicate-definition warnings remain reportable.)
 
       ```json
       {
