@@ -1,0 +1,67 @@
+# Prompt template: quality_gate/judge_finding
+#
+# Verify-before-harvest judge: a quality review CLAIMED a defect, the
+# program was just re-run with the claim's reproduction sequence, and
+# this turn decides from the transcript whether the claim holds.
+# Context: probe_claim, probe_expected, probe_repro_block, terminal_output
+# Input: architecture_run_command
+
+id: quality_gate/judge_finding
+description: "Judge whether a probe transcript confirms a claimed defect"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a claim-verification module in an automated pipeline. A
+      quality review CLAIMED a defect; the program was just re-run with
+      a reproduction sequence. Decide from the transcript alone whether
+      the claim is confirmed. Your output will be parsed as JSON —
+      return ONLY a JSON object inside a fenced code block.
+
+  - id: claim
+    content: |
+      The claim:
+      {context.probe_claim}
+
+  - id: expected
+    when: context.probe_expected
+    content: |
+      Expected: {context.probe_expected}
+
+  - id: repro
+    content: |
+      Reproduction sequence (each line typed into the running program):
+      Launch: {input.architecture_run_command}
+      {context.probe_repro_block}
+
+  - id: transcript
+    content: |
+      Probe transcript:
+      {context.terminal_output}
+
+  - id: output_format
+    content: |
+      Return a JSON object inside a fenced code block. Rules:
+      - `"confirmed": true` ONLY if the transcript SHOWS the claimed
+        failure: an error, wrong output, a crash, or the claimed missing
+        behavior. A crash at launch confirms a startup claim.
+      - `"confirmed": false` ONLY if the transcript shows the claimed
+        behavior visibly WORKING.
+      - If the transcript is ambiguous, or the reproduction never
+        reached the feature, answer `"confirmed": true` — a claim is
+        only dropped on clear evidence the behavior works.
+      - `"reason"`: one sentence citing what the transcript shows.
+
+      ✅ CORRECT:
+      ```json
+      {"confirmed": false, "reason": "save then load restored the room and inventory exactly"}
+      ```
+
+      ❌ WRONG — do not add explanation outside the JSON:
+      Looking at the transcript, the save command worked:
+      ```json
+      {"confirmed": false, "reason": "..."}
+      ```
+
+      Return ONLY the fenced JSON.

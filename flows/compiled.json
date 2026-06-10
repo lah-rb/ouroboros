@@ -6131,8 +6131,8 @@
   },
   "quality_gate": {
     "flow": "quality_gate",
-    "version": 5,
-    "description": "Project-wide quality validation. Three-phase gate:\n1. Deterministic checks \u2014 file scan, cross-file consistency, lint\n2. Behavioral validation \u2014 run_commands (fast-fail), then\n   run_session (UX verification, completion mode only)\n3. Summary \u2014 LLM reviews all results and determines pass/fail",
+    "version": 6,
+    "description": "Project-wide quality validation. Four-phase gate:\n1. Deterministic checks \u2014 file scan, cross-file consistency, lint\n2. Behavioral validation \u2014 run_commands (fast-fail), then\n   run_session (UX verification, completion mode only)\n3. Summary \u2014 LLM reviews all results and emits findings\n4. Verification \u2014 findings with repros are probed against the\n   live program; the verdict is derived from surviving claims",
     "context_tier": "mission_objective",
     "returns": {
       "verdict": {
@@ -6785,6 +6785,10 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "result.has_findings == true and input.get('mode', 'completion') == 'completion'",
+              "transition": "prepare_finding_verification"
+            },
+            {
               "condition": "result.all_passing == true",
               "transition": "gate_pass"
             },
@@ -6800,6 +6804,311 @@
         },
         "publishes": [
           "quality_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "prepare_finding_verification": {
+        "action": "prepare_finding_verification",
+        "description": "Queue functional findings with repros for probe verification",
+        "context": {
+          "required": [
+            "quality_results"
+          ],
+          "optional": [
+            "terminal_output"
+          ]
+        },
+        "params": {
+          "run_command": {
+            "$ref": "input.architecture_run_command",
+            "default": ""
+          },
+          "no_repro_policy": "permissive"
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_next == true",
+              "transition": "run_probe"
+            },
+            {
+              "condition": "true",
+              "transition": "apply_verification_results"
+            }
+          ]
+        },
+        "publishes": [
+          "verification_queue",
+          "passthrough_tasks",
+          "verified_findings",
+          "refuted_findings",
+          "gate_terminal_output",
+          "probe_commands",
+          "probe_claim",
+          "probe_expected",
+          "probe_repro_block"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_probe": {
+        "action": "flow",
+        "description": "Run the program with the finding's reproduction sequence",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "effects": [],
+        "flow": "run_commands",
+        "input_map": {
+          "commands": {
+            "$ref": "context.probe_commands"
+          },
+          "working_directory": {
+            "$ref": "input.working_directory"
+          },
+          "timeout": 20,
+          "stop_on_error": false
+        },
+        "publishes": [
+          "terminal_output"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success'",
+              "transition": "judge_finding"
+            },
+            {
+              "condition": "true",
+              "transition": "record_probe_error"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "judge_finding": {
+        "action": "inference",
+        "description": "Judge whether the probe transcript confirms the claimed defect",
+        "context": {
+          "required": [],
+          "optional": [
+            "probe_claim",
+            "probe_expected",
+            "probe_repro_block",
+            "terminal_output"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "quality_gate/judge_finding",
+          "context_keys": [
+            "probe_claim",
+            "probe_expected",
+            "probe_repro_block",
+            "terminal_output"
+          ],
+          "input_keys": [
+            "architecture_run_command"
+          ]
+        },
+        "config": {
+          "temperature": "t*0.2"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "record_and_advance"
+            },
+            {
+              "condition": "true",
+              "transition": "record_probe_error"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "record_and_advance": {
+        "action": "record_finding_verification",
+        "description": "Parse judge verdict, annotate finding, advance the queue",
+        "context": {
+          "required": [
+            "verification_queue"
+          ],
+          "optional": [
+            "inference_response",
+            "verified_findings",
+            "refuted_findings",
+            "terminal_output"
+          ]
+        },
+        "params": {
+          "run_command": {
+            "$ref": "input.architecture_run_command",
+            "default": ""
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_next == true",
+              "transition": "flush_transient_probe"
+            },
+            {
+              "condition": "true",
+              "transition": "flush_transient_final"
+            }
+          ]
+        },
+        "publishes": [
+          "verification_queue",
+          "verified_findings",
+          "refuted_findings",
+          "probe_commands",
+          "probe_claim",
+          "probe_expected",
+          "probe_repro_block"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "record_probe_error": {
+        "action": "record_finding_verification",
+        "description": "Probe could not run or judge gave no answer \u2014 keep claim unverified",
+        "context": {
+          "required": [
+            "verification_queue"
+          ],
+          "optional": [
+            "inference_response",
+            "verified_findings",
+            "refuted_findings",
+            "terminal_output"
+          ]
+        },
+        "params": {
+          "probe_failed": true,
+          "run_command": {
+            "$ref": "input.architecture_run_command",
+            "default": ""
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_next == true",
+              "transition": "flush_transient_probe"
+            },
+            {
+              "condition": "true",
+              "transition": "flush_transient_final"
+            }
+          ]
+        },
+        "publishes": [
+          "verification_queue",
+          "verified_findings",
+          "refuted_findings",
+          "probe_commands",
+          "probe_claim",
+          "probe_expected",
+          "probe_repro_block"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "flush_transient_probe": {
+        "action": "flush_transient_files",
+        "description": "Delete architecture-declared transient files between probes",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "run_probe"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "flush_transient_final": {
+        "action": "flush_transient_files",
+        "description": "Flush transients after the last probe",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "apply_verification_results"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_verification_results": {
+        "action": "apply_verification_results",
+        "description": "Rebuild quality_results from surviving claims; derive the verdict",
+        "context": {
+          "required": [
+            "quality_results"
+          ],
+          "optional": [
+            "verified_findings",
+            "refuted_findings",
+            "passthrough_tasks",
+            "gate_terminal_output"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.all_passing == true",
+              "transition": "gate_pass"
+            },
+            {
+              "condition": "true",
+              "transition": "gate_fail"
+            }
+          ]
+        },
+        "publishes": [
+          "quality_results",
+          "terminal_output"
         ],
         "effects": [],
         "terminal": false

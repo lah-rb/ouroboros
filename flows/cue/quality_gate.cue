@@ -1,11 +1,16 @@
 // quality_gate.cue — Project-Wide Quality Validation
 //
-// Three-phase gate:
+// Four-phase gate:
 //   1. Deterministic checks — file scan, cross-file AST, imports, lint
 //   2. Behavioral validation (completion mode only):
 //      a. run_commands — does it start? (fast-fail)
 //      b. run_session  — does it work well? (UX verification)
-//   3. Summary — LLM reviews results, determines pass/fail
+//   3. Summary — LLM reviews results, emits findings as CLAIMS
+//   4. Verify-before-harvest (completion mode only) — each functional
+//      claim with a repro is re-run against the live program; only
+//      survivors reach the harvester, and the verdict is DERIVED from
+//      them (~35% of gate findings were false claims on the first
+//      completed run, each costing ~3 dispatches of blind fixing).
 //
 // The two-phase behavioral check prevents burning inference tokens
 // on persona-driven UX exploration when the code doesn't even start.
@@ -14,13 +19,15 @@ package ouroboros
 
 quality_gate: #FlowDefinition & {
 	flow:    "quality_gate"
-	version: 5
+	version: 6
 	description: """
-		Project-wide quality validation. Three-phase gate:
+		Project-wide quality validation. Four-phase gate:
 		1. Deterministic checks — file scan, cross-file consistency, lint
 		2. Behavioral validation — run_commands (fast-fail), then
 		   run_session (UX verification, completion mode only)
-		3. Summary — LLM reviews all results and determines pass/fail
+		3. Summary — LLM reviews all results and emits findings
+		4. Verification — findings with repros are probed against the
+		   live program; the verdict is derived from surviving claims
 		"""
 
 	context_tier: "mission_objective"
@@ -387,12 +394,200 @@ quality_gate: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
+					// Completion mode: non-empty findings enter verification
+					// REGARDLESS of the model's verdict — a "pass" with
+					// blocking_issues and a "fail" both get their claims
+					// checked, and the final verdict is derived from the
+					// survivors. Checkpoint mode keeps the direct routing.
+					{condition: "result.has_findings == true and input.get('mode', 'completion') == 'completion'", transition: "prepare_finding_verification"},
 					{condition: "result.all_passing == true", transition: "gate_pass"},
 					{condition: "result.all_passing == false", transition: "gate_fail"},
 					{condition: "true", transition: "gate_pass"},
 				]
 			}
 			publishes: ["quality_results"]
+		}
+
+		// ── Phase 4: Verify findings before harvest ─────────────────
+		//
+		// Findings are CLAIMS. Each functional claim with a repro is
+		// re-run against the live program (run_commands drives the PTY:
+		// first line launches, the rest are stdin); a judge turn reads
+		// the transcript and confirms or refutes. Only survivors reach
+		// the harvester. Modeled on patch.cue's cross-file queue loop.
+		// Fail-safe throughout: probe/judge infrastructure failures KEEP
+		// the claim (degrade to pre-feature behavior, never silently pass).
+
+		prepare_finding_verification: #StepDefinition & {
+			action:      "prepare_finding_verification"
+			description: "Queue functional findings with repros for probe verification"
+			context: {
+				required: ["quality_results"]
+				optional: ["terminal_output"]
+			}
+			params: {
+				run_command: {$ref: "input.architecture_run_command", default: ""}
+				// "permissive": a functional finding without a usable repro
+				// is harvested unverified (tagged). Flip to "strict" (note-
+				// only, never a goal) once summarize reliably emits repros.
+				no_repro_policy: "permissive"
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.has_next == true", transition: "run_probe"},
+					{condition: "true", transition: "apply_verification_results"},
+				]
+			}
+			publishes: [
+				"verification_queue", "passthrough_tasks",
+				"verified_findings", "refuted_findings",
+				"gate_terminal_output",
+				"probe_commands", "probe_claim", "probe_expected", "probe_repro_block",
+			]
+		}
+
+		run_probe: #StepDefinition & {
+			action:      "flow"
+			description: "Run the program with the finding's reproduction sequence"
+			flow:        "run_commands"
+			input_map: {
+				commands:          {$ref: "context.probe_commands"}
+				working_directory: {$ref: "input.working_directory"}
+				timeout:           20
+				// A timed-out repro line is itself evidence (a hang appears
+				// in the transcript for the judge); keep the sequence going.
+				stop_on_error: false
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.status == 'success'", transition: "judge_finding"},
+					{condition: "true", transition: "record_probe_error"},
+				]
+			}
+			// Probe transcript — the gate's UX transcript was snapshotted
+			// to gate_terminal_output and is restored by apply_verification_results.
+			publishes: ["terminal_output"]
+		}
+
+		judge_finding: #StepDefinition & {
+			action:      "inference"
+			description: "Judge whether the probe transcript confirms the claimed defect"
+			context: optional: [
+				"probe_claim", "probe_expected", "probe_repro_block",
+				"terminal_output",
+			]
+			prompt_template: {
+				template: "quality_gate/judge_finding"
+				context_keys: [
+					"probe_claim", "probe_expected", "probe_repro_block",
+					"terminal_output",
+				]
+				input_keys: ["architecture_run_command"]
+			}
+			config: temperature: "t*0.2"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "record_and_advance"},
+					{condition: "true", transition: "record_probe_error"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		record_and_advance: #StepDefinition & {
+			action:      "record_finding_verification"
+			description: "Parse judge verdict, annotate finding, advance the queue"
+			context: {
+				required: ["verification_queue"]
+				optional: [
+					"inference_response", "verified_findings",
+					"refuted_findings", "terminal_output",
+				]
+			}
+			params: run_command: {$ref: "input.architecture_run_command", default: ""}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.has_next == true", transition: "flush_transient_probe"},
+					{condition: "true", transition: "flush_transient_final"},
+				]
+			}
+			publishes: [
+				"verification_queue", "verified_findings", "refuted_findings",
+				"probe_commands", "probe_claim", "probe_expected", "probe_repro_block",
+			]
+		}
+
+		// Probe infra failed (PTY no-start / judge gave no answer) — keep
+		// the claim, tagged inconclusive. Infra failure is not refutation.
+		record_probe_error: #StepDefinition & {
+			action:      "record_finding_verification"
+			description: "Probe could not run or judge gave no answer — keep claim unverified"
+			context: {
+				required: ["verification_queue"]
+				optional: [
+					"inference_response", "verified_findings",
+					"refuted_findings", "terminal_output",
+				]
+			}
+			params: {
+				probe_failed: true
+				run_command: {$ref: "input.architecture_run_command", default: ""}
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.has_next == true", transition: "flush_transient_probe"},
+					{condition: "true", transition: "flush_transient_final"},
+				]
+			}
+			publishes: [
+				"verification_queue", "verified_findings", "refuted_findings",
+				"probe_commands", "probe_claim", "probe_expected", "probe_repro_block",
+			]
+		}
+
+		// Test isolation between probes (same action as flush_transient_ux:
+		// a probe's save files must not leak into the next probe's run).
+		flush_transient_probe: #StepDefinition & {
+			action:      "flush_transient_files"
+			description: "Delete architecture-declared transient files between probes"
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "run_probe"}]
+			}
+		}
+
+		flush_transient_final: #StepDefinition & {
+			action:      "flush_transient_files"
+			description: "Flush transients after the last probe"
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "apply_verification_results"}]
+			}
+		}
+
+		apply_verification_results: #StepDefinition & {
+			action:      "apply_verification_results"
+			description: "Rebuild quality_results from surviving claims; derive the verdict"
+			context: {
+				required: ["quality_results"]
+				optional: [
+					"verified_findings", "refuted_findings",
+					"passthrough_tasks", "gate_terminal_output",
+				]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.all_passing == true", transition: "gate_pass"},
+					{condition: "true", transition: "gate_fail"},
+				]
+			}
+			publishes: ["quality_results", "terminal_output"]
 		}
 
 		// ── Terminal states ────────────────────────────────────────
