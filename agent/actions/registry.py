@@ -258,6 +258,13 @@ def build_action_registry() -> ActionRegistry:
         action_splice_frame,
     )
 
+    # ── Verification actions (verify-before-harvest) ─────────────
+    from agent.actions.verification_actions import (
+        action_apply_verification_results,
+        action_prepare_finding_verification,
+        action_record_finding_verification,
+    )
+
     # ── Refinement actions ────────────────────────────────────────
     from agent.actions.refinement_actions import (
         action_push_note,
@@ -311,6 +318,12 @@ def build_action_registry() -> ActionRegistry:
     registry.register("log_validation_notes", action_log_validation_notes)
     registry.register("execute_project_setup", action_execute_project_setup)
     registry.register("apply_quality_gate_results", action_apply_quality_gate_results)
+    # Verify-before-harvest probe loop (quality_gate Phase 4)
+    registry.register(
+        "prepare_finding_verification", action_prepare_finding_verification
+    )
+    registry.register("record_finding_verification", action_record_finding_verification)
+    registry.register("apply_verification_results", action_apply_verification_results)
 
     # ── Diagnostic actions ────────────────────────────────────────
     registry.register("compile_diagnosis", action_compile_diagnosis)
