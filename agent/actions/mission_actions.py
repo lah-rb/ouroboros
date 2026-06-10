@@ -1123,6 +1123,12 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
             # ran). Go straight to diagnose -> file_ops; the post-fix interact
             # re-test (defect-resolution polarity) is the real verification.
             if getattr(goal, "origin", "design") == "quality_gate":
+                directive = (
+                    "A quality-gate review reported this defect. Diagnose the "
+                    "root cause and identify the specific file and symbol to "
+                    "change:\n" + goal.description
+                )
+                directive += _goal_repro_block(goal)
                 dispatch_config = {
                     "goal_id": goal.id,
                     "goal_description": goal.description,
@@ -1130,11 +1136,7 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
                     "goal_files": goal.associated_files or [],
                     "flow": "diagnose_issue",
                     "target_file_path": "",
-                    "flow_directive": (
-                        "A quality-gate review reported this defect. Diagnose the "
-                        "root cause and identify the specific file and symbol to "
-                        "change:\n" + goal.description
-                    ),
+                    "flow_directive": directive,
                     "what_happened": goal.description,
                     "error_headline": goal.description[:80],
                 }
@@ -1737,6 +1739,26 @@ def _quality_finding_text(fix_task: Any) -> str:
     return str(fix_task).strip()
 
 
+def _goal_repro_block(goal: Any) -> str:
+    """Render a goal's probe-verified repro + evidence for a flow directive.
+
+    Verify-before-harvest goals carry the exact stdin sequence that
+    demonstrated the defect at the gate; diagnose and the post-fix re-test
+    start from it instead of re-deriving a scenario from prose."""
+    repro = list(getattr(goal, "repro_commands", None) or [])
+    if not repro:
+        return ""
+    lines = "\n".join(f"  {i}. {cmd}" for i, cmd in enumerate(repro, 1))
+    block = (
+        "\nVerified reproduction (each line is typed into the running "
+        f"program, in order):\n{lines}"
+    )
+    evidence = str(getattr(goal, "verification_evidence", "") or "").strip()
+    if evidence:
+        block += f"\nObserved when reproduced: {evidence[:300]}"
+    return block
+
+
 def _functional_retest_directive(goal: Any, *, after: str) -> str:
     """interact re-test directive after a fix, polarity-correct per goal origin.
 
@@ -1747,12 +1769,19 @@ def _functional_retest_directive(goal: Any, *, after: str) -> str:
     nonsense and false-passes, so frame it as defect-resolution instead."""
     desc = getattr(goal, "description", "")
     if getattr(goal, "origin", "design") == "quality_gate":
-        return (
+        directive = (
             f"A quality-gate review reported this defect: {desc}\n"
             f"A {after} was just applied. Run the program and verify the defect "
             f"NO LONGER occurs — the program runs and the affected behavior is "
             f"correct. If the defect still reproduces, report failure."
         )
+        repro_block = _goal_repro_block(goal)
+        if repro_block:
+            directive += (
+                f"{repro_block}\n"
+                "Re-run this exact sequence and confirm the defect no longer occurs."
+            )
+        return directive
     return (
         f"Re-test this capability after a {after}: {desc}\n"
         f"Run the program and verify the described behavior works correctly."
@@ -1767,7 +1796,7 @@ def _rget(report: Any, key: str, default: Any = "") -> Any:
 
 
 def _diag_dispatch_from_quality_finding(
-    issue: str, *, goal_id: str = "", file_hint: str = ""
+    issue: str, *, goal_id: str = "", file_hint: str = "", repro_block: str = ""
 ) -> dict:
     """diagnose_issue dispatch_config for a quality goal's finding (free-text).
     goal_id binds the diagnosis report back to the quality goal."""
@@ -1781,7 +1810,9 @@ def _diag_dispatch_from_quality_finding(
         "target_file_path": str(file_hint or ""),
         "flow_directive": (
             "A quality-gate review found this issue. Diagnose the root cause "
-            "and identify the specific file and symbol to change:\n" + issue
+            "and identify the specific file and symbol to change:\n"
+            + issue
+            + repro_block
         ),
         "what_happened": issue,
         "error_headline": issue[:80],
@@ -1867,11 +1898,27 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
             if (isinstance(task, dict) and task.get("class") == "quality")
             else "functional"
         )
+        repro = (
+            [str(ln) for ln in (task.get("repro") or []) if str(ln).strip()]
+            if isinstance(task, dict)
+            else []
+        )
+        evidence = (
+            str(task.get("verification_evidence") or "")
+            if isinstance(task, dict)
+            else ""
+        )
         existing = by_sig.get(sig)
         if existing is not None:
             if existing.status == "complete":
                 existing.status = "incomplete"
                 reopened += 1
+                # The fresh finding survived a new probe — its repro and
+                # evidence supersede whatever the goal carried before.
+                if repro:
+                    existing.repro_commands = repro
+                if evidence:
+                    existing.verification_evidence = evidence
             else:
                 skipped += 1
             continue
@@ -1883,6 +1930,8 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
                 origin="quality_gate",
                 finding_signature=sig,
                 interaction_mode="exploratory" if cls == "functional" else None,
+                repro_commands=repro,
+                verification_evidence=evidence,
             )
         )
         created += 1
@@ -1977,7 +2026,9 @@ async def action_quality_sweep_next(step_input: StepInput) -> StepOutput:
         observations=f"Quality sweep: diagnosing '{goal.description[:50]}'",
         context_updates={
             "dispatch_config": _diag_dispatch_from_quality_finding(
-                goal.description, goal_id=goal.id
+                goal.description,
+                goal_id=goal.id,
+                repro_block=_goal_repro_block(goal),
             )
         },
     )

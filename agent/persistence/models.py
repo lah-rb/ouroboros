@@ -142,6 +142,12 @@ class GoalRecord(BaseModel):
     # (the fix didn't hold). See action_harvest_quality_findings.
     origin: str = "design"
     finding_signature: str = ""
+    # Verify-before-harvest: the probe-verified reproduction sequence (stdin
+    # lines typed into the running program; launch implicit) and the judge's
+    # evidence. Diagnose starts from the exact failing sequence, and the
+    # post-fix interact re-test replays it.
+    repro_commands: list[str] = Field(default_factory=list)
+    verification_evidence: str = ""
     # Structural import gate: set once a structural goal's import failure has
     # been surfaced to the model for a fix-or-defer decision, so it isn't
     # re-litigated (prevents looping on an expected first-pass cross-module

@@ -175,3 +175,75 @@ async def test_quality_gate_goal_retests_with_defect_polarity_after_fix():
     dc = out.context_updates["dispatch_config"]
     assert dc["flow"] == "interact"
     assert "no longer" in dc["flow_directive"].lower()
+
+
+# ── Verify-before-harvest: probe-verified repros ride along ───────────────
+
+
+def _verified_task(issue: str, repro: list, evidence: str = "use printed nothing"):
+    return {
+        "issue": issue,
+        "description": issue,
+        "class": "functional",
+        "repro": repro,
+        "verification": "confirmed",
+        "verification_evidence": evidence,
+    }
+
+
+@pytest.mark.asyncio
+async def test_harvest_stores_repro_and_evidence_on_created_goal():
+    m = _mission()
+    await action_harvest_quality_findings(
+        _si(m, **_qg(_verified_task("`use` has no effect", ["take map", "use map"])))
+    )
+    (g,) = [x for x in m.goals if x.origin == "quality_gate"]
+    assert g.repro_commands == ["take map", "use map"]
+    assert g.verification_evidence == "use printed nothing"
+
+
+@pytest.mark.asyncio
+async def test_harvest_reopen_refreshes_repro_from_fresh_probe():
+    m = _mission()
+    await action_harvest_quality_findings(
+        _si(m, **_qg(_verified_task("`use` has no effect", ["use map"], "old")))
+    )
+    (g,) = [x for x in m.goals if x.origin == "quality_gate"]
+    g.status = "complete"
+    # Next gate round re-reports the same signature with a fresh probe.
+    await action_harvest_quality_findings(
+        _si(
+            m,
+            **_qg(
+                _verified_task("`use` has no effect", ["take map", "use map"], "new")
+            ),
+        )
+    )
+    assert g.status == "incomplete"
+    assert g.repro_commands == ["take map", "use map"]
+    assert g.verification_evidence == "new"
+
+
+@pytest.mark.asyncio
+async def test_diagnose_directive_carries_verified_repro():
+    g = _fgoal("quality_gate")
+    g.repro_commands = ["take map", "use map"]
+    g.verification_evidence = "nothing happened"
+    out = await action_functional_sweep_next(_si(_mission([g])))
+    directive = out.context_updates["dispatch_config"]["flow_directive"]
+    assert "Verified reproduction" in directive
+    assert "1. take map" in directive and "2. use map" in directive
+    assert "nothing happened" in directive
+
+
+def test_retest_directive_replays_verified_repro():
+    g = _fgoal("quality_gate")
+    g.repro_commands = ["take map", "use map"]
+    d = _functional_retest_directive(g, after="fix")
+    assert "1. take map" in d
+    assert "Re-run this exact sequence" in d
+
+
+def test_directives_unchanged_without_repro():
+    g = _fgoal("quality_gate")
+    assert "Verified reproduction" not in _functional_retest_directive(g, after="fix")
