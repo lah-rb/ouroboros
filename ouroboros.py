@@ -490,19 +490,54 @@ def cmd_start(args: argparse.Namespace) -> None:
 
 
 def cmd_cue_compile(args: argparse.Namespace) -> None:
-    """Validate CUE schemas and compile flows to compiled.json.
+    """Validate CUE schemas and compile all flow sets to compiled.json.
 
-    Runs ``cue vet`` then ``cue export`` from within Python, reading
-    the JSON output directly and writing flows/compiled.json.
+    Flow sets are directories under flows/: ``shared/`` holds the
+    set-agnostic layer (schemas, templates, generic leaf flows); every
+    other directory with .cue files is a set (code_core, scraper, ...).
+    All files share ``package ouroboros`` — each set compiles as a
+    file-list instance of shared + the set's own files (CUE hidden
+    fields like _templates are not importable across packages, so
+    file-list unification is the mechanism, not cue.mod imports).
+
+    Pipeline per invocation:
+      1. shared/ vets + exports STANDALONE — a shared file referencing
+         a set-local symbol fails here (the cross-set guard).
+      2. each set vets + exports as shared + set file list.
+      3. exports merge into one flat flows/compiled.json; shared keys
+         dedupe (deep-equal), differing duplicates are an error.
     """
+    import glob as globmod
     import subprocess
 
     project_root = os.path.dirname(os.path.abspath(__file__))
-    cue_dir = os.path.join(project_root, "flows", "cue")
-    compiled_path = os.path.join(project_root, "flows", "compiled.json")
+    flows_dir = os.path.join(project_root, "flows")
+    compiled_path = os.path.join(flows_dir, "compiled.json")
 
-    if not os.path.isdir(cue_dir):
-        print(f"Error: CUE directory not found: {cue_dir}")
+    if os.path.isdir(os.path.join(flows_dir, "cue")):
+        print(
+            "Error: flows/cue/ still exists — this checkout predates the\n"
+            "flow-set layout (flows/shared/ + flows/<set>/). Pull or migrate."
+        )
+        sys.exit(1)
+
+    shared_files = sorted(
+        os.path.relpath(p, flows_dir)
+        for p in globmod.glob(os.path.join(flows_dir, "shared", "*.cue"))
+    )
+    if not shared_files:
+        print("Error: flows/shared/ has no .cue files")
+        sys.exit(1)
+
+    set_names = sorted(
+        d
+        for d in os.listdir(flows_dir)
+        if d != "shared"
+        and os.path.isdir(os.path.join(flows_dir, d))
+        and globmod.glob(os.path.join(flows_dir, d, "*.cue"))
+    )
+    if not set_names:
+        print("Error: no flow-set directories found under flows/")
         sys.exit(1)
 
     # Locate cue binary
@@ -523,48 +558,77 @@ def cmd_cue_compile(args: argparse.Namespace) -> None:
         print("Error: 'cue' not found. Install from https://cuelang.org/docs/install/")
         sys.exit(1)
 
-    # Step 1: Validate
-    print("Validating CUE schemas...")
-    result = subprocess.run(
-        [cue_bin, "vet", "."],
-        capture_output=True,
-        text=True,
-        cwd=cue_dir,
-    )
-    if result.returncode != 0:
-        print(f"CUE validation failed:\n{result.stderr}")
-        sys.exit(1)
+    def _cue(verb: str, files: list[str], label: str) -> str:
+        result = subprocess.run(
+            [cue_bin, verb, *files] + (["--out", "json"] if verb == "export" else []),
+            capture_output=True,
+            text=True,
+            cwd=flows_dir,
+        )
+        if result.returncode != 0:
+            print(f"CUE {verb} failed for {label}:\n{result.stderr}")
+            sys.exit(1)
+        return result.stdout
 
-    # Step 2: Export to JSON
-    print("Exporting flows to JSON...")
-    result = subprocess.run(
-        [cue_bin, "export", ".", "--out", "json"],
-        capture_output=True,
-        text=True,
-        cwd=cue_dir,
-    )
-    if result.returncode != 0:
-        print(f"CUE export failed:\n{result.stderr}")
-        sys.exit(1)
-
-    # Step 3: Parse, validate, and write
+    # Step 1: shared must stand alone (cross-set guard).
+    print("Validating shared layer (standalone)...")
+    _cue("vet", shared_files, "shared")
     try:
-        data = json.loads(result.stdout)
+        shared_keys = set(json.loads(_cue("export", shared_files, "shared")))
     except json.JSONDecodeError as e:
-        print(f"CUE export produced invalid JSON: {e}")
+        print(f"shared export produced invalid JSON: {e}")
         sys.exit(1)
 
-    flow_count = sum(1 for v in data.values() if isinstance(v, dict) and "flow" in v)
+    # Steps 2-3: vet + export each set, merge.
+    merged: dict = {}
+    provenance: dict[str, str] = {}
+    for set_name in set_names:
+        set_files = shared_files + sorted(
+            os.path.relpath(p, flows_dir)
+            for p in globmod.glob(os.path.join(flows_dir, set_name, "*.cue"))
+        )
+        print(f"Compiling flow set '{set_name}' ({len(set_files)} files)...")
+        _cue("vet", set_files, set_name)
+        try:
+            data = json.loads(_cue("export", set_files, set_name))
+        except json.JSONDecodeError as e:
+            print(f"CUE export for '{set_name}' produced invalid JSON: {e}")
+            sys.exit(1)
+        for key, value in data.items():
+            if key not in merged:
+                merged[key] = value
+                provenance[key] = set_name
+                continue
+            if merged[key] == value:
+                if key not in shared_keys:
+                    print(
+                        f"⚠️  '{key}' defined identically in "
+                        f"'{provenance[key]}' and '{set_name}' — move it to shared/"
+                    )
+                continue
+            print(
+                f"Error: '{key}' differs between flow sets "
+                f"'{provenance[key]}' and '{set_name}' — flow names must be "
+                f"globally unique."
+            )
+            sys.exit(1)
 
-    with open(compiled_path, "w") as f:
-        json.dump(data, f, indent=2)
+    flow_count = sum(1 for v in merged.values() if isinstance(v, dict) and "flow" in v)
+
+    # Atomic write — compiled.json is never invalid mid-write. Key order
+    # is deterministic without sort_keys: cue export's ordering is stable
+    # and sets merge in sorted order.
+    tmp_path = compiled_path + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(merged, f, indent=2)
+    os.replace(tmp_path, compiled_path)
 
     print(f"Done. {compiled_path} generated.")
     print(f"Flow count: {flow_count}")
 
     # Step 4: Quick structural sanity checks
     errors = []
-    for name, flow_def in data.items():
+    for name, flow_def in merged.items():
         if not isinstance(flow_def, dict) or "flow" not in flow_def:
             continue
         entry = flow_def.get("entry", "")

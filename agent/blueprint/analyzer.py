@@ -146,6 +146,16 @@ def _load_flows_from_compiled(
 # ── Source Discovery ──────────────────────────────────────────────────
 
 
+def _cue_source_files(flows_dir: str) -> list[Path]:
+    """All CUE sources across flow-set directories (flows/<set>/*.cue).
+
+    Flow sets replaced the flat flows/cue/ layout: shared/ holds the
+    set-agnostic layer, every other subdirectory is a set. Sorted by
+    full path so per-set grouping is stable.
+    """
+    return sorted(Path(flows_dir).glob("*/*.cue"))
+
+
 def _build_source_map(flows_dir: str) -> dict[str, str]:
     """Walk flows/cue/ and build a mapping of flow name → relative CUE file path.
 
@@ -153,15 +163,11 @@ def _build_source_map(flows_dir: str) -> dict[str, str]:
     """
     source_map: dict[str, str] = {}
     flows_path = Path(flows_dir)
-    cue_dir = flows_path / "cue"
-
-    if not cue_dir.is_dir():
-        return source_map
 
     # Pattern: <flow_name>: #FlowDefinition &
     flow_def_pattern = re.compile(r"^(\w+):\s+#FlowDefinition\s+&", re.MULTILINE)
 
-    for cue_file in sorted(cue_dir.glob("*.cue")):
+    for cue_file in _cue_source_files(flows_dir):
         # Skip schema/utility files
         if cue_file.name in ("flow.cue", "prompt.cue", "lint.cue", "templates.cue"):
             continue
@@ -723,12 +729,8 @@ def _scan_template_usage(flows_dir: str) -> dict[str, list[str]]:
     Returns a mapping of template_name → ["flow.step", ...].
     """
     usage: dict[str, list[str]] = {}
-    cue_dir = Path(flows_dir) / "cue"
 
-    if not cue_dir.is_dir():
-        return usage
-
-    for cue_file in sorted(cue_dir.glob("*.cue")):
+    for cue_file in _cue_source_files(flows_dir):
         if cue_file.name in ("flow.cue", "prompt.cue", "lint.cue", "templates.cue"):
             continue
         try:
@@ -765,9 +767,12 @@ def _build_template_irs_from_cue(
     Extracts template names and their base configurations from the CUE source.
     """
     template_irs: dict[str, TemplateIR] = {}
-    templates_path = Path(flows_dir) / "cue" / "templates.cue"
+    templates_path = next(
+        (f for f in _cue_source_files(flows_dir) if f.name == "templates.cue"),
+        None,
+    )
 
-    if not templates_path.exists():
+    if templates_path is None or not templates_path.exists():
         # Fall back: create entries from usage alone
         for template_name, refs in template_usage.items():
             template_irs[template_name] = TemplateIR(
@@ -829,15 +834,14 @@ def _compute_source_hash(flows_dir: str, agent_dir: str) -> str:
         except Exception:
             pass
 
-    # Hash all CUE files
-    cue_dir = flows_path / "cue"
-    if cue_dir.is_dir():
-        for cue_file in sorted(cue_dir.glob("*.cue")):
-            try:
-                hasher.update(cue_file.name.encode())
-                hasher.update(cue_file.read_bytes())
-            except Exception:
-                continue
+    # Hash all CUE files across flow sets; the set-dir name is part of
+    # the hashed identity so moving a file between sets invalidates it.
+    for cue_file in _cue_source_files(str(flows_path)):
+        try:
+            hasher.update(f"{cue_file.parent.name}/{cue_file.name}".encode())
+            hasher.update(cue_file.read_bytes())
+        except Exception:
+            continue
 
     # Hash the action registry source
     registry_path = Path(agent_dir) / "actions" / "registry.py"
