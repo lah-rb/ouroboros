@@ -41,6 +41,7 @@ These norms apply to AI-directed changes as much as to human ones. If a change a
 | If the task involves... | Start here | Also check |
 |------------------------|------------|------------|
 | Flow logic (step order, transitions, routing) | `flows/<set>/*.cue` (`shared/` + one dir per flow set, e.g. `code_core/`) | Rebuild with `uv run ouroboros.py cue-compile` |
+| Mission types / flow sets (entry flow, phase order) | `agent/flow_sets.py` (registry) | IMPLEMENTATION.md §3.2 "Flow Sets" |
 | New action behavior | `agent/actions/` | Register in `agent/actions/registry.py` |
 | Prompt wording for local model | `prompts/<flow>/<step>.yaml` | `PROMPTING_CONVENTIONS.md` for standards |
 | Step templates (reusable step configs) | `flows/shared/templates.cue` | `agent/loader.py` (merge logic) |

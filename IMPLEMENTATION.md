@@ -469,7 +469,43 @@ are the shared building blocks: modification modes (`create`, `rewrite`, `patch`
 context assembly (`prepare_context`, `research`), terminal interaction (`run_commands`,
 `run_session`), environment probing (`set_env`). Parent flows treat them as black boxes.
 
-### 3.2 Supporting Files
+### 3.2 Flow Sets
+
+The `flows/` directory is organized as component sets:
+
+- **`flows/shared/`** — the set-agnostic layer: the CUE schemas, turn machinery,
+  step templates, projections, and the generic leaf flows any mission type can
+  invoke (`run_commands`, `run_session`, `research`). Shared must compile
+  standalone — `cue-compile` vets and exports it alone first, so a shared file
+  referencing a set-local symbol fails the build (the cross-set guard).
+- **`flows/<set>/`** (e.g. `flows/code_core/`) — one directory per mission type:
+  its controller flow plus the flows specific to that pipeline.
+
+All files share `package ouroboros`; each set compiles as a file-list instance
+of shared + its own files (CUE hidden fields like `_templates` cannot be
+imported across packages, so file-list unification is the mechanism, not
+cue.mod). Per-set exports merge into the single flat `flows/compiled.json`:
+deep-equal duplicates (the shared flows) dedupe, differing duplicates are a
+build error — flow names are globally unique.
+
+The Python side of a set lives in `agent/flow_sets.py`: a `FlowSetSpec` naming
+the controller (entry) flow and the ordered `PhaseRule` spec its check-phase
+action evaluates. Missions select a set via `MissionConfig.flow_set` (YAML
+`flow_set:` or `mission create --flow-set`); the entry flow derives from the
+registry at `start` time. The phase NAMES in a spec are the contract with the
+controller's `check_phase` resolver rules — they must stay in sync.
+
+**Adding a flow set** (e.g. a scraper pipeline):
+
+1. Create `flows/<set>/` with a controller flow (the set's `mission_control`
+   counterpart) and its pipeline flows; reuse shared sub-flows freely.
+2. Register a `FlowSetSpec` in `agent/flow_sets.py` — entry flow + phase rules.
+3. Keep the controller's check-phase resolver rules matching the spec's phase
+   names exactly.
+4. Widen `GoalRecord.type` literals if the set introduces new goal types.
+5. Ship a mission YAML with `flow_set: <set>`.
+
+### 3.3 Supporting Files
 
 | File | Purpose |
 |------|---------|
@@ -477,6 +513,7 @@ context assembly (`prepare_context`, `research`), terminal interaction (`run_com
 | `flows/shared/templates.cue` | Reusable step templates (inherited via CUE unification) |
 | `flows/shared/prompt.cue` | Prompt template reference types and pre-compute formatter registry |
 | `flows/shared/lint.cue` | CUE-level lint constraints for flow validation |
+| `agent/flow_sets.py` | Flow-set registry — entry flows and declarative phase specs |
 | `flows/compiled.json` | Build artifact — all flows compiled from CUE (do not edit directly) |
 
 For the current flow inventory, inspect the `flows/` set directories directly or run
