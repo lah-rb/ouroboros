@@ -808,82 +808,23 @@ def _get_sweep_files(arch: Any) -> list[str]:
 
 
 async def action_check_pipeline_phase(step_input: StepInput) -> StepOutput:
-    """Compute the current pipeline phase from mission state.
+    """Compute the current pipeline phase from the mission's flow-set spec.
 
-    Phase determination (checked in order):
-      1. No architecture or no goals → 'plan'
-      2. Any incomplete structural goal → 'structural'
-      3. Environment not verified → 'environment'
-      4. Startup not verified → 'verify'
-      5. Any incomplete functional goal → 'functional'
-      6. All goals complete → 'quality'
+    The phase order lives in agent/flow_sets.py as a declarative spec
+    selected by ``mission.config.flow_set`` (default code_core, whose
+    order is: plan → structural → environment → functional →
+    quality_fix → quality). The returned phase names are the contract
+    with the controller flow's check_phase resolver rules.
 
     Context required: mission
     """
+    from agent.flow_sets import DEFAULT_FLOW_SET, evaluate_phases, get_flow_set
+
     mission = step_input.context.get("mission")
-
-    if not mission:
-        return StepOutput(
-            result={"phase": "plan"},
-            observations="No mission — needs planning",
-        )
-
-    arch = getattr(mission, "architecture", None)
-    if not arch:
-        return StepOutput(
-            result={"phase": "plan"},
-            observations="No architecture — needs planning",
-        )
-
-    goals = getattr(mission, "goals", [])
-    if not goals:
-        return StepOutput(
-            result={"phase": "plan"},
-            observations="No goals — needs planning",
-        )
-
-    structural = [g for g in goals if g.type == "structural"]
-    functional = [g for g in goals if g.type == "functional"]
-    quality = [g for g in goals if g.type == "quality"]
-    structural_incomplete = [g for g in structural if g.status == "incomplete"]
-    functional_incomplete = [g for g in functional if g.status == "incomplete"]
-    quality_incomplete = [g for g in quality if g.status == "incomplete"]
-
-    if structural_incomplete:
-        return StepOutput(
-            result={"phase": "structural"},
-            observations=f"Structural phase: {len(structural_incomplete)}/{len(structural)} incomplete",
-        )
-
-    # All structural done — check environment
-    env_verified = getattr(mission, "environment_verified", False)
-    if not env_verified:
-        return StepOutput(
-            result={"phase": "environment"},
-            observations="All structural goals complete — environment needs verification",
-        )
-
-    if functional_incomplete:
-        return StepOutput(
-            result={"phase": "functional"},
-            observations=f"Functional phase: {len(functional_incomplete)}/{len(functional)} incomplete",
-        )
-
-    # Quality goals are harvested from gate findings (origin="quality_gate") for
-    # issues with no clean interact re-test; they're worked AFTER functional so
-    # the build is otherwise sound. functional/structural quality-origin goals
-    # are caught by the checks above and ride those sweeps.
-    if quality_incomplete:
-        return StepOutput(
-            result={"phase": "quality_fix"},
-            observations=f"Quality-fix phase: {len(quality_incomplete)}/{len(quality)} incomplete",
-        )
-
-    # All goals complete
-    return StepOutput(
-        result={"phase": "quality"},
-        observations="All goals complete — ready for quality gate",
-    )
+    config = getattr(mission, "config", None) if mission else None
+    set_name = getattr(config, "flow_set", DEFAULT_FLOW_SET) or DEFAULT_FLOW_SET
+    phase, observation = evaluate_phases(mission, get_flow_set(set_name).phases)
+    return StepOutput(result={"phase": phase}, observations=observation)
 
 
 async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:

@@ -1,0 +1,163 @@
+"""Flow-set registry: which controller a mission runs and how its phases derive.
+
+A flow set is a directory of CUE flows (flows/<set>/) plus the Python-side
+spec registered here: the controller flow the agent loop enters, and the
+ordered phase rules its check-phase action evaluates. A mission selects a
+set via ``MissionConfig.flow_set``; the entry flow derives from the
+registry (never persisted per-mission, so a controller rename cannot
+strand old missions).
+
+The phase NAMES in a set's spec are the contract with its controller
+flow's check_phase resolver — the CUE rules route on exactly these
+strings, so spec and resolver must stay in sync (documented in
+IMPLEMENTATION.md's "Flow sets" section).
+
+This module imports nothing from agent.* — it is consumed by
+ouroboros.py (CLI validation), agent/mission_config.py (YAML
+validation), and agent/actions/mission_actions.py (phase evaluation)
+without cycle risk.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Any, Literal
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PhaseRule:
+    """One ordered rule in a flow set's phase derivation.
+
+    kinds:
+      requires_planning   — mission/architecture/goals missing -> ``phase``
+                            (observation is derived from which precondition
+                            failed, not from ``observation``)
+      goal_type_incomplete — any incomplete goal of ``goal_type`` -> ``phase``;
+                            ``observation`` may use {incomplete}/{total}
+                            (counts goals OF THAT TYPE)
+      flag_unset          — ``getattr(mission, flag, False)`` falsy -> ``phase``
+      terminal            — always matches (the spec's final rule)
+    """
+
+    kind: Literal["requires_planning", "goal_type_incomplete", "flag_unset", "terminal"]
+    phase: str
+    goal_type: str = ""
+    flag: str = ""
+    observation: str = ""
+
+
+@dataclass(frozen=True)
+class FlowSetSpec:
+    """A registered flow set: its controller flow and phase derivation."""
+
+    name: str
+    entry_flow: str
+    phases: tuple[PhaseRule, ...]
+
+
+# The code pipeline — semantics identical to the original hardcoded
+# action_check_pipeline_phase (observation strings included; tests pin them).
+CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
+    PhaseRule(kind="requires_planning", phase="plan"),
+    PhaseRule(
+        kind="goal_type_incomplete",
+        phase="structural",
+        goal_type="structural",
+        observation="Structural phase: {incomplete}/{total} incomplete",
+    ),
+    PhaseRule(
+        kind="flag_unset",
+        phase="environment",
+        flag="environment_verified",
+        observation="All structural goals complete — environment needs verification",
+    ),
+    PhaseRule(
+        kind="goal_type_incomplete",
+        phase="functional",
+        goal_type="functional",
+        observation="Functional phase: {incomplete}/{total} incomplete",
+    ),
+    # Quality goals are harvested from gate findings (origin="quality_gate")
+    # for issues with no clean interact re-test; they're worked AFTER
+    # functional so the build is otherwise sound. functional/structural
+    # quality-origin goals are caught by the rules above and ride those
+    # sweeps.
+    PhaseRule(
+        kind="goal_type_incomplete",
+        phase="quality_fix",
+        goal_type="quality",
+        observation="Quality-fix phase: {incomplete}/{total} incomplete",
+    ),
+    PhaseRule(
+        kind="terminal",
+        phase="quality",
+        observation="All goals complete — ready for quality gate",
+    ),
+)
+
+DEFAULT_FLOW_SET = "code_core"
+
+FLOW_SETS: dict[str, FlowSetSpec] = {
+    "code_core": FlowSetSpec(
+        name="code_core",
+        entry_flow="mission_control",
+        phases=CODE_CORE_PHASES,
+    ),
+}
+
+
+def get_flow_set(name: str) -> FlowSetSpec:
+    """Look up a flow set; unknown names fall back to the default.
+
+    Runtime resilience over strictness: a persisted mission referencing a
+    set this build doesn't know should still run as the code pipeline
+    rather than crash the loop. Creation-time validation (CLI/YAML) is
+    where unknown names fail fast.
+    """
+    spec = FLOW_SETS.get(name)
+    if spec is None:
+        logger.warning(
+            "Unknown flow set %r — falling back to %r", name, DEFAULT_FLOW_SET
+        )
+        return FLOW_SETS[DEFAULT_FLOW_SET]
+    return spec
+
+
+def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, str]:
+    """Evaluate a phase spec against mission state -> (phase, observation)."""
+    for rule in phases:
+        if rule.kind == "requires_planning":
+            if not mission:
+                return rule.phase, "No mission — needs planning"
+            if not getattr(mission, "architecture", None):
+                return rule.phase, "No architecture — needs planning"
+            if not getattr(mission, "goals", []):
+                return rule.phase, "No goals — needs planning"
+            continue
+
+        if rule.kind == "goal_type_incomplete":
+            of_type = [
+                g for g in getattr(mission, "goals", []) if g.type == rule.goal_type
+            ]
+            incomplete = [g for g in of_type if g.status == "incomplete"]
+            if incomplete:
+                return rule.phase, rule.observation.format(
+                    incomplete=len(incomplete), total=len(of_type)
+                )
+            continue
+
+        if rule.kind == "flag_unset":
+            if not getattr(mission, rule.flag, False):
+                return rule.phase, rule.observation
+            continue
+
+        # terminal
+        return rule.phase, rule.observation
+
+    # A spec without a terminal rule is a registration bug; fail safe to
+    # planning rather than raising mid-loop.
+    logger.error("Phase spec exhausted without a terminal rule")
+    return "plan", "Phase spec exhausted — re-planning"
