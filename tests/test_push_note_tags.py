@@ -1,6 +1,6 @@
 """Regression tests for action_push_note — tag handling and content filtering.
 
-Motivating context: ``flows/cue/file_ops.cue``'s ``report_bail`` step was
+Motivating context: ``flows/code_core/file_ops.cue``'s ``report_bail`` step was
 extended to include ``{$ref: "input.target_file_path", default: ""}`` in
 its tags list so that bail notes become findable by per-file note
 projections (``_filter_notes_for_file`` in ``agent/projections.py``).

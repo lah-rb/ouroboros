@@ -468,7 +468,7 @@ Standard named blocks:
 
 ### Persona Implementation
 
-- Persona definitions live in `flows/cue/personas.cue` as `_personas` (hidden, not exported)
+- Persona definitions live in `flows/code_core/personas.cue` as `_personas` (hidden, not exported)
 - Flows reference them: `flow_persona: _personas.file_ops`
 - Pre-compute formatters `format_flow_persona` and `format_known_personas` render the blocks
 - Prompt templates include conditional sections gated on `context.flow_persona` / `context.peer_personas`

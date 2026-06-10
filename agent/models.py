@@ -82,7 +82,7 @@ class PreComputeStep(BaseModel):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Turn schema models — mirror flows/cue/turn.cue primitives.
+# Turn schema models — mirror flows/shared/turn.cue primitives.
 #
 # A Turn is attached to an inference StepDefinition via the `turn` field.
 # Non-inference steps (noop, flow, terminal) don't have a turn.

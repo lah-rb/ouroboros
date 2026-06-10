@@ -21,9 +21,6 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Agent state (created at runtime)
-.agent/
-
 # Testing
 .pytest_cache/
 .coverage

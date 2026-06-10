@@ -40,15 +40,15 @@ These norms apply to AI-directed changes as much as to human ones. If a change a
 
 | If the task involves... | Start here | Also check |
 |------------------------|------------|------------|
-| Flow logic (step order, transitions, routing) | `flows/cue/*.cue` | Rebuild with `uv run ouroboros.py cue-compile` |
+| Flow logic (step order, transitions, routing) | `flows/<set>/*.cue` (`shared/` + one dir per flow set, e.g. `code_core/`) | Rebuild with `uv run ouroboros.py cue-compile` |
 | New action behavior | `agent/actions/` | Register in `agent/actions/registry.py` |
 | Prompt wording for local model | `prompts/<flow>/<step>.yaml` | `PROMPTING_CONVENTIONS.md` for standards |
-| Step templates (reusable step configs) | `flows/cue/templates.cue` | `agent/loader.py` (merge logic) |
+| Step templates (reusable step configs) | `flows/shared/templates.cue` | `agent/loader.py` (merge logic) |
 | Data models or schemas | `agent/models.py` or `agent/persistence/models.py` | |
 | How flows are loaded/validated | `agent/loader.py` | |
 | Template rendering (Jinja2 for prompts) | `agent/template.py` | |
-| `$ref` resolution (structural fields) | `agent/loader.py` | `flows/cue/flow.cue` (`#Ref` schema) |
-| Pre-compute formatters / result formatters | `agent/formatters.py` | `flows/cue/prompt.cue` (formatter registry) |
+| `$ref` resolution (structural fields) | `agent/loader.py` | `flows/shared/flow.cue` (`#Ref` schema) |
+| Pre-compute formatters / result formatters | `agent/formatters.py` | `flows/shared/prompt.cue` (formatter registry) |
 | LLMVP inference integration | `agent/effects/inference.py` | |
 | Mission state / persistence | `agent/persistence/` | |
 | Resolver logic (rule or LLM menu) | `agent/resolvers/` | |
@@ -237,7 +237,7 @@ To add a new service, drop an entry into `_MCP_SERVERS` and write an action that
 4. **Test** → `uv run pytest tests/ -v` if tests exist for the touched code.
 
 5. **Compile flows** → `uv run ouroboros.py cue-compile` (if CUE files changed)
-   - `flows/compiled.json` is gitignored — it's a build artifact regenerated from `flows/cue/*.cue`. Fresh checkouts will not have it until compiled. Mission YAML configs typically handle this in `pre_create`.
+   - `flows/compiled.json` is a build artifact regenerated from `flows/<set>/*.cue` — it is committed (tests read it directly), so rebuild and include it whenever CUE sources change.
 
 6. **Smoke test** → `uv run ouroboros.py smoke` (for flow/action changes)
 
@@ -310,7 +310,7 @@ For full architectural design, see `IMPLEMENTATION.md`. Key concepts:
 
 ### Flow Organization
 
-Flows are grouped by role in the agent cycle. For the current flow set, run `uv run ouroboros.py cue-compile` and inspect `flows/compiled.json`, or read the CUE source in `flows/cue/`.
+Flows are grouped by role in the agent cycle. For the current flow set, run `uv run ouroboros.py cue-compile` and inspect `flows/compiled.json`, or read the CUE source in `flows/shared/` and `flows/code_core/`.
 
 **Orchestrator flows** operate above any single task. They shape the mission — designing architecture, selecting goals, reasoning about what to work on next. `mission_control` is the always-present hub; `design_and_plan` runs at mission start and when architecture drift is detected.
 
@@ -318,7 +318,7 @@ Flows are grouped by role in the agent cycle. For the current flow set, run `uv 
 
 **Sub-flows** are mechanical execution units invoked synchronously via `action: flow`. They have no agency — they do a specific job and return structured data. `create`/`rewrite`/`patch` are the three modes of file modification; `prepare_context` builds the workspace view most flows need; `run_commands` and `run_session` wrap terminal interaction; `quality_gate` performs structural and behavioral validation.
 
-The full inventory is derivable from `flows/cue/` at any time. Referring to it in this document would invite drift — the CUE source is the source of truth.
+The full inventory is derivable from the `flows/` set directories at any time. Referring to it in this document would invite drift — the CUE source is the source of truth.
 
 ---
 

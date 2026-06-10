@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ── Registry ─────────────────────────────────────────────────────────
 
 # Projections return a dict for most shapes. Menu-option projections
-# (Pattern C, see flows/cue/state.cue) return a list of option dicts
+# (Pattern C, see flows/shared/state.cue) return a list of option dicts
 # because that's the natural shape the turn renderer consumes. Either
 # shape is valid; consumers check at the call site.
 ProjectionValue = dict | list

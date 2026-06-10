@@ -2,7 +2,7 @@
 
 Motivating incident: a live run crashed with the cryptic error
 ``sequence item 7: expected str instance, list found``. Root cause:
-``flows/cue/file_ops.cue`` routed ``context.validation_results`` (a
+``flows/code_core/file_ops.cue`` routed ``context.validation_results`` (a
 list of check dicts) into ``error_output`` when escalating to
 diagnose_issue. The diagnosis seed builder then did ``"\\n".join(parts)``
 with a list buried in parts, and str.join crashed the whole flow.

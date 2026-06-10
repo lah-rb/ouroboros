@@ -3,7 +3,7 @@ templates to produce a BlueprintIR.
 
 This is the heavy lift of the blueprint system. It:
 1. Loads all flows from CUE-exported compiled.json.
-2. Walks flows/cue/ to build a flow name → CUE source file map.
+2. Walks the flows/<set>/ directories to build a flow name → CUE source file map.
 3. Converts each FlowDefinition → FlowIR with full step details.
 4. Introspects the action registry for module paths and effects usage.
 5. Builds the context key cross-reference with audit flags.
@@ -157,7 +157,7 @@ def _cue_source_files(flows_dir: str) -> list[Path]:
 
 
 def _build_source_map(flows_dir: str) -> dict[str, str]:
-    """Walk flows/cue/ and build a mapping of flow name → relative CUE file path.
+    """Walk the flow-set directories and map flow name → relative CUE file path.
 
     Parses each CUE file looking for the pattern `<name>: #FlowDefinition &`.
     """

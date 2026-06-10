@@ -7,8 +7,8 @@ overview, see `IMPLEMENTATION.md`. For operational guidance, see `AGENT.md`.*
 
 ## Adding a New Task Flow
 
-1. **Create the CUE file** in `flows/cue/<flow_name>.cue`.
-2. Define the flow using `#FlowDefinition &` schema (see `flows/cue/flow.cue` and
+1. **Create the CUE file** in the flow's set directory — `flows/code_core/<flow_name>.cue` for the code pipeline, `flows/shared/<flow_name>.cue` only if the flow is set-agnostic (usable by any mission type).
+2. Define the flow using `#FlowDefinition &` schema (see `flows/shared/flow.cue` and
    `IMPLEMENTATION.md` §2.1.2).
 3. Every flow must have:
    - `flow`, `version`, `description`, `input`, `entry` fields.
@@ -43,7 +43,7 @@ function name minus the `action_` prefix. E.g., `action_read_files` → register
 
 ## Adding a New Shared Sub-flow
 
-1. **Create the CUE file** in `flows/cue/<flow_name>.cue`.
+1. **Create the CUE file** in the flow's set directory — `flows/code_core/<flow_name>.cue` for the code pipeline, `flows/shared/<flow_name>.cue` only if the flow is set-agnostic (usable by any mission type).
 2. Shared sub-flows are invoked via `action: flow` from parent steps.
 3. They should be focused and reusable — one clear responsibility.
 4. Document inputs/outputs clearly since multiple parent flows will depend on the contract.
@@ -89,7 +89,7 @@ Key rules:
 
 ## Step Templates
 
-Reusable step configurations live in `flows/cue/templates.cue`. To use a
+Reusable step configurations live in `flows/shared/templates.cue`. To use a
 template in a flow step:
 
 ```cue

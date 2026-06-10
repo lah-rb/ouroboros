@@ -19,6 +19,6 @@ llmvp_endpoint: "http://localhost:8555/graphql"
 
 pre_create:
   - "rm -rf /home/claude/test_project && mkdir -p /home/claude/test_project"
-  - "cue vet ./flows/cue && cue export ./flows/cue/ --out json > flows/compiled.json"
+  - "uv run ouroboros.py cue-compile"
 
 post_create: []

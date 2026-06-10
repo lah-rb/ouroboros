@@ -1,6 +1,6 @@
 """Tests for the turn schema Pydantic models (agent/models.py).
 
-These models mirror flows/cue/turn.cue. Tests here verify the Pydantic
+These models mirror flows/shared/turn.cue. Tests here verify the Pydantic
 layer accepts what CUE emits and rejects what would escape CUE's
 closure rules — specifically the response-shape/response-contract
 coupling and the default/no_answer distinctness constraint.

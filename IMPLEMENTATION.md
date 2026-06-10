@@ -78,7 +78,7 @@ interface that the step receives but does not own. This gives reproducibility (s
 same output), composability (steps don't know about each other), serializability (every
 state transition is a logged event), and testability (swap the effects interface for mocks).
 
-**Declarative flow definitions.** Flows are defined as CUE data files in `flows/cue/`,
+**Declarative flow definitions.** Flows are defined as CUE data files in `flows/<set>/` directories,
 compiled to JSON via `cue export` (`flows/compiled.json`). The graph structure (steps,
 transitions, context requirements) is pure data with full type validation at the CUE layer.
 Actions (what a step does) are registered Python callables referenced by name. This separates
@@ -95,8 +95,8 @@ be added without modifying the engine.
 
 #### 2.1.2 Flow Definition Format
 
-Flows are CUE files in `flows/cue/` conforming to the `#FlowDefinition` schema defined in
-`flows/cue/flow.cue`. The build pipeline is: `.cue` → `cue export --out json` →
+Flows are CUE files in `flows/shared/` (set-agnostic layer) and per-set directories like
+`flows/code_core/`, conforming to the `#FlowDefinition` schema defined in `flows/shared/flow.cue`. The build pipeline is: `.cue` → `cue export --out json` →
 `flows/compiled.json` → Python loader (`loader.py`) resolves `$ref` values and assembles
 prompts at runtime.
 
@@ -355,7 +355,7 @@ network, or subprocess.
 
 ### 2.5 The Agent Cycle — mission_control
 
-`mission_control` (defined in `flows/cue/mission_control.cue`) is the hub flow that
+`mission_control` (defined in `flows/code_core/mission_control.cue`) is the hub flow that
 orchestrates the entire agent lifecycle. It operates at the `project_goal` context tier —
 reasoning about which capability to advance, not the full mission picture.
 
@@ -423,7 +423,7 @@ Mission state, event queues, and flow artifacts are file-backed JSON in `.agent/
 
 ### 2.8 Step Templates
 
-Reusable step configurations defined in `flows/cue/templates.cue`. Templates
+Reusable step configurations defined in `flows/shared/templates.cue`. Templates
 provide default action, params, config, and resolver settings that individual flow steps
 inherit and can override. The loader merges templates at load time — the runtime sees
 fully resolved step definitions.
@@ -442,7 +442,7 @@ fully resolved step definitions.
 
 ## 3. Flow Organization
 
-All flows are defined as CUE files in `flows/cue/` and compiled to `flows/compiled.json`
+All flows are defined as CUE files under `flows/<set>/` and compiled to `flows/compiled.json`
 via `uv run ouroboros.py cue-compile`. The authoritative flow list is the CUE source —
 this document describes how the set is *organized*, not what flows currently exist.
 
@@ -473,13 +473,13 @@ context assembly (`prepare_context`, `research`), terminal interaction (`run_com
 
 | File | Purpose |
 |------|---------|
-| `flows/cue/flow.cue` | CUE schema — `#FlowDefinition`, `#StepDefinition`, `#Ref`, `#Resolver`, `#ContextTier`, `#FlowReturns` |
-| `flows/cue/templates.cue` | Reusable step templates (inherited via CUE unification) |
-| `flows/cue/prompt.cue` | Prompt template reference types and pre-compute formatter registry |
-| `flows/cue/lint.cue` | CUE-level lint constraints for flow validation |
+| `flows/shared/flow.cue` | CUE schema — `#FlowDefinition`, `#StepDefinition`, `#Ref`, `#Resolver`, `#ContextTier`, `#FlowReturns` |
+| `flows/shared/templates.cue` | Reusable step templates (inherited via CUE unification) |
+| `flows/shared/prompt.cue` | Prompt template reference types and pre-compute formatter registry |
+| `flows/shared/lint.cue` | CUE-level lint constraints for flow validation |
 | `flows/compiled.json` | Build artifact — all flows compiled from CUE (do not edit directly) |
 
-For the current flow inventory, inspect `flows/cue/` directly or run
+For the current flow inventory, inspect the `flows/` set directories directly or run
 `uv run ouroboros.py cue-compile` then read `flows/compiled.json`.
 
 ---

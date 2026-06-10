@@ -251,7 +251,7 @@ class ContextKeyIR:
 
 @dataclass
 class TemplateIR:
-    """A step template from flows/cue/templates.cue."""
+    """A step template from flows/shared/templates.cue."""
 
     name: str
     base_config: dict = field(default_factory=dict)
