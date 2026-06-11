@@ -76,6 +76,17 @@ def _contact_email() -> str:
     return os.environ.get("OUROBOROS_CONTACT_EMAIL", "ouroboros-agent@invalid.local")
 
 
+def _s2_headers() -> dict | None:
+    """Optional Semantic Scholar API key (SEMANTIC_SCHOLAR_API_KEY).
+
+    The unauthenticated shared pool 429s under contention (live-
+    observed); a free key moves requests to a dedicated quota. Without
+    one, discovery degrades gracefully — OpenAlex carries the round.
+    """
+    key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "").strip()
+    return {"x-api-key": key} if key else None
+
+
 async def polite_request(
     effects: Any,
     method: str,
@@ -116,6 +127,18 @@ async def polite_request(
     result = await effects.http_request(
         method, url, params=params, headers=headers, timeout=timeout
     )
+    if result.status == 429:
+        # Shared-pool contention (live-observed on S2's unauthenticated
+        # pool). One respectful retry honoring Retry-After, then accept
+        # the miss — the round/budget machinery absorbs thin rounds.
+        try:
+            retry_after = float((result.headers or {}).get("retry-after") or 0)
+        except (TypeError, ValueError):
+            retry_after = 0.0
+        await asyncio.sleep(min(max(retry_after, 10.0), 60.0))
+        result = await effects.http_request(
+            method, url, params=params, headers=headers, timeout=timeout
+        )
 
     hosts[host] = {"last_ts": time.time()}
     await effects.write_state(
@@ -190,7 +213,7 @@ _S2_SEARCH_FIELDS = (
 )
 _OPENALEX_BASE = "https://api.openalex.org"
 _OPENALEX_SELECT = (
-    "id,doi,title,abstract_inverted_index,publication_year,host_venue,"
+    "id,doi,title,abstract_inverted_index,publication_year,primary_location,"
     "authorships,open_access,best_oa_location,ids"
 )
 
@@ -249,7 +272,10 @@ def _normalize_openalex(work: dict, aspect_name: str) -> dict:
     doi = doi_url.split("doi.org/")[-1] if "doi.org/" in doi_url else doi_url
     ids = work.get("ids") or {}
     best_oa = work.get("best_oa_location") or {}
-    venue = (work.get("host_venue") or {}).get("display_name") or ""
+    # host_venue was removed from the OpenAlex schema (live-verified
+    # 400); the venue now lives at primary_location.source.
+    source = (work.get("primary_location") or {}).get("source") or {}
+    venue = source.get("display_name") or ""
     rec = {
         **_candidate_base(aspect_name),
         "title": str(work.get("title") or ""),
@@ -310,6 +336,7 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
                 "limit": max_per_query,
                 "fields": _S2_SEARCH_FIELDS,
             },
+            headers=_s2_headers(),
         )
         if s2.status == 200 and isinstance(s2.json_data, dict):
             for paper in s2.json_data.get("data") or []:
@@ -564,6 +591,7 @@ async def action_fetch_references(step_input: StepInput) -> StepOutput:
             "GET",
             f"{_S2_BASE}/paper/{ident}/references",
             params={"fields": "externalIds", "limit": 500},
+            headers=_s2_headers(),
         )
         dois: list[str] = []
         if resp.status == 200 and isinstance(resp.json_data, dict):

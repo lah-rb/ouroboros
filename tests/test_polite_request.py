@@ -60,3 +60,26 @@ async def test_budget_exhaustion_fails_soft_without_calling():
     assert r.status == 0
     assert "budget" in (r.error or "")
     assert fx.call_count("http_request") == 0
+
+
+@pytest.mark.asyncio
+async def test_429_gets_one_retry_honoring_retry_after():
+    # Live-observed: S2's unauthenticated pool 429s under contention.
+    fx = MockEffects(
+        http_responses={
+            _URL: [
+                HttpResult(status=429, url=_URL, headers={"retry-after": "12"}),
+                HttpResult(status=200, url=_URL),
+            ]
+        }
+    )
+    sleeps: list[float] = []
+
+    async def fake_sleep(s):
+        sleeps.append(s)
+
+    with patch.object(scholarly_actions.asyncio, "sleep", fake_sleep):
+        r = await polite_request(fx, "GET", _URL)
+    assert r.status == 200
+    assert 12.0 in sleeps  # honored Retry-After
+    assert fx.call_count("http_request") == 2

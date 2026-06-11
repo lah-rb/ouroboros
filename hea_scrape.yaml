@@ -1,0 +1,34 @@
+# High-entropy materials literature harvest — scraper flow set.
+#
+# The objective IS the research abstract: plan_research decomposes it
+# into aspects, discovery queries Semantic Scholar + OpenAlex, and the
+# catalog phase downloads OA PDFs and tags every paper against the
+# aspects (exact/close/adjacent). Edit the objective to steer the
+# corpus; set OUROBOROS_CONTACT_EMAIL for the polite API pools.
+#
+# Run:
+#   uv run ouroboros.py mission create --mission_config hea_scrape
+#   uv run ouroboros.py start --working-dir /tmp/ouroboros-hea-scrape --max-cycles 60
+# version: 1
+
+objective: >
+  Build a literature corpus on high-entropy materials with emphasis on
+  high-entropy alloys and high-entropy ceramics. Cover: phase stability
+  and formation criteria (entropy-driven solid solution vs intermetallic
+  formation); grain boundary phenomena including segregation, embrittlement,
+  and boundary-mediated deformation; mechanical behavior across temperature
+  regimes (strength-ductility trade-offs, cryogenic toughening, creep);
+  processing routes (arc melting, additive manufacturing, powder metallurgy)
+  and their effect on microstructure; and computational/data-driven
+  approaches to composition screening (CALPHAD, DFT, machine learning
+  potentials). Prioritize papers reporting measured properties on named
+  compositions.
+
+flow_set: scraper
+working_dir: "/tmp/ouroboros-hea-scrape"
+effects_profile: local
+llmvp_endpoint: "http://localhost:8008/graphql"
+
+pre_create:
+  - "rm -rf /tmp/ouroboros-hea-scrape && mkdir -p /tmp/ouroboros-hea-scrape"
+  - "uv run ouroboros.py cue-compile"

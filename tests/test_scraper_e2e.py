@@ -79,7 +79,7 @@ _OPENALEX_HIT = {
     "title": "GB segregation in CoCrFeNi",
     "abstract_inverted_index": None,
     "publication_year": 2024,
-    "host_venue": {"display_name": "Acta Mat"},
+    "primary_location": {"source": {"display_name": "Acta Mat"}},
     "authorships": [],
     "best_oa_location": {"pdf_url": ""},
     "ids": {"openalex": "W1"},

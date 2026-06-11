@@ -52,7 +52,7 @@ _OPENALEX_HIT = {
     "title": "GB segregation in CoCrFeNi",
     "abstract_inverted_index": {"Grain": [0], "boundary": [1], "study": [2]},
     "publication_year": 2024,
-    "host_venue": {"display_name": "Acta Mat"},
+    "primary_location": {"source": {"display_name": "Acta Mat"}},
     "authorships": [{"author": {"display_name": "A. Smith"}}],
     "best_oa_location": {"pdf_url": ""},
     "ids": {"openalex": "W1"},

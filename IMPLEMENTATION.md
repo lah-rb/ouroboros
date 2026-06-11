@@ -478,8 +478,11 @@ The `flows/` directory is organized as component sets:
   invoke (`run_commands`, `run_session`, `research`). Shared must compile
   standalone — `cue-compile` vets and exports it alone first, so a shared file
   referencing a set-local symbol fails the build (the cross-set guard).
-- **`flows/<set>/`** (e.g. `flows/code_core/`) — one directory per mission type:
-  its controller flow plus the flows specific to that pipeline.
+- **`flows/<set>/`** — one directory per mission type: its controller flow
+  plus the flows specific to that pipeline. Current sets: `flows/code_core/`
+  (the code pipeline, controller `mission_control`) and `flows/scraper/`
+  (research-paper harvesting, controller `research_control`: plan →
+  discovery → catalog → gate over a workspace paper databank).
 
 All files share `package ouroboros`; each set compiles as a file-list instance
 of shared + its own files (CUE hidden fields like `_templates` cannot be
