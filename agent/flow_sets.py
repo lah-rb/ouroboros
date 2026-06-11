@@ -32,7 +32,8 @@ class PhaseRule:
     """One ordered rule in a flow set's phase derivation.
 
     kinds:
-      requires_planning   — mission/architecture/goals missing -> ``phase``
+      requires_planning   — mission missing, the plan object named by
+                            ``attr`` missing, or goals missing -> ``phase``
                             (observation is derived from which precondition
                             failed, not from ``observation``)
       goal_type_incomplete — any incomplete goal of ``goal_type`` -> ``phase``;
@@ -47,6 +48,10 @@ class PhaseRule:
     goal_type: str = ""
     flag: str = ""
     observation: str = ""
+    # requires_planning: the mission attribute holding the set's plan
+    # object — "architecture" for the code pipeline, "research_plan"
+    # for the scraper.
+    attr: str = "architecture"
 
 
 @dataclass(frozen=True)
@@ -100,6 +105,32 @@ CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
 
 DEFAULT_FLOW_SET = "code_core"
 
+# The scraper pipeline: research-paper harvesting. Goals are per-aspect
+# (discovery) plus one corpus-level catalog goal (type "extraction");
+# papers themselves live in the workspace databank worklist, never as
+# goals. Registered in FLOW_SETS by the scraper-flows commit — a set is
+# creatable only once its flows exist.
+SCRAPER_PHASES: tuple[PhaseRule, ...] = (
+    PhaseRule(kind="requires_planning", phase="plan", attr="research_plan"),
+    PhaseRule(
+        kind="goal_type_incomplete",
+        phase="discovery",
+        goal_type="discovery",
+        observation="Discovery phase: {incomplete}/{total} aspect(s) incomplete",
+    ),
+    PhaseRule(
+        kind="goal_type_incomplete",
+        phase="catalog",
+        goal_type="extraction",
+        observation="Catalog phase: {incomplete}/{total} corpus goal(s) incomplete",
+    ),
+    PhaseRule(
+        kind="terminal",
+        phase="gate",
+        observation="All aspects discovered and cataloged — ready for research gate",
+    ),
+)
+
 FLOW_SETS: dict[str, FlowSetSpec] = {
     "code_core": FlowSetSpec(
         name="code_core",
@@ -132,8 +163,8 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
         if rule.kind == "requires_planning":
             if not mission:
                 return rule.phase, "No mission — needs planning"
-            if not getattr(mission, "architecture", None):
-                return rule.phase, "No architecture — needs planning"
+            if not getattr(mission, rule.attr, None):
+                return rule.phase, f"No {rule.attr} — needs planning"
             if not getattr(mission, "goals", []):
                 return rule.phase, "No goals — needs planning"
             continue
