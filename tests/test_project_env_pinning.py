@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import pytest
 
@@ -27,6 +28,14 @@ from agent.actions.pipeline_actions import (
 from agent.effects.local import LocalEffects
 from agent.effects.mock import MockEffects
 from agent.models import FlowMeta, StepInput
+
+# The venv must pin the framework's own interpreter — unpinned uv venv
+# discovered the macOS system Python 3.9.6 live, where 3.10+ annotation
+# syntax passes every parse gate and explodes at import.
+_PINNED_VENV = (
+    f"uv venv --allow-existing --python "
+    f"{sys.version_info.major}.{sys.version_info.minor}"
+)
 
 # ── venv activation (LocalEffects) ─────────────────────────────────────
 
@@ -72,7 +81,7 @@ def test_uvize_rewrites_editable_install_to_deps_only():
     # `pip install -e .` builds the (flat-layout) package and fails; we install
     # the declared deps from pyproject instead, which is what the program needs.
     out = _uvize_install_commands(["pip install -e ."], {"py": {}})
-    assert out == ["uv venv --allow-existing", "uv pip install -r pyproject.toml"]
+    assert out == [_PINNED_VENV, "uv pip install -r pyproject.toml"]
 
 
 def test_uvize_rewrites_uv_pip_editable_too():
@@ -80,21 +89,21 @@ def test_uvize_rewrites_uv_pip_editable_too():
     # editable build still fails on flat-layout, so it must ALSO be rewritten —
     # the prefix-only guard let this through and broke a live run.
     out = _uvize_install_commands(["uv pip install -e ."], {"py": {}})
-    assert out == ["uv venv --allow-existing", "uv pip install -r pyproject.toml"]
+    assert out == [_PINNED_VENV, "uv pip install -r pyproject.toml"]
     # --editable long form too.
     out2 = _uvize_install_commands(["uv pip install --editable ."], {"py": {}})
-    assert out2 == ["uv venv --allow-existing", "uv pip install -r pyproject.toml"]
+    assert out2 == [_PINNED_VENV, "uv pip install -r pyproject.toml"]
 
 
 def test_uvize_keeps_uv_pip_requirements():
     out = _uvize_install_commands(["uv pip install -r pyproject.toml"], {"py": {}})
-    assert out == ["uv venv --allow-existing", "uv pip install -r pyproject.toml"]
+    assert out == [_PINNED_VENV, "uv pip install -r pyproject.toml"]
 
 
 def test_uvize_handles_pip3_and_python_detected_by_section():
     # No leading-pip command, but the project IS Python → still create the venv.
     out = _uvize_install_commands(["pip3 install -r requirements.txt"], {"py": {}})
-    assert out == ["uv venv --allow-existing", "uv pip install -r requirements.txt"]
+    assert out == [_PINNED_VENV, "uv pip install -r requirements.txt"]
 
 
 def test_uvize_passes_through_non_python():
@@ -119,6 +128,6 @@ async def test_collect_env_field_uvizes_python_install():
 
     assert out.result["commands_found"] is True
     assert out.context_updates["install_commands"] == [
-        "uv venv --allow-existing",
+        _PINNED_VENV,
         "uv pip install -r pyproject.toml",
     ]

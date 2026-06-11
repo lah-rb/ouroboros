@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 
 from agent.models import StepInput, StepOutput
 
@@ -198,7 +199,15 @@ def _uvize_install_commands(commands: list[str], env_config: dict) -> list[str]:
                 toks = ["uv", "pip", "install", "-r", "pyproject.toml"]
         out.append(" ".join(toks))
     if has_python:
-        out.insert(0, "uv venv --allow-existing")
+        # Pin the venv to the interpreter the framework itself runs on.
+        # Unpinned, uv discovers whatever PATH offers — live failure: the
+        # macOS system Python 3.9.6, where the 3.10+ union/generic syntax
+        # models routinely write parses (every syntax gate passes) but
+        # raises TypeError at import. The smoke gate then fails forever
+        # while diagnose flounders, because the code is CORRECT for any
+        # modern interpreter (284 repair dispatches on one goal, live).
+        pinned = f"{sys.version_info.major}.{sys.version_info.minor}"
+        out.insert(0, f"uv venv --allow-existing --python {pinned}")
     return out
 
 

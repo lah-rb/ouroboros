@@ -158,7 +158,10 @@ async def test_env_config_round_trips_through_effects_working_dir_scoped():
     assert cout.result.get("commands_found") is True
     # Python installs are routed through uv (clean per-project venv); editable
     # `-e .` becomes deps-only. See test_project_env_pinning for the full contract.
+    import sys
+
     assert cout.context_updates["install_commands"] == [
-        "uv venv --allow-existing",
+        f"uv venv --allow-existing --python "
+        f"{sys.version_info.major}.{sys.version_info.minor}",
         "uv pip install -r pyproject.toml",
     ]
