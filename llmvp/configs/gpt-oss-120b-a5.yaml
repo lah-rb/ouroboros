@@ -35,6 +35,10 @@ generation:
   min_p: 0.00
   presence_penalty: 0.0
   repeat_penalty: 1.05
+  # Deep session turns are repetition attractors (degenerate generations
+  # observed at turn 5-6 with task-scaled temps ~0.2). Floor session
+  # sampling from the third turn onward; completions untouched.
+  session_temp_floor: 0.35
   streaming_default: true
 
 knowledge:

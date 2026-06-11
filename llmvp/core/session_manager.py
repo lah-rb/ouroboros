@@ -107,6 +107,30 @@ class SessionState:
     turn_count: int = 0
 
 
+def _effective_session_temperature(
+    requested: float, turn_count: int, gen_cfg: Any
+) -> float:
+    """Apply the session temperature floor for deep turns.
+
+    Deep multi-turn sessions are repetition attractors — low requested
+    temperatures compound across accumulated KV until the sampler locks
+    into a token cycle (live-observed at turn 5-6 even on models not
+    otherwise predisposed; sparse MoEs hit it earliest). When the config
+    declares ``session_temp_floor``, turns at depth >=
+    ``session_temp_floor_after_turn`` (default 2 — the third turn
+    onward) sample at no less than the floor. Shallow turns and plain
+    completions keep the requested temperature untouched.
+    """
+    floor = getattr(gen_cfg, "session_temp_floor", None)
+    if not floor:
+        return requested
+    after = getattr(gen_cfg, "session_temp_floor_after_turn", None)
+    after = 2 if after is None else after
+    if turn_count >= after and requested < floor:
+        return float(floor)
+    return requested
+
+
 @dataclass
 class SessionInfo:
     """Returned when a session is created."""
@@ -273,6 +297,21 @@ class SessionManager:
             # Build turn tokens — different paths for first turn vs continuation
             config = get_config()
             renderer = _get_format_renderer(config.model.family)
+
+            # Session temperature floor — deep turns are repetition
+            # attractors; see _effective_session_temperature.
+            floored = _effective_session_temperature(
+                temperature, session.turn_count, getattr(config, "generation", None)
+            )
+            if floored != temperature:
+                logger.info(
+                    "🌡️ Session %s turn %d: temperature floored %.2f -> %.2f",
+                    session_id,
+                    session.turn_count + 1,
+                    temperature,
+                    floored,
+                )
+                temperature = floored
 
             # Build the turn as (text, is_framing) segments so structural framing
             # tokenizes as canonical special tokens while the user prompt stays

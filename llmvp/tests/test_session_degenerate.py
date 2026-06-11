@@ -127,3 +127,43 @@ def test_normal_turn_saves_and_advances():
     assert sess.current_state == "POST_STATE"
     assert sess.turn_count == 1
     assert sess.last_assistant_text == "hello world"
+
+
+# ── session temperature floor ─────────────────────────────────────────
+
+
+def test_session_temp_floor_engages_at_depth():
+    from core.session_manager import _effective_session_temperature
+
+    class Cfg:
+        session_temp_floor = 0.5
+        session_temp_floor_after_turn = None  # default 2
+
+    # Shallow turns keep the requested temperature.
+    assert _effective_session_temperature(0.2, 0, Cfg()) == 0.2
+    assert _effective_session_temperature(0.2, 1, Cfg()) == 0.2
+    # Third turn onward is floored.
+    assert _effective_session_temperature(0.2, 2, Cfg()) == 0.5
+    assert _effective_session_temperature(0.2, 7, Cfg()) == 0.5
+    # Requested temps above the floor are untouched.
+    assert _effective_session_temperature(0.8, 7, Cfg()) == 0.8
+
+
+def test_session_temp_floor_disabled_when_unset():
+    from core.session_manager import _effective_session_temperature
+
+    class Cfg:
+        session_temp_floor = None
+        session_temp_floor_after_turn = None
+
+    assert _effective_session_temperature(0.1, 9, Cfg()) == 0.1
+
+
+def test_session_temp_floor_custom_depth():
+    from core.session_manager import _effective_session_temperature
+
+    class Cfg:
+        session_temp_floor = 0.4
+        session_temp_floor_after_turn = 0  # every session turn
+
+    assert _effective_session_temperature(0.1, 0, Cfg()) == 0.4

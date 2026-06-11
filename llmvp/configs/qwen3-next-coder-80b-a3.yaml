@@ -32,6 +32,10 @@ generation:
   # higher base keeps task-scaled temps out of the low-temp regime that worsens
   # this model's repetition looping (see repeat_penalty below).
   temperature_default: 0.8
+  # This model hits the session repetition attractor earliest (sparse
+  # MoE). The floor targets deep session turns specifically — the
+  # surgical version of the global temperature bumps used before.
+  session_temp_floor: 0.5
   top_p: 0.95
   top_k: 20
   min_p: 0.00

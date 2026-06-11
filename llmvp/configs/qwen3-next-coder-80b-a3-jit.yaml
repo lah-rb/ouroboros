@@ -48,7 +48,9 @@ prompt:
 
 generation:
   max_tokens_default: 262144
-  temperature_default: 0.8
+  temperature_default: 0.9
+  # Session repetition-attractor floor — see qwen3-next-coder-80b-a3.yaml.
+  session_temp_floor: 0.5
   top_p: 0.95
   top_k: 20
   min_p: 0.00

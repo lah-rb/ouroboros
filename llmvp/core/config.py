@@ -84,6 +84,17 @@ class GenerationConfig(BaseModel):
     repetition_max_cycle_period: Optional[int] = None  # default 8
     repetition_min_cycle_reps: Optional[int] = None  # default 12
 
+    # Session temperature floor. Deep multi-turn sessions are repetition
+    # attractors (live-observed: degenerate generations at turn 5-6 on a
+    # model NOT otherwise predisposed; sparse MoEs hit it earliest) — low
+    # requested temperatures compound across accumulated KV. When set,
+    # session turns at depth >= session_temp_floor_after_turn (default 2,
+    # i.e. the third turn onward) are sampled at no less than the floor.
+    # Completions and shallow turns honor the requested temperature
+    # untouched. None => disabled.
+    session_temp_floor: Optional[float] = None
+    session_temp_floor_after_turn: Optional[int] = None  # default 2
+
 
 class KnowledgeConfig(BaseModel):
     """Configuration for knowledge base processing."""
