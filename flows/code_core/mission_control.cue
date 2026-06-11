@@ -376,6 +376,10 @@ mission_control: #FlowDefinition & {
 				mission_id:               {$ref: "input.mission_id"}
 				mission_objective:        {$ref: "context.mission.objective"}
 				architecture_run_command: {$ref: "context.mission.architecture.run_command", default: ""}
+				// effective_smoke_command falls back to run_command for
+				// pre-contract architectures (run_command WAS the piped
+				// startup form then).
+				architecture_smoke_command: {$ref: "context.mission.architecture.effective_smoke_command", default: ""}
 				architecture:            {$ref: "context.mission.architecture", default: ""}
 				mode:                     "completion"
 			}

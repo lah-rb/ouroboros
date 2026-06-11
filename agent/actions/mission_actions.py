@@ -338,6 +338,7 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
     arch = ArchitectureState(
         import_scheme=execution.get("import_scheme", "flat"),
         run_command=execution.get("run_command", ""),
+        smoke_command=execution.get("smoke_command", ""),
         working_directory=execution.get("working_directory", "project root"),
         init_files=execution.get("init_files", False),
         modules=modules,
@@ -357,7 +358,8 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
     arch_summary = (
         f"Import scheme: {arch.import_scheme}. "
         f"Run: {arch.run_command}. "
-        f"Files: {', '.join(arch.canonical_files())}."
+        + (f"Smoke: {arch.smoke_command}. " if arch.smoke_command else "")
+        + f"Files: {', '.join(arch.canonical_files())}."
     )
     if arch.data_shapes:
         shape_lines = [
@@ -712,15 +714,19 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
             logger.warning("Functional goal inference failed: %s", e)
 
     # ── Pass 3: Synthetic startup goal ──
-    # If the architecture defines a run_command, inject a deterministic
+    # If the architecture defines a startup command, inject a deterministic
     # startup verification goal as the FIRST functional goal. This ensures
     # the program starts cleanly before any interactive testing begins.
-    # The interact flow routes this to run_commands (not run_session).
+    # The interact flow routes this to run_commands (not run_session) —
+    # which needs the self-terminating smoke command, not the interactive
+    # launch (effective_smoke_command falls back for pre-split missions).
     run_command = ""
-    if architecture and hasattr(architecture, "run_command"):
-        run_command = getattr(architecture, "run_command", "") or ""
+    if architecture and hasattr(architecture, "effective_smoke_command"):
+        run_command = architecture.effective_smoke_command or ""
     elif isinstance(architecture, dict):
-        run_command = architecture.get("run_command", "") or ""
+        run_command = (
+            architecture.get("smoke_command") or architecture.get("run_command") or ""
+        )
 
     if run_command:
         startup_goal = GoalRecord(
@@ -1028,11 +1034,12 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
             observations="All functional goals complete",
         )
 
-    # Get run_command from architecture for deterministic goals
+    # Deterministic goals run via run_commands and need the self-
+    # terminating smoke command, not the interactive launch.
     arch = getattr(mission, "architecture", None)
     run_command = ""
     if arch:
-        run_command = getattr(arch, "run_command", "") or ""
+        run_command = getattr(arch, "effective_smoke_command", "") or ""
 
     # Load interactive_prompt from env config (set by set_env). Read via effects
     # so the path resolves against the mission working_directory, not the agent

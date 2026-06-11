@@ -54,7 +54,11 @@ sections:
       Produce a SINGLE authoritative blueprint that defines:
 
       1. **Execution Convention**: How to run the project. Specify:
-         - The `run_command`: a **non-interactive startup check** that verifies
+         - The `run_command`: the **plain command a user types to run the
+           program** (e.g., `python main.py`). For an interactive program it
+           launches and WAITS for input — testers and verification probes type
+           into it. Do NOT pipe input or wrap it to auto-exit.
+         - The `smoke_command`: a **non-interactive startup check** that verifies
            the program launches, all imports resolve, and initial setup works,
            then exits cleanly within a few seconds. It MUST NOT block waiting
            for user input. For programs that read stdin (games, REPLs, CLI tools),
@@ -121,7 +125,8 @@ sections:
       ```json
       {
         "execution": {
-          "run_command": "echo quit | python main.py",
+          "run_command": "python main.py",
+          "smoke_command": "echo quit | python main.py",
           "import_scheme": "flat",
           "init_files": false,
           "working_directory": "project root"

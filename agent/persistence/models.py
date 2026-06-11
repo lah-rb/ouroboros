@@ -343,7 +343,16 @@ class ArchitectureState(BaseModel):
     """
 
     import_scheme: Literal["flat", "package", "relative"] = "flat"
+    # The plain command a user types to run the program (interactive
+    # programs launch and WAIT — testers and verification probes type
+    # into them). Pre-smoke_command architectures overloaded this field
+    # with the piped startup-check form; consumers that need launch-and-
+    # wait semantics should fall back accordingly when smoke_command is
+    # empty.
     run_command: str = ""
+    # Non-interactive startup check: launches, exercises imports/setup,
+    # exits cleanly within seconds (e.g. `echo quit | python main.py`).
+    smoke_command: str = ""
     working_directory: str = "project root"
     init_files: bool = False
     modules: list[ModuleSpec] = Field(default_factory=list)
@@ -380,6 +389,17 @@ class ArchitectureState(BaseModel):
         if isinstance(v, (list, tuple)):
             return "; ".join(str(item) for item in v)
         return str(v)
+
+    @property
+    def effective_smoke_command(self) -> str:
+        """Startup-check command with pre-contract fallback.
+
+        Architectures persisted before the run/smoke split overloaded
+        run_command with the piped startup form — for them run_command
+        IS the smoke command. ($ref paths getattr-walk, so flows can
+        reference this property directly.)
+        """
+        return self.smoke_command or self.run_command
 
     def canonical_files(self) -> list[str]:
         """Return the ordered list of canonical file paths."""

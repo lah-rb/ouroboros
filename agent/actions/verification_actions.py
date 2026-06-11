@@ -66,17 +66,20 @@ def _usable_repro(task: Any, *launch_commands: str) -> list[str]:
 def _probe_launch(step_input: StepInput) -> str:
     """The command that launches the program for a probe.
 
-    Prefers the UX session's captured interactive launch
-    (params.ux_launch_command, from run_session's launch_command) over
-    architecture run_command — the latter's startup-check form
-    (`printf "quit\n" | python main.py`) self-terminates, leaving every
-    repro line answering to the bare shell (observed live: the judge
-    then reads `bash: take: command not found` as evidence).
+    With the run/smoke contract split (architecture declares both),
+    run_command is the plain interactive launch — use it directly. For
+    pre-contract architectures run_command was overloaded with the
+    piped startup form (`printf "quit\n" | python main.py`, which
+    self-terminates and leaves repro lines answering to the bare
+    shell), detectable because the effective smoke command equals it —
+    there, prefer the UX session's captured launch.
     """
+    run = str(step_input.params.get("run_command") or "").strip()
+    smoke = str(step_input.params.get("smoke_command") or "").strip()
     ux = str(step_input.params.get("ux_launch_command") or "").strip()
-    if ux:
-        return ux
-    return str(step_input.params.get("run_command") or "").strip()
+    if run and smoke and smoke != run:
+        return run
+    return ux or run
 
 
 def _probe_keys(task: dict, launch: str, run_command: str) -> dict:

@@ -48,7 +48,8 @@ quality_gate: #FlowDefinition & {
 		required: ["working_directory", "mission_id"]
 		optional: [
 			"mission_objective",
-			"architecture_run_command",
+			"architecture_run_command",   // interactive launch (probes, UX charter)
+			"architecture_smoke_command", // non-interactive startup check
 			"architecture",
 			"mode", // "checkpoint" or "completion", default "completion"
 		]
@@ -204,7 +205,11 @@ quality_gate: #FlowDefinition & {
 			// downstream ever consumed it (verified by orphan-
 			// pre_compute scan). Deleted 76d-round.
 			input_map: {
-				commands:          [{$ref: "input.architecture_run_command", default: "echo 'no run command configured'"}]
+				// The smoke command launches, exercises imports/setup, and
+				// exits on its own — the right semantics for a fast-fail
+				// startup check (run_command is the interactive launch and
+				// would block here).
+				commands:          [{$ref: "input.architecture_smoke_command", default: "echo 'no run command configured'"}]
 				working_directory: {$ref: "input.working_directory"}
 				timeout:           15
 				stop_on_error:     true
@@ -437,10 +442,11 @@ quality_gate: #FlowDefinition & {
 			}
 			params: {
 				run_command: {$ref: "input.architecture_run_command", default: ""}
-				// The UX session's actual interactive launch — preferred
-				// over run_command, whose startup-check variant
-				// (`printf "quit\n" | python main.py`) self-terminates and
-				// leaves repro lines answering to the bare shell.
+				// When smoke != run the contract split is in effect and
+				// run_command is the plain interactive launch. For pre-
+				// contract architectures (smoke == run, the piped startup
+				// form) the UX session's captured launch is preferred.
+				smoke_command:     {$ref: "input.architecture_smoke_command", default: ""}
 				ux_launch_command: {$ref: "context.launch_command", default: ""}
 				// "permissive": a functional finding without a usable repro
 				// is harvested unverified (tagged). Flip to "strict" (note-
@@ -525,6 +531,7 @@ quality_gate: #FlowDefinition & {
 			}
 			params: {
 				run_command:       {$ref: "input.architecture_run_command", default: ""}
+				smoke_command:     {$ref: "input.architecture_smoke_command", default: ""}
 				ux_launch_command: {$ref: "context.launch_command", default: ""}
 			}
 			resolver: {
@@ -556,6 +563,7 @@ quality_gate: #FlowDefinition & {
 			params: {
 				probe_failed: true
 				run_command: {$ref: "input.architecture_run_command", default: ""}
+				smoke_command:     {$ref: "input.architecture_smoke_command", default: ""}
 				ux_launch_command: {$ref: "context.launch_command", default: ""}
 			}
 			resolver: {

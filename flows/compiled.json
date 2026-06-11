@@ -4592,6 +4592,10 @@
             "$ref": "context.mission.architecture.run_command",
             "default": ""
           },
+          "architecture_smoke_command": {
+            "$ref": "context.mission.architecture.effective_smoke_command",
+            "default": ""
+          },
           "architecture": {
             "$ref": "context.mission.architecture",
             "default": ""
@@ -6180,6 +6184,7 @@
       "optional": [
         "mission_objective",
         "architecture_run_command",
+        "architecture_smoke_command",
         "architecture",
         "mode"
       ]
@@ -6480,7 +6485,7 @@
         "input_map": {
           "commands": [
             {
-              "$ref": "input.architecture_run_command",
+              "$ref": "input.architecture_smoke_command",
               "default": "echo 'no run command configured'"
             }
           ],
@@ -6826,6 +6831,10 @@
             "$ref": "input.architecture_run_command",
             "default": ""
           },
+          "smoke_command": {
+            "$ref": "input.architecture_smoke_command",
+            "default": ""
+          },
           "ux_launch_command": {
             "$ref": "context.launch_command",
             "default": ""
@@ -6967,6 +6976,10 @@
             "$ref": "input.architecture_run_command",
             "default": ""
           },
+          "smoke_command": {
+            "$ref": "input.architecture_smoke_command",
+            "default": ""
+          },
           "ux_launch_command": {
             "$ref": "context.launch_command",
             "default": ""
@@ -7018,6 +7031,10 @@
           "probe_failed": true,
           "run_command": {
             "$ref": "input.architecture_run_command",
+            "default": ""
+          },
+          "smoke_command": {
+            "$ref": "input.architecture_smoke_command",
             "default": ""
           },
           "ux_launch_command": {
