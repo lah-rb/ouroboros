@@ -167,3 +167,54 @@ def test_session_temp_floor_custom_depth():
         session_temp_floor_after_turn = 0  # every session turn
 
     assert _effective_session_temperature(0.1, 0, Cfg()) == 0.4
+
+
+def test_floored_deep_turn_completes_through_session_turn():
+    """REGRESSION: the floor's log line referenced an undefined name
+    (`logger` vs this module's `log`), so the first time the floor ever
+    APPLIED in production it raised NameError mid-turn, leaked the
+    pinned session, and active=1/limit=1 deadlocked every session flow.
+    The pure-function tests above never execute the logging branch —
+    this drives the floor through session_turn itself."""
+
+    class _GenCfg:
+        session_temp_floor = 0.5
+        session_temp_floor_after_turn = None  # default 2
+
+    class _FloorConfig(_FakeConfig):
+        generation = _GenCfg()
+
+    async def good_gen(**kwargs):
+        yield "ok"
+
+    seen_temps = []
+
+    class _SpyBackend(FakeBackend):
+        def generate_stream_async(self, **kwargs):
+            seen_temps.append(kwargs.get("temperature"))
+            return self._gen_factory()
+
+    mgr = SessionManager(_SpyBackend(good_gen))
+    inst, sess = _make_session(mgr)
+    sess.turn_count = 2  # third turn — floor engages
+
+    import core.session_manager as _sm
+
+    orig = _sm.get_config
+    _sm.get_config = lambda: _FloorConfig()
+    try:
+
+        async def drive():
+            return [
+                c
+                async for c in mgr.session_turn(
+                    "s1", "hi", max_tokens=64, temperature=0.2
+                )
+            ]
+
+        chunks = asyncio.run(drive())
+    finally:
+        _sm.get_config = orig
+
+    assert chunks == ["ok"]  # the turn completes (no NameError)
+    assert seen_temps == [0.5]  # and the floored temperature reached the backend

@@ -304,7 +304,12 @@ class SessionManager:
                 temperature, session.turn_count, getattr(config, "generation", None)
             )
             if floored != temperature:
-                logger.info(
+                # NB: this module's logger is `log`, not `logger` — the
+                # original NameError here detonated only when the floor
+                # first APPLIED (gpt-oss's sub-floor turn temps), killed
+                # the turn mid-guard, and leaked the pinned session:
+                # active=1/limit=1 deadlocked every session flow after.
+                log.info(
                     "🌡️ Session %s turn %d: temperature floored %.2f -> %.2f",
                     session_id,
                     session.turn_count + 1,
