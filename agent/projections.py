@@ -1046,6 +1046,12 @@ def _data_shape_to_dict(ds: Any) -> dict:
         "file": ds.file,
         "consumed_by": ds.consumed_by,
         "structure": ds.structure,
+        # The exemplar is the authoritative nested contract. Dropping it
+        # here meant creation prompts only ever saw the vague structure
+        # prose — so code files invented fields (live: loader.py required
+        # 'initial_dialogue_node' that no contract declared) while data
+        # files followed the exemplar, and the two authorities diverged.
+        "example": getattr(ds, "example", "") or "",
     }
 
 

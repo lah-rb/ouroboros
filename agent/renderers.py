@@ -526,6 +526,25 @@ def render_data_contracts(params: dict, namespaces: dict) -> str:
         except (json.JSONDecodeError, TypeError):
             lines.append(f"Required structure: {structure_raw}")
 
+        # The exemplar is the authoritative nested contract — the same
+        # text the gate's shape checker diffs the real file against.
+        # Without it here, the structure prose was the file authors'
+        # ONLY view of the shape, and it's vague exactly where bugs
+        # live (nested keys, list-vs-dict, optional fields). Code must
+        # not require keys the exemplar doesn't declare; data files
+        # must extend it without reshaping.
+        example = (ds.get("example") or "").strip()
+        if example:
+            try:
+                example = json.dumps(json.loads(example), indent=2)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+            lines.append(
+                "Exemplar (minimal valid instance — the file extends this "
+                "shape; code requires ONLY what it declares):"
+            )
+            lines.append(example)
+
         lines.append("")
 
     if state_shapes:
