@@ -214,3 +214,27 @@ def test_compiled_gate_wiring():
         "plan_checks"
     )
     assert "data_shape_summary" in steps["summarize"]["prompt_template"]["context_keys"]
+
+
+def test_single_entry_exemplar_mapping_is_an_open_map():
+    # Live-caught noise class: exits {north: x} declared one entry; real
+    # rooms have east/south/west. Open maps don't key-check — values do.
+    data = "exits:\n  east: cave\n  south: dock\n  west: shore\n"
+    e = "exits:\n  north: lighthouse\n"
+    assert _diff(data, e) == []
+
+
+def test_open_map_values_still_shape_checked():
+    data = "exits:\n  east:\n    target: cave\n"
+    e = "exits:\n  north: lighthouse\n"  # scalar values declared
+    issues = _diff(data, e)
+    assert any(
+        i["kind"] == "type_mismatch" and i["path"] == "exits.east" for i in issues
+    )
+
+
+def test_multi_key_exemplar_dicts_keep_rename_detection():
+    data = "option:\n  text: hi\n  next_node: lore\n"
+    e = "option:\n  text: hi\n  next_id: lore\n"
+    kinds = {(i["kind"]) for i in _diff(data, e)}
+    assert kinds == {"undeclared_key", "missing_declared_key"}

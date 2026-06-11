@@ -450,6 +450,16 @@ async def action_validate_cross_file_consistency(step_input: StepInput) -> StepO
 # that path in the exemplar is the primary signal (the next_id/next_node
 # rename class); a declared key missing from the data is secondary
 # (possibly optional) and reported distinctly.
+#
+# OPEN MAPPINGS: a single-entry exemplar mapping is a KEY PATTERN, not a
+# fixed schema — `exits: {north: lighthouse}` declares "direction -> room
+# id", and real rooms legitimately have east/south/west. Key names are
+# not checked there; each value is checked against the one exemplar
+# value. (Live-observed: the first armed gate flagged every non-north
+# direction as undeclared; the verification probes refuted all of them
+# behaviorally — this rule removes the noise at the source. Fixed
+# schemas keep full key checking by carrying 2+ keys, which the
+# exemplar convention "every key at every level" already produces.)
 
 _MAX_SHAPE_ISSUES_PER_FILE = 10
 
@@ -470,6 +480,20 @@ def _shape_diff(data: Any, exemplar: Any, path: str, issues: list[dict]) -> None
                     ),
                 }
             )
+            return
+        if len(exemplar) == 1:
+            # Open mapping: validate values against the single exemplar
+            # value; key names are the data's business.
+            exemplar_value = next(iter(exemplar.values()))
+            for key in data:
+                if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
+                    return
+                _shape_diff(
+                    data[key],
+                    exemplar_value,
+                    f"{path}.{key}" if path else str(key),
+                    issues,
+                )
             return
         for key in data:
             if key not in exemplar and len(issues) < _MAX_SHAPE_ISSUES_PER_FILE:
