@@ -13,8 +13,10 @@ from agent.effects.protocol import (
     CommandResult,
     DirEntry,
     DirListing,
+    DownloadResult,
     EffectsLogEntry,
     FileContent,
+    HttpResult,
     InferenceResult,
     SearchMatch,
     SearchResults,
@@ -54,12 +56,20 @@ class MockEffects:
         commands: dict[str, CommandResult] | None = None,
         inference_responses: list[str] | None = None,
         mission: Any = None,
+        http_responses: dict[str, Any] | None = None,
+        http_downloads: dict[str, Any] | None = None,
     ) -> None:
         self._files: dict[str, str] = dict(files or {})
         self._commands: dict[str, CommandResult] = dict(commands or {})
         # Inference responses — popped in order; if exhausted, returns a default
         self._inference_responses: list[str] = list(inference_responses or [])
         self._inference_index: int = 0
+        # Canned HTTP: URL -> HttpResult or list[HttpResult] (lists pop in
+        # order). Lookup: exact URL, else longest registered prefix match.
+        self._http_responses: dict[str, Any] = dict(http_responses or {})
+        # Canned downloads: URL -> DownloadResult; unmatched URLs succeed,
+        # writing a mock PDF body into the in-memory file store.
+        self._http_downloads: dict[str, Any] = dict(http_downloads or {})
         self._calls: list[CallRecord] = []
         self._log: list[EffectsLogEntry] = []
         self._state: dict[str, Any] = {}  # In-memory persistence store
@@ -217,6 +227,70 @@ class MockEffects:
         exists = path in self._files
         self._record("file_exists", {"path": path}, exists)
         return exists
+
+    # ── HTTP ──────────────────────────────────────────────────────
+
+    def _lookup_http(self, url: str) -> Any:
+        """Exact URL match, else longest registered prefix; lists pop."""
+        canned = self._http_responses.get(url)
+        if canned is None:
+            prefixes = sorted(
+                (k for k in self._http_responses if url.startswith(k)),
+                key=len,
+                reverse=True,
+            )
+            if prefixes:
+                canned = self._http_responses[prefixes[0]]
+        if isinstance(canned, list):
+            return canned.pop(0) if canned else None
+        return canned
+
+    async def http_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict | None = None,
+        headers: dict | None = None,
+        json_body: Any = None,
+        timeout: float = 30.0,
+    ) -> HttpResult:
+        result = self._lookup_http(url)
+        if result is None:
+            # Fail-soft default, matching LocalEffects transport errors.
+            result = HttpResult(
+                status=0, url=url, error=f"Mock: no canned response for {url!r}"
+            )
+        self._record(
+            "http_request", {"method": method, "url": url, "params": params}, result
+        )
+        return result
+
+    async def http_download(
+        self,
+        url: str,
+        path: str,
+        *,
+        headers: dict | None = None,
+        timeout: float = 120.0,
+        max_bytes: int = 50_000_000,
+    ) -> DownloadResult:
+        canned = self._http_downloads.get(url)
+        if canned is None:
+            body = f"%PDF-1.4 mock {url}"
+            self._files[path] = body
+            canned = DownloadResult(
+                success=True,
+                url=url,
+                path=path,
+                bytes_written=len(body),
+                status=200,
+                content_type="application/pdf",
+            )
+        elif getattr(canned, "success", False):
+            self._files[path] = f"%PDF-1.4 mock {url}"
+        self._record("http_download", {"url": url, "path": path}, canned)
+        return canned
 
     # ── Process execution ─────────────────────────────────────────
 

@@ -37,8 +37,10 @@ from agent.effects.protocol import (
     CommandResult,
     DirEntry,
     DirListing,
+    DownloadResult,
     EffectsLogEntry,
     FileContent,
+    HttpResult,
     InferenceResult,
     SearchMatch,
     SearchResults,
@@ -72,6 +74,7 @@ class LocalEffects:
         model_default_temperature: float = 0.7,
         trace_thinking: bool = False,
         trace_prompts: bool = False,
+        http_transport=None,
     ) -> None:
         self._working_dir = os.path.realpath(working_directory)
         if not os.path.isdir(self._working_dir):
@@ -83,6 +86,10 @@ class LocalEffects:
         self._persistence = None
         self._llmvp_endpoint = llmvp_endpoint or "http://localhost:8008/graphql"
         self._model_default_temperature = model_default_temperature
+        # HTTP client — lazy; http_transport lets tests inject
+        # httpx.MockTransport without monkeypatching.
+        self._http_client = None
+        self._http_transport = http_transport
         # Trace buffer — flushed to JSONL at cycle boundaries
         self._trace_buffer: list[TraceEvent] = []
         self._trace_file_path: str | None = None
@@ -530,6 +537,155 @@ class LocalEffects:
                 stderr=str(e),
                 command=cmd_str,
             )
+
+    # ── HTTP ──────────────────────────────────────────────────────
+
+    def _get_http_client(self):
+        """Lazy shared httpx.AsyncClient (follows redirects — OA PDF
+        links routinely bounce through resolvers)."""
+        if self._http_client is None:
+            import httpx
+
+            self._http_client = httpx.AsyncClient(
+                follow_redirects=True,
+                transport=self._http_transport,
+            )
+        return self._http_client
+
+    async def http_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict | None = None,
+        headers: dict | None = None,
+        json_body=None,
+        timeout: float = 30.0,
+    ) -> HttpResult:
+        start = time.monotonic()
+        try:
+            client = self._get_http_client()
+            response = await client.request(
+                method.upper(),
+                url,
+                params=params,
+                headers=headers,
+                json=json_body,
+                timeout=timeout,
+            )
+            json_data = None
+            content_type = response.headers.get("content-type", "")
+            if "json" in content_type:
+                try:
+                    json_data = response.json()
+                except ValueError:
+                    json_data = None
+            result = HttpResult(
+                status=response.status_code,
+                url=str(response.url),
+                text=response.text,
+                json_data=json_data,
+                headers=dict(response.headers),
+                elapsed_ms=(time.monotonic() - start) * 1000,
+            )
+            self._log_entry(
+                "http_request",
+                f"{method.upper()} {url}",
+                f"status={result.status}, {len(result.text)}b",
+                start,
+            )
+            return result
+        except Exception as e:
+            self._log_entry(
+                "http_request", f"{method.upper()} {url}", f"error: {e}", start
+            )
+            return HttpResult(
+                status=0,
+                url=url,
+                error=str(e),
+                elapsed_ms=(time.monotonic() - start) * 1000,
+            )
+
+    async def http_download(
+        self,
+        url: str,
+        path: str,
+        *,
+        headers: dict | None = None,
+        timeout: float = 120.0,
+        max_bytes: int = 50_000_000,
+    ) -> DownloadResult:
+        start = time.monotonic()
+        try:
+            resolved = self._resolve_path(path)
+        except PathTraversalError as e:
+            self._log_entry("http_download", url, f"BLOCKED: {e}", start)
+            return DownloadResult(success=False, url=url, path=path, error=str(e))
+
+        try:
+            client = self._get_http_client()
+            async with client.stream(
+                "GET", url, headers=headers, timeout=timeout
+            ) as response:
+                content_type = response.headers.get("content-type", "")
+                if response.status_code != 200:
+                    self._log_entry(
+                        "http_download", url, f"status={response.status_code}", start
+                    )
+                    return DownloadResult(
+                        success=False,
+                        url=url,
+                        path=path,
+                        status=response.status_code,
+                        content_type=content_type,
+                        error=f"HTTP {response.status_code}",
+                    )
+                if "text/html" in content_type:
+                    # Paywall/login redirect pages masquerade as the PDF.
+                    self._log_entry("http_download", url, "rejected text/html", start)
+                    return DownloadResult(
+                        success=False,
+                        url=url,
+                        path=path,
+                        status=response.status_code,
+                        content_type=content_type,
+                        error="response is text/html, not a document",
+                    )
+                os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
+                written = 0
+                with open(resolved, "wb") as f:
+                    async for chunk in response.aiter_bytes():
+                        written += len(chunk)
+                        if written > max_bytes:
+                            f.close()
+                            os.unlink(resolved)
+                            self._log_entry(
+                                "http_download",
+                                url,
+                                f"over max_bytes ({written})",
+                                start,
+                            )
+                            return DownloadResult(
+                                success=False,
+                                url=url,
+                                path=path,
+                                status=response.status_code,
+                                content_type=content_type,
+                                error=f"body exceeded max_bytes={max_bytes}",
+                            )
+                        f.write(chunk)
+            self._log_entry("http_download", url, f"{written}b -> {path}", start)
+            return DownloadResult(
+                success=True,
+                url=url,
+                path=path,
+                bytes_written=written,
+                status=200,
+                content_type=content_type,
+            )
+        except Exception as e:
+            self._log_entry("http_download", url, f"error: {e}", start)
+            return DownloadResult(success=False, url=url, path=path, error=str(e))
 
     async def _maybe_emit_command_trace(
         self,

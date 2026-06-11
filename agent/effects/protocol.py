@@ -86,6 +86,34 @@ class CommandResult:
 
 
 @dataclass
+class HttpResult:
+    """Result of an HTTP request. Never raised-from: connect/timeout
+    errors surface as status=0 with ``error`` set (fail-soft, like the
+    MCP search handling)."""
+
+    status: int
+    url: str
+    text: str = ""
+    json_data: Any = None  # parsed iff content-type is application/json
+    headers: dict[str, str] = field(default_factory=dict)
+    error: str | None = None
+    elapsed_ms: float = 0.0
+
+
+@dataclass
+class DownloadResult:
+    """Result of streaming a URL to a workspace file."""
+
+    success: bool
+    url: str
+    path: str
+    bytes_written: int = 0
+    status: int = 0
+    content_type: str = ""
+    error: str | None = None
+
+
+@dataclass
 class InferenceResult:
     """Result of an inference call.
 
@@ -267,6 +295,43 @@ class Effects(Protocol):
 
         Returns:
             CommandResult with return code, stdout, stderr.
+        """
+        ...
+
+    # ── HTTP (scholarly APIs and other plain REST endpoints) ──────
+
+    async def http_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict | None = None,
+        headers: dict | None = None,
+        json_body: Any = None,
+        timeout: float = 30.0,
+    ) -> HttpResult:
+        """Make an HTTP request. Never raises — transport errors return
+        ``HttpResult(status=0, error=...)``. ``json_data`` is populated
+        when the response content-type is JSON.
+
+        Rate-limit politeness is the CALLER's job (see
+        scholarly_actions.polite_request) — the effect is a dumb pipe.
+        """
+        ...
+
+    async def http_download(
+        self,
+        url: str,
+        path: str,
+        *,
+        headers: dict | None = None,
+        timeout: float = 120.0,
+        max_bytes: int = 50_000_000,
+    ) -> DownloadResult:
+        """Stream a URL to a file under the working directory (binary-
+        safe — write_file is str-only). Rejects text/html responses
+        (paywall redirect pages masquerading as PDFs) and bodies over
+        ``max_bytes``. Never raises.
         """
         ...
 
