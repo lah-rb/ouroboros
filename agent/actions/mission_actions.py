@@ -869,6 +869,52 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             observations="No files or working directory — skip sweep",
         )
 
+    mode = (
+        str(getattr(getattr(mission, "config", None), "structural_mode", "") or "")
+        or "serial"
+    )
+
+    # ── Parallel mode: one-shot batch creation ────────────────────
+    # Dispatch build_structure exactly once, on a virgin structural
+    # phase: no goal has any report, no sweep file exists, and no prior
+    # batch attempt is on record (the batch summary note doubles as the
+    # attempted-flag — an empty generation books no reports, and without
+    # the flag the sweep would re-dispatch the batch forever). After the
+    # batch, this sweep resumes per-file: missing files → serial create,
+    # gate-failed files → diagnose-first repair below.
+    if mode == "parallel":
+        structural_goals = [g for g in mission.goals if g.type == "structural"]
+        batch_attempted = any(g.reports for g in structural_goals) or any(
+            "batch_structural" in (getattr(n, "tags", None) or [])
+            for n in mission.notes
+        )
+        any_file_exists = any(
+            os.path.isfile(os.path.join(working_dir, f)) for f in sweep_files
+        )
+        if structural_goals and not batch_attempted and not any_file_exists:
+            dispatch_config = {
+                "goal_id": "",
+                "goal_description": "Create all architecture files in one batch",
+                "goal_type": "structural",
+                "goal_files": list(sweep_files),
+                "flow": "build_structure",
+                "target_file_path": "",
+                "flow_directive": (
+                    "Create every file in the architecture blueprint in one "
+                    "batch generation."
+                ),
+                "recent_reports": [],
+            }
+            logger.info("Structural sweep: batch-creating %d files", len(sweep_files))
+            return StepOutput(
+                result={"sweep_complete": False, "needs_batch_create": True},
+                observations=(
+                    f"Structural sweep: parallel mode — batch-creating all "
+                    f"{len(sweep_files)} files in one generation"
+                ),
+                context_updates={"dispatch_config": dispatch_config},
+            )
+
     # Walk files in order, find the first incomplete structural goal
     for file_path in sweep_files:
         # Find the goal for this file
@@ -930,7 +976,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             block_reason = structural_block_reason(goal, checks_failed)
 
             if (
-                report_flow == "file_ops"
+                report_flow in ("file_ops", "build_structure")
                 and report_status == "success"
                 and block_reason is None
             ):
@@ -940,6 +986,76 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                 if effects:
                     await effects.save_mission(mission)
                 continue  # Move to next file
+
+        # ── Parallel mode: diagnose-first repair ──────────────────
+        # The serial path's inline self-correct loop already retried
+        # inside file_ops; a batch-created file got no such loop, and
+        # the failure class differs (a fresh file failing its gate vs.
+        # an edit regressing). Route to diagnose_issue first, then map
+        # the diagnosis to a file_ops patch — the same two-step the
+        # quality sweep uses. The import fix-or-defer DECISION pass
+        # stays on the shared file_ops path below (it's a judgment
+        # call, not a defect investigation).
+        if mode == "parallel" and goal.reports and block_reason != "import":
+            last = goal.reports[-1]
+            last_flow = getattr(last, "flow", "")
+            if last_flow == "diagnose_issue":
+                fileops = _fileops_dispatch_from_quality_diagnosis(
+                    last, goal_id=goal.id, goal_description=goal.description
+                )
+                if fileops:
+                    fileops["goal_type"] = "structural"
+                    fileops["target_file_path"] = (
+                        fileops.get("target_file_path") or file_path
+                    )
+                    fileops["goal_files"] = [fileops["target_file_path"]]
+                    logger.info(
+                        "Structural sweep: patching %s from diagnosis", file_path
+                    )
+                    return StepOutput(
+                        result={"sweep_complete": False, "needs_fix": True},
+                        observations=(
+                            f"Structural sweep: patching {file_path} from diagnosis"
+                        ),
+                        context_updates={"dispatch_config": fileops},
+                    )
+                # Diagnosis produced no actionable target — fall through
+                # to the generic file_ops fix directive below.
+            elif getattr(last, "status", "") == "failed":
+                failed_checks = ", ".join(getattr(last, "checks_failed", []) or [])
+                error_output = getattr(last, "terminal_output", "") or ""
+                issue = (
+                    f"{file_path} was just created but fails its validation "
+                    f"gate ({failed_checks or 'see output'})."
+                )
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "structural",
+                    "goal_files": [file_path],
+                    "flow": "diagnose_issue",
+                    "target_file_path": file_path,
+                    "flow_directive": (
+                        "A freshly created file failed its validation gate. "
+                        "Diagnose the root cause and identify the specific "
+                        f"file and symbol to change:\n{issue}"
+                        + (
+                            f"\n\nGate output:\n{error_output[:800]}"
+                            if error_output
+                            else ""
+                        )
+                    ),
+                    "what_happened": issue,
+                    "error_headline": issue[:80],
+                    "error_output": error_output[:800],
+                    "recent_reports": [],
+                }
+                logger.info("Structural sweep: diagnosing %s", file_path)
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_fix": True},
+                    observations=f"Structural sweep: diagnosing {file_path}",
+                    context_updates={"dispatch_config": dispatch_config},
+                )
 
         # File exists, goal incomplete, needs fixing
         # Build a fix directive from the last report if available

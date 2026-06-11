@@ -150,8 +150,12 @@ mission_control: #FlowDefinition & {
 		// Phase 1: Structural Sweep
 		// ══════════════════════════════════════════════════════════
 		//
-		// Walk creation_order + data_shapes files sequentially.
-		// For each: create via file_ops → check gate → mark complete.
+		// Two modes (mission.config.structural_mode):
+		//   parallel (default) — ONE batch generation builds every file
+		//     (build_structure flow); the sweep then repairs gate-failed
+		//     files diagnose-first and serially creates anything the
+		//     batch omitted.
+		//   serial — the original walk: one file_ops dispatch per file.
 		// When all structural goals are complete, advance to Phase 2.
 
 		structural_sweep_next: #StepDefinition & {
@@ -164,12 +168,31 @@ mission_control: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.sweep_complete == true", transition: "check_phase"},
+					{condition: "result.needs_batch_create == true", transition: "dispatch_batch_create"},
 					{condition: "result.needs_create == true", transition: "dispatch_structural_create"},
 					{condition: "result.needs_fix == true", transition: "dispatch_structural_fix"},
 					{condition: "true", transition: "check_phase"},
 				]
 			}
 			publishes: ["dispatch_config"]
+		}
+
+		// Parallel mode, virgin structural phase: build the whole project
+		// in one generation. last_goal_id stays empty — build_structure
+		// books per-goal reports itself (apply_batch_results).
+		dispatch_batch_create: #StepDefinition & {
+			action:      "noop"
+			description: "Batch-create all architecture files in one generation"
+			context: required: ["dispatch_config", "mission"]
+			tail_call: {
+				flow: "build_structure"
+				input_map: {
+					mission_id:        {$ref: "input.mission_id"}
+					goal_id:           {$ref: "context.dispatch_config.goal_id", default: ""}
+					flow_directive:    {$ref: "context.dispatch_config.flow_directive"}
+					working_directory: {$ref: "context.mission.config.working_directory"}
+				}
+			}
 		}
 
 		dispatch_structural_create: #StepDefinition & {
@@ -188,18 +211,31 @@ mission_control: #FlowDefinition & {
 			}
 		}
 
+		// Dynamic target (mirror of dispatch_quality_fix): serial mode
+		// always names file_ops; parallel mode's diagnose-first repair
+		// names diagnose_issue for a fresh gate failure, then file_ops
+		// (with the diagnosis's structured fields) once diagnosed.
 		dispatch_structural_fix: #StepDefinition & {
 			action:      "noop"
-			description: "Fix a structural file that failed its gate"
+			description: "Repair a structural file that failed its gate"
 			context: required: ["dispatch_config", "mission"]
 			tail_call: {
-				flow: "file_ops"
+				flow: {$ref: "context.dispatch_config.flow"}
 				input_map: {
 					mission_id:        {$ref: "input.mission_id"}
 					goal_id:           {$ref: "context.dispatch_config.goal_id", default: ""}
+					goal_description:  {$ref: "context.dispatch_config.goal_description", default: ""}
 					flow_directive:    {$ref: "context.dispatch_config.flow_directive"}
 					target_file_path:  {$ref: "context.dispatch_config.target_file_path", default: ""}
 					working_directory: {$ref: "context.mission.config.working_directory"}
+					error_output:      {$ref: "context.dispatch_config.error_output", default: ""}
+					what_happened:     {$ref: "context.dispatch_config.what_happened", default: ""}
+					error_headline:    {$ref: "context.dispatch_config.error_headline", default: ""}
+					target_symbol:     {$ref: "context.dispatch_config.target_symbol", default: ""}
+					change_spec:       {$ref: "context.dispatch_config.change_spec", default: ""}
+					diagnosis_kind:    {$ref: "context.dispatch_config.diagnosis_kind", default: ""}
+					import_statement:  {$ref: "context.dispatch_config.import_statement", default: ""}
+					related_symbols:   {$ref: "context.dispatch_config.related_symbols", default: []}
 				}
 			}
 		}
