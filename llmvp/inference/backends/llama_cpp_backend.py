@@ -1166,6 +1166,20 @@ class LlamaCppBackend(BaseBackend):
                 or DEFAULT_MIN_CYCLE_REPS,
             )
 
+        # Long-cycle guard + abnormal-exit capture (runaway_capture.py).
+        # The RepetitionGuard sees 8-token cycles; paragraph-scale loops
+        # sail under it (live: 130k-token menu runaways, text discarded).
+        from inference import runaway_capture
+
+        long_cycle_on = gen_cfg.long_cycle_guard_enabled is not False
+        capture_dir = getattr(getattr(self.config, "logging", None), "directory", None)
+        # Set when this generation ends for a known reason (normal stop,
+        # degeneracy, long-cycle). Left None across an abnormal exit —
+        # GeneratorExit from an abandoned consumer, i.e. the agent-side
+        # watchdog cancelling a runaway — where the finally captures the
+        # partial text instead of discarding the evidence.
+        gen_end_reason: Optional[str] = None
+
         # KV position where generation begins: generate() evals dynamic_tokens
         # (reset=False) at [n_tokens, n_tokens+len), then samples from there.
         gen_start_pos = instance.n_tokens + len(dynamic_tokens)
@@ -1192,8 +1206,43 @@ class LlamaCppBackend(BaseBackend):
                 if guard is not None:
                     reason = guard.observe(token)
                     if reason:
+                        gen_end_reason = f"degenerate: {reason}"
+                        runaway_capture.dump_capture(
+                            capture_dir or "./logs",
+                            gen_end_reason,
+                            acc_bytes,
+                            len(completion_tokens),
+                            meta={
+                                "request_id": kwargs.get("request_id", ""),
+                                "temperature": temperature,
+                            },
+                        )
                         raise DegenerateGenerationError(
                             reason, tokens_generated=len(completion_tokens)
+                        )
+
+                # Long-cycle guard — paragraph-scale loops the token guard
+                # can't see. Structural check on the text tail every
+                # CHECK_INTERVAL tokens; abort through the same clean path.
+                if (
+                    long_cycle_on
+                    and len(completion_tokens) % runaway_capture.CHECK_INTERVAL == 0
+                ):
+                    lc_reason = runaway_capture.detect_long_cycle(acc_bytes)
+                    if lc_reason:
+                        gen_end_reason = f"long-cycle: {lc_reason}"
+                        runaway_capture.dump_capture(
+                            capture_dir or "./logs",
+                            lc_reason,
+                            acc_bytes,
+                            len(completion_tokens),
+                            meta={
+                                "request_id": kwargs.get("request_id", ""),
+                                "temperature": temperature,
+                            },
+                        )
+                        raise DegenerateGenerationError(
+                            lc_reason, tokens_generated=len(completion_tokens)
                         )
 
                 # Incremental detokenize: only the NEW token, with all prior
@@ -1235,6 +1284,7 @@ class LlamaCppBackend(BaseBackend):
 
             # Flush any remaining bytes (final multi-byte char or buffered-mode
             # content). The accumulator already holds everything.
+            gen_end_reason = "completed"
             if acc_bytes and len(acc_bytes) > returned_bytes:
                 yield acc_bytes[returned_bytes:].decode("utf-8", errors="replace")
 
@@ -1244,6 +1294,25 @@ class LlamaCppBackend(BaseBackend):
             instance._last_completion_tokens = list(completion_tokens)
             instance._last_gen_start_pos = gen_start_pos
         finally:
+            # Abnormal exit with substantial output and no recorded reason:
+            # the consumer abandoned the stream — in practice the agent-side
+            # health watchdog cancelling a runaway. Capture the partial text
+            # the cancellation used to discard (live: 43 cancellations at up
+            # to 130k tokens with zero forensic evidence).
+            if (
+                gen_end_reason is None
+                and len(completion_tokens) >= runaway_capture.CHECK_INTERVAL
+            ):
+                runaway_capture.dump_capture(
+                    capture_dir or "./logs",
+                    "abandoned by consumer (watchdog cancel or disconnect)",
+                    acc_bytes,
+                    len(completion_tokens),
+                    meta={
+                        "request_id": kwargs.get("request_id", ""),
+                        "temperature": temperature,
+                    },
+                )
             tracker.finish()
 
     async def generate_async(

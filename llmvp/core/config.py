@@ -84,6 +84,17 @@ class GenerationConfig(BaseModel):
     repetition_max_cycle_period: Optional[int] = None  # default 8
     repetition_min_cycle_reps: Optional[int] = None  # default 12
 
+    # Long-cycle guard (see llmvp/inference/runaway_capture.py). The
+    # repetition guard's horizon is 8-token cycles; live failure
+    # (qwen3-next-coder menu turn) looped at paragraph scale — 130k+
+    # tokens, 43 watchdog cancellations, text discarded. This guard runs
+    # a structural distinct-chunk check every ~2k tokens, aborts the
+    # turn through the same DegenerateGenerationError path, and dumps
+    # the partial text to logs/runaway_captures/ for inspection.
+    # Abnormally-ended generations (consumer cancel == agent watchdog)
+    # are captured too. None => enabled.
+    long_cycle_guard_enabled: Optional[bool] = None
+
     # Session temperature floor. Deep multi-turn sessions are repetition
     # attractors (live-observed: degenerate generations at turn 5-6 on a
     # model NOT otherwise predisposed; sparse MoEs hit it earliest) — low
