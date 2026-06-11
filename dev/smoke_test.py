@@ -190,6 +190,13 @@ FLOW_INPUTS = {
         "change_spec": "Write the Todo instance to a JSON file at self.path.",
         "working_directory": "/tmp/test-project",
     },
+    # Parallel structural mode — one-shot batch creation
+    "build_structure": {
+        "mission_id": "test-mission-001",
+        "goal_id": "",
+        "flow_directive": "Create all architecture files in one batch generation.",
+        "working_directory": "/tmp/test-project",
+    },
     # Diagnostics
     "diagnose_issue": {
         "mission_id": "test-mission-001",

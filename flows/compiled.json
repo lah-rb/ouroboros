@@ -251,6 +251,376 @@
       "fallback": "reorganize"
     }
   },
+  "build_structure": {
+    "flow": "build_structure",
+    "version": 1,
+    "description": "One-shot batch creation of all architecture files. Generates the\nwhole project in shared context, slices per-file, gates each file\ndeterministically, completes passing structural goals, and returns\na batch summary to mission_control.",
+    "context_tier": "flow_directive",
+    "returns": {
+      "files_changed": {
+        "type": "list",
+        "from": "context.files_changed",
+        "optional": true
+      },
+      "batch_manifest": {
+        "type": "dict",
+        "from": "context.batch_manifest",
+        "optional": true
+      },
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "goal_id",
+        "working_directory",
+        "flow_directive"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.6"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state for architecture and goals",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "generate_all_files"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "generate_all_files": {
+        "action": "inference",
+        "description": "Generate every architecture file in one completion",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "code",
+          "response": {
+            "language": ""
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/code_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "build_structure/task",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.batch_blueprint"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_structure/generate_all_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "slice_and_write",
+            "no_answer": "slice_and_write"
+          },
+          "config": {
+            "temperature": "t*0.4"
+          },
+          "retries": 2
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_batch_blueprint",
+            "output_key": "batch_blueprint",
+            "params": {
+              "source": {
+                "$ref": "context.mission.architecture"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "slice_and_write": {
+        "action": "slice_batch_files",
+        "description": "Slice FILE blocks, diff against the blueprint, write declared files",
+        "context": {
+          "required": [
+            "inference_response",
+            "mission"
+          ],
+          "optional": [
+            "inference_truncated"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.files_written > 0",
+              "transition": "lookup_env"
+            },
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_manifest",
+          "files_changed",
+          "primary_code_file"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "lookup_env": {
+        "action": "lookup_validation_env",
+        "description": "Ensure validation tooling is configured for the project language",
+        "context": {
+          "required": [
+            "primary_code_file"
+          ],
+          "optional": []
+        },
+        "params": {
+          "target": {
+            "$ref": "context.primary_code_file"
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.env_found == true",
+              "transition": "run_batch_checks"
+            },
+            {
+              "condition": "result.is_data_file == true",
+              "transition": "run_batch_checks"
+            },
+            {
+              "condition": "result.skip_validation == true",
+              "transition": "run_batch_checks"
+            },
+            {
+              "condition": "true",
+              "transition": "run_set_env"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_commands"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_set_env": {
+        "action": "flow",
+        "description": "No validation config yet \u2014 infer tooling for the project",
+        "config": {},
+        "context": {
+          "required": [
+            "primary_code_file"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "set_env",
+        "input_map": {
+          "working_directory": {
+            "$ref": "input.working_directory"
+          },
+          "target_file_path": {
+            "$ref": "context.primary_code_file"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          }
+        },
+        "params": {},
+        "publishes": [],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success' and meta.attempt <= 1",
+              "transition": "lookup_env"
+            },
+            {
+              "condition": "true",
+              "transition": "run_batch_checks"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "run_batch_checks": {
+        "action": "run_batch_file_checks",
+        "description": "Per-file gates: env checks for code, parse-validity for data",
+        "context": {
+          "required": [
+            "files_changed"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_check_results",
+          "validation_results",
+          "validation_output"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_results": {
+        "action": "apply_batch_results",
+        "description": "Book per-goal reports, complete passing goals, note the batch",
+        "context": {
+          "required": [
+            "mission",
+            "batch_manifest"
+          ],
+          "optional": [
+            "batch_check_results",
+            "inference_tokens_generated"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.wrote_any == true",
+              "transition": "report_success"
+            },
+            {
+              "condition": "true",
+              "transition": "report_failed"
+            }
+          ]
+        },
+        "publishes": [
+          "directive_report",
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "report_success": {
+        "action": "noop",
+        "description": "Return to mission_control \u2014 batch written and booked",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      },
+      "report_failed": {
+        "action": "noop",
+        "description": "Return to mission_control \u2014 batch produced nothing usable",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "failed"
+          }
+        }
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "create": {
     "flow": "create",
     "version": 2,

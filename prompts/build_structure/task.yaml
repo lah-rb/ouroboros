@@ -1,0 +1,18 @@
+# Prompt template: build_structure/task
+#
+# Problem section for the batch generation turn: the mission objective
+# plus the framing that this single response builds the WHOLE project.
+# The full blueprint (modules, interfaces, data contracts with
+# exemplars) follows as a context_files section rendered by
+# render_batch_blueprint.
+
+id: build_structure/task
+content: |
+  ## Task
+  {context.mission.objective}
+
+  You are building this ENTIRE project in one response, following the
+  blueprint below exactly. Producing every file together is the point:
+  each file can see every other file's interfaces, so imports, call
+  signatures, and data shapes must agree across the whole set — write
+  them as one coherent system, not as isolated files.

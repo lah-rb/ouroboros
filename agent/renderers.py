@@ -594,7 +594,119 @@ def _render_data_flows_block(data_flows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-# ── Failed Attempts Renderer ─────────────────────────────────────────
+# ── Batch Blueprint Renderer ─────────────────────────────────────────
+
+
+def render_batch_blueprint(params: dict, namespaces: dict) -> str:
+    """Render the COMPLETE architecture as a one-shot build brief.
+
+    Input: mission.architecture (ArchitectureState or dict).
+    Output key: batch_blueprint
+
+    Unlike render_file_context (one file's neighborhood), this renders
+    the whole blueprint — every module, every interface, every data and
+    state contract WITH its exemplar — because the batch generation
+    writes all files in shared context and must honor every contract at
+    once. Exemplars are included verbatim: the shape checker later diffs
+    the written data files against them.
+    """
+    import json
+
+    arch = params.get("source")
+    if not arch:
+        return ""
+
+    def _get(obj: Any, key: str, default: Any = "") -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    lines = ["---PROJECT BLUEPRINT---"]
+    lines.append(f"Import scheme: {_get(arch, 'import_scheme', 'flat')}")
+    lines.append(f"Run command: {_get(arch, 'run_command')}")
+    smoke = _get(arch, "smoke_command")
+    if smoke:
+        lines.append(f"Smoke command: {smoke}")
+
+    order = list(_get(arch, "creation_order", []) or [])
+    modules = list(_get(arch, "modules", []) or [])
+    by_file = {_get(m, "file"): m for m in modules}
+    listed = [f for f in order if f] + [
+        _get(m, "file") for m in modules if _get(m, "file") not in set(order)
+    ]
+    lines.append("")
+    lines.append("Files to produce (every one, in this order):")
+    for i, f in enumerate(listed, 1):
+        mod = by_file.get(f)
+        resp = _get(mod, "responsibility") if mod else ""
+        lines.append(f"  {i}. {f}" + (f" — {resp}" if resp else ""))
+        if mod:
+            defines = _get(mod, "defines", []) or []
+            if defines:
+                lines.append(f"     Defines: {', '.join(defines)}")
+            imports_from = _get(mod, "imports_from", {}) or {}
+            if imports_from:
+                pairs = ", ".join(
+                    f"{src} ({', '.join(syms)})" if syms else src
+                    for src, syms in imports_from.items()
+                )
+                lines.append(f"     Imports from: {pairs}")
+
+    interfaces = list(_get(arch, "interfaces", []) or [])
+    if interfaces:
+        lines.append("")
+        lines.append("Cross-module interfaces (honor these signatures exactly):")
+        for iface in interfaces:
+            sig = _get(iface, "signature")
+            lines.append(
+                f"  - {_get(iface, 'caller')} → {_get(iface, 'callee')}: "
+                f"{_get(iface, 'symbol')}" + (f"({sig})" if sig else "")
+            )
+
+    data_shapes = list(_get(arch, "data_shapes", []) or [])
+    if data_shapes:
+        lines.append("")
+        lines.append("---DATA CONTRACTS (MANDATORY)---")
+        lines.append("Data files and their consumers MUST agree on these exact")
+        lines.append("key names and nesting. The written data file is checked")
+        lines.append("against the exemplar structurally.")
+        for ds in data_shapes:
+            lines.append("")
+            lines.append(f"File: {_get(ds, 'file')}")
+            consumer = _get(ds, "consumed_by")
+            if consumer:
+                lines.append(f"Consumer: {consumer}")
+            structure = _get(ds, "structure")
+            if structure:
+                lines.append(f"Structure: {structure}")
+            example = (_get(ds, "example") or "").strip()
+            if example:
+                try:
+                    example = json.dumps(json.loads(example), indent=2)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+                lines.append(
+                    "Exemplar (minimal valid instance — extend, don't deviate):"
+                )
+                lines.append(example)
+
+    state_shapes = list(_get(arch, "state_shapes", []) or [])
+    if state_shapes:
+        lines.append("")
+        lines.append("State contracts — canonical representations every module")
+        lines.append("must use (never a locally convenient variant):")
+        for ss in state_shapes:
+            lines.append(
+                f"  - {_get(ss, 'name')}: {_get(ss, 'structure')} "
+                f"(owner: {_get(ss, 'owner')})"
+            )
+
+    notes = _get(arch, "notes")
+    if notes:
+        lines.append("")
+        lines.append(f"Architecture notes: {notes}")
+    lines.append("---END BLUEPRINT---")
+    return "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -609,4 +721,5 @@ RENDERER_REGISTRY: dict[str, Any] = {
     "render_quality_overview": render_quality_overview,
     "render_interaction_context": render_interaction_context,
     "render_project_setup_context": render_project_setup_context,
+    "render_batch_blueprint": render_batch_blueprint,
 }

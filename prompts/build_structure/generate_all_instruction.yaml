@@ -1,0 +1,50 @@
+# Prompt template: build_structure/generate_all_instruction
+#
+# Instruction section for the batch generation turn. Defines the
+# multi-file output format (one fenced block per file, FILE marker as
+# the first line) and the completeness bar. The worked example teaches
+# FORM in a different domain (flashcard/quiz CLI — sanitation doctrine:
+# examples never share the benchmark domain).
+
+id: build_structure/generate_all_instruction
+content: |
+  Produce EVERY file listed in the blueprint — all of them, in the
+  order listed. For each file, output one fenced code block whose FIRST
+  line is a FILE marker naming the exact path from the blueprint:
+
+  ```python
+  # === FILE: study_engine.py ===
+  from models import Deck
+
+  class StudyEngine:
+      def __init__(self, deck: Deck) -> None:
+          self.deck = deck
+  ```
+
+  ```yaml
+  # === FILE: decks.yaml ===
+  decks:
+    - name: starter
+      cards:
+        - front: "2 + 2"
+          back: "4"
+  ```
+
+  (The example paths above are from a DIFFERENT project — use only the
+  paths in the blueprint.)
+
+  Rules:
+  - One fenced block per file; the FILE marker is the first line inside
+    the fence, using the comment style of that file's language (`#` for
+    Python/YAML, `//` for JS, none needed for JSON — for JSON put the
+    marker line directly above the opening brace inside the fence).
+  - Use the EXACT file paths from the blueprint. Every listed file must
+    appear; do not add files the blueprint doesn't list.
+  - Honor every interface signature and every data contract. Where a
+    data contract shows an exemplar, your data file must follow its
+    structure exactly — extend it with more entries, never reshape it.
+  - Write production-quality, complete code: every function realized,
+    every import correct, no placeholders, no TODOs, no abbreviated
+    sections like "... rest as before".
+  - Code that reads a data file must match the data file you write
+    here, key for key.
