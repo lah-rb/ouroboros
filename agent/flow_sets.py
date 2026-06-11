@@ -137,6 +137,11 @@ FLOW_SETS: dict[str, FlowSetSpec] = {
         entry_flow="mission_control",
         phases=CODE_CORE_PHASES,
     ),
+    "scraper": FlowSetSpec(
+        name="scraper",
+        entry_flow="research_control",
+        phases=SCRAPER_PHASES,
+    ),
 }
 
 

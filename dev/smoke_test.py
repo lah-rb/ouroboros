@@ -219,6 +219,32 @@ FLOW_INPUTS = {
         "flow_directive": "Run the TODO app and verify that adding and listing items works correctly.",
         "working_directory": "/tmp/test-project",
     },
+    # Scraper flow set
+    "research_control": {
+        "mission_id": "test-mission-001",
+    },
+    "plan_research": {
+        "mission_id": "test-mission-001",
+    },
+    "discover": {
+        "mission_id": "test-mission-001",
+        "goal_id": "goal-001",
+        "flow_directive": "Find candidate papers for the aspect 'grain boundaries'.",
+        "aspect_name": "grain boundaries",
+        "seed_queries": ["grain boundary segregation"],
+        "working_directory": "/tmp/test-project",
+    },
+    "acquire_catalog": {
+        "mission_id": "test-mission-001",
+        "goal_id": "goal-001",
+        "flow_directive": "Acquire and catalog 1 paper from the candidate worklist.",
+        "paper_keys": ["doi_10.1000_x"],
+        "working_directory": "/tmp/test-project",
+    },
+    "research_gate": {
+        "mission_id": "test-mission-001",
+        "working_directory": "/tmp/test-project",
+    },
     # Quality and validation
     "quality_gate": {
         "mission_id": "test-mission-001",

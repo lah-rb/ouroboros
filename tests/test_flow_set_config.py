@@ -27,7 +27,11 @@ def test_yaml_defaults_flow_set_when_absent():
 
 def test_yaml_rejects_unknown_flow_set_listing_known_sets():
     with pytest.raises(ValueError, match="unknown flow_set.*code_core"):
-        MissionYAMLConfig(objective="x", flow_set="scraper")
+        MissionYAMLConfig(objective="x", flow_set="not-a-registered-set")
+
+
+def test_yaml_accepts_scraper_flow_set():
+    assert MissionYAMLConfig(objective="x", flow_set="scraper").flow_set == "scraper"
 
 
 def test_mission_config_defaults_flow_set():

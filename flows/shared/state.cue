@@ -154,6 +154,26 @@ _projections: {
 		required: false // quality gate can run without architecture
 	}
 
+	// ── research_overview ───────────────────────────────────────
+	//
+	// Scraper flow set: aspect coverage + databank worklist/corpus
+	// stats, read from the workspace databank (databank/papers.jsonl).
+	//
+	// Schema shape:
+	//   abstract: string
+	//   aspects:  [...{name, target, candidates, strong_tagged}]
+	//   worklist: {candidate, acquired, cataloged, needs_retag, failed}
+	//   corpus:   {papers, pdfs, closed}
+	//
+	// Consumer: research_control
+	research_overview: #ProjectionSchema & {
+		materializer: "project_research_overview"
+		params: {
+			mission_id: {$ref: "input.mission_id"}
+		}
+		required: false // empty databank before discovery begins
+	}
+
 	// ── interaction_context ─────────────────────────────────────
 	//
 	// Context for the interact flow. Provides everything a beta

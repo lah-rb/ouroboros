@@ -1,0 +1,51 @@
+# Prompt template: scraper/refine_queries
+#
+# Generate NEW scholarly queries for one under-covered aspect. The
+# aspect's seed queries already ran in earlier rounds — emit different
+# phrasings, synonyms, and narrower/broader variants.
+# Input: aspect_name, aspect_description, seed_queries, coverage_target,
+#        have_count
+
+id: scraper/refine_queries
+description: "Refine scholarly search queries for an aspect"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a research librarian refining literature-search queries.
+      Your output will be parsed as JSON. Return ONLY a JSON array of
+      query strings inside a fenced code block.
+
+  - id: aspect
+    content: |
+      Aspect: {input.aspect_name}
+      Description: {input.aspect_description}
+      Coverage: {input.have_count} of {input.coverage_target} candidate papers found so far.
+
+  - id: prior
+    when: input.seed_queries
+    content: |
+      Queries already run (do NOT repeat these):
+      {input.seed_queries}
+
+  - id: instruction
+    content: |
+      Emit 2-4 NEW queries likely to surface papers the prior queries
+      missed: synonyms, alternative terminology, related material
+      systems, or methodological phrasings. Terse noun phrases only —
+      no boolean operators, no quotes (the APIs do relevance ranking).
+
+  - id: output_format
+    content: |
+      ✅ CORRECT:
+      ```json
+      ["solute segregation multicomponent alloy boundaries", "interfacial chemistry compositionally complex alloys"]
+      ```
+
+      ❌ WRONG — not an array, or repeats a prior query:
+      ```json
+      {"queries": ["..."]}
+      ```
+
+      Return ONLY the fenced JSON array.

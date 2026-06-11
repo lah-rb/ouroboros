@@ -1,0 +1,67 @@
+# Prompt template: scraper/tag_paper
+#
+# Tag a batch of papers against the research plan's aspects with the
+# exact/close/adjacent relevance scale. Justifications must quote or
+# closely paraphrase the abstract — the research gate's grounding check
+# verifies them against the stored abstract text.
+# Context: aspects_block (format_aspect_definitions),
+#          papers_block (format_catalog_batch)
+
+id: scraper/tag_paper
+description: "Tag papers against research aspects with relevance tiers"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a research librarian cataloging papers. Your output will
+      be parsed as JSON. Return ONLY a JSON object inside a fenced code
+      block — no commentary.
+
+  - id: aspects
+    content: |
+      {context.aspects_block}
+
+  - id: papers
+    content: |
+      Papers to tag (title + abstract):
+
+      {context.papers_block}
+
+  - id: instruction
+    content: |
+      For EACH paper, list the aspects it is relevant to. Relevance
+      tiers (be honest — the catalog's value depends on calibration,
+      and sampled tags are verified against the abstracts):
+      - "exact"    — the abstract DIRECTLY addresses the aspect (same
+        system, phenomenon, or question)
+      - "close"    — substantial overlap: the methods, materials class,
+        or findings transfer directly to the aspect
+      - "adjacent" — related background: useful context, but a different
+        system or question
+
+      Each tag needs a "justification" that QUOTES or closely
+      paraphrases the abstract — a justification that doesn't appear in
+      the abstract will be rejected at the verification gate. A paper
+      with no relevant aspect gets an empty list. Use ONLY the aspect
+      names listed above.
+
+  - id: output_format
+    content: |
+      ✅ CORRECT (keyed by paper_key):
+      ```json
+      {
+        "doi_10.1000_hea.1": [
+          {"aspect": "grain boundary segregation", "relevance": "exact",
+           "justification": "we study grain boundary segregation in a high entropy alloy"}
+        ],
+        "doi_10.1000_hea.2": []
+      }
+      ```
+
+      ❌ WRONG — invented aspect name, vague justification:
+      ```json
+      {"doi_x": [{"aspect": "materials science", "relevance": "exact", "justification": "seems relevant"}]}
+      ```
+
+      Return ONLY the fenced JSON.

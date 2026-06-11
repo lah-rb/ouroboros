@@ -8534,5 +8534,1486 @@
       "strategy": "split",
       "fallback": "reorganize"
     }
+  },
+  "acquire_catalog": {
+    "flow": "acquire_catalog",
+    "version": 1,
+    "description": "Acquire and catalog a batch of candidate papers: OA resolution,\nPDF download, reference fetch, and aspect tagging\n(exact/close/adjacent) grounded in the abstracts.",
+    "context_tier": "flow_directive",
+    "returns": {
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "goal_id",
+        "flow_directive",
+        "paper_keys",
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.3"
+      }
+    },
+    "steps": {
+      "load_mission": {
+        "action": "load_mission_state",
+        "description": "Load mission (research plan aspects for tagging)",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "load_batch"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "load_batch": {
+        "action": "catalog_batch_next",
+        "description": "Load the dispatched paper records from the databank",
+        "context": {
+          "required": [],
+          "optional": [
+            "paper_keys"
+          ]
+        },
+        "params": {
+          "paper_keys": {
+            "$ref": "input.paper_keys"
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.batch_size > 0",
+              "transition": "resolve_oa"
+            },
+            {
+              "condition": "true",
+              "transition": "return_success"
+            }
+          ]
+        },
+        "publishes": [
+          "catalog_batch"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "resolve_oa": {
+        "action": "resolve_oa_pdf",
+        "description": "Assign access_status (known OA url -> Unpaywall -> closed)",
+        "context": {
+          "required": [
+            "catalog_batch"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "download"
+            }
+          ]
+        },
+        "publishes": [
+          "catalog_batch"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "download": {
+        "action": "download_papers",
+        "description": "Download oa_pdf papers; failures downgrade to oa_unresolved",
+        "context": {
+          "required": [
+            "catalog_batch"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "fetch_refs"
+            }
+          ]
+        },
+        "publishes": [
+          "catalog_batch"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "fetch_refs": {
+        "action": "fetch_references",
+        "description": "Store reference DOIs (corpus edges computed at gate time)",
+        "context": {
+          "required": [
+            "catalog_batch"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "tag_papers"
+            }
+          ]
+        },
+        "publishes": [
+          "catalog_batch"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "tag_papers": {
+        "action": "inference",
+        "description": "Tag the batch against the plan's aspects (one turn)",
+        "context": {
+          "required": [
+            "mission",
+            "catalog_batch"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "scraper/tag_paper",
+          "context_keys": [
+            "aspects_block",
+            "papers_block"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_aspect_definitions",
+            "output_key": "aspects_block",
+            "params": {
+              "source": {
+                "$ref": "context.mission.research_plan"
+              }
+            }
+          },
+          {
+            "formatter": "format_catalog_batch",
+            "output_key": "papers_block",
+            "params": {
+              "source": {
+                "$ref": "context.catalog_batch"
+              }
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.3"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "apply_tags"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_tags": {
+        "action": "apply_paper_tags",
+        "description": "Validate tags, persist cataloged records, build the report",
+        "context": {
+          "required": [
+            "catalog_batch",
+            "mission"
+          ],
+          "optional": [
+            "inference_response"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "return_success"
+            }
+          ]
+        },
+        "publishes": [
+          "directive_report"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "return_success": {
+        "action": "noop",
+        "description": "Return the catalog report to research_control",
+        "context": {
+          "required": [],
+          "optional": [
+            "directive_report"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "research_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      }
+    },
+    "entry": "load_mission",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "discover": {
+    "flow": "discover",
+    "version": 1,
+    "description": "Scholarly discovery round: refine queries for one aspect, search\nS2 + OpenAlex, merge candidates into the workspace databank\n(DOI-keyed dedup), and return a directive report.",
+    "context_tier": "flow_directive",
+    "returns": {
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "goal_id",
+        "flow_directive",
+        "aspect_name",
+        "working_directory"
+      ],
+      "optional": [
+        "aspect_description",
+        "seed_queries",
+        "coverage_target",
+        "have_count"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "refine_queries": {
+        "action": "inference",
+        "description": "Refine scholarly queries for the aspect",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "scraper/refine_queries",
+          "context_keys": [],
+          "input_keys": [
+            "aspect_name",
+            "aspect_description",
+            "seed_queries",
+            "coverage_target",
+            "have_count"
+          ]
+        },
+        "config": {
+          "temperature": "t*0.5"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "extract_queries"
+            },
+            {
+              "condition": "true",
+              "transition": "search"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "extract_queries": {
+        "action": "extract_search_queries",
+        "description": "Parse refined queries into a structured list",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": []
+        },
+        "params": {
+          "max_queries": 4
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "search"
+            }
+          ]
+        },
+        "publishes": [
+          "search_queries"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "search": {
+        "action": "scholarly_search",
+        "description": "Query Semantic Scholar + OpenAlex",
+        "context": {
+          "required": [],
+          "optional": [
+            "search_queries"
+          ]
+        },
+        "params": {
+          "aspect_name": {
+            "$ref": "input.aspect_name"
+          },
+          "seed_queries": {
+            "$ref": "input.seed_queries",
+            "default": []
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "merge"
+            }
+          ]
+        },
+        "publishes": [
+          "raw_candidates"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "merge": {
+        "action": "merge_candidates",
+        "description": "Dedup candidates into the databank; build the report",
+        "context": {
+          "required": [
+            "raw_candidates"
+          ],
+          "optional": []
+        },
+        "params": {
+          "aspect_name": {
+            "$ref": "input.aspect_name"
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "return_success"
+            }
+          ]
+        },
+        "publishes": [
+          "discovery_stats",
+          "directive_report"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "return_success": {
+        "action": "noop",
+        "description": "Return the discovery report to research_control",
+        "context": {
+          "required": [],
+          "optional": [
+            "directive_report"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "research_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      }
+    },
+    "entry": "refine_queries",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "plan_research": {
+    "flow": "plan_research",
+    "version": 1,
+    "description": "Decompose the mission's research abstract into aspects with seed\nqueries and coverage targets (mission.research_plan), then derive\nper-aspect discovery goals plus one corpus catalog goal.",
+    "context_tier": "mission_objective",
+    "returns": {
+      "plan_parsed": {
+        "type": "bool",
+        "from": "context.plan_parsed",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.4"
+      }
+    },
+    "steps": {
+      "load_mission": {
+        "action": "load_mission_state",
+        "description": "Load mission state",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.mission.status == 'active'",
+              "transition": "design_plan"
+            },
+            {
+              "condition": "true",
+              "transition": "failed"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "design_plan": {
+        "action": "inference",
+        "description": "Decompose the abstract into research aspects",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "scraper/plan_research",
+          "context_keys": [
+            "mission_objective"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "mission_objective",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.4"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "parse_plan"
+            },
+            {
+              "condition": "true",
+              "transition": "failed"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "parse_plan": {
+        "action": "parse_and_store_research_plan",
+        "description": "Parse aspects into mission.research_plan",
+        "context": {
+          "required": [
+            "mission",
+            "inference_response"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.plan_parsed == true",
+              "transition": "derive_goals"
+            },
+            {
+              "condition": "true",
+              "transition": "failed"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "derive_goals": {
+        "action": "derive_research_goals",
+        "description": "Per-aspect discovery goals + the corpus catalog goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "complete"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "complete": {
+        "action": "noop",
+        "description": "Plan stored \u2014 return to the controller",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "research_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_status": "success"
+          }
+        }
+      },
+      "failed": {
+        "action": "log_completion",
+        "description": "Planning failed",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "failed"
+      }
+    },
+    "entry": "load_mission",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "research_control": {
+    "flow": "research_control",
+    "version": 1,
+    "description": "Scraper pipeline controller. Computes the current phase from goal\nstatuses (SCRAPER_PHASES) and dispatches discovery/catalog work\nagainst the workspace databank; the research gate derives the\ncompletion verdict from coverage and tag grounding.",
+    "context_tier": "project_goal",
+    "returns": {
+      "final_status": {
+        "type": "string",
+        "from": "context.mission.status",
+        "optional": true
+      }
+    },
+    "projections": {
+      "research_overview": {
+        "materializer": "project_research_overview",
+        "params": {
+          "mission_id": {
+            "$ref": "input.mission_id"
+          }
+        },
+        "required": false
+      }
+    },
+    "input": {
+      "required": [
+        "mission_id"
+      ],
+      "optional": [
+        "last_result",
+        "last_status",
+        "last_goal_id"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state and event queue",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.mission.status == 'active'",
+              "transition": "apply_last_result"
+            },
+            {
+              "condition": "result.mission.status == 'paused'",
+              "transition": "idle"
+            },
+            {
+              "condition": "result.mission.status == 'completed'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "aborted"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_last_result": {
+        "action": "attach_directive_report",
+        "description": "Attach returning flow's directive report to goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "events",
+            "last_result",
+            "last_status",
+            "last_goal_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.events_pending == true",
+              "transition": "process_events"
+            },
+            {
+              "condition": "result.needs_plan == true",
+              "transition": "dispatch_planning"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "process_events": {
+        "action": "handle_events",
+        "description": "Process user messages, abort/pause signals",
+        "context": {
+          "required": [
+            "mission",
+            "events"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.abort_requested == true",
+              "transition": "aborted"
+            },
+            {
+              "condition": "result.pause_requested == true",
+              "transition": "idle"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "check_phase": {
+        "action": "check_pipeline_phase",
+        "description": "Determine the scraper phase from goal statuses",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.phase == 'plan'",
+              "transition": "dispatch_planning"
+            },
+            {
+              "condition": "result.phase == 'discovery'",
+              "transition": "discovery_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'catalog'",
+              "transition": "catalog_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'gate'",
+              "transition": "dispatch_research_gate"
+            },
+            {
+              "condition": "true",
+              "transition": "dispatch_planning"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_planning": {
+        "action": "noop",
+        "description": "No research plan or goals \u2014 dispatch plan_research",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "plan_research",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          }
+        }
+      },
+      "discovery_sweep_next": {
+        "action": "discovery_sweep_next",
+        "description": "Dispatch the next incomplete aspect's discovery round",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.needs_discover == true",
+              "transition": "dispatch_discover"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_discover": {
+        "action": "noop",
+        "description": "Run a discovery round for one aspect",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "discover",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id"
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "aspect_name": {
+              "$ref": "context.dispatch_config.aspect_name"
+            },
+            "aspect_description": {
+              "$ref": "context.dispatch_config.aspect_description",
+              "default": ""
+            },
+            "seed_queries": {
+              "$ref": "context.dispatch_config.seed_queries",
+              "default": []
+            },
+            "coverage_target": {
+              "$ref": "context.dispatch_config.coverage_target",
+              "default": 10
+            },
+            "have_count": {
+              "$ref": "context.dispatch_config.have_count",
+              "default": 0
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
+      },
+      "catalog_sweep_next": {
+        "action": "catalog_sweep_next",
+        "description": "Dispatch the next acquire+catalog batch",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.needs_catalog == true",
+              "transition": "dispatch_catalog"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_catalog": {
+        "action": "noop",
+        "description": "Acquire and catalog a batch of candidate papers",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "acquire_catalog",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id"
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "paper_keys": {
+              "$ref": "context.dispatch_config.paper_keys"
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
+      },
+      "dispatch_research_gate": {
+        "action": "flow",
+        "description": "Research gate for mission completion",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "research_gate",
+        "input_map": {
+          "mission_id": {
+            "$ref": "input.mission_id"
+          },
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          },
+          "mission_objective": {
+            "$ref": "context.mission.objective"
+          }
+        },
+        "params": {},
+        "publishes": [
+          "gate_results"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "harvest_findings"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "harvest_findings": {
+        "action": "harvest_research_findings",
+        "description": "Reopen aspect goals / mark retags from gate findings",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "gate_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.done == true",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "completed": {
+        "action": "finalize_mission",
+        "description": "Mark mission complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission",
+            "gate_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "completed"
+      },
+      "idle": {
+        "action": "enter_idle",
+        "description": "Wait for events",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "research_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          },
+          "delay": 5
+        }
+      },
+      "aborted": {
+        "action": "finalize_mission",
+        "description": "Mission aborted",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {
+          "abort": true
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "aborted"
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "research_gate": {
+    "flow": "research_gate",
+    "version": 1,
+    "description": "Research completion gate: aspect coverage (exact+close tags vs\ntargets), corpus cross-link finalization, and tag-grounding\nprobes. Verdict derived from probed facts.",
+    "context_tier": "mission_objective",
+    "returns": {
+      "verdict": {
+        "type": "string",
+        "from": "context.gate_results.verdict",
+        "optional": true
+      },
+      "blocking_issues": {
+        "type": "list",
+        "from": "context.gate_results.blocking_issues",
+        "optional": true
+      },
+      "stats": {
+        "type": "dict",
+        "from": "context.gate_results.stats",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "working_directory"
+      ],
+      "optional": [
+        "mission_objective"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.2"
+      }
+    },
+    "steps": {
+      "load_mission": {
+        "action": "load_mission_state",
+        "description": "Load mission (research plan for coverage targets)",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "coverage_check"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "coverage_check": {
+        "action": "check_aspect_coverage",
+        "description": "Per-aspect evidence-base counts (exact+close only)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "finalize_crosslinks"
+            }
+          ]
+        },
+        "publishes": [
+          "coverage_report"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "finalize_crosslinks": {
+        "action": "finalize_crosslinks",
+        "description": "Corpus-internal citation edges -> databank/links.json",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "prepare_grounding"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "prepare_grounding": {
+        "action": "prepare_tag_grounding",
+        "description": "Sample tags; cheap overlap check; queue survivors",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_next == true",
+              "transition": "judge_grounding"
+            },
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "grounding_queue",
+          "grounded_tags",
+          "ungrounded_tags",
+          "probe_abstract",
+          "probe_tags",
+          "probe_paper_key"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "judge_grounding": {
+        "action": "inference",
+        "description": "Judge whether the abstract supports the queued tags",
+        "context": {
+          "required": [],
+          "optional": [
+            "probe_abstract",
+            "probe_tags",
+            "probe_paper_key"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "scraper/judge_grounding",
+          "context_keys": [
+            "probe_abstract",
+            "probe_tags"
+          ],
+          "input_keys": []
+        },
+        "config": {
+          "temperature": "t*0.2"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "record_grounding"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "record_grounding": {
+        "action": "record_tag_grounding",
+        "description": "Record the judge verdict, advance the queue",
+        "context": {
+          "required": [
+            "grounding_queue"
+          ],
+          "optional": [
+            "inference_response",
+            "grounded_tags",
+            "ungrounded_tags"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_next == true",
+              "transition": "judge_grounding"
+            },
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "grounding_queue",
+          "grounded_tags",
+          "ungrounded_tags",
+          "probe_abstract",
+          "probe_tags",
+          "probe_paper_key"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_results": {
+        "action": "apply_research_gate_results",
+        "description": "Derive the verdict from coverage + grounding facts",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "coverage_report",
+            "ungrounded_tags"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.all_passing == true",
+              "transition": "gate_pass"
+            },
+            {
+              "condition": "true",
+              "transition": "gate_fail"
+            }
+          ]
+        },
+        "publishes": [
+          "gate_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "gate_pass": {
+        "action": "noop",
+        "description": "Corpus covered and grounded",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      },
+      "gate_fail": {
+        "action": "noop",
+        "description": "Coverage or grounding issues need attention",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "failed"
+      }
+    },
+    "entry": "load_mission",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
   }
 }

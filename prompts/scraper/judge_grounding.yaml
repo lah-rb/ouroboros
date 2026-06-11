@@ -1,0 +1,55 @@
+# Prompt template: scraper/judge_grounding
+#
+# Grounding judge for sampled aspect tags: does the stored abstract
+# actually support each tag's justification AND its claimed relevance
+# tier? Fail-safe runs toward rejection — an unverifiable tag must not
+# enter the evidence base.
+# Context: probe_abstract, probe_tags
+
+id: scraper/judge_grounding
+description: "Judge whether an abstract supports a paper's aspect tags"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a claim-verification module in an automated pipeline. A
+      cataloging pass CLAIMED these aspect tags for a paper; decide from
+      the abstract alone whether each claim holds. Output is parsed as
+      JSON — return ONLY a fenced JSON object.
+
+  - id: abstract
+    content: |
+      The paper's abstract:
+      {context.probe_abstract}
+
+  - id: tags
+    content: |
+      The claimed tags:
+      {context.probe_tags}
+
+  - id: output_format
+    content: |
+      Return a JSON object inside a fenced code block. Rules:
+      - A tag is grounded ONLY if the abstract supports its
+        justification AND the claimed relevance tier is not inflated
+        ("exact" requires the abstract to directly address the aspect;
+        "close" requires directly transferable methods/materials/findings).
+      - If every tag holds: {"grounded": true}
+      - If some tags fail: {"grounded": false, "ungrounded_aspects":
+        ["<aspect name>", ...], "reason": "one sentence"}
+      - If the abstract is too thin to verify a tag, that tag is NOT
+        grounded — name it in ungrounded_aspects.
+
+      ✅ CORRECT:
+      ```json
+      {"grounded": false, "ungrounded_aspects": ["phase stability"], "reason": "the abstract never discusses phases; the tier 'exact' is inflated"}
+      ```
+
+      ❌ WRONG — do not add explanation outside the JSON:
+      Looking at the abstract, the tags seem mostly fine:
+      ```json
+      {"grounded": true}
+      ```
+
+      Return ONLY the fenced JSON.

@@ -304,6 +304,44 @@ def format_run_context(params: dict, namespaces: dict) -> str:
 # ══════════════════════════════════════════════════════════════════════
 
 
+def format_aspect_definitions(params: dict, namespaces: dict) -> str:
+    """Render the research plan's aspects for the tagging turn."""
+    plan = params.get("source")
+    aspects = getattr(plan, "aspects", None) or (
+        plan.get("aspects") if isinstance(plan, dict) else None
+    )
+    if not aspects:
+        return ""
+    lines = ["Research aspects (tag papers against THESE names only):"]
+    for a in aspects:
+        name = getattr(a, "name", None) or (
+            a.get("name") if isinstance(a, dict) else ""
+        )
+        desc = getattr(a, "description", None) or (
+            a.get("description") if isinstance(a, dict) else ""
+        )
+        lines.append(f"- {name}: {desc or 'no description'}")
+    return "\n".join(lines)
+
+
+def format_catalog_batch(params: dict, namespaces: dict) -> str:
+    """Render the catalog batch's papers (key, title, abstract) for tagging."""
+    batch = params.get("source") or []
+    if not batch:
+        return ""
+    blocks = []
+    for rec in batch:
+        if not isinstance(rec, dict):
+            continue
+        abstract = (rec.get("abstract") or "").strip() or "(no abstract — title only)"
+        blocks.append(
+            f"paper_key: {rec.get('paper_key', '?')}\n"
+            f"title: {rec.get('title', '')}\n"
+            f"abstract: {abstract[:1500]}"
+        )
+    return "\n\n".join(blocks)
+
+
 def format_research_overview(params: dict, namespaces: dict) -> str:
     """Render the research_overview projection as a prompt block.
 
@@ -347,6 +385,8 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_validation_results": format_validation_results,
     "format_verified_behaviors": format_verified_behaviors,
     "format_research_overview": format_research_overview,
+    "format_aspect_definitions": format_aspect_definitions,
+    "format_catalog_batch": format_catalog_batch,
     "format_session_history": format_session_history,
     "format_last_turn": format_last_turn,
     "format_run_context": format_run_context,

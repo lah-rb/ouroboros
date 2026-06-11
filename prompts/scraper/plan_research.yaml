@@ -1,0 +1,59 @@
+# Prompt template: scraper/plan_research
+#
+# Decompose a research abstract into aspects with seed queries and
+# coverage targets. The aspects ARE the plan — each becomes a discovery
+# goal, and cataloged papers are tagged against these names.
+# Context: mission_objective (the abstract, via format_mission_meta)
+
+id: scraper/plan_research
+description: "Decompose a research abstract into searchable aspects"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a research librarian planning a literature harvest. Your
+      output will be parsed as JSON. Return ONLY a JSON object inside a
+      fenced code block — no commentary.
+
+  - id: abstract
+    content: |
+      Research abstract:
+      {context.mission_objective}
+
+  - id: instruction
+    content: |
+      Decompose the abstract into 3 to 7 ASPECTS — the distinct
+      phenomena, methods, or questions a literature search must cover.
+      For each aspect give:
+      - "name": a short, stable name (used as a tag — keep it terse)
+      - "description": one sentence on what papers about this aspect contain
+      - "seed_queries": 2-4 scholarly search queries (terse noun phrases,
+        no boolean operators — these go to relevance-ranked APIs)
+      - "coverage_target": how many strongly-relevant papers the corpus
+        needs for this aspect (default 10; lower for narrow niches)
+
+  - id: output_format
+    content: |
+      ✅ CORRECT:
+      ```json
+      {
+        "aspects": [
+          {
+            "name": "grain boundary segregation",
+            "description": "Elemental segregation at grain boundaries in multi-principal-element alloys",
+            "seed_queries": ["grain boundary segregation high entropy alloy", "GB chemistry CoCrFeNi"],
+            "coverage_target": 10
+          }
+        ],
+        "notes": "one line on the decomposition rationale"
+      }
+      ```
+
+      ❌ WRONG — do not add explanation outside the JSON:
+      Here is my decomposition of the abstract:
+      ```json
+      {"aspects": [...]}
+      ```
+
+      Return ONLY the fenced JSON.

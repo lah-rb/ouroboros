@@ -287,6 +287,14 @@ async def action_scholarly_search(step_input: StepInput) -> StepOutput:
         for q in (step_input.context.get("search_queries") or [])
         if str(q).strip()
     ]
+    if not queries:
+        # Query refinement failed/was skipped — the aspect's seed
+        # queries from the research plan are the fallback.
+        queries = [
+            str(q).strip()
+            for q in (step_input.params.get("seed_queries") or [])
+            if str(q).strip()
+        ]
     aspect_name = str(step_input.params.get("aspect_name") or "")
     max_per_query = int(step_input.params.get("max_per_query") or 20)
 
