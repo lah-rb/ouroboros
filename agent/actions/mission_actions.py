@@ -1819,6 +1819,20 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
     if not mission:
         return StepOutput(result={"done": True}, observations="No mission — finalize")
 
+    # The gate just pushed notes (survivor + refuted-claim telemetry from
+    # apply_verification_results) via effects.push_note, which persisted
+    # them to disk — but THIS cycle's context mission was loaded before
+    # the gate ran. Saving it below would clobber those notes (observed
+    # live: every gate-pushed note vanished). Freshen notes from disk
+    # before mutating goals.
+    if effects:
+        try:
+            fresh = await effects.load_mission()
+            if fresh is not None and len(fresh.notes) > len(mission.notes):
+                mission.notes = fresh.notes
+        except Exception:
+            pass
+
     quality_results = step_input.context.get("quality_results") or {}
     fix_tasks = (
         (quality_results.get("fix_tasks") or [])

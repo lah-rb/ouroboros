@@ -247,3 +247,37 @@ def test_retest_directive_replays_verified_repro():
 def test_directives_unchanged_without_repro():
     g = _fgoal("quality_gate")
     assert "Verified reproduction" not in _functional_retest_directive(g, after="fix")
+
+
+@pytest.mark.asyncio
+async def test_harvest_preserves_notes_pushed_mid_gate():
+    """Lost-update regression: the gate pushes notes (refuted-claim
+    telemetry) via effects.push_note, persisting them to disk — but the
+    cycle's context mission predates the gate, and harvest's save was
+    clobbering them. Harvest must freshen notes from disk first."""
+    from agent.persistence.models import NoteRecord
+
+    context_mission = _mission()  # what mission_control loaded at cycle start
+    disk_mission = _mission()  # what push_note persisted mid-gate
+    disk_mission.notes.append(
+        NoteRecord(
+            content="Quality gate claimed: save broken — probe REFUTED it",
+            category="failure_analysis",
+            tags=["refuted-finding"],
+            source_flow="quality_gate",
+        )
+    )
+    effects = MockEffects(mission=disk_mission)
+    si = StepInput(
+        context={
+            "mission": context_mission,
+            **_qg({"issue": "use broken", "class": "functional"}),
+        },
+        params={},
+        meta=FlowMeta(flow_name="mission_control", step_id="harvest"),
+        effects=effects,
+    )
+    await action_harvest_quality_findings(si)
+    saved = effects._state["mission"]
+    assert any("REFUTED" in n.content for n in saved.notes)
+    assert any(g.origin == "quality_gate" for g in saved.goals)
