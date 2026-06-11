@@ -115,7 +115,9 @@ def test_contract_reaches_modules_the_consumer_imports_from():
                 ModuleSpec(
                     file="engine.py",
                     responsibility="consumes decks.yaml",
-                    imports_from={"models.py": ["Deck", "Card"]},
+                    # bare module name — the design turn writes either
+                    # form; both must match models.py
+                    imports_from={"models": ["Deck", "Card"]},
                 ),
                 ModuleSpec(file="cli.py", responsibility="frontend"),
             ],

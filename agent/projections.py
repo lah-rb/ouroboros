@@ -1110,9 +1110,17 @@ def _data_shape_relevant(ds: Any, target_file: str, modules: Any = None) -> bool
         return True
     if _consumed_by_matches(ds.consumed_by, target_file):
         return True
+    # imports_from keys arrive as either file names ("models.py") or bare
+    # module names ("models") depending on how the design turn wrote
+    # them — normalize both sides (live: bare keys silently excluded
+    # models.py from the contract on the redo run).
+    target_key = target_file.rsplit("/", 1)[-1].removesuffix(".py")
     for mod in modules or []:
         if _consumed_by_matches(ds.consumed_by, getattr(mod, "file", "")):
-            return target_file in (getattr(mod, "imports_from", None) or {})
+            keys = getattr(mod, "imports_from", None) or {}
+            return target_key in {
+                k.rsplit("/", 1)[-1].removesuffix(".py") for k in keys
+            }
     return False
 
 
