@@ -1671,6 +1671,13 @@ def _quality_finding_signature(fix_task: Any) -> str:
     if not text:
         return ""
     low = _SIG_LINE_NO.sub(" ", text.lower())
+    # The untested marker is framing, not identity: "take command was not
+    # exercised" and "untested: take command was not exercised" are the
+    # same finding (live-observed: the prefix variation across gate
+    # rounds spawned duplicate goals that re-litigated completed work).
+    low = low.strip()
+    if low.startswith("untested:"):
+        low = low[len("untested:") :].strip()
     anchors = {
         a
         for a in (set(_SIG_PY_FILE.findall(low)) | set(_SIG_IDENT.findall(low)))

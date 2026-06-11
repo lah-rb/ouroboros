@@ -281,3 +281,16 @@ async def test_harvest_preserves_notes_pushed_mid_gate():
     saved = effects._state["mission"]
     assert any("REFUTED" in n.content for n in saved.notes)
     assert any(g.origin == "quality_gate" for g in saved.goals)
+
+
+def test_untested_prefix_is_framing_not_identity():
+    """Live-observed duplicate class: 'take command was not exercised' and
+    'untested: take command was not exercised' spawned separate goals across
+    gate rounds. The prefix is framing — signatures must collapse it."""
+    plain = _quality_finding_signature(
+        {"issue": "take command was not exercised by the UX session"}
+    )
+    prefixed = _quality_finding_signature(
+        {"issue": "untested: take command was not exercised by the UX session"}
+    )
+    assert plain == prefixed
