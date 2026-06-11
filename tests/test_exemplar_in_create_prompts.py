@@ -97,3 +97,34 @@ def test_file_context_projection_carries_example():
     # And the rendered block built from the projection shows it.
     block = render_data_contracts({"source": ctx}, namespaces={})
     assert '"front": "2+2"' in block
+
+
+def test_contract_reaches_modules_the_consumer_imports_from():
+    # models.py defines the classes loader.py maps the data into — it
+    # co-owns the shape (the live inventor of the undeclared field).
+    from agent.persistence.models import ModuleSpec
+
+    mission = MissionState(
+        objective="t",
+        config=MissionConfig(working_directory="/tmp/nonexistent-x"),
+        architecture=ArchitectureState(
+            run_command="python main.py",
+            creation_order=["models.py", "engine.py", "decks.yaml"],
+            modules=[
+                ModuleSpec(file="models.py", responsibility="data classes"),
+                ModuleSpec(
+                    file="engine.py",
+                    responsibility="consumes decks.yaml",
+                    imports_from={"models.py": ["Deck", "Card"]},
+                ),
+                ModuleSpec(file="cli.py", responsibility="frontend"),
+            ],
+            data_shapes=[_shape()],
+        ),
+    )
+    ctx = project_file_context(mission, {"target_file": "models.py"})
+    assert ctx.get("data_shapes"), "consumer-imported module must see the contract"
+    assert ctx["data_shapes"][0]["example"] == _EXAMPLE
+    # A module outside the consumer's import set stays unburdened.
+    ctx_cli = project_file_context(mission, {"target_file": "cli.py"})
+    assert not ctx_cli.get("data_shapes")

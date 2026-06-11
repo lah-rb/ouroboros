@@ -148,7 +148,7 @@ def project_file_context(mission: MissionState, params: dict) -> dict:
             "data_shapes": [
                 _data_shape_to_dict(ds)
                 for ds in arch.data_shapes
-                if _data_shape_relevant(ds, target_file)
+                if _data_shape_relevant(ds, target_file, arch.modules)
             ],
             "state_shapes": _state_shapes_to_dicts(arch),
             "data_file_contents": _load_related_data_files(
@@ -195,7 +195,7 @@ def project_file_context(mission: MissionState, params: dict) -> dict:
     data_shapes = [
         _data_shape_to_dict(ds)
         for ds in arch.data_shapes
-        if _data_shape_relevant(ds, target_file)
+        if _data_shape_relevant(ds, target_file, arch.modules)
     ]
 
     # Load related data file contents
@@ -1094,16 +1094,26 @@ def _consumed_by_matches(consumed_by: str, target_file: str) -> bool:
     return consumer_module == target_module
 
 
-def _data_shape_relevant(ds: Any, target_file: str) -> bool:
+def _data_shape_relevant(ds: Any, target_file: str, modules: Any = None) -> bool:
     """Check if a data_shape contract is relevant to a target file.
 
-    Relevant when the target file is either:
+    Relevant when the target file is:
       - The data file itself (ds.file == target_file)
       - The code that consumes it (ds.consumed_by matches target_file)
+      - A module the consumer imports from. The consumer maps the data
+        into classes defined there, so that module co-owns the shape —
+        live failure: models.py (imported by loader.py) invented an NPC
+        field the exemplar never declared, loader validated it strictly,
+        and the conforming data file failed to boot.
     """
     if ds.file == target_file:
         return True
-    return _consumed_by_matches(ds.consumed_by, target_file)
+    if _consumed_by_matches(ds.consumed_by, target_file):
+        return True
+    for mod in modules or []:
+        if _consumed_by_matches(ds.consumed_by, getattr(mod, "file", "")):
+            return target_file in (getattr(mod, "imports_from", None) or {})
+    return False
 
 
 def _file_to_module_name(file_path: str) -> str:
