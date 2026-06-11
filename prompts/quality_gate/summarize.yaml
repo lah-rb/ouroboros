@@ -44,6 +44,17 @@ sections:
       Cross-file consistency:
       {context.cross_file_summary}
 
+  - id: data_shapes
+    when: context.data_shape_summary
+    content: |
+      {context.data_shape_summary}
+
+      These are DETERMINISTIC violations of the architecture's declared
+      data examples — the file and its loader have drifted apart. Report
+      each as a blocking issue quoting the path and key VERBATIM (class
+      "functional": a shape mismatch breaks loading behavior). The repro
+      is whatever exercises that data (or [] if none applies).
+
   - id: terminal
     when: context.terminal_output
     content: |

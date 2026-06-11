@@ -86,6 +86,13 @@ sections:
          data** — files that exist before the program runs (world definitions,
          config). Runtime output files (save files) belong in State Contracts
          below, not here.
+         Each data shape MUST include an `example`: a literal MINIMAL VALID
+         INSTANCE of the file as a string — one element per list, EVERY key
+         at EVERY nesting level, exactly as the loader will read them. The
+         example IS the contract: the pipeline mechanically diffs the real
+         file against it, so a nested key the example doesn't show (or names
+         differently) is reported as a violation. Prose cannot pin down
+         nesting; the example can.
 
       6. **State Contracts**: The canonical representation of runtime state
          that MORE THAN ONE module reads or writes, plus the schema of any
@@ -157,7 +164,8 @@ sections:
           {
             "file": "world_data.yaml",
             "consumed_by": "loader.py",
-            "structure": "rooms: list of {id: str, name: str, ...}"
+            "structure": "rooms: list of {id: str, name: str, ...}",
+            "example": "rooms:\n  - id: dock\n    name: Weathered Dock\n    description: An old dock.\n    exits:\n      north: lighthouse\n    items:\n      - rusted_key\nnpcs:\n  - id: keeper\n    name: Lighthouse Keeper\n    location: lighthouse\n    dialogue:\n      nodes:\n        - id: greet\n          text: Welcome.\n          options:\n            - text: Tell me more\n              next_id: lore\n"
           }
         ],
         "state_shapes": [

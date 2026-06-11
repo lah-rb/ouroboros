@@ -19,7 +19,7 @@ package ouroboros
 
 quality_gate: #FlowDefinition & {
 	flow:    "quality_gate"
-	version: 6
+	version: 7
 	description: """
 		Project-wide quality validation. Four-phase gate:
 		1. Deterministic checks — file scan, cross-file consistency, lint
@@ -77,8 +77,23 @@ quality_gate: #FlowDefinition & {
 			params: root: "."
 			resolver: {
 				type: "rule"
+				rules: [{condition: "true", transition: "data_shape_check"}]
+			}
+		}
+
+		// Diff each declared data file against its exemplar contract
+		// (architecture.data_shapes[].example) — path-anchored violations
+		// like "key 'next_id' at npcs[0].dialogue not in declared example"
+		// instead of behavioral symptoms three layers downstream.
+		data_shape_check: #StepDefinition & {
+			action:      "validate_data_shapes"
+			description: "Validate data files against their exemplar contracts"
+			context: optional: ["architecture"]
+			resolver: {
+				type: "rule"
 				rules: [{condition: "true", transition: "plan_checks"}]
 			}
+			publishes: ["data_shape_results", "data_shape_summary"]
 		}
 
 		plan_checks: #StepDefinition & {
@@ -342,14 +357,14 @@ quality_gate: #FlowDefinition & {
 			description: "Summarize all quality results into actionable findings"
 			context: optional: [
 				"validation_results", "project_manifest",
-				"cross_file_summary", "terminal_output",
+				"cross_file_summary", "data_shape_summary", "terminal_output",
 				"ux_session_assessment",
 			]
 			prompt_template: {
 				template: "quality_gate/summarize"
 				context_keys: [
 					"validation_summary", "project_file_list",
-					"cross_file_summary", "terminal_output",
+					"cross_file_summary", "data_shape_summary", "terminal_output",
 					"ux_session_assessment",
 					"architecture_summary",
 					"verified_behaviors_block",

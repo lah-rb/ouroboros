@@ -214,6 +214,7 @@ def build_action_registry() -> ActionRegistry:
     from agent.actions.research_actions import (
         action_build_and_query_repomap,
         action_validate_cross_file_consistency,
+        action_validate_data_shapes,
     )
 
     # ── Interactive terminal actions (MCP-based) ────────────────────
@@ -385,6 +386,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register(
         "validate_cross_file_consistency", action_validate_cross_file_consistency
     )
+    registry.register("validate_data_shapes", action_validate_data_shapes)
 
     # ── Interactive terminal actions (MCP-based) ────────────────────
     registry.register("start_interactive_session", action_start_interactive_session)

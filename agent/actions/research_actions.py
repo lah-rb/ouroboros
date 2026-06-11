@@ -432,3 +432,195 @@ async def action_validate_cross_file_consistency(step_input: StepInput) -> StepO
 
 
 # ── format_technical_query ────────────────────────────────────────────
+
+
+# ── validate_data_shapes ──────────────────────────────────────────────
+#
+# The general class the dialogue-schema war exposed: NESTED data
+# contracts with internal key choices (list-vs-dict, deep key names)
+# that one-line prose `structure` descriptions cannot pin down. The
+# architecture's data_shapes now carry a literal minimal exemplar; this
+# checker diffs each real data file against it PATH BY PATH, turning
+# "the loader and the data drifted" from a behavioral symptom three
+# layers downstream into a named, located fact.
+#
+# Precision doctrine (learned from the cross-file checker): structural
+# checks only — container types and key names. No scalar typing (str vs
+# int noise), no value checks. A key present in the data but absent at
+# that path in the exemplar is the primary signal (the next_id/next_node
+# rename class); a declared key missing from the data is secondary
+# (possibly optional) and reported distinctly.
+
+_MAX_SHAPE_ISSUES_PER_FILE = 10
+
+
+def _shape_diff(data: Any, exemplar: Any, path: str, issues: list[dict]) -> None:
+    """Recursive structural diff of a parsed data file vs its exemplar."""
+    if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
+        return
+    if isinstance(exemplar, dict):
+        if not isinstance(data, dict):
+            issues.append(
+                {
+                    "kind": "type_mismatch",
+                    "path": path or "<root>",
+                    "detail": (
+                        f"exemplar declares a mapping but the file has "
+                        f"{type(data).__name__}"
+                    ),
+                }
+            )
+            return
+        for key in data:
+            if key not in exemplar and len(issues) < _MAX_SHAPE_ISSUES_PER_FILE:
+                issues.append(
+                    {
+                        "kind": "undeclared_key",
+                        "path": path or "<root>",
+                        "detail": (
+                            f"key '{key}' is not in the declared example "
+                            f"(declared keys here: {sorted(exemplar)})"
+                        ),
+                    }
+                )
+        for key in exemplar:
+            if key not in data and len(issues) < _MAX_SHAPE_ISSUES_PER_FILE:
+                issues.append(
+                    {
+                        "kind": "missing_declared_key",
+                        "path": path or "<root>",
+                        "detail": f"declared key '{key}' is absent from the file",
+                    }
+                )
+        for key in data:
+            if key in exemplar and len(issues) < _MAX_SHAPE_ISSUES_PER_FILE:
+                _shape_diff(
+                    data[key], exemplar[key], f"{path}.{key}" if path else key, issues
+                )
+        return
+    if isinstance(exemplar, list):
+        if not isinstance(data, list):
+            issues.append(
+                {
+                    "kind": "type_mismatch",
+                    "path": path or "<root>",
+                    "detail": (
+                        f"exemplar declares a list but the file has "
+                        f"{type(data).__name__}"
+                    ),
+                }
+            )
+            return
+        if exemplar:
+            # Exemplar lists carry ONE element by convention; every real
+            # element must conform to it.
+            for i, element in enumerate(data):
+                if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
+                    return
+                _shape_diff(element, exemplar[0], f"{path}[{i}]", issues)
+        return
+    # Scalar exemplar: no value/typing checks (precision over coverage) —
+    # except a container where a scalar was declared, which IS structural.
+    if isinstance(data, (dict, list)):
+        issues.append(
+            {
+                "kind": "type_mismatch",
+                "path": path or "<root>",
+                "detail": (
+                    f"exemplar declares a scalar but the file has "
+                    f"{type(data).__name__}"
+                ),
+            }
+        )
+
+
+def _parse_data_text(text: str) -> Any:
+    """Parse YAML or JSON (YAML is a superset; pyyaml handles both)."""
+    import yaml
+
+    return yaml.safe_load(text)
+
+
+async def action_validate_data_shapes(step_input: StepInput) -> StepOutput:
+    """Diff each declared data file against its exemplar contract.
+
+    Skips shapes with no exemplar (pre-contract architectures) and files
+    that don't exist yet. An unparseable data file is itself an issue.
+
+    Context: architecture (optional — no architecture means no contracts)
+    Result: shapes_checked, issue_count, all_conformant
+    Publishes: data_shape_results, data_shape_summary
+    """
+    effects = step_input.effects
+    arch = step_input.context.get("architecture")
+    shapes = getattr(arch, "data_shapes", None) or []
+
+    checked = 0
+    all_issues: list[dict] = []
+    for shape in shapes:
+        example = (getattr(shape, "example", "") or "").strip()
+        file_path = (getattr(shape, "file", "") or "").strip()
+        if not example or not file_path:
+            continue
+        fc = await effects.read_file(file_path)
+        if not getattr(fc, "exists", False):
+            continue
+        checked += 1
+        try:
+            exemplar = _parse_data_text(example)
+        except Exception as e:
+            all_issues.append(
+                {
+                    "file": file_path,
+                    "kind": "exemplar_unparseable",
+                    "path": "<contract>",
+                    "detail": f"declared example does not parse: {e}",
+                }
+            )
+            continue
+        try:
+            data = _parse_data_text(fc.content)
+        except Exception as e:
+            all_issues.append(
+                {
+                    "file": file_path,
+                    "kind": "file_unparseable",
+                    "path": "<root>",
+                    "detail": f"data file does not parse: {e}",
+                }
+            )
+            continue
+        issues: list[dict] = []
+        _shape_diff(data, exemplar, "", issues)
+        for issue in issues:
+            all_issues.append({"file": file_path, **issue})
+
+    if all_issues:
+        lines = [
+            f"Data-shape contract violations ({len(all_issues)}; the declared "
+            f"example in the architecture is the contract):"
+        ]
+        for issue in all_issues:
+            lines.append(
+                f"- {issue['file']} at {issue['path']}: [{issue['kind']}] "
+                f"{issue['detail']}"
+            )
+        summary = "\n".join(lines)
+    else:
+        summary = ""
+
+    return StepOutput(
+        result={
+            "shapes_checked": checked,
+            "issue_count": len(all_issues),
+            "all_conformant": not all_issues,
+        },
+        observations=(
+            f"Data shapes: {checked} file(s) checked, "
+            f"{len(all_issues)} contract violation(s)"
+        ),
+        context_updates={
+            "data_shape_results": {"issues": all_issues, "files_checked": checked},
+            "data_shape_summary": summary,
+        },
+    )

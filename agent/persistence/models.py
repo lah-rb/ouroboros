@@ -240,8 +240,14 @@ class DataShapeContract(BaseModel):
     structure: str = (
         ""  # compact shape description (e.g., "rooms: list of {id, name, ...}")
     )
+    # A literal MINIMAL VALID INSTANCE of the file (one element per list,
+    # every key at every nesting level). Prose structure descriptions go
+    # vague exactly where bugs live — nested keys, list-vs-dict choices,
+    # internal references — so the exemplar is the checkable contract:
+    # validate_data_shapes diffs the real file against it path by path.
+    example: str = ""
 
-    @field_validator("file", "consumed_by", "structure", mode="before")
+    @field_validator("file", "consumed_by", "structure", "example", mode="before")
     @classmethod
     def _coerce_to_str(cls, v: Any) -> str:
         """Coerce non-string values to strings.
@@ -270,10 +276,21 @@ class DataShapeContract(BaseModel):
         pre-serializes ``structure`` if it comes back as a dict.
         """
         consumed = d.get("consumed_by") or d.get("produced_by", "")
+        example = d.get("example") or d.get("exemplar") or d.get("sample") or ""
+        if isinstance(example, (dict, list)):
+            # The model emitted the exemplar as structured data rather
+            # than a literal snippet — serialize it; YAML parses JSON.
+            import json as _json
+
+            try:
+                example = _json.dumps(example, indent=2, default=str)
+            except Exception:
+                example = str(example)
         return cls(
             file=d.get("file", ""),
             consumed_by=consumed,
             structure=d.get("structure", ""),
+            example=example,
         )
 
 

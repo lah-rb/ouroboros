@@ -6135,7 +6135,7 @@
   },
   "quality_gate": {
     "flow": "quality_gate",
-    "version": 6,
+    "version": 7,
     "description": "Project-wide quality validation. Four-phase gate:\n1. Deterministic checks \u2014 file scan, cross-file consistency, lint\n2. Behavioral validation \u2014 run_commands (fast-fail), then\n   run_session (UX verification, completion mode only)\n3. Summary \u2014 LLM reviews all results and emits findings\n4. Verification \u2014 findings with repros are probed against the\n   live program; the verdict is derived from surviving claims",
     "context_tier": "mission_objective",
     "returns": {
@@ -6250,12 +6250,39 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "plan_checks"
+              "transition": "data_shape_check"
             }
           ]
         },
         "publishes": [
           "cross_file_summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "data_shape_check": {
+        "action": "validate_data_shapes",
+        "description": "Validate data files against their exemplar contracts",
+        "context": {
+          "required": [],
+          "optional": [
+            "architecture"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "plan_checks"
+            }
+          ]
+        },
+        "publishes": [
+          "data_shape_results",
+          "data_shape_summary"
         ],
         "effects": [],
         "terminal": false
@@ -6690,6 +6717,7 @@
             "validation_results",
             "project_manifest",
             "cross_file_summary",
+            "data_shape_summary",
             "terminal_output",
             "ux_session_assessment"
           ]
@@ -6701,6 +6729,7 @@
             "validation_summary",
             "project_file_list",
             "cross_file_summary",
+            "data_shape_summary",
             "terminal_output",
             "ux_session_assessment",
             "architecture_summary",
