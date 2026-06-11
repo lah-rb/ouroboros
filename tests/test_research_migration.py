@@ -136,7 +136,7 @@ def test_plan_queries_renders_with_all_inputs(
 
     # Envelope with example from research_queries schema
     assert "```json" in prompt
-    assert "npc dialogue" in prompt.lower()  # from x-example
+    assert "adaptive review path" in prompt.lower()  # from x-example
 
 
 def test_plan_queries_research_context_omitted_when_absent(

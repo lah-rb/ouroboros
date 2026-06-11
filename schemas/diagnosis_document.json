@@ -13,7 +13,7 @@
     },
     "target_symbol": {
       "type": "string",
-      "description": "The function / method / class to modify or add. Optional: omit for whole-file operations (create_file, data files). Use the qualified name for methods (e.g. 'GameEngine._handle_move')."
+      "description": "The function / method / class to modify or add. Optional: omit for whole-file operations (create_file, data files). Use the qualified name for methods (e.g. 'StudyEngine._handle_review')."
     },
     "related_symbols": {
       "type": "array",

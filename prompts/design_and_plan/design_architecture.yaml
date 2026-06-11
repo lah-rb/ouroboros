@@ -93,7 +93,7 @@ sections:
          file against it, so a nested key the example doesn't show (or names
          differently) is reported as a violation. Prose cannot pin down
          nesting; the example can. Convention: a mapping with ARBITRARY keys
-         (e.g. direction -> room id) shows exactly ONE representative entry;
+         (e.g. code -> display name) shows exactly ONE representative entry;
          a fixed object shows ALL of its keys.
 
       6. **State Contracts**: The canonical representation of runtime state
@@ -103,7 +103,7 @@ sections:
          id strings or full objects? Every module must conform to it.
          Include:
          - Shared mutable state: the type of each field, exactly
-           (e.g. "Room.items: list of item_id strings — never Item objects").
+           (e.g. "Deck.cards: list of card_id strings — never Card objects").
          - Persisted state: the full schema of what gets written and
            restored (e.g. save JSON: every key and its value type).
          Without this, each file's author guesses independently and the
@@ -113,7 +113,7 @@ sections:
          runtime (save files, caches, logs), as names or glob patterns
          relative to the project root. These are automatically deleted
          between test sessions so one test's leftover state cannot
-         contaminate the next. NEVER list input data files (world
+         contaminate the next. NEVER list input data files (content
          definitions, config) here — only program-generated output.
 
       7. **Creation Order**: Dependency-sorted. Files with no project imports
@@ -143,15 +143,15 @@ sections:
         "modules": [
           {
             "file": "models.py",
-            "responsibility": "Data classes for rooms, items, NPCs",
-            "defines": ["Room", "Item", "NPC"],
+            "responsibility": "Data classes for decks, cards, review paths",
+            "defines": ["Deck", "Card", "Choice"],
             "imports_from": {}
           },
           {
             "file": "engine.py",
-            "responsibility": "Game loop and room navigation",
-            "defines": ["GameEngine"],
-            "imports_from": {"models": ["Room", "Item", "NPC"]}
+            "responsibility": "Review session loop and card scheduling",
+            "defines": ["StudyEngine"],
+            "imports_from": {"models": ["Deck", "Card", "Choice"]}
           }
         ],
         "interfaces": [
@@ -164,27 +164,27 @@ sections:
         ],
         "data_shapes": [
           {
-            "file": "world_data.yaml",
+            "file": "decks.yaml",
             "consumed_by": "loader.py",
-            "structure": "rooms: list of {id: str, name: str, ...}",
-            "example": "rooms:\n  - id: dock\n    name: Weathered Dock\n    description: An old dock.\n    exits:\n      north: lighthouse\n    items:\n      - rusted_key\nnpcs:\n  - id: keeper\n    name: Lighthouse Keeper\n    location: lighthouse\n    dialogue:\n      nodes:\n        - id: greet\n          text: Welcome.\n          options:\n            - text: Tell me more\n              next_id: lore\n"
+            "structure": "decks: list of {id: str, title: str, ...}",
+            "example": "decks:\n  - id: basics\n    title: Basics\n    description: Starter deck.\n    tags:\n      level: intro\n    cards:\n      - id: card_1\n        prompt: What is X?\n        choices:\n          - text: A definition\n            next_id: card_2\n"
           }
         ],
         "state_shapes": [
           {
-            "name": "Room.items",
+            "name": "Deck.cards",
             "owner": "models.py",
             "consumed_by": "engine.py, loader.py",
-            "structure": "list of item_id strings — never Item objects"
+            "structure": "list of card_id strings — never Card objects"
           },
           {
-            "name": "save file JSON",
+            "name": "progress file JSON",
             "owner": "engine.py",
             "consumed_by": "engine.py",
-            "structure": "{current_room_id: str, inventory: [item_id], rooms: {room_id: {items: [item_id]}}}"
+            "structure": "{current_deck_id: str, completed: [card_id], scores: {deck_id: int}}"
           }
         ],
-        "transient_files": ["savegame.json", "*.save.json"],
+        "transient_files": ["progress.json", "*.session.json"],
         "creation_order": ["models.py", "parser.py", "engine.py", "main.py"],
         "notes": "Brief notes on design rationale"
       }
@@ -201,7 +201,7 @@ sections:
       ```json
       "modules": [
         {"file": "models.py", "responsibility": "Data classes", ...},
-        {"file": "engine.py", "responsibility": "Game loop", ...}
+        {"file": "engine.py", "responsibility": "Session loop", ...}
       ],
       "creation_order": ["models.py", "engine.py", "main.py"]
       ```

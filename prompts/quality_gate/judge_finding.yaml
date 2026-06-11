@@ -58,11 +58,11 @@ sections:
 
       ✅ CORRECT:
       ```json
-      {"confirmed": false, "reason": "save then load restored the room and inventory exactly"}
+      {"confirmed": false, "reason": "save then load restored the list contents exactly"}
       ```
 
       ❌ WRONG — do not add explanation outside the JSON:
-      Looking at the transcript, the save command worked:
+      Looking at the transcript, the command worked:
       ```json
       {"confirmed": false, "reason": "..."}
       ```

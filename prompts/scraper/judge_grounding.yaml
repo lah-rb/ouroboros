@@ -43,7 +43,7 @@ sections:
 
       ✅ CORRECT:
       ```json
-      {"grounded": false, "ungrounded_aspects": ["phase stability"], "reason": "the abstract never discusses phases; the tier 'exact' is inflated"}
+      {"grounded": false, "ungrounded_aspects": ["device stability"], "reason": "the abstract never discusses stability testing; the tier 'exact' is inflated"}
       ```
 
       ❌ WRONG — do not add explanation outside the JSON:

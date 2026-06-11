@@ -12,10 +12,10 @@ content: |
 
   Example progression:
 
-      Turn 1: {"choice": "shell_command", "command": "python main.py world.yaml"}
+      Turn 1: {"choice": "shell_command", "command": "python main.py library.yaml"}
               → Output: "Welcome. What is your name? > "
       Turn 2: {"choice": "send_input", "text": "Hero\n"}
-              → Output: "Hello Hero! You are in a dark room."
+              → Output: "Welcome! 3 collections loaded."
 
   ## Rules
   Your job is to RUN and OBSERVE. Don't install packages, don't

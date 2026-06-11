@@ -10,8 +10,8 @@
   "minItems": 1,
   "maxItems": 3,
   "x-example": [
-    "npc dialogue branching tree yaml schema",
-    "dialogue engine condition-gated options",
-    "game dialogue state machine patterns"
+    "adaptive review path yaml schema",
+    "scheduler condition-gated transitions",
+    "cli session state machine patterns"
   ]
 }

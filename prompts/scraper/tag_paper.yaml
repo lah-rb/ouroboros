@@ -51,11 +51,11 @@ sections:
       ✅ CORRECT (keyed by paper_key):
       ```json
       {
-        "doi_10.1000_hea.1": [
-          {"aspect": "grain boundary segregation", "relevance": "exact",
-           "justification": "we study grain boundary segregation in a high entropy alloy"}
+        "doi_10.1000_psc.1": [
+          {"aspect": "interfacial degradation", "relevance": "exact",
+           "justification": "we characterize ion migration across the transport-layer interface"}
         ],
-        "doi_10.1000_hea.2": []
+        "doi_10.1000_psc.2": []
       }
       ```
 

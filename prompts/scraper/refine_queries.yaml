@@ -40,7 +40,7 @@ sections:
     content: |
       ✅ CORRECT:
       ```json
-      ["solute segregation multicomponent alloy boundaries", "interfacial chemistry compositionally complex alloys"]
+      ["interface passivation strategies thin film photovoltaics", "ion migration suppression layered devices"]
       ```
 
       ❌ WRONG — not an array, or repeats a prior query:

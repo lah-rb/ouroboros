@@ -40,9 +40,9 @@ sections:
       {
         "aspects": [
           {
-            "name": "grain boundary segregation",
-            "description": "Elemental segregation at grain boundaries in multi-principal-element alloys",
-            "seed_queries": ["grain boundary segregation high entropy alloy", "GB chemistry CoCrFeNi"],
+            "name": "interfacial degradation",
+            "description": "Chemical and structural degradation at layer interfaces under operating conditions",
+            "seed_queries": ["interfacial degradation perovskite solar cell", "interface ion migration halide perovskite"],
             "coverage_target": 10
           }
         ],

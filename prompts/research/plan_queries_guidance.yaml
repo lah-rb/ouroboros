@@ -7,13 +7,13 @@ content: |
   Good query categories:
 
   - **User experience insights** — what do users enjoy, what makes a
-    product engaging. Example: `what makes NPC dialogue engaging`
+    product engaging. Example: `what makes spaced repetition effective`
   - **Architecture patterns** — efficient approaches others have used.
-    Example: `entity component system game python`
+    Example: `plugin architecture python cli`
   - **Domain-specific techniques** — specialized knowledge for this
-    problem space. Example: `branching dialogue tree data structure`
+    problem space. Example: `adaptive review path data structure`
   - **Common pitfalls** — what goes wrong in similar projects.
-    Example: `circular import python game engine`
+    Example: `circular import python package layout`
   - **Library best practices** — how to use specific tools well.
     Example: `pydantic nested model yaml deserialization`
 

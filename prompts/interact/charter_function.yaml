@@ -21,14 +21,14 @@ content: |
   - Pick the SIMPLEST instance reachable from the start state. Use the
     world/data files above to choose a target that is already present in
     (or one move from) the starting location — do NOT send the tester on
-    a multi-room journey to reach a specific item.
+    a multi-step navigation to reach a specific record.
   - Goal text may name a specific example, e.g. "(e.g., the spyglass)".
     That is an ILLUSTRATION, not a requirement. Test the capability with
     whatever instance is closest to hand; the named example does not have
     to be the one you use.
   - If reaching the target genuinely requires movement, write the exact
-    route as explicit steps (e.g. "go north", "go east") read from the
-    room exits in the world data — the operator sees only this brief and
+    route as explicit steps read from the program's own data file — the
+    operator sees only this brief and
     cannot discover the map on its own.
   - Each step is one concrete action the tester types.
 

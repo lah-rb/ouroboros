@@ -15,6 +15,6 @@ content: |
   If a data contract is shown above, it is binding: your code must
   read and write data files using exactly those key names and
   structures. A rewrite that "fixes" the code by introducing new
-  required keys (e.g. demanding a `player_location` field that
+  required keys (e.g. demanding a `last_opened` field that
   isn't in the contract) silently breaks the data side and is
   worse than the original bug.

@@ -3,7 +3,7 @@ content: |
   The program has exited. Before the session is assessed, check your
   brief: have you worked through EVERY item in it? Some items can only
   be completed across program runs — for example, verifying that a
-  saved game restores correctly requires relaunching and loading the
+  saved state restores correctly requires relaunching and loading the
   save you just made.
 
   If any item in your brief still needs another program run, choose

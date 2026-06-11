@@ -99,8 +99,8 @@ sections:
       Each blocking issue MUST be an object with an `issue` (specific, one
       sentence — name the command/file/behavior) and a `class`:
       - `"functional"` — a broken behavior a play-test could verify (a command
-        errors or does the wrong thing, save/load, movement, dialogue logic, an
-        item/room that can't be reached). DEFAULT to this when unsure.
+        errors or does the wrong thing, persistence, navigation, branching
+        logic, a record that can't be reached). DEFAULT to this when unsure.
       - `"quality"` — a cosmetic/content issue a play-test can't cleanly verify
         (grammar, wording, a flavor inconsistency).
 
@@ -132,19 +132,19 @@ sections:
       {
         "verdict": "fail",
         "blocking_issues": [
-          {"issue": "the `use` command has no effect on any item",
+          {"issue": "the `export` command writes an empty file",
            "class": "functional",
-           "repro": ["take lantern", "use lantern"],
-           "expected": "using the lantern should light the room; instead nothing happens"},
-          {"issue": "\"Martha the Caretaker are here\" should read \"is here\"", "class": "quality"}
+           "repro": ["add milk", "export list.txt"],
+           "expected": "the exported file should contain the added entry; it is empty"},
+          {"issue": "\"The entries is sorted\" should read \"are sorted\"", "class": "quality"}
         ],
-        "summary": "Use is unimplemented; one grammar error."
+        "summary": "Export is broken; one grammar error."
       }
       ```
 
       ❌ WRONG — repro must not include the launch command, and must be an array:
-      {"repro": ["python main.py", "take lantern"], ...}
-      {"repro": "take lantern", ...}
+      {"repro": ["python main.py", "add milk"], ...}
+      {"repro": "add milk", ...}
 
       ❌ WRONG — do not add explanation outside the JSON:
       After reviewing the results, the project has issues:
