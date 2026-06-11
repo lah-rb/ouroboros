@@ -279,6 +279,79 @@ async def test_batch_success_report_auto_completes(tmp_path):
     assert goals[0].status == "complete"
 
 
+# ── Repair-economics instrumentation ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_diagnose_dispatch_writes_repair_econ_note(tmp_path):
+    (tmp_path / "models.py").write_text("def broken(:\n")
+    (tmp_path / "main.py").write_text("print('ok')\n")
+    goals = [
+        GoalRecord(
+            description="models",
+            type="structural",
+            associated_files=["models.py"],
+            reports=[_failed_report("models.py")],
+        ),
+        GoalRecord(
+            description="entry",
+            type="structural",
+            associated_files=["main.py"],
+            status="complete",
+        ),
+    ]
+    mission = _mission(tmp_path, "parallel", goals=goals)
+    fx = MockEffects(mission=mission)
+    await action_structural_sweep_next(_si(mission, fx))
+    note = next(n for n in mission.notes if "repair_econ" in n.tags)
+    assert "stage=diagnose" in note.content
+    assert "file=models.py" in note.content
+    assert "class=syntax" in note.content
+    size = os.path.getsize(tmp_path / "models.py")
+    assert f"size_bytes={size}" in note.content
+    assert fx.call_count("save_mission") >= 1  # persisted, not just in-context
+
+
+@pytest.mark.asyncio
+async def test_patch_dispatch_writes_repair_econ_note(tmp_path):
+    (tmp_path / "models.py").write_text("def broken(:\n")
+    diagnosis = DirectiveReport(
+        flow="diagnose_issue",
+        status="diagnosed",
+        summary="bad params",
+        target_file="models.py",
+        target_symbol="broken",
+        change_spec="fix it",
+    )
+    goals = [
+        GoalRecord(
+            description="models",
+            type="structural",
+            associated_files=["models.py"],
+            reports=[_failed_report("models.py"), diagnosis],
+        ),
+    ]
+    mission = _mission(tmp_path, "parallel", goals=goals)
+    await action_structural_sweep_next(_si(mission))
+    note = next(n for n in mission.notes if "repair_econ" in n.tags)
+    assert "stage=patch" in note.content
+
+
+def test_repair_econ_note_parses_in_join_script(tmp_path):
+    import sys
+
+    sys.path.insert(0, "dev")
+    try:
+        from repair_econ import _NOTE_RE
+
+        m = _NOTE_RE.search(
+            "repair_econ stage=diagnose file=engine.py class=syntax size_bytes=812"
+        )
+        assert m and m.group("cls") == "syntax" and m.group("file") == "engine.py"
+    finally:
+        sys.path.remove("dev")
+
+
 # ── Compiled wiring ───────────────────────────────────────────────────
 
 

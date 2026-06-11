@@ -833,6 +833,57 @@ async def action_check_pipeline_phase(step_input: StepInput) -> StepOutput:
     return StepOutput(result={"phase": phase}, observations=observation)
 
 
+def _repair_failure_class(report: Any) -> str:
+    """Coarse failure class from a report's checks_failed prefixes."""
+    checks = getattr(report, "checks_failed", None) or []
+    for prefix in ("syntax", "import", "smoke"):
+        if any(str(c).startswith(f"{prefix}:") for c in checks):
+            return prefix
+    return "other"
+
+
+async def _note_repair_econ(
+    effects: Any,
+    mission: Any,
+    working_dir: str,
+    file_path: str,
+    stage: str,
+    report: Any,
+) -> None:
+    """Tag a parallel-mode repair dispatch for offline economics joins.
+
+    One machine-parseable line per dispatch (stage = diagnose | patch):
+    file, failure class, file size. The note's own timestamp brackets
+    the episode against llmvp interactions.jsonl, where the actual
+    read/write token counts live — dev/repair_econ.py does the join.
+    These notes feed the regenerate-vs-diagnose tiering decision with
+    measured per-failure-class costs instead of borrowed estimates.
+    """
+    from agent.persistence.models import NoteRecord
+
+    try:
+        size = os.path.getsize(os.path.join(working_dir, file_path))
+    except OSError:
+        size = 0
+    failure_class = _repair_failure_class(report)
+    mission.notes.append(
+        NoteRecord(
+            content=(
+                f"repair_econ stage={stage} file={file_path} "
+                f"class={failure_class} size_bytes={size}"
+            ),
+            category="failure_analysis",
+            tags=["repair_econ", file_path, failure_class],
+            source_flow="structural_sweep_next",
+        )
+    )
+    if effects:
+        try:
+            await effects.save_mission(mission)
+        except Exception:  # noqa: BLE001 - telemetry must not break dispatch
+            logger.warning("repair_econ note save failed", exc_info=True)
+
+
 async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
     """Find the next incomplete structural goal and determine what it needs.
 
@@ -1009,6 +1060,9 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                         fileops.get("target_file_path") or file_path
                     )
                     fileops["goal_files"] = [fileops["target_file_path"]]
+                    await _note_repair_econ(
+                        effects, mission, working_dir, file_path, "patch", last
+                    )
                     logger.info(
                         "Structural sweep: patching %s from diagnosis", file_path
                     )
@@ -1050,6 +1104,9 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                     "error_output": error_output[:800],
                     "recent_reports": [],
                 }
+                await _note_repair_econ(
+                    effects, mission, working_dir, file_path, "diagnose", last
+                )
                 logger.info("Structural sweep: diagnosing %s", file_path)
                 return StepOutput(
                     result={"sweep_complete": False, "needs_fix": True},
