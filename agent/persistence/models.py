@@ -133,7 +133,12 @@ class GoalRecord(BaseModel):
     # for issues with no clean interact re-test — they complete on a successful
     # patch (action_quality_sweep_next). functional/structural goals keep their
     # existing verification (interact / file+export gate).
-    type: Literal["structural", "functional", "quality"] = "structural"
+    # "discovery"/"extraction" are scraper-set types (per-aspect paper
+    # discovery; corpus acquire+catalog). Code_core sweeps filter by
+    # equality, so the new literals are inert in the code pipeline.
+    type: Literal["structural", "functional", "quality", "discovery", "extraction"] = (
+        "structural"
+    )
     status: Literal["incomplete", "complete"] = "incomplete"
     associated_files: list[str] = Field(default_factory=list)
     reports: list[DirectiveReport] = Field(default_factory=list)
@@ -430,6 +435,53 @@ class DispatchRecord(BaseModel):
 # ── Mission State ─────────────────────────────────────────────────────
 
 
+class AspectSpec(BaseModel):
+    """One aspect of a research abstract (scraper flow set).
+
+    Aspects are the decomposition unit: each gets a discovery goal and a
+    coverage target, and cataloged papers are tagged against them with a
+    relevance tier (exact/close/adjacent — coverage counts exact+close).
+    """
+
+    name: str
+    description: str = ""
+    seed_queries: list[str] = Field(default_factory=list)
+    coverage_target: int = 10
+
+    @classmethod
+    def from_llm_dict(cls, d: dict) -> "AspectSpec":
+        """Construct from raw LLM output, tolerating field-name drift."""
+        queries = d.get("seed_queries") or d.get("queries") or []
+        if isinstance(queries, str):
+            queries = [queries]
+        try:
+            target = int(d.get("coverage_target") or d.get("target") or 10)
+        except (TypeError, ValueError):
+            target = 10
+        return cls(
+            name=str(d.get("name") or d.get("aspect") or "").strip(),
+            description=str(d.get("description") or "").strip(),
+            seed_queries=[str(q).strip() for q in queries if str(q).strip()],
+            coverage_target=max(1, target),
+        )
+
+
+class ResearchPlanState(BaseModel):
+    """The scraper flow set's plan object (mission.research_plan).
+
+    The analog of ArchitectureState for research missions: produced by
+    plan_research from the mission abstract, consumed by the discovery/
+    catalog sweeps and the research gate. Paper records deliberately do
+    NOT live here — they go to the workspace databank (JSONL) so
+    mission.json stays small.
+    """
+
+    abstract: str = ""
+    aspects: list[AspectSpec] = Field(default_factory=list)
+    notes: str = ""
+    schema_version: int = 1
+
+
 class MissionState(BaseModel):
     """Top-level mission state — serialized to .agent/mission.json.
 
@@ -445,6 +497,8 @@ class MissionState(BaseModel):
     goals: list[GoalRecord] = Field(default_factory=list)
     notes: list[NoteRecord] = Field(default_factory=list)
     architecture: ArchitectureState | None = None
+    # Scraper flow set's plan object (additive — code missions leave it None).
+    research_plan: ResearchPlanState | None = None
     dispatch_history: list[DispatchRecord] = Field(default_factory=list)
     environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
     # How many times this mission has been reopened after reaching a terminal
