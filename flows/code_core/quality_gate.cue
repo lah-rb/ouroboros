@@ -281,7 +281,11 @@ quality_gate: #FlowDefinition & {
 					{condition: "true", transition: "evaluate_ux_session"},
 				]
 			}
-			publishes: ["terminal_output", "inference_session_id"]
+			// launch_command: the session's actual interactive launch —
+			// the verification probes replay it (architecture.run_command
+			// may be the self-terminating startup variant, which would
+			// leave probe stdin lines answering to the bare shell).
+			publishes: ["terminal_output", "inference_session_id", "launch_command"]
 		}
 
 		// Evaluate UX session inside the same memoryful session that
@@ -427,6 +431,11 @@ quality_gate: #FlowDefinition & {
 			}
 			params: {
 				run_command: {$ref: "input.architecture_run_command", default: ""}
+				// The UX session's actual interactive launch — preferred
+				// over run_command, whose startup-check variant
+				// (`printf "quit\n" | python main.py`) self-terminates and
+				// leaves repro lines answering to the bare shell.
+				ux_launch_command: {$ref: "context.launch_command", default: ""}
 				// "permissive": a functional finding without a usable repro
 				// is harvested unverified (tagged). Flip to "strict" (note-
 				// only, never a goal) once summarize reliably emits repros.
@@ -443,7 +452,8 @@ quality_gate: #FlowDefinition & {
 				"verification_queue", "passthrough_tasks",
 				"verified_findings", "refuted_findings",
 				"gate_terminal_output",
-				"probe_commands", "probe_claim", "probe_expected", "probe_repro_block",
+				"probe_commands", "probe_launch", "probe_claim",
+				"probe_expected", "probe_repro_block",
 			]
 		}
 
@@ -476,15 +486,15 @@ quality_gate: #FlowDefinition & {
 			description: "Judge whether the probe transcript confirms the claimed defect"
 			context: optional: [
 				"probe_claim", "probe_expected", "probe_repro_block",
-				"terminal_output",
+				"probe_launch", "terminal_output",
 			]
 			prompt_template: {
 				template: "quality_gate/judge_finding"
 				context_keys: [
 					"probe_claim", "probe_expected", "probe_repro_block",
-					"terminal_output",
+					"probe_launch", "terminal_output",
 				]
-				input_keys: ["architecture_run_command"]
+				input_keys: []
 			}
 			config: temperature: "t*0.2"
 			resolver: {
@@ -507,7 +517,10 @@ quality_gate: #FlowDefinition & {
 					"refuted_findings", "terminal_output",
 				]
 			}
-			params: run_command: {$ref: "input.architecture_run_command", default: ""}
+			params: {
+				run_command:       {$ref: "input.architecture_run_command", default: ""}
+				ux_launch_command: {$ref: "context.launch_command", default: ""}
+			}
 			resolver: {
 				type: "rule"
 				rules: [
@@ -517,7 +530,8 @@ quality_gate: #FlowDefinition & {
 			}
 			publishes: [
 				"verification_queue", "verified_findings", "refuted_findings",
-				"probe_commands", "probe_claim", "probe_expected", "probe_repro_block",
+				"probe_commands", "probe_launch", "probe_claim",
+				"probe_expected", "probe_repro_block",
 			]
 		}
 
@@ -536,6 +550,7 @@ quality_gate: #FlowDefinition & {
 			params: {
 				probe_failed: true
 				run_command: {$ref: "input.architecture_run_command", default: ""}
+				ux_launch_command: {$ref: "context.launch_command", default: ""}
 			}
 			resolver: {
 				type: "rule"
@@ -546,7 +561,8 @@ quality_gate: #FlowDefinition & {
 			}
 			publishes: [
 				"verification_queue", "verified_findings", "refuted_findings",
-				"probe_commands", "probe_claim", "probe_expected", "probe_repro_block",
+				"probe_commands", "probe_launch", "probe_claim",
+				"probe_expected", "probe_repro_block",
 			]
 		}
 

@@ -41,6 +41,12 @@ run_session: #FlowDefinition & {
 		terminal_output:      {type: "string", from: "context.terminal_output",      optional: true}
 		commands_run:         {type: "int",    from: "context.command_count",         optional: true}
 		inference_session_id: {type: "string", from: "context.inference_session_id",  optional: true}
+		// The session's actual interactive launch command (captured by
+		// send_interaction; relaunch replays it). Callers that re-run the
+		// program deterministically — the quality gate's finding probes —
+		// need this, NOT architecture.run_command, which may be the
+		// self-terminating startup-check variant (`printf "quit\n" | ...`).
+		launch_command: {type: "string", from: "context.launch_command", optional: true}
 	}
 
 	input: {

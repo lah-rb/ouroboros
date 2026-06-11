@@ -43,13 +43,23 @@ def _si(context=None, params=None) -> StepInput:
     )
 
 
-def _prepare_si(*tasks, run_command=_RUN, policy="permissive", terminal_output="ux"):
+def _prepare_si(
+    *tasks,
+    run_command=_RUN,
+    ux_launch="",
+    policy="permissive",
+    terminal_output="ux",
+):
     return _si(
         context={
             "quality_results": {"all_passing": False, "fix_tasks": list(tasks)},
             "terminal_output": terminal_output,
         },
-        params={"run_command": run_command, "no_repro_policy": policy},
+        params={
+            "run_command": run_command,
+            "ux_launch_command": ux_launch,
+            "no_repro_policy": policy,
+        },
     )
 
 
@@ -119,6 +129,32 @@ async def test_prepare_strips_leading_run_command_from_repro():
         _prepare_si(_task("x", repro=[_RUN, "go north"]))
     )
     assert out.context_updates["probe_commands"] == [_RUN, "go north"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_prefers_ux_launch_over_startup_run_command():
+    # architecture.run_command is the self-terminating startup-check
+    # variant (`printf "quit\n" | python main.py`) — probing with it
+    # leaves repro lines answering to the bare shell. The UX session's
+    # captured interactive launch is the probe launch.
+    out = await action_prepare_finding_verification(
+        _prepare_si(
+            _task("x", repro=["go north"]),
+            run_command='printf "quit\\n" | python main.py',
+            ux_launch="python main.py",
+        )
+    )
+    cu = out.context_updates
+    assert cu["probe_commands"] == ["python main.py", "go north"]
+    assert cu["probe_launch"] == "python main.py"
+
+
+@pytest.mark.asyncio
+async def test_prepare_falls_back_to_run_command_without_ux_launch():
+    out = await action_prepare_finding_verification(
+        _prepare_si(_task("x", repro=["go north"]))
+    )
+    assert out.context_updates["probe_launch"] == _RUN
 
 
 @pytest.mark.asyncio

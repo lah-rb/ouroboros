@@ -3,8 +3,8 @@
 # Verify-before-harvest judge: a quality review CLAIMED a defect, the
 # program was just re-run with the claim's reproduction sequence, and
 # this turn decides from the transcript whether the claim holds.
-# Context: probe_claim, probe_expected, probe_repro_block, terminal_output
-# Input: architecture_run_command
+# Context: probe_claim, probe_expected, probe_repro_block, probe_launch,
+#          terminal_output
 
 id: quality_gate/judge_finding
 description: "Judge whether a probe transcript confirms a claimed defect"
@@ -32,7 +32,7 @@ sections:
   - id: repro
     content: |
       Reproduction sequence (each line typed into the running program):
-      Launch: {input.architecture_run_command}
+      Launch: {context.probe_launch}
       {context.probe_repro_block}
 
   - id: transcript
@@ -51,6 +51,9 @@ sections:
       - If the transcript is ambiguous, or the reproduction never
         reached the feature, answer `"confirmed": true` — a claim is
         only dropped on clear evidence the behavior works.
+      - Shell responses like `bash: take: command not found` mean the
+        PROGRAM was not running when that line was typed — that is
+        NEVER evidence the behavior works. Answer `"confirmed": true`.
       - `"reason"`: one sentence citing what the transcript shows.
 
       ✅ CORRECT:

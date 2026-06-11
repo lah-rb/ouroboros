@@ -40,10 +40,10 @@ def _finding_text(task: Any) -> str:
     return str(task or "")
 
 
-def _usable_repro(task: Any, run_command: str) -> list[str]:
+def _usable_repro(task: Any, *launch_commands: str) -> list[str]:
     """Extract the probe-ready repro from a finding, or [] if unusable.
 
-    Strips a leading line that duplicates the launch command (the prompt
+    Strips a leading line that duplicates a launch command (the prompt
     forbids it, but models include it anyway) and re-applies the length cap.
     """
     if not isinstance(task, dict):
@@ -52,7 +52,8 @@ def _usable_repro(task: Any, run_command: str) -> list[str]:
     if not isinstance(repro, list):
         return []
     lines = [str(ln).strip() for ln in repro if str(ln).strip()]
-    if lines and run_command and lines[0] == run_command.strip():
+    launches = {lc.strip() for lc in launch_commands if lc and lc.strip()}
+    if lines and lines[0] in launches:
         lines = lines[1:]
     if len(lines) > MAX_REPRO_COMMANDS:
         logger.warning(
@@ -62,11 +63,28 @@ def _usable_repro(task: Any, run_command: str) -> list[str]:
     return lines
 
 
-def _probe_keys(task: dict, run_command: str) -> dict:
+def _probe_launch(step_input: StepInput) -> str:
+    """The command that launches the program for a probe.
+
+    Prefers the UX session's captured interactive launch
+    (params.ux_launch_command, from run_session's launch_command) over
+    architecture run_command — the latter's startup-check form
+    (`printf "quit\n" | python main.py`) self-terminates, leaving every
+    repro line answering to the bare shell (observed live: the judge
+    then reads `bash: take: command not found` as evidence).
+    """
+    ux = str(step_input.params.get("ux_launch_command") or "").strip()
+    if ux:
+        return ux
+    return str(step_input.params.get("run_command") or "").strip()
+
+
+def _probe_keys(task: dict, launch: str, run_command: str) -> dict:
     """Context keys consumed by the run_probe and judge_finding steps."""
-    repro = _usable_repro(task, run_command)
+    repro = _usable_repro(task, launch, run_command)
     return {
-        "probe_commands": [run_command] + repro,
+        "probe_commands": [launch] + repro,
+        "probe_launch": launch,
         "probe_claim": _finding_text(task),
         "probe_expected": str(task.get("expected") or ""),
         "probe_repro_block": "\n".join(
@@ -102,6 +120,7 @@ async def action_prepare_finding_verification(step_input: StepInput) -> StepOutp
         else []
     )
     run_command = str(step_input.params.get("run_command") or "").strip()
+    launch = _probe_launch(step_input)
     policy = str(step_input.params.get("no_repro_policy") or "permissive").lower()
 
     queue: list[dict] = []
@@ -115,8 +134,8 @@ async def action_prepare_finding_verification(step_input: StepInput) -> StepOutp
         if cls == "quality":
             passthrough.append({**task, "verification": "not-applicable"})
             continue
-        repro = _usable_repro(task, run_command)
-        if not repro or not run_command:
+        repro = _usable_repro(task, launch, run_command)
+        if not repro or not launch:
             if policy == "strict":
                 refuted.append(
                     {
@@ -146,7 +165,7 @@ async def action_prepare_finding_verification(step_input: StepInput) -> StepOutp
         "gate_terminal_output": step_input.context.get("terminal_output", ""),
     }
     if queue:
-        context_updates.update(_probe_keys(queue[0], run_command))
+        context_updates.update(_probe_keys(queue[0], launch, run_command))
 
     return StepOutput(
         result={
@@ -186,6 +205,7 @@ async def action_record_finding_verification(step_input: StepInput) -> StepOutpu
     refuted = list(step_input.context.get("refuted_findings") or [])
     transcript = str(step_input.context.get("terminal_output") or "")
     run_command = str(step_input.params.get("run_command") or "").strip()
+    launch = _probe_launch(step_input)
     probe_failed = bool(step_input.params.get("probe_failed", False))
 
     if not queue:
@@ -253,7 +273,7 @@ async def action_record_finding_verification(step_input: StepInput) -> StepOutpu
         "refuted_findings": refuted,
     }
     if queue:
-        context_updates.update(_probe_keys(queue[0], run_command))
+        context_updates.update(_probe_keys(queue[0], launch, run_command))
 
     return StepOutput(
         result={"has_next": bool(queue), "confirmed": confirmed},

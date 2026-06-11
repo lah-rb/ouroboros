@@ -6580,7 +6580,8 @@
         },
         "publishes": [
           "terminal_output",
-          "inference_session_id"
+          "inference_session_id",
+          "launch_command"
         ],
         "resolver": {
           "type": "rule",
@@ -6824,6 +6825,10 @@
             "$ref": "input.architecture_run_command",
             "default": ""
           },
+          "ux_launch_command": {
+            "$ref": "context.launch_command",
+            "default": ""
+          },
           "no_repro_policy": "permissive"
         },
         "config": {},
@@ -6847,6 +6852,7 @@
           "refuted_findings",
           "gate_terminal_output",
           "probe_commands",
+          "probe_launch",
           "probe_claim",
           "probe_expected",
           "probe_repro_block"
@@ -6902,6 +6908,7 @@
             "probe_claim",
             "probe_expected",
             "probe_repro_block",
+            "probe_launch",
             "terminal_output"
           ]
         },
@@ -6912,11 +6919,10 @@
             "probe_claim",
             "probe_expected",
             "probe_repro_block",
+            "probe_launch",
             "terminal_output"
           ],
-          "input_keys": [
-            "architecture_run_command"
-          ]
+          "input_keys": []
         },
         "config": {
           "temperature": "t*0.2"
@@ -6958,6 +6964,10 @@
           "run_command": {
             "$ref": "input.architecture_run_command",
             "default": ""
+          },
+          "ux_launch_command": {
+            "$ref": "context.launch_command",
+            "default": ""
           }
         },
         "config": {},
@@ -6979,6 +6989,7 @@
           "verified_findings",
           "refuted_findings",
           "probe_commands",
+          "probe_launch",
           "probe_claim",
           "probe_expected",
           "probe_repro_block"
@@ -7005,6 +7016,10 @@
           "run_command": {
             "$ref": "input.architecture_run_command",
             "default": ""
+          },
+          "ux_launch_command": {
+            "$ref": "context.launch_command",
+            "default": ""
           }
         },
         "config": {},
@@ -7026,6 +7041,7 @@
           "verified_findings",
           "refuted_findings",
           "probe_commands",
+          "probe_launch",
           "probe_claim",
           "probe_expected",
           "probe_repro_block"
@@ -7879,6 +7895,11 @@
       "inference_session_id": {
         "type": "string",
         "from": "context.inference_session_id",
+        "optional": true
+      },
+      "launch_command": {
+        "type": "string",
+        "from": "context.launch_command",
         "optional": true
       }
     },
