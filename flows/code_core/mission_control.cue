@@ -317,11 +317,46 @@ mission_control: #FlowDefinition & {
 				}
 				transitions: {
 					default:   "apply_fix_target"
-					no_answer: "check_phase"
+					no_answer: "fallback_fix_target"
 				}
-				config: temperature: "t*0.3"
+				// Bounded-output site: the answer is one option key. Without
+				// the cap, a reasoning model that fails to converge burns the
+				// watchdog ceiling per attempt (live: 43 cancelled generations
+				// at up to 130k tokens each, zero cycles of progress). The cap
+				// turns a runaway into a fast no_answer; the deterministic
+				// fallback below guarantees the loop exits.
+				config: {
+					temperature: "t*0.3"
+					max_tokens:  4096
+				}
 				retries: 3
 			}
+		}
+
+		// LIVENESS: no_answer previously looped to check_phase → the same
+		// sweep re-entered the same menu with the same junk diagnosis —
+		// an unbounded hot loop consuming no cycle budget. After retries
+		// exhaust, pick the projection's top-ranked file deterministically;
+		// a wrong pick costs one budgeted file_ops dispatch and the gate
+		// machinery self-corrects, which is strictly better than spinning.
+		fallback_fix_target: #StepDefinition & {
+			action:      "fallback_fix_target"
+			description: "Menu unanswerable — take the top-ranked fix target deterministically"
+			context: {
+				required: ["mission"]
+				optional: ["dispatch_config"]
+			}
+			params: {
+				options: {$ref: "input.fix_target_menu", default: []}
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.has_target == true", transition: "apply_fix_target"},
+					{condition: "true", transition: "check_phase"},
+				]
+			}
+			publishes: ["selected_fix_target"]
 		}
 
 		apply_fix_target: #StepDefinition & {

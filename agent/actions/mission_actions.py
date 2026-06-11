@@ -2187,6 +2187,38 @@ async def action_quality_sweep_next(step_input: StepInput) -> StepOutput:
 # action step is required.
 
 
+async def action_fallback_fix_target(step_input: StepInput) -> StepOutput:
+    """Deterministic fix-target when the LLM menu can't answer.
+
+    LIVENESS backstop for resolve_fix_target: after the (token-capped)
+    menu retries exhaust, take the projection's top-ranked option
+    instead of looping back into the sweep — live failure: 43 runaway
+    generations cancelled at the watchdog ceiling with zero cycles of
+    progress. A wrong pick costs one budgeted dispatch and the gate
+    machinery self-corrects; spinning costs everything.
+
+    Params: options — the fix_target_menu projection (list of {id, ...})
+    Publishes: selected_fix_target
+    """
+    options = step_input.params.get("options") or []
+    first = ""
+    if options and isinstance(options, list):
+        head = options[0]
+        first = str(head.get("id", "")) if isinstance(head, dict) else str(head)
+
+    if not first:
+        return StepOutput(
+            result={"has_target": False},
+            observations="Fallback fix target: no menu options available",
+        )
+    logger.info("Fallback fix target: deterministically selected %s", first)
+    return StepOutput(
+        result={"has_target": True},
+        observations=f"Menu unanswerable — fell back to top-ranked target {first}",
+        context_updates={"selected_fix_target": first},
+    )
+
+
 async def action_apply_fix_target(step_input: StepInput) -> StepOutput:
     """Apply the LLM-selected fix target to the dispatch_config.
 

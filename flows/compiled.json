@@ -4838,15 +4838,53 @@
           },
           "transitions": {
             "default": "apply_fix_target",
-            "no_answer": "check_phase"
+            "no_answer": "fallback_fix_target"
           },
           "config": {
-            "temperature": "t*0.3"
+            "temperature": "t*0.3",
+            "max_tokens": 4096
           },
           "retries": 3
         },
         "config": {},
         "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "fallback_fix_target": {
+        "action": "fallback_fix_target",
+        "description": "Menu unanswerable \u2014 take the top-ranked fix target deterministically",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "dispatch_config"
+          ]
+        },
+        "params": {
+          "options": {
+            "$ref": "input.fix_target_menu",
+            "default": []
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_target == true",
+              "transition": "apply_fix_target"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "selected_fix_target"
+        ],
         "effects": [],
         "terminal": false
       },

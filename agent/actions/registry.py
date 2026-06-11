@@ -197,6 +197,7 @@ def build_action_registry() -> ActionRegistry:
         action_quality_sweep_next,
         # Fix target resolution
         action_apply_fix_target,
+        action_fallback_fix_target,
     )
 
     # ── Diagnostic actions ────────────────────────────────────────
@@ -341,6 +342,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("quality_sweep_next", action_quality_sweep_next)
     # Fix target resolution — menu assembly moved to fix_target_menu projection
     registry.register("apply_fix_target", action_apply_fix_target)
+    registry.register("fallback_fix_target", action_fallback_fix_target)
 
     # ── File operations ───────────────────────────────────────────
 
