@@ -40,6 +40,15 @@ class MissionConfig(BaseModel):
     # Selects the controller flow and phase derivation; additive default
     # keeps pre-flow-set mission.json files loading unchanged.
     flow_set: str = "code_core"
+    # How the structural phase creates files. "parallel": one batch
+    # generation produces every file in shared context (cross-file
+    # coherence), sliced and gated per-file, failures diagnosed
+    # individually. "serial": the original one-file-per-dispatch sweep,
+    # kept as the testing mode and the patch engine. Missions persisted
+    # before this field existed default to parallel on next load, which
+    # is inert for them — batch creation only dispatches when no
+    # structural goal has run yet.
+    structural_mode: Literal["parallel", "serial"] = "parallel"
 
 
 # ── Directive Reports ─────────────────────────────────────────────────

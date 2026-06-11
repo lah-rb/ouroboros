@@ -1249,7 +1249,16 @@ async def _execute_turn_inference(
             f"Turn inference exhausted {attempts_made} attempt(s) with empty response"
         )
 
-    context_updates: dict[str, Any] = {"inference_response": response_text}
+    context_updates: dict[str, Any] = {
+        "inference_response": response_text,
+        # Generation health signals for downstream actions. A multi-file
+        # batch generation that hit the token ceiling (finish_reason ==
+        # length) is sliced for whatever completed; the slicer reports
+        # truncation so missing files route to per-file creation instead
+        # of being misread as the model omitting them.
+        "inference_truncated": bool(getattr(result, "truncated", False)),
+        "inference_tokens_generated": result.tokens_generated if result else 0,
+    }
     # Drain the session_injections queue once it's been consumed —
     # otherwise the seed prompt would replay on every subsequent
     # session_inference in the same flow.

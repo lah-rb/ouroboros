@@ -129,11 +129,18 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
 
     pm.init_agent_dir()
 
+    structural_mode = (
+        getattr(args, "structural_mode", None)
+        or (yaml_config.structural_mode if yaml_config else None)
+        or "parallel"
+    )
+
     config = MissionConfig(
         working_directory=working_dir,
         effects_profile=effects_profile,
         llmvp_endpoint=llmvp_endpoint,
         flow_set=flow_set,
+        structural_mode=structural_mode,
     )
 
     mission = MissionState(objective=objective, principles=principles, config=config)

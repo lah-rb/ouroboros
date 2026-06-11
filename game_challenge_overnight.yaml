@@ -17,3 +17,6 @@ objective: >
 working_dir: "/tmp/ouroboros-challenge"
 effects_profile: local
 llmvp_endpoint: "http://localhost:8008/graphql"
+# Pinned: the overnight benchmark measures the serial structural baseline.
+# Parallel batch creation gets its own comparison run once this queue drains.
+structural_mode: serial
