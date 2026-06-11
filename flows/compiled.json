@@ -6817,7 +6817,8 @@
             "quality_results"
           ],
           "optional": [
-            "terminal_output"
+            "terminal_output",
+            "launch_command"
           ]
         },
         "params": {
@@ -6957,7 +6958,8 @@
             "inference_response",
             "verified_findings",
             "refuted_findings",
-            "terminal_output"
+            "terminal_output",
+            "launch_command"
           ]
         },
         "params": {
@@ -7008,7 +7010,8 @@
             "inference_response",
             "verified_findings",
             "refuted_findings",
-            "terminal_output"
+            "terminal_output",
+            "launch_command"
           ]
         },
         "params": {

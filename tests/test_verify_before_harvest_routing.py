@@ -139,3 +139,23 @@ def test_probe_step_uses_run_commands_with_probe_keys():
 def test_record_probe_error_sets_probe_failed():
     step = _COMPILED["quality_gate"]["steps"]["record_probe_error"]
     assert step["params"]["probe_failed"] is True
+
+
+def test_launch_command_declared_wherever_its_param_ref_lives():
+    # Action params resolve against the FILTERED context
+    # (runtime._build_step_input) — an undeclared key makes the
+    # ux_launch_command $ref silently default and probes fall back to
+    # the self-terminating startup command (observed live: every repro
+    # line answered to bare bash).
+    steps = _COMPILED["quality_gate"]["steps"]
+    assert "launch_command" in steps["run_ux_verification"]["publishes"]
+    for name in (
+        "prepare_finding_verification",
+        "record_and_advance",
+        "record_probe_error",
+    ):
+        step = steps[name]
+        assert (
+            step["params"]["ux_launch_command"]["$ref"] == "context.launch_command"
+        ), name
+        assert "launch_command" in step["context"]["optional"], name

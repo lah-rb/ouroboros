@@ -427,7 +427,13 @@ quality_gate: #FlowDefinition & {
 			description: "Queue functional findings with repros for probe verification"
 			context: {
 				required: ["quality_results"]
-				optional: ["terminal_output"]
+				// launch_command must be DECLARED for the ux_launch_command
+				// param $ref to see it — action params resolve against the
+				// filtered context (runtime._build_step_input), not the
+				// accumulator. Observed live: undeclared, the $ref silently
+				// defaulted and probes fell back to the self-terminating
+				// startup command.
+				optional: ["terminal_output", "launch_command"]
 			}
 			params: {
 				run_command: {$ref: "input.architecture_run_command", default: ""}
@@ -514,7 +520,7 @@ quality_gate: #FlowDefinition & {
 				required: ["verification_queue"]
 				optional: [
 					"inference_response", "verified_findings",
-					"refuted_findings", "terminal_output",
+					"refuted_findings", "terminal_output", "launch_command",
 				]
 			}
 			params: {
@@ -544,7 +550,7 @@ quality_gate: #FlowDefinition & {
 				required: ["verification_queue"]
 				optional: [
 					"inference_response", "verified_findings",
-					"refuted_findings", "terminal_output",
+					"refuted_findings", "terminal_output", "launch_command",
 				]
 			}
 			params: {
