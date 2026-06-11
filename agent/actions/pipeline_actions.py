@@ -314,12 +314,64 @@ async def action_run_validation_checks_from_env(
             output_lines.append(f"  stdout: {stdout}")
         if stderr:
             output_lines.append(f"  stderr: {stderr}")
+    # ── Smoke-boot check: does the program still start? ───────────
+    # A syntactically valid edit can still break startup (the gate later
+    # re-reports it and reopens goals — observed live: one bad edit
+    # cascaded into 9 reopens). Once the program is KNOWN bootable
+    # (environment_verified — during the structural phase it legitimately
+    # isn't yet), every write re-runs the architecture's smoke command;
+    # a failure routes into the same-dispatch self-correct loop instead
+    # of surfacing N cycles later as behavioral symptoms.
+    smoke_failed = False
+    if not syntax_failed:
+        smoke_cmd = ""
+        try:
+            mission = await effects.load_mission()
+            if mission is not None and getattr(mission, "environment_verified", False):
+                arch = getattr(mission, "architecture", None)
+                smoke_cmd = (getattr(arch, "effective_smoke_command", "") or "").strip()
+        except Exception:
+            smoke_cmd = ""
+        if smoke_cmd:
+            try:
+                smoke = await effects.run_command(
+                    ["/bin/sh", "-c", smoke_cmd], timeout=20
+                )
+                passed = smoke.return_code == 0 and not smoke.timed_out
+            except Exception as e:
+                smoke = type(
+                    "R", (), {"stdout": "", "stderr": str(e), "return_code": 1}
+                )()
+                passed = False
+            results.append(
+                {
+                    "name": f"smoke_boot: {smoke_cmd}",
+                    "passed": passed,
+                    "tier": "smoke",
+                    "required": True,
+                    "stdout": getattr(smoke, "stdout", "")[:500],
+                    "stderr": getattr(smoke, "stderr", "")[:500],
+                }
+            )
+            if not passed:
+                smoke_failed = True
+                output_lines.append(f"[FAIL] smoke_boot: {smoke_cmd}")
+                if getattr(smoke, "stderr", ""):
+                    output_lines.append(f"  stderr: {smoke.stderr[:500]}")
+                output_lines.append(
+                    "  The program no longer starts after this edit — the edit "
+                    "must be corrected."
+                )
+            else:
+                output_lines.append(f"[PASS] smoke_boot: {smoke_cmd}")
+
     validation_output = "\n".join(output_lines)
 
     return StepOutput(
         result={
-            "all_passing": not syntax_failed and not has_issues,
+            "all_passing": not syntax_failed and not has_issues and not smoke_failed,
             "syntax_failed": syntax_failed,
+            "smoke_failed": smoke_failed,
             "has_issues": has_issues,
         },
         observations=f"Validation: {sum(1 for r in results if r['passed'])}/{len(results)} checks passed",

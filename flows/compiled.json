@@ -1851,7 +1851,7 @@
   },
   "file_ops": {
     "flow": "file_ops",
-    "version": 2,
+    "version": 3,
     "description": "File operations lifecycle. Routes to create/patch/rewrite,\nvalidates output, self-corrects on failure, reports to\nmission_control via structured returns.",
     "context_tier": "flow_directive",
     "returns": {
@@ -2622,6 +2622,10 @@
             },
             {
               "condition": "result.syntax_failed == true",
+              "transition": "check_retry"
+            },
+            {
+              "condition": "result.smoke_failed == true",
               "transition": "check_retry"
             },
             {

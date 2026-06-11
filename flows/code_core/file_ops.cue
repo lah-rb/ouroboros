@@ -18,7 +18,7 @@ package ouroboros
 
 file_ops: #FlowDefinition & {
 	flow:    "file_ops"
-	version: 2
+	version: 3
 	description: """
 		File operations lifecycle. Routes to create/patch/rewrite,
 		validates output, self-corrects on failure, reports to
@@ -419,6 +419,11 @@ file_ops: #FlowDefinition & {
 				rules: [
 					{condition: "result.all_passing == true", transition: "compile_report_success"},
 					{condition: "result.syntax_failed == true", transition: "check_retry"},
+					// The edit broke program startup (smoke command fails on a
+					// previously-bootable program) — correct it in THIS dispatch
+					// rather than letting the gate find the wreck N cycles later
+					// (observed live: one bad edit cascaded into 9 reopened goals).
+					{condition: "result.smoke_failed == true", transition: "check_retry"},
 					{condition: "result.has_issues == true", transition: "log_and_report_success"},
 				]
 			}
