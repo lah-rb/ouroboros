@@ -277,6 +277,31 @@ def build_action_registry() -> ActionRegistry:
         action_apply_quality_gate_results,
     )
 
+    # ── Scraper flow set (scholarly harvest + research gate) ──────
+    from agent.actions.scholarly_actions import (
+        action_apply_paper_tags,
+        action_catalog_batch_next,
+        action_download_papers,
+        action_fetch_references,
+        action_merge_candidates,
+        action_resolve_oa_pdf,
+        action_scholarly_search,
+    )
+    from agent.actions.research_plan_actions import (
+        action_catalog_sweep_next,
+        action_derive_research_goals,
+        action_discovery_sweep_next,
+        action_harvest_research_findings,
+        action_parse_and_store_research_plan,
+    )
+    from agent.actions.research_gate_actions import (
+        action_apply_research_gate_results,
+        action_check_aspect_coverage,
+        action_finalize_crosslinks,
+        action_prepare_tag_grounding,
+        action_record_tag_grounding,
+    )
+
     registry = ActionRegistry()
 
     # ── Core built-in actions ─────────────────────────────────────
@@ -324,6 +349,27 @@ def build_action_registry() -> ActionRegistry:
     )
     registry.register("record_finding_verification", action_record_finding_verification)
     registry.register("apply_verification_results", action_apply_verification_results)
+
+    # ── Scraper flow set ───────────────────────────────────────────
+    registry.register("scholarly_search", action_scholarly_search)
+    registry.register("merge_candidates", action_merge_candidates)
+    registry.register("catalog_batch_next", action_catalog_batch_next)
+    registry.register("resolve_oa_pdf", action_resolve_oa_pdf)
+    registry.register("download_papers", action_download_papers)
+    registry.register("fetch_references", action_fetch_references)
+    registry.register("apply_paper_tags", action_apply_paper_tags)
+    registry.register(
+        "parse_and_store_research_plan", action_parse_and_store_research_plan
+    )
+    registry.register("derive_research_goals", action_derive_research_goals)
+    registry.register("discovery_sweep_next", action_discovery_sweep_next)
+    registry.register("catalog_sweep_next", action_catalog_sweep_next)
+    registry.register("harvest_research_findings", action_harvest_research_findings)
+    registry.register("check_aspect_coverage", action_check_aspect_coverage)
+    registry.register("finalize_crosslinks", action_finalize_crosslinks)
+    registry.register("prepare_tag_grounding", action_prepare_tag_grounding)
+    registry.register("record_tag_grounding", action_record_tag_grounding)
+    registry.register("apply_research_gate_results", action_apply_research_gate_results)
 
     # ── Diagnostic actions ────────────────────────────────────────
     registry.register("compile_diagnosis", action_compile_diagnosis)

@@ -1507,3 +1507,78 @@ def project_fix_target_menu(mission: MissionState, params: dict) -> list[dict]:
         seen_paths.add(file_path)
 
     return options
+
+
+@register("project_research_overview")
+def project_research_overview(mission: MissionState, params: dict) -> dict:
+    """Aspect coverage + databank stats for the scraper flow set.
+
+    Projections are sync and effect-less, so the databank is read
+    straight from the mission working directory (same pattern as the
+    sweeps' os.path file checks).
+    """
+    import json as _json
+    import os as _os
+
+    plan = getattr(mission, "research_plan", None)
+    databank: dict[str, dict] = {}
+    path = _os.path.join(mission.config.working_directory, "databank", "papers.jsonl")
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if rec.get("paper_key"):
+                    databank[rec["paper_key"]] = rec
+    except OSError:
+        pass
+
+    statuses = [r.get("status") for r in databank.values()]
+    aspects = []
+    for aspect in plan.aspects if plan else []:
+        strong = sum(
+            1
+            for r in databank.values()
+            if any(
+                t.get("aspect") == aspect.name
+                and t.get("relevance") in ("exact", "close")
+                for t in (r.get("tags") or [])
+            )
+        )
+        candidates = sum(
+            1
+            for r in databank.values()
+            if aspect.name in (r.get("source_aspects") or [])
+        )
+        aspects.append(
+            {
+                "name": aspect.name,
+                "target": aspect.coverage_target,
+                "candidates": candidates,
+                "strong_tagged": strong,
+            }
+        )
+
+    return {
+        "abstract": (plan.abstract if plan else mission.objective)[:500],
+        "aspects": aspects,
+        "worklist": {
+            "candidate": statuses.count("candidate"),
+            "acquired": statuses.count("acquired"),
+            "cataloged": statuses.count("cataloged"),
+            "needs_retag": statuses.count("needs_retag"),
+            "failed": statuses.count("failed"),
+        },
+        "corpus": {
+            "papers": len(databank),
+            "pdfs": sum(1 for r in databank.values() if r.get("pdf_path")),
+            "closed": sum(
+                1 for r in databank.values() if r.get("access_status") == "closed"
+            ),
+        },
+    }

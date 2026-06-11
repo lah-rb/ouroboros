@@ -303,6 +303,35 @@ def format_run_context(params: dict, namespaces: dict) -> str:
 # Persona formatters
 # ══════════════════════════════════════════════════════════════════════
 
+
+def format_research_overview(params: dict, namespaces: dict) -> str:
+    """Render the research_overview projection as a prompt block.
+
+    Aspect coverage table + worklist/corpus counts for the scraper's
+    planning re-entry and gate summary turns.
+    """
+    overview = params.get("source") or {}
+    if not isinstance(overview, dict) or not overview.get("aspects"):
+        return ""
+    lines = ["Research corpus status:"]
+    for a in overview["aspects"]:
+        lines.append(
+            f"- {a['name']}: {a['strong_tagged']} strongly-tagged "
+            f"(target {a['target']}), {a['candidates']} candidate(s)"
+        )
+    wl = overview.get("worklist") or {}
+    corpus = overview.get("corpus") or {}
+    lines.append(
+        f"Worklist: {wl.get('candidate', 0)} candidate, "
+        f"{wl.get('cataloged', 0)} cataloged, {wl.get('needs_retag', 0)} retag"
+    )
+    lines.append(
+        f"Corpus: {corpus.get('papers', 0)} papers, {corpus.get('pdfs', 0)} PDFs, "
+        f"{corpus.get('closed', 0)} closed-access"
+    )
+    return "\n".join(lines)
+
+
 # Lazy-loaded persona data from compiled.json
 _persona_cache: dict[str, str] | None = None
 
@@ -317,6 +346,7 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_project_listing": format_project_listing,
     "format_validation_results": format_validation_results,
     "format_verified_behaviors": format_verified_behaviors,
+    "format_research_overview": format_research_overview,
     "format_session_history": format_session_history,
     "format_last_turn": format_last_turn,
     "format_run_context": format_run_context,

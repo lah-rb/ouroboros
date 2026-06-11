@@ -1,0 +1,397 @@
+"""Research planning, sweeps, and harvest for the scraper flow set.
+
+The research plan is the scraper's architecture analog: plan_research
+parses the abstract into aspects (mission.research_plan), goals derive
+deterministically from them — aspects ARE the decomposition, no second
+inference pass — and the sweeps drive dispatches against the workspace
+databank worklist (papers are never goals; see scholarly_actions).
+"""
+
+from __future__ import annotations
+
+import logging
+
+from agent.models import StepInput, StepOutput
+
+logger = logging.getLogger(__name__)
+
+MAX_DISCOVERY_ROUNDS = 3
+CORPUS_GOAL_SIGNATURE = "corpus-catalog"
+
+
+def _aspect_slug(name: str) -> str:
+    return "".join(c if c.isalnum() else "-" for c in name.strip().lower()).strip("-")
+
+
+def _discovery_signature(aspect_name: str) -> str:
+    return f"aspect-discovery:{_aspect_slug(aspect_name)}"
+
+
+async def action_parse_and_store_research_plan(step_input: StepInput) -> StepOutput:
+    """Parse the plan JSON into mission.research_plan.
+
+    Expected LLM shape: {"aspects": [{name, description, seed_queries,
+    coverage_target}], "notes": "..."} — AspectSpec.from_llm_dict
+    tolerates field-name drift; nameless aspects are dropped.
+
+    Context: mission, inference_response
+    Result: plan_parsed, aspect_count
+    """
+    from agent.llm_json import parse_llm_json
+    from agent.persistence.models import AspectSpec, ResearchPlanState
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission:
+        return StepOutput(result={"plan_parsed": False}, observations="No mission")
+
+    parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
+    if not isinstance(parsed, dict):
+        return StepOutput(
+            result={"plan_parsed": False},
+            observations="Research plan JSON did not parse",
+        )
+
+    aspects = []
+    for raw in parsed.get("aspects") or []:
+        if not isinstance(raw, dict):
+            continue
+        aspect = AspectSpec.from_llm_dict(raw)
+        if aspect.name:
+            aspects.append(aspect)
+
+    if not aspects:
+        return StepOutput(
+            result={"plan_parsed": False},
+            observations="Research plan parsed but contained no named aspects",
+        )
+
+    mission.research_plan = ResearchPlanState(
+        abstract=str(getattr(mission, "objective", "") or ""),
+        aspects=aspects,
+        notes=str(parsed.get("notes") or ""),
+    )
+    if effects:
+        await effects.save_mission(mission)
+
+    return StepOutput(
+        result={"plan_parsed": True, "aspect_count": len(aspects)},
+        observations=(
+            "Research plan stored: "
+            + ", ".join(f"'{a.name}' (target {a.coverage_target})" for a in aspects)
+        ),
+        context_updates={"mission": mission},
+    )
+
+
+async def action_derive_research_goals(step_input: StepInput) -> StepOutput:
+    """Deterministic goals from the plan: one discovery goal per aspect
+    plus ONE corpus-level catalog goal (type "extraction").
+
+    Idempotent by finding_signature — re-planning never duplicates goals
+    (mirrors the harvest dedup mechanism).
+
+    Context: mission
+    Result: goals_derived, goal_count
+    """
+    from agent.persistence.models import GoalRecord
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    plan = getattr(mission, "research_plan", None) if mission else None
+    if not plan or not plan.aspects:
+        return StepOutput(
+            result={"goals_derived": False}, observations="No research plan"
+        )
+
+    existing_sigs = {
+        getattr(g, "finding_signature", "")
+        for g in mission.goals
+        if getattr(g, "finding_signature", "")
+    }
+    created = 0
+    for aspect in plan.aspects:
+        sig = _discovery_signature(aspect.name)
+        if sig in existing_sigs:
+            continue
+        mission.goals.append(
+            GoalRecord(
+                description=(
+                    f"Aspect '{aspect.name}': discover at least "
+                    f"{aspect.coverage_target} candidate papers"
+                ),
+                type="discovery",
+                origin="design",
+                finding_signature=sig,
+            )
+        )
+        created += 1
+    if CORPUS_GOAL_SIGNATURE not in existing_sigs:
+        mission.goals.append(
+            GoalRecord(
+                description="Acquire OA PDFs and catalog all candidate papers",
+                type="extraction",
+                origin="design",
+                finding_signature=CORPUS_GOAL_SIGNATURE,
+            )
+        )
+        created += 1
+
+    if effects:
+        await effects.save_mission(mission)
+
+    return StepOutput(
+        result={"goals_derived": True, "goal_count": created},
+        observations=f"Derived {created} research goal(s)",
+        context_updates={"mission": mission},
+    )
+
+
+async def action_discovery_sweep_next(step_input: StepInput) -> StepOutput:
+    """Dispatch the next incomplete aspect's discovery, or complete them.
+
+    Completion check FIRST (candidate count ≥ target, or the goal has
+    burned MAX_DISCOVERY_ROUNDS dispatches — thin literature must not
+    loop forever; the gate reports residual under-coverage).
+
+    Context: mission
+    Result: needs_discover (+ dispatch_config) | sweep_complete
+    """
+    from agent.actions.scholarly_actions import read_databank
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    plan = getattr(mission, "research_plan", None) if mission else None
+    if not mission or not plan:
+        return StepOutput(result={"sweep_complete": True}, observations="No plan")
+
+    aspects_by_sig = {_discovery_signature(a.name): a for a in plan.aspects}
+    databank = await read_databank(effects)
+
+    def _aspect_count(name: str) -> int:
+        return sum(
+            1 for rec in databank.values() if name in (rec.get("source_aspects") or [])
+        )
+
+    changed = False
+    for goal in mission.goals:
+        if goal.type != "discovery" or goal.status != "incomplete":
+            continue
+        aspect = aspects_by_sig.get(goal.finding_signature)
+        if aspect is None:
+            goal.status = "complete"  # plan drifted; don't strand the mission
+            changed = True
+            continue
+        have = _aspect_count(aspect.name)
+        if have >= aspect.coverage_target or len(goal.reports) >= MAX_DISCOVERY_ROUNDS:
+            goal.status = "complete"
+            changed = True
+            logger.info(
+                "Discovery complete for '%s': %d/%d candidates (%d round(s))",
+                aspect.name,
+                have,
+                aspect.coverage_target,
+                len(goal.reports),
+            )
+            continue
+        if changed and effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"needs_discover": True},
+            observations=(
+                f"Discovery sweep: '{aspect.name}' at {have}/"
+                f"{aspect.coverage_target} — dispatching round "
+                f"{len(goal.reports) + 1}"
+            ),
+            context_updates={
+                "dispatch_config": {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "flow": "discover",
+                    "aspect_name": aspect.name,
+                    "aspect_description": aspect.description,
+                    "seed_queries": list(aspect.seed_queries),
+                    "coverage_target": aspect.coverage_target,
+                    "have_count": have,
+                    "flow_directive": (
+                        f"Find candidate papers for the aspect '{aspect.name}' "
+                        f"({aspect.description or 'no description'}). The aspect "
+                        f"has {have} of {aspect.coverage_target} candidates."
+                    ),
+                }
+            },
+        )
+
+    if changed and effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"sweep_complete": True},
+        observations="Discovery sweep: all aspects complete",
+    )
+
+
+async def action_catalog_sweep_next(step_input: StepInput) -> StepOutput:
+    """Dispatch the next acquire+catalog batch from the worklist.
+
+    needs_retag records (gate grounding failures) take priority over
+    fresh candidates. Empty worklist completes the corpus goal.
+
+    Context: mission
+    Result: needs_catalog (+ dispatch_config) | sweep_complete
+    """
+    from agent.actions.scholarly_actions import CATALOG_BATCH_SIZE, read_databank
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission:
+        return StepOutput(result={"sweep_complete": True}, observations="No mission")
+
+    goal = next(
+        (
+            g
+            for g in mission.goals
+            if g.type == "extraction" and g.status == "incomplete"
+        ),
+        None,
+    )
+    if goal is None:
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="Catalog sweep: corpus goal complete",
+        )
+
+    databank = await read_databank(effects)
+    retag = [k for k, r in databank.items() if r.get("status") == "needs_retag"]
+    fresh = [k for k, r in databank.items() if r.get("status") == "candidate"]
+    batch = (sorted(retag) + sorted(fresh))[:CATALOG_BATCH_SIZE]
+
+    if not batch:
+        goal.status = "complete"
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="Catalog sweep: worklist empty — corpus goal complete",
+        )
+
+    return StepOutput(
+        result={"needs_catalog": True},
+        observations=f"Catalog sweep: dispatching batch of {len(batch)}",
+        context_updates={
+            "dispatch_config": {
+                "goal_id": goal.id,
+                "goal_description": goal.description,
+                "flow": "acquire_catalog",
+                "paper_keys": batch,
+                "flow_directive": (
+                    f"Acquire and catalog {len(batch)} paper(s) from the "
+                    f"candidate worklist."
+                ),
+            }
+        },
+    )
+
+
+async def action_harvest_research_findings(step_input: StepInput) -> StepOutput:
+    """Turn research-gate findings into reopened goals / retag marks.
+
+    coverage issue  -> reopen that aspect's discovery goal + a note with
+                       the expansion hint (distinguishing "no candidates"
+                       from "only adjacent hits").
+    grounding issue -> mark the paper needs_retag + reopen the corpus goal.
+
+    Freshens mission.notes from disk first — the gate just pushed notes
+    and this cycle's context mission predates them (lost-update hazard,
+    see action_harvest_quality_findings).
+
+    Context: mission; optional gate_results
+    Result: harvested | done
+    """
+    from agent.actions.scholarly_actions import append_records, read_databank
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission:
+        return StepOutput(result={"done": True}, observations="No mission")
+
+    if effects:
+        try:
+            fresh = await effects.load_mission()
+            if fresh is not None and len(fresh.notes) > len(mission.notes):
+                mission.notes = fresh.notes
+        except Exception:
+            pass
+
+    gate_results = step_input.context.get("gate_results") or {}
+    issues = (
+        (gate_results.get("blocking_issues") or [])
+        if isinstance(gate_results, dict)
+        else []
+    )
+    if not issues:
+        return StepOutput(
+            result={"done": True},
+            observations="Research gate failed but produced no issues — finalizing",
+        )
+
+    by_sig = {
+        getattr(g, "finding_signature", ""): g
+        for g in mission.goals
+        if getattr(g, "finding_signature", "")
+    }
+    reopened = retagged = 0
+    retag_records: list[dict] = []
+    databank = await read_databank(effects)
+
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        cls = issue.get("class")
+        if cls == "coverage":
+            sig = _discovery_signature(str(issue.get("aspect") or ""))
+            goal = by_sig.get(sig)
+            if goal is not None and goal.status == "complete":
+                goal.status = "incomplete"
+                # Reset the round budget — the gate has authorized more rounds.
+                goal.reports = []
+                reopened += 1
+            if effects:
+                hint = (
+                    "only adjacent-relevance hits — broaden toward the aspect's "
+                    "core phenomenon"
+                    if issue.get("adjacent_only")
+                    else "too few candidates — widen query phrasing"
+                )
+                await effects.push_note(
+                    content=(
+                        f"Research gate: aspect '{issue.get('aspect')}' at "
+                        f"{issue.get('have', '?')}/{issue.get('want', '?')} — {hint}"
+                    ),
+                    category="failure_analysis",
+                    tags=["coverage"],
+                    source_flow="research_control",
+                )
+        elif cls == "grounding":
+            key = str(issue.get("paper_key") or "")
+            rec = databank.get(key)
+            if rec is not None and rec.get("status") != "needs_retag":
+                rec["status"] = "needs_retag"
+                retag_records.append(rec)
+                retagged += 1
+            corpus = by_sig.get(CORPUS_GOAL_SIGNATURE)
+            if corpus is not None and corpus.status == "complete":
+                corpus.status = "incomplete"
+                reopened += 1
+
+    if retag_records:
+        await append_records(effects, retag_records)
+    if effects:
+        await effects.save_mission(mission)
+
+    return StepOutput(
+        result={"harvested": True},
+        observations=(
+            f"Research harvest: {reopened} goal(s) reopened, "
+            f"{retagged} paper(s) marked for retag"
+        ),
+    )
