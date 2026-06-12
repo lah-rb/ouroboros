@@ -41,7 +41,9 @@ content: |
   One or two sentences naming a real failure of THIS capability (command
   not recognized, error/traceback, wrong or empty output). A navigation
   detour, an unrelated rough edge, or a deprecation warning is NOT a
-  failure of this capability.
+  failure of this capability — but anything that seems off along the way
+  still goes in the tester's summary ("I noticed X but that's okay" is
+  never okay: X gets written down, it just doesn't flip the verdict).
 
   Target length: under 200 words total. The banner tells the model this
   is prose output — write naturally, no JSON, no code fences around the

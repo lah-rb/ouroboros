@@ -20,6 +20,14 @@ content: |
   - Be specific in the summary. "The program launched and accepted
     input; the expected greeting appeared" is useful. "It worked" is
     not.
+  - Note issues, quality-of-life gaps, and things that just seem off —
+    even when the objective itself is met. If you catch yourself
+    thinking "I noticed X, but that's okay" — it is NOT okay: put X in
+    the summary. A reply attributed to the wrong entity, an action
+    that reports success without any observable change, a command
+    accepted only with one exact phrasing, output that repeats or
+    contradicts itself: these are findings, not background. The gate
+    only ever sees what you write down.
 
   If the session ended with an error or a crash that's itself a
   finding about the product, report it honestly — goal_met: false

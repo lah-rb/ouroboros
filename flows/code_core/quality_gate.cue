@@ -413,7 +413,11 @@ quality_gate: #FlowDefinition & {
 			description: "Parse quality summary and determine pass/fail"
 			context: {
 				required: ["inference_response"]
-				optional: ["validation_results", "project_manifest", "mission"]
+				// data_shape_results: deterministic checker findings merge
+				// directly into fix_tasks with exact signatures — the prose
+				// layer paraphrased them, mutating signatures and defeating
+				// dedup/suppression (52-round noise loop, live).
+				optional: ["validation_results", "project_manifest", "mission", "data_shape_results"]
 			}
 			resolver: {
 				type: "rule"

@@ -50,10 +50,11 @@ sections:
       {context.data_shape_summary}
 
       These are DETERMINISTIC violations of the architecture's declared
-      data examples — the file and its loader have drifted apart. Report
-      each as a blocking issue quoting the path and key VERBATIM (class
-      "functional": a shape mismatch breaks loading behavior). The repro
-      is whatever exercises that data (or [] if none applies).
+      data examples, and they are filed as blocking issues AUTOMATICALLY
+      — do NOT repeat them in your blocking_issues (a reworded duplicate
+      creates a second goal for the same defect). Use them only as
+      context: if a BEHAVIOR you observed traces to one of these
+      mismatches, report that behavior with its own repro.
 
   - id: terminal
     when: context.terminal_output

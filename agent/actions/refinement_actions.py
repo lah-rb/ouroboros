@@ -929,16 +929,97 @@ def _parse_setup_plan(raw: str) -> dict:
 # ── apply_quality_gate_results ────────────────────────────────────────
 
 
+# Phrasings the deterministic shape checker emits. Used to (a) filter
+# LLM re-emissions of checker findings out of the parsed summary — the
+# prose layer PARAPHRASES them, mutating finding signatures so dedup
+# and refutation-suppression can't hold (live: 7 findings re-refuted 48
+# times across 52 gate rounds under 2-3 signature variants each) — and
+# (b) recognize them nowhere else: deterministic findings now flow
+# directly into fix_tasks with exact deterministic signatures.
+_SHAPE_PHRASES = (
+    "declared example",
+    "undeclared key",
+    "undeclared_key",
+    "missing declared key",
+    "missing_declared_key",
+    "is absent from the file",
+    "declares a mapping",
+    "declares a list",
+    "declares a scalar",
+)
+
+_SHAPE_KEY_RE = None  # compiled lazily
+
+
+def _deterministic_shape_tasks(data_shape_results: Any) -> list[dict]:
+    """Build fix_tasks directly from the shape checker's structured issues.
+
+    Deterministic source → deterministic pipeline: the signature is
+    derived from (kind, path, quoted key), so the same violation maps to
+    the same goal in every round — no prose in the loop. Same doctrine
+    as the contracts: declared, not captured.
+    """
+    global _SHAPE_KEY_RE
+    import re as _re
+
+    if _SHAPE_KEY_RE is None:
+        _SHAPE_KEY_RE = _re.compile(r"'([^']+)'")
+    issues = (
+        (data_shape_results or {}).get("issues")
+        if isinstance(data_shape_results, dict)
+        else None
+    ) or []
+    tasks: list[dict] = []
+    file_re = _re.compile(r"^(\S+?\.(?:yaml|yml|json|toml))")
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        kind = issue.get("kind", "")
+        path = issue.get("path", "")
+        detail = issue.get("detail", "")
+        km = _SHAPE_KEY_RE.search(detail)
+        key = km.group(1) if km else ""
+        fm = file_re.match(path)
+        tasks.append(
+            {
+                "description": f"{path}: {detail}",
+                "class": "functional",
+                "repro": [],
+                "file": fm.group(1) if fm else "",
+                "signature": f"shape|{kind}|{path}|{key}",
+            }
+        )
+    return tasks
+
+
+def _is_shape_paraphrase(task: Any) -> bool:
+    """True when an LLM-authored fix_task restates a checker finding."""
+    if not isinstance(task, dict):
+        return False
+    text = " ".join(
+        str(task.get(k, "")) for k in ("description", "issue", "expected")
+    ).lower()
+    return any(p in text for p in _SHAPE_PHRASES)
+
+
 async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput:
     """Parse quality gate summary and record issues for the director.
 
     Reads the LLM summary of project-wide validation, extracts issues,
     records them as notes, and returns pass/fail status. The director
     decides what to dispatch based on quality_results in context.
+
+    Deterministic shape-checker findings are merged in directly from
+    data_shape_results with exact signatures; LLM paraphrases of the
+    same findings are dropped (the prose layer mutates signatures,
+    defeating dedup and refutation-suppression).
     """
     effects = step_input.effects
     raw = step_input.context.get("inference_response", "")
     validation_results = step_input.context.get("validation_results", [])
+    shape_tasks = _deterministic_shape_tasks(
+        step_input.context.get("data_shape_results")
+    )
 
     # Parse the quality summary
     summary = _parse_quality_summary(str(raw))
@@ -946,26 +1027,35 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
     if not summary:
         # Fallback: check validation_results directly
         failed_checks = [r for r in validation_results if not r.get("passed", True)]
-        all_passing = len(failed_checks) == 0
+        all_passing = len(failed_checks) == 0 and not shape_tasks
         return StepOutput(
             result={
                 "all_passing": all_passing,
-                "has_findings": False,
-                "issues_found": len(failed_checks),
+                "has_findings": bool(shape_tasks),
+                "issues_found": len(failed_checks) + len(shape_tasks),
             },
             observations=f"Quality gate: {'PASS' if all_passing else 'FAIL'} "
-            f"({len(failed_checks)} failures, could not parse LLM summary)",
+            f"({len(failed_checks)} failures, could not parse LLM summary, "
+            f"{len(shape_tasks)} deterministic shape findings)",
             context_updates={
                 "quality_results": {
                     "all_passing": all_passing,
                     "summary": f"{len(failed_checks)} check failures",
-                    "fix_tasks": [],
+                    "fix_tasks": list(shape_tasks),
                 },
             },
         )
 
     all_passing = summary.get("all_passing", True)
     fix_tasks = summary.get("fix_tasks", [])
+    # Drop LLM paraphrases of checker findings, then merge the
+    # deterministic originals with exact signatures.
+    paraphrases = [t for t in fix_tasks if _is_shape_paraphrase(t)]
+    if paraphrases:
+        fix_tasks = [t for t in fix_tasks if not _is_shape_paraphrase(t)]
+    fix_tasks = fix_tasks + shape_tasks
+    if shape_tasks:
+        all_passing = False
 
     # Completion mode verifies findings before harvest; notes for the
     # survivors are pushed by apply_verification_results so refuted
@@ -999,7 +1089,14 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
             "fix_tasks_added": len(fix_tasks) if not all_passing else 0,
         },
         observations=f"Quality gate: {'PASS' if all_passing else 'FAIL'} — "
-        f"{summary.get('summary', 'no summary')}",
+        f"{summary.get('summary', 'no summary')}"
+        + (
+            f" [{len(shape_tasks)} deterministic shape findings merged"
+            + (f", {len(paraphrases)} LLM paraphrases dropped" if paraphrases else "")
+            + "]"
+            if shape_tasks or paraphrases
+            else ""
+        ),
         context_updates={
             "quality_results": {
                 "all_passing": all_passing,

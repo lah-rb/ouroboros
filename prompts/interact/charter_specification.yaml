@@ -18,6 +18,10 @@ content: |
   todo labeled 'buy milk'", "quit cleanly with Ctrl-D." Steps are a
   GUIDE, not a checklist — the tester may stop early if the objective
   is clearly satisfied, or go beyond them if evidence is incomplete.
+  If the program persists state (save files, databases, documents),
+  include one FULL round-trip: save, CHANGE something, load, verify
+  the change rolled back — a save/load with nothing changed in
+  between proves nothing.
 
   ## PASS CRITERIA
   One or two sentences stating what observed behavior means the
@@ -27,7 +31,11 @@ content: |
   ## FAIL CRITERIA
   One or two sentences stating what behavior means the product
   failed. Distinguish real failures from minor surface issues (a
-  deprecation warning on stdout is not a failure).
+  deprecation warning on stdout is not a failure). Also instruct the
+  tester to NOTE everything that seems off even when the objective
+  passes — wrong attributions, success messages with no observable
+  effect, inputs that only work with exact phrasing. "I noticed X but
+  that's okay" is never okay: X goes in the report.
 
   Target length: close to 250 words total. The banner tells the
   model this is prose output — write naturally, no JSON, no code

@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+from collections import Counter
 from typing import Any
 
 from agent.models import StepInput, StepOutput
@@ -1829,6 +1830,13 @@ _SIG_PY_FILE = re.compile(r"\b[\w-]+\.py\b")
 _SIG_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:[._][A-Za-z0-9_]+)+")
 
 
+# Claim text inside apply_verification_results' refuted-claim telemetry
+# notes ("Quality gate claimed: <claim> — probe REFUTED it: ...").
+_REFUTED_CLAIM_RE = re.compile(
+    r"Quality gate claimed:\s*(.*?)\s*—\s*probe REFUTED", re.S
+)
+
+
 def _quality_finding_signature(fix_task: Any) -> str:
     """Stable dedup key for a quality finding, robust to LLM rephrasing.
 
@@ -1840,6 +1848,11 @@ def _quality_finding_signature(fix_task: Any) -> str:
     names — Python filenames and dotted/snake_case identifiers — which survive
     rephrasing. Fall back to normalized prose only when the finding names no
     code anchor (rare; those don't recur as duplicates in practice)."""
+    # Deterministic sources (the shape checker) precompute exact
+    # signatures — honor them so the same violation maps to the same
+    # goal every round, no prose in the loop.
+    if isinstance(fix_task, dict) and fix_task.get("signature"):
+        return str(fix_task["signature"])
     text = _quality_finding_text(fix_task)
     if not text:
         return ""
@@ -2030,10 +2043,34 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
         for g in mission.goals
         if getattr(g, "finding_signature", "")
     }
-    created = reopened = skipped = 0
+
+    # ── Refuted-signature suppression ──────────────────────────────
+    # Verification telemetry is a memory, not just a log: a claim the
+    # probes have refuted TWICE is a noise pattern, not a regression
+    # (live: 7 claims re-raised and re-refuted up to 8x each across 52
+    # rounds — 2/3 of all verification effort). One refutation stays
+    # harmless (a real regression may legitimately recur); the second
+    # suppresses. Keyed on the prose-normalized signature of the
+    # refuted claim text from the notes, matched against the task's
+    # text signature so deterministic and prose findings both match.
+    refuted_counts: Counter = Counter()
+    for n in mission.notes:
+        rm = _REFUTED_CLAIM_RE.search(getattr(n, "content", "") or "")
+        if rm:
+            rsig = _quality_finding_signature({"description": rm.group(1)})
+            if rsig:
+                refuted_counts[rsig] += 1
+
+    created = reopened = skipped = suppressed = 0
     for task in fix_tasks:
         sig = _quality_finding_signature(task)
         if not sig:
+            continue
+        text_sig = _quality_finding_signature(
+            {"description": _quality_finding_text(task)}
+        )
+        if refuted_counts.get(text_sig, 0) >= 2:
+            suppressed += 1
             continue
         cls = (
             "quality"
@@ -2082,11 +2119,24 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
         await effects.save_mission(mission)
 
     logger.info(
-        "Quality harvest: %d new + %d reopened goal(s) (%d already in flight)",
+        "Quality harvest: %d new + %d reopened goal(s) (%d in flight, %d suppressed)",
         created,
         reopened,
         skipped,
+        suppressed,
     )
+    if suppressed and not (created or reopened or skipped):
+        # Every finding this round was a twice-refuted noise pattern.
+        # A gate failing SOLELY on suppressed claims must not loop the
+        # mission forever (live: 52 consecutive gate-fail rounds kept
+        # alive by 7 immortal claims) — treat as no actionable findings.
+        return StepOutput(
+            result={"done": True},
+            observations=(
+                f"Quality gate: all {suppressed} finding(s) suppressed as "
+                f"twice-refuted noise — no actionable findings, finalizing"
+            ),
+        )
     # created+reopened>0 at gate time (the gate only runs when all goals are
     # complete, so a fresh finding is new or matches a completed goal). skipped
     # is a safety branch; either way there are now incomplete goals to work, so
@@ -2095,7 +2145,7 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
         result={"harvested": True},
         observations=(
             f"Quality gate: harvested {created} new + {reopened} reopened goal(s) "
-            f"({skipped} already in flight)"
+            f"({skipped} already in flight, {suppressed} suppressed)"
         ),
     )
 

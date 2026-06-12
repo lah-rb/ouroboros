@@ -7299,7 +7299,8 @@
           "optional": [
             "validation_results",
             "project_manifest",
-            "mission"
+            "mission",
+            "data_shape_results"
           ]
         },
         "params": {},
