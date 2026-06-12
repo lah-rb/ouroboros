@@ -54,8 +54,9 @@ _OPENALEX_HIT = {
     "publication_year": 2024,
     "primary_location": {"source": {"display_name": "Acta Mat"}},
     "authorships": [{"author": {"display_name": "A. Smith"}}],
-    "best_oa_location": {"pdf_url": ""},
+    "best_oa_location": {"pdf_url": "", "license": "cc-by"},
     "ids": {"openalex": "W1"},
+    "language": "en",
 }
 
 
@@ -103,6 +104,10 @@ async def test_search_normalizes_both_apis():
     assert recs[0]["source_aspects"] == ["gb"]
     assert recs[1]["abstract"] == "Grain boundary study"  # de-inverted
     assert recs[0]["paper_key"] == recs[1]["paper_key"]  # same DOI
+    assert recs[1]["language"] == "en"
+    assert recs[1]["license"] == "cc-by"
+    # S2 records carry the fields too (empty — S2 doesn't provide them).
+    assert recs[0]["language"] == "" and recs[0]["license"] == ""
 
 
 @pytest.mark.asyncio
@@ -153,7 +158,12 @@ async def test_resolve_oa_chain_and_closed_is_not_failure():
             "https://api.unpaywall.org/v2/10.2/up": HttpResult(
                 status=200,
                 url="up",
-                json_data={"best_oa_location": {"url_for_pdf": "https://up.org/p.pdf"}},
+                json_data={
+                    "best_oa_location": {
+                        "url_for_pdf": "https://up.org/p.pdf",
+                        "license": "cc-by-nc",
+                    }
+                },
             ),
             "https://api.unpaywall.org/v2/10.3/closed": HttpResult(
                 status=200, url="up", json_data={"best_oa_location": None}
@@ -170,6 +180,7 @@ async def test_resolve_oa_chain_and_closed_is_not_failure():
     statuses = {r["paper_key"]: r["access_status"] for r in batch}
     assert statuses == {"a": "oa_pdf", "b": "oa_pdf", "c": "closed"}
     assert batch[1]["oa_pdf_url"] == "https://up.org/p.pdf"
+    assert batch[1]["license"] == "cc-by-nc"  # Unpaywall license capture
 
 
 @pytest.mark.asyncio

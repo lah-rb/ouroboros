@@ -23,6 +23,8 @@ for a ``paper_key`` wins (append-only updates). Record contract:
                 "relevance": "exact"|"close"|"adjacent",
                 "justification": str}],
       "reference_dois": [str],      # capped, from S2 references
+      "language": str,              # OpenAlex code ("en", "zh", ...)
+      "license": str,               # best-OA license ("cc-by", ...)
       "failure_reason": str, "updated_at": iso8601
     }
 
@@ -238,7 +240,7 @@ _S2_SEARCH_FIELDS = (
 _OPENALEX_BASE = "https://api.openalex.org"
 _OPENALEX_SELECT = (
     "id,doi,title,abstract_inverted_index,publication_year,primary_location,"
-    "authorships,open_access,best_oa_location,ids"
+    "authorships,open_access,best_oa_location,ids,language"
 )
 
 
@@ -265,6 +267,12 @@ def _candidate_base(aspect_name: str) -> dict:
         "pdf_path": "",
         "tags": [],
         "reference_dois": [],
+        # Dataset hooks: language routes the future translation/OCR
+        # stage (zh -> Paddle-native per the bake-off); license makes
+        # the corpus filterable before any training use. OpenAlex and
+        # Unpaywall fill these; S2 doesn't provide them.
+        "language": "",
+        "license": "",
         "failure_reason": "",
     }
 
@@ -315,6 +323,8 @@ def _normalize_openalex(work: dict, aspect_name: str) -> dict:
         "s2_id": "",
         "openalex_id": str(work.get("id") or ids.get("openalex") or ""),
         "oa_pdf_url": str(best_oa.get("pdf_url") or ""),
+        "language": str(work.get("language") or ""),
+        "license": str(best_oa.get("license") or ""),
     }
     rec["paper_key"] = paper_key(rec)
     return rec
@@ -538,6 +548,8 @@ async def action_resolve_oa_pdf(step_input: StepInput) -> StepOutput:
             if up.status == 200 and isinstance(up.json_data, dict):
                 best = up.json_data.get("best_oa_location") or {}
                 url = str(best.get("url_for_pdf") or "")
+                if best.get("license") and not rec.get("license"):
+                    rec["license"] = str(best.get("license"))
             if url:
                 rec["oa_pdf_url"] = url
                 rec["access_status"] = "oa_pdf"
