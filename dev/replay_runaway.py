@@ -88,35 +88,65 @@ def analyze(text: str) -> None:
             print(f"  repeat gap (lines): median≈{sorted(gaps)[len(gaps) // 2]}")
 
 
+def classify(out: dict | None, err: str) -> tuple[str, str]:
+    """One run → (class, detail). Classes: answered | runaway | truncated | error."""
+    if out is None:
+        return "error", err[:120]
+    if out.get("errors"):
+        msg = out["errors"][0].get("message", "")
+        if "long-cycle" in msg or "Degenerate" in msg or "repetition" in msg:
+            return "runaway", msg[:120]
+        return "error", msg[:120]
+    data = (out.get("data") or {}).get("createCompletion") or {}
+    text = data.get("text") or ""
+    toks = data.get("tokensGenerated") or 0
+    if '"choice"' in text and len(text) < 400:
+        return "answered", f"{toks} tok: {text.strip()[:60]!r}"
+    if toks >= MAX_TOKENS - 64:
+        return "truncated", f"hit {toks} tok ceiling without answering"
+    if len(text) > 2000:
+        return "runaway", f"{toks} tok of unconverged output (under guard threshold)"
+    return "answered", f"{toks} tok (nonstandard shape): {text.strip()[:60]!r}"
+
+
 def main() -> None:
-    path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_ARCHIVE
+    temps = [0.24, 0.35, 0.5, 0.7]
+    runs = RUNS
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    for a in sys.argv[1:]:
+        if a.startswith("--temps="):
+            temps = [float(x) for x in a.split("=", 1)[1].split(",")]
+        if a.startswith("--runs="):
+            runs = int(a.split("=", 1)[1])
+    path = args[0] if args else DEFAULT_ARCHIVE
     prompt = load_menu_prompt(path)
-    print(
-        f"replaying menu prompt ({len(prompt)} chars) at T={TEMPERATURE}, {RUNS} runs"
-    )
-    for i in range(RUNS):
-        print(f"\n── run {i + 1}/{RUNS} ──")
-        try:
-            out = run_inference(prompt)
-        except Exception as e:  # noqa: BLE001
-            print(f"  request failed/cancelled: {e}")
-            print("  (if the long-cycle guard fired, see llmvp/logs/runaway_captures/)")
-            continue
-        if out.get("errors"):
-            print(f"  server error: {out['errors'][0].get('message', '')[:200]}")
-            print(
-                "  (DegenerateGenerationError == guard fired; check runaway_captures/)"
-            )
-            continue
-        data = (out.get("data") or {}).get("createCompletion") or {}
-        text = data.get("text") or ""
+    print(f"sweep: menu prompt ({len(prompt)} chars), temps={temps}, {runs} runs each")
+    global TEMPERATURE
+    results: dict[float, list[tuple[str, str]]] = {}
+    for t in temps:
+        TEMPERATURE = t
+        results[t] = []
+        for i in range(runs):
+            try:
+                out, err = run_inference(prompt), ""
+            except Exception as e:  # noqa: BLE001
+                out, err = None, str(e)
+            cls, detail = classify(out, err)
+            results[t].append((cls, detail))
+            print(f"  T={t} run {i + 1}/{runs}: [{cls}] {detail}", flush=True)
+
+    print("\n══ SWEEP SUMMARY ══")
+    print(f"{'temp':>6} {'answered':>9} {'runaway':>8} {'truncated':>10} {'error':>6}")
+    for t in temps:
+        c = [r[0] for r in results[t]]
         print(
-            f"  tokensGenerated: {data.get('tokensGenerated')} "
-            f"finished: {data.get('finished')}"
+            f"{t:>6} {c.count('answered'):>9} {c.count('runaway'):>8} "
+            f"{c.count('truncated'):>10} {c.count('error'):>6}"
         )
-        analyze(text)
-        if len(text) < 200:
-            print(f"  full response: {text!r}")
+    print(
+        "\n(runaway+truncated = failed to converge; captures in "
+        "llmvp/logs/runaway_captures/ for period analysis)"
+    )
 
 
 if __name__ == "__main__":
