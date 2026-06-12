@@ -35,6 +35,17 @@ class ModelConfig(BaseModel):
     # system block (harmony + Step/chatml). None → use the family default.
     # Inert for binary families (tekken/Mistral use the `thinking` bool only).
     thinking_mode: Optional[str] = None
+    # Hybrid/recurrent-architecture session policy (Qwen3-Next family).
+    # Recurrent state cannot be partially rolled back, so the session
+    # layer's per-turn save/load round-trips and tail seq_rm compaction
+    # are unsound for these models (upstream: llama.cpp #22384, #19794;
+    # cache-reuse documented incompatible with recurrent state). When
+    # true, sessions keep a token history and FULLY RE-PREFILL each turn
+    # from the pristine static snapshot — whole-state restore is the one
+    # rollback a recurrent model supports (the pre-session-era design
+    # under which this family was stable). Cost: prefill grows with
+    # depth; on sparse-MoE the trade is acceptable.
+    session_full_replay: bool = False
 
     @field_validator("thinking_mode")
     @classmethod
@@ -105,6 +116,16 @@ class GenerationConfig(BaseModel):
     # untouched. None => disabled.
     session_temp_floor: Optional[float] = None
     session_temp_floor_after_turn: Optional[int] = None  # default 2
+
+    # Global temperature floor — a per-model refusal to sample below
+    # this value for ANY request (completions and all session turns).
+    # Every observed live runaway sat in the 0.24-0.32 effective-temp
+    # band (flow multipliers drive temps as low as t*0.1); a floor
+    # raises the loop-escape probability whatever the underlying
+    # trigger. Requests below the floor are raised to it. None =>
+    # disabled. The session_temp_floor still applies on top for deep
+    # turns (sequential max).
+    temperature_floor: Optional[float] = None
 
 
 class KnowledgeConfig(BaseModel):

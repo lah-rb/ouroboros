@@ -22,6 +22,9 @@ model:
   flash_attention: true
   batch_size: 512
   thinking: false
+  # Hybrid recurrent state: per-turn save/load splicing is unsound
+  # (upstream llama.cpp #22384) — sessions re-prefill from history.
+  session_full_replay: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
@@ -36,6 +39,9 @@ generation:
   # MoE). The floor targets deep session turns specifically — the
   # surgical version of the global temperature bumps used before.
   session_temp_floor: 0.5
+  # Refuse to sample below 0.4 for ANY request — every live runaway
+  # sat in the 0.24-0.32 band the flow multipliers produce.
+  temperature_floor: 0.4
   top_p: 0.95
   top_k: 20
   min_p: 0.00

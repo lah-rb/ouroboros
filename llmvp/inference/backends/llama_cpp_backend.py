@@ -123,6 +123,13 @@ class LlamaCppBackend(BaseBackend):
     def backend_name(self) -> str:
         return "llama_cpp"
 
+    @property
+    def static_state(self) -> Any:
+        """The pristine post-static-tokens snapshot, for whole-state
+        restores by the session layer's full-replay policy (the only
+        rollback operation recurrent/hybrid models support)."""
+        return self._static_state
+
     def _detect_capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
             streaming=True,

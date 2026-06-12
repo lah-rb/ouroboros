@@ -218,3 +218,141 @@ def test_floored_deep_turn_completes_through_session_turn():
 
     assert chunks == ["ok"]  # the turn completes (no NameError)
     assert seen_temps == [0.5]  # and the floored temperature reached the backend
+
+
+# ── full-replay session policy (hybrid/recurrent models) ─────────────
+
+
+class _ReplayModel(_FakeModel):
+    session_full_replay = True
+
+
+class _ReplayConfig(_FakeConfig):
+    model = _ReplayModel()
+
+
+class _SpyBackend(FakeBackend):
+    """Records every generate call's prompt_tokens; exposes static_state."""
+
+    static_state = None  # manager falls back to instance.reset()
+
+    def __init__(self, gen_factory):
+        super().__init__(gen_factory)
+        self.prompts_seen: list[list[int]] = []
+
+    def generate_stream_async(self, **kwargs):
+        self.prompts_seen.append(list(kwargs.get("prompt_tokens") or []))
+        return self._gen_factory()
+
+
+class _ReplayInstance(FakeInstance):
+    def __init__(self):
+        super().__init__()
+        self.reset_calls = 0
+        self._last_completion_tokens = [9]  # generated ids each turn
+
+    def reset(self):
+        self.reset_calls += 1
+
+
+def _with_replay_config(monkey_target, fn):
+    import core.session_manager as _sm
+
+    orig = _sm.get_config
+    _sm.get_config = lambda: _ReplayConfig()
+    try:
+        return fn()
+    finally:
+        _sm.get_config = orig
+
+
+def test_full_replay_reprefills_history_and_skips_state_surgery():
+    """Turn N's prompt_tokens = full history + new turn; no save_state,
+    no evolving load_state — only reset (static fallback) per turn. The
+    one rollback a recurrent model supports."""
+
+    async def good_gen(**kwargs):
+        yield "ok"
+
+    backend = _SpyBackend(good_gen)
+    mgr = SessionManager(backend)
+    inst = _ReplayInstance()
+    sess = SessionState(instance=inst, current_state="PRE_STATE")
+    mgr._sessions["s1"] = sess
+
+    def drive():
+        async def turns():
+            out = []
+            for prompt in ("first", "second"):
+                out.append(
+                    [c async for c in mgr.session_turn("s1", prompt, max_tokens=8)]
+                )
+            return out
+
+        return asyncio.run(turns())
+
+    _with_replay_config(None, drive)
+
+    # tokenize_segments is stubbed to [1,2,3] per turn.
+    assert backend.prompts_seen[0] == [1, 2, 3]
+    # Turn 2 re-prefills turn 1's tokens + its generated ids, then turn 2.
+    assert backend.prompts_seen[1] == [1, 2, 3, 9, 1, 2, 3]
+    assert inst.save_calls == 0, "full replay must never save_state"
+    assert inst.load_calls == [], "must never load evolving session state"
+    assert inst.reset_calls == 2, "static fallback reset once per turn"
+    assert sess.turn_count == 2
+    assert sess.token_history == [1, 2, 3, 9, 1, 2, 3, 9]
+
+
+def test_full_replay_degenerate_turn_drops_from_history():
+    calls = {"n": 0}
+
+    def gen_factory(**kwargs):
+        async def degen():
+            yield "partial"
+            raise DegenerateGenerationError("cycle period 3 x 12", tokens_generated=36)
+
+        async def good(**kw):
+            yield "ok"
+
+        calls["n"] += 1
+        return degen() if calls["n"] == 1 else good()
+
+    backend = _SpyBackend(gen_factory)
+    mgr = SessionManager(backend)
+    inst = _ReplayInstance()
+    sess = SessionState(instance=inst, current_state="PRE_STATE")
+    mgr._sessions["s1"] = sess
+
+    def drive():
+        async def run():
+            with pytest.raises(DegenerateGenerationError):
+                async for _ in mgr.session_turn("s1", "bad", max_tokens=8):
+                    pass
+            return [c async for c in mgr.session_turn("s1", "good", max_tokens=8)]
+
+        return asyncio.run(run())
+
+    _with_replay_config(None, drive)
+
+    assert sess.turn_count == 1, "degenerate turn must not advance"
+    # The degenerate turn's tokens never entered history: the good turn's
+    # prompt is pristine (no [1,2,3] residue from the failed attempt).
+    assert backend.prompts_seen[1] == [1, 2, 3]
+    assert inst.load_calls == [], "no purge load needed in full replay"
+
+
+def test_global_temperature_floor_clamps_any_request():
+    from core.session_manager import _global_temperature_floor
+
+    class Cfg:
+        temperature_floor = 0.4
+
+    assert _global_temperature_floor(0.08, Cfg()) == 0.4
+    assert _global_temperature_floor(0.24, Cfg()) == 0.4
+    assert _global_temperature_floor(0.7, Cfg()) == 0.7
+
+    class Off:
+        temperature_floor = None
+
+    assert _global_temperature_floor(0.08, Off()) == 0.08

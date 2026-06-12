@@ -105,6 +105,25 @@ class SessionState:
     created_at: float = field(default_factory=time.monotonic)
     last_turn_at: float = field(default_factory=time.monotonic)
     turn_count: int = 0
+    # Full-replay mode (model.session_full_replay): the exact dynamic
+    # token sequence of every completed turn (turn segments + generated
+    # tokens), re-prefilled on top of the pristine static snapshot each
+    # turn instead of save/load state surgery. A degenerate turn simply
+    # never enters the history.
+    token_history: list = field(default_factory=list)
+
+
+def _global_temperature_floor(requested: float, gen_cfg: Any) -> float:
+    """Apply the per-model global temperature floor (any request kind).
+
+    A refusal to sample below ``generation.temperature_floor``: requests
+    under the floor are raised to it. Distinct from the session-depth
+    floor below, which applies on top for deep turns.
+    """
+    floor = getattr(gen_cfg, "temperature_floor", None)
+    if floor and requested < floor:
+        return float(floor)
+    return requested
 
 
 def _effective_session_temperature(
@@ -291,17 +310,43 @@ class SessionManager:
         # so a JIT scaling operation can neither interleave with the
         # turn nor start mid-turn.
         async with self._generation_guard():
-            # Restore session state (includes all prior turns)
-            await run_in_threadpool(instance.load_state, session.current_state)
+            config = get_config()
+            # Hybrid/recurrent policy: per-turn save/load round-trips and
+            # tail seq_rm are unsound for recurrent state (it cannot be
+            # partially rolled back). Full-replay sessions restore the
+            # PRISTINE static snapshot — the one whole-state op the
+            # architecture supports — and re-prefill the accumulated
+            # token history below.
+            full_replay = bool(getattr(config.model, "session_full_replay", False))
+            if full_replay:
+                static = getattr(self._backend, "static_state", None)
+                if static is not None:
+                    await run_in_threadpool(instance.load_state, static)
+                else:
+                    await run_in_threadpool(instance.reset)
+            else:
+                # Restore session state (includes all prior turns)
+                await run_in_threadpool(instance.load_state, session.current_state)
 
             # Build turn tokens — different paths for first turn vs continuation
-            config = get_config()
             renderer = _get_format_renderer(config.model.family)
 
-            # Session temperature floor — deep turns are repetition
+            # Global per-model floor first (any request kind), then the
+            # session-depth floor on top — deep turns are repetition
             # attractors; see _effective_session_temperature.
+            gen_cfg = getattr(config, "generation", None)
+            globally_floored = _global_temperature_floor(temperature, gen_cfg)
+            if globally_floored != temperature:
+                log.info(
+                    "🌡️ Session %s turn %d: global floor %.2f -> %.2f",
+                    session_id,
+                    session.turn_count + 1,
+                    temperature,
+                    globally_floored,
+                )
+                temperature = globally_floored
             floored = _effective_session_temperature(
-                temperature, session.turn_count, getattr(config, "generation", None)
+                temperature, session.turn_count, gen_cfg
             )
             if floored != temperature:
                 # NB: this module's logger is `log`, not `logger` — the
@@ -331,6 +376,12 @@ class SessionManager:
 
             tokenizer = get_cached_tokenizer()
             turn_tokens = tokenize_segments(tokenizer, segments)
+            if full_replay:
+                # Re-prefill everything this session has ever evaluated,
+                # then this turn — identical token stream to what the KV
+                # would have held under state splicing, rebuilt exactly.
+                turn_only = turn_tokens
+                turn_tokens = list(session.token_history) + turn_only
 
             # Build generation kwargs
             gen_kwargs = {}
@@ -375,19 +426,33 @@ class SessionManager:
                     generated_parts.append(chunk)
                     yield chunk
 
-                # Factor 4: strip THIS turn's reasoning from the KV cache before
-                # snapshotting, so prior-turn chain-of-thought never accumulates
-                # across the session (canonical multi-turn: keep prior answers, drop
-                # prior CoT). Truncate-and-replay (tail seq_rm + re-eval the clean
-                # answer). Skips non-thinking models/turns and truncated turns.
-                if _think_strip_enabled():
-                    from core.inference import _strip_delimiter
+                if full_replay:
+                    # No state surgery of any kind: extend the history with
+                    # this turn's exact tokens (turn segments + generated ids
+                    # exposed by the backend) — the next turn re-prefills it.
+                    # strip_reasoning (tail seq_rm) is skipped by design: the
+                    # operation is unsound on recurrent state, and the family
+                    # configs using full replay are non-thinking.
+                    gen_ids = list(
+                        getattr(instance, "_last_completion_tokens", None) or []
+                    )
+                    session.token_history.extend(turn_only)
+                    session.token_history.extend(gen_ids)
+                else:
+                    # Factor 4: strip THIS turn's reasoning from the KV cache
+                    # before snapshotting, so prior-turn chain-of-thought never
+                    # accumulates across the session (canonical multi-turn: keep
+                    # prior answers, drop prior CoT). Truncate-and-replay (tail
+                    # seq_rm + re-eval the clean answer). Skips non-thinking
+                    # models/turns and truncated turns.
+                    if _think_strip_enabled():
+                        from core.inference import _strip_delimiter
 
-                    content = _strip_delimiter("".join(generated_parts))
-                    await self._maybe_strip_reasoning(instance, content)
+                        content = _strip_delimiter("".join(generated_parts))
+                        await self._maybe_strip_reasoning(instance, content)
 
-                # Save post-generation state for next turn
-                session.current_state = await run_in_threadpool(instance.save_state)
+                    # Save post-generation state for next turn
+                    session.current_state = await run_in_threadpool(instance.save_state)
                 session.last_assistant_text = "".join(generated_parts)
                 session.last_turn_at = time.monotonic()
                 session.turn_count += 1
@@ -399,6 +464,17 @@ class SessionManager:
                     len(session.last_assistant_text),
                 )
             except DegenerateGenerationError as e:
+                if full_replay:
+                    # Nothing to purge: the history was never extended, so
+                    # the degenerate span simply doesn't exist as far as the
+                    # next turn's re-prefill is concerned.
+                    log.warning(
+                        "🛑 Session %s degenerate generation (%s) — full-replay "
+                        "mode, degenerate turn dropped from history",
+                        session_id,
+                        e.reason,
+                    )
+                    raise
                 # PURGE: restore the pre-turn KV. session.current_state was never
                 # overwritten (save_state above is skipped on raise), so it still
                 # holds the pre-turn snapshot; reloading it discards the degenerate

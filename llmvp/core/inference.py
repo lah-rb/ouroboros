@@ -251,6 +251,18 @@ async def run_completion(
 
     max_tokens = max_tokens or config.generation.max_tokens_default or 256
     temperature = temperature or config.generation.temperature_default or 0.7
+    # Global per-model temperature floor — a refusal to sample below the
+    # configured value for ANY request kind (see GenerationConfig).
+    from core.session_manager import _global_temperature_floor
+
+    _floored = _global_temperature_floor(temperature, config.generation)
+    if _floored != temperature:
+        log.info(
+            "🌡️ Completion: global temperature floor %.2f -> %.2f",
+            temperature,
+            _floored,
+        )
+        temperature = _floored
 
     static_tokens = static_tokens_manager.get_static_tokens()
 
@@ -347,6 +359,18 @@ async def run_raw_completion(
 
     max_tokens = max_tokens or config.generation.max_tokens_default or 256
     temperature = temperature or config.generation.temperature_default or 0.7
+    # Global per-model temperature floor — a refusal to sample below the
+    # configured value for ANY request kind (see GenerationConfig).
+    from core.session_manager import _global_temperature_floor
+
+    _floored = _global_temperature_floor(temperature, config.generation)
+    if _floored != temperature:
+        log.info(
+            "🌡️ Completion: global temperature floor %.2f -> %.2f",
+            temperature,
+            _floored,
+        )
+        temperature = _floored
 
     static_tokens = static_tokens_manager.get_static_tokens()
 
@@ -418,6 +442,18 @@ async def stream_completion(
 
     max_tokens = max_tokens or config.generation.max_tokens_default or 256
     temperature = temperature or config.generation.temperature_default or 0.7
+    # Global per-model temperature floor — a refusal to sample below the
+    # configured value for ANY request kind (see GenerationConfig).
+    from core.session_manager import _global_temperature_floor
+
+    _floored = _global_temperature_floor(temperature, config.generation)
+    if _floored != temperature:
+        log.info(
+            "🌡️ Completion: global temperature floor %.2f -> %.2f",
+            temperature,
+            _floored,
+        )
+        temperature = _floored
 
     static_tokens = static_tokens_manager.get_static_tokens()
 
