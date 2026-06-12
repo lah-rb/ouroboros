@@ -1173,6 +1173,26 @@ class LlamaCppBackend(BaseBackend):
 
         long_cycle_on = gen_cfg.long_cycle_guard_enabled is not False
         capture_dir = getattr(getattr(self.config, "logging", None), "directory", None)
+
+        def _capture_meta() -> dict:
+            # The prompt is the half of the specimen the live failure never
+            # preserved (43 cancelled menu runaways, prompts unrecoverable —
+            # the archived survivor reproduced nothing at any temperature).
+            # Detok only on capture (rare), tail only (the dynamic context
+            # that varies between a clean run and a runaway sits at the end).
+            meta = {
+                "request_id": kwargs.get("request_id", ""),
+                "temperature": temperature,
+                "prompt_tokens": len(prompt_tokens),
+            }
+            try:
+                meta["prompt_tail"] = instance.detokenize(
+                    list(prompt_tokens[-768:])
+                ).decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001 - forensics must not break capture
+                meta["prompt_tail"] = "(detokenization failed)"
+            return meta
+
         # Set when this generation ends for a known reason (normal stop,
         # degeneracy, long-cycle). Left None across an abnormal exit —
         # GeneratorExit from an abandoned consumer, i.e. the agent-side
@@ -1212,10 +1232,7 @@ class LlamaCppBackend(BaseBackend):
                             gen_end_reason,
                             acc_bytes,
                             len(completion_tokens),
-                            meta={
-                                "request_id": kwargs.get("request_id", ""),
-                                "temperature": temperature,
-                            },
+                            meta=_capture_meta(),
                         )
                         raise DegenerateGenerationError(
                             reason, tokens_generated=len(completion_tokens)
@@ -1236,10 +1253,7 @@ class LlamaCppBackend(BaseBackend):
                             lc_reason,
                             acc_bytes,
                             len(completion_tokens),
-                            meta={
-                                "request_id": kwargs.get("request_id", ""),
-                                "temperature": temperature,
-                            },
+                            meta=_capture_meta(),
                         )
                         raise DegenerateGenerationError(
                             lc_reason, tokens_generated=len(completion_tokens)
@@ -1308,10 +1322,7 @@ class LlamaCppBackend(BaseBackend):
                     "abandoned by consumer (watchdog cancel or disconnect)",
                     acc_bytes,
                     len(completion_tokens),
-                    meta={
-                        "request_id": kwargs.get("request_id", ""),
-                        "temperature": temperature,
-                    },
+                    meta=_capture_meta(),
                 )
             tracker.finish()
 
