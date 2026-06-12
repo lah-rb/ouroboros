@@ -217,7 +217,8 @@ async def run_agent(
     prompts_dir: str = "prompts",
     entry_flow: str = "mission_control",
     entry_inputs: dict[str, Any] | None = None,
-    max_cycles: int = 50,
+    max_cycles: int | None = 50,
+    max_wall_clock_s: float | None = None,
 ) -> FlowResult:
     """Run the agent loop — follow tail calls until termination.
 
@@ -228,7 +229,11 @@ async def run_agent(
         prompts_dir: Directory containing prompt templates.
         entry_flow: The flow to start with (default: mission_control).
         entry_inputs: Override initial inputs (default: {mission_id}).
-        max_cycles: Maximum number of flow executions (safety limit).
+        max_cycles: Maximum number of work flow executions; None runs
+            until the mission's flow terminates (run_until="completed").
+        max_wall_clock_s: Park the mission as paused once elapsed wall
+            time exceeds this, checked at work-flow boundaries — a
+            running flow is never interrupted mid-dispatch.
 
     Returns:
         The final FlowResult when the agent terminates.
@@ -240,12 +245,16 @@ async def run_agent(
     current_flow = entry_flow
     current_inputs = entry_inputs or {"mission_id": mission_id}
     cycle = 0
+    started_at = time.monotonic()
 
     logger.info("Agent starting: flow=%r, mission=%s", entry_flow, mission_id)
 
-    # Track consecutive entry_flow runs to catch self-loops
+    # Track consecutive entry_flow runs to catch self-loops. Unbounded
+    # runs (max_cycles=None) still need this livelock guard; the counter
+    # resets whenever a work flow executes, so 50 back-to-back entry
+    # runs without a dispatch is pathological at any budget.
     consecutive_entry = 0
-    max_consecutive_entry = max_cycles + 3  # generous headroom
+    max_consecutive_entry = (max_cycles + 3) if max_cycles is not None else 50
 
     while True:
         # Safety: catch entry flow self-loops
@@ -405,21 +414,35 @@ async def run_agent(
         # the result by the time we reach the next work flow dispatch.
         if current_flow != entry_flow:
             cycle += 1
-        if cycle >= max_cycles and outcome.target_flow != entry_flow:
+        out_of_cycles = max_cycles is not None and cycle >= max_cycles
+        elapsed_s = time.monotonic() - started_at
+        out_of_time = max_wall_clock_s is not None and elapsed_s >= max_wall_clock_s
+        if (out_of_cycles or out_of_time) and outcome.target_flow != entry_flow:
             # Budget exhausted with work still pending. Park the mission as
             # paused so `mission resume` / `start` can pick it up later, rather
             # than leaving it 'active' after the error exit. General by design:
             # a budget-exhausted mission being resumable is strictly better than
             # erroring + left active — applies to any long sweep, and is what
             # lets the quality-fix loop continue across `--max-cycles` windows.
+            # Wall clock takes the same exit: it only ever fires at a work-flow
+            # boundary, so an in-flight dispatch always finishes and records.
+            if out_of_cycles:
+                budget_msg = f"Cycle limit: {max_cycles}."
+            else:
+                budget_msg = (
+                    f"Wall-clock limit: {max_wall_clock_s:.0f}s "
+                    f"(elapsed {elapsed_s:.0f}s)."
+                )
             try:
                 _m = await effects.load_mission()
                 if _m is not None and getattr(_m, "status", "") == "active":
                     _m.status = "paused"
                     await effects.save_mission(_m)
                     logger.info(
-                        "Budget exhausted (%d cycles) — parked mission %s as paused",
+                        "Budget exhausted (%d cycles, %.0fs) — parked mission "
+                        "%s as paused",
                         cycle,
+                        elapsed_s,
                         mission_id,
                     )
             except Exception:
@@ -427,7 +450,7 @@ async def run_agent(
                     "Failed to park mission as paused on budget exhaustion"
                 )
             raise RuntimeError(
-                f"Agent completed {cycle} work cycle(s). Cycle limit: {max_cycles}. "
+                f"Agent completed {cycle} work cycle(s). {budget_msg} "
                 f"Mission parked as paused — resume with `mission resume` or `start`."
             )
 

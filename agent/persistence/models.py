@@ -49,6 +49,15 @@ class MissionConfig(BaseModel):
     # is inert for them — batch creation only dispatches when no
     # structural goal has run yet.
     structural_mode: Literal["parallel", "serial"] = "parallel"
+    # Run-termination policy (mission YAML; `start` CLI flags override).
+    # "completed" makes the cycle budget opt-in: the agent runs until
+    # the mission reaches a terminal status, bounded by max_wall_clock_s
+    # and/or an explicit max_cycles backstop. Wall clock parks the
+    # mission as paused (resumable), the same exit the cycle budget
+    # takes — required by the benchmark interface.
+    run_until: Literal["cycle_budget", "completed"] = "cycle_budget"
+    max_cycles: int | None = None
+    max_wall_clock_s: float | None = None
 
 
 # ── Directive Reports ─────────────────────────────────────────────────
@@ -190,15 +199,11 @@ class FailedAttempt(BaseModel):
     """
 
     target_file: str
-    target_symbol: str = (
-        ""  # added 2d7 round: the specific symbol the patch targeted, if any — lets diagnose's ## Prior attempts section see "function X has been patched 3 times without effect, try a different function"
-    )
+    target_symbol: str = ""  # added 2d7 round: the specific symbol the patch targeted, if any — lets diagnose's ## Prior attempts section see "function X has been patched 3 times without effect, try a different function"
     flow: str  # "file_ops", "project_ops"
     reason: str  # bail reason or error summary
     diagnosis_summary: str  # the diagnosis that led to this attempt
-    pre_headline: str = (
-        ""  # headline from the interact that triggered this attempt's diagnose cycle — captures the test's state *before* the patch, enabling before/after comparison when the fix doesn't hold
-    )
+    pre_headline: str = ""  # headline from the interact that triggered this attempt's diagnose cycle — captures the test's state *before* the patch, enabling before/after comparison when the fix doesn't hold
     timestamp: str = Field(default_factory=_now_iso)
 
 

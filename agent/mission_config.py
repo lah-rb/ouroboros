@@ -20,14 +20,51 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
+
+# ── Durations ─────────────────────────────────────────────────────────
+
+_DURATION_RE = re.compile(
+    r"^(?:(?P<d>\d+(?:\.\d+)?)d)?"
+    r"(?:(?P<h>\d+(?:\.\d+)?)h)?"
+    r"(?:(?P<m>\d+(?:\.\d+)?)m)?"
+    r"(?:(?P<s>\d+(?:\.\d+)?)s)?$"
+)
+
+
+def parse_duration(value: float | int | str) -> float:
+    """Duration to seconds: bare numbers are seconds; strings compose
+    d/h/m/s suffixes ("3h", "90m", "1h30m", "1.5h", "2d12h").
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds = float(value)
+    else:
+        text = str(value).strip().lower()
+        try:
+            seconds = float(text)
+        except ValueError:
+            match = _DURATION_RE.match(text)
+            if not match or not any(match.groupdict().values()):
+                raise ValueError(
+                    f"invalid duration {value!r} — use seconds or d/h/m/s "
+                    f'suffixes ("3h", "90m", "1h30m")'
+                ) from None
+            parts = {k: float(v or 0) for k, v in match.groupdict().items()}
+            seconds = (
+                parts["d"] * 86400 + parts["h"] * 3600 + parts["m"] * 60 + parts["s"]
+            )
+    if seconds <= 0:
+        raise ValueError(f"duration must be positive, got {value!r}")
+    return seconds
+
 
 # ── YAML Config Model ────────────────────────────────────────────────
 
@@ -53,6 +90,19 @@ class MissionYAMLConfig(BaseModel):
     principles: list[str] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
 
+    # Run-termination policy. "completed" runs until the mission reaches
+    # a terminal status (cycle budget becomes an opt-in backstop);
+    # max_wall_clock parks the mission as paused when elapsed time
+    # exceeds it ("3h", "90m", "1h30m", or bare seconds).
+    run_until: Literal["cycle_budget", "completed"] = "cycle_budget"
+    max_cycles: int | None = Field(default=None, gt=0)
+    max_wall_clock: float | None = None
+
+    @field_validator("max_wall_clock", mode="before")
+    @classmethod
+    def normalize_wall_clock(cls, v):
+        return None if v is None else parse_duration(v)
+
     # Lifecycle commands — executed in the invoking cwd (not working_dir)
     pre_create: list[str] = Field(default_factory=list)
     post_create: list[str] = Field(default_factory=list)
@@ -70,10 +120,44 @@ class MissionYAMLConfig(BaseModel):
 
         if self.flow_set not in FLOW_SETS:
             raise ValueError(
-                f"unknown flow_set {self.flow_set!r} — "
-                f"known sets: {sorted(FLOW_SETS)}"
+                f"unknown flow_set {self.flow_set!r} — known sets: {sorted(FLOW_SETS)}"
             )
         return self
+
+
+DEFAULT_MAX_CYCLES = 50
+
+
+def resolve_run_policy(
+    mission_config,
+    cli_max_cycles: int | None = None,
+    cli_max_wall_clock: str | None = None,
+) -> tuple[int | None, float | None]:
+    """(max_cycles, max_wall_clock_s) for run_agent — CLI beats mission
+    config beats defaults.
+
+    Under run_until="completed" the cycle budget defaults to None
+    (unbounded): the run ends at a terminal mission status, an explicit
+    backstop, or the wall clock. Defensive getattr keeps mission.json
+    files persisted before these fields existed loading unchanged.
+    """
+    run_until = getattr(mission_config, "run_until", "cycle_budget")
+
+    if cli_max_cycles is not None:
+        max_cycles = cli_max_cycles
+    elif getattr(mission_config, "max_cycles", None):
+        max_cycles = mission_config.max_cycles
+    elif run_until == "completed":
+        max_cycles = None
+    else:
+        max_cycles = DEFAULT_MAX_CYCLES
+
+    if cli_max_wall_clock is not None:
+        max_wall_clock_s = parse_duration(cli_max_wall_clock)
+    else:
+        max_wall_clock_s = getattr(mission_config, "max_wall_clock_s", None)
+
+    return max_cycles, max_wall_clock_s
 
 
 # ── Loading ───────────────────────────────────────────────────────────
@@ -102,7 +186,7 @@ def resolve_config_path(name_or_path: str) -> Path:
 
     if not path.exists():
         raise FileNotFoundError(
-            f"Mission config not found: {path}\n" f"  Searched: {path.resolve()}"
+            f"Mission config not found: {path}\n  Searched: {path.resolve()}"
         )
     return path
 

@@ -7,7 +7,7 @@
 #
 # Run:
 #   uv run ouroboros.py mission create --mission_config extract_hea
-#   uv run ouroboros.py start --working-dir /tmp/ouroboros-hea-scrape --max-cycles 60
+#   uv run ouroboros.py start --working-dir /tmp/ouroboros-hea-scrape
 # version: 1
 
 objective: >
@@ -19,6 +19,11 @@ flow_set: extractor
 working_dir: "/tmp/ouroboros-hea-scrape"
 effects_profile: local
 llmvp_endpoint: "http://localhost:8008/graphql"
+
+# Deterministic sweep over a finite worklist — run to the gate verdict,
+# with wall clock as the backstop (~35 dispatches at ~10 min each).
+run_until: completed
+max_wall_clock: 6h
 
 pre_create:
   - "uv run ouroboros.py cue-compile"

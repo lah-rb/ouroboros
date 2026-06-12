@@ -8,7 +8,7 @@
 #
 # Run:
 #   uv run ouroboros.py mission create --mission_config hea_scrape
-#   uv run ouroboros.py start --working-dir /tmp/ouroboros-hea-scrape --max-cycles 60
+#   uv run ouroboros.py start --working-dir /tmp/ouroboros-hea-scrape
 # version: 1
 
 objective: >
@@ -28,6 +28,12 @@ flow_set: scraper
 working_dir: "/tmp/ouroboros-hea-scrape"
 effects_profile: local
 llmvp_endpoint: "http://localhost:8008/graphql"
+
+# Run to the research gate's verdict; the wall clock (a benchmark
+# interface requirement) bounds API-pacing worst cases, and the
+# politeness budget independently caps total requests.
+run_until: completed
+max_wall_clock: 4h
 
 pre_create:
   - "rm -rf /tmp/ouroboros-hea-scrape && mkdir -p /tmp/ouroboros-hea-scrape"

@@ -141,6 +141,9 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         llmvp_endpoint=llmvp_endpoint,
         flow_set=flow_set,
         structural_mode=structural_mode,
+        run_until=(yaml_config.run_until if yaml_config else "cycle_budget"),
+        max_cycles=(yaml_config.max_cycles if yaml_config else None),
+        max_wall_clock_s=(yaml_config.max_wall_clock if yaml_config else None),
     )
 
     mission = MissionState(objective=objective, principles=principles, config=config)
@@ -483,6 +486,23 @@ def cmd_start(args: argparse.Namespace) -> None:
     flow_set = get_flow_set(getattr(mission.config, "flow_set", "code_core"))
     print(f"   Flow set: {flow_set.name} (entry: {flow_set.entry_flow})")
 
+    # Termination policy: CLI flags beat mission config beats defaults.
+    from agent.mission_config import resolve_run_policy
+
+    try:
+        max_cycles, max_wall_clock_s = resolve_run_policy(
+            mission.config,
+            cli_max_cycles=args.max_cycles,
+            cli_max_wall_clock=getattr(args, "max_wall_clock", None),
+        )
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    policy = "until completed" if max_cycles is None else f"≤{max_cycles} cycles"
+    if max_wall_clock_s:
+        policy += f", ≤{max_wall_clock_s / 3600:.1f}h wall clock"
+    print(f"   Run: {policy}")
+
     # Run the agent loop
     from agent.loop import run_agent
 
@@ -494,7 +514,8 @@ def cmd_start(args: argparse.Namespace) -> None:
                 flows_dir=flows_dir,
                 prompts_dir=prompts_dir,
                 entry_flow=flow_set.entry_flow,
-                max_cycles=args.max_cycles,
+                max_cycles=max_cycles,
+                max_wall_clock_s=max_wall_clock_s,
             )
         )
         print()
@@ -768,7 +789,17 @@ def main() -> None:
     start_p = subparsers.add_parser("start", help="Start the agent on a mission")
     start_p.add_argument("--working-dir", help="Working directory (default: cwd)")
     start_p.add_argument(
-        "--max-cycles", type=int, default=50, help="Max flow cycles (default: 50)"
+        "--max-cycles",
+        type=int,
+        default=None,
+        help="Max work-flow cycles (default: mission config, else 50; "
+        "missions with run_until: completed run unbounded unless capped)",
+    )
+    start_p.add_argument(
+        "--max-wall-clock",
+        default=None,
+        help="Park the mission as paused after this much wall time "
+        '("3h", "90m", "1h30m", or seconds; default: mission config)',
     )
     start_p.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     start_p.add_argument(
