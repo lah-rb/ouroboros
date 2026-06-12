@@ -14,15 +14,15 @@ graphql:
 model:
   name: "mistral-small-4-119b-a6"
   family: "tekken"
-  path: /Users/lah-rb/.lmstudio/models/bartowski/mistralai_Mistral-Small-4-119B-2603-GGUF/mistralai_Mistral-Small-4-119B-2603-Q5_K_L-00001-of-00003.gguf
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Mistral-Small-4-119B-2603-GGUF/Mistral-Small-4-119B-2603-MXFP4_MOE-00001-of-00003.gguf
   n_ctx: 131072
   n_gpu_layers: -1   
   seed: -1
   verbose: false
   flash_attention: true
   batch_size: 512
-  thinking: false   # retest CoT OFF (reasoning_effort "none"); was implicitly high
-                    # tekken is binary — no [THINK] injected when false
+  thinking: true   # true is implicitly high
+                   # tekken is binary — no [THINK] injected when false
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

@@ -12,9 +12,9 @@ graphql:
   introspection_enabled: true
 
 model:
-  name: "qwen3.5-35b-a3"
+  name: "qwen3.6-27b"
   family: "chatml"
-  path: /Users/lah-rb/.lmstudio/models/lmstudio-community/Qwen3.5-35B-A3B-GGUF/Qwen3.5-35B-A3B-Q6_K.gguf
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q6_K.gguf
   n_ctx: 262144
   n_gpu_layers: -1   
   seed: -1
@@ -36,7 +36,7 @@ generation:
   streaming_default: true
 
 knowledge:
-  tokens_bin: "./data/qwen3.5-35b-a3.tokens.bin"
+  tokens_bin: "./data/qwen3.6-27b.tokens.bin"
   token_limit: 32768
 
 resources:
