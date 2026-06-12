@@ -9053,6 +9053,598 @@
       "fallback": "reorganize"
     }
   },
+  "extract_control": {
+    "flow": "extract_control",
+    "version": 1,
+    "description": "Extractor pipeline controller. Bootstraps the corpus extraction\ngoal from the databank, sweeps pending OA PDFs through the\nPaddle-MLX toolchain in batches, and completes when the\ndeterministic extraction gate passes.",
+    "context_tier": "project_goal",
+    "returns": {
+      "final_status": {
+        "type": "string",
+        "from": "context.mission.status",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id"
+      ],
+      "optional": [
+        "last_result",
+        "last_status",
+        "last_goal_id"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state and event queue",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.mission.status == 'active'",
+              "transition": "apply_last_result"
+            },
+            {
+              "condition": "result.mission.status == 'paused'",
+              "transition": "idle"
+            },
+            {
+              "condition": "result.mission.status == 'completed'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "aborted"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_last_result": {
+        "action": "attach_directive_report",
+        "description": "Attach returning flow's directive report to goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "events",
+            "last_result",
+            "last_status",
+            "last_goal_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.events_pending == true",
+              "transition": "process_events"
+            },
+            {
+              "condition": "true",
+              "transition": "bootstrap_goals"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "process_events": {
+        "action": "handle_events",
+        "description": "Process user messages, abort/pause signals",
+        "context": {
+          "required": [
+            "mission",
+            "events"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.abort_requested == true",
+              "transition": "aborted"
+            },
+            {
+              "condition": "result.pause_requested == true",
+              "transition": "idle"
+            },
+            {
+              "condition": "true",
+              "transition": "bootstrap_goals"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "bootstrap_goals": {
+        "action": "derive_extraction_goals",
+        "description": "Derive the corpus pdf_extract goal from the databank",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.goals_ready == true",
+              "transition": "check_phase"
+            },
+            {
+              "condition": "true",
+              "transition": "completed"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "check_phase": {
+        "action": "check_pipeline_phase",
+        "description": "Determine the extractor phase from goal statuses",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.phase == 'pdf_extract'",
+              "transition": "pdf_extract_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'extract_gate'",
+              "transition": "dispatch_extract_gate"
+            },
+            {
+              "condition": "true",
+              "transition": "completed"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "pdf_extract_sweep_next": {
+        "action": "pdf_extract_sweep_next",
+        "description": "Dispatch the next extraction batch (retries first)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.needs_extract == true",
+              "transition": "dispatch_extract"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_extract": {
+        "action": "noop",
+        "description": "Run the extraction toolchain over the batch",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "extract_pdfs",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id"
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "paper_keys": {
+              "$ref": "context.dispatch_config.paper_keys"
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
+      },
+      "dispatch_extract_gate": {
+        "action": "flow",
+        "description": "Extraction gate for mission completion",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "extract_gate",
+        "input_map": {
+          "mission_id": {
+            "$ref": "input.mission_id"
+          },
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          }
+        },
+        "params": {},
+        "publishes": [
+          "gate_results"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "reopen_goal"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "reopen_goal": {
+        "action": "reopen_extraction_goal",
+        "description": "Gate failed \u2014 reopen the corpus goal for the sweep",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "completed": {
+        "action": "finalize_mission",
+        "description": "Mark mission complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission",
+            "gate_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "completed"
+      },
+      "idle": {
+        "action": "enter_idle",
+        "description": "Wait for events",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "extract_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          },
+          "delay": 5
+        }
+      },
+      "aborted": {
+        "action": "finalize_mission",
+        "description": "Mission aborted",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {
+          "abort": true
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "aborted"
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "extract_gate": {
+    "flow": "extract_gate",
+    "version": 1,
+    "description": "Deterministic extraction gate: every OA PDF terminal. The\nper-record extraction_quality distribution is the stage's\nscorecard and the dataset stage's input contract.",
+    "context_tier": "session_task",
+    "returns": {
+      "gate_passed": {
+        "type": "bool",
+        "from": "context.gate_passed",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "check": {
+        "action": "check_extraction_complete",
+        "description": "Every OA-PDF record terminal (extracted | extract_failed)?",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.gate_passed == true",
+              "transition": "gate_pass"
+            },
+            {
+              "condition": "true",
+              "transition": "gate_fail"
+            }
+          ]
+        },
+        "publishes": [
+          "pending_extractions"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "gate_pass": {
+        "action": "noop",
+        "description": "Extraction complete \u2014 corpus ready for the dataset stage",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      },
+      "gate_fail": {
+        "action": "noop",
+        "description": "Papers still pending \u2014 controller reopens the sweep",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "failed"
+      }
+    },
+    "entry": "check",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "extract_pdfs": {
+    "flow": "extract_pdfs",
+    "version": 1,
+    "description": "Extract markdown + figures from a batch of OA PDFs via the\nPaddle-MLX toolchain; verify against the publisher text layer;\nupdate databank records by quality policy.",
+    "context_tier": "flow_directive",
+    "returns": {
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "goal_id",
+        "flow_directive",
+        "paper_keys",
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "extract": {
+        "action": "extract_pdf_batch",
+        "description": "Run the extraction toolchain and apply the quality policy",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'failed'",
+              "transition": "return_failed"
+            },
+            {
+              "condition": "true",
+              "transition": "return_success"
+            }
+          ]
+        },
+        "publishes": [
+          "directive_report"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "return_success": {
+        "action": "noop",
+        "description": "Report batch results to extract_control",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "extract_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      },
+      "return_failed": {
+        "action": "noop",
+        "description": "Report batch failure to extract_control",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "extract_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "failed"
+          }
+        }
+      }
+    },
+    "entry": "extract",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "acquire_catalog": {
     "flow": "acquire_catalog",
     "version": 1,

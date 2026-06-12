@@ -226,6 +226,21 @@ FLOW_INPUTS = {
         "flow_directive": "Run the TODO app and verify that adding and listing items works correctly.",
         "working_directory": "/tmp/test-project",
     },
+    # Extractor flow set (scraper v2)
+    "extract_control": {
+        "mission_id": "test-mission-001",
+    },
+    "extract_pdfs": {
+        "mission_id": "test-mission-001",
+        "goal_id": "goal-001",
+        "flow_directive": "Extract markdown and figures from 1 PDF.",
+        "paper_keys": ["doi_10.1000_x.1"],
+        "working_directory": "/tmp/test-project",
+    },
+    "extract_gate": {
+        "mission_id": "test-mission-001",
+        "working_directory": "/tmp/test-project",
+    },
     # Scraper flow set
     "research_control": {
         "mission_id": "test-mission-001",

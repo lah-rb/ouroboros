@@ -145,9 +145,14 @@ class GoalRecord(BaseModel):
     # "discovery"/"extraction" are scraper-set types (per-aspect paper
     # discovery; corpus acquire+catalog). Code_core sweeps filter by
     # equality, so the new literals are inert in the code pipeline.
-    type: Literal["structural", "functional", "quality", "discovery", "extraction"] = (
-        "structural"
-    )
+    type: Literal[
+        "structural",
+        "functional",
+        "quality",
+        "discovery",
+        "extraction",
+        "pdf_extract",
+    ] = "structural"
     status: Literal["incomplete", "complete"] = "incomplete"
     associated_files: list[str] = Field(default_factory=list)
     reports: list[DirectiveReport] = Field(default_factory=list)

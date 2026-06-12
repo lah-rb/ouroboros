@@ -131,6 +131,26 @@ SCRAPER_PHASES: tuple[PhaseRule, ...] = (
     ),
 )
 
+# The extractor set: scraper v2's stage-pipeline sibling. Operates on an
+# EXISTING databank (working_dir shared with a completed scraper
+# mission): one corpus-level pdf_extract goal sweeps OA PDFs through the
+# Paddle-MLX toolchain in batches, then a fully deterministic gate
+# verifies every record reached a terminal extraction state. Contains
+# ZERO LLM turns — deterministic findings stay deterministic end-to-end.
+EXTRACTOR_PHASES: tuple[PhaseRule, ...] = (
+    PhaseRule(
+        kind="goal_type_incomplete",
+        phase="pdf_extract",
+        goal_type="pdf_extract",
+        observation="Extraction phase: {incomplete}/{total} corpus goal(s) incomplete",
+    ),
+    PhaseRule(
+        kind="terminal",
+        phase="extract_gate",
+        observation="All extraction goals complete — ready for extraction gate",
+    ),
+)
+
 FLOW_SETS: dict[str, FlowSetSpec] = {
     "code_core": FlowSetSpec(
         name="code_core",
@@ -141,6 +161,11 @@ FLOW_SETS: dict[str, FlowSetSpec] = {
         name="scraper",
         entry_flow="research_control",
         phases=SCRAPER_PHASES,
+    ),
+    "extractor": FlowSetSpec(
+        name="extractor",
+        entry_flow="extract_control",
+        phases=EXTRACTOR_PHASES,
     ),
 }
 

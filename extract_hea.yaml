@@ -1,0 +1,24 @@
+# Extraction stage over the completed HEA scrape corpus (scraper v2).
+#
+# Stage two of the corpus pipeline: operates on the EXISTING databank
+# in the shared working_dir — discovery and catalog are not re-run.
+# NO workspace wipe: the corpus (259 records, 101 OA PDFs) is the
+# input. Requires the toolchain: bash dev/setup_pdf_tools.sh
+#
+# Run:
+#   uv run ouroboros.py mission create --mission_config extract_hea
+#   uv run ouroboros.py start --working-dir /tmp/ouroboros-hea-scrape --max-cycles 60
+# version: 1
+
+objective: >
+  Extract verified markdown and deduplicated figures from every
+  open-access PDF in the high-entropy-materials corpus databank,
+  producing the input artifacts for the dataset-coalescing stage.
+
+flow_set: extractor
+working_dir: "/tmp/ouroboros-hea-scrape"
+effects_profile: local
+llmvp_endpoint: "http://localhost:8008/graphql"
+
+pre_create:
+  - "uv run ouroboros.py cue-compile"
