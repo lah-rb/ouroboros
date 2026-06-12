@@ -460,8 +460,39 @@ async def action_validate_cross_file_consistency(step_input: StepInput) -> StepO
 # behaviorally — this rule removes the noise at the source. Fixed
 # schemas keep full key checking by carrying 2+ keys, which the
 # exemplar convention "every key at every level" already produces.)
+#
+# OPEN COLLECTIONS (multi-key): a mapping whose exemplar values are ALL
+# dicts with IDENTICAL key sets is a homogeneous collection — the keys
+# are instance names (dialogue node ids, web routes, i18n locales), not
+# schema fields. A struct's values are heterogeneous by nature; identical
+# sub-shapes across 2+ entries is the exemplar itself saying "keyed
+# collection". (Live-observed: 7 immortal gate findings on NPC dialogue
+# node names, re-refuted 48 times across 52 rounds. Cross-domain battery:
+# web routes and config maps false-positive identically.)
+#
+# VARIANT LIST ELEMENTS: when an exemplar LIST carries 2+ elements whose
+# key sets DIFFER, the author is declaring variants (CI steps with
+# `uses` vs `run`). Data elements are then checked against the UNION of
+# sibling keys, and only keys present in EVERY sibling are required.
+# Single-element exemplar lists (the documented convention) keep strict
+# checking — the rules only widen when the exemplar itself demonstrates
+# variance.
+#
+# KNOWN RESIDUAL: scalar-valued multi-key maps (dependency pins,
+# hyperparameter dicts) are structurally indistinguishable from scalar
+# structs ({front, back}) — they stay closed and can false-positive.
+# That class is handled downstream by refuted-signature suppression,
+# not here; opening it structurally would silence real key renames.
 
 _MAX_SHAPE_ISSUES_PER_FILE = 10
+
+
+def _identical_dict_shapes(values: list) -> bool:
+    """True when every value is a dict and all share one key set."""
+    if not values or not all(isinstance(v, dict) for v in values):
+        return False
+    first = set(values[0].keys())
+    return all(set(v.keys()) == first for v in values[1:])
 
 
 def _shape_diff(data: Any, exemplar: Any, path: str, issues: list[dict]) -> None:
@@ -481,9 +512,12 @@ def _shape_diff(data: Any, exemplar: Any, path: str, issues: list[dict]) -> None
                 }
             )
             return
-        if len(exemplar) == 1:
-            # Open mapping: validate values against the single exemplar
-            # value; key names are the data's business.
+        if len(exemplar) == 1 or _identical_dict_shapes(list(exemplar.values())):
+            # Open mapping: a single-entry exemplar is a key pattern; a
+            # multi-entry exemplar whose values all share one dict shape
+            # is a homogeneous collection (instance names, not schema).
+            # Validate values against the first exemplar value; key
+            # names are the data's business.
             exemplar_value = next(iter(exemplar.values()))
             for key in data:
                 if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
@@ -537,7 +571,65 @@ def _shape_diff(data: Any, exemplar: Any, path: str, issues: list[dict]) -> None
             return
         if exemplar:
             # Exemplar lists carry ONE element by convention; every real
-            # element must conform to it.
+            # element must conform to it. When the author wrote 2+ DICT
+            # elements with DIFFERING key sets, the exemplar itself
+            # declares variants (CI steps with `uses` vs `run`): data
+            # elements then check against the UNION of sibling keys and
+            # only intersection keys are required.
+            sibling_dicts = [e for e in exemplar if isinstance(e, dict)]
+            divergent = (
+                len(sibling_dicts) >= 2
+                and len(sibling_dicts) == len(exemplar)
+                and not _identical_dict_shapes(sibling_dicts)
+            )
+            if divergent:
+                union: set = set().union(*(set(e.keys()) for e in sibling_dicts))
+                required = set.intersection(*(set(e.keys()) for e in sibling_dicts))
+                for i, element in enumerate(data):
+                    if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
+                        return
+                    if not isinstance(element, dict):
+                        _shape_diff(element, exemplar[0], f"{path}[{i}]", issues)
+                        continue
+                    epath = f"{path}[{i}]"
+                    for key in element:
+                        if key not in union:
+                            issues.append(
+                                {
+                                    "kind": "undeclared_key",
+                                    "path": epath,
+                                    "detail": (
+                                        f"key '{key}' is not in any declared "
+                                        f"variant (variant keys: {sorted(union)})"
+                                    ),
+                                }
+                            )
+                            if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
+                                return
+                    for key in required:
+                        if key not in element:
+                            issues.append(
+                                {
+                                    "kind": "missing_declared_key",
+                                    "path": epath,
+                                    "detail": (
+                                        f"declared key '{key}' (required by "
+                                        f"every variant) is absent"
+                                    ),
+                                }
+                            )
+                            if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
+                                return
+                    # Recurse into keys with a matching sibling declaration.
+                    for key in element:
+                        donor = next((e for e in sibling_dicts if key in e), None)
+                        if donor is not None:
+                            _shape_diff(
+                                element[key], donor[key], f"{epath}.{key}", issues
+                            )
+                            if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
+                                return
+                return
             for i, element in enumerate(data):
                 if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
                     return
