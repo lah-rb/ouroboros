@@ -76,14 +76,34 @@ def _contact_email() -> str:
     return os.environ.get("OUROBOROS_CONTACT_EMAIL", "ouroboros-agent@invalid.local")
 
 
-def _s2_headers() -> dict | None:
-    """Optional Semantic Scholar API key (SEMANTIC_SCHOLAR_API_KEY).
+_S2_KEY_FILE = "~/.s2_key"
+_s2_key_cache: str | None = None  # resolved once per process
 
-    The unauthenticated shared pool 429s under contention (live-
-    observed); a free key moves requests to a dedicated quota. Without
-    one, discovery degrades gracefully — OpenAlex carries the round.
+
+def _s2_key() -> str:
+    """Semantic Scholar API key: env var, else ~/.s2_key, else ''.
+
+    The unauthenticated shared pool 429s under contention (31 bounces in
+    three discovery cycles, live); a key moves requests to a dedicated
+    quota. The key file keeps the credential out of shell history and
+    harness scripts — env var still wins when both are set.
     """
+    global _s2_key_cache
+    if _s2_key_cache is not None:
+        return _s2_key_cache
     key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "").strip()
+    if not key:
+        try:
+            key = open(os.path.expanduser(_S2_KEY_FILE)).read().strip()
+        except OSError:
+            key = ""
+    _s2_key_cache = key
+    return key
+
+
+def _s2_headers() -> dict | None:
+    """Optional Semantic Scholar API key headers (see _s2_key)."""
+    key = _s2_key()
     return {"x-api-key": key} if key else None
 
 
@@ -119,6 +139,10 @@ async def polite_request(
 
     host = urlsplit(url).netloc
     min_interval = _HOST_MIN_INTERVAL.get(host, _DEFAULT_MIN_INTERVAL)
+    # Authenticated S2 gets a dedicated ~1 rps quota — the 3.5s pacing
+    # exists for the shared unauthenticated pool only.
+    if host == "api.semanticscholar.org" and _s2_key():
+        min_interval = 1.1
     last_ts = float((hosts.get(host) or {}).get("last_ts") or 0.0)
     wait = min_interval - (time.time() - last_ts)
     if wait > 0:
