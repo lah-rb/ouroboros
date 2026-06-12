@@ -1,0 +1,25 @@
+# Isolated OCR toolchain for the extractor flow set (scraper v2).
+#
+# Heavyweight, GPU-adjacent dependencies (PaddlePaddle, MLX) that must
+# NEVER enter the main ouroboros venv. The agent invokes extract_batch.py
+# through this package's own venv (tools/pdf_extract/.venv) via
+# run_command — see dev/setup_pdf_tools.sh for provisioning and
+# agent/actions/extraction_actions.py for the caller.
+#
+# Engine choice (live bake-off, June 2026): PaddleOCR-VL-1.6 with the
+# VLM component served by MLX (8-bit) — ~6s/page on Apple Silicon,
+# best structure ratio on every test page, best Chinese. The official
+# Apple Silicon path: paddle layout pipeline + mlx-vlm server backend.
+
+[project]
+name = "ouroboros-pdf-extract"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "paddlepaddle>=3.2.1",
+    "paddleocr[doc-parser]>=3.0",
+    "paddlex[ocr,genai-client]",
+    "mlx-vlm>=0.3.11",
+    "pymupdf>=1.24",
+    "pillow>=10.0",
+]

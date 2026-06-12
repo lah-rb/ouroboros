@@ -28,3 +28,7 @@ htmlcov/
 
 # Artifacts
 flows/compiled.json
+
+# PDF extraction toolchain (provisioned by dev/setup_pdf_tools.sh)
+tools/pdf_extract/.venv/
+tools/pdf_extract/models/
