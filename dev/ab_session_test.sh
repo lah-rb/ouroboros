@@ -27,6 +27,19 @@ CAP_WALL=2h
 # name:session_full_replay
 ARMS=( "save_load:false" "full_replay:true" )
 
+# Optional positional filter: run only the named arm(s), e.g.
+#   bash dev/ab_session_test.sh full_replay
+# to resume a paused A/B without re-running completed arms.
+if [ "$#" -gt 0 ]; then
+  FILTERED=()
+  for entry in "${ARMS[@]}"; do
+    for want in "$@"; do
+      [ "${entry%%:*}" = "$want" ] && FILTERED+=("$entry")
+    done
+  done
+  ARMS=("${FILTERED[@]}")
+fi
+
 mkdir -p "$AB"
 log(){ echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 health_ok(){ curl -s -m5 -X POST http://localhost:8008/graphql \
