@@ -17,15 +17,19 @@ Pipeline per paper:
      (size/entropy) into databank/figures/<paper_key>/fig_NN.png; the
      markdown references figures by relative path.
   4. Verification (truth-recall direction): on pages WITH a text
-     layer, the text layer's numeric tokens must appear in our markdown
-     (numbers are language-invariant grounding anchors) and sampled
-     truth 5-grams must land in it. Rates are corpus-weighted across
-     pages. Pages without a text layer are counted unverified —
-     flagged, never silently trusted. Calibration (live corpus):
+     layer, the PROSE text layer's numeric tokens must appear in our
+     markdown (numbers are language-invariant grounding anchors) and
+     sampled truth 5-grams must land in it. Rates are corpus-weighted
+     across pages. Pages without a text layer are counted unverified —
+     flagged, never silently trusted. "Prose" excludes vector-figure
+     text blocks (see _prose_text): publishers that draw figures as
+     vector art put axis ticks in the text layer, and the engine
+     legitimately renders those figures as images (live: 26 of 26
+     Nature-family papers failed at numeric 0.54-0.84 while faithful;
+     prose-only rescored them 0.91-1.00). Calibration (live corpus):
      faithful extractions measure numeric 0.89-0.95, span 0.83-0.88;
      residual misses are affiliation postal codes, reference page
-     ranges, and vector-figure axis text that legitimately lives in
-     the exported figure PNGs instead of the markdown.
+     ranges, and crystallographic overline notation.
 
 Output: one JSON report line per paper on stdout. The agent action
 (extraction_actions.extract_pdf_batch) parses these and applies the
@@ -64,6 +68,11 @@ _NUM_RE = re.compile(r"-?\d+\.\d+(?:[eE][+-]?\d+)?|-?\d{2,}")
 _SPAN_WORDS = 5  # n-gram length for sampled span checks
 _SPANS_PER_PAGE = 8
 
+# Vector-figure text filter: a text-layer block this short whose
+# characters are mostly digits is an axis tick / data label, not prose.
+_PROSE_MIN_BLOCK = 30  # chars; tick blocks are tiny ("20", "0.5", "2θ (°)")
+_PROSE_DIGIT_FRAC = 0.5
+
 # ── Figure filter constants ───────────────────────────────────────────
 
 _MIN_FIG_PX = 96  # short side below this = rule/ornament, drop
@@ -97,6 +106,29 @@ def _wait_health(port: int, timeout: float = 120.0) -> bool:
 def _norm(s: str) -> str:
     s = re.sub(r"[#*_`|\[\]()>~\-]", " ", s.lower())
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _prose_text(page) -> str:
+    """Text-layer prose for verification — vector-figure text excluded.
+
+    Publishers that draw figures as vector graphics (Nature's whole
+    family, some RSC/Elsevier) emit axis ticks and data labels into the
+    text layer. The VLM renders those figures as images, so against the
+    raw text layer every axis number counts as a miss. Drop short,
+    digit-dominated blocks; prose blocks keep all their numerics.
+    """
+    parts = []
+    for block in page.get_text("blocks"):
+        text = block[4]
+        stripped = re.sub(r"[\s,.\-–—°%()×±]+", "", text)
+        if (
+            len(text.strip()) < _PROSE_MIN_BLOCK
+            and stripped
+            and sum(c.isdigit() for c in stripped) / len(stripped) > _PROSE_DIGIT_FRAC
+        ):
+            continue
+        parts.append(text)
+    return "\n".join(parts)
 
 
 def _verify_page(md: str, truth: str) -> tuple[int, int, int, int]:
@@ -232,7 +264,7 @@ def extract_paper(pipe, pdf_path: str, key: str, databank_dir: str, dpi: int) ->
             for i, page in enumerate(doc):
                 png = os.path.join(tmp, f"p{i}.png")
                 page.get_pixmap(dpi=dpi).save(png)
-                truth = page.get_text("text")
+                truth = _prose_text(page)
 
                 parts = []
                 out_dir = os.path.join(tmp, f"out{i}")
