@@ -187,7 +187,13 @@ def main() -> None:
         return
 
     ab_dir = Path(sys.argv[1])
-    arm_dirs = sorted(d for d in ab_dir.glob("arm-*") if d.is_dir())
+
+    def _baseline_first(d: Path):
+        # Keep the save/load baseline as column A so Δ reads "B vs baseline".
+        n = d.name.lower()
+        return (0 if ("save" in n or "load" in n or "baseline" in n) else 1, n)
+
+    arm_dirs = sorted((d for d in ab_dir.glob("arm-*") if d.is_dir()), key=_baseline_first)
     if not arm_dirs:
         print(f"No arm-*/ subdirs in {ab_dir}")
         sys.exit(1)
