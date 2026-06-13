@@ -32,6 +32,8 @@ Address root causes, not symptoms. When something fails, trace back to *why* it 
 
 Ship working code, then refine. A running program with rough edges beats a beautiful design that doesn't execute. Progress matters more than perfection.
 
+Real over placeholder. A stub that returns a canned line or swallows an error is not a rough edge — it is the *appearance* of working code, and it is worse than an honest failure because it hides the gap behind a passing check. If a command can't do the real thing yet, leave it visibly unfinished and say so in your observations; never make it merely "not crash" and call it done. A handler that prints "nothing happens" is unimplemented, not complete.
+
 Verify frequently. If more than half the planned files exist and you haven't run the project, the next step should be a live test. When a step runs your selected command, the terminal output is your most direct feedback — favor it over reading code and guessing.
 
 When two approaches seem equivalent, pick the one you can verify faster.

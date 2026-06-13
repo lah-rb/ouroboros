@@ -6,11 +6,14 @@ This module handles loading, memory-mapping, and management of
 static knowledge base tokens.
 """
 
+import logging
 import mmap
 from typing import List
 
 # Local imports
 from core.config import get_config
+
+log = logging.getLogger("llm-mvp")
 
 
 class StaticTokensManager:
@@ -29,8 +32,29 @@ class StaticTokensManager:
         self._static_tokens_list: List[int] = []
 
     def load_static_buffer(self) -> None:
-        """Load the static token buffer from disk."""
+        """Load the static token buffer from disk.
+
+        Auto-builds the per-model cache first if it is missing or stale
+        (persona/knowledge/active-config changed since it was written), so
+        editing SOUL.md no longer needs a manual ``--prep`` — and the model
+        never silently runs against an outdated persona.
+        """
         config = get_config()
+
+        try:
+            from preprocessing.builder import build_and_write, cache_is_stale
+
+            if cache_is_stale(config):
+                log.info(
+                    "🧩 Static token cache missing or stale — rebuilding %s",
+                    config.knowledge.tokens_bin,
+                )
+                build_and_write(config, emit=log.info)
+        except Exception as exc:
+            # Don't fail startup on a build error; fall through and try to
+            # load whatever is on disk (lifecycle degrades to lightweight
+            # mode if that also fails).
+            log.warning("⚠️ Static token auto-build skipped: %s", exc)
 
         try:
             f = open(config.knowledge.tokens_bin, "rb")
