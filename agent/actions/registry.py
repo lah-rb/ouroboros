@@ -311,6 +311,11 @@ def build_action_registry() -> ActionRegistry:
         action_pdf_extract_sweep_next,
         action_reopen_extraction_goal,
     )
+    from agent.actions.operations_actions import (
+        action_derive_task_goal,
+        action_judge_task_completion,
+        action_store_completion_criteria,
+    )
     from agent.actions.batch_structural_actions import (
         action_apply_batch_results,
         action_run_batch_file_checks,
@@ -348,6 +353,9 @@ def build_action_registry() -> ActionRegistry:
     registry.register("apply_batch_results", action_apply_batch_results)
     # Extractor flow set (scraper v2 — PDF -> markdown+figures)
     registry.register("derive_extraction_goals", action_derive_extraction_goals)
+    registry.register("derive_task_goal", action_derive_task_goal)
+    registry.register("store_completion_criteria", action_store_completion_criteria)
+    registry.register("judge_task_completion", action_judge_task_completion)
     registry.register("pdf_extract_sweep_next", action_pdf_extract_sweep_next)
     registry.register("extract_pdf_batch", action_extract_pdf_batch)
     registry.register("check_extraction_complete", action_check_extraction_complete)

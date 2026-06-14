@@ -1,0 +1,60 @@
+# Prompt template: ops/derive_completion_criteria
+#
+# Derive the "definition of done" for a terminal task: a list of shell checks
+# that each exit 0 iff a required final-state condition holds. These mirror how
+# the task is graded (by final state), so they are observable STATE checks, not
+# transcript assertions.
+#
+# Pre-computed: task_spec (the task statement), working_directory
+
+id: ops/derive_completion_criteria
+description: "Derive observable shell checks that prove a terminal task complete"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a verification-planning module in an automated pipeline. Your
+      output is parsed as JSON. Return ONLY a JSON object inside a fenced code
+      block — no commentary.
+
+  - id: task
+    content: |
+      ## Task to verify
+      {context.task_spec}
+
+      Working directory: {context.working_directory}
+
+  - id: instructions
+    content: |
+      Produce the DEFINITION OF DONE: the shell checks that, if they all
+      succeed, prove the task above is complete. Each check is a single command
+      that **exits 0 iff a required end-state condition holds** — inspect the
+      FINAL state (files, their contents, a running service, exit codes), NOT
+      the steps taken to get there. Prefer the smallest set of necessary,
+      independent conditions (2-5). Use only standard tools; assume the command
+      runs in the working directory.
+
+  - id: output_format
+    content: |
+      Return a JSON object with a "checks" array. The example below is from an
+      UNRELATED task — it shows the SHAPE only. Write checks for the actual task.
+
+      ✅ CORRECT — observable final-state checks (illustrative: "create a
+      config that enables logging"):
+      ```json
+      {
+        "checks": [
+          {"command": "test -f config.yaml", "description": "config file exists"},
+          {"command": "grep -q 'logging: enabled' config.yaml", "description": "logging is enabled"}
+        ]
+      }
+      ```
+
+      ❌ WRONG — asserts steps/output instead of final state, or adds prose:
+      Here are the checks:
+      ```json
+      {"checks": [{"command": "echo done", "description": "ran the command"}]}
+      ```
+
+      Return ONLY the fenced JSON object.

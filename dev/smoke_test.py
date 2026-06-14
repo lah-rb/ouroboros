@@ -241,6 +241,14 @@ FLOW_INPUTS = {
         "mission_id": "test-mission-001",
         "working_directory": "/tmp/test-project",
     },
+    # Ops flow set
+    "ops_control": {
+        "mission_id": "test-mission-001",
+    },
+    "ops_task": {
+        "mission_id": "test-mission-001",
+        "working_directory": "/tmp/test-project",
+    },
     # Scraper flow set
     "research_control": {
         "mission_id": "test-mission-001",

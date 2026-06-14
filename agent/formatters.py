@@ -82,6 +82,33 @@ def format_existing_architecture(params: dict, namespaces: dict) -> str:
     return format_architecture_listing(params, namespaces)
 
 
+def format_feedback_block(params: dict, namespaces: dict) -> str:
+    """Render an ops TaskState's last_feedback as a charter feedback block
+    (empty on the first attempt) so the next run_session addresses it."""
+    td = params.get("source")
+    fb = str(getattr(td, "last_feedback", "") if td else "").strip()
+    if not fb:
+        return ""
+    return f"## FEEDBACK FROM YOUR LAST ATTEMPT — address this\n{fb}"
+
+
+def format_session_tail(params: dict, namespaces: dict) -> str:
+    """Tail of a terminal session transcript, for the completion judge."""
+    out = str(params.get("source") or "")
+    n = int(params.get("max_chars", 2000))
+    return out[-n:] if len(out) > n else out
+
+
+def format_completion_criteria(params: dict, namespaces: dict) -> str:
+    """Render an ops TaskState's completion_criteria as the {"checks": [...]}
+    JSON that action_run_validation_checks consumes (the ops definition-of-done
+    fed to the reused check-runner each work cycle)."""
+    import json
+
+    criteria = params.get("source") or []
+    return json.dumps({"checks": list(criteria)})
+
+
 def format_existing_goals(params: dict, namespaces: dict) -> str:
     """Render the mission's current goals (type/status/description) so a
     brownfield planner sees what already exists and won't re-emit it."""
@@ -402,6 +429,9 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_architecture_summary": format_architecture_summary,
     "format_architecture_listing": format_architecture_listing,
     "format_existing_architecture": format_existing_architecture,
+    "format_completion_criteria": format_completion_criteria,
+    "format_feedback_block": format_feedback_block,
+    "format_session_tail": format_session_tail,
     "format_existing_goals": format_existing_goals,
     "format_mission_meta": format_mission_meta,
     "format_project_file_list": format_project_file_list,

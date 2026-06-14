@@ -1,0 +1,121 @@
+"""Ops flow set — registration, phase routing, compiled wiring, e2e handoff.
+
+Pins the contract: the task goal (type "task_exec") drives the phase machine
+(task_exec while incomplete → complete when done), ops_task reuses run_session
+verbatim, and the intake → phase → judge → complete handoff composes.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+import pytest
+
+from agent.actions.mission_actions import action_check_pipeline_phase
+from agent.actions.operations_actions import (
+    TASK_GOAL_SIGNATURE,
+    action_derive_task_goal,
+    action_judge_task_completion,
+)
+from agent.effects.mock import MockEffects
+from agent.flow_sets import FLOW_SETS, get_flow_set
+from agent.models import FlowMeta, StepInput
+from agent.persistence.models import MissionConfig, MissionState
+
+
+def _mission() -> MissionState:
+    return MissionState(
+        objective="create a config.yaml that enables logging",
+        status="active",
+        config=MissionConfig(working_directory="/tmp/x", flow_set="ops"),
+    )
+
+
+def _si(mission, **ctx) -> StepInput:
+    return StepInput(
+        context={"mission": mission, **ctx},
+        params={},
+        meta=FlowMeta(flow_name="ops_control", step_id="x"),
+        effects=MockEffects(),
+    )
+
+
+# ── registration + phases ─────────────────────────────────────────────
+
+
+def test_ops_registered_with_entry_flow():
+    assert "ops" in FLOW_SETS
+    assert get_flow_set("ops").entry_flow == "ops_control"
+
+
+@pytest.mark.asyncio
+async def test_phase_task_exec_while_incomplete_then_complete():
+    m = _mission()
+    await action_derive_task_goal(_si(m))  # one incomplete task_exec goal
+    out = await action_check_pipeline_phase(_si(m))
+    assert out.result["phase"] == "task_exec"
+    # Mark the task goal complete → phase flips to complete.
+    next(g for g in m.goals if g.type == "task_exec").status = "complete"
+    out2 = await action_check_pipeline_phase(_si(m))
+    assert out2.result["phase"] == "complete"
+
+
+# ── compiled wiring ───────────────────────────────────────────────────
+
+
+def _compiled():
+    with open(os.path.join("flows", "compiled.json")) as f:
+        return json.load(f)
+
+
+def test_compiled_ops_wiring():
+    c = _compiled()
+    rules = c["ops_control"]["steps"]["check_phase"]["resolver"]["rules"]
+    transitions = {r["condition"]: r["transition"] for r in rules}
+    assert transitions["result.phase == 'task_exec'"] == "dispatch_task"
+    assert transitions["result.phase == 'complete'"] == "completed"
+    assert c["ops_control"]["steps"]["dispatch_task"]["tail_call"]["flow"] == "ops_task"
+    # ops_task reuses run_session verbatim and judges completion.
+    steps = c["ops_task"]["steps"]
+    assert steps["run_terminal"]["flow"] == "run_session"
+    assert steps["run_checks"]["action"] == "run_validation_checks"
+    assert steps["decide"]["action"] == "judge_task_completion"
+
+
+def test_completion_criteria_formatter_registered():
+    from agent.formatters import PRE_COMPUTE_FORMATTERS
+
+    assert "format_completion_criteria" in PRE_COMPUTE_FORMATTERS
+    # It renders the {"checks": [...]} shape the reused check-runner consumes.
+    out = PRE_COMPUTE_FORMATTERS["format_completion_criteria"](
+        {"source": [{"command": "test -f x"}]}, {}
+    )
+    assert json.loads(out) == {"checks": [{"command": "test -f x"}]}
+
+
+# ── e2e handoff (pure-Python, no LLM/terminal) ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ops_intake_to_complete_handoff():
+    m = _mission()
+    # Intake: one task goal + TaskState, definition-of-done pending.
+    await action_derive_task_goal(_si(m))
+    assert (await action_check_pipeline_phase(_si(m))).result["phase"] == "task_exec"
+
+    # A work cycle finishes: checks pass + judge confirms → goal complete.
+    out = await action_judge_task_completion(
+        _si(
+            m,
+            validation_results=[{"passed": True, "required": True}],
+            inference_response=json.dumps({"task_complete": True, "feedback": ""}),
+        )
+    )
+    assert out.result["task_done"] is True
+    assert (
+        next(g for g in m.goals if g.finding_signature == TASK_GOAL_SIGNATURE).status
+        == "complete"
+    )
+    # Phase now resolves to complete → ops_control would finalize.
+    assert (await action_check_pipeline_phase(_si(m))).result["phase"] == "complete"

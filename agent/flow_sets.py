@@ -171,6 +171,23 @@ EXTRACTOR_PHASES: tuple[PhaseRule, ...] = (
     ),
 )
 
+# The ops pipeline — a single terminal task worked until done. The task goal
+# (one, type "task_exec") is incomplete until the completion judge marks it
+# complete; then the run finishes. No multi-phase sweep.
+OPS_PHASES: tuple[PhaseRule, ...] = (
+    PhaseRule(
+        kind="goal_type_incomplete",
+        phase="task_exec",
+        goal_type="task_exec",
+        observation="Task in progress: {incomplete}/{total} task goal(s) incomplete",
+    ),
+    PhaseRule(
+        kind="terminal",
+        phase="complete",
+        observation="Task complete",
+    ),
+)
+
 FLOW_SETS: dict[str, FlowSetSpec] = {
     "code_core": FlowSetSpec(
         name="code_core",
@@ -186,6 +203,11 @@ FLOW_SETS: dict[str, FlowSetSpec] = {
         name="extractor",
         entry_flow="extract_control",
         phases=EXTRACTOR_PHASES,
+    ),
+    "ops": FlowSetSpec(
+        name="ops",
+        entry_flow="ops_control",
+        phases=OPS_PHASES,
     ),
 }
 

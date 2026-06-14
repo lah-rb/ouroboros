@@ -161,6 +161,7 @@ class GoalRecord(BaseModel):
         "discovery",
         "extraction",
         "pdf_extract",
+        "task_exec",
     ] = "structural"
     status: Literal["incomplete", "complete"] = "incomplete"
     associated_files: list[str] = Field(default_factory=list)
@@ -530,6 +531,26 @@ class ResearchPlanState(BaseModel):
     schema_version: int = 1
 
 
+class TaskState(BaseModel):
+    """The ops flow set's plan object (mission.task_definition).
+
+    The analog of ArchitectureState/ResearchPlanState for terminal-task
+    missions: the objective IS the task statement, and the "definition of
+    done" is a list of observable shell checks (each exits 0 iff its
+    condition holds) derived once up front. terminal-bench grades by final
+    container state, so these self-checks mirror the grader's shape.
+    """
+
+    task_spec: str = ""
+    # Definition of done: [{command, description}] — fed to
+    # action_run_validation_checks (return_code == 0 ⇒ condition met).
+    completion_criteria: list[dict] = Field(default_factory=list)
+    # The latest judge feedback, seeded into the next run_session loop.
+    last_feedback: str = ""
+    attempts: int = 0
+    schema_version: int = 1
+
+
 class MissionState(BaseModel):
     """Top-level mission state — serialized to .agent/mission.json.
 
@@ -547,6 +568,9 @@ class MissionState(BaseModel):
     architecture: ArchitectureState | None = None
     # Scraper flow set's plan object (additive — code missions leave it None).
     research_plan: ResearchPlanState | None = None
+    # Ops flow set's plan object (terminal-task missions). Additive default
+    # keeps non-ops mission.json files loading unchanged.
+    task_definition: TaskState | None = None
     dispatch_history: list[DispatchRecord] = Field(default_factory=list)
     environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
     # How many times this mission has been reopened after reaching a terminal

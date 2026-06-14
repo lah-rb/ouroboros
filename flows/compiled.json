@@ -10073,6 +10073,725 @@
       "fallback": "reorganize"
     }
   },
+  "ops_control": {
+    "flow": "ops_control",
+    "version": 1,
+    "description": "Ops pipeline controller. Derives one task goal + a definition-of-done\nfrom the objective, then drives run_session work cycles and judges\ncompletion against the done-checks until the task is complete.",
+    "context_tier": "project_goal",
+    "returns": {
+      "final_status": {
+        "type": "string",
+        "from": "context.mission.status",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id"
+      ],
+      "optional": [
+        "last_result",
+        "last_status",
+        "last_goal_id"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.4"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state and event queue",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.mission.status == 'active'",
+              "transition": "apply_last_result"
+            },
+            {
+              "condition": "result.mission.status == 'paused'",
+              "transition": "idle"
+            },
+            {
+              "condition": "result.mission.status == 'completed'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "aborted"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_last_result": {
+        "action": "attach_directive_report",
+        "description": "Attach returning flow's directive report to goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "events",
+            "last_result",
+            "last_status",
+            "last_goal_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.events_pending == true",
+              "transition": "process_events"
+            },
+            {
+              "condition": "true",
+              "transition": "bootstrap_goals"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "process_events": {
+        "action": "handle_events",
+        "description": "Process user messages, abort/pause signals",
+        "context": {
+          "required": [
+            "mission",
+            "events"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.abort_requested == true",
+              "transition": "aborted"
+            },
+            {
+              "condition": "result.pause_requested == true",
+              "transition": "idle"
+            },
+            {
+              "condition": "true",
+              "transition": "bootstrap_goals"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "bootstrap_goals": {
+        "action": "derive_task_goal",
+        "description": "Derive the single task goal + TaskState from the objective",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.criteria_needed == true",
+              "transition": "derive_criteria"
+            },
+            {
+              "condition": "result.goals_ready == true",
+              "transition": "check_phase"
+            },
+            {
+              "condition": "true",
+              "transition": "completed"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "derive_criteria": {
+        "action": "inference",
+        "description": "Derive the definition-of-done (completion checks) once",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "ops/derive_completion_criteria",
+          "context_keys": [
+            "task_spec",
+            "working_directory"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "task_spec",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          },
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "working_directory",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "config.working_directory"
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.0"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "store_criteria"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "store_criteria": {
+        "action": "store_completion_criteria",
+        "description": "Parse + store the definition-of-done on the TaskState",
+        "context": {
+          "required": [
+            "mission",
+            "inference_response"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "check_phase": {
+        "action": "check_pipeline_phase",
+        "description": "Task incomplete \u2192 work cycle; complete \u2192 finish",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.phase == 'task_exec'",
+              "transition": "dispatch_task"
+            },
+            {
+              "condition": "result.phase == 'complete'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "completed"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_task": {
+        "action": "noop",
+        "description": "Run one work cycle (charter \u2192 run_session \u2192 check \u2192 judge)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "ops_task",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
+      },
+      "completed": {
+        "action": "finalize_mission",
+        "description": "Mark mission complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "completed"
+      },
+      "idle": {
+        "action": "enter_idle",
+        "description": "Wait for events",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "ops_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          },
+          "delay": 5
+        }
+      },
+      "aborted": {
+        "action": "finalize_mission",
+        "description": "Mission aborted",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {
+          "abort": true
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "aborted"
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "ops_task": {
+    "flow": "ops_task",
+    "version": 1,
+    "description": "One ops work cycle: accomplish-charter \u2192 run_session \u2192 completion\nchecks \u2192 judge \u2192 complete or loop-with-feedback.",
+    "context_tier": "project_goal",
+    "returns": {
+      "task_done": {
+        "type": "bool",
+        "from": "context.task_done",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.4"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.mission.status == 'active'",
+              "transition": "plan_charter"
+            },
+            {
+              "condition": "true",
+              "transition": "return_loop"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "plan_charter": {
+        "action": "inference",
+        "description": "Write an accomplish-charter for the terminal session",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "ops/charter_accomplish",
+          "context_keys": [
+            "task_spec",
+            "feedback_block"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "task_spec",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          },
+          {
+            "formatter": "format_feedback_block",
+            "output_key": "feedback_block",
+            "params": {
+              "source": {
+                "$ref": "context.mission.task_definition"
+              }
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.4"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "run_terminal"
+            },
+            {
+              "condition": "true",
+              "transition": "return_loop"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_terminal": {
+        "action": "flow",
+        "description": "Accomplish the task in an interactive terminal session",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "effects": [],
+        "flow": "run_session",
+        "input_map": {
+          "execution_persona": {
+            "$ref": "context.inference_response"
+          },
+          "working_directory": {
+            "$ref": "input.working_directory"
+          }
+        },
+        "publishes": [
+          "terminal_output",
+          "inference_session_id"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "run_checks"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "run_checks": {
+        "action": "run_validation_checks",
+        "description": "Run the completion checks against the final state",
+        "context": {
+          "required": [],
+          "optional": [
+            "validation_strategy"
+          ]
+        },
+        "params": {
+          "max_checks": 8
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_completion_criteria",
+            "output_key": "validation_strategy",
+            "params": {
+              "source": {
+                "$ref": "context.mission.task_definition.completion_criteria"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "judge_step"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "judge_step": {
+        "action": "inference",
+        "description": "Judge whether the task is complete",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "validation_results",
+            "terminal_output"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "ops/judge_task_completion",
+          "context_keys": [
+            "task_spec",
+            "validation_summary",
+            "session_tail"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "task_spec",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          },
+          {
+            "formatter": "format_validation_results",
+            "output_key": "validation_summary",
+            "params": {
+              "source": {
+                "$ref": "context.validation_results"
+              }
+            }
+          },
+          {
+            "formatter": "format_session_tail",
+            "output_key": "session_tail",
+            "params": {
+              "source": {
+                "$ref": "context.terminal_output"
+              },
+              "max_chars": 2000
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.1"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "decide"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "decide": {
+        "action": "judge_task_completion",
+        "description": "Complete the goal (done) or store feedback (loop)",
+        "context": {
+          "required": [
+            "mission",
+            "inference_response"
+          ],
+          "optional": [
+            "validation_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.task_done == true",
+              "transition": "return_success"
+            },
+            {
+              "condition": "true",
+              "transition": "return_loop"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "return_success": {
+        "action": "noop",
+        "description": "Task complete \u2014 return to ops_control",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "ops_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_status": "success"
+          }
+        }
+      },
+      "return_loop": {
+        "action": "noop",
+        "description": "Not done \u2014 return to ops_control for another cycle",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "ops_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_status": "in_progress"
+          }
+        }
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "acquire_catalog": {
     "flow": "acquire_catalog",
     "version": 1,

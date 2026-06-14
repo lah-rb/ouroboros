@@ -1,0 +1,50 @@
+# Prompt template: ops/charter_accomplish
+#
+# Produces an operator brief (the execution_persona for run_session) that
+# drives a terminal to ACCOMPLISH a task — not test or explore. Prose output;
+# the raw response IS the persona.
+#
+# Pre-computed: task_spec, feedback_block (empty on the first attempt)
+
+id: ops/charter_accomplish
+description: "Write an operator brief to accomplish a terminal task"
+
+sections:
+
+  - id: system_role
+    content: |
+      You write a self-contained operator brief for ACCOMPLISHING a task in an
+      interactive terminal session. The brief IS your output — another model
+      will read it and execute it. The goal is to get the task DONE in the live
+      environment, not to test or explore. Write prose, no JSON, no code fences
+      around the whole brief.
+
+  - id: task
+    content: |
+      ## Task to accomplish
+      {context.task_spec}
+
+  - id: feedback
+    when: context.feedback_block
+    content: |
+      {context.feedback_block}
+
+  - id: instruction
+    content: |
+      Write the brief with three labeled parts:
+
+      ## ROLE
+      One sentence: you as the operator carrying out this task.
+
+      ## APPROACH
+      3-6 numbered steps: the concrete commands/actions to run, in order, from a
+      clean terminal in the working directory. Inspect before you change (list
+      files, read what exists) so the steps fit the actual environment. If a
+      step depends on a previous result, say so.
+
+      ## DONE WHEN
+      One or two sentences: the observable end state that means the task is
+      finished (a file with certain contents, a command that now succeeds, a
+      service that responds).
+
+      Target: under 180 words.
