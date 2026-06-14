@@ -25,6 +25,7 @@ from lint_flows import (  # noqa: E402
     _evaluate_condition,
     _resolver_possible_targets,
     check_path_reachability,
+    check_precompute_context_declared,
 )
 
 # ── Condition-evaluator unit tests ───────────────────────────────────
@@ -267,3 +268,63 @@ def test_reachability_seeds_flow_inputs_and_ambient_keys() -> None:
         f"Flow inputs and ambient keys must be treated as available "
         f"from flow entry. Got findings: {findings!r}"
     )
+
+
+# ── Pre-compute context-ref declaration ──────────────────────────────
+
+
+def test_precompute_context_ref_must_be_declared() -> None:
+    """A pre_compute $ref to context.<key> the step doesn't declare is an
+    ERROR: the runtime context filter hides the key, so the ref resolves to
+    None and the formatter renders empty. Regression for the ops_task.run_checks
+    bug (referenced context.mission without declaring it → empty checks →
+    completion gate silently bypassed)."""
+    flows = _make_flow(
+        "f",
+        "a",
+        {
+            "a": {
+                "context": {"required": [], "optional": ["validation_strategy"]},
+                "pre_compute": [
+                    {
+                        "formatter": "format_completion_criteria",
+                        "output_key": "validation_strategy",
+                        "params": {
+                            "source": {
+                                "$ref": "context.mission.task_definition.completion_criteria"
+                            }
+                        },
+                    }
+                ],
+                "publishes": [],
+            },
+        },
+    )
+    findings = check_precompute_context_declared(flows)
+    assert any(
+        f.step == "a" and f.check == "precompute_context_undeclared" for f in findings
+    ), f"undeclared context.mission in pre_compute must be flagged. Got: {findings!r}"
+
+
+def test_precompute_context_ref_declared_is_clean() -> None:
+    """When the step declares the context key (or it's ambient), no finding."""
+    flows = _make_flow(
+        "f",
+        "a",
+        {
+            "a": {
+                "context": {"required": ["mission"], "optional": []},
+                "pre_compute": [
+                    {
+                        "formatter": "format_completion_criteria",
+                        "output_key": "validation_strategy",
+                        "params": {
+                            "source": {"$ref": "context.mission.task_definition"}
+                        },
+                    }
+                ],
+                "publishes": [],
+            },
+        },
+    )
+    assert not check_precompute_context_declared(flows)

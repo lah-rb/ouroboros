@@ -1,0 +1,32 @@
+# ops flow set — local acceptance for the promoted run_session task type.
+#
+# A single self-contained terminal task worked until done. The objective IS
+# the task statement; the agent derives a definition-of-done (observable
+# final-state shell checks), drives the terminal to accomplish it, and the
+# deterministic checks gate completion.
+#
+# Run:
+#   uv run ouroboros.py cue-compile
+#   uv run ouroboros.py mission create --mission_config ops_demo
+#   uv run ouroboros.py start --working-dir /tmp/ouroboros-ops-demo --max-cycles 6
+# version: 1
+
+objective: >
+  In the working directory, create an executable shell script named
+  linecount.sh that takes a filename as its first argument and prints only
+  the number of lines in that file. Also create a text file named sample.txt
+  containing exactly three lines of text. Running ./linecount.sh sample.txt
+  must print 3 and nothing else.
+
+flow_set: ops
+working_dir: "/tmp/ouroboros-ops-demo"
+effects_profile: local
+llmvp_endpoint: "http://localhost:8008/graphql"
+
+# One task, worked until the completion checks pass; wall clock is the
+# backstop. --max-cycles on the CLI is the hard safety bound for this run.
+run_until: completed
+max_wall_clock: 20m
+
+pre_create:
+  - "uv run ouroboros.py cue-compile"

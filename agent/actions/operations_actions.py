@@ -155,13 +155,20 @@ async def action_judge_task_completion(step_input: StepInput) -> StepOutput:
         return StepOutput(result={"task_done": False}, observations="No mission")
 
     # Deterministic signal from the completion checks (computed from the
-    # published results so we don't depend on a result-only field). With no
-    # criteria parsed, fall back to the judge alone rather than never finishing.
+    # published results so we don't depend on a result-only field).
     results = step_input.context.get("validation_results") or []
+    td = getattr(mission, "task_definition", None)
+    criteria_defined = bool(getattr(td, "completion_criteria", None))
     if results:
         checks_passed = all(r.get("passed") for r in results if r.get("required", True))
+    elif criteria_defined:
+        # Criteria EXIST but produced no results — the checks didn't actually
+        # run (a wiring/exec failure). The deterministic gate is the whole point
+        # of an ops task, so don't let the judge declare done over a silent
+        # bypass; loop instead (the next cycle re-runs the checks).
+        checks_passed = False
     else:
-        checks_passed = True  # no deterministic criteria — defer to the judge
+        checks_passed = True  # genuinely no deterministic criteria — defer to judge
 
     parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
     parsed = parsed if isinstance(parsed, dict) else {}

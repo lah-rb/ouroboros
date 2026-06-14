@@ -419,6 +419,65 @@ def check_publish_consume_chains(flows: dict) -> list[LintResult]:
     return results
 
 
+# ── Check 3a: Pre-compute context refs must be declared ──────────────
+
+
+def check_precompute_context_declared(flows: dict) -> list[LintResult]:
+    """Flag pre_compute $refs to context.<key> the step doesn't declare.
+
+    _build_step_input filters the accumulator to each step's declared context
+    (required + optional) before pre_compute runs. A pre_compute that references
+    context.<key> without declaring it therefore sees None — the formatter
+    renders empty and the step runs on missing data, silently, with no error.
+
+    Regression guard: ops_task.run_checks referenced
+    context.mission.task_definition.completion_criteria in a pre_compute but
+    declared only validation_strategy, so it rendered an empty
+    definition-of-done and bypassed the completion gate entirely.
+    """
+    ambient_keys = frozenset({"session_injections", "inference_session_id"})
+    try:
+        from agent.runtime import _AMBIENT_CONTEXT_KEYS as _runtime_ambient
+
+        ambient_keys = frozenset(_runtime_ambient)
+    except Exception:
+        pass
+
+    results = []
+    for flow_name, flow_def in _iter_flows(flows):
+        for step_name, step_def in flow_def["steps"].items():
+            ctx = step_def.get("context", {})
+            declared = set(ctx.get("required", [])) | set(ctx.get("optional", []))
+            declared |= ambient_keys
+            # Pre-compute params only (input_map refs resolve against the
+            # tail-call/sub-flow namespace, not this step's filtered context).
+            for pc in step_def.get("pre_compute", []):
+                for v in (pc.get("params", {}) or {}).values():
+                    if not (isinstance(v, dict) and "$ref" in v):
+                        continue
+                    ref = v["$ref"]
+                    if not (isinstance(ref, str) and ref.startswith("context.")):
+                        continue
+                    key = ref.split(".")[1]
+                    if key not in declared:
+                        results.append(
+                            LintResult(
+                                level="ERROR",
+                                flow=flow_name,
+                                step=step_name,
+                                check="precompute_context_undeclared",
+                                message=(
+                                    f"pre_compute references 'context.{key}' but "
+                                    f"the step declares only "
+                                    f"{sorted(declared - ambient_keys) or '(none)'}; "
+                                    f"the context filter hides it and the $ref "
+                                    f"resolves to None"
+                                ),
+                            )
+                        )
+    return results
+
+
 # ── Check 3b: Path-reachability of required context ──────────────────
 
 
@@ -1209,6 +1268,7 @@ def lint(
 
     # Strategy 3: Publish/consume chains
     results.extend(check_publish_consume_chains(flows))
+    results.extend(check_precompute_context_declared(flows))
 
     # Strategy 3b: Path reachability of required context (stronger —
     # catches gaps where the publisher exists but isn't on the taken path)

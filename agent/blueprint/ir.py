@@ -107,6 +107,9 @@ class StepIR:
     pre_compute_input_refs: list[str] = field(
         default_factory=list
     )  # input.<name> refs in pre_compute params
+    pre_compute_context_refs: list[str] = field(
+        default_factory=list
+    )  # context.<key> refs in pre_compute params (top-level key)
     params_input_refs: list[str] = field(
         default_factory=list
     )  # input.<name> refs in step-level params

@@ -92,7 +92,14 @@ ops_task: #FlowDefinition & {
 		run_checks: #StepDefinition & {
 			action:      "run_validation_checks"
 			description: "Run the completion checks against the final state"
-			context: optional: ["validation_strategy"]
+			// mission is REQUIRED: the pre_compute reads the stored criteria off
+			// it. The accumulator is filtered to a step's declared context, so an
+			// undeclared mission would render an empty strategy → zero checks →
+			// the deterministic gate silently bypassed (the judge alone deciding).
+			context: {
+				required: ["mission"]
+				optional: ["validation_strategy"]
+			}
 			pre_compute: [{
 				formatter:  "format_completion_criteria"
 				output_key: "validation_strategy"

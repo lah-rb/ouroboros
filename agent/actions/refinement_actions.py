@@ -684,6 +684,7 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
         results.append(
             {
                 "name": check.get("name", "unnamed check"),
+                "command": check.get("command", ""),
                 "passed": passed,
                 "required": check.get("required", True),
                 "stdout": cmd_result.stdout[:500],

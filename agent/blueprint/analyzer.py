@@ -361,9 +361,10 @@ def _step_def_to_ir(
         )
         prompt_injects.extend(f"input.{k}" for k in step_def.prompt_template.input_keys)
 
-    # Extract pre-compute formatter names and input.* $ref references
+    # Extract pre-compute formatter names and input.* / context.* $ref refs
     pre_compute_names: list[str] = []
     pre_compute_input_refs: list[str] = []
+    pre_compute_context_refs: list[str] = []
     if step_def.pre_compute:
         for pc in step_def.pre_compute:
             name = pc.formatter if hasattr(pc, "formatter") else pc.get("formatter", "")
@@ -377,6 +378,11 @@ def _step_def_to_ir(
                         # Take the top-level field name (input.foo.bar → foo)
                         pre_compute_input_refs.append(
                             ref[len("input.") :].split(".")[0]
+                        )
+                    elif isinstance(ref, str) and ref.startswith("context."):
+                        # Top-level context key (context.mission.x.y → mission)
+                        pre_compute_context_refs.append(
+                            ref[len("context.") :].split(".")[0]
                         )
 
     # Extract input.* $ref references from step-level params
@@ -431,6 +437,7 @@ def _step_def_to_ir(
         prompt_injects=prompt_injects,
         pre_compute=pre_compute_names,
         pre_compute_input_refs=pre_compute_input_refs,
+        pre_compute_context_refs=pre_compute_context_refs,
         params_input_refs=params_input_refs,
         config=config,
         resolver=resolver,

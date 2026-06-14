@@ -10602,7 +10602,9 @@
         "action": "run_validation_checks",
         "description": "Run the completion checks against the final state",
         "context": {
-          "required": [],
+          "required": [
+            "mission"
+          ],
           "optional": [
             "validation_strategy"
           ]

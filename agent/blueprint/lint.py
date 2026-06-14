@@ -49,6 +49,7 @@ def lint_flows(ir: BlueprintIR, verbose: bool = False) -> list[LintResult]:
     results.extend(_check_unused_optional_inputs(ir))
     results.extend(_check_published_never_consumed(ir))
     results.extend(_check_consumed_never_published(ir))
+    results.extend(_check_precompute_context_refs_declared(ir))
     results.extend(_check_resolver_conventions(ir))
     results.extend(_check_duplicate_class_defs())
 
@@ -217,6 +218,57 @@ def _check_consumed_never_published(ir: BlueprintIR) -> list[LintResult]:
                             step=step_name,
                             check="consumed_never_published",
                             message=f"requires '{key}' but no upstream step or input publishes it",
+                        )
+                    )
+
+    return results
+
+
+# ── Check 4b: Pre-compute context refs must be declared ──────────────
+
+# Context keys that flow through every step without declaration (mirrors
+# runtime._AMBIENT_CONTEXT_KEYS). A pre_compute may reference these without
+# declaring them; everything else must be declared or the runtime's context
+# filter hides it and the $ref silently resolves to None.
+_AMBIENT_CONTEXT_KEYS: frozenset[str] = frozenset(
+    {"session_injections", "inference_session_id"}
+)
+
+
+def _check_precompute_context_refs_declared(ir: BlueprintIR) -> list[LintResult]:
+    """Error when a pre_compute references context.<key> the step doesn't declare.
+
+    The runtime filters each step's context to its declared required+optional
+    keys before running pre_compute. An undeclared context.<key> in a pre_compute
+    $ref therefore resolves to None — the formatter renders empty and the step
+    runs on missing data with no error. (Regression guard: ops_task.run_checks
+    referenced context.mission without declaring it, rendering an empty
+    definition-of-done and silently bypassing the completion gate.)
+    """
+    results = []
+
+    for flow_name, flow in ir.flows.items():
+        if not isinstance(flow, FlowIR):
+            continue
+        for step_name, step in flow.steps.items():
+            if not isinstance(step, StepIR):
+                continue
+            declared = set(step.context_required) | set(step.context_optional)
+            declared |= _AMBIENT_CONTEXT_KEYS
+            for key in step.pre_compute_context_refs:
+                if key not in declared:
+                    results.append(
+                        LintResult(
+                            level="ERROR",
+                            flow=flow_name,
+                            step=step_name,
+                            check="precompute_context_ref_undeclared",
+                            message=(
+                                f"pre_compute references 'context.{key}' but the "
+                                f"step does not declare it (required/optional); "
+                                f"the runtime context filter will hide it and the "
+                                f"$ref resolves to None"
+                            ),
                         )
                     )
 

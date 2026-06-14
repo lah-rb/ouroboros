@@ -171,3 +171,24 @@ async def test_judge_with_no_criteria_defers_to_judge():
         )
     )
     assert out.result["task_done"] is True
+
+
+@pytest.mark.asyncio
+async def test_judge_not_done_when_criteria_defined_but_no_results():
+    # Silent-bypass guard: criteria EXIST but produced no results (the checks
+    # didn't run — a wiring failure). The judge must not declare done on its
+    # own; the deterministic gate is the point. Regression for the M3 bug where
+    # run_checks couldn't see mission and ran zero checks.
+    m = _mission(task=True)
+    m.task_definition.completion_criteria = [
+        {"command": "test -f config.yaml", "required": True}
+    ]
+    out = await action_judge_task_completion(
+        _si(
+            m,
+            validation_results=[],  # checks didn't run despite criteria existing
+            inference_response=json.dumps({"task_complete": True, "feedback": ""}),
+        )
+    )
+    assert out.result["task_done"] is False
+    assert next(g for g in m.goals if g.type == "task_exec").status == "incomplete"

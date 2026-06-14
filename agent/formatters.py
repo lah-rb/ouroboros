@@ -204,6 +204,11 @@ def format_validation_results(params: dict, namespaces: dict) -> str:
         status = "PASS" if check.get("passed", False) else "FAIL"
         lines.append(f"- {check.get('name', '?')}: {status}")
         if not check.get("passed"):
+            # Surface the command so a judge can see WHY it failed — a boolean
+            # check (e.g. [ "$(cmd)" = "3" ]) emits no output of its own.
+            cmd = check.get("command", "")
+            if cmd:
+                lines.append(f"  command: {cmd}")
             for key in ("stdout", "stderr"):
                 val = check.get(key, "")
                 if val:
