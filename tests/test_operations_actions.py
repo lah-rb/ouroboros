@@ -161,16 +161,22 @@ async def test_judge_not_done_stores_judge_feedback():
 
 
 @pytest.mark.asyncio
-async def test_judge_with_no_criteria_defers_to_judge():
-    m = _mission(task=True)
+async def test_judge_with_no_criteria_is_not_done():
+    # Integrity: an ops task is never certified done without a derived
+    # definition-of-done. Zero criteria (derivation hasn't succeeded — e.g. a
+    # transient inference error) must NOT complete on the judge alone, even
+    # when the judge says complete. Closes the judge-only escape hatch.
+    m = _mission(task=True)  # task_definition present, completion_criteria empty
     out = await action_judge_task_completion(
         _si(
             m,
-            validation_results=[],  # no deterministic checks
+            validation_results=[],  # no deterministic checks ran
             inference_response=json.dumps({"task_complete": True, "feedback": ""}),
         )
     )
-    assert out.result["task_done"] is True
+    assert out.result["task_done"] is False
+    assert next(g for g in m.goals if g.type == "task_exec").status == "incomplete"
+    assert "definition-of-done" in m.task_definition.last_feedback
 
 
 @pytest.mark.asyncio

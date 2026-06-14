@@ -75,6 +75,15 @@ def test_compiled_ops_wiring():
     transitions = {r["condition"]: r["transition"] for r in rules}
     assert transitions["result.phase == 'task_exec'"] == "dispatch_task"
     assert transitions["result.phase == 'complete'"] == "completed"
+    # Empty definition-of-done derivation re-loops to re-derive (mandatory gate),
+    # rather than storing 0 checks and running a session against no gate.
+    derive_rules = c["ops_control"]["steps"]["derive_criteria"]["resolver"]["rules"]
+    dt = {r["condition"]: r["transition"] for r in derive_rules}
+    assert dt["result.tokens_generated > 0"] == "store_criteria"
+    assert dt["true"] == "retry_setup"
+    assert (
+        c["ops_control"]["steps"]["retry_setup"]["tail_call"]["flow"] == "ops_control"
+    )
     assert c["ops_control"]["steps"]["dispatch_task"]["tail_call"]["flow"] == "ops_task"
     # ops_task reuses run_session verbatim and judges completion.
     steps = c["ops_task"]["steps"]
@@ -87,11 +96,15 @@ def test_completion_criteria_formatter_registered():
     from agent.formatters import PRE_COMPUTE_FORMATTERS
 
     assert "format_completion_criteria" in PRE_COMPUTE_FORMATTERS
-    # It renders the {"checks": [...]} shape the reused check-runner consumes.
+    # It renders the {"checks": [...]} shape the reused check-runner consumes,
+    # wrapping each command as ["/bin/sh", "-c", cmd] so shell syntax (quotes,
+    # pipes, $(), [ ]) runs through a shell instead of being exec'd as argv.
     out = PRE_COMPUTE_FORMATTERS["format_completion_criteria"](
-        {"source": [{"command": "test -f x"}]}, {}
+        {"source": [{"command": "grep -q 'x y' f"}]}, {}
     )
-    assert json.loads(out) == {"checks": [{"command": "test -f x"}]}
+    assert json.loads(out) == {
+        "checks": [{"command": ["/bin/sh", "-c", "grep -q 'x y' f"]}]
+    }
 
 
 # ── e2e handoff (pure-Python, no LLM/terminal) ────────────────────────

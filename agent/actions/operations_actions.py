@@ -155,20 +155,23 @@ async def action_judge_task_completion(step_input: StepInput) -> StepOutput:
         return StepOutput(result={"task_done": False}, observations="No mission")
 
     # Deterministic signal from the completion checks (computed from the
-    # published results so we don't depend on a result-only field).
+    # published results so we don't depend on a result-only field). An ops task
+    # is certified done ONLY against a derived definition-of-done — never on the
+    # judge alone. So BOTH "no criteria at all" (derivation hasn't succeeded —
+    # e.g. a transient inference error returned empty) and "criteria exist but
+    # produced no results" (the checks didn't run — a wiring failure) are NOT
+    # done: loop, and the next cycle re-derives / re-runs. This closes the
+    # judge-only escape hatch that would otherwise complete a task whose
+    # definition-of-done was never established.
     results = step_input.context.get("validation_results") or []
     td = getattr(mission, "task_definition", None)
     criteria_defined = bool(getattr(td, "completion_criteria", None))
     if results:
         checks_passed = all(r.get("passed") for r in results if r.get("required", True))
-    elif criteria_defined:
-        # Criteria EXIST but produced no results — the checks didn't actually
-        # run (a wiring/exec failure). The deterministic gate is the whole point
-        # of an ops task, so don't let the judge declare done over a silent
-        # bypass; loop instead (the next cycle re-runs the checks).
-        checks_passed = False
+        no_criteria = False
     else:
-        checks_passed = True  # genuinely no deterministic criteria — defer to judge
+        checks_passed = False
+        no_criteria = not criteria_defined
 
     parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
     parsed = parsed if isinstance(parsed, dict) else {}
@@ -190,12 +193,23 @@ async def action_judge_task_completion(step_input: StepInput) -> StepOutput:
         observation = "Ops task complete (checks pass + judge confirms)"
     else:
         if getattr(mission, "task_definition", None) is not None:
-            # Prefer the judge's note; fall back to "checks still failing".
-            mission.task_definition.last_feedback = feedback or (
-                "Some completion checks still fail — keep working toward them."
-            )
+            # Prefer the judge's note; fall back to a reason-specific default.
+            if no_criteria:
+                default_fb = (
+                    "The definition-of-done has not been derived yet — completion "
+                    "cannot be certified. Keep working; criteria will be re-derived."
+                )
+            else:
+                default_fb = (
+                    "Some completion checks still fail — keep working toward them."
+                )
+            mission.task_definition.last_feedback = feedback or default_fb
             mission.task_definition.attempts += 1
-        why = "checks fail" if not checks_passed else "judge: not yet done"
+        why = (
+            "no definition-of-done"
+            if no_criteria
+            else ("checks fail" if not checks_passed else "judge: not yet done")
+        )
         observation = f"Ops task not done ({why}) — looping with feedback"
 
     if effects:

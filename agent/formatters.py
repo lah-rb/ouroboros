@@ -102,11 +102,30 @@ def format_session_tail(params: dict, namespaces: dict) -> str:
 def format_completion_criteria(params: dict, namespaces: dict) -> str:
     """Render an ops TaskState's completion_criteria as the {"checks": [...]}
     JSON that action_run_validation_checks consumes (the ops definition-of-done
-    fed to the reused check-runner each work cycle)."""
+    fed to the reused check-runner each work cycle).
+
+    Each check's command is wrapped as ``["/bin/sh", "-c", cmd]`` so it runs
+    through a shell: the criteria are shell one-liners (quotes, pipes, ``$(...)``,
+    ``[ ... ]``, ``&&``), but the effects' run_command execs argv with NO shell
+    and the check-runner naive-splits a bare string — which mangles every
+    non-trivial check (``grep -qE 'x'`` keeps the quotes literal; ``a | b``
+    becomes args to ``a``). Passing a list skips the split and the shell parses
+    the full line. Matches the ``/bin/sh -c`` convention in pipeline_actions.
+    The stored criteria stay readable strings; only the rendered strategy wraps.
+    """
     import json
 
     criteria = params.get("source") or []
-    return json.dumps({"checks": list(criteria)})
+    checks = []
+    for c in criteria:
+        if not isinstance(c, dict):
+            continue
+        cmd = c.get("command")
+        if isinstance(cmd, str) and cmd.strip():
+            checks.append({**c, "command": ["/bin/sh", "-c", cmd]})
+        else:
+            checks.append(c)
+    return json.dumps({"checks": checks})
 
 
 def format_existing_goals(params: dict, namespaces: dict) -> str:
@@ -207,6 +226,13 @@ def format_validation_results(params: dict, namespaces: dict) -> str:
             # Surface the command so a judge can see WHY it failed — a boolean
             # check (e.g. [ "$(cmd)" = "3" ]) emits no output of its own.
             cmd = check.get("command", "")
+            if isinstance(cmd, list):
+                # Unwrap ["/bin/sh", "-c", X] → X for readability.
+                cmd = (
+                    cmd[-1]
+                    if len(cmd) >= 3 and cmd[0] in ("/bin/sh", "sh", "bash")
+                    else " ".join(str(p) for p in cmd)
+                )
             if cmd:
                 lines.append(f"  command: {cmd}")
             for key in ("stdout", "stderr"):

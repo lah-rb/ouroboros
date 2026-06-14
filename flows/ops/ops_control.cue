@@ -119,9 +119,30 @@ ops_control: #FlowDefinition & {
 			config: temperature: "t*0.0"
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "store_criteria"}]
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "store_criteria"},
+					{condition: "true", transition: "retry_setup"},
+				]
 			}
 			publishes: ["inference_response"]
+		}
+
+		// Derivation came back empty (e.g. a transient inference error). The
+		// definition-of-done is mandatory — an ops task is never certified done
+		// without it — so re-loop the controller (after a short delay to let the
+		// inference instance free) and re-derive, rather than storing 0 checks
+		// and running a work session against no gate. Bounded by the cycle /
+		// wall-clock budget like any other loop.
+		retry_setup: #StepDefinition & {
+			action:      "noop"
+			description: "Empty definition-of-done — re-loop to re-derive it"
+			tail_call: {
+				flow: "ops_control"
+				input_map: {
+					mission_id: {$ref: "input.mission_id"}
+				}
+				delay: 3
+			}
 		}
 
 		store_criteria: #StepDefinition & {
