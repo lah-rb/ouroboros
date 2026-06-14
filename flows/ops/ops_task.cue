@@ -153,11 +153,35 @@ ops_task: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.task_done == true", transition: "return_success"},
-					{condition: "true", transition: "return_loop"},
+					{condition: "result.task_done == true", transition: "end_session_success"},
+					{condition: "true", transition: "end_session_loop"},
 				]
 			}
 			publishes: ["mission"]
+		}
+
+		// Release the memoryful inference session run_session opened (and
+		// judge_step reused) BEFORE returning — otherwise every ops cycle leaks
+		// an LLMVP pool instance (the other run_session callers — quality_gate,
+		// interact, diagnose_issue — all end their sessions here too).
+		end_session_success: #StepDefinition & {
+			action:      "end_inference_session"
+			description: "Release the inference session (task done)"
+			context: optional: ["inference_session_id"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "return_success"}]
+			}
+		}
+
+		end_session_loop: #StepDefinition & {
+			action:      "end_inference_session"
+			description: "Release the inference session (looping)"
+			context: optional: ["inference_session_id"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "return_loop"}]
+			}
 		}
 
 		return_success: #StepDefinition & {

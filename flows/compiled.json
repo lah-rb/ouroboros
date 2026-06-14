@@ -10755,17 +10755,65 @@
           "rules": [
             {
               "condition": "result.task_done == true",
-              "transition": "return_success"
+              "transition": "end_session_success"
             },
             {
               "condition": "true",
-              "transition": "return_loop"
+              "transition": "end_session_loop"
             }
           ]
         },
         "publishes": [
           "mission"
         ],
+        "effects": [],
+        "terminal": false
+      },
+      "end_session_success": {
+        "action": "end_inference_session",
+        "description": "Release the inference session (task done)",
+        "context": {
+          "required": [],
+          "optional": [
+            "inference_session_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "return_success"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "end_session_loop": {
+        "action": "end_inference_session",
+        "description": "Release the inference session (looping)",
+        "context": {
+          "required": [],
+          "optional": [
+            "inference_session_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "return_loop"
+            }
+          ]
+        },
+        "publishes": [],
         "effects": [],
         "terminal": false
       },

@@ -90,6 +90,16 @@ def test_compiled_ops_wiring():
     assert steps["run_terminal"]["flow"] == "run_session"
     assert steps["run_checks"]["action"] == "run_validation_checks"
     assert steps["decide"]["action"] == "judge_task_completion"
+    # Both decide branches release the memoryful inference session before
+    # returning (else every ops cycle leaks an LLMVP pool instance).
+    decide_t = {
+        r["condition"]: r["transition"]
+        for r in steps["decide"]["resolver"]["rules"]
+    }
+    assert decide_t["result.task_done == true"] == "end_session_success"
+    assert decide_t["true"] == "end_session_loop"
+    assert steps["end_session_success"]["action"] == "end_inference_session"
+    assert steps["end_session_loop"]["action"] == "end_inference_session"
 
 
 def test_completion_criteria_formatter_registered():

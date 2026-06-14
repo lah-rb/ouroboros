@@ -35,3 +35,6 @@ tools/pdf_extract/models/
 
 # state-management A/B experiment — heavy local archive (games, traces)
 dev/archive/state_exp/data/
+
+# terminal-bench harness run outputs (per-run logs, casts, results)
+runs/
