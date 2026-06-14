@@ -1,0 +1,35 @@
+
+====================================================================================
+  metric                                           save_load             full_replay
+====================================================================================
+  session mode                                           n/a                     n/a
+  exit code                                                1                       1
+  ----------------------------------------------------------------------------------
+  total wall (s)                                     7,445.0                 7,240.0
+  work cycles                                            159                     161
+    wall / cycle (s)                                    46.8                    45.0
+    cycle dur mean (ms)                             46,818.7                44,966.8
+    cycle dur median (ms)                           14,052.1                    58.5
+    cycle dur p90 (ms)                             121,478.1               133,752.3
+  ----------------------------------------------------------------------------------
+  inferences                                             519                     414
+  tokens_in (prefill) TOTAL                        426,599.0               327,465.0
+  tokens_out TOTAL                                  28,263.0                28,234.0
+  prefill ratio (in/out)                                15.1                    11.6
+  inference wall TOTAL (s)                           6,458.7                 6,590.2
+  ----------------------------------------------------------------------------------
+  session-step inferences (the full-replay cost concentrator):
+    session inferences                                   257                     161
+    tokens_in / sess-infer MEAN                        732.3                   747.6
+    tokens_in / sess-infer P90                       1,407.0                 2,032.0
+    wall_ms / sess-infer MEAN                        7,712.3                 8,826.6
+  ----------------------------------------------------------------------------------
+  save_state overflow errors                               1                       0
+====================================================================================
+
+  Δ (B vs A):
+    total wall (s): -205.0  (-2.8%)
+    wall / cycle (s): -1.9  (-4.0%)
+    tokens_in TOTAL: -99,134.0  (-23.2%)
+    tokens_in / sess-infer MEAN: +15.3  (+2.1%)
+    wall_ms / sess-infer MEAN: +1,114.3  (+14.4%)

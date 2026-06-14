@@ -317,7 +317,10 @@ class SessionManager:
             # PRISTINE static snapshot — the one whole-state op the
             # architecture supports — and re-prefill the accumulated
             # token history below.
-            full_replay = bool(getattr(config.model, "session_full_replay", False))
+            # Default true (safety): the save/load path below is the opt-in
+            # fast path. getattr fallback matches the ModelConfig default so a
+            # pre-field serialized config also gets the safe behavior.
+            full_replay = bool(getattr(config.model, "session_full_replay", True))
             if full_replay:
                 static = getattr(self._backend, "static_state", None)
                 if static is not None:

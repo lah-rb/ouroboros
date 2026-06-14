@@ -60,6 +60,9 @@ class _FakeRenderer:
 
 class _FakeModel:
     family = "chatml"
+    # save/load is now the opt-in fast path (default is full-replay), so the
+    # save/purge/advance tests below pin it explicitly. _ReplayModel flips it.
+    session_full_replay = False
 
 
 class _FakeConfig:

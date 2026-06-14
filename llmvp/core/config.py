@@ -35,17 +35,26 @@ class ModelConfig(BaseModel):
     # system block (harmony + Step/chatml). None → use the family default.
     # Inert for binary families (tekken/Mistral use the `thinking` bool only).
     thinking_mode: Optional[str] = None
-    # Hybrid/recurrent-architecture session policy (Qwen3-Next family).
-    # Recurrent state cannot be partially rolled back, so the session
-    # layer's per-turn save/load round-trips and tail seq_rm compaction
-    # are unsound for these models (upstream: llama.cpp #22384, #19794;
-    # cache-reuse documented incompatible with recurrent state). When
-    # true, sessions keep a token history and FULLY RE-PREFILL each turn
-    # from the pristine static snapshot — whole-state restore is the one
-    # rollback a recurrent model supports (the pre-session-era design
-    # under which this family was stable). Cost: prefill grows with
-    # depth; on sparse-MoE the trade is acceptable.
-    session_full_replay: bool = False
+    # Session continuity policy. When true (the DEFAULT), sessions keep a
+    # token history and FULLY RE-PREFILL each turn from the pristine static
+    # snapshot — whole-state restore, the one rollback every architecture
+    # supports. When false, sessions splice per-turn KV state via
+    # save_state/load_state (+ tail seq_rm) — incrementally cheaper, but it
+    # is the OPT-IN fast path now, not the default.
+    #
+    # Default true for SAFETY. save_state is unsound for hybrid/recurrent
+    # models (Qwen3-Next; upstream llama.cpp #22384, #19794 — recurrent
+    # state can't be partially rolled back) AND its serialized blob
+    # overflows an int boundary on deep sessions of large models (measured:
+    # gpt-oss-120B, a session ~40 turns deep → "Negative size passed to
+    # PyBytes_FromStringAndSize", killing the turn). Full-replay never
+    # serializes state, so it sidesteps both. Cost is re-prefill that grows
+    # with session depth, but the A/B (dev/archive/state_exp) measured it
+    # wall-clock-neutral on a real workload — concentrated in deep-session
+    # tails (+44% prefill at P90) while the mean is flat. Set false only
+    # where the minor speed gain matters and the model is a plain
+    # transformer running shallow sessions.
+    session_full_replay: bool = True
 
     @field_validator("thinking_mode")
     @classmethod
