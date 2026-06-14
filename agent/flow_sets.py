@@ -40,10 +40,20 @@ class PhaseRule:
                             ``observation`` may use {incomplete}/{total}
                             (counts goals OF THAT TYPE)
       flag_unset          — ``getattr(mission, flag, False)`` falsy -> ``phase``
+      attr_truthy         — ``getattr(mission, flag, None)`` truthy -> ``phase``
+                            (inverse of flag_unset; for a pending field like
+                            ``pending_directive`` that, when set, must intercept
+                            before the normal phases)
       terminal            — always matches (the spec's final rule)
     """
 
-    kind: Literal["requires_planning", "goal_type_incomplete", "flag_unset", "terminal"]
+    kind: Literal[
+        "requires_planning",
+        "goal_type_incomplete",
+        "flag_unset",
+        "attr_truthy",
+        "terminal",
+    ]
     phase: str
     goal_type: str = ""
     flag: str = ""
@@ -66,6 +76,16 @@ class FlowSetSpec:
 # The code pipeline — semantics identical to the original hardcoded
 # action_check_pipeline_phase (observation strings included; tests pin them).
 CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
+    # Brownfield re-entry: a directive added on reopen must be decomposed into
+    # goals before anything else. First so it intercepts a reopened-and-complete
+    # mission (which would otherwise route straight to the quality gate). Cleared
+    # by action_derive_directive_goals, after which this falls through.
+    PhaseRule(
+        kind="attr_truthy",
+        phase="replan",
+        flag="pending_directive",
+        observation="Pending directive — decomposing into goals (brownfield replan)",
+    ),
     PhaseRule(kind="requires_planning", phase="plan"),
     PhaseRule(
         kind="goal_type_incomplete",
@@ -212,6 +232,14 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
 
         if rule.kind == "flag_unset":
             if not getattr(mission, rule.flag, False):
+                return rule.phase, rule.observation
+            continue
+
+        if rule.kind == "attr_truthy":
+            # Fires when the named attr is set (truthy). Safe on a None
+            # mission (getattr -> None -> falsy), so a pre-mission state
+            # falls through to the planning precondition rather than erroring.
+            if getattr(mission, rule.flag, None):
                 return rule.phase, rule.observation
             continue
 

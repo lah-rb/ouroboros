@@ -185,6 +185,14 @@ class GoalRecord(BaseModel):
     # re-litigated (prevents looping on an expected first-pass cross-module
     # import). See structural_block_reason in agent/actions/reporting_actions.py.
     import_reviewed: bool = False
+    # Brownfield "absent = the task" marker. A functional goal that names a
+    # capability which does NOT exist yet and must be BUILT (not verified or
+    # bug-fixed). Set by the directive planner (action_derive_directive_goals);
+    # the functional sweep routes it to an absence-aware explore-and-build
+    # interact session (charter_mode="explore") on first dispatch, instead of
+    # the default "test this capability works" verification. Composes with
+    # interaction_mode="exploratory". See action_functional_sweep_next.
+    capability_absent: bool = False
 
 
 class FailedAttempt(BaseModel):
@@ -199,11 +207,15 @@ class FailedAttempt(BaseModel):
     """
 
     target_file: str
-    target_symbol: str = ""  # added 2d7 round: the specific symbol the patch targeted, if any — lets diagnose's ## Prior attempts section see "function X has been patched 3 times without effect, try a different function"
+    target_symbol: str = (
+        ""  # added 2d7 round: the specific symbol the patch targeted, if any — lets diagnose's ## Prior attempts section see "function X has been patched 3 times without effect, try a different function"
+    )
     flow: str  # "file_ops", "project_ops"
     reason: str  # bail reason or error summary
     diagnosis_summary: str  # the diagnosis that led to this attempt
-    pre_headline: str = ""  # headline from the interact that triggered this attempt's diagnose cycle — captures the test's state *before* the patch, enabling before/after comparison when the fix doesn't hold
+    pre_headline: str = (
+        ""  # headline from the interact that triggered this attempt's diagnose cycle — captures the test's state *before* the patch, enabling before/after comparison when the fix doesn't hold
+    )
     timestamp: str = Field(default_factory=_now_iso)
 
 

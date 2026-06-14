@@ -135,6 +135,51 @@ async def test_all_complete_is_quality_gate():
     )
 
 
+# ── brownfield replan (pending_directive) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pending_directive_routes_to_replan():
+    # A reopened-and-complete mission would otherwise go straight to quality;
+    # a pending directive must intercept first.
+    m = _mission(
+        [_goal("structural", "complete"), _goal("functional", "complete")],
+        env_verified=True,
+    )
+    m.pending_directive = "Add a boss room behind a puzzle"
+    assert await _phase(m) == (
+        "replan",
+        "Pending directive — decomposing into goals (brownfield replan)",
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_pending_directive_unaffected():
+    # Polarity guard: the common re-gate case (no directive) is unchanged.
+    m = _mission(
+        [_goal("structural", "complete"), _goal("functional", "complete")],
+        env_verified=True,
+    )
+    assert m.pending_directive == ""
+    assert (await _phase(m))[0] == "quality"
+
+
+@pytest.mark.asyncio
+async def test_replan_wins_over_incomplete_structural():
+    m = _mission([_goal("structural", "incomplete")])
+    m.pending_directive = "extend it"
+    assert (await _phase(m))[0] == "replan"  # replan rule is first
+
+
+def test_replan_rule_is_first_and_keyed_on_pending_directive():
+    from agent.flow_sets import CODE_CORE_PHASES
+
+    first = CODE_CORE_PHASES[0]
+    assert first.kind == "attr_truthy"
+    assert first.phase == "replan"
+    assert first.flag == "pending_directive"
+
+
 # ── flow-set selection edges ──────────────────────────────────────────
 
 
