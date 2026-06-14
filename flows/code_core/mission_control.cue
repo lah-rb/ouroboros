@@ -114,7 +114,8 @@ mission_control: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.phase == 'plan'", transition: "dispatch_planning"},
+					{condition: "result.phase == 'replan'", transition: "dispatch_replan"},
+						{condition: "result.phase == 'plan'", transition: "dispatch_planning"},
 					{condition: "result.phase == 'structural'", transition: "structural_sweep_next"},
 					{condition: "result.phase == 'environment'", transition: "dispatch_environment_setup"},
 					{condition: "result.phase == 'functional'", transition: "functional_sweep_next"},
@@ -140,6 +141,21 @@ mission_control: #FlowDefinition & {
 			context: optional: ["mission"]
 			tail_call: {
 				flow: "design_and_plan"
+				input_map: {
+					mission_id: {$ref: "input.mission_id"}
+				}
+			}
+		}
+
+		// Brownfield re-entry: a pending directive added on reopen — decompose
+		// it into goals against the existing codebase (append-only), then the
+		// next check_phase falls through to the normal structural/functional flow.
+		dispatch_replan: #StepDefinition & {
+			action:      "noop"
+			description: "Pending directive — decompose against the existing codebase"
+			context: optional: ["mission"]
+			tail_call: {
+				flow: "replan"
 				input_map: {
 					mission_id: {$ref: "input.mission_id"}
 				}

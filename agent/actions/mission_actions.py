@@ -762,6 +762,145 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
     )
 
 
+def _directive_slug(text: str) -> str:
+    return "".join(c if c.isalnum() else "-" for c in text.strip().lower()).strip("-")[
+        :60
+    ]
+
+
+async def action_derive_directive_goals(step_input: StepInput) -> StepOutput:
+    """Decompose ``mission.pending_directive`` into APPEND-ONLY goals against the
+    existing architecture (brownfield replan). New-file modules become structural
+    goals (and append a ModuleSpec to the architecture); capabilities become
+    functional ``capability_absent`` goals. Idempotent by ``finding_signature``;
+    clears ``pending_directive`` so the replan phase falls through.
+
+    Unlike ``action_derive_project_goals`` (which REPLACES ``mission.goals``),
+    this ONLY appends — existing complete goals and ModuleSpecs are never
+    touched.
+
+    Context: mission, inference_response
+    Result: goals_derived, structural_count, functional_count
+    Publishes: mission
+    """
+    from agent.llm_json import parse_llm_json
+    from agent.persistence.models import GoalRecord, ModuleSpec
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission:
+        return StepOutput(result={"goals_derived": False}, observations="No mission")
+
+    directive = str(getattr(mission, "pending_directive", "") or "").strip()
+    if not directive:
+        # Re-entry safety: the directive was already consumed.
+        return StepOutput(
+            result={"goals_derived": False},
+            observations="No pending directive to decompose",
+        )
+
+    parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
+    parsed = parsed if isinstance(parsed, dict) else {}
+    new_files = parsed.get("new_files") or []
+    capabilities = parsed.get("capabilities") or []
+
+    existing_sigs = {
+        getattr(g, "finding_signature", "")
+        for g in mission.goals
+        if getattr(g, "finding_signature", "")
+    }
+    arch = getattr(mission, "architecture", None)
+
+    # ── Pass 1: new files → structural goals (+ ModuleSpec) ───────────
+    structural_count = 0
+    for entry in new_files:
+        if not isinstance(entry, dict):
+            continue
+        file_path = str(entry.get("file") or "").strip()
+        if not file_path:
+            continue
+        sig = f"directive-struct:{file_path}"
+        # Skip already-signed goals and architecture-known files (don't
+        # re-plan something that already exists in the blueprint).
+        if sig in existing_sigs or (arch is not None and arch.has_file(file_path)):
+            continue
+        if arch is not None:
+            arch.modules.append(
+                ModuleSpec(
+                    file=file_path,
+                    responsibility=str(entry.get("responsibility") or ""),
+                    defines=[str(d) for d in (entry.get("defines") or [])],
+                    imports_from=entry.get("imports_from") or {},
+                )
+            )
+            if file_path not in arch.creation_order:
+                arch.creation_order.append(file_path)
+        mission.goals.append(
+            GoalRecord(
+                description=str(
+                    entry.get("responsibility") or f"Implement {file_path}"
+                ),
+                type="structural",
+                associated_files=[file_path],
+                origin="directive",
+                finding_signature=sig,
+            )
+        )
+        existing_sigs.add(sig)
+        structural_count += 1
+
+    # ── Pass 2: capabilities → functional "absent = build" goals ──────
+    functional_count = 0
+    for entry in capabilities:
+        if isinstance(entry, dict):
+            desc = str(entry.get("description") or "").strip()
+            placement = str(entry.get("placement") or "").strip()
+        else:
+            desc, placement = str(entry or "").strip(), ""
+        if not desc:
+            continue
+        sig = f"directive-func:{_directive_slug(desc)}"
+        if sig in existing_sigs:
+            continue
+        full_desc = desc if not placement else f"{desc}\n\nPlacement: {placement}"
+        mission.goals.append(
+            GoalRecord(
+                description=full_desc,
+                type="functional",
+                origin="directive",
+                capability_absent=True,
+                interaction_mode="exploratory",
+                finding_signature=sig,
+            )
+        )
+        existing_sigs.add(sig)
+        functional_count += 1
+
+    # Clear UNCONDITIONALLY (even on 0 goals) so an undecomposable directive
+    # can't loop forever in the replan phase. Dedup makes a re-run a no-op.
+    mission.pending_directive = ""
+    derived = structural_count + functional_count
+    if derived == 0:
+        logger.warning(
+            "Directive decomposed to 0 goals (cleared anyway): %r", directive[:80]
+        )
+    if effects:
+        await effects.save_mission(mission)
+
+    return StepOutput(
+        result={
+            "goals_derived": derived > 0,
+            "structural_count": structural_count,
+            "functional_count": functional_count,
+        },
+        observations=(
+            f"Directive decomposed: +{structural_count} structural, "
+            f"+{functional_count} functional goal(s)"
+        ),
+        context_updates={"mission": mission},
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Creation Order Sweep
 # ══════════════════════════════════════════════════════════════════════

@@ -82,6 +82,29 @@ def format_existing_architecture(params: dict, namespaces: dict) -> str:
     return format_architecture_listing(params, namespaces)
 
 
+def format_existing_goals(params: dict, namespaces: dict) -> str:
+    """Render the mission's current goals (type/status/description) so a
+    brownfield planner sees what already exists and won't re-emit it."""
+    goals = params.get("source") or []
+    if not goals:
+        return "No existing goals."
+    lines = []
+    for g in goals:
+        gtype = getattr(g, "type", None) or (
+            g.get("type") if isinstance(g, dict) else "?"
+        )
+        status = getattr(g, "status", None) or (
+            g.get("status") if isinstance(g, dict) else "?"
+        )
+        desc = getattr(g, "description", None) or (
+            g.get("description") if isinstance(g, dict) else ""
+        )
+        # First line only — placement hints can make descriptions multi-line.
+        desc = str(desc).splitlines()[0] if desc else ""
+        lines.append(f"  - [{gtype}, {status}] {desc}")
+    return "\n".join(lines)
+
+
 def format_mission_meta(params: dict, namespaces: dict) -> str:
     mission = params.get("mission")
     field = params.get("field", "")
@@ -379,6 +402,7 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_architecture_summary": format_architecture_summary,
     "format_architecture_listing": format_architecture_listing,
     "format_existing_architecture": format_existing_architecture,
+    "format_existing_goals": format_existing_goals,
     "format_mission_meta": format_mission_meta,
     "format_project_file_list": format_project_file_list,
     "format_project_listing": format_project_listing,

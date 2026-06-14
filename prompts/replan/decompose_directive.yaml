@@ -1,0 +1,115 @@
+# Prompt template: replan/decompose_directive
+#
+# Brownfield planning: decompose a new high-level directive into the
+# SMALLEST set of additions to an EXISTING codebase. Output is parsed by
+# action_derive_directive_goals into append-only structural + functional
+# goals.
+#
+# Pre-computed context keys:
+#   mission_objective     — the original objective
+#   pending_directive     — the new direction to satisfy
+#   existing_architecture — formatted current architecture
+#   existing_goals        — formatted current goals (already built/planned)
+#   repo_map_formatted    — AST map of the existing code
+
+id: replan/decompose_directive
+description: "Decompose a directive into additions to an existing codebase"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a brownfield planning module in an automated coding pipeline.
+      A working project already exists; a new direction has been requested.
+      Your output will be parsed by a JSON extractor. Return ONLY a JSON
+      object inside a fenced code block — no explanation, no surrounding text.
+
+  - id: objective
+    content: |
+      ## Original Objective
+      {context.mission_objective}
+
+  - id: directive
+    content: |
+      ## New Direction (what to add now)
+      {context.pending_directive}
+
+  - id: existing_architecture
+    when: context.existing_architecture
+    content: |
+      ## Existing Architecture — EXTEND and REUSE, do NOT rebuild
+      {context.existing_architecture}
+
+  - id: existing_goals
+    when: context.existing_goals
+    content: |
+      ## Already Built / Planned (do NOT re-emit these)
+      {context.existing_goals}
+
+  - id: repo_map
+    when: context.repo_map_formatted
+    content: |
+      ## Existing Code Structure (AST-based)
+      {context.repo_map_formatted}
+
+  - id: instructions
+    content: |
+      ## Decompose the New Direction
+
+      Produce the SMALLEST set of additions to the EXISTING project that
+      satisfies the new direction. Reuse existing modules wherever possible;
+      do not recreate files or capabilities that already exist.
+
+      Split the work two ways:
+
+      1. **`new_files`** — ONLY for genuinely NEW files that must be created
+         (a file not already in the architecture above). Each becomes a
+         structural goal bound to that file, with the same blueprint fields
+         as the existing modules (`file`, `responsibility`, `defines`,
+         `imports_from`). Do NOT list files that already exist — extending an
+         existing file is a capability, not a new file.
+
+      2. **`capabilities`** — EVERYTHING ELSE: behavior to add, an existing
+         module to extend, a feature to wire up. Each capability does NOT
+         exist yet and must be EXPLORED-AND-BUILT. For each, give:
+         - `description`: WHAT the user should be able to do once it works,
+           phrased as an observable capability.
+         - `placement`: WHERE it fits relative to the existing structure —
+           which file(s)/symbol(s) to touch and how it connects (e.g.
+           "add an east exit on the guard room in world.yaml; wire the new
+           BossRoom into the room graph in engine.py"). Be concrete; this is
+           the placement guidance the build step starts from.
+
+      Keep it tight: a directive should decompose into a few concrete goals,
+      not a sprawling re-plan. If the direction is fully satisfiable by
+      extending existing files, `new_files` may be empty.
+
+  - id: output_format
+    content: |
+      ✅ CORRECT:
+      ```json
+      {
+        "new_files": [
+          {
+            "file": "boss.py",
+            "responsibility": "Boss encounter state and combat resolution",
+            "defines": ["BossRoom", "resolve_combat"],
+            "imports_from": {"models": ["Room"]}
+          }
+        ],
+        "capabilities": [
+          {
+            "description": "The player can enter the boss room from the guard room and must solve a puzzle to pass",
+            "placement": "add an east exit on the guard room in world.yaml; wire BossRoom into the room graph and gate entry on the puzzle in engine.py"
+          }
+        ]
+      }
+      ```
+
+      ❌ WRONG — do not re-list existing files or add explanation:
+      Based on the direction, here is the plan:
+      ```json
+      {"new_files": [{"file": "engine.py", ...}], ...}
+      ```
+
+      Return ONLY the fenced JSON.

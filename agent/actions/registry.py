@@ -189,6 +189,7 @@ def build_action_registry() -> ActionRegistry:
         action_parse_and_store_architecture,
         # Context Contract Architecture
         action_derive_project_goals,
+        action_derive_directive_goals,
         # Pipeline v9 actions
         action_check_pipeline_phase,
         action_structural_sweep_next,
@@ -336,6 +337,7 @@ def build_action_registry() -> ActionRegistry:
     )
     # Goal derivation
     registry.register("derive_project_goals", action_derive_project_goals)
+    registry.register("derive_directive_goals", action_derive_directive_goals)
     # Creation order sweep (legacy, delegates to structural_sweep_next)
     # Pipeline v9 actions
     registry.register("check_pipeline_phase", action_check_pipeline_phase)
