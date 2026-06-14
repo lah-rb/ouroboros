@@ -4,6 +4,9 @@ app:
   log_level: "info"
   cors_origins: ["*"]
   backend_timeout: 180
+  # OpenAI-compat REST shim (/v1/completions + /v1/chat/completions) — lets
+  # external chat agents (terminal-bench's Terminus) drive the model.
+  openai_shim: true
 
 graphql:
   max_query_depth: 10

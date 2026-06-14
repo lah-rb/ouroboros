@@ -35,6 +35,14 @@ sections:
       independent conditions (2-5). Use only standard tools; assume the command
       runs in the working directory.
 
+      CRITICAL — each check must be SATISFIABLE: it must exit 0 on a genuinely
+      correct result. Mentally run it against the ideal solution; if it would
+      NOT pass, the check is wrong, not the solution. A common trap: `$(...)`
+      command substitution strips trailing newlines, so
+      `[ "$(tail -c1 f)" = ... ]` can never see a newline — to assert a file
+      ends in a newline use `[ -z "$(tail -c1 f)" ]` instead. Prefer robust,
+      well-known idioms over clever ones.
+
   - id: output_format
     content: |
       Return a JSON object with a "checks" array. The example below is from an

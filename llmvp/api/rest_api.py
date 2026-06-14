@@ -7,8 +7,9 @@ This is a minimal compatibility layer for existing services that
 know how to talk to OpenAI. GraphQL is the standard interaction
 method for this project.
 
-This module provides only the /v1/completions endpoint as a thin
-shim over the shared inference logic from core.inference.
+This module provides /v1/completions (raw prompt) and /v1/chat/completions
+(OpenAI message list — for external chat agents like terminal-bench's Terminus)
+as thin shims over the shared inference logic in core.inference.
 """
 
 import json
@@ -20,7 +21,7 @@ from fastapi.responses import StreamingResponse
 
 # Local imports
 from core.config import get_config
-from core.inference import run_completion, stream_completion
+from core.inference import run_chat_completion, run_completion, stream_completion
 
 # Set up logging
 config = get_config()
@@ -71,6 +72,53 @@ async def completions(request: Request):
             raise HTTPException(status_code=400, detail=str(exc))
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/chat/completions")
+async def chat_completions(request: Request):
+    """OpenAI-compatible chat completion endpoint.
+
+    Accepts a ``messages`` list (system/user/assistant/tool) and renders it
+    through the model's format renderer. Lets external OpenAI-chat agents
+    (terminal-bench's Terminus, litellm clients) drive the model. Run the
+    server with ``--skip-knowledge`` so the external scaffold's own system
+    prompt isn't layered under SOUL.md. Non-streaming only for now.
+    """
+    body = await request.json()
+    messages = body.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise HTTPException(
+            status_code=400, detail="`messages` must be a non-empty list"
+        )
+
+    max_tokens = body.get("max_tokens")
+    temperature = body.get("temperature")
+    model = body.get("model") or config.model.name
+
+    try:
+        answer, tokens_out = await run_chat_completion(
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "id": "chatcmpl-llmvp",
+        "object": "chat.completion",
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": answer},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"completion_tokens": tokens_out},
+    }
 
 
 async def _stream_response(

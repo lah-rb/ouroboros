@@ -589,6 +589,66 @@ def _build_messages_tokens(messages: list, tokenizer) -> list:
     return tokenize_segments(tokenizer, segments)
 
 
+async def run_chat_completion(
+    messages: list,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    grammar: Optional[str] = None,
+) -> Tuple[str, int]:
+    """Run a non-streaming completion from an OpenAI-style ``messages`` list.
+
+    Renders the full conversation (system/user/assistant/tool turns) through the
+    model's format renderer — the same path as the multi-turn/tool loop — so
+    external agents that speak OpenAI chat (e.g. terminal-bench's Terminus) can
+    drive the model. Prepends the static-knowledge prefix like every other path;
+    run the server with ``--skip-knowledge`` for a bare model (no SOUL.md
+    persona) when the external scaffold supplies its own system prompt.
+
+    Returns: (generated_text, approximate_token_count).
+    """
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("`messages` must be a non-empty list")
+
+    max_tokens = max_tokens or config.generation.max_tokens_default or 256
+    temperature = temperature or config.generation.temperature_default or 0.7
+    from core.session_manager import _global_temperature_floor
+
+    temperature = _global_temperature_floor(temperature, config.generation)
+
+    # Build complete prompt BEFORE acquiring instance (mirror run_completion /
+    # run_tool_completion: static knowledge prefix + rendered conversation).
+    static_tokens = static_tokens_manager.get_static_tokens()
+    tokenizer = get_cached_tokenizer()
+    dynamic_ids = _build_messages_tokens(messages, tokenizer)
+    full_prompt = list(static_tokens) + dynamic_ids
+    if len(full_prompt) > config.model.n_ctx:
+        raise ValueError(
+            f"Combined prompt length ({len(full_prompt)}) exceeds the model's "
+            f"context window of {config.model.n_ctx} tokens."
+        )
+
+    backend = await _get_backend()
+    instance = None
+    if backend.capabilities.manual_pooling:
+        instance = await backend.acquire_instance()
+    try:
+        gen_kwargs = {"grammar": grammar} if grammar else {}
+        answer = await backend.generate_async(
+            instance=instance or backend,
+            prompt_tokens=full_prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            **gen_kwargs,
+        )
+        answer = _strip_delimiter(answer)
+        tokens_generated = _approximate_token_count(answer)
+        log_interaction(prompt=str(messages)[:500], response=answer, mode="chat")
+        return answer, tokens_generated
+    finally:
+        if backend.capabilities.manual_pooling and instance is not None:
+            await backend.release_instance(instance)
+
+
 async def run_tool_completion(
     prompt: str,
     max_tokens: Optional[int] = None,
