@@ -76,6 +76,44 @@ def test_reopen_paused_mission_refuses(tmp_path):
         cmd_mission_reopen(_args(tmp_path))
 
 
+def _args_scope(tmp_path, add_goal=None, directive=None) -> SimpleNamespace:
+    return SimpleNamespace(
+        working_dir=str(tmp_path), add_goal=add_goal, directive=directive
+    )
+
+
+def test_reopen_add_goal_appends_directly_and_dedups(tmp_path):
+    pm = _save_mission(
+        tmp_path, "completed", [GoalRecord(description="existing", status="complete")]
+    )
+    cmd_mission_reopen(
+        _args_scope(tmp_path, add_goal=["Add a help alias", "existing"])
+    )
+    m = pm.load_mission()
+    assert m.status == "active"
+    descs = [g.description for g in m.goals]
+    assert "Add a help alias" in descs  # new goal appended
+    assert descs.count("existing") == 1  # duplicate skipped
+    new = next(g for g in m.goals if g.description == "Add a help alias")
+    assert new.type == "functional" and new.status == "incomplete"
+    assert new.origin == "directive"
+
+
+def test_reopen_directive_persists_for_planning(tmp_path):
+    pm = _save_mission(
+        tmp_path, "completed", [GoalRecord(description="g1", status="complete")]
+    )
+    cmd_mission_reopen(
+        _args_scope(tmp_path, directive="Add a boss room behind a puzzle")
+    )
+    m = pm.load_mission()
+    assert m.status == "active"
+    assert m.pending_directive == "Add a boss room behind a puzzle"
+    assert len(m.goals) == 1  # no goal added directly — awaits planning pass
+    events = pm.read_events()
+    assert any(e.type == "reopen" and e.payload.get("directive") for e in events)
+
+
 def test_reopen_increments_across_generations(tmp_path):
     pm = _save_mission(
         tmp_path, "completed", [GoalRecord(description="g1", status="complete")]

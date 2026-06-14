@@ -328,22 +328,69 @@ def cmd_mission_reopen(args: argparse.Namespace) -> None:
     prior = mission.status
     mission.status = "active"
     mission.reopen_count += 1
+
+    # ── New scope (Phase 2) ───────────────────────────────────────────
+    # Two ways to add direction on reopen (the rest re-gate as before):
+    #   --add-goal "..."  append a concrete goal directly (simple extension)
+    #   --directive "..." queue a high-level direction for the planning pass
+    #                     to decompose into goals (brownfield design step)
+    from agent.persistence.models import GoalRecord
+
+    added = 0
+    existing = {g.description.strip().lower() for g in mission.goals}
+    for desc in getattr(args, "add_goal", None) or []:
+        desc = desc.strip()
+        if not desc:
+            continue
+        if desc.lower() in existing:
+            print(f"   (skipped duplicate goal: {desc[:60]})")
+            continue
+        mission.goals.append(
+            GoalRecord(
+                description=desc,
+                type="functional",
+                status="incomplete",
+                origin="directive",
+            )
+        )
+        existing.add(desc.lower())
+        added += 1
+
+    directive = (getattr(args, "directive", None) or "").strip()
+    if directive:
+        mission.pending_directive = directive
+
     pm.save_mission(mission)
     pm.push_event(
         Event(
             type="reopen",
-            payload={"from_status": prior, "reopen_count": mission.reopen_count},
+            payload={
+                "from_status": prior,
+                "reopen_count": mission.reopen_count,
+                "goals_added": added,
+                "directive": bool(directive),
+            },
         )
     )
 
     incomplete = [g for g in mission.goals if g.status == "incomplete"]
     print(f"♻  Mission reopened (was '{prior}', reopen #{mission.reopen_count}).")
-    if incomplete:
+    if added:
+        print(f"   +{added} goal(s) added directly — `start` will work them.")
+    if directive:
+        print(f'   Directive queued: "{directive[:70]}"')
         print(
-            f"   {len(incomplete)} incomplete goal(s) — `start` will work them, then re-gate."
+            "   `start` will decompose it into goals via the planning pass "
+            "before working them."
         )
-    else:
-        print("   All goals complete — `start` will re-run the quality gate.")
+    if not added and not directive:
+        if incomplete:
+            print(
+                f"   {len(incomplete)} incomplete goal(s) — `start` will work "
+                f"them, then re-gate."
+            )
+        else:
+            print("   All goals complete — `start` will re-run the quality gate.")
     print("   Run: ouroboros.py start --working-dir " + working_dir)
 
 
@@ -920,6 +967,18 @@ def main() -> None:
         help="Reopen a finished (completed/aborted) mission so `start` can run again",
     )
     reopen_p.add_argument("--working-dir", help="Working directory (default: cwd)")
+    reopen_p.add_argument(
+        "--add-goal",
+        action="append",
+        metavar="DESCRIPTION",
+        help="Append a concrete goal directly (repeatable). For simple "
+        "extensions that need no planning. Duplicates are skipped.",
+    )
+    reopen_p.add_argument(
+        "--directive",
+        help="Queue a high-level direction for the planning pass to decompose "
+        "into structural/functional goals (brownfield design step).",
+    )
 
     # mission message
     msg_p = mission_sub.add_parser("message", help="Send a message to the agent")

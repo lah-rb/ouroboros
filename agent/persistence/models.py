@@ -542,6 +542,13 @@ class MissionState(BaseModel):
     # onto goals added in a later generation so reports can distinguish scope
     # added after the first completion. See cmd_mission_reopen.
     reopen_count: int = 0
+    # A high-level direction added on reopen (`reopen --directive`) that needs
+    # decomposing into structural/functional goals by a planning pass — the
+    # brownfield analog of the initial design step. Empty when there is no
+    # pending direction (the common re-gate case). Cleared once the replan
+    # phase has derived goals from it. (`reopen --add-goal` skips this and
+    # appends goals directly.)
+    pending_directive: str = ""
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)
     config: MissionConfig
