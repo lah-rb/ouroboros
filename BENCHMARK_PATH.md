@@ -15,6 +15,47 @@
 
 ---
 
+## 2026-06-14 delta (from the 2026-06-10 baseline)
+
+Three changes land directly on gaps named below:
+
+1. **Wall-clock task budgets — DONE.** `run_until: completed` + `max_wall_clock`
+   (mission config; `start` CLI overrides) park a mission as *paused/resumable* at
+   the cap. This was the shared-infrastructure row needed by all four benches — the
+   "required by the benchmark interface" item. ✔.
+
+2. **The greenfield-only mission layer — the headline limitation — is no longer
+   absolute.** Brownfield `replan`: `reopen --directive "…"` decomposes a new
+   direction into **append-only** goals against the **existing** architecture (a
+   `replan` phase keyed on `pending_directive` → a `decompose_directive` planner →
+   an "absent capability = build it" functional path), then works them through the
+   normal structural→functional→quality flow. Play-validated end-to-end: a directive
+   grew a real, solvable lock-and-key boss room into a completed game. This is the
+   first **non-greenfield** mission capability — the conceptual blocker for
+   SWE-bench's "issue → fix on existing code." **Bound:** validated at ~10-file
+   scale, NOT repo-scale localization.
+
+3. **The design bet got two more confirmations.** The `extractor` flow set and the
+   `replan` phase both landed as orchestrator-flow-sized changes with **zero
+   flow-engine edits**. Registered flow sets now: `code_core`, `scraper`, `extractor`.
+
+**Substrate hardening** that de-risks the SWE-bench "honest risk" (local-model
+capability/throughput): session full-replay default (fixed the `save_state` overflow,
+restored qwen3-next usability, measured wall-clock-neutral); the anti-placeholder
+SOUL rule (protects test-judged integrity — placeholder fixes fail real tests);
+long-cycle / runaway / temperature-floor guards.
+
+**GAIA file-handling partially closed:** the scraper-v2 PDF→markdown+figures toolchain
+is concrete "attached-file reader" progress; the multimodal LLMVP backend remains the
+blocker (OCR is a separate tool, not integrated vision).
+
+**Revised closest-path read:** terminal-bench is *shorter* now — wall-clock budgets ✔
+and the brownfield/ops mission shape de-risked — leaving the **harness adapter** + a
+thin **ops orchestrator** (`run_session` promoted to a mission type with a completion
+judgment). Active next step: build toward a terminal-bench run.
+
+---
+
 ## Closeness ranking
 
 1. **terminal-bench** — closest; core competencies align directly.
