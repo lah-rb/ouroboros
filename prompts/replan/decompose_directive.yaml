@@ -80,36 +80,60 @@ sections:
            BossRoom into the room graph in engine.py"). Be concrete; this is
            the placement guidance the build step starts from.
 
+      GRANULARITY: each capability must be ONE thing that can be built and
+      verified ON ITS OWN, without requiring the other capabilities in this
+      list to already work. Do NOT combine capabilities with "and". If a
+      feature has a foundational part and an integrated part, split them.
+
+      ORDERING: list capabilities from most foundational to most integrative.
+      A capability others depend on comes FIRST; one that needs several
+      pieces working together (the end-to-end scenario) comes LAST. They are
+      built and verified in this order, so a later goal may rely on earlier
+      ones — but no goal may rely on a LATER one.
+
       Keep it tight: a directive should decompose into a few concrete goals,
       not a sprawling re-plan. If the direction is fully satisfiable by
       extending existing files, `new_files` may be empty.
 
-  - id: output_format
-    content: |
-      ✅ CORRECT:
+      The example below is from an UNRELATED project (a calculator) — it
+      shows the SHAPE only. Decompose the actual direction above; do not copy
+      these fields.
+
+      ✅ CORRECT — granular capabilities, ordered foundational → integrative
+      (illustrative domain: adding a memory feature to a calculator):
       ```json
       {
-        "new_files": [
-          {
-            "file": "boss.py",
-            "responsibility": "Boss encounter state and combat resolution",
-            "defines": ["BossRoom", "resolve_combat"],
-            "imports_from": {"models": ["Room"]}
-          }
-        ],
+        "new_files": [],
         "capabilities": [
           {
-            "description": "The player can enter the boss room from the guard room and must solve a puzzle to pass",
-            "placement": "add an east exit on the guard room in world.yaml; wire BossRoom into the room graph and gate entry on the puzzle in engine.py"
+            "description": "The current result can be stored into a memory slot",
+            "placement": "add a `memory` field to the Calculator in calc.py; handle an 'MS' (memory-store) command in the input loop"
+          },
+          {
+            "description": "An 'MR' command prints the stored memory value",
+            "placement": "in calc.py's input loop, add 'MR' that reads the memory field set above"
+          },
+          {
+            "description": "A stored memory value can be used as an operand in a new calculation",
+            "placement": "extend the token reader in parser.py so 'M' resolves to the memory field during evaluation"
           }
         ]
       }
+      ```
+      Each capability is verifiable on its own once the earlier ones exist;
+      the integrated use-in-calculation comes last.
+
+      ❌ WRONG — a single end-to-end goal that can't pass until everything else is built:
+      ```json
+      {"new_files": [], "capabilities": [
+        {"description": "A memory you can store, recall, and compute with", "placement": "..."}
+      ]}
       ```
 
       ❌ WRONG — do not re-list existing files or add explanation:
       Based on the direction, here is the plan:
       ```json
-      {"new_files": [{"file": "engine.py", ...}], ...}
+      {"new_files": [{"file": "calc.py", ...}], ...}
       ```
 
       Return ONLY the fenced JSON.
