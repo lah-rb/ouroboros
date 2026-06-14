@@ -406,6 +406,7 @@ mission_control: #FlowDefinition & {
 					interaction_mode:   {$ref: "context.dispatch_config.interaction_mode", default: ""}
 					run_command:        {$ref: "context.dispatch_config.run_command", default: ""}
 					interactive_prompt: {$ref: "context.dispatch_config.interactive_prompt", default: ""}
+					charter_mode:       {$ref: "context.dispatch_config.charter_mode", default: ""}
 				}
 			}
 		}

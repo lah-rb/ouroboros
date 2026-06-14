@@ -1376,6 +1376,45 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
 
         # Check the latest report to determine what this goal needs
         if not goal.reports:
+            # capability_absent goals (brownfield directive) name a feature that
+            # does NOT exist yet — a thing to BUILD, not verify. Default interact
+            # would charter "prove this works" and immediately fail on absence.
+            # Instead run an absence-aware explore session (charter_mode=explore)
+            # that reads player-view placement, then diagnose explores the code
+            # and patch builds it. Subsequent reports ride the normal report-walk
+            # below (interact success completes; a diagnose->file_ops cycle
+            # re-tests), so only the FIRST dispatch differs.
+            if getattr(goal, "capability_absent", False):
+                directive = (
+                    "This capability does not exist yet — it is a feature to "
+                    "BUILD, not a bug to reproduce. Explore the running program "
+                    "and the code to find where it fits, then describe what to "
+                    "build:\n" + goal.description
+                )
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "functional",
+                    "goal_files": goal.associated_files or [],
+                    "flow": "interact",
+                    "target_file_path": "",
+                    "flow_directive": directive,
+                    "interaction_mode": "exploratory",
+                    "charter_mode": "explore",
+                    "run_command": "",
+                    "interactive_prompt": interactive_prompt,
+                }
+                logger.info(
+                    "Functional sweep: exploring to build %s", goal.description[:50]
+                )
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_test": True},
+                    observations=(
+                        f"Functional sweep: exploring to build "
+                        f"'{goal.description[:50]}'"
+                    ),
+                    context_updates={"dispatch_config": dispatch_config},
+                )
             # quality_gate-origin goals are ALREADY-CONFIRMED defects (the gate
             # found them). Re-reproducing one via interact mis-frames a bug
             # report as a capability to "verify works" and stochastically
@@ -1436,6 +1475,47 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
         last_report = goal.reports[-1]
         report_flow = getattr(last_report, "flow", "")
         report_status = getattr(last_report, "status", "")
+
+        # capability_absent goal, BUILD phase: the explore-interact session
+        # scouted placement (it produces a build spec, not a working feature),
+        # so route it to diagnose -> file_ops to actually build — regardless of
+        # the session's pass/fail. Only applies before a build has happened (no
+        # file_ops yet); once built, the normal report-walk below re-tests and
+        # completes it like any functional goal.
+        if (
+            getattr(goal, "capability_absent", False)
+            and report_flow == "interact"
+            and not any(getattr(r, "flow", "") == "file_ops" for r in goal.reports)
+        ):
+            directive = (
+                "Build this capability from the exploration and placement notes "
+                "above. Diagnose what file and symbol to create or extend, and "
+                "how it connects to the existing structure:\n" + goal.description
+            )
+            dispatch_config = {
+                "goal_id": goal.id,
+                "goal_description": goal.description,
+                "goal_type": "functional",
+                "goal_files": goal.associated_files or [],
+                "flow": "diagnose_issue",
+                "target_file_path": "",
+                "flow_directive": directive,
+                "what_happened": getattr(last_report, "summary", ""),
+                "error_headline": getattr(last_report, "headline", "")
+                or goal.description[:80],
+            }
+            logger.info(
+                "Functional sweep: building explored capability %s",
+                goal.description[:50],
+            )
+            return StepOutput(
+                result={"sweep_complete": False, "needs_fix": True},
+                observations=(
+                    f"Functional sweep: building explored capability "
+                    f"'{goal.description[:50]}'"
+                ),
+                context_updates={"dispatch_config": dispatch_config},
+            )
 
         # interact success means goal_met was true (the flow routes on this)
         if report_flow == "interact" and report_status == "success":

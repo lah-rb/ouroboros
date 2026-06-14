@@ -1,0 +1,44 @@
+id: interact/charter_explore
+content: |
+  Write an exploration charter — a self-contained brief for an engineer
+  scouting WHERE a NOT-YET-BUILT capability should fit. The capability in
+  the objective above does NOT exist yet; this is not a pass/fail test. The
+  job is to explore the running program AND the code, then produce a precise
+  build spec: what to build and where it connects to the existing structure.
+
+  The charter must contain five labeled parts:
+
+  ## ROLE
+  One sentence: an engineer locating where a new capability should be built.
+
+  ## LAUNCH
+  The exact shell command to start the program, drawn from the code
+  structure and project files above. If data files are required arguments,
+  include them.
+
+  ## EXPLORE STEPS
+  A numbered short list (2-5 steps) that gathers the placement evidence:
+  - Navigate the running program to where the feature would naturally live
+    (e.g., go to the room it should connect to and `look`), reading the
+    world/data files above to find the right spot.
+  - Read the relevant code/data: which file defines the structure this
+    feature extends, what pattern existing equivalents follow, what symbol
+    or data entry the new behavior hangs off.
+  - Confirm the connection point (e.g., the exit that should lead to the new
+    room, the command handler the new verb slots beside).
+
+  ## DELIVERABLE
+  Two to four sentences describing the BUILD SPEC: precisely WHAT to build
+  and WHERE — which file(s) and symbol(s) to add or extend, how it connects
+  to existing structure (which exit, which data entry, which handler), and
+  the pattern to follow from existing equivalents. This is the spec the
+  build step starts from — be concrete about placement, not about behavior
+  alone.
+
+  ## NOT THIS SESSION
+  This session does NOT pass or fail the capability and does NOT build it —
+  it discovers placement and writes the spec. If the capability turns out to
+  already exist, say so plainly instead of inventing work.
+
+  Target length: under 220 words total. The banner tells the model this is
+  prose output — write naturally, no JSON, no code fences around the brief.

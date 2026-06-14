@@ -141,6 +141,65 @@ async def test_design_functional_goal_still_reproduces_via_interact():
     assert out.result.get("needs_test") is True
     dc = out.context_updates["dispatch_config"]
     assert dc["flow"] == "interact"
+    assert dc.get("charter_mode", "") != "explore"  # verify, not explore
+
+
+# ── Brownfield "absent = build" goals (capability_absent) ────────────────
+
+
+def _cgoal(reports=None) -> GoalRecord:
+    return GoalRecord(
+        description="Player can enter the boss room from the guard room",
+        type="functional",
+        status="incomplete",
+        origin="directive",
+        capability_absent=True,
+        interaction_mode="exploratory",
+        reports=reports or [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_capability_absent_first_dispatch_explores():
+    out = await action_functional_sweep_next(_si(_mission([_cgoal()])))
+    assert out.result.get("needs_test") is True
+    dc = out.context_updates["dispatch_config"]
+    assert dc["flow"] == "interact"
+    assert dc["charter_mode"] == "explore"
+    assert dc["interaction_mode"] == "exploratory"
+    assert "does not exist yet" in dc["flow_directive"]
+
+
+@pytest.mark.asyncio
+async def test_capability_absent_explore_routes_to_build_not_complete():
+    # The explore-interact session "succeeds" at scouting — but nothing is
+    # built yet, so it must route to diagnose (build), NOT complete the goal.
+    g = _cgoal(
+        reports=[
+            DirectiveReport(
+                flow="interact", status="success", summary="spec: add east exit"
+            )
+        ]
+    )
+    out = await action_functional_sweep_next(_si(_mission([g])))
+    assert g.status == "incomplete"  # did NOT complete on the explore success
+    assert out.result.get("needs_fix") is True
+    assert out.context_updates["dispatch_config"]["flow"] == "diagnose_issue"
+
+
+@pytest.mark.asyncio
+async def test_capability_absent_completes_after_build_and_retest():
+    # Once a build (file_ops) has happened, a successful re-test interact
+    # completes the goal like any functional goal.
+    g = _cgoal(
+        reports=[
+            DirectiveReport(flow="interact", status="success", summary="spec"),
+            DirectiveReport(flow="file_ops", status="success", summary="built it"),
+            DirectiveReport(flow="interact", status="success", summary="works"),
+        ]
+    )
+    await action_functional_sweep_next(_si(_mission([g])))
+    assert g.status == "complete"
 
 
 # ── Fix 3: post-fix re-test directive polarity ───────────────────────────

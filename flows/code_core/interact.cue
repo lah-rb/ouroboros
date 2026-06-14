@@ -51,6 +51,9 @@ interact: #FlowDefinition & {
 			"interaction_mode",
 			"run_command",
 			"interactive_prompt",
+			// "explore" selects the absence-aware build-spec charter (a
+			// not-yet-built capability); default/empty uses the verify charter.
+			"charter_mode",
 		]
 	}
 
@@ -131,7 +134,22 @@ interact: #FlowDefinition & {
 			params: context_budget: 6
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "plan_interaction"}]
+				rules: [{condition: "true", transition: "choose_charter"}]
+			}
+		}
+
+		// charter_mode="explore" (a not-yet-built capability) → the build-spec
+		// charter; otherwise the default verify charter. Two steps because CUE
+		// template refs are literals and can't be selected by $ref.
+		choose_charter: #StepDefinition & {
+			action:      "noop"
+			description: "Select the verify vs explore-and-build charter"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "input.get('charter_mode', '') == 'explore'", transition: "plan_interaction_explore"},
+					{condition: "true", transition: "plan_interaction"},
+				]
 			}
 		}
 
@@ -158,6 +176,41 @@ interact: #FlowDefinition & {
 					// treated as illustrative (see charter_explore for the
 					// quality gate's exploratory counterpart).
 					{type: "instruction", template:   "interact/charter_function"},
+					{type: "envelope"},
+				]
+				response: {}
+				transitions: {
+					default:   "run_session"
+					no_answer: "failed"
+				}
+				config: temperature: "t*0.4"
+				retries: 3
+			}
+			pre_compute: [
+				{formatter: "render_interaction_context", output_key: "interaction_brief"
+					params: source:                                   {$ref: "input.interaction_context"}},
+				{formatter: "format_project_file_list", output_key: "project_file_list"
+					params: source:                                {$ref: "context.project_manifest"}},
+			]
+			publishes: ["execution_persona"]
+		}
+
+		// Explore-and-build variant (charter_mode="explore"): identical to
+		// plan_interaction but swaps the verify charter for the build-spec
+		// charter — the capability does not exist yet, so the session explores
+		// for placement and produces a build spec rather than a pass/fail.
+		plan_interaction_explore: #StepDefinition & {
+			action:      "inference"
+			description: "Craft an explore-and-build charter for a not-yet-built capability"
+			context: optional: ["project_manifest", "repo_map_formatted"]
+			turn: #Turn & {
+				response_shape: "prose"
+				sections: [
+					{type: "role", template:          "personas/charter_author"},
+					{type: "problem", template:       "interact/test_objective_bounded"},
+					{type: "context_files", template: "interact/project_and_code_structure"},
+					{type: "dependencies", ref:       {$ref: "context.interaction_brief"}},
+					{type: "instruction", template:   "interact/charter_explore"},
 					{type: "envelope"},
 				]
 				response: {}

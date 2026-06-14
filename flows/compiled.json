@@ -3521,7 +3521,8 @@
         "interaction_context",
         "interaction_mode",
         "run_command",
-        "interactive_prompt"
+        "interactive_prompt",
+        "charter_mode"
       ]
     },
     "defaults": {
@@ -3673,10 +3674,36 @@
           "rules": [
             {
               "condition": "true",
+              "transition": "choose_charter"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "choose_charter": {
+        "action": "noop",
+        "description": "Select the verify vs explore-and-build charter",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "input.get('charter_mode', '') == 'explore'",
+              "transition": "plan_interaction_explore"
+            },
+            {
+              "condition": "true",
               "transition": "plan_interaction"
             }
           ]
         },
+        "publishes": [],
+        "effects": [],
         "terminal": false
       },
       "plan_interaction": {
@@ -3718,6 +3745,89 @@
             {
               "type": "instruction",
               "template": "interact/charter_function",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {},
+          "transitions": {
+            "default": "run_session",
+            "no_answer": "failed"
+          },
+          "config": {
+            "temperature": "t*0.4"
+          },
+          "retries": 3
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_interaction_context",
+            "output_key": "interaction_brief",
+            "params": {
+              "source": {
+                "$ref": "input.interaction_context"
+              }
+            }
+          },
+          {
+            "formatter": "format_project_file_list",
+            "output_key": "project_file_list",
+            "params": {
+              "source": {
+                "$ref": "context.project_manifest"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "execution_persona"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "plan_interaction_explore": {
+        "action": "inference",
+        "description": "Craft an explore-and-build charter for a not-yet-built capability",
+        "context": {
+          "required": [],
+          "optional": [
+            "project_manifest",
+            "repo_map_formatted"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "prose",
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/charter_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "interact/test_objective_bounded",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "template": "interact/project_and_code_structure",
+              "required": false
+            },
+            {
+              "type": "dependencies",
+              "ref": {
+                "$ref": "context.interaction_brief"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "interact/charter_explore",
               "required": false
             },
             {
@@ -4992,6 +5102,10 @@
             },
             "interactive_prompt": {
               "$ref": "context.dispatch_config.interactive_prompt",
+              "default": ""
+            },
+            "charter_mode": {
+              "$ref": "context.dispatch_config.charter_mode",
               "default": ""
             }
           }
