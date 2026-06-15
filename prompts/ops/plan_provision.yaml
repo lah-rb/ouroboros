@@ -14,10 +14,13 @@ description: "Plan install/setup commands to provision the env for a terminal ta
 
 sections:
 
-  # cache: true marks the leading invariant head — pinned per-flow in the KV
+  # Layout: static-first / dynamic-last. The invariant head (role, task,
+  # instructions, format) is marked cache: true and pinned per-flow in the KV
   # cache (opt-in: config.model.flow_kv_cache) so it isn't re-prefilled each
-  # cycle. Output-neutral: the split reconstructs the full prompt verbatim. The
-  # dynamic feedback below ends the cacheable run (KV caches only a prefix).
+  # cycle; the per-cycle feedback is the ONLY dynamic section and comes LAST,
+  # which both ends the cacheable prefix and puts the freshest signal in the
+  # recency slot. Safe here because Ouroboros runs at <5% of the model's context
+  # window, far below where mid-prompt position matters (see PROMPTING_CONVENTIONS).
   - id: system_role
     cache: true
     content: |
@@ -31,12 +34,8 @@ sections:
       ## Task to be accomplished
       {context.task_spec}
 
-  - id: feedback
-    when: context.feedback_block
-    content: |
-      {context.feedback_block}
-
   - id: instructions
+    cache: true
     content: |
       List the shell commands needed to PROVISION the environment for this task
       — installing the tools, packages, or runtimes it requires that may not be
@@ -47,7 +46,7 @@ sections:
       - Plan the SMALLEST set of commands necessary. If the environment already
         has what's needed (common tools, or packages a prior step installed),
         return an empty list.
-      - If the prior-attempt feedback names a missing tool/package, install it.
+      - If the prior-attempt feedback (below) names a missing tool/package, install it.
       - ONE command per action — do NOT chain with `&&`, `|`, or `;` (each
         command runs as argv, not through a shell).
       - For Python packages use `python3 -m pip install --break-system-packages
@@ -55,6 +54,7 @@ sections:
       - Assume the command runs in the working directory.
 
   - id: output_format
+    cache: true
     content: |
       Return a JSON object with a "setup_actions" array. The example is from an
       UNRELATED task — it shows the SHAPE only; write actions for the real task
@@ -70,3 +70,9 @@ sections:
 
       Each action: `type` is "command", `command` is an argv array, `name` is a
       short label. Return ONLY the fenced JSON object.
+
+  # Dynamic tail — last (recency) and ends the cached prefix.
+  - id: feedback
+    when: context.feedback_block
+    content: |
+      {context.feedback_block}

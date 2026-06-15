@@ -1105,7 +1105,7 @@ class LlamaCppBackend(BaseBackend):
                 if flow_key in self._flow_states:
                     self._flow_states.move_to_end(flow_key)
                     instance.load_state(self._flow_states[flow_key])
-                    log.debug(
+                    log.info(
                         "🔁 flow_kv_cache HIT %r (%d tok pinned)",
                         flow_key, flow_prefix_len,
                     )

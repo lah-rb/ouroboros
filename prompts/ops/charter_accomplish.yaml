@@ -11,9 +11,11 @@ description: "Write an operator brief to accomplish a terminal task"
 
 sections:
 
-  # cache: true marks the leading invariant head — pinned per-flow in the KV
-  # cache (opt-in: config.model.flow_kv_cache), output-neutral. The dynamic
-  # feedback below ends the cacheable run (KV caches only a prefix).
+  # Layout: static-first / dynamic-last. The invariant head (role, task,
+  # instruction) is cache: true and pinned per-flow in the KV cache (opt-in:
+  # config.model.flow_kv_cache); the per-cycle feedback is the only dynamic
+  # section and comes LAST (recency slot + ends the cached prefix). Safe at
+  # Ouroboros's <5%-of-window context (see PROMPTING_CONVENTIONS).
   - id: system_role
     cache: true
     content: |
@@ -29,12 +31,8 @@ sections:
       ## Task to accomplish
       {context.task_spec}
 
-  - id: feedback
-    when: context.feedback_block
-    content: |
-      {context.feedback_block}
-
   - id: instruction
+    cache: true
     content: |
       Write the brief with three labeled parts:
 
@@ -45,7 +43,8 @@ sections:
       3-6 numbered steps: the concrete commands/actions to run, in order, from a
       clean terminal in the working directory. Inspect before you change (list
       files, read what exists) so the steps fit the actual environment. If a
-      step depends on a previous result, say so.
+      step depends on a previous result, say so. If the prior-attempt feedback
+      (below) points at a failure, fix that first.
 
       ## DONE WHEN
       One or two sentences: the observable end state that means the task is
@@ -53,3 +52,9 @@ sections:
       service that responds).
 
       Target: under 180 words.
+
+  # Dynamic tail — last (recency) and ends the cached prefix.
+  - id: feedback
+    when: context.feedback_block
+    content: |
+      {context.feedback_block}

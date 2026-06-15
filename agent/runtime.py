@@ -918,8 +918,14 @@ async def _execute_inference_action(
                 _step_name,
                 session_id,
             )
+        # Cache only when there's BOTH a static head AND a dynamic tail. When a
+        # template's dynamic section is conditionally absent (e.g. feedback on
+        # the first cycle) the whole prompt is static → flow_dynamic == "" → send
+        # the full prompt normally (an empty prompt would be rejected). The
+        # cycles that DO carry feedback then build/hit the same static head.
         run_kwargs: dict[str, Any] = {}
-        if flow_static_prefix:
+        prompt_to_send = rendered_prompt
+        if flow_static_prefix and flow_dynamic:
             import hashlib
 
             # Key on flow:step + a hash of the static head, so different tasks
@@ -928,8 +934,9 @@ async def _execute_inference_action(
             digest = hashlib.md5(flow_static_prefix.encode("utf-8")).hexdigest()[:10]
             run_kwargs["static_prefix"] = flow_static_prefix
             run_kwargs["flow_key"] = f"{flow_def.flow}:{_step_name}:{digest}"
+            prompt_to_send = flow_dynamic
         result = await effects.run_inference(
-            prompt=flow_dynamic,
+            prompt=prompt_to_send,
             config_overrides=config_overrides if config_overrides else None,
             **run_kwargs,
         )

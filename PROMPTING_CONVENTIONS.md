@@ -63,7 +63,7 @@ Every inference prompt MUST follow this structure:
 [OUTPUT FORMAT]      — Exactly what to return, with examples of right and wrong
 ```
 
-**CRITICAL:** The output format section must appear last (closest to where generation begins) and must include at least one concrete example of the expected format.
+**CRITICAL:** The output format section must include at least one concrete example of the expected format. It should sit near the end — *except* for prompts re-issued every cycle with only a small varying tail (planners, judges), where it belongs in the static head so the whole head can be KV-cached and only the dynamic tail (latest feedback/state) trails it. See §10 "Cache-aware ordering." Why this is safe: Ouroboros runs at well under 5% of the model's context window, where mid-prompt position is negligible — the format spec does not need to be last to be followed.
 
 ### Role Section
 
@@ -518,6 +518,33 @@ All references use simple dotted paths:
 
 No expressions, no filters, no method calls. If a value is None or missing, it renders as empty string.
 
+### Cache-aware ordering (static-first / dynamic-last)
+
+For a prompt that is **re-issued every cycle with only a small varying tail** — ops `plan_provision` / `charter_accomplish` / the judge, the file-ops planners — order the sections **static-first, dynamic-last** and mark the leading invariant run `cache: true`:
+
+```yaml
+  - id: system_role        # ┐
+    cache: true            # │
+  - id: task               # │ invariant head — role · task · instructions ·
+    cache: true            # │ output-format. Pinned in the per-flow KV cache
+  - id: instructions       # │ (config.model.flow_kv_cache) so it is prefilled
+    cache: true            # │ ONCE per (flow, task) and reused every cycle.
+  - id: output_format      # ┘
+    cache: true
+  - id: feedback           # the ONLY dynamic section — comes LAST, ends the
+    when: context.feedback_block   # cached prefix, and lands in the recency slot.
+    content: "{context.feedback_block}"
+```
+
+How it works (`PromptRenderer.render_with_cache_split` → `runtime` → `effects.run_inference(static_prefix, flow_key)` → llmvp): the renderer splits the **leading contiguous run** of `cache: true` sections from the rest, reconstructing the full prompt verbatim (output-neutral). Only a *leading prefix* caches, so **any dynamic section ends the run** — put every varying section (feedback, latest state, per-cycle results) at the bottom. If a template's only dynamic section is conditionally absent (e.g. feedback on cycle 0), the whole prompt is static, the tail is empty, and the runtime sends it normally (no cache that cycle).
+
+Why static-first/dynamic-last is safe (and slightly preferable) here, despite the classic "important content last" guidance:
+- **It's a relative-length effect.** "Lost in the middle" (Liu et al., TACL 2024) and positional bias bite when the input fills **≳25–50%** of the model's context window (COLM 2025, arXiv 2508.07479), not at any absolute length. Ouroboros operates at **~2–5k tokens on ≥128k windows (<5% fill)** — far below that, so the whole prompt sits in the high-attention zone and mid-prompt position is within noise.
+- **The two privileged edges still get used.** A mild causal-mask **primacy** bias favors the front → good home for static context; **recency** favors the end → the per-cycle feedback (the freshest, most actionable signal) goes there.
+- **No "restate at the end" insurance needed** at this context fraction. The one positional effect that survives short context is *few-shot label-order* bias — so if a prompt ever stacks labeled in-context examples, balance/shuffle them; our `✅/❌` blocks are format exemplars, not labeled demonstrations, and are immune.
+
+This is the ONLY place the "output-format last" rule (§2) is overridden. Single-shot prompts (no per-cycle re-issue) keep format-near-the-end and need no `cache:` markers.
+
 ---
 
 ## 11. Temperature Guidelines
@@ -604,7 +631,7 @@ resolver: {
 When adding or modifying a prompt template, verify:
 
 - [ ] **Role section present** — 1-3 sentences establishing identity and constraints
-- [ ] **Output format section at the end** — with ✅/❌ example pair for machine-parsed outputs (JSON, file blocks, code). Optional for free-text analysis prompts (see §5).
+- [ ] **Output format section near the end** — with ✅/❌ example pair for machine-parsed outputs (JSON, file blocks, code). Optional for free-text analysis prompts (see §5). EXCEPTION: cycle-re-issued prompts put it in the `cache: true` static head with the dynamic tail last (§10 "Cache-aware ordering").
 - [ ] **Critical information at edges** — target file and task near the top; format spec at the bottom
 - [ ] **Optional sections use `when:`** — for conditional context inclusion
 - [ ] **Single output per prompt** — one file, one JSON object, or one reflection
