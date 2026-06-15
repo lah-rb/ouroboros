@@ -230,6 +230,8 @@ async def run_completion(
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     grammar: Optional[str] = None,
+    static_prefix: Optional[str] = None,
+    flow_key: Optional[str] = None,
 ) -> Tuple[str, int]:
     """
     Run a non-streaming completion.
@@ -268,7 +270,25 @@ async def run_completion(
 
     # Build complete prompt BEFORE acquiring instance to minimize pool hold time
     tokenizer = get_cached_tokenizer()
-    dynamic_ids = build_full_prompt(prompt, tokenizer)
+    flow_kwargs: dict = {}
+    if getattr(config.model, "flow_kv_cache", False) and flow_key and static_prefix:
+        # Render the full turn once — the token sequence is IDENTICAL to the
+        # non-cached path, so output is unchanged; caching only splits where the
+        # KV gets computed. Then find the stable token prefix determined solely
+        # by static_prefix (not by what follows) via two probes with different
+        # tails — robust to tokenizer boundary merges. That prefix (after the
+        # global static buffer) is what the backend pins per flow_key.
+        dynamic_ids = build_full_prompt(static_prefix + prompt, tokenizer)
+        p1 = build_full_prompt(static_prefix + "\nAlpha one two", tokenizer)
+        p2 = build_full_prompt(static_prefix + "\tBravo nine six", tokenizer)
+        n = 0
+        lim = min(len(p1), len(p2), len(dynamic_ids))
+        while n < lim and p1[n] == p2[n] == dynamic_ids[n]:
+            n += 1
+        if n > 0:
+            flow_kwargs = {"flow_key": flow_key, "flow_prefix_len": len(static_tokens) + n}
+    else:
+        dynamic_ids = build_full_prompt(prompt, tokenizer)
     total_len = len(static_tokens) + len(dynamic_ids)
 
     if total_len > config.model.n_ctx:
@@ -291,6 +311,7 @@ async def run_completion(
         gen_kwargs = {}
         if grammar:
             gen_kwargs["grammar"] = grammar
+        gen_kwargs.update(flow_kwargs)
 
         # Use backend's async generation
         answer = await backend.generate_async(

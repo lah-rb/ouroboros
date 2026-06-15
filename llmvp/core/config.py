@@ -55,6 +55,19 @@ class ModelConfig(BaseModel):
     # where the minor speed gain matters and the model is a plain
     # transformer running shallow sessions.
     session_full_replay: bool = True
+    # Per-flow static-prefix KV cache (OPT-IN, default off — unproven). A
+    # request carrying a flow_cache_key + its static prefix (persona + fixed
+    # instructions) gets that prefix's KV pinned via save_state() on first use
+    # and restored via load_state() on later visits, so only the dynamic tail is
+    # prefilled — the per-flow generalization of the global static buffer.
+    # Build uses reset()+eval(); serve uses load_state()+generate() — NEVER
+    # load_state()+eval(), which trips gpt-oss's sliding-window cache. Same
+    # save_state caveats as session_full_replay=false: sound only for plain
+    # transformers (NOT recurrent/hybrid like Qwen3-Next) — but each flow state
+    # is a single SHALLOW prefix (~the global-buffer size), not a deep session,
+    # so it sidesteps the deep-session blob overflow. LRU-bounded.
+    flow_kv_cache: bool = False
+    flow_kv_cache_max: int = 8
 
     @field_validator("thinking_mode")
     @classmethod

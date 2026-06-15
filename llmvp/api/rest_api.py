@@ -78,6 +78,11 @@ async def completions(request: Request):
     max_tokens = body.get("max_tokens")
     temperature = body.get("temperature")
     stream = bool(body.get("stream", config.generation.streaming_default or False))
+    # Opt-in per-flow KV cache (config.model.flow_kv_cache): a caller pins a
+    # flow's static head by passing `static_prefix` (the invariant text that
+    # leads `prompt`) + `flow_cache_key`. Ignored unless the flag is on.
+    static_prefix = body.get("static_prefix")
+    flow_key = body.get("flow_cache_key")
 
     if stream:
         return StreamingResponse(
@@ -90,6 +95,8 @@ async def completions(request: Request):
                 prompt=user_prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                static_prefix=static_prefix,
+                flow_key=flow_key,
             )
             return {"choices": [{"text": answer}]}
         except ValueError as exc:

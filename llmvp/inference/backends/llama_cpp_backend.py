@@ -18,6 +18,7 @@ import ctypes
 import dataclasses
 import logging
 import time
+from collections import OrderedDict
 from typing import Any, AsyncGenerator, Iterator, List, Optional
 
 import numpy as np
@@ -88,6 +89,11 @@ class LlamaCppBackend(BaseBackend):
         # Hybrid/recurrent model support
         self._is_hybrid = False
         self._static_state = None  # Saved LlamaState after processing static tokens
+        # Per-flow static-prefix KV cache (opt-in: config.model.flow_kv_cache).
+        # flow_key -> saved LlamaState of [global static + that flow's static
+        # head], so later visits restore it and prefill only the dynamic tail.
+        # LRU-bounded; only populated when the flag is on. See config.py.
+        self._flow_states: "OrderedDict[str, Any]" = OrderedDict()
         # JIT pool scaling
         jit_limit = config.resources.jit_concurrency_limit
         self._jit_enabled: bool = jit_limit is not None
@@ -1079,10 +1085,71 @@ class LlamaCppBackend(BaseBackend):
         # only the prompt tail and produced blind rewrites/refusals
         # (45f031ac run, cycle-25 process_command placeholder splice).
         static_in_prompt = kwargs.pop("static_in_prompt", True)
+
+        # ── Per-flow static-prefix KV cache (opt-in) ──────────────────────
+        # Pin [global static + this flow's static head] (flow_prefix_len tokens)
+        # so later visits restore it and prefill only the dynamic tail. BUILD
+        # uses reset()+eval() (the global-buffer pattern); SERVE uses
+        # load_state() — NEVER load_state()+eval() (SWA-fragile). Any save_state
+        # failure (recurrent model, blob overflow) falls back to the static base.
+        flow_key = kwargs.pop("flow_key", None)
+        flow_prefix_len = int(kwargs.pop("flow_prefix_len", 0) or 0)
+        flow_n_static = None
+        if (
+            flow_key
+            and getattr(self.config.model, "flow_kv_cache", False)
+            and static_in_prompt
+            and 0 < flow_prefix_len <= len(prompt_tokens)
+        ):
+            try:
+                if flow_key in self._flow_states:
+                    self._flow_states.move_to_end(flow_key)
+                    instance.load_state(self._flow_states[flow_key])
+                    log.debug(
+                        "🔁 flow_kv_cache HIT %r (%d tok pinned)",
+                        flow_key, flow_prefix_len,
+                    )
+                else:
+                    # Build ON TOP of the global static that acquire_instance
+                    # already loaded — eval ONLY the flow-static span and
+                    # snapshot [global + flow_static]. This reproduces the
+                    # uncached path's global base EXACTLY (same warmup snapshot),
+                    # so output is bit-identical; reset()+eval(whole prefix)
+                    # recomputes the global KV and diverges. (eval-on-top of a
+                    # loaded state is what generate() does every request.)
+                    n_global = (
+                        self._static_state.n_tokens if self._static_state else 0
+                    )
+                    instance.eval(list(prompt_tokens[n_global:flow_prefix_len]))
+                    self._flow_states[flow_key] = instance.save_state()
+                    cap = max(
+                        1,
+                        int(getattr(self.config.model, "flow_kv_cache_max", 8) or 8),
+                    )
+                    while len(self._flow_states) > cap:
+                        self._flow_states.popitem(last=False)
+                    log.info(
+                        "🆕 flow_kv_cache BUILD %r (%d tok)",
+                        flow_key, flow_prefix_len,
+                    )
+                flow_n_static = flow_prefix_len
+            except Exception as exc:  # noqa: BLE001 — save_state fragility net
+                log.warning(
+                    "flow_kv_cache failed for %r (%s) — using static base",
+                    flow_key, exc,
+                )
+                if self._static_state is not None:
+                    instance.load_state(self._static_state)
+                flow_n_static = None
+
         n_static = (
-            self._static_state.n_tokens
-            if (self._static_state and static_in_prompt)
-            else 0
+            flow_n_static
+            if flow_n_static is not None
+            else (
+                self._static_state.n_tokens
+                if (self._static_state and static_in_prompt)
+                else 0
+            )
         )
         if n_static > len(prompt_tokens):
             n_static = 0  # safety fallback

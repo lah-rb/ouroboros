@@ -26,6 +26,11 @@ model:
   batch_size: 512
   thinking: true
   thinking_mode: medium   # harmony "Reasoning: medium" (explicit; was the default)
+  # OPT-IN per-flow static-prefix KV cache. Validated correct (output-identical)
+  # + faster on gpt-oss (plain transformer, shallow flow states → save_state is
+  # sound). Off by default until proven on a real routed run; flip to true to
+  # experiment. Inert unless callers pass static_prefix + flow_cache_key.
+  flow_kv_cache: false
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
