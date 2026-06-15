@@ -934,7 +934,13 @@ async def _execute_inference_action(
         prompt_content = rendered_prompt
         response_content = result.text or ""
 
-    _can_trace = hasattr(effects, "emit_trace")
+    # Trace this inference — but ONLY for the stateless path. The session path
+    # (effects.session_inference) emits its own complete InferenceCall, so
+    # emitting here too would double-log every session inference (e.g. ops
+    # judge_step, which reuses run_session's session): two rows ~ms apart with
+    # identical content, inflating trace-based token/cost reports. Mirrors the
+    # same guard on the turn-based path below.
+    _can_trace = hasattr(effects, "emit_trace") and not session_id
     if _can_trace:
         await effects.emit_trace(
             InferenceCall(
@@ -947,7 +953,7 @@ async def _execute_inference_action(
                 wall_ms=(time.monotonic() - infer_start) * 1000,
                 temperature=_safe_float_temp(config_overrides.get("temperature", 0)),
                 max_tokens=int(config_overrides.get("max_tokens", 0) or 0),
-                purpose="session_inference" if session_id else "step_inference",
+                purpose="step_inference",
                 thinking_content=thinking_content,
                 prompt_content=prompt_content,
                 response_content=response_content,
