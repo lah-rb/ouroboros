@@ -14,13 +14,19 @@ description: "Plan install/setup commands to provision the env for a terminal ta
 
 sections:
 
+  # cache: true marks the leading invariant head — pinned per-flow in the KV
+  # cache (opt-in: config.model.flow_kv_cache) so it isn't re-prefilled each
+  # cycle. Output-neutral: the split reconstructs the full prompt verbatim. The
+  # dynamic feedback below ends the cacheable run (KV caches only a prefix).
   - id: system_role
+    cache: true
     content: |
       You are an environment-provisioning module in an automated pipeline. Your
       output is parsed as JSON. Return ONLY a JSON object inside a fenced code
       block — no commentary.
 
   - id: task
+    cache: true
     content: |
       ## Task to be accomplished
       {context.task_spec}

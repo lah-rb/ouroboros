@@ -30,7 +30,7 @@ model:
   # + faster on gpt-oss (plain transformer, shallow flow states → save_state is
   # sound). Off by default until proven on a real routed run; flip to true to
   # experiment. Inert unless callers pass static_prefix + flow_cache_key.
-  flow_kv_cache: false
+  flow_kv_cache: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

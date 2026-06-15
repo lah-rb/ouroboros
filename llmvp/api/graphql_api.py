@@ -138,6 +138,10 @@ class CompletionRequest:
     max_tokens: Optional[int] = strawberry.field(default=None)
     temperature: Optional[float] = strawberry.field(default=None)
     grammar: Optional[str] = strawberry.field(default=None)
+    # Per-flow KV cache (opt-in: config.model.flow_kv_cache). static_prefix is
+    # the invariant head that leads `prompt`; flow_cache_key keys its pinned KV.
+    static_prefix: Optional[str] = strawberry.field(default=None)
+    flow_cache_key: Optional[str] = strawberry.field(default=None)
 
 
 @strawberry.type
@@ -335,11 +339,21 @@ class Query:
         effective_max = (
             request.max_tokens or config.generation.max_tokens_default or 256
         )
+        # Flow-cache fields only apply to the plain completion path.
+        extra = (
+            {}
+            if use_tools
+            else {
+                "static_prefix": request.static_prefix,
+                "flow_key": request.flow_cache_key,
+            }
+        )
         answer, tokens_generated = await run_fn(
             prompt=request.prompt,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             grammar=request.grammar,
+            **extra,
         )
         return CompletionResponse(
             text=answer,

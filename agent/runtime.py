@@ -863,9 +863,16 @@ async def _execute_inference_action(
         step_input.context.update(computed)
         namespaces["context"].update(computed)
 
-    # Render the prompt
+    # Render the prompt. The split form also separates the leading cache:true
+    # sections (the invariant static head) from the dynamic tail, so the LLMVP
+    # backend can pin the head's KV per flow (opt-in via config.model.flow_kv_cache;
+    # inert otherwise). static_prefix + dynamic == the full render exactly, so
+    # output is unchanged whether or not caching is active.
     renderer = _get_prompt_renderer()
-    rendered_prompt = renderer.render(step_def.prompt_template.template, namespaces)
+    flow_static_prefix, flow_dynamic = renderer.render_with_cache_split(
+        step_def.prompt_template.template, namespaces
+    )
+    rendered_prompt = flow_static_prefix + flow_dynamic
 
     # Build config overrides from merged step config
     config_overrides = {}
@@ -911,9 +918,20 @@ async def _execute_inference_action(
                 _step_name,
                 session_id,
             )
+        run_kwargs: dict[str, Any] = {}
+        if flow_static_prefix:
+            import hashlib
+
+            # Key on flow:step + a hash of the static head, so different tasks
+            # (different task_spec in the head) get distinct cache entries and a
+            # hit always means the pinned prefix matches.
+            digest = hashlib.md5(flow_static_prefix.encode("utf-8")).hexdigest()[:10]
+            run_kwargs["static_prefix"] = flow_static_prefix
+            run_kwargs["flow_key"] = f"{flow_def.flow}:{_step_name}:{digest}"
         result = await effects.run_inference(
-            prompt=rendered_prompt,
+            prompt=flow_dynamic,
             config_overrides=config_overrides if config_overrides else None,
+            **run_kwargs,
         )
 
     tokens_out = count_tokens(result.text) if result.text else 0

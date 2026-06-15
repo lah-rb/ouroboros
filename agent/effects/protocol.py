@@ -341,6 +341,8 @@ class Effects(Protocol):
         self,
         prompt: str,
         config_overrides: dict | None = None,
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
     ) -> InferenceResult:
         """Run an inference call against the LLMVP backend.
 

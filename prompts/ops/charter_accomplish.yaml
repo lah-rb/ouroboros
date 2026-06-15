@@ -11,7 +11,11 @@ description: "Write an operator brief to accomplish a terminal task"
 
 sections:
 
+  # cache: true marks the leading invariant head — pinned per-flow in the KV
+  # cache (opt-in: config.model.flow_kv_cache), output-neutral. The dynamic
+  # feedback below ends the cacheable run (KV caches only a prefix).
   - id: system_role
+    cache: true
     content: |
       You write a self-contained operator brief for ACCOMPLISHING a task in an
       interactive terminal session. The brief IS your output — another model
@@ -20,6 +24,7 @@ sections:
       around the whole brief.
 
   - id: task
+    cache: true
     content: |
       ## Task to accomplish
       {context.task_spec}

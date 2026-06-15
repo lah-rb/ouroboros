@@ -280,6 +280,8 @@ class InferenceEffect:
         self,
         prompt: str,
         config_overrides: dict | None = None,
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
     ) -> InferenceResult:
         """Send a completion request to LLMVP.
 
@@ -301,6 +303,12 @@ class InferenceEffect:
 
         # Build the request variables
         request_vars: dict[str, Any] = {"prompt": prompt}
+
+        # Per-flow KV cache (opt-in server-side). Sent only when both are
+        # present; the server ignores them unless flow_kv_cache is enabled.
+        if static_prefix and flow_key:
+            request_vars["staticPrefix"] = static_prefix
+            request_vars["flowCacheKey"] = flow_key
 
         if config_overrides:
             if "temperature" in config_overrides:

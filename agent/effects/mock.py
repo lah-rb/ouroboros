@@ -350,6 +350,8 @@ class MockEffects:
         self,
         prompt: str,
         config_overrides: dict | None = None,
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
     ) -> InferenceResult:
         """Return next canned inference response, or a default.
 

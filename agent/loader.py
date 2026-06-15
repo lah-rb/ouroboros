@@ -316,6 +316,44 @@ class PromptRenderer:
 
         return "\n\n".join(rendered_sections)
 
+    def render_with_cache_split(
+        self, template_id: str, namespaces: dict[str, Any]
+    ) -> tuple[str, str]:
+        """Render, splitting the LEADING run of ``cache: true`` sections (the
+        invariant static head) from the rest (the dynamic tail).
+
+        Returns ``(static_prefix, dynamic)`` such that
+        ``static_prefix + dynamic == render(template_id, namespaces)`` exactly —
+        the separator is baked into ``static_prefix`` — so feeding them to the
+        per-flow KV cache is output-neutral. ``static_prefix`` is ``""`` when no
+        leading cache section renders (caller then uses the normal path).
+
+        Only the LEADING contiguous cache:true sections count: once a
+        non-cache (or skipped) section appears, everything after is dynamic,
+        because KV-prefix caching can only pin a prefix. So order matters —
+        put the dynamic tail (e.g. per-cycle feedback) last for max coverage.
+        """
+        template = self.load_template(template_id)
+        static_parts: list[str] = []
+        dynamic_parts: list[str] = []
+        in_static = True
+        for section in template.get("sections", []):
+            rendered = self._render_section(section, namespaces)
+            if rendered is None:
+                continue
+            if in_static and section.get("cache") is True:
+                static_parts.append(rendered)
+            else:
+                in_static = False
+                dynamic_parts.append(rendered)
+        static_prefix = "\n\n".join(static_parts)
+        dynamic = "\n\n".join(dynamic_parts)
+        if static_prefix and dynamic:
+            # render() joins the two halves with "\n\n"; bake it into the prefix
+            # so static_prefix + dynamic reconstructs the full prompt verbatim.
+            return static_prefix + "\n\n", dynamic
+        return static_prefix, dynamic
+
     def _render_section(self, section: dict, namespaces: dict[str, Any]) -> str | None:
         """Render a single section, returning None if skipped.
 

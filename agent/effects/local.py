@@ -1021,13 +1021,22 @@ class LocalEffects:
         self,
         prompt: str,
         config_overrides: dict | None = None,
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
     ) -> InferenceResult:
-        """Run an inference call via the LLMVP GraphQL API."""
+        """Run an inference call via the LLMVP GraphQL API.
+
+        ``static_prefix`` + ``flow_key`` opt into the per-flow KV cache (the
+        backend pins the prefix's KV per flow_key). Inert unless the server has
+        ``flow_kv_cache`` on.
+        """
         start = time.monotonic()
         prompt_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
 
         inference = self._get_inference()
-        result = await inference.run_inference(prompt, config_overrides)
+        result = await inference.run_inference(
+            prompt, config_overrides, static_prefix=static_prefix, flow_key=flow_key
+        )
 
         if result.error:
             self._log_entry(
