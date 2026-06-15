@@ -35,11 +35,52 @@ ops_task: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.mission.status == 'active'", transition: "plan_charter"},
+					{condition: "result.mission.status == 'active'", transition: "plan_provision"},
 					{condition: "true", transition: "return_loop"},
 				]
 			}
 			publishes: ["mission"]
+		}
+
+		// Provision the environment FIRST (install the tools the task needs), so
+		// the work session runs in a ready env and stays observe-only. terminal-
+		// bench expects agents to manipulate the env (its grader runs in the same
+		// container and supplies its own test deps). Reuses project_ops's
+		// install-runner; run_command routes into the container via the adapter.
+		plan_provision: #StepDefinition & {
+			action:      "inference"
+			description: "Plan setup/install commands the task's environment needs"
+			context: required: ["mission"]
+			prompt_template: {
+				template: "ops/plan_provision"
+				context_keys: ["task_spec", "feedback_block"]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_mission_meta", output_key: "task_spec"
+					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+				{formatter: "format_feedback_block", output_key: "feedback_block"
+					params: {source: {$ref: "context.mission.task_definition"}}},
+			]
+			config: temperature: "t*0.2"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "run_provision"},
+					{condition: "true", transition: "plan_charter"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		run_provision: #StepDefinition & {
+			action:      "execute_project_setup"
+			description: "Run the planned setup/install commands (in the container)"
+			context: required: ["inference_response"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "plan_charter"}]
+			}
 		}
 
 		// Craft the operator brief (the run_session execution_persona). The raw

@@ -10515,7 +10515,7 @@
           "rules": [
             {
               "condition": "result.mission.status == 'active'",
-              "transition": "plan_charter"
+              "transition": "plan_provision"
             },
             {
               "condition": "true",
@@ -10526,6 +10526,91 @@
         "publishes": [
           "mission"
         ],
+        "effects": [],
+        "terminal": false
+      },
+      "plan_provision": {
+        "action": "inference",
+        "description": "Plan setup/install commands the task's environment needs",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "ops/plan_provision",
+          "context_keys": [
+            "task_spec",
+            "feedback_block"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "task_spec",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          },
+          {
+            "formatter": "format_feedback_block",
+            "output_key": "feedback_block",
+            "params": {
+              "source": {
+                "$ref": "context.mission.task_definition"
+              }
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.2"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "run_provision"
+            },
+            {
+              "condition": "true",
+              "transition": "plan_charter"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_provision": {
+        "action": "execute_project_setup",
+        "description": "Run the planned setup/install commands (in the container)",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "plan_charter"
+            }
+          ]
+        },
+        "publishes": [],
         "effects": [],
         "terminal": false
       },

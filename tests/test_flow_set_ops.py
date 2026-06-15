@@ -87,6 +87,15 @@ def test_compiled_ops_wiring():
     assert c["ops_control"]["steps"]["dispatch_task"]["tail_call"]["flow"] == "ops_task"
     # ops_task reuses run_session verbatim and judges completion.
     steps = c["ops_task"]["steps"]
+    # Provision the env BEFORE the work session (reuse project_ops's install
+    # runner), so run_session stays observe-only and tb env-setup works.
+    assert (
+        steps["load_state"]["resolver"]["rules"][0]["transition"] == "plan_provision"
+    )
+    assert steps["run_provision"]["action"] == "execute_project_setup"
+    pp = {r["condition"]: r["transition"] for r in steps["plan_provision"]["resolver"]["rules"]}
+    assert pp["result.tokens_generated > 0"] == "run_provision"
+    assert steps["run_provision"]["resolver"]["rules"][0]["transition"] == "plan_charter"
     assert steps["run_terminal"]["flow"] == "run_session"
     assert steps["run_checks"]["action"] == "run_validation_checks"
     assert steps["decide"]["action"] == "judge_task_completion"
