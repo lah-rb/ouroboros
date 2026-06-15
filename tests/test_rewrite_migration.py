@@ -161,7 +161,15 @@ async def test_end_to_end_routing_on_success(compiled_rewrite_flow) -> None:
     step_def = compiled_rewrite_flow.steps["generate_rewrite"]
     step_input = StepInput(
         task="rewrite",
-        context={},
+        # v3: the file body is read by the read_target step into
+        # context.target_file (effects-routed, container-safe) and the
+        # target_file_content pre_compute sources from it — not from the
+        # file_context projection (which host-reads, empty in a container).
+        context={
+            "target_file": {
+                "content": "def add_todo(item): _store.append(item)"
+            }
+        },
         config={},
         params={},
         meta=FlowMeta(flow_name="rewrite", step_id="generate_rewrite"),

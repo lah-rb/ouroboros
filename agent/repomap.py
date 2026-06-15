@@ -179,6 +179,173 @@ try:
 except ImportError:
     pass
 
+# Multi-language grammars via tree-sitter-language-pack (version-matched
+# bundle — avoids per-grammar ABI mismatch with the tree-sitter core). Python
+# keeps its dedicated extractor above (full def + ref + variable tracing); other
+# languages get a definitions-only walk (below) so the repo map and the
+# architecture extractor are no longer blind to shell/js/ts/go/etc. — the gap
+# that left `## Existing Code Structure` empty on a bash project.
+_LANG_PACK_AVAILABLE = False
+_get_ts_language = None
+try:
+    from tree_sitter_language_pack import get_language as _get_ts_language
+
+    _LANG_PACK_AVAILABLE = True
+except ImportError:
+    pass
+
+# File extension → language-pack grammar name.
+_LANG_BY_EXT: dict[str, str] = {
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "bash",
+    ".js": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".jsx": "javascript",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".go": "go",
+    ".rb": "ruby",
+    ".rs": "rust",
+    ".java": "java",
+}
+
+# Per-language definition node types → SymbolDef.kind. class-like kinds
+# (class/module) become the `parent` of nested method definitions.
+_DEF_NODE_KINDS: dict[str, dict[str, str]] = {
+    "bash": {"function_definition": "function"},
+    "javascript": {
+        "function_declaration": "function",
+        "generator_function_declaration": "function",
+        "class_declaration": "class",
+        "method_definition": "method",
+    },
+    "typescript": {
+        "function_declaration": "function",
+        "generator_function_declaration": "function",
+        "class_declaration": "class",
+        "interface_declaration": "class",
+        "method_definition": "method",
+        "method_signature": "method",
+    },
+    "tsx": {
+        "function_declaration": "function",
+        "class_declaration": "class",
+        "interface_declaration": "class",
+        "method_definition": "method",
+    },
+    "go": {
+        "function_declaration": "function",
+        "method_declaration": "method",
+        "type_declaration": "class",
+    },
+    "ruby": {
+        "method": "method",
+        "singleton_method": "method",
+        "class": "class",
+        "module": "module",
+    },
+    "rust": {
+        "function_item": "function",
+        "struct_item": "class",
+        "enum_item": "class",
+        "trait_item": "class",
+    },
+    "java": {
+        "method_declaration": "method",
+        "constructor_declaration": "method",
+        "class_declaration": "class",
+        "interface_declaration": "class",
+    },
+}
+
+_TS_PARSER_CACHE: dict[str, Any] = {}
+
+
+def _ts_parser_for(lang: str):
+    """A cached tree-sitter Parser for a language-pack grammar (or None)."""
+    if not _LANG_PACK_AVAILABLE or _get_ts_language is None:
+        return None
+    if lang not in _TS_PARSER_CACHE:
+        try:
+            _TS_PARSER_CACHE[lang] = Parser(_get_ts_language(lang))
+        except Exception:
+            _TS_PARSER_CACHE[lang] = None
+    return _TS_PARSER_CACHE[lang]
+
+
+def _ts_node_name(node: Any) -> str:
+    """Best-effort symbol name for a definition node across grammars."""
+    name_node = node.child_by_field_name("name")
+    if name_node is not None:
+        return name_node.text.decode("utf-8", "replace")
+    for child in node.children:
+        if child.type in (
+            "identifier",
+            "word",
+            "name",
+            "constant",
+            "type_identifier",
+            "field_identifier",
+            "property_identifier",
+        ):
+            return child.text.decode("utf-8", "replace")
+    return ""
+
+
+def _extract_generic_tree_sitter(
+    file_path: str, content: str, lang: str
+) -> tuple[list[SymbolDef], list[SymbolRef]]:
+    """Definitions-only symbol extraction for a non-Python language.
+
+    Walks the tree for the language's definition node types (functions,
+    classes, methods). References are not extracted — definitions alone give
+    the repo map a real per-file symbol list (vs. the empty/regex fallback),
+    which is what the architecture extractor needs for non-Python repos.
+    """
+    parser = _ts_parser_for(lang)
+    if parser is None:
+        return [], []
+    def_kinds = _DEF_NODE_KINDS.get(lang, {})
+    if not def_kinds:
+        return [], []
+    try:
+        tree = parser.parse(content.encode("utf-8"))
+    except Exception:
+        return [], []
+
+    definitions: list[SymbolDef] = []
+
+    def _walk(node: Any, parent: str | None = None) -> None:
+        kind = def_kinds.get(node.type)
+        if kind:
+            name = _ts_node_name(node)
+            if name:
+                definitions.append(
+                    SymbolDef(
+                        name=name,
+                        kind=kind,  # type: ignore[arg-type]
+                        file_path=file_path,
+                        line=node.start_point[0] + 1,
+                        end_line=node.end_point[0] + 1,
+                        start_byte=node.start_byte,
+                        end_byte=node.end_byte,
+                        signature=_node_first_line(node, content),
+                        parent=parent,
+                    )
+                )
+                # Nested methods inherit the class/module as their parent.
+                nested_parent = name if kind in ("class", "module") else parent
+                for child in node.children:
+                    _walk(child, nested_parent)
+                return
+        for child in node.children:
+            _walk(child, parent)
+
+    _walk(tree.root_node)
+    return definitions, []
+
 
 def _extract_python_tree_sitter(
     file_path: str, content: str
@@ -532,8 +699,14 @@ def extract_file_symbols(
             return _extract_python_tree_sitter(file_path, content)
         return _extract_python_regex(file_path, content)
 
-    # Future: add tree-sitter-javascript, tree-sitter-typescript, etc.
-    # For now, unsupported languages return empty
+    # Non-Python: dispatch by extension to a language-pack grammar
+    # (definitions-only). Unknown extensions / no language-pack → empty.
+    import os
+
+    ext = os.path.splitext(file_path)[1].lower()
+    lang = _LANG_BY_EXT.get(ext)
+    if lang and _LANG_PACK_AVAILABLE:
+        return _extract_generic_tree_sitter(file_path, content, lang)
     return [], []
 
 

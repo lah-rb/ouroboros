@@ -188,7 +188,11 @@ def format_project_listing(params: dict, namespaces: dict) -> str:
     for filepath, sig in manifest.items():
         lines.append(f"- {filepath}")
         if sig:
-            lines.append(f"  {str(sig)}")
+            # Indent every line of a multi-line signature (content snippet) so
+            # each file's block reads cleanly instead of the first line indented
+            # and the rest flush-left.
+            for sig_line in str(sig).splitlines():
+                lines.append(f"    {sig_line}")
     return "\n".join(lines)
 
 

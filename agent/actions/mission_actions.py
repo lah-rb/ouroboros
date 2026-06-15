@@ -300,56 +300,68 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
             observations="Failed to parse architecture JSON",
         )
 
-    # Build ArchitectureState
-    execution = data.get("execution", {})
-    modules = []
-    for m in data.get("modules", []):
-        modules.append(
-            ModuleSpec(
-                file=m.get("file", ""),
-                responsibility=m.get("responsibility", ""),
-                defines=m.get("defines", []),
-                imports_from=m.get("imports_from", {}),
+    # Build ArchitectureState. Any field the model gets wrong (a list where a
+    # str is expected, a bad enum value the coercions don't catch) raises a
+    # ValidationError — degrade to architecture_parsed=False so the flow takes
+    # its parse-failure branch rather than crashing the cycle into a retry loop.
+    try:
+        execution = data.get("execution", {})
+        if not isinstance(execution, dict):
+            execution = {}
+        modules = []
+        for m in data.get("modules", []):
+            modules.append(
+                ModuleSpec(
+                    file=m.get("file", ""),
+                    responsibility=m.get("responsibility", ""),
+                    defines=m.get("defines", []),
+                    imports_from=m.get("imports_from", {}),
+                )
             )
-        )
 
-    interfaces = []
-    for iface in data.get("interfaces", []):
-        interfaces.append(
-            InterfaceContract(
-                caller=iface.get("caller", ""),
-                callee=iface.get("callee", ""),
-                symbol=iface.get("symbol", ""),
-                signature=iface.get("signature", ""),
+        interfaces = []
+        for iface in data.get("interfaces", []):
+            interfaces.append(
+                InterfaceContract(
+                    caller=iface.get("caller", ""),
+                    callee=iface.get("callee", ""),
+                    symbol=iface.get("symbol", ""),
+                    signature=iface.get("signature", ""),
+                )
             )
+
+        data_shapes = []
+        for ds in data.get("data_shapes", []):
+            data_shapes.append(DataShapeContract.from_llm_dict(ds))
+
+        state_shapes = []
+        for ss in data.get("state_shapes", []):
+            state_shapes.append(StateShapeContract.from_llm_dict(ss))
+
+        transient_files = [
+            str(t).strip() for t in data.get("transient_files", []) if str(t).strip()
+        ]
+
+        arch = ArchitectureState(
+            import_scheme=execution.get("import_scheme", "flat"),
+            run_command=execution.get("run_command", ""),
+            smoke_command=execution.get("smoke_command", ""),
+            working_directory=execution.get("working_directory", "project root"),
+            init_files=execution.get("init_files", False),
+            modules=modules,
+            creation_order=data.get("creation_order", [m.file for m in modules]),
+            interfaces=interfaces,
+            data_shapes=data_shapes,
+            state_shapes=state_shapes,
+            transient_files=transient_files,
+            notes=data.get("notes", ""),
         )
-
-    data_shapes = []
-    for ds in data.get("data_shapes", []):
-        data_shapes.append(DataShapeContract.from_llm_dict(ds))
-
-    state_shapes = []
-    for ss in data.get("state_shapes", []):
-        state_shapes.append(StateShapeContract.from_llm_dict(ss))
-
-    transient_files = [
-        str(t).strip() for t in data.get("transient_files", []) if str(t).strip()
-    ]
-
-    arch = ArchitectureState(
-        import_scheme=execution.get("import_scheme", "flat"),
-        run_command=execution.get("run_command", ""),
-        smoke_command=execution.get("smoke_command", ""),
-        working_directory=execution.get("working_directory", "project root"),
-        init_files=execution.get("init_files", False),
-        modules=modules,
-        creation_order=data.get("creation_order", [m.file for m in modules]),
-        interfaces=interfaces,
-        data_shapes=data_shapes,
-        state_shapes=state_shapes,
-        transient_files=transient_files,
-        notes=data.get("notes", ""),
-    )
+    except Exception as e:  # ValidationError or malformed field shapes
+        logger.warning("Architecture validation failed: %s", e)
+        return StepOutput(
+            result={"architecture_parsed": False},
+            observations=f"Architecture failed validation: {e}",
+        )
 
     mission.architecture = arch
 

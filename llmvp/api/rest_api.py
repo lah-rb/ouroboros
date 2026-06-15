@@ -31,6 +31,30 @@ log = logging.getLogger("llm-mvp")
 router = APIRouter(tags=["openai-shim"])
 
 
+def _unwrap_code_fence(text: str) -> str:
+    """Unwrap a response that is ENTIRELY one markdown code fence.
+
+    ```json\\n{…}\\n```  ->  {…}  . Leaves clean JSON / plain prose untouched
+    (only acts when the whole stripped body starts with ``` and ends with ```).
+    Lets strict json.loads chat clients consume models that fence despite a
+    'no markdown' instruction.
+    """
+    if not text:
+        return text
+    s = text.strip()
+    if not s.startswith("```"):
+        return text
+    lines = s.split("\n")
+    if not lines[0].startswith("```"):
+        return text
+    lines = lines[1:]  # drop the opening ``` / ```json line
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    else:
+        return text  # no closing fence — not a fully wrapped block, leave it
+    return "\n".join(lines).strip()
+
+
 @router.post("/completions")
 async def completions(request: Request):
     """
@@ -105,6 +129,14 @@ async def chat_completions(request: Request):
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+    # Normalize a fully markdown-fenced response down to its contents. Many
+    # models wrap JSON in ```json … ``` even when told not to; a compliant
+    # OpenAI endpoint serving structured output returns the bare value, so
+    # strict json.loads clients (terminal-bench's Terminus) expect that. This
+    # only unwraps a response that is ENTIRELY one fenced block — clean JSON or
+    # plain prose is returned untouched.
+    answer = _unwrap_code_fence(answer)
 
     return {
         "id": "chatcmpl-llmvp",

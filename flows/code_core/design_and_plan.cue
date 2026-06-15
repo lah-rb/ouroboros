@@ -99,7 +99,11 @@ design_and_plan: #FlowDefinition & {
 					{condition: "result.drift_detected == true", transition: "design_reconcile"},
 					// Goals exist, no drift — re-derive goals (idempotent)
 					{condition: "result.has_tasks == true", transition: "derive_goals"},
-					{condition: "true", transition: "domain_research"},
+					// Proactive grounding research only when the run allows web
+					// access (config.web_research; the tb adapter turns it off for
+					// hermetic, comparison-clean runs).
+					{condition: "context.mission.config.web_research == true", transition: "domain_research"},
+					{condition: "true", transition: "derive_goals"},
 				]
 			}
 		}
@@ -174,8 +178,10 @@ design_and_plan: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.architecture_parsed == true", transition: "domain_research"},
-					// Architecture parse failed — try to derive goals from whatever we have
+					// Grounding research only when web access is allowed
+					// (config.web_research) — else proceed straight to goals.
+					{condition: "result.architecture_parsed == true and context.mission.config.web_research == true", transition: "domain_research"},
+					// Parse failed, or research disabled — derive goals from whatever we have.
 					{condition: "true", transition: "derive_goals"},
 				]
 			}

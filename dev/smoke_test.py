@@ -124,6 +124,10 @@ FLOW_INPUTS = {
     "design_and_plan": {
         "mission_id": "test-mission-001",
     },
+    # Brownfield adoption — read a foreign workspace into mission.architecture
+    "ingest_workspace": {
+        "mission_id": "test-mission-001",
+    },
     "revise_plan": {
         "mission_id": "test-mission-001",
         "observation": "Need to add database support",

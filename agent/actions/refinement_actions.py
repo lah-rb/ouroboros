@@ -264,7 +264,11 @@ def _extract_signature(filepath: str, content: str, depth: str) -> str:
     elif filepath.endswith(".md"):
         return _extract_markdown_signature(lines)
     else:
-        return "\n".join(lines[:10])
+        # Shell, config, and other non-AST files have no symbol-level repo map,
+        # so this snippet is the ONLY content the architecture extractor sees for
+        # them. Capture enough to convey what a small script does (entry point,
+        # what it calls) rather than just its first few lines.
+        return "\n".join(lines[:50])
 
 
 def _extract_python_signature(lines: list[str], depth: str) -> str:

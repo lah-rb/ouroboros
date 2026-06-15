@@ -12,6 +12,16 @@
 //   - Target file content from file_context projection instead of read step
 //   - File excerpts from projection instead of context_bundle
 //   - Kept gather_context for repo_map (lightweight scan only)
+//
+// v3 changes:
+//   - Re-introduced an effects-based read of the target file (read_target).
+//     The file_context projection sources target_content via a SYNCHRONOUS
+//     host-filesystem read (projections can't await effects), so when the real
+//     files live in a container (the terminal-bench adapter) target_content was
+//     empty and the model regenerated the file from the directive instead of
+//     fixing the actual code. Reading through effects is container-routed AND
+//     re-reads the CURRENT bytes each pass — correct for self_correct, which
+//     must see the edit the first rewrite already wrote.
 
 package ouroboros
 
@@ -43,6 +53,17 @@ rewrite: #FlowDefinition & {
 
 	steps: {
 
+		// Read the CURRENT target bytes via effects (container-routed). This is
+		// the file the model must minimally fix — not a projection-reconstructed
+		// guess. Missing file falls through to generation (rewrite is normally
+		// only dispatched for files that exist).
+		read_target: #StepDefinition & _templates.read_target_file & {
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "gather_context"}]
+			}
+		}
+
 		gather_context: #StepDefinition & _templates.gather_project_context & {
 			params: context_budget: 10
 			resolver: {
@@ -54,7 +75,7 @@ rewrite: #FlowDefinition & {
 		generate_rewrite: #StepDefinition & {
 			action:      "inference"
 			description: "Generate complete file replacement"
-			context: optional: ["project_manifest", "repo_map_formatted"]
+			context: optional: ["project_manifest", "repo_map_formatted", "target_file"]
 			turn: #Turn & {
 				response_shape: "code"
 				sections: [
@@ -82,8 +103,11 @@ rewrite: #FlowDefinition & {
 					params: source:                                  {$ref: "input.file_context"}},
 				{formatter: "render_data_contracts", output_key: "data_contract_block"
 					params: source:                             {$ref: "input.file_context"}},
+				// Source the file body from the effects read (container-routed,
+				// current bytes), NOT the projection's host-read target_content
+				// (empty when the real file lives in a container).
 				{formatter: "extract_field", output_key: "target_file_content"
-					params: {source:                    {$ref: "input.file_context"}, field: "target_content"}},
+					params: {source:                    {$ref: "context.target_file"}, field: "content"}},
 			]
 			publishes: ["inference_response"]
 		}
@@ -106,5 +130,5 @@ rewrite: #FlowDefinition & {
 		failed: #StepDefinition & _templates.terminal_failure
 	}
 
-	entry: "gather_context"
+	entry: "read_target"
 }

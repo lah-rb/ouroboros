@@ -86,9 +86,7 @@ def test_reopen_add_goal_appends_directly_and_dedups(tmp_path):
     pm = _save_mission(
         tmp_path, "completed", [GoalRecord(description="existing", status="complete")]
     )
-    cmd_mission_reopen(
-        _args_scope(tmp_path, add_goal=["Add a help alias", "existing"])
-    )
+    cmd_mission_reopen(_args_scope(tmp_path, add_goal=["Add a help alias", "existing"]))
     m = pm.load_mission()
     assert m.status == "active"
     descs = [g.description for g in m.goals]

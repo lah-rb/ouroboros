@@ -46,11 +46,23 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 _MAX_CYCLES = int(os.environ.get("OURO_MAX_CYCLES", "20"))
-# When set, OURO_WALL_CLOCK_S overrides the per-task cap (useful for debugging);
-# otherwise the cap is derived from each task's own max_agent_timeout_sec.
+# When set, OURO_WALL_CLOCK_S overrides the per-task cap RAW (no safety margin —
+# a debug knob to pin the exact wall clock).
 _WALL_OVERRIDE = os.environ.get("OURO_WALL_CLOCK_S")
 _CAP_FRACTION = 0.9  # park just under the harness's own per-task wait_for limit.
 _CAP_FALLBACK = 300.0  # if the task dir can't be found.
+# The harness computes its wait_for budget as
+#   --global-agent-timeout-sec  (if set)  else
+#   task.max_agent_timeout_sec × --global-timeout-multiplier
+# (terminal_bench/harness/harness.py). The agent never receives those CLI
+# flags, so mirror them via env vars — set them alongside the flags. Without
+# this, our self-cap is computed off the raw task.yaml value and diverges from
+# the harness's actual deadline under a global override/multiplier.
+_GLOBAL_AGENT_TIMEOUT = os.environ.get("OURO_GLOBAL_AGENT_TIMEOUT_S")
+try:
+    _TIMEOUT_MULTIPLIER = float(os.environ.get("OURO_TIMEOUT_MULTIPLIER", "1") or "1")
+except ValueError:
+    _TIMEOUT_MULTIPLIER = 1.0
 _LLMVP = os.environ.get("OURO_LLMVP", "http://localhost:8008/graphql")
 # Detailed tracing on by default (capture judge CoT + full prompts/responses);
 # set OURO_TRACE=0 to disable.
@@ -68,6 +80,7 @@ class OuroborosAgent(BaseAgent):
         session: TmuxSession,
         logging_dir: Path | None = None,
     ) -> AgentResult:
+        from agent.flow_sets import get_flow_set
         from agent.loop import run_agent
         from agent.persistence.manager import PersistenceManager
         from agent.persistence.models import MissionConfig, MissionState
@@ -97,6 +110,8 @@ class OuroborosAgent(BaseAgent):
             except Exception:
                 pass
 
+        flow_set = self._select_flow_set(instruction, task_dir)
+
         pm = PersistenceManager(host_tmp)
         pm.init_agent_dir()
         mission = MissionState(
@@ -104,10 +119,23 @@ class OuroborosAgent(BaseAgent):
             status="active",
             config=MissionConfig(
                 working_directory=container_cwd,
-                flow_set="ops",
+                flow_set=flow_set,
                 llmvp_endpoint=_LLMVP,
+                # tb runs are hermetic — no web reach (keeps cross-model
+                # comparison from being confounded by network access).
+                web_research=False,
             ),
         )
+        # code_core ADOPTS the foreign container repo: enter via ingest_workspace
+        # (scan → extract the existing architecture into mission.architecture),
+        # which hands off to mission_control where the pending directive drives
+        # replan → the functional repair sweep against the real files — no
+        # greenfield design. ops takes the objective directly via its controller.
+        if flow_set == "code_core":
+            mission.pending_directive = instruction
+            entry_flow = "ingest_workspace"
+        else:
+            entry_flow = get_flow_set(flow_set).entry_flow
         pm.save_mission(mission)
 
         effects = ContainerEffects(
@@ -129,7 +157,7 @@ class OuroborosAgent(BaseAgent):
                     effects=effects,
                     flows_dir=os.path.join(_REPO_ROOT, "flows"),
                     prompts_dir=os.path.join(_REPO_ROOT, "prompts"),
-                    entry_flow="ops_control",
+                    entry_flow=entry_flow,
                     max_cycles=_MAX_CYCLES,
                     max_wall_clock_s=wall_clock_s,
                 )
@@ -177,8 +205,16 @@ class OuroborosAgent(BaseAgent):
         return None
 
     def _per_task_cap(self, task_dir: Path | None) -> float:
-        """Cap ourselves at ~0.9× the task's own max_agent_timeout_sec so we
-        park before the harness's wait_for fires (and don't self-handicap)."""
+        """Self-cap at ~0.9× the harness's wait_for budget so we park before it
+        fires (and don't self-handicap). Mirrors the harness's own computation:
+        a global override wins; otherwise the task's max_agent_timeout_sec scaled
+        by the global multiplier."""
+        # --global-agent-timeout-sec overrides the task value entirely.
+        if _GLOBAL_AGENT_TIMEOUT:
+            try:
+                return max(60.0, float(_GLOBAL_AGENT_TIMEOUT) * _CAP_FRACTION)
+            except ValueError:
+                pass
         if task_dir is not None:
             try:
                 import yaml
@@ -186,10 +222,10 @@ class OuroborosAgent(BaseAgent):
                 d = yaml.safe_load((task_dir / "task.yaml").read_text()) or {}
                 t = float(d.get("max_agent_timeout_sec") or 0)
                 if t > 0:
-                    return max(60.0, t * _CAP_FRACTION)
+                    return max(60.0, t * _TIMEOUT_MULTIPLIER * _CAP_FRACTION)
             except Exception:
                 pass
-        return _CAP_FALLBACK
+        return max(60.0, _CAP_FALLBACK * _TIMEOUT_MULTIPLIER)
 
     def _mirror_test_env(self, container, task_dir: Path | None, cwd: str) -> list[str]:
         """Install the deps the task's grading scripts install, into the
@@ -257,6 +293,12 @@ class OuroborosAgent(BaseAgent):
                 )
         except Exception:
             pass
+
+    def _select_flow_set(self, instruction: str, task_dir) -> str:
+        """Which flow set handles this task. For now an env override
+        (OURO_FLOW_SET, default "ops"); M3 replaces this with a task judge
+        (terminal-accomplish → ops, software-build/fix → code_core)."""
+        return os.environ.get("OURO_FLOW_SET", "ops")
 
     # ── helpers ───────────────────────────────────────────────────────
     def _probe_container_cwd(self, container) -> str:

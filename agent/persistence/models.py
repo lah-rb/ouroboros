@@ -49,6 +49,14 @@ class MissionConfig(BaseModel):
     # is inert for them — batch creation only dispatches when no
     # structural goal has run yet.
     structural_mode: Literal["parallel", "serial"] = "parallel"
+    # Whether flows may reach the web for proactive grounding (the
+    # `research` sub-flow — EXA-backed). Default on: greenfield design and
+    # workspace ingest research the domain to stay grounded. Set False to
+    # keep a run fully offline / hermetic (the terminal-bench adapter does
+    # this so web access can't confound cross-model comparison). Degrades
+    # gracefully when on but unreachable — the research step's failure
+    # branch proceeds without a summary.
+    web_research: bool = True
     # Run-termination policy (mission YAML; `start` CLI flags override).
     # "completed" makes the cycle budget opt-in: the agent runs until
     # the mission reaches a terminal status, bounded by max_wall_clock_s
@@ -422,6 +430,22 @@ class ArchitectureState(BaseModel):
     # state.json poison class). Never list input data files here.
     transient_files: list[str] = Field(default_factory=list)
     notes: str = ""
+
+    @field_validator("import_scheme", mode="before")
+    @classmethod
+    def _coerce_import_scheme(cls, v):
+        """Coerce an out-of-vocabulary import scheme to ``flat``.
+
+        The architecture LLM picks ``import_scheme`` from {flat, package,
+        relative}, but a project with no module imports (shell scripts, a
+        single file, a non-Python repo) makes it emit ``""``, ``"none"``,
+        ``"bash"``, etc. — values the strict Literal rejects, which used to
+        crash parse_and_store_architecture mid-cycle. For such projects the
+        scheme is irrelevant, so default to ``flat`` rather than fail.
+        """
+        if isinstance(v, str) and v.strip().lower() in ("flat", "package", "relative"):
+            return v.strip().lower()
+        return "flat"
 
     @field_validator("notes", mode="before")
     @classmethod

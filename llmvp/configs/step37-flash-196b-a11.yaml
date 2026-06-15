@@ -4,6 +4,9 @@ app:
   log_level: "info"
   cors_origins: ["*"]
   backend_timeout: 180
+  # Enables the /v1/chat/completions REST shim (for the Terminus comparison
+  # run; harmless for Ouroboros, which uses GraphQL).
+  openai_shim: true
 
 graphql:
   max_query_depth: 10

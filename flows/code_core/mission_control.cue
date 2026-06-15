@@ -77,6 +77,13 @@ mission_control: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.events_pending == true", transition: "process_events"},
+					// A pending directive must be decomposed by replan BEFORE any
+					// greenfield planning. Route to the phase router, whose first
+					// rule maps pending_directive -> replan. Without this, a freshly
+					// ingested brownfield mission (architecture present but no goals
+					// yet) trips needs_plan and runs design_and_plan greenfield ahead
+					// of the directive (the ingest_workspace -> replan path).
+					{condition: "context.mission.pending_directive != ''", transition: "check_phase"},
 					{condition: "result.needs_plan == true", transition: "dispatch_planning"},
 					{condition: "true", transition: "check_phase"},
 				]
