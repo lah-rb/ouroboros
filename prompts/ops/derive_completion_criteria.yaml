@@ -27,40 +27,65 @@ sections:
 
   - id: instructions
     content: |
-      Produce the DEFINITION OF DONE: the shell checks that, if they all
-      succeed, prove the task above is complete. Each check is a single command
-      that **exits 0 iff a required end-state condition holds** — inspect the
-      FINAL state (files, their contents, a running service, exit codes), NOT
-      the steps taken to get there. Prefer the smallest set of necessary,
-      independent conditions (2-5). Use only standard tools; assume the command
-      runs in the working directory.
+      Produce the DEFINITION OF DONE: shell checks that inspect the FINAL state
+      (files exist, are non-empty/executable, a service responds, exit codes) —
+      NOT the steps taken to get there. Each check exits 0 iff a required
+      end-state condition holds. Prefer the smallest set of necessary,
+      independent conditions (2-5), run in the working directory with standard
+      tools. These checks are a SCREEN, not the full grader — a separate judge
+      reads the actual output and rules on whether the content is correct. So
+      you do NOT have to prove correctness here; you have to prove the right
+      artifacts exist in the right shape, with checks that cannot be "almost
+      right". Two rules make that reliable:
 
-      CRITICAL — each check must be SATISFIABLE: it must exit 0 on a genuinely
-      correct result. Mentally run it against the ideal solution; if it would
-      NOT pass, the check is wrong, not the solution. A common trap: `$(...)`
-      command substitution strips trailing newlines, so
-      `[ "$(tail -c1 f)" = ... ]` can never see a newline — to assert a file
-      ends in a newline use `[ -z "$(tail -c1 f)" ]` instead. Prefer robust,
-      well-known idioms over clever ones.
+      1. ROBUST PREDICATES ONLY. Use conditions the shell evaluates
+         unambiguously: `test -f path`, `test -s path` (exists and non-empty),
+         `test -x path`, an exit code, a running-port probe, or
+         `grep -qF '<exact text>' path` — but a content match ONLY when the task
+         STATES the exact literal to look for. Existence + shape is almost always
+         enough for the screen.
+
+      2. NEVER RE-DERIVE THE ANSWER INSIDE A CHECK. Do not extract, recompute, or
+         re-run the task's own work inside a check and compare it to the result
+         (no `cmp <(re-extract …) out`, no `[ "$(recompute)" = out ]`). Such a
+         check is circular: if your re-derivation is even slightly wrong it FAILS
+         A CORRECT ANSWER, and the agent will then destroy a good result chasing
+         it. If you do not already know the exact expected content, do NOT write
+         a content check at all — assert the artifact EXISTS and is NON-EMPTY and
+         leave correctness to the judge. A weaker sound check beats a precise
+         wrong one.
+
+      (Shell aside, since it bites even existence checks: `$(…)` strips trailing
+      newlines — to assert a file ends in a newline use `[ -z "$(tail -c1 f)" ]`.)
 
   - id: output_format
     content: |
       Return a JSON object with a "checks" array. The example below is from an
       UNRELATED task — it shows the SHAPE only. Write checks for the actual task.
 
-      ✅ CORRECT — observable final-state checks (illustrative: "create a
-      config that enables logging"):
+      ✅ CORRECT — robust existence/shape checks; a content match only on a
+      literal the task named (illustrative: "create config.yaml that enables
+      logging"):
       ```json
       {
         "checks": [
-          {"command": "test -f config.yaml", "description": "config file exists"},
-          {"command": "grep -q 'logging: enabled' config.yaml", "description": "logging is enabled"}
+          {"command": "test -s config.yaml", "description": "config file exists and is non-empty"},
+          {"command": "grep -qF 'logging: enabled' config.yaml", "description": "the named literal 'logging: enabled' is present"}
         ]
       }
       ```
 
-      ❌ WRONG — asserts steps/output instead of final state, or adds prose:
-      Here are the checks:
+      ❌ WRONG — re-derives the answer inside the check (illustrative: "extract
+      solution.txt from archive.tar"). `$(tar -tf archive.tar | head -n1)` is the
+      first LISTING line — the directory entry `archive/`, not the file — so this
+      can never pass, and the agent will trash a correct extraction chasing it:
+      ```json
+      {"checks": [{"command": "tar -xOf archive.tar $(tar -tf archive.tar | head -n1) | cmp -s - solution.txt", "description": "content matches"}]}
+      ```
+      Instead, when you don't know the exact bytes, screen on existence and let
+      the judge confirm content: `{"command": "test -s solution.txt", "description": "solution.txt exists and is non-empty"}`.
+
+      ❌ WRONG — asserts a step ran instead of final state, or adds prose:
       ```json
       {"checks": [{"command": "echo done", "description": "ran the command"}]}
       ```

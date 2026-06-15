@@ -34,14 +34,18 @@ sections:
       ## What happened in the terminal session (tail)
       {context.session_tail}
 
-  - id: instructions
-    content: |
-      Decide whether the task is genuinely complete. Be strict: the task is done
-      only if the end state actually satisfies the task — passing checks are
-      evidence, but flag it if the checks look too weak to prove the task (a
-      placeholder or partial result is NOT done). If not done, write one
-      concrete sentence of feedback naming what still has to happen, for the
-      next attempt.
+      Decide whether the task is genuinely complete. The definition-of-done
+      checks are a SCREEN — they mostly prove the right artifacts EXIST in the
+      right shape; proving the CONTENT is actually correct is YOUR job. Read the
+      session output (and the artifact contents shown there) and judge whether
+      the end state truly satisfies the task. Be strict: passing checks are
+      necessary but not sufficient — a file that exists but holds a placeholder,
+      the wrong value, or a partial result is NOT done. Conversely, do not fail a
+      result that is genuinely correct just because a check is weak or a check
+      looks malformed — trust the observed end state over a dubious check. If the
+      session doesn't show enough to confirm the content, say so in the feedback
+      (e.g. "cat the output file to verify"). If not done, write one concrete
+      sentence of feedback naming what still has to happen, for the next attempt.
 
   - id: output_format
     content: |
