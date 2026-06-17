@@ -167,6 +167,13 @@ def resolve_temperature(
 #     ~10-24k, so the ceiling sits higher with headroom — still far below 262k.
 SESSION_RUNAWAY_TOKEN_CEILING = 32768
 COMPLETION_RUNAWAY_TOKEN_CEILING = 49152
+# Guard G1 — last-resort prompt-size backstop (~120k tokens). The per-source
+# guards (scan skeleton G2, terminal/session bounds G3/G4) should keep every
+# prompt far under this; if one slips through, the dynamic prompt is bounded and
+# a LOUD warning is logged rather than crashing the server (the llama_decode
+# code -1 / 29M-token overflow). Conservative so it protects the smallest context
+# window (gpt-oss 131k); legitimate prompts never approach it after the guards.
+PROMPT_CHAR_CEILING = 480_000
 
 
 class InferenceEffect:
@@ -276,6 +283,32 @@ class InferenceEffect:
             logger.debug("Failed to fetch thinking: %s", e)
             return ""
 
+    @staticmethod
+    def _guard_prompt_size(prompt: str, static_prefix: str | None) -> str:
+        """Last-resort prompt-size backstop (Guard G1). The per-source guards keep
+        prompts well under the context window; an over-ceiling prompt HERE means an
+        upstream guard missed — so bound the dynamic tail (keep the cacheable static
+        prefix intact) and LOG LOUDLY. Never a silent truncation: visibility is the
+        point, because the model would otherwise misread a quietly-cut prompt."""
+        budget = PROMPT_CHAR_CEILING - len(static_prefix or "")
+        if budget <= 0 or len(prompt) <= budget:
+            return prompt
+        logger.warning(
+            "PROMPT-SIZE BACKSTOP fired: static=%d + dynamic=%d chars exceeds the "
+            "%d ceiling — an upstream context guard (G2 scan / G3 terminal / G4 "
+            "session) missed this. Bounding the dynamic tail; investigate the source.",
+            len(static_prefix or ""), len(prompt), PROMPT_CHAR_CEILING,
+        )
+        head = int(budget * 0.6)
+        tail = budget - head
+        omitted = len(prompt) - head - tail
+        return (
+            prompt[:head]
+            + f"\n\n… [BACKSTOP: {omitted} chars bounded — an upstream guard missed "
+            "this; re-query a narrower slice] …\n\n"
+            + prompt[-tail:]
+        )
+
     async def run_inference(
         self,
         prompt: str,
@@ -300,6 +333,10 @@ class InferenceEffect:
             InferenceResult with the model's response.
         """
         client = await self._get_client()
+
+        # Last-resort prompt-size backstop (Guard G1) — keep the static prefix
+        # intact, bound only the dynamic tail if an upstream guard missed.
+        prompt = self._guard_prompt_size(prompt, static_prefix)
 
         # Build the request variables
         request_vars: dict[str, Any] = {"prompt": prompt}

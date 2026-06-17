@@ -189,6 +189,25 @@ async def action_push_note(step_input: StepInput) -> StepOutput:
 # ── scan_project ──────────────────────────────────────────────────────
 
 
+# Guard G2 — vendor/cache/build dirs that aren't project source. A single
+# dataset or cache tree can hold 100k files; scanning into one produced the
+# 29M-token prompt that the server rejected. Matched as a path COMPONENT.
+_EXCLUDED_DIRS = frozenset({
+    ".git", ".hg", ".svn", ".venv", "venv", "env", "node_modules", "__pycache__",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".cache", "site-packages",
+    "dist", "build", ".next", ".nuxt", "target", ".idea", ".gradle", "vendor",
+    "datasets", ".agent", ".ouro_out",
+})
+_MAX_FILE_SIZE = 256 * 1024   # skip files larger than this (data/binary, not source)
+_MAX_SCAN_FILES = 300         # cap the manifest; the rest is reachable via trace/grep
+_SIGNATURE_MAX_CHARS = 2000   # byte-cap a per-file snippet (defeats minified one-liners)
+
+
+def _excluded(filepath: str) -> bool:
+    parts = filepath.replace("\\", "/").split("/")
+    return any(p in _EXCLUDED_DIRS or p.endswith(".egg-info") for p in parts)
+
+
 async def action_scan_project(step_input: StepInput) -> StepOutput:
     """Scan workspace and extract file signatures.
 
@@ -216,22 +235,24 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
     # Get recursive directory listing
     listing = await effects.list_directory(root, recursive=True)
 
-    # Directories that are agent infrastructure — not project code
-    infrastructure_prefixes = (".agent/", ".agent\\")
-
-    # Filter to matching patterns — adapt to DirListing.entries protocol
+    # Filter to source patterns, EXCLUDING vendor/cache/build dirs and large or
+    # binary files (Guard G2) — skip them BEFORE reading, then cap the count. A
+    # dataset/cache tree can hold 100k files; that was the 29M-token overflow.
     matched_files = []
     for entry in listing.entries:
         if not entry.is_file:
             continue
         filepath = entry.path
-        # Skip agent infrastructure files (e.g. .agent/mission.json)
-        if any(filepath.startswith(prefix) for prefix in infrastructure_prefixes):
+        if _excluded(filepath):
             continue
+        if getattr(entry, "size", 0) > _MAX_FILE_SIZE:
+            continue  # data/binary, not navigable source
         if any(fnmatch.fnmatch(filepath, pat) for pat in include_patterns):
             matched_files.append(filepath)
+    scan_omitted = max(0, len(matched_files) - _MAX_SCAN_FILES)
+    matched_files = matched_files[:_MAX_SCAN_FILES]
 
-    # Extract signatures
+    # Extract signatures (each byte-capped so a minified one-liner can't blow up)
     manifest: dict[str, str] = {}
     for filepath in matched_files:
         try:
@@ -240,15 +261,22 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
                 signature = _extract_signature(
                     filepath, content.content, signature_depth
                 )
+                if len(signature) > _SIGNATURE_MAX_CHARS:
+                    signature = (
+                        signature[:_SIGNATURE_MAX_CHARS] + "\n    # …(signature truncated)"
+                    )
                 manifest[filepath] = signature
             else:
                 manifest[filepath] = "(file not readable)"
         except Exception as e:
             manifest[filepath] = f"(error reading: {e})"
 
+    obs = f"Scanned {len(manifest)} files in {root}"
+    if scan_omitted:
+        obs += f" ({scan_omitted} more matched, omitted past the {_MAX_SCAN_FILES}-file cap)"
     return StepOutput(
-        result={"file_count": len(manifest)},
-        observations=f"Scanned {len(manifest)} files in {root}",
+        result={"file_count": len(manifest), "scan_omitted": scan_omitted},
+        observations=obs,
         context_updates={"project_manifest": manifest},
     )
 

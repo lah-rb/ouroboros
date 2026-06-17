@@ -180,19 +180,33 @@ def format_project_file_list(params: dict, namespaces: dict) -> str:
     return str(manifest)
 
 
+# Total rendered project-listing budget (Guard G2 backstop). Even after the scan
+# caps the count + size + per-file signature, render no more than this — beyond it
+# the agent traces/greps a path rather than reading a wall of skeletons.
+_LISTING_MAX_CHARS = 40000
+
+
 def format_project_listing(params: dict, namespaces: dict) -> str:
     manifest = params.get("source") or {}
     if not manifest:
         return ""
-    lines = []
-    for filepath, sig in manifest.items():
-        lines.append(f"- {filepath}")
+    items = list(manifest.items())
+    lines: list[str] = []
+    total = 0
+    for i, (filepath, sig) in enumerate(items):
+        block = [f"- {filepath}"]
         if sig:
             # Indent every line of a multi-line signature (content snippet) so
-            # each file's block reads cleanly instead of the first line indented
-            # and the rest flush-left.
-            for sig_line in str(sig).splitlines():
-                lines.append(f"    {sig_line}")
+            # each file's block reads cleanly.
+            block += [f"    {sig_line}" for sig_line in str(sig).splitlines()]
+        block_text = "\n".join(block)
+        if lines and total + len(block_text) > _LISTING_MAX_CHARS:
+            lines.append(
+                f"… ({len(items) - i} more files omitted — trace or grep a path to inspect)"
+            )
+            break
+        lines.append(block_text)
+        total += len(block_text)
     return "\n".join(lines)
 
 
@@ -246,19 +260,86 @@ def format_validation_results(params: dict, namespaces: dict) -> str:
     return "\n".join(lines)
 
 
+# Per-turn terminal-output bounds for the rendered session view (Guard G3). The
+# full output stays in mission state (history); only the PROMPT view is bounded,
+# so a single chatty command (a build, a data dump) can't balloon the next prompt
+# past the context window — the llama_decode overflow crash. Beyond the limit we
+# show head+tail and TEACH the agent to re-query via its own shell: it drives a
+# real terminal, so `| grep` / `| tail` / a redirect IS the search tool (nothing
+# is lost; it re-fetches what it needs). Prior turns are bounded tighter than the
+# current turn, which the agent needs in full to act on.
+_HISTORY_TURN_MAX = 2500
+_LAST_TURN_MAX = 8000
+_REQUERY_HINT = (
+    "re-run with a filter to inspect fully — append `| grep PATTERN`, "
+    "`| tail -100`, or redirect `> /tmp/out.txt 2>&1` then `grep PATTERN /tmp/out.txt`"
+)
+
+
+def _bound_output(output: str, limit: int, saved_path: str | None = None) -> str:
+    """Bound a single turn's output to head+tail with a re-query hint (G3). When
+    the full output was persisted (interactive_actions._save_full_output), point
+    the agent's shell straight at the file instead of the generic hint."""
+    if not output or len(output) <= limit:
+        return output
+    head = int(limit * 0.6)
+    tail = limit - head
+    omitted = len(output) - head - tail
+    approx_lines = output.count("\n") + 1
+    hint = (
+        f"full output saved to {saved_path} — `grep PATTERN {saved_path}` / `less {saved_path}`"
+        if saved_path
+        else _REQUERY_HINT
+    )
+    return (
+        output[:head]
+        + f"\n\n… [{omitted} chars of ~{approx_lines} lines bounded — {hint}] …\n\n"
+        + output[-tail:]
+    )
+
+
+# Guard G4 — diagnose-style compact session display: only the most recent turns
+# render in full (each G3-bounded); older turns collapse to a one-line action →
+# outcome ledger (no output body), so a long session's REPLAY can't accumulate
+# past the window. The agent re-queries an older turn's saved output (G3) if it
+# needs more than the ledger.
+_RECENT_TURNS_FULL = 6
+
+
+def _ledger_line(entry: dict) -> str:
+    """A compact one-line summary of a prior turn — what ran + the outcome."""
+    cmd = entry.get("command") or entry.get("input", "")
+    if entry.get("timed_out"):
+        outcome = "TIMED OUT"
+    elif entry.get("return_code", 0) != 0:
+        outcome = f"exit {entry['return_code']}"
+    else:
+        out = (entry.get("output") or "").strip()
+        first = out.splitlines()[0][:80] if out else ""
+        outcome = f"ok — {first}" if first else "ok"
+    saved = entry.get("output_file")
+    tail = f"  [full: {saved}]" if saved else ""
+    return f"[Turn {entry.get('turn', '?')}] $ {cmd}  → {outcome}{tail}"
+
+
 def format_session_history(params: dict, namespaces: dict) -> str:
     history = params.get("source") or []
     if not history:
         return "No commands have been run yet."
+    entries = [e for e in history if isinstance(e, dict)]
+    cutoff = len(entries) - _RECENT_TURNS_FULL  # older than this → ledger
     lines = []
-    for entry in history:
-        if not isinstance(entry, dict):
+    for i, entry in enumerate(entries):
+        if i < cutoff:
+            lines.append(_ledger_line(entry))
             continue
-        # Support both run_commands entries ('command') and interactive entries ('input')
+        # Support both run_commands ('command') and interactive ('input') entries.
         cmd = entry.get("command") or entry.get("input", "")
         lines.append(f"[Turn {entry.get('turn','?')}] $ {cmd}")
         if entry.get("output"):
-            lines.append(entry["output"])
+            lines.append(
+                _bound_output(entry["output"], _HISTORY_TURN_MAX, entry.get("output_file"))
+            )
         if entry.get("return_code", 0) != 0:
             lines.append(f"(exit code: {entry['return_code']})")
         if entry.get("timed_out"):
@@ -295,7 +376,7 @@ def format_last_turn(params: dict, namespaces: dict) -> str:
         lines.append(f"[Turn {last.get('turn', '?')}] ({action}) {cmd}")
 
     if output:
-        lines.append(output)
+        lines.append(_bound_output(output, _LAST_TURN_MAX, last.get("output_file")))
     if last.get("return_code", 0) != 0:
         lines.append(f"(exit code: {last['return_code']})")
     lines.append("---END LAST TURN---")

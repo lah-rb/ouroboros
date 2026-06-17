@@ -38,3 +38,5 @@ dev/archive/state_exp/data/
 
 # terminal-bench harness run outputs (per-run logs, casts, results)
 runs/
+llmvp/logs/llmvp_server.log
+llmvp/logs/interactions.jsonl

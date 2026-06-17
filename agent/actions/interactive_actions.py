@@ -162,6 +162,25 @@ async def action_start_interactive_session(step_input: StepInput) -> StepOutput:
 
 # ── send_interaction ──────────────────────────────────────────────────
 
+# Above this many chars, a turn's FULL output is persisted to a workspace file
+# (Guard G3) so the agent can grep it via its shell — the bytes survive even for
+# one-shot commands the bounded prompt view can't reproduce. Under /tmp so it
+# never pollutes the graded workspace.
+_SAVE_OUTPUT_THRESHOLD = 4000
+
+
+async def _save_full_output(effects, output: str, turn) -> str | None:
+    """Persist a large turn's full output to /tmp/.ouro_out/t<turn>.log so the
+    agent can `grep` it. Best-effort; returns the path or None."""
+    if effects is None or not output or len(output) <= _SAVE_OUTPUT_THRESHOLD:
+        return None
+    path = f"/tmp/.ouro_out/t{turn}.log"
+    try:
+        await effects.write_file(path, output)
+        return path
+    except Exception:
+        return None
+
 
 async def action_send_interaction(step_input: StepInput) -> StepOutput:
     """Parse the model's structured interaction and dispatch to MCP.
@@ -356,6 +375,9 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
                 status,
             )
 
+        entry["output_file"] = await _save_full_output(
+            effects, entry.get("output", ""), entry["turn"]
+        )
         session_history.append(entry)
 
         return StepOutput(
@@ -578,6 +600,9 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
                     status,
                 )
 
+    entry["output_file"] = await _save_full_output(
+        effects, entry.get("output", ""), entry["turn"]
+    )
     session_history.append(entry)
 
     context_updates = {
