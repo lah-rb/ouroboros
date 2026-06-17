@@ -8,39 +8,41 @@ description: "Plan validation checks based on project structure"
 
 sections:
 
-  - id: system_role
-    content: |
-      You are a validation planning module in an automated pipeline.
-      Your output will be parsed as JSON. Return ONLY a JSON array
-      inside a fenced code block — no commentary or explanation.
+- id: system_role
+  content: |
+    You are a validation planning module in an automated pipeline.
+    Your output will be parsed as JSON. Return ONLY a JSON array
+    inside a fenced code block — no commentary or explanation.
 
-  - id: project
-    content: |
-      Working directory: {input.working_directory}
+  cache: true
+- id: output_format
+  content: |
+    Return a JSON array of validation checks inside a fenced code block.
+    Each check has: command, description, category.
+    Maximum 8 checks. Prioritize syntax checks over style checks.
+    Only include checks for tools configured in the project.
 
-      Project files:
-      {context.project_listing}
+    ✅ CORRECT:
+    ```json
+    [
+      {"command": "python -m py_compile main.py", "description": "Syntax check main.py", "category": "syntax"},
+      {"command": "python -m pytest --tb=short", "description": "Run test suite", "category": "test"}
+    ]
+    ```
 
-  - id: output_format
-    content: |
-      Return a JSON array of validation checks inside a fenced code block.
-      Each check has: command, description, category.
-      Maximum 8 checks. Prioritize syntax checks over style checks.
-      Only include checks for tools configured in the project.
+    ❌ WRONG — do not add explanation before or after:
+    Based on the project structure, here are the checks:
+    ```json
+    [{"command": "python -m py_compile main.py", "description": "...", "category": "syntax"}]
+    ```
+    These checks cover the main validation needs.
 
-      ✅ CORRECT:
-      ```json
-      [
-        {"command": "python -m py_compile main.py", "description": "Syntax check main.py", "category": "syntax"},
-        {"command": "python -m pytest --tb=short", "description": "Run test suite", "category": "test"}
-      ]
-      ```
+    Return ONLY the fenced JSON.
+  cache: true
+- id: project
+  content: |
+    Working directory: {input.working_directory}
 
-      ❌ WRONG — do not add explanation before or after:
-      Based on the project structure, here are the checks:
-      ```json
-      [{"command": "python -m py_compile main.py", "description": "...", "category": "syntax"}]
-      ```
-      These checks cover the main validation needs.
+    Project files:
+    {context.project_listing}
 
-      Return ONLY the fenced JSON.

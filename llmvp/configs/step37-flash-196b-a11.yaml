@@ -26,6 +26,9 @@ model:
   seed: -1
   verbose: false
   flash_attention: true
+  flow_kv_cache: true
+  kv_unified: true
+  swa_full: true
   batch_size: 512
 
 prompt:
@@ -34,6 +37,12 @@ prompt:
 generation:
   max_tokens_default: 32768
   temperature_default: 0.6 # try 1.0 at some point
+  # Degeneration fix (matches qwen3.6): step37 collapses to bare `<think>`
+  # then empties at the low effective temps from t*0.1/t*0.2 steps
+  # (0.6*0.1=0.06). Floor clamps every completion to 0.4; session floor
+  # protects deep run_session turns. Without these step37 retried ~30x/run.
+  session_temp_floor: 0.5
+  temperature_floor: 0.4
   top_p: 0.95
   top_k: 20
   min_p: 0.0

@@ -17,123 +17,125 @@ description: "Decompose a directive into additions to an existing codebase"
 
 sections:
 
-  - id: system_role
-    content: |
-      You are a brownfield planning module in an automated coding pipeline.
-      A working project already exists; a new direction has been requested.
-      Your output will be parsed by a JSON extractor. Return ONLY a JSON
-      object inside a fenced code block — no explanation, no surrounding text.
+- id: system_role
+  content: |
+    You are a brownfield planning module in an automated coding pipeline.
+    A working project already exists; a new direction has been requested.
+    Your output will be parsed by a JSON extractor. Return ONLY a JSON
+    object inside a fenced code block — no explanation, no surrounding text.
 
-  - id: objective
-    content: |
-      ## Original Objective
-      {context.mission_objective}
+  cache: true
+- id: instructions
+  content: |
+    ## Decompose the New Direction
 
-  - id: directive
-    content: |
-      ## New Direction (what to add now)
-      {context.pending_directive}
+    Produce the SMALLEST set of additions to the EXISTING project that
+    satisfies the new direction. Reuse existing modules wherever possible;
+    do not recreate files or capabilities that already exist.
 
-  - id: existing_architecture
-    when: context.existing_architecture
-    content: |
-      ## Existing Architecture — EXTEND and REUSE, do NOT rebuild
-      {context.existing_architecture}
+    Split the work two ways:
 
-  - id: existing_goals
-    when: context.existing_goals
-    content: |
-      ## Already Built / Planned (do NOT re-emit these)
-      {context.existing_goals}
+    1. **`new_files`** — ONLY for genuinely NEW files that must be created
+       (a file not already in the architecture below). Each becomes a
+       structural goal bound to that file, with the same blueprint fields
+       as the existing modules (`file`, `responsibility`, `defines`,
+       `imports_from`). Do NOT list files that already exist — extending an
+       existing file is a capability, not a new file.
 
-  - id: repo_map
-    when: context.repo_map_formatted
-    content: |
-      ## Existing Code Structure (AST-based)
-      {context.repo_map_formatted}
+    2. **`capabilities`** — EVERYTHING ELSE: behavior to add, an existing
+       module to extend, a feature to wire up. Each capability does NOT
+       exist yet and must be EXPLORED-AND-BUILT. For each, give:
+       - `description`: WHAT the user should be able to do once it works,
+         phrased as an observable capability.
+       - `placement`: WHERE it fits relative to the existing structure —
+         which file(s)/symbol(s) to touch and how it connects (e.g.
+         "add an east exit on the guard room in world.yaml; wire the new
+         BossRoom into the room graph in engine.py"). Be concrete; this is
+         the placement guidance the build step starts from.
 
-  - id: instructions
-    content: |
-      ## Decompose the New Direction
+    GRANULARITY: each capability must be ONE thing that can be built and
+    verified ON ITS OWN, without requiring the other capabilities in this
+    list to already work. Do NOT combine capabilities with "and". If a
+    feature has a foundational part and an integrated part, split them.
 
-      Produce the SMALLEST set of additions to the EXISTING project that
-      satisfies the new direction. Reuse existing modules wherever possible;
-      do not recreate files or capabilities that already exist.
+    ORDERING: list capabilities from most foundational to most integrative.
+    A capability others depend on comes FIRST; one that needs several
+    pieces working together (the end-to-end scenario) comes LAST. They are
+    built and verified in this order, so a later goal may rely on earlier
+    ones — but no goal may rely on a LATER one.
 
-      Split the work two ways:
+    Keep it tight: a directive should decompose into a few concrete goals,
+    not a sprawling re-plan. If the direction is fully satisfiable by
+    extending existing files, `new_files` may be empty.
 
-      1. **`new_files`** — ONLY for genuinely NEW files that must be created
-         (a file not already in the architecture above). Each becomes a
-         structural goal bound to that file, with the same blueprint fields
-         as the existing modules (`file`, `responsibility`, `defines`,
-         `imports_from`). Do NOT list files that already exist — extending an
-         existing file is a capability, not a new file.
+    The example below is from an UNRELATED project (a calculator) — it
+    shows the SHAPE only. Decompose the actual direction below; do not copy
+    these fields.
 
-      2. **`capabilities`** — EVERYTHING ELSE: behavior to add, an existing
-         module to extend, a feature to wire up. Each capability does NOT
-         exist yet and must be EXPLORED-AND-BUILT. For each, give:
-         - `description`: WHAT the user should be able to do once it works,
-           phrased as an observable capability.
-         - `placement`: WHERE it fits relative to the existing structure —
-           which file(s)/symbol(s) to touch and how it connects (e.g.
-           "add an east exit on the guard room in world.yaml; wire the new
-           BossRoom into the room graph in engine.py"). Be concrete; this is
-           the placement guidance the build step starts from.
+    ✅ CORRECT — granular capabilities, ordered foundational → integrative
+    (illustrative domain: adding a memory feature to a calculator):
+    ```json
+    {
+      "new_files": [],
+      "capabilities": [
+        {
+          "description": "The current result can be stored into a memory slot",
+          "placement": "add a `memory` field to the Calculator in calc.py; handle an 'MS' (memory-store) command in the input loop"
+        },
+        {
+          "description": "An 'MR' command prints the stored memory value",
+          "placement": "in calc.py's input loop, add 'MR' that reads the memory field set above"
+        },
+        {
+          "description": "A stored memory value can be used as an operand in a new calculation",
+          "placement": "extend the token reader in parser.py so 'M' resolves to the memory field during evaluation"
+        }
+      ]
+    }
+    ```
+    Each capability is verifiable on its own once the earlier ones exist;
+    the integrated use-in-calculation comes last.
 
-      GRANULARITY: each capability must be ONE thing that can be built and
-      verified ON ITS OWN, without requiring the other capabilities in this
-      list to already work. Do NOT combine capabilities with "and". If a
-      feature has a foundational part and an integrated part, split them.
+    ❌ WRONG — a single end-to-end goal that can't pass until everything else is built:
+    ```json
+    {"new_files": [], "capabilities": [
+      {"description": "A memory you can store, recall, and compute with", "placement": "..."}
+    ]}
+    ```
 
-      ORDERING: list capabilities from most foundational to most integrative.
-      A capability others depend on comes FIRST; one that needs several
-      pieces working together (the end-to-end scenario) comes LAST. They are
-      built and verified in this order, so a later goal may rely on earlier
-      ones — but no goal may rely on a LATER one.
+    ❌ WRONG — do not re-list existing files or add explanation:
+    Based on the direction, here is the plan:
+    ```json
+    {"new_files": [{"file": "calc.py", ...}], ...}
+    ```
 
-      Keep it tight: a directive should decompose into a few concrete goals,
-      not a sprawling re-plan. If the direction is fully satisfiable by
-      extending existing files, `new_files` may be empty.
+    Return ONLY the fenced JSON.
+  cache: true
+- id: objective
+  content: |
+    ## Original Objective
+    {context.mission_objective}
 
-      The example below is from an UNRELATED project (a calculator) — it
-      shows the SHAPE only. Decompose the actual direction above; do not copy
-      these fields.
+- id: directive
+  content: |
+    ## New Direction (what to add now)
+    {context.pending_directive}
 
-      ✅ CORRECT — granular capabilities, ordered foundational → integrative
-      (illustrative domain: adding a memory feature to a calculator):
-      ```json
-      {
-        "new_files": [],
-        "capabilities": [
-          {
-            "description": "The current result can be stored into a memory slot",
-            "placement": "add a `memory` field to the Calculator in calc.py; handle an 'MS' (memory-store) command in the input loop"
-          },
-          {
-            "description": "An 'MR' command prints the stored memory value",
-            "placement": "in calc.py's input loop, add 'MR' that reads the memory field set above"
-          },
-          {
-            "description": "A stored memory value can be used as an operand in a new calculation",
-            "placement": "extend the token reader in parser.py so 'M' resolves to the memory field during evaluation"
-          }
-        ]
-      }
-      ```
-      Each capability is verifiable on its own once the earlier ones exist;
-      the integrated use-in-calculation comes last.
+- id: existing_architecture
+  when: context.existing_architecture
+  content: |
+    ## Existing Architecture — EXTEND and REUSE, do NOT rebuild
+    {context.existing_architecture}
 
-      ❌ WRONG — a single end-to-end goal that can't pass until everything else is built:
-      ```json
-      {"new_files": [], "capabilities": [
-        {"description": "A memory you can store, recall, and compute with", "placement": "..."}
-      ]}
-      ```
+- id: existing_goals
+  when: context.existing_goals
+  content: |
+    ## Already Built / Planned (do NOT re-emit these)
+    {context.existing_goals}
 
-      ❌ WRONG — do not re-list existing files or add explanation:
-      Based on the direction, here is the plan:
-      ```json
-      {"new_files": [{"file": "calc.py", ...}], ...}
-      ```
+- id: repo_map
+  when: context.repo_map_formatted
+  content: |
+    ## Existing Code Structure (AST-based)
+    {context.repo_map_formatted}
 
-      Return ONLY the fenced JSON.

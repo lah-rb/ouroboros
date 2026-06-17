@@ -14,6 +14,7 @@ plan_checks → execute_checks → summarize.
 from __future__ import annotations
 
 import logging
+import re
 
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
@@ -21,6 +22,120 @@ from agent.models import StepInput, StepOutput
 logger = logging.getLogger(__name__)
 
 TASK_GOAL_SIGNATURE = "ops-task"
+
+# ── asym-probe applicability gate ─────────────────────────────────────────
+# The asym-probe (a property-based differential test) only makes sense for
+# rule-inference tasks: implement a function/callable whose behaviour is pinned
+# by WORKED EXAMPLES that may under-determine the rule (grid-pattern-transform is
+# the archetype — its symmetric example hides rot90-vs-fliplr). Everywhere else
+# (install/extract/bucket, or a plain deterministic conversion with no example
+# ambiguity) the probe adds an inference for no signal, so it stays gated OFF.
+_SOLVER_FN_RE = re.compile(
+    r"(?i)\b(implement|complete|write)\b.{0,80}?\b(function|method|solver?)\b"
+    r"|\bdef\s+\w+\s*\(|\b\w+\s*\([^)]*\)\s*(?:->|:)\s*"  # a def / typed signature
+)
+_EXAMPLE_RE = re.compile(r"(?i)\bexamples?\b|input.{0,8}?output|=>|->")
+
+
+async def action_detect_solver_task(step_input: StepInput) -> StepOutput:
+    """Gate the asym-probe. Fire (run_probe=True) iff ALL hold:
+      - the objective asks to implement a callable AND shows worked examples
+        (the rule-inference shape the probe disambiguates),
+      - the deterministic completion checks already pass (a COMPLETE candidate —
+        don't waste the probe on a half-written file).
+    RE-VERIFY each complete candidate (not once): a wrong first solution gets a
+    property counterexample as feedback, and the NEXT candidate is re-probed so a
+    still-wrong fix can't be certified unverified (the single-shot version let
+    that through). The extra probe turn is cheap now that swa_full keeps the
+    static prefill cached. Deterministic — zero inference; incomplete/non-eligible
+    cycles still pay nothing.
+    """
+    mission = step_input.context.get("mission")
+    obj = str(getattr(mission, "objective", "") or "") if mission else ""
+    is_solver = bool(_SOLVER_FN_RE.search(obj) and _EXAMPLE_RE.search(obj))
+
+    results = step_input.context.get("validation_results") or []
+    checks_passed = bool(results) and all(
+        r.get("passed") for r in results if r.get("required", True)
+    )
+
+    run_probe = is_solver and checks_passed
+    return StepOutput(
+        result={"run_probe": run_probe, "is_solver_task": is_solver},
+        observations=(
+            "asym-probe firing (complete candidate — re-verify)"
+            if run_probe
+            else f"asym-probe skipped (solver={is_solver}, checks_passed={checks_passed})"
+        ),
+    )
+
+
+def _strip_probe_fence(text: str) -> str:
+    """Pull a python script out of a fenced block if the model fenced it."""
+    s = (text or "").strip()
+    m = re.search(r"```(?:python|py)?\s*\n(.*?)```", s, re.DOTALL)
+    return (m.group(1) if m else s).strip()
+
+
+async def action_run_property_probe(step_input: StepInput) -> StepOutput:
+    """Write the generated property test into the working directory, run it,
+    and APPEND its pass/fail as a required validation_result so the existing
+    judge/decide loop treats a property violation as 'not done' and loops with
+    the discrepancy as feedback. Self-contained — no oracle, just the spec's
+    own invariants checked on discriminating inputs.
+
+    Context: inference_response (the generated test), working_directory,
+    validation_results (the checks so far, appended to).
+    """
+    effects = step_input.effects
+    wd = step_input.params.get("working_directory") or "."
+    test_src = _strip_probe_fence(str(step_input.context.get("inference_response", "")))
+    results = list(step_input.context.get("validation_results") or [])
+    updates: dict = {"validation_results": results}
+
+    if not test_src or effects is None:
+        # No usable probe — don't manufacture a failure; leave checks unchanged.
+        return StepOutput(
+            result={"probe_passed": True, "probe_ran": False},
+            observations="asym-probe produced no test — skipped",
+            context_updates=updates,
+        )
+
+    test_name = "asym_probe_test.py"
+    detail = ""
+    try:
+        await effects.write_file(test_name, test_src)
+        # Run from the working dir so the script's own directory is the import
+        # root (`import grid_transform` resolves to the candidate).
+        res = await effects.run_command(["python3", test_name], working_dir=wd, timeout=30)
+        passed = res.return_code == 0
+        detail = ((res.stdout or "") + (res.stderr or "")).strip()
+        # Clean up so the probe artifact never pollutes the graded workspace.
+        await effects.run_command(["rm", "-f", test_name], working_dir=wd, timeout=10)
+    except Exception as exc:  # never crash the cycle on a probe error
+        return StepOutput(
+            result={"probe_passed": True, "probe_ran": False},
+            observations=f"asym-probe error ({exc}) — skipped",
+            context_updates=updates,
+        )
+
+    results.append(
+        {
+            "name": "asym_property_probe",
+            "command": f"python3 {test_name}",
+            "passed": passed,
+            "required": True,
+            "stdout": (res.stdout or "")[:500],
+            "stderr": (res.stderr or "")[:500],
+            "return_code": res.return_code,
+        }
+    )
+    updates["validation_results"] = results
+    return StepOutput(
+        result={"probe_passed": passed, "probe_ran": True},
+        observations=f"asym-probe {'PASS' if passed else 'FAIL'}: {detail[:160]}",
+        context_updates=updates,
+    )
 
 
 async def action_derive_task_goal(step_input: StepInput) -> StepOutput:

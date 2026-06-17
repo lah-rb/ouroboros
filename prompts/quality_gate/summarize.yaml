@@ -11,147 +11,149 @@ description: "Summarize validation results into a pass/fail verdict"
 
 sections:
 
-  - id: system_role
-    content: |
-      You are a quality gate evaluation module in an automated pipeline.
-      Your output will be parsed as JSON. Return ONLY a JSON object
-      inside a fenced code block — no commentary or explanation.
+- id: system_role
+  content: |
+    You are a quality gate evaluation module in an automated pipeline.
+    Your output will be parsed as JSON. Return ONLY a JSON object
+    inside a fenced code block — no commentary or explanation.
 
-  - id: objective
-    content: |
-      Mission objective: {input.mission_objective}
+  cache: true
+- id: output_format
+  content: |
+    Return a JSON verdict object inside a fenced code block. Rules:
+    - Syntax errors or import failures → "fail"
+    - Test failures → "fail" (unless mode is "checkpoint", then warn)
+    - Cross-file inconsistencies → "fail"
+    - Project does not implement the mission objective → "fail"
+    - Architecture specifies modules or files that do not exist → "fail"
+    - No source files exist at all → "fail"
+    - Style/lint warnings alone → "pass"
+    - All checks passed AND project addresses the mission objective → "pass"
 
-  - id: architecture
-    when: context.architecture_summary
-    content: |
-      Planned architecture:
-      {context.architecture_summary}
+    ✅ CORRECT:
+    Each blocking issue MUST be an object with an `issue` (specific, one
+    sentence — name the command/file/behavior) and a `class`:
+    - `"functional"` — a broken behavior a play-test could verify (a command
+      errors or does the wrong thing, persistence, navigation, branching
+      logic, a record that can't be reached). DEFAULT to this when unsure.
+    - `"quality"` — a cosmetic/content issue a play-test can't cleanly verify
+      (grammar, wording, a flavor inconsistency).
 
-  - id: mode
-    when: input.mode
-    content: |
-      Gate mode: {input.mode}
+    Every `"functional"` issue MUST also carry:
+    - `"repro"` — a JSON array of the exact lines to type into the running
+      program, in order, that demonstrates the problem. The program is
+      launched automatically — do NOT include the run command. At most 10
+      lines. For an `untested:` finding, the repro is the sequence that
+      exercises the feature.
+    - `"expected"` — one sentence: what should happen, or what was observed
+      failing.
+    (`"quality"` issues need neither field.)
 
-  - id: validation_results
-    when: context.validation_summary
-    content: |
-      Validation check results:
-      {context.validation_summary}
+    EVIDENCE RULE — broken requires observation. Only report a behavior
+    as broken/not-functional if the evidence below SHOWS it failing (an
+    error, wrong output, a crash). If the UX session simply did not
+    exercise a feature, that feature is UNTESTED, not broken — report it
+    as `{"issue": "untested: <feature> was not exercised by the UX
+    session", "class": "functional"}` so it gets verified by a play-test,
+    and never claim it does not work.
 
-  - id: cross_file
-    when: context.cross_file_summary
-    content: |
-      Cross-file consistency:
-      {context.cross_file_summary}
+    Unresolved-reference counts in the cross-file consistency report are
+    INFORMATIONAL ONLY — the resolver cannot see builtins, the standard
+    library, or third-party imports, so the count is dominated by names
+    that resolve fine at runtime. NEVER report unresolved references as
+    a blocking issue. (Duplicate-definition warnings remain reportable.)
 
-  - id: data_shapes
-    when: context.data_shape_summary
-    content: |
-      {context.data_shape_summary}
+    ```json
+    {
+      "verdict": "fail",
+      "blocking_issues": [
+        {"issue": "the `export` command writes an empty file",
+         "class": "functional",
+         "repro": ["add milk", "export list.txt"],
+         "expected": "the exported file should contain the added entry; it is empty"},
+        {"issue": "\"The entries is sorted\" should read \"are sorted\"", "class": "quality"}
+      ],
+      "summary": "Export is broken; one grammar error."
+    }
+    ```
 
-      These are DETERMINISTIC violations of the architecture's declared
-      data examples, and they are filed as blocking issues AUTOMATICALLY
-      — do NOT repeat them in your blocking_issues (a reworded duplicate
-      creates a second goal for the same defect). Use them only as
-      context: if a BEHAVIOR you observed traces to one of these
-      mismatches, report that behavior with its own repro.
+    ❌ WRONG — repro must not include the launch command, and must be an array:
+    {"repro": ["python main.py", "add milk"], ...}
+    {"repro": "add milk", ...}
 
-  - id: terminal
-    when: context.terminal_output
-    content: |
-      Terminal test output:
-      {context.terminal_output}
+    ❌ WRONG — do not add explanation outside the JSON:
+    After reviewing the results, the project has issues:
+    ```json
+    {"verdict": "fail", "blocking_issues": [...]}
+    ```
+    The main problem is the syntax error.
 
-  - id: ux_summary
-    when: context.ux_session_assessment
-    content: |
-      UX verification session:
-      {context.ux_session_assessment}
+    Return ONLY the fenced JSON.
+  cache: true
+- id: objective
+  content: |
+    Mission objective: {input.mission_objective}
 
-  - id: verified_behaviors
-    when: context.verified_behaviors_block
-    content: |
-      {context.verified_behaviors_block}
+- id: architecture
+  when: context.architecture_summary
+  content: |
+    Planned architecture:
+    {context.architecture_summary}
 
-      These behaviors already passed a dedicated play-test. Do NOT report
-      them as untested or broken just because this UX session did not
-      revisit them — only report one if the evidence above shows it
-      failing NOW.
+- id: mode
+  when: input.mode
+  content: |
+    Gate mode: {input.mode}
 
-  - id: files
-    when: context.project_file_list
-    content: |
-      Project files:
-      {context.project_file_list}
+- id: validation_results
+  when: context.validation_summary
+  content: |
+    Validation check results:
+    {context.validation_summary}
 
-  - id: output_format
-    content: |
-      Return a JSON verdict object inside a fenced code block. Rules:
-      - Syntax errors or import failures → "fail"
-      - Test failures → "fail" (unless mode is "checkpoint", then warn)
-      - Cross-file inconsistencies → "fail"
-      - Project does not implement the mission objective → "fail"
-      - Architecture specifies modules or files that do not exist → "fail"
-      - No source files exist at all → "fail"
-      - Style/lint warnings alone → "pass"
-      - All checks passed AND project addresses the mission objective → "pass"
+- id: cross_file
+  when: context.cross_file_summary
+  content: |
+    Cross-file consistency:
+    {context.cross_file_summary}
 
-      ✅ CORRECT:
-      Each blocking issue MUST be an object with an `issue` (specific, one
-      sentence — name the command/file/behavior) and a `class`:
-      - `"functional"` — a broken behavior a play-test could verify (a command
-        errors or does the wrong thing, persistence, navigation, branching
-        logic, a record that can't be reached). DEFAULT to this when unsure.
-      - `"quality"` — a cosmetic/content issue a play-test can't cleanly verify
-        (grammar, wording, a flavor inconsistency).
+- id: data_shapes
+  when: context.data_shape_summary
+  content: |
+    {context.data_shape_summary}
 
-      Every `"functional"` issue MUST also carry:
-      - `"repro"` — a JSON array of the exact lines to type into the running
-        program, in order, that demonstrates the problem. The program is
-        launched automatically — do NOT include the run command. At most 10
-        lines. For an `untested:` finding, the repro is the sequence that
-        exercises the feature.
-      - `"expected"` — one sentence: what should happen, or what was observed
-        failing.
-      (`"quality"` issues need neither field.)
+    These are DETERMINISTIC violations of the architecture's declared
+    data examples, and they are filed as blocking issues AUTOMATICALLY
+    — do NOT repeat them in your blocking_issues (a reworded duplicate
+    creates a second goal for the same defect). Use them only as
+    context: if a BEHAVIOR you observed traces to one of these
+    mismatches, report that behavior with its own repro.
 
-      EVIDENCE RULE — broken requires observation. Only report a behavior
-      as broken/not-functional if the evidence above SHOWS it failing (an
-      error, wrong output, a crash). If the UX session simply did not
-      exercise a feature, that feature is UNTESTED, not broken — report it
-      as `{"issue": "untested: <feature> was not exercised by the UX
-      session", "class": "functional"}` so it gets verified by a play-test,
-      and never claim it does not work.
+- id: terminal
+  when: context.terminal_output
+  content: |
+    Terminal test output:
+    {context.terminal_output}
 
-      Unresolved-reference counts in the cross-file consistency report are
-      INFORMATIONAL ONLY — the resolver cannot see builtins, the standard
-      library, or third-party imports, so the count is dominated by names
-      that resolve fine at runtime. NEVER report unresolved references as
-      a blocking issue. (Duplicate-definition warnings remain reportable.)
+- id: ux_summary
+  when: context.ux_session_assessment
+  content: |
+    UX verification session:
+    {context.ux_session_assessment}
 
-      ```json
-      {
-        "verdict": "fail",
-        "blocking_issues": [
-          {"issue": "the `export` command writes an empty file",
-           "class": "functional",
-           "repro": ["add milk", "export list.txt"],
-           "expected": "the exported file should contain the added entry; it is empty"},
-          {"issue": "\"The entries is sorted\" should read \"are sorted\"", "class": "quality"}
-        ],
-        "summary": "Export is broken; one grammar error."
-      }
-      ```
+- id: verified_behaviors
+  when: context.verified_behaviors_block
+  content: |
+    {context.verified_behaviors_block}
 
-      ❌ WRONG — repro must not include the launch command, and must be an array:
-      {"repro": ["python main.py", "add milk"], ...}
-      {"repro": "add milk", ...}
+    These behaviors already passed a dedicated play-test. Do NOT report
+    them as untested or broken just because this UX session did not
+    revisit them — only report one if the evidence above shows it
+    failing NOW.
 
-      ❌ WRONG — do not add explanation outside the JSON:
-      After reviewing the results, the project has issues:
-      ```json
-      {"verdict": "fail", "blocking_issues": [...]}
-      ```
-      The main problem is the syntax error.
+- id: files
+  when: context.project_file_list
+  content: |
+    Project files:
+    {context.project_file_list}
 
-      Return ONLY the fenced JSON.

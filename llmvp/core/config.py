@@ -28,6 +28,17 @@ class ModelConfig(BaseModel):
     n_gpu_layers: int
     seed: int
     verbose: bool
+    # Keep the FULL KV for sliding-window-attention layers instead of a 128-token
+    # window. Required to make save_state/load_state (and flow_kv_cache) sound on
+    # SWA models like gpt-oss-120b: without it the static prefix (~1809 tok) far
+    # exceeds the SWA window, so a restored state is inconsistent at the window
+    # boundary and the next decode fails with `llama_decode code -3`. Costs extra
+    # SWA-layer KV memory (pair with kv_unified). Off by default (dense models
+    # don't need it).
+    swa_full: bool = False
+    # Single unified KV cache cell allocation (vs per-sequence) — pairs with
+    # swa_full to bound the memory cost on unified-memory (Metal) hardware.
+    kv_unified: bool = False
     flash_attention: bool = False
     batch_size: int = 64
     thinking: bool = True  # Master on/off: gates the <think>/[THINK] opening

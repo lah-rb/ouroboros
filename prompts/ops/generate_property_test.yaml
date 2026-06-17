@@ -1,0 +1,76 @@
+# Prompt template: ops/generate_property_test
+#
+# The tiered asym-probe. Writes a self-contained Python PROPERTY TEST that judges
+# a candidate solver WITHOUT being given the correct outputs — by checking
+# properties the spec implies, on discriminating inputs. Output is run as a
+# required completion check; a violation loops the task with the counterexample
+# as feedback. Only invoked for rule-inference tasks (detect_solver_task gate).
+#
+# Pre-computed: task_spec (the objective — names the file/function + examples)
+
+id: ops/generate_property_test
+description: "Generate a property-based differential test for a candidate solver"
+
+sections:
+
+  # Static head (cache-aware ordering): role, the property-selection method, and
+  # the output contract are invariant; the per-task spec is the only dynamic part
+  # and comes last.
+  - id: system_role
+    cache: true
+    content: |
+      You write ONE self-contained Python property test that decides whether a
+      candidate solver is CORRECT — without being given the correct outputs. You
+      import the candidate and test it against properties the task specification
+      implies. Your entire output is the test script.
+
+  - id: method
+    cache: true
+    content: |
+      The task gives worked examples, but examples can UNDER-DETERMINE the rule:
+      a plausible-but-wrong implementation can reproduce every visible example yet
+      be wrong in general (e.g. a symmetric example where a rotation and a
+      reflection happen to agree). Your job is to find a test such a wrong
+      implementation FAILS.
+
+      Choose properties that do NOT require predicting the exact output — those
+      are independent of any implementation. Prefer them in this order:
+
+      1. STRUCTURAL INVARIANTS the spec implies — parts of the output fixed by the
+         rule regardless of the values: a region of the output that must equal a
+         known region of the input, required shape/size, counts, positions.
+         (Strongest — no prediction needed.)
+      2. ALGEBRAIC LAWS the operation must obey — involution (applying it twice
+         returns the original), idempotence (applying it twice = applying once),
+         round-trip (decode∘encode = identity), structure preservation.
+      3. METAMORPHIC RELATIONS — relate outputs of RELATED inputs without knowing
+         either output: relabeling the values must commute with the transform; a
+         permuted input yields a correspondingly permuted output.
+      4. ONLY IF none of the above apply: LITERAL EXAMPLE-APPLICATION — take the
+         rule the worked example demonstrates, apply it BY HAND to a NEW input you
+         choose, reasoning step by step, then assert the candidate matches.
+
+      Construct DISCRIMINATING inputs: avoid symmetric, all-equal, or degenerate
+      inputs where wrong and right implementations coincide. Make every element
+      distinct so orientation/position errors surface.
+
+  - id: output_format
+    cache: true
+    content: |
+      Return ONLY a fenced ```python block — a complete, deterministic script that:
+      - imports the candidate (the spec names the file and the callable; the test
+        runs from the candidate's directory, so a plain `from <module> import
+        <fn>` resolves),
+      - checks your chosen properties on your constructed inputs,
+      - on the FIRST violation prints `PROBE_FAIL: <which property> on input
+        <input> — expected <…>, got <…>` and calls `sys.exit(1)`,
+      - if every property holds prints `PROBE_PASS` and exits 0.
+      If the candidate cannot be imported or run, let the exception propagate
+      (a nonzero exit is correct — the candidate is unusable). Do not print
+      anything except the PROBE_PASS / PROBE_FAIL line and any failure detail.
+
+  # Dynamic tail — the task spec (names the file/function + the worked examples).
+  - id: task
+    content: |
+      ## TASK SPECIFICATION (the candidate implements this)
+      {context.task_spec}

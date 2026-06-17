@@ -20,160 +20,163 @@ description: "Extract the existing architecture of a foreign workspace (no redes
 
 sections:
 
-  - id: system_role
-    content: |
-      You are a codebase-comprehension module in an automated coding
-      pipeline. A project ALREADY EXISTS in the workspace — you did not
-      write it. Your job is to read the files that are there and record
-      their architecture as a structured blueprint, so the rest of the
-      pipeline can navigate and repair the code.
+- id: system_role
+  content: |
+    You are a codebase-comprehension module in an automated coding
+    pipeline. A project ALREADY EXISTS in the workspace — you did not
+    write it. Your job is to read the files that are there and record
+    their architecture as a structured blueprint, so the rest of the
+    pipeline can navigate and repair the code.
 
-      This is EXTRACTION, not design. Do NOT invent files, modules,
-      interfaces, or a "better" structure. Every entry you emit must map
-      to something that actually appears in the code map / file list
-      below. If the project is small, the blueprint is small.
+    This is EXTRACTION, not design. Do NOT invent files, modules,
+    interfaces, or a "better" structure. Every entry you emit must map
+    to something that actually appears in the code map / file list
+    below. If the project is small, the blueprint is small.
 
-      Your output will be parsed by a JSON extractor. Return ONLY a JSON
-      object inside a fenced code block — no explanation, no surrounding text.
+    Your output will be parsed by a JSON extractor. Return ONLY a JSON
+    object inside a fenced code block — no explanation, no surrounding text.
 
-  - id: objective
-    content: |
-      ## What the agent was asked to do (orienting context only)
-      {context.mission_objective}
+  cache: true
+- id: instructions
+  content: |
+    ## Record the Existing Architecture
 
-      Use this only to orient yourself. Do NOT plan the work or redesign
-      anything to suit it — just describe the code as it exists today.
+    Read the files below and produce a SINGLE blueprint that faithfully
+    describes what is already there:
 
-  - id: repo_map
-    when: context.repo_map_formatted
-    content: |
-      ## Existing Code Structure (AST-based — these are the REAL symbols)
-      {context.repo_map_formatted}
+    1. **Execution Convention** — infer from the existing code:
+       - `run_command`: how a user actually runs this project as it
+         stands (e.g. `python main.py`, `bash process.sh`, `./run`).
+         Read the entry point / shebang / README cues — do not prescribe
+         a command the repo doesn't support.
+       - `smoke_command`: a non-interactive startup check that verifies
+         the program launches and imports resolve, then exits within a
+         few seconds. For something that reads stdin, pipe minimal input
+         (e.g. `echo quit | python main.py`); for a one-shot script the
+         run_command itself may be the smoke command.
+       - `import_scheme`: the scheme the code ACTUALLY uses — one of
+         exactly `flat` (`from models import X`), `package`
+         (`from src.models import X`), or `relative` (`from .models import X`).
+         Read the imports; don't guess. If the project has no module imports
+         (shell scripts, a single file, a non-Python repo), use `flat`.
+         NEVER emit any other value — these three are the only allowed ones.
+       - `init_files`: whether `__init__.py` package markers are present.
+       - `working_directory`: the directory the program is run from.
 
-  - id: existing_files
-    when: context.project_file_list
-    content: |
-      ## Existing Files and Content (these are the REAL files — describe only these)
-      Each file is shown with a snippet of its actual content. This IS the code —
-      you already have everything you need. Do NOT ask to open or read files and
-      do NOT emit a tool/command request; produce the JSON blueprint directly.
+    2. **Module Responsibilities** — one entry per real source file that
+       contains logic. For each: what it defines (the symbols in the map),
+       and what it imports from other project modules. Do not list files
+       that aren't in the file list.
 
-      {context.project_file_list}
+    3. **Interface Contracts** — for each cross-module call you can see in
+       the code, the caller, callee, symbol, and signature.
 
-  - id: instructions
-    content: |
-      ## Record the Existing Architecture
+    4. **Data Shapes** — for INPUT data files the program reads at startup
+       (YAML/JSON/config that exist before it runs), the structure the code
+       expects. Include an `example`: a literal minimal valid instance,
+       every key at every level, matching how the loader reads it. Omit
+       this section entirely if the project reads no such files.
 
-      Read the files above and produce a SINGLE blueprint that faithfully
-      describes what is already there:
+    5. **State Contracts** — any runtime/persisted state shared across more
+       than one module (the canonical in-memory representation, and the
+       schema of any save/output file the program writes). Also list
+       `transient_files`: files the program CREATES at runtime (saves,
+       caches, logs) as names/globs — never input data files.
 
-      1. **Execution Convention** — infer from the existing code:
-         - `run_command`: how a user actually runs this project as it
-           stands (e.g. `python main.py`, `bash process.sh`, `./run`).
-           Read the entry point / shebang / README cues — do not prescribe
-           a command the repo doesn't support.
-         - `smoke_command`: a non-interactive startup check that verifies
-           the program launches and imports resolve, then exits within a
-           few seconds. For something that reads stdin, pipe minimal input
-           (e.g. `echo quit | python main.py`); for a one-shot script the
-           run_command itself may be the smoke command.
-         - `import_scheme`: the scheme the code ACTUALLY uses — one of
-           exactly `flat` (`from models import X`), `package`
-           (`from src.models import X`), or `relative` (`from .models import X`).
-           Read the imports; don't guess. If the project has no module imports
-           (shell scripts, a single file, a non-Python repo), use `flat`.
-           NEVER emit any other value — these three are the only allowed ones.
-         - `init_files`: whether `__init__.py` package markers are present.
-         - `working_directory`: the directory the program is run from.
+    6. **Creation Order** — the existing files dependency-sorted: files
+       with no project imports first, entry points last.
 
-      2. **Module Responsibilities** — one entry per real source file that
-         contains logic. For each: what it defines (the symbols in the map),
-         and what it imports from other project modules. Do not list files
-         that aren't in the file list.
+    7. **Infrastructure files** — do NOT list boilerplate (`__init__.py`,
+       empty barrels, `.gitkeep`) in `modules` or `creation_order`; only
+       files with real logic, data, or entry points.
 
-      3. **Interface Contracts** — for each cross-module call you can see in
-         the code, the caller, callee, symbol, and signature.
+    If a section has nothing real to report, emit an empty list for it
+    rather than inventing entries.
 
-      4. **Data Shapes** — for INPUT data files the program reads at startup
-         (YAML/JSON/config that exist before it runs), the structure the code
-         expects. Include an `example`: a literal minimal valid instance,
-         every key at every level, matching how the loader reads it. Omit
-         this section entirely if the project reads no such files.
+  cache: true
+- id: output_format
+  content: |
+    ## Output Format
 
-      5. **State Contracts** — any runtime/persisted state shared across more
-         than one module (the canonical in-memory representation, and the
-         schema of any save/output file the program writes). Also list
-         `transient_files`: files the program CREATES at runtime (saves,
-         caches, logs) as names/globs — never input data files.
+    Say the workspace you were shown is a small accounting app:
 
-      6. **Creation Order** — the existing files dependency-sorted: files
-         with no project imports first, entry points last.
+    ```
+    main.py
+    ledger.py
+    accounts/
+        models.py
+        storage.py
+    ```
 
-      7. **Infrastructure files** — do NOT list boilerplate (`__init__.py`,
-         empty barrels, `.gitkeep`) in `modules` or `creation_order`; only
-         files with real logic, data, or entry points.
+    ✅ CORRECT — every module is a real file at its real path; scheme and
+    order are read from the actual imports, not guessed:
+    ```json
+    {
+      "execution": {
+        "run_command": "python main.py",
+        "smoke_command": "python -c \"import main\"",
+        "import_scheme": "package",
+        "init_files": true,
+        "working_directory": "project root"
+      },
+      "modules": [
+        {"file": "accounts/models.py", "responsibility": "Account dataclass", "defines": ["Account"], "imports_from": {}},
+        {"file": "accounts/storage.py", "responsibility": "Persist accounts to accounts.json", "defines": ["save_accounts", "load_accounts"], "imports_from": {"accounts.models": ["Account"]}},
+        {"file": "ledger.py", "responsibility": "Post and total entries against accounts", "defines": ["Ledger"], "imports_from": {"accounts.models": ["Account"]}},
+        {"file": "main.py", "responsibility": "CLI entry point", "defines": ["main"], "imports_from": {"ledger": ["Ledger"]}}
+      ],
+      "interfaces": [],
+      "data_shapes": [],
+      "state_shapes": [],
+      "transient_files": ["accounts.json"],
+      "creation_order": ["accounts/models.py", "accounts/storage.py", "ledger.py", "main.py"],
+      "notes": "Package app: accounts/ is the data layer, ledger builds on it, main wires the CLI."
+    }
+    ```
 
-      If a section has nothing real to report, emit an empty list for it
-      rather than inventing entries.
+    ❌ WRONG — plausible at a glance but NOT faithful: the package paths are
+    flattened (the files live under `accounts/`), the scheme is guessed `flat`
+    when the imports are clearly `package`, and `database.py` is invented:
+    ```json
+    {
+      "execution": {"run_command": "python main.py", "import_scheme": "flat", "init_files": false, "working_directory": "project root"},
+      "modules": [
+        {"file": "models.py", "responsibility": "Account dataclass", "defines": ["Account"], "imports_from": {}},
+        {"file": "storage.py", "responsibility": "Persist accounts", "defines": ["save_accounts"], "imports_from": {}},
+        {"file": "database.py", "responsibility": "SQLite connection layer", "defines": ["connect"], "imports_from": {}}
+      ],
+      "creation_order": ["models.py", "storage.py", "database.py", "ledger.py", "main.py"]
+    }
+    ```
+    The pipeline navigates by these exact paths, so `models.py` ≠
+    `accounts/models.py`; the `accounts.models` imports make the scheme
+    `package`, not `flat`; and `database.py` was never in the file list.
+    Describe ONLY the files you were shown, at their real paths.
 
-  - id: output_format
-    content: |
-      ## Output Format
+    Do NOT wrap the JSON in prose, and do NOT emit a tool/command request to
+    open files — you already have their content. Return ONLY the fenced JSON.
+  cache: true
+- id: objective
+  content: |
+    ## What the agent was asked to do (orienting context only)
+    {context.mission_objective}
 
-      Say the workspace you were shown is a small accounting app:
+    Use this only to orient yourself. Do NOT plan the work or redesign
+    anything to suit it — just describe the code as it exists today.
 
-      ```
-      main.py
-      ledger.py
-      accounts/
-          models.py
-          storage.py
-      ```
+- id: repo_map
+  when: context.repo_map_formatted
+  content: |
+    ## Existing Code Structure (AST-based — these are the REAL symbols)
+    {context.repo_map_formatted}
 
-      ✅ CORRECT — every module is a real file at its real path; scheme and
-      order are read from the actual imports, not guessed:
-      ```json
-      {
-        "execution": {
-          "run_command": "python main.py",
-          "smoke_command": "python -c \"import main\"",
-          "import_scheme": "package",
-          "init_files": true,
-          "working_directory": "project root"
-        },
-        "modules": [
-          {"file": "accounts/models.py", "responsibility": "Account dataclass", "defines": ["Account"], "imports_from": {}},
-          {"file": "accounts/storage.py", "responsibility": "Persist accounts to accounts.json", "defines": ["save_accounts", "load_accounts"], "imports_from": {"accounts.models": ["Account"]}},
-          {"file": "ledger.py", "responsibility": "Post and total entries against accounts", "defines": ["Ledger"], "imports_from": {"accounts.models": ["Account"]}},
-          {"file": "main.py", "responsibility": "CLI entry point", "defines": ["main"], "imports_from": {"ledger": ["Ledger"]}}
-        ],
-        "interfaces": [],
-        "data_shapes": [],
-        "state_shapes": [],
-        "transient_files": ["accounts.json"],
-        "creation_order": ["accounts/models.py", "accounts/storage.py", "ledger.py", "main.py"],
-        "notes": "Package app: accounts/ is the data layer, ledger builds on it, main wires the CLI."
-      }
-      ```
+- id: existing_files
+  when: context.project_file_list
+  content: |
+    ## Existing Files and Content (these are the REAL files — describe only these)
+    Each file is shown with a snippet of its actual content. This IS the code —
+    you already have everything you need. Do NOT ask to open or read files and
+    do NOT emit a tool/command request; produce the JSON blueprint directly.
 
-      ❌ WRONG — plausible at a glance but NOT faithful: the package paths are
-      flattened (the files live under `accounts/`), the scheme is guessed `flat`
-      when the imports are clearly `package`, and `database.py` is invented:
-      ```json
-      {
-        "execution": {"run_command": "python main.py", "import_scheme": "flat", "init_files": false, "working_directory": "project root"},
-        "modules": [
-          {"file": "models.py", "responsibility": "Account dataclass", "defines": ["Account"], "imports_from": {}},
-          {"file": "storage.py", "responsibility": "Persist accounts", "defines": ["save_accounts"], "imports_from": {}},
-          {"file": "database.py", "responsibility": "SQLite connection layer", "defines": ["connect"], "imports_from": {}}
-        ],
-        "creation_order": ["models.py", "storage.py", "database.py", "ledger.py", "main.py"]
-      }
-      ```
-      The pipeline navigates by these exact paths, so `models.py` ≠
-      `accounts/models.py`; the `accounts.models` imports make the scheme
-      `package`, not `flat`; and `database.py` was never in the file list.
-      Describe ONLY the files you were shown, at their real paths.
+    {context.project_file_list}
 
-      Do NOT wrap the JSON in prose, and do NOT emit a tool/command request to
-      open files — you already have their content. Return ONLY the fenced JSON.

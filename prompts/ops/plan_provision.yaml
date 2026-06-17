@@ -14,13 +14,14 @@ description: "Plan install/setup commands to provision the env for a terminal ta
 
 sections:
 
-  # Layout: static-first / dynamic-last. The invariant head (role, task,
-  # instructions, format) is marked cache: true and pinned per-flow in the KV
-  # cache (opt-in: config.model.flow_kv_cache) so it isn't re-prefilled each
-  # cycle; the per-cycle feedback is the ONLY dynamic section and comes LAST,
-  # which both ends the cacheable prefix and puts the freshest signal in the
-  # recency slot. Safe here because Ouroboros runs at <5% of the model's context
-  # window, far below where mid-prompt position matters (see PROMPTING_CONVENTIONS).
+  # Layout: CROSS-TASK-static head, then per-task content, then per-cycle tail.
+  # The role + instructions + output_format are identical for EVERY task, so they
+  # lead as the contiguous cache: true run — that makes the flow KV-cache key
+  # invariant across tasks (it doesn't include task_spec), so one BUILD per flow
+  # warms the whole bench (the `warm` launch mode pre-builds them; every task then
+  # HITs). The per-task `task` and per-cycle `feedback` sit AFTER the cache
+  # boundary as the dynamic suffix (cheap to re-eval; small). Safe at Ouroboros's
+  # <5%-of-window context (see PROMPTING_CONVENTIONS).
   - id: system_role
     cache: true
     content: |
@@ -28,18 +29,12 @@ sections:
       output is parsed as JSON. Return ONLY a JSON object inside a fenced code
       block — no commentary.
 
-  - id: task
-    cache: true
-    content: |
-      ## Task to be accomplished
-      {context.task_spec}
-
   - id: instructions
     cache: true
     content: |
-      List the shell commands needed to PROVISION the environment for this task
-      — installing the tools, packages, or runtimes it requires that may not be
-      present. This is setup ONLY: do not solve the task, do not create the
+      List the shell commands needed to PROVISION the environment for the task
+      below — installing the tools, packages, or runtimes it requires that may not
+      be present. This is setup ONLY: do not solve the task, do not create the
       deliverable, do not run the tool — just make it available.
 
       Rules:
@@ -71,7 +66,16 @@ sections:
       Each action: `type` is "command", `command` is an argv array, `name` is a
       short label. Return ONLY the fenced JSON object.
 
-  # Dynamic tail — last (recency) and ends the cached prefix.
+  # ── cache boundary ── everything below is dynamic (not cached) ──
+
+  # Per-task: the task spec. After the cache boundary so the cached prefix stays
+  # cross-task-invariant; cheap to re-eval each cycle.
+  - id: task
+    content: |
+      ## Task to be accomplished
+      {context.task_spec}
+
+  # Per-cycle: the prior judge note (empty first run) — last (recency slot).
   - id: feedback
     when: context.feedback_block
     content: |

@@ -143,11 +143,20 @@ class ContainerEffects(LocalEffects):
         """The shell command the PTY server spawns (a host child whose stdio
         pipes to bash inside the container). A string (no spaces in container
         names / the cwd), since the MCP create_session tool types command as str.
+
+        `bash -i` (interactive) so the container's ~/.bashrc loads and ALIASES
+        expand — `docker exec -i` alone gives bash a pipe (non-interactive), so
+        task-provided shell config is silently dropped. The create-bucket task,
+        for one, aliases `aws`→`awslocal` (localstack) in ~/.bashrc; without this
+        the natural `aws s3 mb` runs the real CLI with no endpoint and fails.
+        Chose `-i` over `-it`: both resolve the alias, but `-i` keeps the output
+        free of TTY control codes (verified: 0 vs 8 ANSI escapes) — cleaner for
+        the session capture. (One cosmetic "no job control" line on start.)
         """
         user = f"-u {self._exec_user} " if self._exec_user else ""
         return (
             f"docker exec -i -w {self._container_workdir} "
-            f"{user}{self._container.name} /bin/bash"
+            f"{user}{self._container.name} /bin/bash -i"
         )
 
     async def mcp_call_tool(

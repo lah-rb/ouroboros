@@ -14,28 +14,30 @@ description: "Assess UX session for quality gate — in-session evaluation"
 
 sections:
 
-  - id: transition
-    content: |
-      ---TERMINAL CLOSED---
+- id: transition
+  content: |
+    ---TERMINAL CLOSED---
 
-      The UX verification session is now complete. No more commands will be sent.
+    The UX verification session is now complete. No more commands will be sent.
 
-  - id: goal
-    when: input.mission_objective
-    content: |
-      The project's mission objective is:
-        {input.mission_objective}
+  cache: true
+- id: instructions
+  content: |
+    Based on everything you observed during this session, provide a brief
+    assessment of the project's functional quality. Cover:
 
-  - id: instructions
-    content: |
-      Based on everything you observed during this session, provide a brief
-      assessment of the project's functional quality. Cover:
+    1. Did the program start and respond to input?
+    2. Did core features work as expected?
+    3. Were there any errors, crashes, or unexpected behavior?
+    4. Any usability issues (confusing output, missing feedback)?
 
-      1. Did the program start and respond to input?
-      2. Did core features work as expected?
-      3. Were there any errors, crashes, or unexpected behavior?
-      4. Any usability issues (confusing output, missing feedback)?
+    Write 3-5 sentences. Be specific — mention actual commands you tried
+    and what happened. This assessment will be combined with other quality
+    checks (lint, imports, cross-file consistency) to make a final verdict.
+  cache: true
+- id: goal
+  when: input.mission_objective
+  content: |
+    The project's mission objective is:
+      {input.mission_objective}
 
-      Write 3-5 sentences. Be specific — mention actual commands you tried
-      and what happened. This assessment will be combined with other quality
-      checks (lint, imports, cross-file consistency) to make a final verdict.

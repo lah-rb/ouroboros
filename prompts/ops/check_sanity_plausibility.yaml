@@ -1,0 +1,78 @@
+# Prompt template: ops/check_sanity_plausibility
+#
+# Rung 0, light-inference half. The deterministic floor already cleared the
+# artifact of obvious garbage (empty / error-trace / bare 0 / placeholder). This
+# turn judges whether the produced answer is PLAUSIBLE for the task — right type,
+# format, and order-of-magnitude — WITHOUT claiming to know the exact answer. It
+# catches the wrong-type / wrong-magnitude class the floor cannot (e.g. a token
+# count that came back as a filename, or as 3 when the corpus is millions).
+#
+# Static sections lead (cache: true) so the head is cross-task-invariant; the
+# task + artifact are appended after the boundary.
+#
+# Pre-computed: task_spec (the objective), sanity_artifact_excerpt (path + bytes)
+
+id: ops/check_sanity_plausibility
+description: "Judge whether a produced answer is plausible for the task (type/range)"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are an output-plausibility module in an automated pipeline. You are a
+      SANITY check, not a grader: you do NOT know the correct answer and must not
+      guess it. Your only job is to decide whether the produced answer is a
+      PLAUSIBLE answer to the task — the right KIND of thing, the right FORMAT,
+      and a believable ORDER OF MAGNITUDE.
+
+      Your output is parsed as JSON. Return ONLY a JSON object in a fenced code
+      block — no commentary.
+    cache: true
+
+  - id: instructions
+    content: |
+      ## How to judge
+
+      Mark `"plausible": false` ONLY when the answer is clearly the wrong shape
+      for the task, for example:
+        - wrong TYPE — the task asks for a count/number but the file holds a word,
+          a path, a sentence, or a shell error;
+        - wrong FORMAT — the task pins a specific form (a bare integer, a JSON
+          object, a hash) and the answer doesn't match it;
+        - implausible MAGNITUDE — a value that cannot be right by orders of
+          magnitude given what the task describes (e.g. "3" tokens for a
+          multi-million-row dataset, or a negative count).
+
+      Otherwise mark `"plausible": true`. Be conservative: when the answer is the
+      right kind of thing and you have no strong reason to doubt its magnitude,
+      it is plausible. Never fail a believable answer just because you cannot
+      confirm it exactly — that is the grader's job, not yours.
+
+      `"reason"` — one sentence. If implausible, name the specific mismatch so the
+      next attempt can fix it.
+    cache: true
+
+  - id: output_format
+    content: |
+      ✅ CORRECT — plausible:
+      ```json
+      {"plausible": true, "reason": "a bare integer ~11M, the right shape for a token count over a large dataset"}
+      ```
+
+      ✅ CORRECT — implausible (wrong magnitude):
+      ```json
+      {"plausible": false, "reason": "answer is 3, but the task counts tokens across millions of rows — the filter almost certainly matched nothing"}
+      ```
+
+      Return ONLY the fenced JSON object.
+    cache: true
+
+  - id: task
+    content: |
+      ## Task
+      {context.task_spec}
+
+  - id: artifact
+    content: |
+      ## The produced answer (path and contents)
+      {context.sanity_artifact_excerpt}

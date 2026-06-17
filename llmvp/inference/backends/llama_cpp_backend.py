@@ -165,6 +165,10 @@ class LlamaCppBackend(BaseBackend):
             n_gpu_layers=self.config.model.n_gpu_layers,
             gpu_backend="metal",
             flash_attn=bool(self.config.model.flash_attention),
+            # Retain full KV for SWA layers so save_state/flow_kv_cache is sound on
+            # sliding-window models (gpt-oss); kv_unified bounds the memory cost.
+            swa_full=bool(getattr(self.config.model, "swa_full", False)),
+            kv_unified=bool(getattr(self.config.model, "kv_unified", False)),
             seed=self.config.model.seed,
             verbose=self.config.model.verbose,
             n_threads=self.config.resources.cpu_threads,

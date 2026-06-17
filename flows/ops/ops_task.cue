@@ -35,11 +35,41 @@ ops_task: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.mission.status == 'active'", transition: "plan_provision"},
+					{condition: "result.mission.status == 'active'", transition: "gather_context"},
 					{condition: "true", transition: "return_loop"},
 				]
 			}
 			publishes: ["mission"]
+		}
+
+		// Ground the cycle in the actual working directory BEFORE planning, so the
+		// charter plans against the real files (with content snippets for small
+		// scripts/data — _extract_signature returns the first 50 lines for non-code
+		// files) instead of blind. Deterministic, zero inference (a file scan).
+		// Broad include_patterns cover shell/data/config, not just code (the
+		// default scan_project set misses *.sh/*.csv — the grid/ingest gotcha).
+		// Re-runs each cycle so the manifest reflects edits from the prior pass.
+		gather_context: #StepDefinition & {
+			action:      "scan_project"
+			description: "Scan the working directory so the charter plans against real files"
+			context: required: ["mission"]
+			params: {
+				root: {$ref: "input.working_directory"}
+				include_patterns: [
+					"*.py", "*.js", "*.ts", "*.tsx", "*.jsx", "*.rs", "*.go",
+					"*.rb", "*.java", "*.kt", "*.c", "*.h", "*.cpp", "*.hpp",
+					"*.cc", "*.sh", "*.bash", "*.zsh", "*.pl", "*.php", "*.lua",
+					"*.sql", "*.yaml", "*.yml", "*.toml", "*.json", "*.cfg",
+					"*.ini", "*.conf", "*.env", "*.txt", "*.md", "*.csv",
+					"*.tsv", "Makefile", "Dockerfile",
+				]
+				signature_depth: "imports_and_exports"
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "plan_provision"}]
+			}
+			publishes: ["project_manifest"]
 		}
 
 		// Provision the environment FIRST (install the tools the task needs), so
@@ -89,15 +119,20 @@ ops_task: #FlowDefinition & {
 		plan_charter: #StepDefinition & {
 			action:      "inference"
 			description: "Write an accomplish-charter for the terminal session"
-			context: required: ["mission"]
+			context: {
+				required: ["mission"]
+				optional: ["project_manifest"]
+			}
 			prompt_template: {
 				template: "ops/charter_accomplish"
-				context_keys: ["task_spec", "feedback_block"]
+				context_keys: ["task_spec", "workspace_context", "feedback_block"]
 				input_keys: []
 			}
 			pre_compute: [
 				{formatter: "format_mission_meta", output_key: "task_spec"
 					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+				{formatter: "format_project_listing", output_key: "workspace_context"
+					params: {source: {$ref: "context.project_manifest"}}},
 				{formatter: "format_feedback_block", output_key: "feedback_block"
 					params: {source: {$ref: "context.mission.task_definition"}}},
 			]
@@ -149,6 +184,150 @@ ops_task: #FlowDefinition & {
 			params: max_checks: 8
 			resolver: {
 				type: "rule"
+				rules: [{condition: "true", transition: "check_sanity"}]
+			}
+			publishes: ["validation_results"]
+		}
+
+		// ── Rung 0: output non-degeneracy / sanity oracle ────────────────
+		// Backstops the credulous judge: for an answer-producing task it reads
+		// the produced artifact and appends a REQUIRED fail if the content is
+		// obviously degenerate (empty / error-trace / bare 0 / placeholder) —
+		// the literal-"0" gaming that passed count-dataset-tokens. The floor is
+		// zero-inference; a clean floor on an answer task routes to a light
+		// plausibility turn (wrong type/magnitude). Configure/run tasks with no
+		// single produced artifact skip cleanly.
+		check_sanity: #StepDefinition & {
+			action:      "check_output_sanity"
+			description: "Rung 0: flag a degenerate produced answer (deterministic floor)"
+			context: {
+				required: ["mission"]
+				optional: ["validation_results"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.check_plausibility == true", transition: "sanity_plausibility"},
+					{condition: "true", transition: "profile_oracle"},
+				]
+			}
+			publishes: ["validation_results", "sanity_artifact_excerpt"]
+		}
+
+		sanity_plausibility: #StepDefinition & {
+			action:      "inference"
+			description: "Judge whether the produced answer is plausible (type/magnitude)"
+			context: required: ["mission", "sanity_artifact_excerpt"]
+			prompt_template: {
+				template: "ops/check_sanity_plausibility"
+				context_keys: ["task_spec", "sanity_artifact_excerpt"]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_mission_meta", output_key: "task_spec"
+					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+			]
+			config: temperature: "t*0.1"
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "record_sanity"}]
+			}
+			publishes: ["inference_response"]
+		}
+
+		record_sanity: #StepDefinition & {
+			action:      "record_output_sanity"
+			description: "Append a required fail on a confident implausible verdict"
+			context: {
+				required: ["inference_response"]
+				optional: ["validation_results", "sanity_artifact_excerpt"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "profile_oracle"}]
+			}
+			publishes: ["validation_results"]
+		}
+
+		// ── Profile-gated oracle: service / data_transform / invertible ───
+		// Reads mission.config.task_profile (set by the task judge) and runs the
+		// matching rung — liveness (the service responds), conservation (the
+		// transform output isn't empty/zero-row), or round-trip (a produced
+		// archive is intact) — appending a REQUIRED fail on an unambiguous
+		// failure. Skips for other profiles; best-effort + fail-safe, so it can
+		// only tighten the gate.
+		profile_oracle: #StepDefinition & {
+			action:      "check_profile_oracle"
+			description: "Profile-gated completion oracle (service/data/invertible)"
+			context: {
+				required: ["mission"]
+				optional: ["validation_results", "task_profile"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "probe_gate"}]
+			}
+			publishes: ["validation_results"]
+		}
+
+		// ── Tiered asym-probe (property-based differential test) ──────────
+		// Only rule-inference tasks (implement a callable pinned by worked
+		// examples that may under-determine the rule — grid is the archetype)
+		// reach the probe; everything else skips straight to the judge at zero
+		// inference cost. When it runs, the probe generates a property test
+		// (invariant-first, no oracle) and appends its PASS/FAIL as a REQUIRED
+		// check, so a violation loops the task with the counterexample as
+		// feedback through the existing judge/decide path.
+		probe_gate: #StepDefinition & {
+			action:      "detect_solver_task"
+			description: "Gate the asym-probe to function+examples tasks"
+			context: {
+				required: ["mission"]
+				optional: ["validation_results"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.run_probe == true", transition: "probe_generate"},
+					{condition: "true", transition: "judge_step"},
+				]
+			}
+		}
+
+		probe_generate: #StepDefinition & {
+			action:      "inference"
+			description: "Generate a property-based differential test for the candidate"
+			context: required: ["mission"]
+			prompt_template: {
+				template: "ops/generate_property_test"
+				context_keys: ["task_spec"]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_mission_meta", output_key: "task_spec"
+					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+			]
+			config: temperature: "t*0.2"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "probe_run"},
+					{condition: "true", transition: "judge_step"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		probe_run: #StepDefinition & {
+			action:      "run_property_probe"
+			description: "Run the property test; append PASS/FAIL as a required check"
+			context: {
+				required: ["inference_response"]
+				optional: ["validation_results"]
+			}
+			params: working_directory: {$ref: "input.working_directory"}
+			resolver: {
+				type: "rule"
 				rules: [{condition: "true", transition: "judge_step"}]
 			}
 			publishes: ["validation_results"]
@@ -179,9 +358,68 @@ ops_task: #FlowDefinition & {
 			config: temperature: "t*0.1"
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "decide"}]
+				rules: [{condition: "true", transition: "reprobe_completion"}]
 			}
 			publishes: ["inference_response"]
+		}
+
+		// ── Verify-before-harvest: re-probe the completion before harvest ──
+		// The judge claimed done — don't take its word. Re-run the completion
+		// criteria against the live container + re-read the produced artifact into
+		// a fresh transcript, then a verify turn confirms genuine completion. The
+		// verdict rides validation_results as a required check, so decide derives
+		// done from the survivor. Gated: skips straight to decide when the judge
+		// did not claim done (no point re-probing a not-done cycle).
+		reprobe_completion: #StepDefinition & {
+			action:      "reprobe_completion"
+			description: "Re-probe completion criteria + artifact when the judge claims done"
+			context: {
+				required: ["mission"]
+				optional: ["inference_response"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.do_verify == true", transition: "verify_completion"},
+					{condition: "true", transition: "decide"},
+				]
+			}
+			publishes: ["vbh_transcript", "judge_response"]
+		}
+
+		verify_completion: #StepDefinition & {
+			action:      "inference"
+			description: "Confirm genuine completion from the fresh re-probe"
+			context: required: ["mission", "vbh_transcript"]
+			prompt_template: {
+				template: "ops/verify_completion"
+				context_keys: ["task_spec", "vbh_transcript"]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_mission_meta", output_key: "task_spec"
+					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+			]
+			config: temperature: "t*0.1"
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "record_completion_verify"}]
+			}
+			publishes: ["inference_response"]
+		}
+
+		record_completion_verify: #StepDefinition & {
+			action:      "record_completion_verify"
+			description: "Derive the verdict; restore the judge verdict for decide"
+			context: {
+				required: ["inference_response"]
+				optional: ["validation_results", "judge_response"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "decide"}]
+			}
+			publishes: ["validation_results", "inference_response"]
 		}
 
 		decide: #StepDefinition & {

@@ -902,24 +902,10 @@ async def action_parse_inference_json(step_input: StepInput) -> StepOutput:
 
 # ── Deterministic evaluation ─────────────────────────────────────────
 
-# Error patterns that indicate failure even when exit code is 0.
-# Ordered by specificity — most diagnostic first.
-_FAILURE_PATTERNS = [
-    "Traceback (most recent call last)",
-    "ImportError:",
-    "ModuleNotFoundError:",
-    "SyntaxError:",
-    "FileNotFoundError:",
-    "NameError:",
-    "TypeError:",
-    "AttributeError:",
-    "ValueError:",
-    "KeyError:",
-    "IndentationError:",
-    "OSError:",
-    "PermissionError:",
-    "RuntimeError:",
-]
+# Error patterns that indicate failure even when exit code is 0 — consolidated
+# into the shared liveness predicate (oracle_actions) so this deterministic eval
+# and the oracle rungs scan for the SAME error-strings (was a duplicated list).
+from agent.actions.oracle_actions import _FAILURE_PATTERNS  # noqa: E402
 
 
 async def action_evaluate_deterministic_result(step_input: StepInput) -> StepOutput:

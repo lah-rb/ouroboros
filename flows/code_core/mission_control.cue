@@ -477,6 +477,9 @@ mission_control: #FlowDefinition & {
 				architecture_smoke_command: {$ref: "context.mission.architecture.effective_smoke_command", default: ""}
 				architecture:            {$ref: "context.mission.architecture", default: ""}
 				mode:                     "completion"
+				// Capability profile (the task judge): gates the profile oracle —
+				// for a repair mission it runs the no-collateral regression rung.
+				task_profile:             {$ref: "context.mission.config.task_profile", default: ""}
 			}
 			resolver: {
 				type: "rule"

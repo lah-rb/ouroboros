@@ -5649,7 +5649,11 @@
             "$ref": "context.mission.architecture",
             "default": ""
           },
-          "mode": "completion"
+          "mode": "completion",
+          "task_profile": {
+            "$ref": "context.mission.config.task_profile",
+            "default": ""
+          }
         },
         "params": {},
         "publishes": [
@@ -7235,7 +7239,8 @@
         "architecture_run_command",
         "architecture_smoke_command",
         "architecture",
-        "mode"
+        "mode",
+        "task_profile"
       ]
     },
     "defaults": {
@@ -7402,6 +7407,34 @@
         "params": {
           "max_checks": 20
         },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "profile_oracle"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "profile_oracle": {
+        "action": "check_profile_oracle",
+        "description": "Profile-gated oracle (repair \u2192 no-collateral regression)",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission",
+            "validation_results",
+            "task_profile"
+          ]
+        },
+        "params": {},
         "config": {},
         "resolver": {
           "type": "rule",
@@ -10978,7 +11011,7 @@
           "rules": [
             {
               "condition": "result.mission.status == 'active'",
-              "transition": "plan_provision"
+              "transition": "gather_context"
             },
             {
               "condition": "true",
@@ -10988,6 +11021,75 @@
         },
         "publishes": [
           "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "gather_context": {
+        "action": "scan_project",
+        "description": "Scan the working directory so the charter plans against real files",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {
+          "root": {
+            "$ref": "input.working_directory"
+          },
+          "include_patterns": [
+            "*.py",
+            "*.js",
+            "*.ts",
+            "*.tsx",
+            "*.jsx",
+            "*.rs",
+            "*.go",
+            "*.rb",
+            "*.java",
+            "*.kt",
+            "*.c",
+            "*.h",
+            "*.cpp",
+            "*.hpp",
+            "*.cc",
+            "*.sh",
+            "*.bash",
+            "*.zsh",
+            "*.pl",
+            "*.php",
+            "*.lua",
+            "*.sql",
+            "*.yaml",
+            "*.yml",
+            "*.toml",
+            "*.json",
+            "*.cfg",
+            "*.ini",
+            "*.conf",
+            "*.env",
+            "*.txt",
+            "*.md",
+            "*.csv",
+            "*.tsv",
+            "Makefile",
+            "Dockerfile"
+          ],
+          "signature_depth": "imports_and_exports"
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "plan_provision"
+            }
+          ]
+        },
+        "publishes": [
+          "project_manifest"
         ],
         "effects": [],
         "terminal": false
@@ -11084,13 +11186,16 @@
           "required": [
             "mission"
           ],
-          "optional": []
+          "optional": [
+            "project_manifest"
+          ]
         },
         "params": {},
         "prompt_template": {
           "template": "ops/charter_accomplish",
           "context_keys": [
             "task_spec",
+            "workspace_context",
             "feedback_block"
           ],
           "input_keys": []
@@ -11104,6 +11209,15 @@
                 "$ref": "context.mission"
               },
               "field": "objective"
+            }
+          },
+          {
+            "formatter": "format_project_listing",
+            "output_key": "workspace_context",
+            "params": {
+              "source": {
+                "$ref": "context.project_manifest"
+              }
             }
           },
           {
@@ -11203,6 +11317,259 @@
           "rules": [
             {
               "condition": "true",
+              "transition": "check_sanity"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "check_sanity": {
+        "action": "check_output_sanity",
+        "description": "Rung 0: flag a degenerate produced answer (deterministic floor)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "validation_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.check_plausibility == true",
+              "transition": "sanity_plausibility"
+            },
+            {
+              "condition": "true",
+              "transition": "profile_oracle"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results",
+          "sanity_artifact_excerpt"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "sanity_plausibility": {
+        "action": "inference",
+        "description": "Judge whether the produced answer is plausible (type/magnitude)",
+        "context": {
+          "required": [
+            "mission",
+            "sanity_artifact_excerpt"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "ops/check_sanity_plausibility",
+          "context_keys": [
+            "task_spec",
+            "sanity_artifact_excerpt"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "task_spec",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.1"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "record_sanity"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "record_sanity": {
+        "action": "record_output_sanity",
+        "description": "Append a required fail on a confident implausible verdict",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": [
+            "validation_results",
+            "sanity_artifact_excerpt"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "profile_oracle"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "profile_oracle": {
+        "action": "check_profile_oracle",
+        "description": "Profile-gated completion oracle (service/data/invertible)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "validation_results",
+            "task_profile"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "probe_gate"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "probe_gate": {
+        "action": "detect_solver_task",
+        "description": "Gate the asym-probe to function+examples tasks",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "validation_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.run_probe == true",
+              "transition": "probe_generate"
+            },
+            {
+              "condition": "true",
+              "transition": "judge_step"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "probe_generate": {
+        "action": "inference",
+        "description": "Generate a property-based differential test for the candidate",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "ops/generate_property_test",
+          "context_keys": [
+            "task_spec"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "task_spec",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.2"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "probe_run"
+            },
+            {
+              "condition": "true",
+              "transition": "judge_step"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "probe_run": {
+        "action": "run_property_probe",
+        "description": "Run the property test; append PASS/FAIL as a required check",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": [
+            "validation_results"
+          ]
+        },
+        "params": {
+          "working_directory": {
+            "$ref": "input.working_directory"
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
               "transition": "judge_step"
             }
           ]
@@ -11274,11 +11641,123 @@
           "rules": [
             {
               "condition": "true",
+              "transition": "reprobe_completion"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "reprobe_completion": {
+        "action": "reprobe_completion",
+        "description": "Re-probe completion criteria + artifact when the judge claims done",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "inference_response"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.do_verify == true",
+              "transition": "verify_completion"
+            },
+            {
+              "condition": "true",
               "transition": "decide"
             }
           ]
         },
         "publishes": [
+          "vbh_transcript",
+          "judge_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "verify_completion": {
+        "action": "inference",
+        "description": "Confirm genuine completion from the fresh re-probe",
+        "context": {
+          "required": [
+            "mission",
+            "vbh_transcript"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "ops/verify_completion",
+          "context_keys": [
+            "task_spec",
+            "vbh_transcript"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "task_spec",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.1"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "record_completion_verify"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "record_completion_verify": {
+        "action": "record_completion_verify",
+        "description": "Derive the verdict; restore the judge verdict for decide",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": [
+            "validation_results",
+            "judge_response"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "decide"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results",
           "inference_response"
         ],
         "effects": [],

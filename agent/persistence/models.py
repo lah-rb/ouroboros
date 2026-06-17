@@ -40,6 +40,10 @@ class MissionConfig(BaseModel):
     # Selects the controller flow and phase derivation; additive default
     # keeps pre-flow-set mission.json files loading unchanged.
     flow_set: str = "code_core"
+    # Capability profile (tb_adapter/task_judge): service | data_transform |
+    # invertible | repair | answer | plain. Gates which completion oracle rung
+    # fires (agent/actions/oracle_actions). "" disables profile-gated rungs.
+    task_profile: str = ""
     # How the structural phase creates files. "parallel": one batch
     # generation produces every file in shared context (cross-file
     # coherence), sliced and gated per-file, failures diagnosed
@@ -267,6 +271,15 @@ class InterfaceContract(BaseModel):
     symbol: str
     signature: str = ""
 
+    # Built raw from LLM output in the same ingest/replan path as ModuleSpec; a
+    # foreign repo or terse model can null any of these. Coerce to empty rather
+    # than crash the flow (downstream filters empty contracts) — matches the
+    # codebase's "tolerate shape, never fail validation mid-cycle" stance.
+    @field_validator("caller", "callee", "symbol", "signature", mode="before")
+    @classmethod
+    def _coerce_interface_str(cls, v):
+        return "" if v is None else v
+
 
 class DataShapeContract(BaseModel):
     """A data format contract between a data file and its consumer.
@@ -395,6 +408,53 @@ class ModuleSpec(BaseModel):
     defines: list[str] = Field(default_factory=list)
     imports_from: dict[str, list[str]] = Field(default_factory=dict)
 
+    # ModuleSpec is built raw from LLM output (unlike its from_llm_dict siblings),
+    # so it needs the same shape-tolerance: foreign-repo adoption + varied models
+    # emit imports as a bare list, defines as null, etc. Coerce rather than crash
+    # derive_directive_goals' replan (the brownfield path).
+    @field_validator("file", "responsibility", mode="before")
+    @classmethod
+    def _coerce_module_str(cls, v):
+        return "" if v is None else v
+
+    @field_validator("defines", mode="before")
+    @classmethod
+    def _coerce_defines(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v]
+        if isinstance(v, (list, tuple)):
+            return [str(x) for x in v]
+        return []
+
+    @field_validator("imports_from", mode="before")
+    @classmethod
+    def _coerce_imports_from(cls, v):
+        """Tolerate imports expressed as a list of module names.
+
+        imports_from is a ``{module: [symbols]}`` map, but models routinely emit
+        a bare list (``['numpy']`` — "imports these modules", symbols unnamed) or
+        ``null`` (imports nothing). Strict dict validation rejected both and
+        looped replan → ingest_workspace. Coerce: list → ``{name: []}`` per entry
+        (dict entries merged through), str → ``{s: []}``, None → ``{}``.
+        """
+        if v is None:
+            return {}
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            return {v: []}
+        if isinstance(v, (list, tuple)):
+            out: dict[str, list[str]] = {}
+            for item in v:
+                if isinstance(item, str):
+                    out[item] = []
+                elif isinstance(item, dict):
+                    out.update(item)
+            return out
+        return {}
+
 
 class ArchitectureState(BaseModel):
     """Structured, machine-readable architecture blueprint.
@@ -467,6 +527,28 @@ class ArchitectureState(BaseModel):
         if isinstance(v, (list, tuple)):
             return "; ".join(str(item) for item in v)
         return str(v)
+
+    @field_validator("run_command", "smoke_command", mode="before")
+    @classmethod
+    def _coerce_optional_command(cls, v):
+        """Treat a null command as 'none known' (empty).
+
+        A foreign or not-yet-runnable repo — e.g. an empty task container the
+        agent must still populate (ingest_workspace adopting a brownfield repo)
+        — has no run/smoke command, so the architecture LLM emits ``null`` for
+        these. The strict ``str`` type rejected ``None`` and crashed
+        parse_and_store_architecture's validation; an empty command is the
+        correct 'none known' representation (effective_smoke_command already
+        falls back accordingly).
+        """
+        return "" if v is None else v
+
+    @field_validator("working_directory", mode="before")
+    @classmethod
+    def _coerce_working_directory(cls, v):
+        """Same foreign-repo null case: a null working directory falls back to
+        the project root rather than failing validation."""
+        return "project root" if v is None else v
 
     @property
     def effective_smoke_command(self) -> str:

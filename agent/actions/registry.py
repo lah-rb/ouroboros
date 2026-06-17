@@ -313,8 +313,17 @@ def build_action_registry() -> ActionRegistry:
     )
     from agent.actions.operations_actions import (
         action_derive_task_goal,
+        action_detect_solver_task,
         action_judge_task_completion,
+        action_run_property_probe,
         action_store_completion_criteria,
+    )
+    from agent.actions.oracle_actions import (
+        action_check_output_sanity,
+        action_check_profile_oracle,
+        action_record_completion_verify,
+        action_record_output_sanity,
+        action_reprobe_completion,
     )
     from agent.actions.batch_structural_actions import (
         action_apply_batch_results,
@@ -356,6 +365,14 @@ def build_action_registry() -> ActionRegistry:
     registry.register("derive_task_goal", action_derive_task_goal)
     registry.register("store_completion_criteria", action_store_completion_criteria)
     registry.register("judge_task_completion", action_judge_task_completion)
+    # Oracle rungs (non-degeneracy / sanity — backstops the credulous judge)
+    registry.register("check_output_sanity", action_check_output_sanity)
+    registry.register("record_output_sanity", action_record_output_sanity)
+    # Verify-before-harvest: re-probe the completion before harvesting "done"
+    registry.register("reprobe_completion", action_reprobe_completion)
+    registry.register("record_completion_verify", action_record_completion_verify)
+    # Profile-gated rungs: liveness (service) / conservation (data) / round-trip
+    registry.register("check_profile_oracle", action_check_profile_oracle)
     registry.register("pdf_extract_sweep_next", action_pdf_extract_sweep_next)
     registry.register("extract_pdf_batch", action_extract_pdf_batch)
     registry.register("check_extraction_complete", action_check_extraction_complete)
@@ -375,6 +392,8 @@ def build_action_registry() -> ActionRegistry:
     registry.register("extract_search_queries", action_extract_search_queries)
     registry.register("exa_search", action_exa_search)
     registry.register("run_validation_checks", action_run_validation_checks)
+    registry.register("detect_solver_task", action_detect_solver_task)
+    registry.register("run_property_probe", action_run_property_probe)
     registry.register("log_validation_notes", action_log_validation_notes)
     registry.register("execute_project_setup", action_execute_project_setup)
     registry.register("apply_quality_gate_results", action_apply_quality_gate_results)

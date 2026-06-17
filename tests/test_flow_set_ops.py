@@ -87,11 +87,43 @@ def test_compiled_ops_wiring():
     assert c["ops_control"]["steps"]["dispatch_task"]["tail_call"]["flow"] == "ops_task"
     # ops_task reuses run_session verbatim and judges completion.
     steps = c["ops_task"]["steps"]
+    # Ground the cycle in the real working directory BEFORE planning, so the
+    # charter plans against actual files (not blind). load_state →
+    # gather_context (scan_project) → plan_provision.
+    assert (
+        steps["load_state"]["resolver"]["rules"][0]["transition"] == "gather_context"
+    )
+    assert steps["gather_context"]["action"] == "scan_project"
+    assert (
+        steps["gather_context"]["resolver"]["rules"][0]["transition"] == "plan_provision"
+    )
+    # The charter consumes the workspace manifest (grounded, not blind).
+    assert (
+        "workspace_context" in steps["plan_charter"]["prompt_template"]["context_keys"]
+    )
+    assert any(
+        pc.get("formatter") == "format_project_listing"
+        and pc.get("output_key") == "workspace_context"
+        for pc in steps["plan_charter"]["pre_compute"]
+    )
+    # Oracle rungs: the sanity floor gates the judge; verify-before-harvest
+    # re-probes the completion before "done" is harvested.
+    assert steps["run_checks"]["resolver"]["rules"][0]["transition"] == "check_sanity"
+    cs = {r["condition"]: r["transition"] for r in steps["check_sanity"]["resolver"]["rules"]}
+    assert cs["result.check_plausibility == true"] == "sanity_plausibility"
+    assert cs["true"] == "profile_oracle"  # sanity branch flows into the profile rung
+    # Profile-gated rung (service/data/invertible) sits before the probe/judge.
+    assert steps["profile_oracle"]["action"] == "check_profile_oracle"
+    assert steps["profile_oracle"]["resolver"]["rules"][0]["transition"] == "probe_gate"
+    assert steps["judge_step"]["resolver"]["rules"][0]["transition"] == "reprobe_completion"
+    rp = {r["condition"]: r["transition"] for r in steps["reprobe_completion"]["resolver"]["rules"]}
+    assert rp["result.do_verify == true"] == "verify_completion"
+    assert rp["true"] == "decide"
+    assert (
+        steps["record_completion_verify"]["resolver"]["rules"][0]["transition"] == "decide"
+    )
     # Provision the env BEFORE the work session (reuse project_ops's install
     # runner), so run_session stays observe-only and tb env-setup works.
-    assert (
-        steps["load_state"]["resolver"]["rules"][0]["transition"] == "plan_provision"
-    )
     assert steps["run_provision"]["action"] == "execute_project_setup"
     pp = {r["condition"]: r["transition"] for r in steps["plan_provision"]["resolver"]["rules"]}
     assert pp["result.tokens_generated > 0"] == "run_provision"

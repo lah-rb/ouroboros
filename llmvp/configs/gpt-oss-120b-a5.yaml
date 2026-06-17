@@ -26,11 +26,27 @@ model:
   batch_size: 512
   thinking: true
   thinking_mode: medium   # harmony "Reasoning: medium" (explicit; was the default)
-  # OPT-IN per-flow static-prefix KV cache. Validated correct (output-identical)
-  # + faster on gpt-oss (plain transformer, shallow flow states → save_state is
-  # sound). Off by default until proven on a real routed run; flip to true to
-  # experiment. Inert unless callers pass static_prefix + flow_cache_key.
+  # gpt-oss-120b uses sliding-window attention (128-tok window on alternating
+  # layers). swa_full keeps the FULL KV for those layers so the ~1809-tok static
+  # prefix is consistent across save_state/load_state — without it, restoring a
+  # state whose SWA half only held a 128-tok tail is inconsistent at the window
+  # boundary (~pos 1809) and the next decode fails `llama_decode code -3`. This is
+  # the root cause of the corruption that disabled flow_kv_cache; swa_full fixes
+  # it. kv_unified bounds the extra SWA-KV cost on unified (Metal) memory.
+  swa_full: true
+  kv_unified: true
+  # OPT-IN per-flow static-prefix KV cache. Re-enabled 2026-06-16 now that
+  # swa_full removes the SWA window-boundary corruption (the `code -3` at pos
+  # 1809). Inert unless callers pass static_prefix + flow_cache_key.
   flow_kv_cache: true
+  # gpt-oss uses the save_state/load_state session path, which corrupts the 120B
+  # KV at deep context. A 6h/80-task sweep crashed the server with `llama_decode
+  # code -1` (Invalid input batch at Pos 2174) inside session_turn, right after a
+  # 12-turn / 1020s interactive session (zork/maze class). session_full_replay
+  # re-prefills each turn from a pristine snapshot — no per-turn save/load/seq_rm
+  # state surgery — bypassing the corruption locus. Slightly slower per deep turn,
+  # but deterministic and crash-proof (the same mitigation qwen/step37 already use).
+  session_full_replay: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

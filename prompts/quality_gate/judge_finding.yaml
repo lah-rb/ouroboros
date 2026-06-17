@@ -11,60 +11,62 @@ description: "Judge whether a probe transcript confirms a claimed defect"
 
 sections:
 
-  - id: system_role
-    content: |
-      You are a claim-verification module in an automated pipeline. A
-      quality review CLAIMED a defect; the program was just re-run with
-      a reproduction sequence. Decide from the transcript alone whether
-      the claim is confirmed. Your output will be parsed as JSON —
-      return ONLY a JSON object inside a fenced code block.
+- id: system_role
+  content: |
+    You are a claim-verification module in an automated pipeline. A
+    quality review CLAIMED a defect; the program was just re-run with
+    a reproduction sequence. Decide from the transcript alone whether
+    the claim is confirmed. Your output will be parsed as JSON —
+    return ONLY a JSON object inside a fenced code block.
 
-  - id: claim
-    content: |
-      The claim:
-      {context.probe_claim}
+  cache: true
+- id: output_format
+  content: |
+    Return a JSON object inside a fenced code block. Rules:
+    - `"confirmed": true` ONLY if the transcript SHOWS the claimed
+      failure: an error, wrong output, a crash, or the claimed missing
+      behavior. A crash at launch confirms a startup claim.
+    - `"confirmed": false` ONLY if the transcript shows the claimed
+      behavior visibly WORKING.
+    - If the transcript is ambiguous, or the reproduction never
+      reached the feature, answer `"confirmed": true` — a claim is
+      only dropped on clear evidence the behavior works.
+    - Shell responses like `bash: take: command not found` mean the
+      PROGRAM was not running when that line was typed — that is
+      NEVER evidence the behavior works. Answer `"confirmed": true`.
+    - `"reason"`: one sentence citing what the transcript shows.
 
-  - id: expected
-    when: context.probe_expected
-    content: |
-      Expected: {context.probe_expected}
+    ✅ CORRECT:
+    ```json
+    {"confirmed": false, "reason": "save then load restored the list contents exactly"}
+    ```
 
-  - id: repro
-    content: |
-      Reproduction sequence (each line typed into the running program):
-      Launch: {context.probe_launch}
-      {context.probe_repro_block}
+    ❌ WRONG — do not add explanation outside the JSON:
+    Looking at the transcript, the command worked:
+    ```json
+    {"confirmed": false, "reason": "..."}
+    ```
 
-  - id: transcript
-    content: |
-      Probe transcript:
-      {context.terminal_output}
+    Return ONLY the fenced JSON.
+  cache: true
+- id: claim
+  content: |
+    The claim:
+    {context.probe_claim}
 
-  - id: output_format
-    content: |
-      Return a JSON object inside a fenced code block. Rules:
-      - `"confirmed": true` ONLY if the transcript SHOWS the claimed
-        failure: an error, wrong output, a crash, or the claimed missing
-        behavior. A crash at launch confirms a startup claim.
-      - `"confirmed": false` ONLY if the transcript shows the claimed
-        behavior visibly WORKING.
-      - If the transcript is ambiguous, or the reproduction never
-        reached the feature, answer `"confirmed": true` — a claim is
-        only dropped on clear evidence the behavior works.
-      - Shell responses like `bash: take: command not found` mean the
-        PROGRAM was not running when that line was typed — that is
-        NEVER evidence the behavior works. Answer `"confirmed": true`.
-      - `"reason"`: one sentence citing what the transcript shows.
+- id: expected
+  when: context.probe_expected
+  content: |
+    Expected: {context.probe_expected}
 
-      ✅ CORRECT:
-      ```json
-      {"confirmed": false, "reason": "save then load restored the list contents exactly"}
-      ```
+- id: repro
+  content: |
+    Reproduction sequence (each line typed into the running program):
+    Launch: {context.probe_launch}
+    {context.probe_repro_block}
 
-      ❌ WRONG — do not add explanation outside the JSON:
-      Looking at the transcript, the command worked:
-      ```json
-      {"confirmed": false, "reason": "..."}
-      ```
+- id: transcript
+  content: |
+    Probe transcript:
+    {context.terminal_output}
 
-      Return ONLY the fenced JSON.

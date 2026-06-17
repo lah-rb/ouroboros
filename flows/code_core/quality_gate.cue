@@ -52,6 +52,7 @@ quality_gate: #FlowDefinition & {
 			"architecture_smoke_command", // non-interactive startup check
 			"architecture",
 			"mode", // "checkpoint" or "completion", default "completion"
+			"task_profile", // gates the profile oracle (repair → regression rung)
 		]
 	}
 
@@ -129,6 +130,24 @@ quality_gate: #FlowDefinition & {
 			description: "Execute all deterministic quality checks"
 			context: required: ["inference_response"]
 			params: max_checks: 20
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "profile_oracle"}]
+			}
+			publishes: ["validation_results"]
+		}
+
+		// Profile-gated oracle (repair → regression). task_profile is threaded in
+		// as a flow input (quality_gate holds no mission object); for a repair task
+		// the dispatcher runs pytest collect-only and flags a fix that broke test
+		// collection (structural collateral). Appends to validation_results so the
+		// break feeds the gate summary. Skips every other profile.
+		profile_oracle: #StepDefinition & {
+			action:      "check_profile_oracle"
+			description: "Profile-gated oracle (repair → no-collateral regression)"
+			context: {
+				optional: ["mission", "validation_results", "task_profile"]
+			}
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "gather_dep_info"}]

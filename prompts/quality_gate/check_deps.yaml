@@ -12,68 +12,71 @@ description: "Check that all imported packages are declared in the dependency ma
 
 sections:
 
-  - id: system_role
-    content: |
-      You are a dependency coverage checker in an automated pipeline.
-      Your output will be parsed as JSON. Return ONLY a JSON object
-      inside a fenced code block — no commentary or explanation.
+- id: system_role
+  content: |
+    You are a dependency coverage checker in an automated pipeline.
+    Your output will be parsed as JSON. Return ONLY a JSON object
+    inside a fenced code block — no commentary or explanation.
 
-  - id: imports
-    content: |
-      Import statements found in source files:
-      {context.dep_check_imports}
+  cache: true
+- id: instructions
+  content: |
+    Compare the imports against the declared dependencies.
+    Identify third-party packages that are IMPORTED but NOT DECLARED
+    in the dependency manifest.
 
-  - id: manifest
-    content: |
-      Dependency manifest file(s):
-      {context.dep_check_manifest}
+    Rules:
+    - IGNORE standard library modules (e.g. os, sys, json, pathlib for Python;
+      fs, path, http for Node.js; std:: for Rust).
+    - IGNORE relative imports (from . import, from .. import, ./local).
+    - IGNORE project-internal imports (modules that exist as files in the project).
+    - Account for import-name vs package-name mismatches:
+      e.g. "import yaml" requires package "pyyaml",
+      "import cv2" requires "opencv-python",
+      "import PIL" requires "Pillow",
+      "import sklearn" requires "scikit-learn".
+    - For the install_command, use the appropriate tool for the project
+      (pip install, uv add, npm install, cargo add, etc.).
 
-  - id: instructions
-    content: |
-      Compare the imports against the declared dependencies.
-      Identify third-party packages that are IMPORTED but NOT DECLARED
-      in the dependency manifest.
+  cache: true
+- id: output_format
+  content: |
+    ✅ CORRECT — missing deps found:
+    ```json
+    {
+      "missing_dependencies": ["pyyaml", "requests"],
+      "details": [
+        {"import": "yaml", "package": "pyyaml", "file": "loader.py"},
+        {"import": "requests", "package": "requests", "file": "api.py"}
+      ],
+      "install_command": "uv add pyyaml requests"
+    }
+    ```
 
-      Rules:
-      - IGNORE standard library modules (e.g. os, sys, json, pathlib for Python;
-        fs, path, http for Node.js; std:: for Rust).
-      - IGNORE relative imports (from . import, from .. import, ./local).
-      - IGNORE project-internal imports (modules that exist as files in the project).
-      - Account for import-name vs package-name mismatches:
-        e.g. "import yaml" requires package "pyyaml",
-        "import cv2" requires "opencv-python",
-        "import PIL" requires "Pillow",
-        "import sklearn" requires "scikit-learn".
-      - For the install_command, use the appropriate tool for the project
-        (pip install, uv add, npm install, cargo add, etc.).
+    ✅ CORRECT — all deps covered:
+    ```json
+    {
+      "missing_dependencies": [],
+      "details": [],
+      "install_command": ""
+    }
+    ```
 
-  - id: output_format
-    content: |
-      ✅ CORRECT — missing deps found:
-      ```json
-      {
-        "missing_dependencies": ["pyyaml", "requests"],
-        "details": [
-          {"import": "yaml", "package": "pyyaml", "file": "loader.py"},
-          {"import": "requests", "package": "requests", "file": "api.py"}
-        ],
-        "install_command": "uv add pyyaml requests"
-      }
-      ```
+    ❌ WRONG — do not add explanation:
+    After checking the imports, I found that...
+    ```json
+    {"missing_dependencies": ["pyyaml"]}
+    ```
 
-      ✅ CORRECT — all deps covered:
-      ```json
-      {
-        "missing_dependencies": [],
-        "details": [],
-        "install_command": ""
-      }
-      ```
+    Return ONLY the fenced JSON.
+  cache: true
+- id: imports
+  content: |
+    Import statements found in source files:
+    {context.dep_check_imports}
 
-      ❌ WRONG — do not add explanation:
-      After checking the imports, I found that...
-      ```json
-      {"missing_dependencies": ["pyyaml"]}
-      ```
+- id: manifest
+  content: |
+    Dependency manifest file(s):
+    {context.dep_check_manifest}
 
-      Return ONLY the fenced JSON.

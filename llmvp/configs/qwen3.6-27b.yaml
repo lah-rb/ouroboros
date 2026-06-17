@@ -21,6 +21,7 @@ model:
   verbose: false
   flash_attention: true
   batch_size: 512
+  thinking: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

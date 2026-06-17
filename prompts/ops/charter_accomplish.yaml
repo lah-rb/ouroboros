@@ -11,11 +11,13 @@ description: "Write an operator brief to accomplish a terminal task"
 
 sections:
 
-  # Layout: static-first / dynamic-last. The invariant head (role, task,
-  # instruction) is cache: true and pinned per-flow in the KV cache (opt-in:
-  # config.model.flow_kv_cache); the per-cycle feedback is the only dynamic
-  # section and comes LAST (recency slot + ends the cached prefix). Safe at
-  # Ouroboros's <5%-of-window context (see PROMPTING_CONVENTIONS).
+  # Layout: CROSS-TASK-static head, then per-task content, then per-cycle tail.
+  # The role + instruction are identical for EVERY task, so they lead as the
+  # contiguous cache: true run — making the flow KV-cache key invariant across
+  # tasks (no task_spec in it), so one BUILD per flow warms the whole bench (the
+  # `warm` launch mode pre-builds it). The per-task `task` and the per-cycle
+  # `workspace`/`feedback` sit AFTER the cache boundary as the dynamic suffix.
+  # Safe at Ouroboros's <5%-of-window context (see PROMPTING_CONVENTIONS).
   - id: system_role
     cache: true
     content: |
@@ -24,12 +26,6 @@ sections:
       will read it and execute it. The goal is to get the task DONE in the live
       environment, not to test or explore. Write prose, no JSON, no code fences
       around the whole brief.
-
-  - id: task
-    cache: true
-    content: |
-      ## Task to accomplish
-      {context.task_spec}
 
   - id: instruction
     cache: true
@@ -45,6 +41,12 @@ sections:
       files, read what exists) so the steps fit the actual environment. If a
       step depends on a previous result, say so. If the prior-attempt feedback
       (below) points at a failure, fix that first.
+      If the task requires producing a file that does not exist yet (a script, a
+      config, an output), a step MUST CREATE it — e.g. `cat > file <<'EOF' … EOF`
+      with the full contents — before any step that runs it. Don't describe the
+      file as if it already exists; write it. But only create the DELIVERABLE the
+      task asks for — NEVER overwrite or recreate input/data files that are
+      already present (read and use them as they are).
 
       ## DONE WHEN
       One or two sentences: the observable end state that means the task is
@@ -52,6 +54,30 @@ sections:
       service that responds).
 
       Target: under 180 words.
+
+  # ── cache boundary ── everything below is dynamic (not cached) ──
+
+  # Per-task: the task to accomplish. After the cache boundary so the cached
+  # prefix stays cross-task-invariant; cheap to re-eval each cycle.
+  - id: task
+    content: |
+      ## Task to accomplish
+      {context.task_spec}
+
+  # Dynamic tail (non-cache) — the actual files in the working directory with a
+  # content/structure snippet, so the brief plans against what EXISTS instead of
+  # blind. Changes per cycle (files get created/edited), so it sits after the
+  # cached static head; omitted when the directory is empty (nothing to ground on
+  # — the task says what to create).
+  - id: workspace
+    when: context.workspace_context
+    content: |
+      ## FILES ALREADY IN THE WORKING DIRECTORY
+      Each file is shown with a content or structure snippet. Plan around what is
+      actually here — read these before changing them, and do not guess at
+      contents or assume the directory is empty.
+
+      {context.workspace_context}
 
   # Dynamic tail — last (recency) and ends the cached prefix.
   - id: feedback

@@ -110,7 +110,7 @@ class OuroborosAgent(BaseAgent):
             except Exception:
                 pass
 
-        flow_set = self._select_flow_set(instruction, task_dir)
+        flow_set, task_profile = self._select_flow_set(instruction, logging_dir)
 
         pm = PersistenceManager(host_tmp)
         pm.init_agent_dir()
@@ -120,6 +120,7 @@ class OuroborosAgent(BaseAgent):
             config=MissionConfig(
                 working_directory=container_cwd,
                 flow_set=flow_set,
+                task_profile=task_profile,
                 llmvp_endpoint=_LLMVP,
                 # tb runs are hermetic — no web reach (keeps cross-model
                 # comparison from being confounded by network access).
@@ -229,15 +230,29 @@ class OuroborosAgent(BaseAgent):
 
     def _mirror_test_env(self, container, task_dir: Path | None, cwd: str) -> list[str]:
         """Install the deps the task's grading scripts install, into the
-        container's system python, so our completion checks see the same env the
-        bench grades in. Best-effort; failures are harmless (checks just fall
-        back to the barer env)."""
+        container's system python, so the agent's `python3 x.py` (and our checks)
+        see the same env the bench grades in. Best-effort.
+
+        The t-bench ubuntu-24-04 images ship NO pip and NO ensurepip (the graders
+        use `uv`), so a bare `python3 -m pip install` is a silent no-op — which is
+        exactly why csv-class tasks thrashed forever on install. So: ensure pip
+        first (`apt-get install python3-pip`, ~15s), THEN install with
+        --break-system-packages (PEP-668). Returns the deps it attempted."""
         if task_dir is None:
             return []
         pkgs = self._extract_deps(task_dir)
         if not pkgs:
             return []
         try:
+            has_pip = (
+                container.exec_run(cmd=["python3", "-m", "pip", "--version"]).exit_code
+                == 0
+            )
+            if not has_pip:
+                container.exec_run(cmd=["apt-get", "update", "-q"], workdir=cwd)
+                container.exec_run(
+                    cmd=["apt-get", "install", "-y", "-q", "python3-pip"], workdir=cwd
+                )
             container.exec_run(
                 cmd=[
                     "python3",
@@ -294,11 +309,28 @@ class OuroborosAgent(BaseAgent):
         except Exception:
             pass
 
-    def _select_flow_set(self, instruction: str, task_dir) -> str:
-        """Which flow set handles this task. For now an env override
-        (OURO_FLOW_SET, default "ops"); M3 replaces this with a task judge
-        (terminal-accomplish → ops, software-build/fix → code_core)."""
-        return os.environ.get("OURO_FLOW_SET", "ops")
+    def _select_flow_set(
+        self, instruction: str, logging_dir: Path | None
+    ) -> tuple[str, str]:
+        """Flow set + capability profile for this task (the M3 task judge): one
+        cold-temp LLMVP classification into (ops|code_core, profile), with keyword
+        heuristic fallbacks and an OURO_FLOW_SET override for the flow set. The
+        profile (service|data_transform|invertible|repair|answer|plain) gates the
+        completion oracle rungs. Decision + method logged to
+        logging_dir/ouroboros-routing.json for audit."""
+        from tb_adapter.task_judge import classify_flow_set
+
+        log_path = (
+            Path(logging_dir) / "ouroboros-routing.json" if logging_dir else None
+        )
+        flow_set, profile, method = classify_flow_set(
+            instruction, _LLMVP, log_path=log_path
+        )
+        print(
+            f"[ouroboros] flow_set={flow_set} profile={profile} ({method})",
+            file=sys.stderr,
+        )
+        return flow_set, profile
 
     # ── helpers ───────────────────────────────────────────────────────
     def _probe_container_cwd(self, container) -> str:

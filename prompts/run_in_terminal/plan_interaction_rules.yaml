@@ -18,8 +18,13 @@ content: |
               → Output: "Welcome! 3 collections loaded."
 
   ## Rules
-  Your job is to RUN and OBSERVE. Don't install packages, don't
-  edit files, don't try to repair the program — those are different
-  flows' responsibilities. If you see an error trace, read it, but
-  don't attempt to fix it; close the session and report what you
-  saw. Deprecation warnings are not failures.
+  Act according to YOUR BRIEF (this session's opening message):
+  - If your brief is to BUILD or ACCOMPLISH something, CREATE the files and run
+    the commands it requires — write a script with `cat > file <<'EOF' … EOF`,
+    install dependencies if needed (`pip install …`), then run and verify it.
+    Producing the deliverable is the whole point; don't just run a file that
+    doesn't exist yet — write it first.
+  - If your brief is to TEST or OBSERVE existing software, RUN and OBSERVE only —
+    don't install, edit, or repair the software under test; if you see an error
+    trace, read it and report it, don't fix it.
+  Deprecation warnings are not failures.
