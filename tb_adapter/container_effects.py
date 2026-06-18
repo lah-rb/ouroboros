@@ -99,6 +99,28 @@ class ContainerEffects(LocalEffects):
             demux=True,
         )
 
+    @staticmethod
+    def _interactive(command):
+        """Route a ``<shell> -c SCRIPT`` invocation through interactive bash so
+        the task's ~/.bashrc (aliases, env) loads — the SAME environment the
+        operator works in (``_pty_launcher`` uses ``bash -i`` for exactly this).
+
+        Without it, ``run_command``'s ``-c`` scripts run in a bare non-interactive
+        shell that silently drops task shell config — so a completion re-probe
+        verifies in a DIFFERENT environment than the work ran in and false-fails
+        (create-bucket aliases ``aws``→``awslocal`` in ~/.bashrc; the re-probe's
+        ``aws`` was the real CLI → "Unable to locate credentials"). Non-shell argv
+        (``test``/``find``/``grep`` parity helpers) is left untouched.
+        """
+        if (
+            isinstance(command, list)
+            and len(command) >= 3
+            and command[0] in ("/bin/sh", "sh", "/bin/bash", "bash")
+            and command[1] == "-c"
+        ):
+            return ["/bin/bash", "-i", "-c", command[2]]
+        return command
+
     async def run_command(
         self,
         command: list[str],
@@ -108,10 +130,14 @@ class ContainerEffects(LocalEffects):
         """Run a command INSIDE the task container (not on the host).
 
         ``command`` is a list[str] (the ops checks pass e.g.
-        ``["/bin/sh", "-c", "grep -qx 42 out"]``). We hand it to exec_run as-is —
-        no host path-scoping (``_resolve_path``), which would reject ``/app``.
+        ``["/bin/sh", "-c", "grep -qx 42 out"]``). A ``<shell> -c`` form is routed
+        through interactive bash (``_interactive``) so it sees the task's shell
+        env — matching the operator PTY — and the completion re-probe verifies in
+        the env the work actually ran in. We hand it to exec_run with no host
+        path-scoping (``_resolve_path``), which would reject ``/app``.
         """
         wd = working_dir or self._container_workdir
+        command = self._interactive(command)
         cmd_str = " ".join(command) if isinstance(command, list) else str(command)
         try:
             res = await asyncio.wait_for(
@@ -131,10 +157,19 @@ class ContainerEffects(LocalEffects):
             )
 
         out, err = res.output if res.output else (b"", b"")
+        err_text = (err or b"").decode("utf-8", "replace")
+        # `bash -i` on a non-tty pipe emits a cosmetic job-control notice; drop it
+        # so it doesn't pollute the re-probe transcript or a stderr check.
+        if "job control" in err_text or "terminal process group" in err_text:
+            err_text = "\n".join(
+                ln for ln in err_text.splitlines()
+                if "no job control" not in ln
+                and "cannot set terminal process group" not in ln
+            )
         return CommandResult(
             return_code=res.exit_code if res.exit_code is not None else -1,
             stdout=(out or b"").decode("utf-8", "replace"),
-            stderr=(err or b"").decode("utf-8", "replace"),
+            stderr=err_text,
             command=cmd_str,
         )
 

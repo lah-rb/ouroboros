@@ -118,3 +118,20 @@ async def test_search_files_content(fx):
     res = await fx.search_files("*.py", content_pattern="NEEDLE")
     assert any(m.file_path == "s1.py" for m in res.matches)
     assert all(m.file_path != "s2.py" for m in res.matches)
+
+
+def test_interactive_routes_shell_c_through_bash_i():
+    """run_command's ``<shell> -c SCRIPT`` must run in INTERACTIVE bash so the
+    task's ~/.bashrc (aliases/env) loads — the SAME env the operator PTY uses.
+    The create-bucket verify re-probe false-failed ("Unable to locate
+    credentials") because ``/bin/sh -c`` skipped the ``aws``→``awslocal`` alias;
+    non-shell argv (test/find/grep parity) must pass through untouched. Pure
+    function — no docker needed.
+    """
+    from tb_adapter.container_effects import ContainerEffects
+
+    f = ContainerEffects._interactive
+    assert f(["/bin/sh", "-c", "aws s3 ls"]) == ["/bin/bash", "-i", "-c", "aws s3 ls"]
+    assert f(["bash", "-c", "x"]) == ["/bin/bash", "-i", "-c", "x"]
+    assert f(["test", "-e", "/app/x"]) == ["test", "-e", "/app/x"]
+    assert f(["find", ".", "-name", "*.sh"]) == ["find", ".", "-name", "*.sh"]
