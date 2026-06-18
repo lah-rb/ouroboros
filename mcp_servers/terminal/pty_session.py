@@ -69,13 +69,17 @@ CPU_SAMPLE_MIN_INTERVAL_S = 0.08  # throttle ps sampling during a byte lull
 
 # Container activity probe (sessions whose shell is a `docker exec` relay — tb
 # tasks). The host-pgrp CPU probe above sees only the idle relay, so we instead
-# sample the CONTAINER's own cumulative work counters (cpu + block IO + net
-# bytes) via `docker exec`; growth across the settle window ⇒ the container is
-# working (a --quiet download streams net bytes, a cache write grows block IO,
-# ds.map burns cpu). Like the CPU confirm this is purely conservative — it can
-# only DELAY a settle / DEFER the backstop, never settle early — and degrades to
+# sample the CONTAINER's own cumulative work counters via `docker exec`: cpu
+# usage (µs) and IO+net bytes, kept SEPARATE — they have wildly different units
+# and idle baselines, so summing them against one threshold reads idle as busy
+# (cpu-µs alone grows by thousands per window on an idle container). The window
+# is "busy" iff cpu OR bytes grew past its OWN threshold. Purely conservative:
+# can only DELAY a settle / DEFER the backstop, never settle early; degrades to
 # the byte/CPU path when the probe can't be sampled.
-CONTAINER_ACTIVITY_EPS = 4096  # counter growth over the window that counts as "active"
+CONTAINER_CPU_EPS_USEC = 150_000  # cpu-µs growth/window that counts as real compute
+#   (~0.15 core·s over a 0.75s window ≫ idle-daemon noise of a few thousand µs).
+CONTAINER_BYTES_EPS = 65_536  # IO+net byte growth/window that counts as active transfer
+#   (64 KiB ≫ idle keepalive/log chatter; a real download moves MB/s).
 CONTAINER_SAMPLE_MIN_INTERVAL_S = 0.4  # throttle docker-exec probing (it costs ~50-150ms)
 CONTAINER_HARD_MAX_MS = 420_000  # absolute ceiling (~7min): an active container defers the
 # backstop up to here. MUST stay below the agent's send_input RPC timeout
@@ -191,14 +195,14 @@ def _pgrp_cpu_seconds(pgrp: int) -> float | None:
     return total if seen else None
 
 
-def _container_activity(container_name: str) -> float | None:
-    """Monotonic 'work done' counter for a container — cpu usage + block IO +
-    net bytes, summed — sampled via one ``docker exec``. Growth between two reads
-    means the container is actively working; flat means idle. Returns None on any
-    failure (no docker, container gone, parse miss) so the caller degrades to the
-    byte/host-CPU settle path. The mixed units don't matter: any real work moves
-    the sum by orders of magnitude more than ``CONTAINER_ACTIVITY_EPS``, while an
-    idle bash moves it ~0.
+def _container_activity(container_name: str) -> tuple[float, float] | None:
+    """Cumulative (cpu_usec, io_net_bytes) for a container, sampled via one
+    ``docker exec``. cpu_usec = cgroup cpu.stat usage; io_net_bytes = block IO
+    (rbytes+wbytes) + net rx+tx. Kept SEPARATE so each can be thresholded against
+    its own idle baseline (see CONTAINER_CPU_EPS_USEC / CONTAINER_BYTES_EPS).
+    Growth between two reads ⇒ the container is working. Returns None on any
+    failure (no docker, container gone, nothing parsed) so the caller degrades to
+    the byte/host-CPU settle path.
     """
     if not container_name:
         return None
@@ -216,13 +220,14 @@ def _container_activity(container_name: str) -> float | None:
     except (OSError, subprocess.SubprocessError):
         return None
 
-    total = 0.0
+    cpu = 0.0
+    byts = 0.0
     seen = False
     for line in out.splitlines():
         s = line.strip()
         if s.startswith("usage_usec"):  # cgroup v2 cpu.stat
             try:
-                total += float(s.split()[1])
+                cpu += float(s.split()[1])
                 seen = True
             except (IndexError, ValueError):
                 pass
@@ -230,18 +235,18 @@ def _container_activity(container_name: str) -> float | None:
             for tok in s.split():
                 if tok.startswith(("rbytes=", "wbytes=")):
                     try:
-                        total += float(tok.split("=", 1)[1])
+                        byts += float(tok.split("=", 1)[1])
                         seen = True
                     except ValueError:
                         pass
         elif ":" in s and not s.startswith(("Inter", "face", "lo:")):  # /proc/net/dev
             try:
                 cols = s.split(":", 1)[1].split()
-                total += float(cols[0]) + float(cols[8])  # rx + tx bytes
+                byts += float(cols[0]) + float(cols[8])  # rx + tx bytes
                 seen = True
             except (IndexError, ValueError):
                 pass
-    return total if seen else None
+    return (cpu, byts) if seen else None
 
 
 def _diagnose_child(pid: int) -> str:
@@ -1126,17 +1131,21 @@ class PTYSessionManager:
                     )
                     now = loop.time()  # the probe took time; re-read the clock
                     if work is not None:
-                        container_samples.append((now, work))
+                        container_samples.append((now, work[0], work[1]))  # t, cpu, bytes
                     last_container_sample_t = now
                 container_samples = [
                     c for c in container_samples if c[0] >= now - settle_s
                 ]
-                container_busy = (
-                    len(container_samples) >= 2
-                    and (container_samples[-1][0] - container_samples[0][0])
-                    >= settle_s * 0.5
-                    and (container_samples[-1][1] - container_samples[0][1])
-                    >= CONTAINER_ACTIVITY_EPS
+                # Busy iff cpu OR bytes grew past its OWN threshold over a window
+                # spanning ≥ half the settle time. Separate thresholds: cpu-µs and
+                # byte counts have different units and idle baselines.
+                container_busy = len(container_samples) >= 2 and (
+                    container_samples[-1][0] - container_samples[0][0]
+                ) >= settle_s * 0.5 and (
+                    (container_samples[-1][1] - container_samples[0][1])
+                    >= CONTAINER_CPU_EPS_USEC
+                    or (container_samples[-1][2] - container_samples[0][2])
+                    >= CONTAINER_BYTES_EPS
                 )
                 if container_busy:
                     last_container_active_t = now
