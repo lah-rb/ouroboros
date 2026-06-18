@@ -27,4 +27,5 @@ dependencies = [
     "tree-sitter-python>=0.25.0",
     "tree-sitter-language-pack>=1.8.1",
     "weasyprint>=68.1",
+    "jedi>=0.20.0",
 ]
