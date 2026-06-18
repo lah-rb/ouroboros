@@ -12,6 +12,7 @@ import json
 import logging
 from typing import Any
 
+from agent import languages
 from agent.models import StepInput, StepOutput
 from agent.repomap import extract_file_symbols, is_tree_sitter_available
 from agent.actions.refinement_actions import extract_code_from_response
@@ -52,12 +53,12 @@ def _ensure_parsed(value: Any) -> Any:
 # file yields zero tree-sitter symbols, so it reaches the "no editable symbols"
 # return below — that's where this flag routes file_ops to data_patch instead
 # of a full rewrite.
-_DATA_PATCH_EXTS = {"yaml", "yml"}
+# The data-patchable set now lives in agent/languages.py (languages.is_data_patch).
 
 
 def _data_patch_eligible(path: str) -> bool:
     ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-    return ext in _DATA_PATCH_EXTS
+    return languages.is_data_patch(ext)
 
 
 def _build_symbol_table(file_path: str, file_content: str) -> list[dict[str, Any]]:

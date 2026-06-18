@@ -379,7 +379,7 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
     # CONTENT when a traced symbol reads it; this just ensures the model knows
     # data files exist and are valid trace targets even when not connected to
     # any traced symbol — a bug may live in the data, not the code.
-    from agent.actions.pipeline_actions import _DATA_EXTENSIONS
+    from agent import languages
 
     data_file_names: list[str] = []
     if isinstance(file_context, dict):
@@ -392,7 +392,7 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
             for entry in getattr(listing, "entries", []) or []:
                 p = getattr(entry, "path", "")
                 ext = p.rsplit(".", 1)[-1].lower() if "." in p else ""
-                if ext in _DATA_EXTENSIONS and not getattr(entry, "is_dir", False):
+                if languages.is_data(ext) and not getattr(entry, "is_dir", False):
                     data_file_names.append(p)
         except Exception:  # noqa: BLE001 - enumeration is best-effort
             pass

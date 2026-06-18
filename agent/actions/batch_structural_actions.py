@@ -23,8 +23,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from agent import languages
 from agent.actions.pipeline_actions import (
-    _DATA_EXTENSIONS,
     _load_env_config,
     _parse_data_file,
     action_run_validation_checks_from_env,
@@ -124,7 +124,7 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
         (
             f
             for f in written
-            if "." in f and f.rsplit(".", 1)[-1].lower() not in _DATA_EXTENSIONS
+            if "." in f and not languages.is_data(f.rsplit(".", 1)[-1])
         ),
         "",
     )
@@ -201,7 +201,7 @@ async def action_run_batch_file_checks(step_input: StepInput) -> StepOutput:
     code_by_ext: dict[str, list[str]] = {}
     for f in files:
         ext = f.rsplit(".", 1)[-1].lower() if "." in f else ""
-        if ext in _DATA_EXTENSIONS:
+        if languages.is_data(ext):
             try:
                 fc = await effects.read_file(f)
                 content = (

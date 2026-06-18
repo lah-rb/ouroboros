@@ -21,6 +21,7 @@ import ast as stdlib_ast
 import logging
 import re
 
+from agent import languages
 from agent.actions.refinement_actions import extract_code_from_response
 from agent.models import StepInput, StepOutput
 from agent.repomap import extract_file_symbols
@@ -226,30 +227,11 @@ async def action_prepare_frame(step_input: StepInput) -> StepOutput:
     )
 
 
-# Per-extension (display label, code-fence) for the frame prompt. Unknown → a
-# neutral "file" / no fence; the extractor strips any fence regardless.
-_FRAME_LANG = {
-    ".py": ("Python file", "python"),
-    ".sh": ("shell script", "bash"),
-    ".bash": ("shell script", "bash"),
-    ".zsh": ("shell script", "bash"),
-    ".js": ("JavaScript file", "javascript"),
-    ".mjs": ("JavaScript file", "javascript"),
-    ".cjs": ("JavaScript file", "javascript"),
-    ".jsx": ("JavaScript file", "javascript"),
-    ".ts": ("TypeScript file", "typescript"),
-    ".tsx": ("TypeScript file", "tsx"),
-    ".go": ("Go file", "go"),
-    ".rb": ("Ruby file", "ruby"),
-    ".rs": ("Rust file", "rust"),
-    ".java": ("Java file", "java"),
-}
-
-
 def _frame_lang(file_path: str) -> tuple[str, str]:
-    import os
-
-    return _FRAME_LANG.get(os.path.splitext(file_path or "")[1].lower(), ("file", ""))
+    """(display label, code-fence) for the frame prompt — delegates to the
+    canonical language registry. Unknown → ('file', ''); the extractor strips
+    any fence regardless."""
+    return languages.frame_label_and_fence(file_path)
 
 
 _FRAME_INSTRUCTION = (

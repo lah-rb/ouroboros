@@ -48,6 +48,7 @@ from typing import Any
 
 import yaml
 
+from agent import languages
 from agent.models import OptionSource, Ref, Section, TurnDefinition
 from agent.schema_registry import SchemaRegistry, get_default_registry
 
@@ -67,47 +68,9 @@ _BANNERS: dict[str, str] = {
     "prose": "=== WRITING ===",
 }
 
-# Filename-extension hints used in the code envelope's example block.
-# Covers the languages the project actually generates today; unknown
-# languages fall back to using the language name itself as the extension.
-_LANGUAGE_EXTENSIONS: dict[str, str] = {
-    "python": "py",
-    "javascript": "js",
-    "typescript": "ts",
-    "rust": "rs",
-    "go": "go",
-    "ruby": "rb",
-    "java": "java",
-    "swift": "swift",
-    "kotlin": "kt",
-    "scala": "scala",
-    "bash": "sh",
-    "shell": "sh",
-    "sh": "sh",
-    "yaml": "yaml",
-    "toml": "toml",
-    "json": "json",
-    "markdown": "md",
-    "md": "md",
-    "html": "html",
-    "css": "css",
-}
-
-# Map a file extension to its markdown fence tag where they differ (e.g. `.py`
-# → ```python). Extensions absent here use themselves as the tag (`.yaml` →
-# ```yaml, `.toml` → ```toml). Used to make the full-file code envelope's
-# example tag follow the ACTUAL target format rather than the create turn's
-# coarse `response.language: "python"` default.
-_EXTENSION_FENCE: dict[str, str] = {
-    "py": "python",
-    "js": "javascript",
-    "ts": "typescript",
-    "rb": "ruby",
-    "rs": "rust",
-    "yml": "yaml",
-    "md": "markdown",
-    "sh": "bash",
-}
+# The code-envelope example block's language↔extension↔fence hints now live in
+# the canonical agent/languages.py registry (languages.ext_for_name /
+# fence_for_ext), keyed there as a name→ext map + an ext→fence map.
 
 # Namespace reference pattern — matches {input.x}, {context.y}, {meta.z}.
 # Deliberately compatible with the existing PromptRenderer pattern so
@@ -482,11 +445,11 @@ class TurnRenderer:
             # Prefer the target's actual format for the fence tag + example
             # extension; fall back to response.language when no target is known.
             if target_ext:
-                fence_lang = _EXTENSION_FENCE.get(target_ext, target_ext)
+                fence_lang = languages.fence_for_ext(target_ext)
                 ext = target_ext
             else:
                 fence_lang = language
-                ext = _LANGUAGE_EXTENSIONS.get(language, language)
+                ext = languages.ext_for_name(language)
             fenced_example = (
                 f"```{fence_lang}\n"
                 f"# === FILE: path/to/file.{ext} ===\n"

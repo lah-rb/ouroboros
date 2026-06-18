@@ -16,6 +16,8 @@ from typing import Any, Literal
 
 import networkx as nx
 
+from agent import languages
+
 # ── Data Models ───────────────────────────────────────────────────────
 
 
@@ -194,71 +196,9 @@ try:
 except ImportError:
     pass
 
-# File extension → language-pack grammar name.
-_LANG_BY_EXT: dict[str, str] = {
-    ".sh": "bash",
-    ".bash": "bash",
-    ".zsh": "bash",
-    ".js": "javascript",
-    ".mjs": "javascript",
-    ".cjs": "javascript",
-    ".jsx": "javascript",
-    ".ts": "typescript",
-    ".tsx": "tsx",
-    ".go": "go",
-    ".rb": "ruby",
-    ".rs": "rust",
-    ".java": "java",
-}
-
-# Per-language definition node types → SymbolDef.kind. class-like kinds
-# (class/module) become the `parent` of nested method definitions.
-_DEF_NODE_KINDS: dict[str, dict[str, str]] = {
-    "bash": {"function_definition": "function"},
-    "javascript": {
-        "function_declaration": "function",
-        "generator_function_declaration": "function",
-        "class_declaration": "class",
-        "method_definition": "method",
-    },
-    "typescript": {
-        "function_declaration": "function",
-        "generator_function_declaration": "function",
-        "class_declaration": "class",
-        "interface_declaration": "class",
-        "method_definition": "method",
-        "method_signature": "method",
-    },
-    "tsx": {
-        "function_declaration": "function",
-        "class_declaration": "class",
-        "interface_declaration": "class",
-        "method_definition": "method",
-    },
-    "go": {
-        "function_declaration": "function",
-        "method_declaration": "method",
-        "type_declaration": "class",
-    },
-    "ruby": {
-        "method": "method",
-        "singleton_method": "method",
-        "class": "class",
-        "module": "module",
-    },
-    "rust": {
-        "function_item": "function",
-        "struct_item": "class",
-        "enum_item": "class",
-        "trait_item": "class",
-    },
-    "java": {
-        "method_declaration": "method",
-        "constructor_declaration": "method",
-        "class_declaration": "class",
-        "interface_declaration": "class",
-    },
-}
+# Extension→grammar and grammar→definition-node-kinds now live in the canonical
+# agent/languages.py registry (via languages.grammar_for_ext /
+# def_node_kinds_for_grammar). The tree-sitter MACHINERY below stays here.
 
 _TS_PARSER_CACHE: dict[str, Any] = {}
 
@@ -284,7 +224,7 @@ def parse_has_error(file_path: str, content: str):
     validated separately with stdlib ast, which is precise.)"""
     import os
 
-    lang = _LANG_BY_EXT.get(os.path.splitext(file_path)[1].lower())
+    lang = languages.grammar_for_ext(os.path.splitext(file_path)[1].lower())
     if not lang:
         return None
     parser = _ts_parser_for(lang)
@@ -329,7 +269,7 @@ def _extract_generic_tree_sitter(
     parser = _ts_parser_for(lang)
     if parser is None:
         return [], []
-    def_kinds = _DEF_NODE_KINDS.get(lang, {})
+    def_kinds = languages.def_node_kinds_for_grammar(lang)
     if not def_kinds:
         return [], []
     try:
@@ -726,7 +666,7 @@ def extract_file_symbols(
     import os
 
     ext = os.path.splitext(file_path)[1].lower()
-    lang = _LANG_BY_EXT.get(ext)
+    lang = languages.grammar_for_ext(ext)
     if lang and _LANG_PACK_AVAILABLE:
         return _extract_generic_tree_sitter(file_path, content, lang)
     return [], []

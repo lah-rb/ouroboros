@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 
+from agent import languages
 from agent.models import StepInput, StepOutput
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ _SKIP_EXTENSIONS = {
 # give them a PARSE-VALIDITY check (the data analog of the Python syntax gate)
 # via action_check_data_file. Parse-only — NOT style/lint — so a real
 # malformation blocks the structural goal while formatting nits don't.
-_DATA_EXTENSIONS = {"yaml", "yml", "json", "toml"}
+# The data-extension set now lives in agent/languages.py (languages.is_data).
 
 
 async def _load_env_config(effects) -> dict:
@@ -91,7 +92,7 @@ async def action_lookup_validation_env(step_input: StepInput) -> StepOutput:
     # Structured data files get a built-in parse-validity check (not env
     # commands, not set_env) — see action_check_data_file. Routed here before
     # the env lookup so it's consistent regardless of project tooling.
-    if ext in _DATA_EXTENSIONS:
+    if languages.is_data(ext):
         return StepOutput(
             result={"is_data_file": True},
             observations=f"Data file ({ext}) — parse-validity check",
@@ -602,25 +603,8 @@ _DEP_MANIFEST_NAMES = [
     "deno.jsonc",
 ]
 
-# Source extensions worth scanning for import statements.
-_SOURCE_EXTENSIONS = {
-    "py",
-    "js",
-    "ts",
-    "jsx",
-    "tsx",
-    "rs",
-    "go",
-    "rb",
-    "java",
-    "kt",
-    "kts",
-    "swift",
-    "dart",
-    "ex",
-    "exs",
-    "php",
-}
+# Source extensions worth scanning for imports now live in agent/languages.py
+# (languages.is_source).
 
 
 def _extract_import_lines(filepath: str, content: str) -> list[str]:
@@ -725,7 +709,7 @@ async def action_check_dependency_coverage(step_input: StepInput) -> StepOutput:
     import_map: dict[str, list[str]] = {}
     for filepath in sorted(project_files):
         ext = filepath.rsplit(".", 1)[-1].lower() if "." in filepath else ""
-        if ext not in _SOURCE_EXTENSIONS:
+        if not languages.is_source(ext):
             continue
         try:
             fc = await effects.read_file(filepath)
