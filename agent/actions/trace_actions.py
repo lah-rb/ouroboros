@@ -34,6 +34,44 @@ logger = logging.getLogger(__name__)
 # signature only for larger ones.
 SMALL_SYMBOL_MAX_LINES = 20
 
+# Full-file fallback budget for symbol-less / unmatched trace targets. Matches the
+# repo-map formatter + dependency-file display cap (4000 chars) and the canonical
+# `_load_file_content` truncation marker, so a file with no symbols (a linear
+# shell script, config/data, or ANY non-Python file — the diagnose symbol table
+# is .py-only) is shown the same way an unparseable-grammar file is, instead of
+# returning "not found" and letting the model invent symbols (the
+# processing-pipeline trace-spin).
+FULLFILE_FALLBACK_MAX_CHARS = 4000
+
+
+def _full_file_fallback(
+    file_path: str, file_content: str, symbol_name: str, had_table: bool
+) -> StepOutput:
+    """Surface the target file's own content as the traced context when there is
+    no symbol to trace — the read-side analogue of the patch frame fallback, but
+    language-agnostic (plain text, no AST). Bounded + truncated like the
+    repo-map / dependency-file display."""
+    reason = (
+        f"symbol {symbol_name!r} is not in the symbol table"
+        if had_table
+        else "this file has no extractable symbols"
+    )
+    if not file_content:
+        return StepOutput(
+            result={"traced": False, "symbol_count": 0},
+            observations=f"{reason} — and no file content to fall back to",
+            context_updates={"traced_context": ""},
+        )
+    body = file_content
+    if len(body) > FULLFILE_FALLBACK_MAX_CHARS:
+        body = body[:FULLFILE_FALLBACK_MAX_CHARS] + "\n# ... truncated ...\n"
+    view = f"{file_path or 'target file'} ({reason} — showing the full file):\n\n{body}"
+    return StepOutput(
+        result={"traced": True, "symbol_count": 0},
+        observations=f"{reason} — fell back to the full file ({len(body)} chars)",
+        context_updates={"traced_context": view},
+    )
+
 
 async def trace_function(step_input: StepInput) -> StepOutput:
     """Trace a symbol's execution context for diagnosis.
@@ -61,20 +99,23 @@ async def trace_function(step_input: StepInput) -> StepOutput:
     file_path = target_file.get("path", "")
     file_content = target_file.get("content", "")
 
-    if not symbol_name or not symbol_table:
+    if not symbol_name:
         return StepOutput(
             result={"traced": False, "symbol_count": 0},
-            observations="No symbol name or symbol table — cannot trace",
+            observations="No symbol name — cannot trace",
             context_updates={"traced_context": ""},
         )
 
     # ── 1. Find the target symbol ────────────────────────────────
-    target_sym = _find_symbol(symbol_name, symbol_table)
+    target_sym = _find_symbol(symbol_name, symbol_table) if symbol_table else None
     if not target_sym:
-        return StepOutput(
-            result={"traced": False, "symbol_count": 0},
-            observations=f"Symbol {symbol_name!r} not found in symbol table",
-            context_updates={"traced_context": ""},
+        # No symbol to trace — the file yields no symbols (symbol-less: a linear
+        # shell script, config/data, or any non-Python file, since the diagnose
+        # symbol table is .py-only) or the requested name isn't one of them.
+        # Show the file's own content (the frame) so the model reads the actual
+        # code instead of inventing symbols.
+        return _full_file_fallback(
+            file_path, file_content, symbol_name, bool(symbol_table)
         )
 
     target_body = target_sym.get("body", "")
