@@ -898,39 +898,44 @@ def _extract_symbol_table(
     file_path: str,
     content: str,
 ) -> list[dict[str, str]]:
-    """Extract a symbol table from file content via AST.
+    """Extract a symbol table from file content.
 
     Returns a lightweight list of symbol names and signatures — no bodies.
-    Used to give the model a structural map of the file.
-
-    Returns empty list for non-Python files or if parsing fails.
+    Used to give the model a structural map of the file. Works for ANY
+    tree-sitter-supported language (Python, bash, js, ts, go, ruby, rust, java)
+    via repomap — so diagnose can trace a bash function as readily as a Python
+    one; the stdlib-ast path is kept only as a Python-only fallback for when
+    tree-sitter isn't available. Empty for symbol-less or unsupported-grammar
+    files (the caller's full-file fallback then surfaces the content).
     """
-    if not content or not file_path.endswith(".py"):
+    if not content:
         return []
 
     try:
         from agent.repomap import extract_file_symbols, is_tree_sitter_available
 
-        if not is_tree_sitter_available():
-            # Fall back to AST-based signature extraction
+        if is_tree_sitter_available():
+            defs, _refs = extract_file_symbols(file_path, content)
+            symbols = []
+            for sym in defs:
+                if sym.kind in ("function", "method", "class"):
+                    qualified = f"{sym.parent}.{sym.name}" if sym.parent else sym.name
+                    symbols.append(
+                        {
+                            "name": qualified,
+                            "kind": sym.kind,
+                            "signature": sym.signature,
+                        }
+                    )
+            if symbols:
+                return symbols
+        # No tree-sitter, or it surfaced nothing: stdlib ast is Python-only.
+        if file_path.endswith(".py"):
             return _symbol_table_from_ast(content)
-
-        defs, _refs = extract_file_symbols(file_path, content)
-        symbols = []
-        for sym in defs:
-            if sym.kind in ("function", "method", "class"):
-                qualified = f"{sym.parent}.{sym.name}" if sym.parent else sym.name
-                symbols.append(
-                    {
-                        "name": qualified,
-                        "kind": sym.kind,
-                        "signature": sym.signature,
-                    }
-                )
-        return symbols
+        return []
     except Exception as e:
         logger.debug("Symbol extraction failed for %s: %s", file_path, e)
-        return _symbol_table_from_ast(content)
+        return _symbol_table_from_ast(content) if file_path.endswith(".py") else []
 
 
 def _symbol_table_from_ast(content: str) -> list[dict[str, str]]:
@@ -994,9 +999,11 @@ def _extract_imported_symbol_bodies(
     Used for smart dependency inclusion: instead of including the entire
     dependency file, include only the symbols we actually import.
 
-    Returns {symbol_name: body_text} for each found symbol.
+    Returns {symbol_name: body_text} for each found symbol. Language-agnostic:
+    bodies are sliced by repomap's tree-sitter byte offsets, which it produces
+    for every supported grammar (no longer Python-only).
     """
-    if not content or not file_path.endswith(".py"):
+    if not content:
         return {}
 
     try:

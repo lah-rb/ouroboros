@@ -275,6 +275,28 @@ def _ts_parser_for(lang: str):
     return _TS_PARSER_CACHE[lang]
 
 
+def parse_has_error(file_path: str, content: str):
+    """Soft syntax-validity check for a NON-Python file via its tree-sitter
+    grammar. Returns True if the parse tree contains error nodes, False if clean,
+    None if no grammar is available (caller should skip the check). Tree-sitter is
+    error-tolerant — it always yields a tree, marking ERROR nodes — so this is a
+    best-effort gate, used by the frame splice for bash/js/ts/go/etc. (Python is
+    validated separately with stdlib ast, which is precise.)"""
+    import os
+
+    lang = _LANG_BY_EXT.get(os.path.splitext(file_path)[1].lower())
+    if not lang:
+        return None
+    parser = _ts_parser_for(lang)
+    if parser is None:
+        return None
+    try:
+        tree = parser.parse(content.encode("utf-8"))
+    except Exception:
+        return None
+    return bool(tree.root_node.has_error)
+
+
 def _ts_node_name(node: Any) -> str:
     """Best-effort symbol name for a definition node across grammars."""
     name_node = node.child_by_field_name("name")

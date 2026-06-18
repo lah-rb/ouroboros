@@ -101,12 +101,13 @@ def build_frame(file_path, content):
     return "".join(out), preserved, True, ""
 
 
-def splice_frame(model_frame, preserved):
+def splice_frame(model_frame, preserved, file_path=""):
     """Replace each sentinel line in the model's edited frame with its preserved
     body. Returns (content, ok, reason). ok=False → caller falls back to rewrite.
 
     Validates: every preserved symbol's sentinel appears exactly once, no unknown
-    sentinels, and the spliced file parses.
+    sentinels, and the spliced file parses — Python via stdlib ast (precise),
+    other languages via tree-sitter error nodes, unknown grammars skipped.
     """
     out = []
     seen = set()
@@ -129,10 +130,19 @@ def splice_frame(model_frame, preserved):
     if missing:
         return "", False, f"missing sentinels: {sorted(missing)}"
     content = "".join(out)
-    try:
-        stdlib_ast.parse(content)
-    except SyntaxError as e:
-        return "", False, f"parse error after splice: {e}"
+    # Language-aware validity: Python via stdlib ast (precise); other grammars via
+    # tree-sitter error nodes; unknown/unsupported grammar skips (the sentinel
+    # round-trip above already guarantees every body is intact + placed once).
+    if file_path.endswith(".py") or not file_path:
+        try:
+            stdlib_ast.parse(content)
+        except SyntaxError as e:
+            return "", False, f"parse error after splice: {e}"
+    else:
+        from agent.repomap import parse_has_error
+
+        if parse_has_error(file_path, content) is True:
+            return "", False, "parse error after splice (tree-sitter error nodes)"
     return content, True, ""
 
 
@@ -216,27 +226,59 @@ async def action_prepare_frame(step_input: StepInput) -> StepOutput:
     )
 
 
+# Per-extension (display label, code-fence) for the frame prompt. Unknown → a
+# neutral "file" / no fence; the extractor strips any fence regardless.
+_FRAME_LANG = {
+    ".py": ("Python file", "python"),
+    ".sh": ("shell script", "bash"),
+    ".bash": ("shell script", "bash"),
+    ".zsh": ("shell script", "bash"),
+    ".js": ("JavaScript file", "javascript"),
+    ".mjs": ("JavaScript file", "javascript"),
+    ".cjs": ("JavaScript file", "javascript"),
+    ".jsx": ("JavaScript file", "javascript"),
+    ".ts": ("TypeScript file", "typescript"),
+    ".tsx": ("TypeScript file", "tsx"),
+    ".go": ("Go file", "go"),
+    ".rb": ("Ruby file", "ruby"),
+    ".rs": ("Rust file", "rust"),
+    ".java": ("Java file", "java"),
+}
+
+
+def _frame_lang(file_path: str) -> tuple[str, str]:
+    import os
+
+    return _FRAME_LANG.get(os.path.splitext(file_path or "")[1].lower(), ("file", ""))
+
+
 _FRAME_INSTRUCTION = (
-    "You are editing the MODULE FRAME of a Python file. {directive}\n\n"
+    "You are editing the FRAME of a {label} — the top-level code OUTSIDE any "
+    "function/class body. {directive}\n\n"
     "Rules:\n"
-    "- Edit ONLY module-level code: the docstring, imports, top-level statements, "
-    'and the `if __name__ == "__main__":` block.\n'
+    "- Edit ONLY top-level code: the file header/shebang, imports or includes, "
+    "top-level statements, and any entry-point block. Do NOT touch function or "
+    "class bodies.\n"
     "- Lines beginning with `# ⟦OUROBOROS-SYMBOL ...⟧` are placeholders for "
     "function/class bodies that are preserved elsewhere. Keep each such line "
     "EXACTLY as-is — do not edit, remove, reorder, or add them.\n"
-    "- Return the COMPLETE edited frame as one Python code block.\n\n"
-    "Frame:\n```python\n{frame}\n```"
+    "- Return the COMPLETE edited frame as one code block.\n\n"
+    "Frame:\n```{fence}\n{frame}\n```"
 )
 
 
 async def action_rewrite_frame_turn(step_input: StepInput) -> StepOutput:
     """Single inference turn: the model edits the frame per the directive."""
     effects = step_input.effects
+    file_path = _ctx(step_input, "target_file_path") or _ctx(step_input, "file_path")
     frame_text = _ctx(step_input, "frame_text")
     directive = _ctx(step_input, "import_directive") or _ctx(
         step_input, "flow_directive"
     )
-    prompt = _FRAME_INSTRUCTION.format(directive=directive, frame=frame_text)
+    label, fence = _frame_lang(file_path)
+    prompt = _FRAME_INSTRUCTION.format(
+        label=label, fence=fence, directive=directive, frame=frame_text
+    )
 
     model_frame = ""
     if effects:
@@ -278,7 +320,7 @@ async def action_splice_frame(step_input: StepInput) -> StepOutput:
             context_updates={},
         )
 
-    content, ok, reason = splice_frame(model_frame, preserved)
+    content, ok, reason = splice_frame(model_frame, preserved, file_path)
     if not ok:
         logger.warning("splice_frame: %s → falling back to rewrite", reason)
         return StepOutput(
