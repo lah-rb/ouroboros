@@ -67,6 +67,18 @@ SCREEN_HISTORY = 2000
 CPU_IDLE_EPS_S = 0.05  # CPU-seconds over the settle window that count as "active"
 CPU_SAMPLE_MIN_INTERVAL_S = 0.08  # throttle ps sampling during a byte lull
 
+# Container activity probe (sessions whose shell is a `docker exec` relay — tb
+# tasks). The host-pgrp CPU probe above sees only the idle relay, so we instead
+# sample the CONTAINER's own cumulative work counters (cpu + block IO + net
+# bytes) via `docker exec`; growth across the settle window ⇒ the container is
+# working (a --quiet download streams net bytes, a cache write grows block IO,
+# ds.map burns cpu). Like the CPU confirm this is purely conservative — it can
+# only DELAY a settle / DEFER the backstop, never settle early — and degrades to
+# the byte/CPU path when the probe can't be sampled.
+CONTAINER_ACTIVITY_EPS = 4096  # counter growth over the window that counts as "active"
+CONTAINER_SAMPLE_MIN_INTERVAL_S = 0.4  # throttle docker-exec probing (it costs ~50-150ms)
+CONTAINER_HARD_MAX_MS = 600_000  # absolute ceiling: an active container defers the backstop up to here
+
 # ── Prompt Detection ─────────────────────────────────────────────────
 #
 # Heuristic prompt patterns checked when output settles. These are
@@ -174,6 +186,59 @@ def _pgrp_cpu_seconds(pgrp: int) -> float | None:
                 seen = True
             except ValueError:
                 continue
+    return total if seen else None
+
+
+def _container_activity(container_name: str) -> float | None:
+    """Monotonic 'work done' counter for a container — cpu usage + block IO +
+    net bytes, summed — sampled via one ``docker exec``. Growth between two reads
+    means the container is actively working; flat means idle. Returns None on any
+    failure (no docker, container gone, parse miss) so the caller degrades to the
+    byte/host-CPU settle path. The mixed units don't matter: any real work moves
+    the sum by orders of magnitude more than ``CONTAINER_ACTIVITY_EPS``, while an
+    idle bash moves it ~0.
+    """
+    if not container_name:
+        return None
+    try:
+        out = subprocess.run(
+            [
+                "docker", "exec", container_name, "sh", "-c",
+                "cat /sys/fs/cgroup/cpu.stat /sys/fs/cgroup/io.stat /proc/net/dev "
+                "2>/dev/null",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    total = 0.0
+    seen = False
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("usage_usec"):  # cgroup v2 cpu.stat
+            try:
+                total += float(s.split()[1])
+                seen = True
+            except (IndexError, ValueError):
+                pass
+        elif "rbytes=" in s or "wbytes=" in s:  # cgroup v2 io.stat
+            for tok in s.split():
+                if tok.startswith(("rbytes=", "wbytes=")):
+                    try:
+                        total += float(tok.split("=", 1)[1])
+                        seen = True
+                    except ValueError:
+                        pass
+        elif ":" in s and not s.startswith(("Inter", "face", "lo:")):  # /proc/net/dev
+            try:
+                cols = s.split(":", 1)[1].split()
+                total += float(cols[0]) + float(cols[8])  # rx + tx bytes
+                seen = True
+            except (IndexError, ValueError):
+                pass
     return total if seen else None
 
 
@@ -326,6 +391,10 @@ class SessionInfo:
     # doing our own would make its isalive() hit ECHILD and raise.
     proc: object | None = field(default=None, repr=False)
     expected_prompt: str = ""  # Explicit prompt character from project config
+    # Container NAME for sessions whose shell is a `docker exec` relay (tb tasks).
+    # Empty for local sessions. When set, the settle loop probes container-side
+    # CPU/IO activity (the host-pgrp CPU probe sees only the idle relay).
+    container_name: str = ""
     turn_count: int = 0
     history: list[dict] = field(default_factory=list)
     # Output capture. ``_output_buffer`` is a tail-window of recent bytes
@@ -480,6 +549,7 @@ class PTYSessionManager:
         working_directory: str = ".",
         env: dict[str, str] | None = None,
         expected_prompt: str = "",
+        container_name: str = "",
     ) -> str:
         """Create a new PTY session.
 
@@ -552,6 +622,7 @@ class PTYSessionManager:
             shell_pgid=shell_pgid,
             working_directory=cwd,
             expected_prompt=expected_prompt,
+            container_name=container_name,
             proc=proc,
         )
 
@@ -956,6 +1027,18 @@ class PTYSessionManager:
         # CPU signal ⇒ fall back to byte-idle alone.
         cpu_samples: list[tuple[float, float]] = []
         last_cpu_sample_t = 0.0
+        # Container-activity confirm — the analogue of cpu_samples for a session
+        # whose shell is a docker-exec relay (the host pgrp sees only the idle
+        # relay). Sampled during a byte lull, pruned to the settle window, reset
+        # on byte growth. container_busy gates the settle AND defers the backstop
+        # while the container is doing silent work (a --quiet download), up to an
+        # absolute ceiling; <2 spanning samples ⇒ no signal ⇒ byte/CPU path.
+        container_name = session.container_name
+        container_samples: list[tuple[float, float]] = []
+        last_container_sample_t = 0.0
+        last_container_active_t = 0.0  # stale until activity is actually observed
+        container_hard_deadline = loop.time() + CONTAINER_HARD_MAX_MS / 1000.0
+        backstop_grace_s = max(2.0, settle_s * 2)
 
         def _current_rate_bps(now: float) -> float:
             """Bytes/sec over the trailing rate window."""
@@ -991,6 +1074,7 @@ class PTYSessionManager:
             if grew or first_data:
                 last_byte_time = now
                 cpu_samples.clear()  # lull (if any) is over; restart CPU window
+                container_samples.clear()  # ditto for the container-activity window
             samples.append((now, current_total))
             cutoff = now - (rate_window_s * 2)
             samples = [s for s in samples if s[0] >= cutoff]
@@ -1022,6 +1106,39 @@ class PTYSessionManager:
                 last_cpu_sample_t = now
             cpu_samples = [c for c in cpu_samples if c[0] >= now - settle_s]
 
+            # ── Container-activity sampling + confirm (docker-exec sessions) ──
+            # The analogue of the CPU confirm for a container whose work the host
+            # pgrp can't see. Sample only when bytes are NOT currently flowing
+            # (``not grew`` — a flowing stream is already its own activity signal),
+            # throttled because the probe shells out. Run it off-loop so the
+            # ~100ms docker-exec doesn't stall the poll. container_busy can only
+            # DELAY a settle / DEFER the backstop, never close early.
+            container_busy = False
+            if container_name:
+                if (
+                    not grew
+                    and now - last_container_sample_t >= CONTAINER_SAMPLE_MIN_INTERVAL_S
+                ):
+                    work = await loop.run_in_executor(
+                        None, _container_activity, container_name
+                    )
+                    now = loop.time()  # the probe took time; re-read the clock
+                    if work is not None:
+                        container_samples.append((now, work))
+                    last_container_sample_t = now
+                container_samples = [
+                    c for c in container_samples if c[0] >= now - settle_s
+                ]
+                container_busy = (
+                    len(container_samples) >= 2
+                    and (container_samples[-1][0] - container_samples[0][0])
+                    >= settle_s * 0.5
+                    and (container_samples[-1][1] - container_samples[0][1])
+                    >= CONTAINER_ACTIVITY_EPS
+                )
+                if container_busy:
+                    last_container_active_t = now
+
             # ── Process exit ────────────────────────────────────
             if session._exited:
                 # Brief tail to catch a final burst before
@@ -1050,7 +1167,7 @@ class PTYSessionManager:
                     and (cpu_samples[-1][0] - cpu_samples[0][0]) >= settle_s * 0.5
                     and (cpu_samples[-1][1] - cpu_samples[0][1]) >= CPU_IDLE_EPS_S
                 )
-                if not cpu_busy:
+                if not cpu_busy and not container_busy:
                     return {
                         "saw_burst": saw_data,
                         "settled": True,
@@ -1062,7 +1179,16 @@ class PTYSessionManager:
                     }
 
             # ── Hard timeout ────────────────────────────────────
-            if now >= deadline:
+            # A container session DEFERS the backstop while the container is still
+            # working — recent container activity OR bytes still arriving — so a
+            # silent --quiet download (invisible to the host-pgrp CPU probe) is
+            # never aborted mid-flight. Bounded by an absolute ceiling so a genuine
+            # hang (no output AND no container activity) still returns.
+            recent_byte = last_byte_time is not None and (now - last_byte_time) < backstop_grace_s
+            container_working = container_name and now < container_hard_deadline and (
+                (now - last_container_active_t) < backstop_grace_s or recent_byte
+            )
+            if now >= deadline and not container_working:
                 return {
                     "saw_burst": saw_data,
                     "settled": False,

@@ -75,6 +75,13 @@ sections:
       ## Task to be accomplished
       {context.task_spec}
 
+  # Per-cycle: durable effects already done (installs/downloads survive in the
+  # container) — don't re-provision them. Empty on the first cycle.
+  - id: ledger
+    when: context.workspace_ledger
+    content: |
+      {context.workspace_ledger}
+
   # Per-cycle: the prior judge note (empty first run) — last (recency slot).
   - id: feedback
     when: context.feedback_block

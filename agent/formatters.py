@@ -92,6 +92,28 @@ def format_feedback_block(params: dict, namespaces: dict) -> str:
     return f"## FEEDBACK FROM YOUR LAST ATTEMPT — address this\n{fb}"
 
 
+def format_workspace_ledger(params: dict, namespaces: dict) -> str:
+    """Render the ops mission's workspace_ledger (a rolling window of durable
+    effects — installs, downloads, files, checks) as an "already done" block so
+    plan_provision / plan_charter build on prior cycles instead of re-doing work.
+    Empty on the first cycle."""
+    ledger = params.get("source") or []
+    rows = []
+    for e in ledger[-12:]:
+        kind = str(getattr(e, "kind", "") or "")
+        desc = str(getattr(e, "description", "") or "").strip()
+        status = str(getattr(e, "status", "") or "")
+        if not desc:
+            continue
+        rows.append(f"- [{kind}] {desc}" + (f" — {status}" if status else ""))
+    if not rows:
+        return ""
+    return (
+        "## ALREADY DONE THIS MISSION (don't repeat — the container kept it)\n"
+        + "\n".join(rows)
+    )
+
+
 def format_session_tail(params: dict, namespaces: dict) -> str:
     """Tail of a terminal session transcript, for the completion judge."""
     out = str(params.get("source") or "")
@@ -547,6 +569,7 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_existing_architecture": format_existing_architecture,
     "format_completion_criteria": format_completion_criteria,
     "format_feedback_block": format_feedback_block,
+    "format_workspace_ledger": format_workspace_ledger,
     "format_session_tail": format_session_tail,
     "format_existing_goals": format_existing_goals,
     "format_mission_meta": format_mission_meta,

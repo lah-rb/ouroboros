@@ -46,13 +46,20 @@ async def create_session(
     command: str | None = None,
     env: dict[str, str] | None = None,
     expected_prompt: str = "",
+    container_name: str = "",
 ) -> dict:
-    """Create a new PTY session."""
+    """Create a new PTY session.
+
+    ``container_name`` (set by the tb adapter, empty for local sessions) lets the
+    settle loop probe container-side activity via ``docker exec`` — the host-pgrp
+    CPU probe is blind to a ``docker exec`` relay's container work.
+    """
     session_id = await manager.create_session(
         command=command,
         working_directory=working_directory,
         env=env,
         expected_prompt=expected_prompt,
+        container_name=container_name,
     )
     return {
         "session_id": session_id,

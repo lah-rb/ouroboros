@@ -11108,6 +11108,7 @@
           "template": "ops/plan_provision",
           "context_keys": [
             "task_spec",
+            "workspace_ledger",
             "feedback_block"
           ],
           "input_keys": []
@@ -11121,6 +11122,15 @@
                 "$ref": "context.mission"
               },
               "field": "objective"
+            }
+          },
+          {
+            "formatter": "format_workspace_ledger",
+            "output_key": "workspace_ledger",
+            "params": {
+              "source": {
+                "$ref": "context.mission.workspace_ledger"
+              }
             }
           },
           {
@@ -11196,6 +11206,7 @@
           "context_keys": [
             "task_spec",
             "workspace_context",
+            "workspace_ledger",
             "feedback_block"
           ],
           "input_keys": []
@@ -11217,6 +11228,15 @@
             "params": {
               "source": {
                 "$ref": "context.project_manifest"
+              }
+            }
+          },
+          {
+            "formatter": "format_workspace_ledger",
+            "output_key": "workspace_ledger",
+            "params": {
+              "source": {
+                "$ref": "context.mission.workspace_ledger"
               }
             }
           },

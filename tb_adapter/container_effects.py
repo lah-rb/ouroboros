@@ -208,6 +208,11 @@ class ContainerEffects(LocalEffects):
             # os.makedirs (always host-side) doesn't create /app on the Mac.
             arguments["working_directory"] = self._host_pty_scratch
             arguments["command"] = self._pty_launcher()
+            # The PTY server is a separate subprocess and its foreground-pgrp CPU
+            # probe samples only the host docker-exec relay (blind to the
+            # container's real work). Hand it the container NAME so the settle
+            # loop can probe container-side activity via `docker exec`.
+            arguments["container_name"] = self._container.name
         return await super().mcp_call_tool(connection_id, tool_name, arguments, timeout)
 
     # ── filesystem parity (all routed into the container) ─────────────

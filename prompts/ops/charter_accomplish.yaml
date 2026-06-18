@@ -79,6 +79,13 @@ sections:
 
       {context.workspace_context}
 
+  # Per-cycle: durable effects already done (installs/downloads/files survive in
+  # the container) — build on them, don't redo. Empty on the first cycle.
+  - id: ledger
+    when: context.workspace_ledger
+    content: |
+      {context.workspace_ledger}
+
   # Dynamic tail — last (recency) and ends the cached prefix.
   - id: feedback
     when: context.feedback_block

@@ -19,6 +19,53 @@ import re
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
 
+
+def _record_workspace_ledger(
+    mission, step_input, *, session_status: str, session_desc: str
+) -> None:
+    """Append durable workspace effects to the mission ledger (best-effort).
+
+    Deterministic provision entries from ``setup_results`` (one per setup action
+    that did something) plus one coarse per-cycle ``session`` entry from the judge.
+    Successful provisions are de-duped against prior entries so a cycle that
+    re-reports the same install doesn't bloat the ledger; the window is bounded.
+    """
+    from agent.persistence.models import WorkspaceLedgerEntry
+
+    led = getattr(mission, "workspace_ledger", None)
+    if led is None:  # non-ops mission or old state — nothing to record onto
+        return
+    cycle = int(step_input.context.get("cycle", 0) or 0)
+    seen = {(e.kind, e.description) for e in led}
+    for r in step_input.context.get("setup_results") or []:
+        desc = str(r.get("name", "")).strip()
+        if not desc:
+            continue
+        status = (
+            "success"
+            if r.get("passed")
+            else ("skipped" if r.get("skipped") else "failed")
+        )
+        if ("provision", desc) in seen and status != "failed":
+            continue  # already have a non-failed provision of this
+        led.append(
+            WorkspaceLedgerEntry(
+                cycle=cycle, kind="provision", description=desc, status=status
+            )
+        )
+        seen.add(("provision", desc))
+    if session_desc:
+        led.append(
+            WorkspaceLedgerEntry(
+                cycle=cycle,
+                kind="session",
+                description=session_desc[:200],
+                status=session_status,
+            )
+        )
+    if len(led) > 60:  # bound growth — keep the most recent
+        del led[:-60]
+
 logger = logging.getLogger(__name__)
 
 TASK_GOAL_SIGNATURE = "ops-task"
@@ -326,6 +373,15 @@ async def action_judge_task_completion(step_input: StepInput) -> StepOutput:
             else ("checks fail" if not checks_passed else "judge: not yet done")
         )
         observation = f"Ops task not done ({why}) — looping with feedback"
+
+    # Record this cycle's durable workspace effects (installs + a session note) so
+    # the next cycle builds on them instead of re-doing work.
+    _record_workspace_ledger(
+        mission,
+        step_input,
+        session_status="success" if done else "attempt",
+        session_desc=(feedback or observation),
+    )
 
     if effects:
         await effects.save_mission(mission)

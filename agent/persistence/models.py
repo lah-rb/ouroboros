@@ -588,6 +588,21 @@ class DispatchRecord(BaseModel):
     timestamp: str = Field(default_factory=_now_iso)
 
 
+class WorkspaceLedgerEntry(BaseModel):
+    """A cross-cycle record of durable ops-task workspace effects — what a cycle
+    installed / created / downloaded / verified — so a later cycle doesn't re-pip
+    or rewrite work the container filesystem already holds. The ops-mission analog
+    of DispatchRecord; project_ops_workspace_ledger renders a rolling window into
+    plan_provision / plan_charter."""
+
+    cycle: int = 0
+    kind: str = ""  # "provision" | "session" | "check"
+    description: str = ""  # e.g. "installed datasets transformers"
+    status: str = ""  # "success" | "failed" | "partial" | "skipped"
+    details: dict = Field(default_factory=dict)
+    timestamp: str = Field(default_factory=_now_iso)
+
+
 # ── Mission State ─────────────────────────────────────────────────────
 
 
@@ -679,6 +694,10 @@ class MissionState(BaseModel):
     # keeps non-ops mission.json files loading unchanged.
     task_definition: TaskState | None = None
     dispatch_history: list[DispatchRecord] = Field(default_factory=list)
+    # Ops-task workspace ledger — durable effects (installs, downloads, files,
+    # checks) recorded per cycle so later cycles build on prior progress instead
+    # of re-doing it. Additive default keeps non-ops mission.json files loading.
+    workspace_ledger: list[WorkspaceLedgerEntry] = Field(default_factory=list)
     environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
     # How many times this mission has been reopened after reaching a terminal
     # state (completed/aborted) via `mission reopen`. 0 = original run. Stamped
@@ -695,7 +714,7 @@ class MissionState(BaseModel):
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)
     config: MissionConfig
-    schema_version: int = 5
+    schema_version: int = 6
 
 
 # ── Events ────────────────────────────────────────────────────────────

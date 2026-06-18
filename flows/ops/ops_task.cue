@@ -83,12 +83,14 @@ ops_task: #FlowDefinition & {
 			context: required: ["mission"]
 			prompt_template: {
 				template: "ops/plan_provision"
-				context_keys: ["task_spec", "feedback_block"]
+				context_keys: ["task_spec", "workspace_ledger", "feedback_block"]
 				input_keys: []
 			}
 			pre_compute: [
 				{formatter: "format_mission_meta", output_key: "task_spec"
 					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+				{formatter: "format_workspace_ledger", output_key: "workspace_ledger"
+					params: {source: {$ref: "context.mission.workspace_ledger"}}},
 				{formatter: "format_feedback_block", output_key: "feedback_block"
 					params: {source: {$ref: "context.mission.task_definition"}}},
 			]
@@ -125,7 +127,7 @@ ops_task: #FlowDefinition & {
 			}
 			prompt_template: {
 				template: "ops/charter_accomplish"
-				context_keys: ["task_spec", "workspace_context", "feedback_block"]
+				context_keys: ["task_spec", "workspace_context", "workspace_ledger", "feedback_block"]
 				input_keys: []
 			}
 			pre_compute: [
@@ -133,6 +135,8 @@ ops_task: #FlowDefinition & {
 					params: {mission: {$ref: "context.mission"}, field: "objective"}},
 				{formatter: "format_project_listing", output_key: "workspace_context"
 					params: {source: {$ref: "context.project_manifest"}}},
+				{formatter: "format_workspace_ledger", output_key: "workspace_ledger"
+					params: {source: {$ref: "context.mission.workspace_ledger"}}},
 				{formatter: "format_feedback_block", output_key: "feedback_block"
 					params: {source: {$ref: "context.mission.task_definition"}}},
 			]
