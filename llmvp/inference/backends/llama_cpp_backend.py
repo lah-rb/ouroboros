@@ -30,6 +30,14 @@ from inference.repetition import DegenerateGenerationError, RepetitionGuard
 
 log = logging.getLogger("llm-mvp")
 
+# Reserved seq ids for the resident in-context cache (config.model.resident_seq_cache).
+# Each pool context handles ONE working stream, so generation stays on seq 0 (where the
+# high-level Llama.generate()/eval() operate) — we reuse the existing generation machinery
+# verbatim. SEQ_STATIC holds the pristine static prefix, forked onto SEQ_WORKING per request.
+SEQ_WORKING = 0  # the live generation / session seq
+SEQ_STATIC = 1   # pristine static-prefix template (fork source); never generated on
+SEQ_FLOW_BASE = 2  # Phase 2: per-flow resident prefixes occupy seqs [2, 2+flow_hot_set)
+
 
 @dataclasses.dataclass
 class InstanceMeta:
@@ -94,6 +102,36 @@ class LlamaCppBackend(BaseBackend):
         # head], so later visits restore it and prefill only the dynamic tail.
         # LRU-bounded; only populated when the flag is on. See config.py.
         self._flow_states: "OrderedDict[str, Any]" = OrderedDict()
+        # Resident in-context sequence cache (opt-in: config.model.resident_seq_cache).
+        # When active, the pristine static prefix lives on SEQ_STATIC and is forked
+        # (memory_seq_cp) onto SEQ_WORKING=0 per request instead of load_state'd from a
+        # blob. _resident_active is set in initialize() after the can_shift gate (forced
+        # off for pure-recurrent models, which lack memory_can_shift()).
+        self._resident_requested = bool(
+            getattr(getattr(config, "model", None), "resident_seq_cache", False)
+        )
+        self._resident_active = False
+        self._resident_static_len = 0
+        self._resident_static_tokens: List[int] = []
+        # Phase 2: resident flow-prefix hot-set. When resident + flow_kv_cache, each
+        # flow's [global static + flow head] is pinned on a dedicated per-instance
+        # seq (band [SEQ_FLOW_BASE, SEQ_FLOW_BASE+flow_hot_set)) and forked onto seq 0
+        # per request — no save_state. Per-instance (KV is context-local).
+        self._flow_hot_set = int(
+            getattr(getattr(config, "model", None), "flow_kv_cache_max", 8) or 8
+        )
+        self._flow_resident = self._resident_requested and bool(
+            getattr(getattr(config, "model", None), "flow_kv_cache", False)
+        )
+        # Session flow-fork (Phase 2b): a memoryful session forks a pinned flow head
+        # onto its live seq at turn 0. Reuses the same flow band as the stateless
+        # cache; needs the band allocated even when flow_kv_cache itself is off.
+        self._session_flow_fork = self._resident_requested and bool(
+            getattr(getattr(config, "model", None), "resident_session_flow_fork", False)
+        )
+        # The flow seq band (n_seq_max widening + per-instance _flow_seqs allocator)
+        # is allocated if EITHER flow consumer is on.
+        self._flow_band = self._flow_resident or self._session_flow_fork
         # JIT pool scaling
         jit_limit = config.resources.jit_concurrency_limit
         self._jit_enabled: bool = jit_limit is not None
@@ -169,6 +207,14 @@ class LlamaCppBackend(BaseBackend):
             # sliding-window models (gpt-oss); kv_unified bounds the memory cost.
             swa_full=bool(getattr(self.config.model, "swa_full", False)),
             kv_unified=bool(getattr(self.config.model, "kv_unified", False)),
+            # Resident cache needs SEQ_STATIC alongside the working seq; the flow
+            # hot-set adds one resident seq per cached flow prefix. Harmless if the
+            # can_shift gate later disables the resident path.
+            n_seq_max=(
+                (2 + self._flow_hot_set if self._flow_band else 2)
+                if self._resident_requested
+                else 1
+            ),
             seed=self.config.model.seed,
             verbose=self.config.model.verbose,
             n_threads=self.config.resources.cpu_threads,
@@ -284,6 +330,7 @@ class LlamaCppBackend(BaseBackend):
             from preprocessing.static_tokens import get_static_tokens
 
             static_tokens = get_static_tokens()
+            n_tokens = len(static_tokens)
 
             started = time.perf_counter()
 
@@ -294,11 +341,7 @@ class LlamaCppBackend(BaseBackend):
                     f"✅ Loaded pre-computed static state for pool slot #{idx} "
                     f"in {time.perf_counter() - started:.2f}s"
                 )
-                return
-
-            n_tokens = len(static_tokens)
-
-            if n_tokens == 0:
+            elif n_tokens == 0:
                 # No static tokens (--skip-knowledge) — save a clean
                 # initial state without any system prompt prefix.
                 llm_inst.reset()
@@ -307,24 +350,36 @@ class LlamaCppBackend(BaseBackend):
                     f"📝 No static tokens — saved clean initial state "
                     f"(pool slot #{idx})"
                 )
-                return
+            else:
+                log.info(
+                    f"🔄 Processing {n_tokens:,} static tokens for state "
+                    f"snapshot (pool slot #{idx})…"
+                )
+                llm_inst.reset()
+                llm_inst.eval(list(static_tokens))
+                self._static_state = llm_inst.save_state()
+                state_mb = self._static_state.llama_state_size / (1024 * 1024)
+                log.info(
+                    f"✅ State snapshot saved — {n_tokens:,} tokens, "
+                    f"{state_mb:,.1f} MiB C-level state, static eval took "
+                    f"{time.perf_counter() - started:.2f}s (pool slot #{idx})"
+                )
 
-            log.info(
-                f"🔄 Processing {n_tokens:,} static tokens for state "
-                f"snapshot (pool slot #{idx})…"
-            )
-
-            llm_inst.reset()
-            llm_inst.eval(list(static_tokens))
-
-            self._static_state = llm_inst.save_state()
-
-            state_mb = self._static_state.llama_state_size / (1024 * 1024)
-            log.info(
-                f"✅ State snapshot saved — {n_tokens:,} tokens, "
-                f"{state_mb:,.1f} MiB C-level state, static eval took "
-                f"{time.perf_counter() - started:.2f}s (pool slot #{idx})"
-            )
+            # Resident path: seq 0 now holds the pristine static prefix — pin a copy
+            # onto SEQ_STATIC so acquire_instance can fork it back onto seq 0 per
+            # request (an intra-context copy, never a save_state blob).
+            if self._resident_active:
+                self._resident_static_len = n_tokens
+                self._resident_static_tokens = list(static_tokens)
+                if n_tokens > 0:
+                    llm_inst._ctx.memory_seq_rm(SEQ_STATIC, 0, -1)
+                    llm_inst._ctx.memory_seq_cp(SEQ_WORKING, SEQ_STATIC, -1, -1)
+                # Per-instance flow-prefix allocator (Phase 2): flow_key -> seq_id.
+                llm_inst._flow_seqs = OrderedDict()
+                log.debug(
+                    "🧩 Pinned %d static tokens to SEQ_STATIC (pool slot #%d)",
+                    n_tokens, idx,
+                )
         except Exception as exc:
             log.error(f"❌ Warm-up failed for pool slot #{idx}: {exc}")
 
@@ -344,6 +399,106 @@ class LlamaCppBackend(BaseBackend):
             "🔄 Re-warmed primary instance after scale-down in %.2fs",
             time.perf_counter() - started,
         )
+
+    def _resident_restore_static(self, inst: Any) -> None:
+        """Restore seq 0 to the pristine static prefix by forking SEQ_STATIC onto it
+        (clearing seq 0 first) — the resident replacement for load_state(_static_state),
+        a cheap intra-context copy rather than a multi-GB blob restore. Syncs the
+        high-level n_tokens / input_ids counters so the existing eval/generate path
+        (which operates on seq 0) places the dynamic prompt at the correct position.
+        SEQ_STATIC is left intact for the next fork."""
+        ctx = inst._ctx
+        ctx.memory_seq_rm(SEQ_WORKING, 0, -1)  # clear the working seq
+        if self._resident_static_len > 0:
+            ctx.memory_seq_cp(SEQ_STATIC, SEQ_WORKING, -1, -1)
+            inst.input_ids[: self._resident_static_len] = np.array(
+                self._resident_static_tokens, dtype=np.intc
+            )
+        inst.n_tokens = self._resident_static_len
+
+    def _window_resident_seq(self, inst: Any, n_keep: int) -> int:
+        """Slide the resident session window: drop the oldest ~half of the live
+        conversation — positions [n_keep, n_keep+n_discard) — and shift the recent
+        tail down by n_discard, keeping the static head [0, n_keep) intact. Lets a
+        deep session run PAST n_ctx (the oldest turns fall out of context) instead
+        of the backend raising at the context-window guard. Only the tail BEYOND
+        the static head is shifted, so the static-prefix positions (pos_min=0) are
+        never touched (the seq_add corruption the reasoning strip warned about hit
+        spans that included the head). Returns the new n_tokens."""
+        ctx = inst._ctx
+        n_tokens = int(inst.n_tokens)
+        n_discard = (n_tokens - n_keep) // 2
+        if n_discard <= 0:
+            return n_tokens
+        ctx.memory_seq_rm(SEQ_WORKING, n_keep, n_keep + n_discard)
+        ctx.memory_seq_add(SEQ_WORKING, n_keep + n_discard, n_tokens, -n_discard)
+        inst.input_ids[n_keep: n_tokens - n_discard] = inst.input_ids[
+            n_keep + n_discard: n_tokens
+        ]
+        inst.n_tokens = n_tokens - n_discard
+        log.warning(
+            "🪟 windowed resident seq: dropped %d oldest tokens "
+            "(kept %d static head + %d recent)",
+            n_discard, n_keep, inst.n_tokens - n_keep,
+        )
+        return inst.n_tokens
+
+    def _alloc_flow_seq(self, inst: Any, flow_key: str) -> int:
+        """Allocate a resident seq id for flow_key in the per-instance flow band
+        [SEQ_FLOW_BASE, SEQ_FLOW_BASE+flow_hot_set), LRU-evicting when full."""
+        flow_seqs = inst._flow_seqs
+        used = set(flow_seqs.values())
+        for s in range(SEQ_FLOW_BASE, SEQ_FLOW_BASE + self._flow_hot_set):
+            if s not in used:
+                flow_seqs[flow_key] = s
+                return s
+        old_key, old_seq = flow_seqs.popitem(last=False)  # evict LRU, reuse its seq
+        inst._ctx.memory_seq_rm(old_seq, 0, -1)
+        flow_seqs[flow_key] = old_seq
+        log.info("resident flow LRU evict %r → reuse seq %d", old_key, old_seq)
+        return old_seq
+
+    def _resident_flow(
+        self, inst: Any, flow_key: str, flow_prefix_len: int, prompt_tokens: List[int]
+    ) -> Optional[int]:
+        """Resident flow-prefix cache (Phase 2): pin [global static + flow head]
+        (flow_prefix_len tokens) on a dedicated per-instance seq and fork it onto
+        seq 0 per request, so only the dynamic tail prefills — NO save_state, just
+        seq_cp. acquire_instance() has already forked SEQ_STATIC → seq 0 (global
+        static). Returns flow_prefix_len on success, or None to fall back to base."""
+        try:
+            flow_seqs = inst._flow_seqs
+            ctx = inst._ctx
+            ids = np.array(prompt_tokens[:flow_prefix_len], dtype=np.intc)
+            if flow_key in flow_seqs:
+                # HIT: replace seq 0 (global static) with the pinned [global+flow].
+                flow_seqs.move_to_end(flow_key)
+                seq = flow_seqs[flow_key]
+                ctx.memory_seq_rm(SEQ_WORKING, 0, -1)
+                ctx.memory_seq_cp(seq, SEQ_WORKING, -1, -1)
+                inst.n_tokens = flow_prefix_len
+                inst.input_ids[:flow_prefix_len] = ids
+                log.info(
+                    "🔁 resident flow HIT %r (seq %d, %d tok)",
+                    flow_key, seq, flow_prefix_len,
+                )
+            else:
+                # BUILD: seq 0 holds the global static (acquire fork); eval the flow
+                # head on top, then pin a copy on a dedicated flow seq.
+                inst.eval(list(prompt_tokens[self._resident_static_len: flow_prefix_len]))
+                seq = self._alloc_flow_seq(inst, flow_key)
+                ctx.memory_seq_rm(seq, 0, -1)
+                ctx.memory_seq_cp(SEQ_WORKING, seq, -1, -1)
+                inst.input_ids[:flow_prefix_len] = ids
+                log.info(
+                    "🆕 resident flow BUILD %r (seq %d, %d tok)",
+                    flow_key, seq, flow_prefix_len,
+                )
+            return flow_prefix_len
+        except Exception as exc:  # noqa: BLE001 — fall back to the static base
+            log.warning("resident flow failed for %r (%s) — static base", flow_key, exc)
+            self._resident_restore_static(inst)
+            return None
 
     # ------------------------------------------------------------------
     # Shared JIT scaling helpers
@@ -548,6 +703,21 @@ class LlamaCppBackend(BaseBackend):
         if self._is_hybrid:
             log.info("🧬 Hybrid/recurrent model detected")
 
+        # Resident-seq gate: the seq ops (memory_seq_cp/rm) require memory_can_shift()
+        # — true on SWA models with swa_full and on can-shift hybrids (Qwen3-Next),
+        # FALSE on pure-recurrent state. When false, force the resident path off and
+        # fall back to the legacy save_state/full_replay path.
+        if self._resident_requested:
+            can_shift = bool(self._primary_instance._ctx.memory_can_shift())
+            self._resident_active = can_shift
+            if can_shift:
+                log.info("🧩 Resident-seq cache ACTIVE (memory_can_shift=True)")
+            else:
+                log.warning(
+                    "🧩 resident_seq_cache requested but memory_can_shift=False "
+                    "(pure-recurrent) — falling back to legacy save_state path"
+                )
+
         # Warm-up primary instance: evaluate static tokens & save snapshot.
         await run_in_threadpool(self._warm_up_instance, self._primary_instance, 0)
         self._all_instances.append(self._primary_instance)
@@ -697,9 +867,14 @@ class LlamaCppBackend(BaseBackend):
         # turns) is not GPU work and must not block scaling drains.
         self._checked_out += 1
 
-        # Restore the post-static-tokens state snapshot. This is a
-        # multi-GB GPU memcpy — guard it like any other GPU work.
-        if self._static_state is not None:
+        # Restore seq 0 to the pristine post-static-tokens state. Guard it like
+        # any other GPU work. Resident: fork SEQ_STATIC → seq 0 (intra-context
+        # copy). Legacy: load_state the (multi-GB) snapshot blob.
+        if self._resident_active:
+            async with self.generation_guard():
+                await run_in_threadpool(self._resident_restore_static, inst)
+            log.debug("🧩 Forked SEQ_STATIC → seq 0 before request (resident)")
+        elif self._static_state is not None:
             async with self.generation_guard():
                 await run_in_threadpool(inst.load_state, self._static_state)
             log.debug("🔄 Restored static state snapshot before request")
@@ -1099,12 +1274,19 @@ class LlamaCppBackend(BaseBackend):
         flow_key = kwargs.pop("flow_key", None)
         flow_prefix_len = int(kwargs.pop("flow_prefix_len", 0) or 0)
         flow_n_static = None
-        if (
+        flow_eligible = bool(
             flow_key
             and getattr(self.config.model, "flow_kv_cache", False)
             and static_in_prompt
             and 0 < flow_prefix_len <= len(prompt_tokens)
-        ):
+        )
+        if flow_eligible and self._resident_active:
+            # Phase 2: resident flow hot-set — pin [global static + flow head] on a
+            # dedicated seq, fork onto seq 0 per request. No save_state (seq_cp only).
+            flow_n_static = self._resident_flow(
+                instance, flow_key, flow_prefix_len, prompt_tokens
+            )
+        elif flow_eligible:
             try:
                 if flow_key in self._flow_states:
                     self._flow_states.move_to_end(flow_key)

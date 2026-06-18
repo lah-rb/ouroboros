@@ -20,6 +20,7 @@ from inference.tokenizer import (
     get_cached_tokenizer,
     tokenize_segments,
     build_full_prompt,
+    flow_head_tokens,
 )
 from core.interaction_logger import log_interaction
 from formats.registry import get_renderer as _get_format_renderer
@@ -279,12 +280,7 @@ async def run_completion(
         # tails — robust to tokenizer boundary merges. That prefix (after the
         # global static buffer) is what the backend pins per flow_key.
         dynamic_ids = build_full_prompt(static_prefix + prompt, tokenizer)
-        p1 = build_full_prompt(static_prefix + "\nAlpha one two", tokenizer)
-        p2 = build_full_prompt(static_prefix + "\tBravo nine six", tokenizer)
-        n = 0
-        lim = min(len(p1), len(p2), len(dynamic_ids))
-        while n < lim and p1[n] == p2[n] == dynamic_ids[n]:
-            n += 1
+        n = len(flow_head_tokens(static_prefix, tokenizer, confirm_with=dynamic_ids))
         if n > 0:
             flow_kwargs = {"flow_key": flow_key, "flow_prefix_len": len(static_tokens) + n}
     else:

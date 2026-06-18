@@ -47,6 +47,13 @@ model:
   # state surgery — bypassing the corruption locus. Slightly slower per deep turn,
   # but deterministic and crash-proof (the same mitigation qwen/step37 already use).
   session_full_replay: true
+  # RESIDENT seq KV cache (ENABLED 2026-06-18). Supersedes BOTH failure modes above:
+  # the static prefix lives on a dedicated seq forked per request (no save_state, no
+  # corruption), and a memoryful session keeps its seq LIVE across turns (append-only,
+  # no full_replay re-prefill). Gated on memory_can_shift() — true here via swa_full;
+  # falls back to session_full_replay if ever false. Validated: A/B ~2x faster session
+  # turns (14.2s->7.4s mean); terminal-bench 3/8 (37.5%) -> 5/8 (62.5%), tying Terminus.
+  resident_seq_cache: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

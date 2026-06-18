@@ -178,6 +178,11 @@ class SessionConfig:
     """Configuration for a new memoryful session."""
 
     ttl_seconds: Optional[int] = strawberry.field(default=300)
+    # Resident session flow-fork (model.resident_session_flow_fork): pin an invariant
+    # per-flow preamble (static_prefix) above the global static and fork it onto the
+    # live seq at turn 0, keyed by flow_cache_key. Ignored unless the flag is on.
+    flow_cache_key: Optional[str] = strawberry.field(default=None)
+    static_prefix: Optional[str] = strawberry.field(default=None)
 
 
 @strawberry.input
@@ -477,7 +482,11 @@ class Mutation:
         """Acquire a pool instance and pin it for memoryful inference."""
         mgr = _get_session_manager()
         ttl = config.ttl_seconds if config and config.ttl_seconds else 300
-        info = await mgr.start_session(ttl_seconds=ttl)
+        info = await mgr.start_session(
+            ttl_seconds=ttl,
+            flow_key=config.flow_cache_key if config else None,
+            static_prefix=config.static_prefix if config else None,
+        )
         return SessionInfoGQL(
             session_id=info.session_id,
             instance_index=info.instance_index,

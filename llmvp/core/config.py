@@ -79,6 +79,45 @@ class ModelConfig(BaseModel):
     # so it sidesteps the deep-session blob overflow. LRU-bounded.
     flow_kv_cache: bool = False
     flow_kv_cache_max: int = 8
+    # Resident in-context sequence cache (OPT-IN, default off). Replaces the
+    # whole-context save_state/load_state KV reuse with RESIDENT sequences: the
+    # static prefix lives on its own seq_id (SEQ_STATIC), and each request/session
+    # forks it (llama_memory_seq_cp) onto a working seq — KV stays live in the
+    # context, never serialized. This sidesteps the deep-session save_state blob
+    # overflow ENTIRELY (no blob), and a memoryful session appends to its resident
+    # seq instead of re-prefilling its whole history each turn (kills the
+    # full_replay cost). Mirrors llama-server's slot pattern; built on the seq
+    # primitives our llama-cpp-python exposes (n_seq_max, memory_seq_cp/rm,
+    # llama_state_seq_*). REQUIRES memory_can_shift() (set by swa_full on SWA
+    # models like gpt-oss; true on can-shift hybrids like Qwen3-Next; FALSE on
+    # pure-recurrent state) — the warm-up gate forces this off and falls back to
+    # the legacy save_state/full_replay path when can_shift is false. Validated
+    # bit-identical vs the legacy path in dev/cache_strategy_stress.py.
+    resident_seq_cache: bool = False
+    # In-place reasoning strip for RESIDENT memoryful sessions (Factor 4). When on
+    # (and resident_seq_cache is active and the model is a thinking family), each
+    # finished turn's analysis/CoT is dropped from the live KV via truncate-and-
+    # replay (memory_seq_rm + re-eval the clean final answer), so prior-turn CoT
+    # never accumulates — the harmony-compliant multi-turn form (keep prior
+    # answers, drop prior reasoning), and a large context-size reduction on deep
+    # thinking sessions. Skips truncated turns (no clean answer to replay). No-op
+    # for non-thinking families. Off by default: legacy full_replay does NOT strip,
+    # so this is the opt-in correctness/efficiency upgrade the resident live seq
+    # uniquely enables crash-free (the splice path's strip overflowed save_state).
+    # Validated on gpt-oss (harmony); enable per-config after validating chatml.
+    resident_strip_reasoning: bool = False
+    # Resident SESSION flow-fork (OPT-IN, default off). When a memoryful session is
+    # started with a flow_key + static_prefix (an invariant per-flow preamble ABOVE
+    # the global static — e.g. per-agent role/tool framing), turn 0 forks the pinned
+    # [global static + flow head] resident seq onto the live session seq (BUILD once
+    # per instance, HIT after) so only the first user message prefills, instead of
+    # re-prefilling the preamble on every new session. Reuses the Phase 2 flow band
+    # (seqs [SEQ_FLOW_BASE, +flow_hot_set)); allocates it even when flow_kv_cache is
+    # off. Requires resident_seq_cache active (can_shift). Windowing then preserves
+    # the flow head (per-session static base), not just the global static. Turn-0
+    # win only (turns 1+ are already flat); valuable for high-churn short sessions
+    # with a large shared preamble. Validated bit-identical fork==fresh-prefill.
+    resident_session_flow_fork: bool = False
 
     @field_validator("thinking_mode")
     @classmethod

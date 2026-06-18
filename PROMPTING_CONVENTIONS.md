@@ -18,6 +18,25 @@ Every inference call in Ouroboros is composed from three layers:
 
 The soul establishes *who the agent is*. The step prompt establishes *what to do right now*. Pre-computed context provides *the materials to do it with*. When writing or modifying prompts, keep this separation in mind — behavioral principles belong in the soul, task-specific format instructions belong in the step template, and data formatting belongs in pre-compute formatters.
 
+### Cache lifetimes — what content belongs where
+
+The KV the server computes for a prompt is reused at one of four **lifetimes**. Placing a fact at the right one is a quiet but real efficiency lever: put it at the *shallowest lifetime whose scope it actually needs*. Too deep and it gets re-computed needlessly every call; too shallow and it wastes KV on every unrelated call (and, for the permanent layer, can't change without a server-side rebuild). This is gentle guidance, not a hard rule — but across a long run it adds up, and it maps cleanly onto the context layers above.
+
+| Lifetime | Where it lives | Reused by | Put here only… |
+|---|---|---|---|
+| **Permanent** | the Soul / static buffer (Layer 1) | **every** call, every flow, for the whole server run | …**generalizable** identity + principles true for *all* flows — behavioral philosophy, universal output conventions. Nothing flow- or task-specific. |
+| **Semi-permanent · flow** | the `cache: true` static head of a step template | every task & cycle of that one `(flow, step)` | …the **task-invariant** per-flow framing — role, instructions, output-format. Must read identically for every task (no `{input.*}`/`{context.*}` refs) or it won't cache. |
+| **Semi-permanent · session** | a memoryful session's accumulated turns | every later turn *of the same session* | …**persistent details later turns reference** — the investigation transcript, plan state, prior answers, a per-session persona. |
+| **Single-turn** | the dynamic tail of the prompt | nothing — computed once, then discarded | …only what is **specific to the exact task at hand** — the target file, the latest feedback, this cycle's state. |
+
+In practice:
+- **Generalizable → permanent.** If it holds for the create_file flow *and* diagnose *and* ops, it belongs in `SOUL.md` once, not repeated in each step prompt.
+- **Per-flow invariant → flow head.** Role framing and output-format identical for every task this step runs go in the leading `cache: true` sections (§10). Keep them free of task variables so the head stays byte-identical and shareable.
+- **Carries across turns → session.** If a fact must survive into the *next* turn of the same multi-turn loop, let the session hold it — don't re-send it each turn. The session-injection queue (§7) adds to it without a wasted inference.
+- **Just this task → tail.** Everything keyed to the specific input — file contents, feedback, per-cycle results — is the dynamic tail. It comes last (§10) and is the only part re-prefilled each call.
+
+The runtime mechanics behind these lifetimes (resident in-context sequences vs the legacy `save_state` path, eviction bounds, the SWA `swa_full` requirement) live in [dev/CACHE_STATE.md](dev/CACHE_STATE.md). As a prompt author you only need the placement guidance above plus the ordering rule in §10.
+
 ### Template Format
 
 Prompts are **section-based YAML files** in `prompts/<flow>/<step>.yaml`, referenced by CUE flow definitions via `prompt_template.template`. Complex data formatting is handled by **pre-compute formatters** (Python functions) that run before template rendering — the template itself only does simple variable substitution.

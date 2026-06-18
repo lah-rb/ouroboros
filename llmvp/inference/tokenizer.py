@@ -284,3 +284,26 @@ def build_full_prompt(user_prompt: str, tokenizer: Any) -> List[int]:
     )
 
     return tokenize_segments(tokenizer, segments)
+
+
+def flow_head_tokens(
+    static_prefix: str, tokenizer: Any, confirm_with: Optional[List[int]] = None
+) -> List[int]:
+    """The leading tokens of a rendered ``static_prefix`` that are STABLE regardless
+    of what text follows it — the pinnable flow head, boundary-merge robust.
+
+    Renders ``static_prefix`` with two different tails and keeps their common token
+    prefix; if ``confirm_with`` (a third real render, e.g. ``static_prefix + prompt``)
+    is given it must agree too, tightening the boundary. Shared by the stateless flow
+    cache (run_completion) and the resident session flow-fork so both pin the exact
+    same head for a given flow.
+    """
+    p1 = build_full_prompt(static_prefix + "\nAlpha one two", tokenizer)
+    others = [build_full_prompt(static_prefix + "\tBravo nine six", tokenizer)]
+    if confirm_with is not None:
+        others.append(list(confirm_with))
+    lim = min([len(p1)] + [len(s) for s in others])
+    n = 0
+    while n < lim and all(p1[n] == s[n] for s in others):
+        n += 1
+    return p1[:n]

@@ -31,6 +31,14 @@ from formats.registry import get_renderer as _get_format_renderer
 
 log = logging.getLogger("llm-mvp")
 
+# Resident windowing reserves at most this much generation headroom when deciding
+# whether a deep session must slide its window — NOT the full requested max_tokens.
+# Session turns (esp. thinking models) often pass max_tokens ≈ n_ctx for headroom;
+# reserving all of it would fire windowing every turn and gut the session memory.
+# The backend caps the ACTUAL generation to the remaining context regardless, so
+# this is just the minimum free headroom we keep before dropping the oldest turns.
+_WINDOW_GEN_RESERVE = 16384
+
 
 def _think_strip_enabled() -> bool:
     """Whether to strip prior-turn reasoning from session KV (Factor 4).
@@ -111,6 +119,14 @@ class SessionState:
     # turn instead of save/load state surgery. A degenerate turn simply
     # never enters the history.
     token_history: list = field(default_factory=list)
+    # Resident session flow-fork (model.resident_session_flow_fork): an invariant
+    # per-flow preamble ABOVE the global static, pinned + forked onto the live seq at
+    # turn 0 so only the first user message prefills. static_base is the resident
+    # head length to PRESERVE on windowing (flow_prefix_len when forked, else the
+    # global static len).
+    flow_key: Optional[str] = None
+    flow_static_prefix: Optional[str] = None
+    static_base: int = 0
 
 
 def _global_temperature_floor(requested: float, gen_cfg: Any) -> float:
@@ -224,17 +240,71 @@ class SessionManager:
             return contextlib.nullcontext()
         return guard()
 
-    async def start_session(self, ttl_seconds: int = 300) -> SessionInfo:
-        """Acquire instance, save initial state, return session info."""
+    async def _resident_session_flow_fork(
+        self, instance: Any, session: "SessionState", prompt: str
+    ) -> Optional[list]:
+        """Turn-0 flow fork: pin [global static + flow head] and fork it onto the
+        live session seq so only the first user message's tail prefills.
+
+        The first user turn is rendered as ``static_prefix + prompt`` (ONE turn —
+        the identical token stream the stateless flow path produces), the stable
+        head is pinned via the backend's resident flow cache (BUILD once per
+        instance, HIT after), and only the suffix AFTER the pinned head is returned
+        to append. Sets ``session.static_base`` (the resident head to preserve on
+        windowing). Returns the turn-0 token suffix, or None to fall back to the
+        normal turn-0 build (no usable head, or the backend fell back).
+        """
+        from inference.tokenizer import build_full_prompt, flow_head_tokens
+
+        tokenizer = get_cached_tokenizer()
+        static_toks = getattr(self._backend, "_resident_static_tokens", None) or []
+        glob = int(getattr(self._backend, "_resident_static_len", 0) or 0)
+        prefix = session.flow_static_prefix or ""
+        dynamic_full = build_full_prompt(prefix + prompt, tokenizer)
+        n = len(flow_head_tokens(prefix, tokenizer, confirm_with=dynamic_full))
+        if n <= 0:
+            session.static_base = glob
+            return None
+        head = list(static_toks) + list(dynamic_full[:n])
+        got = await run_in_threadpool(
+            self._backend._resident_flow,
+            instance, session.flow_key, len(head), head,
+        )
+        if got is None:  # backend fell back to the global static base
+            session.static_base = glob
+            return None
+        session.static_base = int(got)
+        log.info(
+            "🪡 session flow-fork %r: pinned %d-tok head, turn-0 suffix %d tok",
+            session.flow_key, len(head), len(dynamic_full) - n,
+        )
+        return list(dynamic_full[n:])
+
+    async def start_session(
+        self,
+        ttl_seconds: int = 300,
+        flow_key: Optional[str] = None,
+        static_prefix: Optional[str] = None,
+    ) -> SessionInfo:
+        """Acquire instance, save initial state, return session info.
+
+        ``flow_key`` + ``static_prefix`` opt a resident session into the turn-0
+        flow-fork (model.resident_session_flow_fork): the invariant preamble is
+        pinned + forked onto the live seq at turn 0 so it isn't re-prefilled per
+        session. Ignored unless resident_session_flow_fork is active.
+        """
         instance = await self._backend.acquire_instance()
         session_id = _generate_session_id()
 
-        # The instance already has the static snapshot restored
-        # (from acquire_instance). Save this as the session's
-        # initial state — it becomes turn 0. save_state is a multi-GB
-        # GPU memcpy — guard it like any other GPU work.
-        async with self._generation_guard():
-            initial_state = await run_in_threadpool(instance.save_state)
+        # Resident-live sessions keep seq 0 live across turns (acquire_instance
+        # already forked the pristine static onto it) — no per-turn save/restore,
+        # so no initial snapshot. Legacy: save the post-static state as turn 0.
+        resident = bool(getattr(self._backend, "_resident_active", False))
+        initial_state = None
+        if not resident:
+            # save_state is a multi-GB GPU memcpy — guard it like other GPU work.
+            async with self._generation_guard():
+                initial_state = await run_in_threadpool(instance.save_state)
 
         self._sessions[session_id] = SessionState(
             instance=instance,
@@ -242,6 +312,8 @@ class SessionManager:
             ttl=ttl_seconds,
             created_at=time.monotonic(),
             last_turn_at=time.monotonic(),
+            flow_key=flow_key,
+            flow_static_prefix=static_prefix,
         )
 
         # Start TTL expiry timer
@@ -320,8 +392,31 @@ class SessionManager:
             # Default true (safety): the save/load path below is the opt-in
             # fast path. getattr fallback matches the ModelConfig default so a
             # pre-field serialized config also gets the safe behavior.
+            # Resident-live takes precedence: seq 0 already holds static + every
+            # prior turn (left live from last turn) — NO restore, NO re-prefill.
+            # We only capture the live position so a degenerate turn can be
+            # purged back to it. This is what eliminates BOTH the save_state
+            # overflow and the full-replay re-prefill cost.
+            resident = bool(getattr(self._backend, "_resident_active", False))
             full_replay = bool(getattr(config.model, "session_full_replay", True))
-            if full_replay:
+            pre_turn_pos = 0
+            flow_turn_suffix = None  # set by the turn-0 flow fork, if any
+            if resident:
+                # Turn 0 of a flow session: fork the pinned [global static + flow
+                # head] onto the live seq (BUILD once per instance, HIT after) so
+                # only the first user message's tail prefills. Must run BEFORE
+                # capturing pre_turn_pos (the fork advances the live position).
+                if (
+                    session.turn_count == 0
+                    and getattr(self._backend, "_session_flow_fork", False)
+                    and session.flow_key
+                    and session.flow_static_prefix
+                ):
+                    flow_turn_suffix = await self._resident_session_flow_fork(
+                        instance, session, prompt
+                    )
+                pre_turn_pos = int(getattr(instance, "n_tokens", 0) or 0)
+            elif full_replay:
                 static = getattr(self._backend, "static_state", None)
                 if static is not None:
                     await run_in_threadpool(instance.load_state, static)
@@ -371,20 +466,53 @@ class SessionManager:
             # plain text. Continuation turns (turn_count > 0) first emit the
             # transition that closes the previous assistant turn in the KV cache;
             # the first turn has no prior assistant output to close.
-            segments: list = []
-            if session.turn_count > 0:
-                segments += renderer.render_turn_transition_segments()
-            segments += renderer.render_user_segments(prompt)
-            segments += renderer.render_generation_prompt_segments()
-
-            tokenizer = get_cached_tokenizer()
-            turn_tokens = tokenize_segments(tokenizer, segments)
-            if full_replay:
-                # Re-prefill everything this session has ever evaluated,
-                # then this turn — identical token stream to what the KV
-                # would have held under state splicing, rebuilt exactly.
+            if flow_turn_suffix is not None:
+                # Turn-0 flow fork: the live seq already holds [global static + flow
+                # head]; the suffix encodes the rest of the (static_prefix + prompt)
+                # user turn + the generation prompt. Append only that.
+                turn_tokens = flow_turn_suffix
                 turn_only = turn_tokens
-                turn_tokens = list(session.token_history) + turn_only
+            else:
+                segments: list = []
+                if session.turn_count > 0:
+                    segments += renderer.render_turn_transition_segments()
+                segments += renderer.render_user_segments(prompt)
+                segments += renderer.render_generation_prompt_segments()
+
+                tokenizer = get_cached_tokenizer()
+                turn_tokens = tokenize_segments(tokenizer, segments)
+                turn_only = turn_tokens
+                if full_replay and not resident:
+                    # Re-prefill everything this session has ever evaluated,
+                    # then this turn — identical token stream to what the KV
+                    # would have held under state splicing, rebuilt exactly.
+                    # (Resident keeps the KV live, so it appends turn_only only.)
+                    turn_tokens = list(session.token_history) + turn_only
+
+            # Resident windowing: if this turn + its generation won't fit in the
+            # context, slide the window (drop the oldest turns, keep the static
+            # head + recent turns) instead of letting the backend raise at the
+            # context-window guard. Update pre_turn_pos so a degenerate purge
+            # targets the post-window position.
+            if resident:
+                n_ctx = int(getattr(instance, "_n_ctx", 0) or 0)
+                # Preserve the session's actual resident head — the flow head when a
+                # flow-fork session pinned one, else the global static — so windowing
+                # never shaves off the agent preamble.
+                n_keep = int(
+                    session.static_base
+                    or getattr(self._backend, "_resident_static_len", 0)
+                    or 0
+                )
+                # Reserve only a BOUNDED generation headroom (not the full
+                # max_tokens — a thinking-turn's max_tokens is often ~n_ctx, which
+                # would window every turn). The backend caps real generation to the
+                # remaining context anyway; this just keeps a slice free.
+                gen_reserve = min(int(max_tokens or 0), _WINDOW_GEN_RESERVE)
+                if n_ctx and pre_turn_pos + len(turn_tokens) + gen_reserve >= n_ctx:
+                    pre_turn_pos = await run_in_threadpool(
+                        self._backend._window_resident_seq, instance, n_keep
+                    )
 
             # Build generation kwargs
             gen_kwargs = {}
@@ -429,7 +557,22 @@ class SessionManager:
                     generated_parts.append(chunk)
                     yield chunk
 
-                if full_replay:
+                if resident:
+                    # Resident-live: KV stays live on seq 0 — NO save_state, NO
+                    # token_history. Optional Factor-4 in-place CoT strip
+                    # (model.resident_strip_reasoning): drop this turn's reasoning
+                    # from the live KV so prior-turn CoT never accumulates. No-op
+                    # for non-thinking families; skips truncated turns (handled in
+                    # _maybe_strip_reasoning). Crash-free here (no save_state),
+                    # unlike the splice path. Off by default (parity w/ full_replay).
+                    if _think_strip_enabled() and getattr(
+                        config.model, "resident_strip_reasoning", False
+                    ):
+                        from core.inference import _strip_delimiter
+
+                        content = _strip_delimiter("".join(generated_parts))
+                        await self._maybe_strip_reasoning(instance, content)
+                elif full_replay:
                     # No state surgery of any kind: extend the history with
                     # this turn's exact tokens (turn segments + generated ids
                     # exposed by the backend) — the next turn re-prefills it.
@@ -467,6 +610,23 @@ class SessionManager:
                     len(session.last_assistant_text),
                 )
             except DegenerateGenerationError as e:
+                if resident:
+                    # Purge the degenerate span from the live seq 0: drop its KV
+                    # from pre_turn_pos to the end and rewind the position. All
+                    # prior turns survive (they sit below pre_turn_pos). No blob.
+                    def _purge_resident() -> None:
+                        instance._ctx.memory_seq_rm(0, pre_turn_pos, -1)
+                        instance.n_tokens = pre_turn_pos
+
+                    await run_in_threadpool(_purge_resident)
+                    log.warning(
+                        "🛑 Session %s degenerate generation (%s) — resident, "
+                        "purged turn span back to pos %d",
+                        session_id,
+                        e.reason,
+                        pre_turn_pos,
+                    )
+                    raise
                 if full_replay:
                     # Nothing to purge: the history was never extended, so
                     # the degenerate span simply doesn't exist as far as the
@@ -502,6 +662,13 @@ class SessionManager:
         p = getattr(instance, "_last_gen_start_pos", None)
         if not gen_tokens or p is None:
             return
+        if not (content or "").strip():
+            # The turn was truncated before emitting a final-channel answer (e.g.
+            # max_tokens hit mid-analysis) — there is no clean answer to replay.
+            # Stripping here would replace the raw output with an EMPTY final
+            # channel, writing an answerless assistant turn into the KV (which
+            # compounds across turns). Keep the raw generation instead.
+            return
         config = get_config()
         span = reasoning_span(
             config.model.family,
@@ -525,6 +692,19 @@ class SessionManager:
                 t0,
                 len(replay),
             )
+            import os as _os
+            if _os.getenv("OURO_RESIDENT_STRIP") == "1":  # diagnostic
+                try:
+                    gen_txt = instance.detokenize(list(gen_tokens)).decode("utf-8", "replace")
+                    nt = instance.n_tokens
+                    tail_ids = list(instance.input_ids[max(0, nt - 110):nt])
+                    tail = instance.detokenize(tail_ids).decode("utf-8", "replace")
+                    log.warning(
+                        "🔬 STRIP DIAG t0=%d nt=%d | content=%r | gen=%r | post-tail=%r",
+                        t0, nt, (content or "")[:70], gen_txt[:110], tail[-230:],
+                    )
+                except Exception as ex:  # noqa: BLE001
+                    log.warning("strip diag failed: %s", ex)
 
     async def session_turn_complete(
         self,
