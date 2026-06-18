@@ -31,7 +31,10 @@ def test_split_reconstructs_full_prompt_exactly():
 
 
 def test_template_without_cache_sections_yields_empty_static():
+    # Uses a template with NO `cache: true` sections. (Was judge_task_completion
+    # until it was cache-ordered; if derive_completion_criteria is ever cache-
+    # ordered too, this fails loudly — repoint to another uncached template.)
     r = PromptRenderer("prompts")
-    static, dynamic = r.render_with_cache_split("ops/judge_task_completion", _ns())
+    static, dynamic = r.render_with_cache_split("ops/derive_completion_criteria", _ns())
     assert static == ""
-    assert dynamic == r.render("ops/judge_task_completion", _ns())
+    assert dynamic == r.render("ops/derive_completion_criteria", _ns())
