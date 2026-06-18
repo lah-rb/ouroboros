@@ -54,7 +54,7 @@ async def action_compile_diagnosis(step_input: StepInput) -> StepOutput:
     target_symbol = step_input.context.get("target_symbol", "") or ""
     change_spec = step_input.context.get("change_spec", "") or ""
     diagnosis_kind = step_input.context.get("diagnosis_kind", "") or ""
-    import_statement = step_input.context.get("import_statement", "") or ""
+    module_statement = step_input.context.get("module_statement", "") or ""
     diagnosis_confidence = step_input.context.get("diagnosis_confidence", "") or ""
     root_cause_struct = step_input.context.get("root_cause", "") or ""
     # Multi-symbol patching (505 round). conclude_diagnosis publishes
@@ -108,7 +108,7 @@ async def action_compile_diagnosis(step_input: StepInput) -> StepOutput:
         "related_symbols": related_symbols,
         "change_spec": change_spec,
         "kind": diagnosis_kind,
-        "import_statement": str(import_statement),
+        "module_statement": str(module_statement),
     }
 
     status_msg = (

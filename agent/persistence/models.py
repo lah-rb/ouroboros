@@ -122,13 +122,14 @@ class DirectiveReport(BaseModel):
     # symbols.
     related_symbols: list[str] = Field(default_factory=list)
     change_spec: str = ""
-    # "fix" | "enhancement" | "new_file" | "import_fix" (diagnose only)
+    # "fix" | "enhancement" | "new_file" | "module_fix" (diagnose only)
     diagnosis_kind: str = ""
-    # Structured import-fix declaration: the exact literal statement to
-    # insert when diagnosis_kind == "import_fix" (e.g. "from commands
-    # import InventoryCommand"). file_ops routes on this — no heuristic
-    # extraction from prose. Empty for all other kinds.
-    import_statement: str = ""
+    # Structured module-fix declaration: the exact literal module-level line to
+    # insert when diagnosis_kind == "module_fix" (a missing import, a script's
+    # shebang, a `source`/`set` line — e.g. "from commands import
+    # InventoryCommand" or "#!/usr/bin/env bash"). file_ops routes on this — no
+    # heuristic extraction from prose. Empty for all other kinds.
+    module_statement: str = ""
     timestamp: str = Field(default_factory=_now_iso)
 
 

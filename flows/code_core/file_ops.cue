@@ -55,9 +55,9 @@ file_ops: #FlowDefinition & {
 			"change_spec",
 			"diagnosis_kind",
 			// Structured import-fix declaration: the literal statement
-			// accompanying diagnosis_kind == "import_fix". Routed on by
-			// check_import_fix — no heuristic extraction from prose.
-			"import_statement",
+			// accompanying diagnosis_kind == "module_fix". Routed on by
+			// check_module_fix — no heuristic extraction from prose.
+			"module_statement",
 			// Multi-symbol patching (505 round). List of co-dependent
 			// symbols in the same file that must change alongside
 			// target_symbol. Forwarded to the patch sub-flow where
@@ -126,47 +126,47 @@ file_ops: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.file_found == true", transition: "check_import_fix"},
+					{condition: "result.file_found == true", transition: "check_module_fix"},
 					{condition: "true", transition: "compile_report_failure"},
 				]
 			}
 		}
 
-		// Pure reader of the diagnosis's structured import_fix declaration.
-		// A missing module-level import can't be expressed by the symbol
-		// patch (it rewrites a function body, where a top-level import can't
-		// live). When diagnose declared kind == "import_fix" with a literal
-		// import_statement, route to the module-frame editor; otherwise fall
-		// through to the normal symbol routing unchanged.
-		check_import_fix: #StepDefinition & {
-			action:      "check_import_fix"
-			description: "Route a declared import-class fix to the module-frame editor"
+		// Pure reader of the diagnosis's structured module_fix declaration.
+		// A missing module-level line (import, shebang, source/set) can't be
+		// expressed by the symbol patch (it rewrites a function body, where a
+		// top-level statement can't live). When diagnose declared kind ==
+		// "module_fix" with a literal module_statement, route to the
+		// module-frame editor; otherwise fall through to normal symbol routing.
+		check_module_fix: #StepDefinition & {
+			action:      "check_module_fix"
+			description: "Route a declared module-class fix to the module-frame editor"
 			context: optional: ["target_file"]
 			params: {
 				target_file_path: {$ref: "input.target_file_path", default: ""}
 				file_content:     {$ref: "context.target_file.content", default: ""}
 				diagnosis_kind:   {$ref: "input.diagnosis_kind", default: ""}
-				import_statement: {$ref: "input.import_statement", default: ""}
+				module_statement: {$ref: "input.module_statement", default: ""}
 			}
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.is_import_fix == true", transition: "run_module_frame_edit"},
+					{condition: "result.is_module_fix == true", transition: "run_module_frame_edit"},
 					{condition: "true", transition:                          "extract_symbols"},
 				]
 			}
-			publishes: ["import_statement", "import_directive"]
+			publishes: ["module_statement", "module_directive"]
 		}
 
 		run_module_frame_edit: #StepDefinition & {
 			action:      "flow"
-			description: "Import-class fix — edit the module frame (bodies preserved)"
+			description: "Module-class fix — edit the module frame (bodies preserved)"
 			flow:        "patch_module"
 			input_map: {
 				target_file_path:  {$ref: "input.target_file_path"}
 				file_content:      {$ref: "context.target_file.content"}
 				flow_directive:    {$ref: "input.flow_directive"}
-				import_directive:  {$ref: "context.import_directive", default: ""}
+				module_directive:  {$ref: "context.module_directive", default: ""}
 				change_spec:       {$ref: "input.change_spec", default: ""}
 				working_directory: {$ref: "input.working_directory"}
 			}
@@ -560,7 +560,7 @@ file_ops: #FlowDefinition & {
 				target_symbol:    {$ref: "input.target_symbol", default: ""}
 				change_spec:      {$ref: "input.change_spec", default: ""}
 				diagnosis_kind:   {$ref: "input.diagnosis_kind", default: ""}
-				import_statement: {$ref: "input.import_statement", default: ""}
+				module_statement: {$ref: "input.module_statement", default: ""}
 				related_symbols:  {$ref: "input.related_symbols", default: []}
 			}
 			resolver: {
@@ -581,7 +581,7 @@ file_ops: #FlowDefinition & {
 				target_symbol:    {$ref: "input.target_symbol", default: ""}
 				change_spec:      {$ref: "input.change_spec", default: ""}
 				diagnosis_kind:   {$ref: "input.diagnosis_kind", default: ""}
-				import_statement: {$ref: "input.import_statement", default: ""}
+				module_statement: {$ref: "input.module_statement", default: ""}
 				related_symbols:  {$ref: "input.related_symbols", default: []}
 			}
 			resolver: {

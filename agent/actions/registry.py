@@ -253,9 +253,9 @@ def build_action_registry() -> ActionRegistry:
         action_translate_data_ops_turn,
     )
 
-    # ── Module-frame editor (import trigger + frame edit) ─────────
+    # ── Module-frame editor (module-fix trigger + frame edit) ─────
     from agent.actions.frame_actions import (
-        action_check_import_fix,
+        action_check_module_fix,
         action_prepare_frame,
         action_rewrite_frame_turn,
         action_splice_frame,
@@ -470,7 +470,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("apply_data_ops", action_apply_data_ops)
 
     # ── Module-frame editor ───────────────────────────────────────
-    registry.register("check_import_fix", action_check_import_fix)
+    registry.register("check_module_fix", action_check_module_fix)
     registry.register("prepare_frame", action_prepare_frame)
     registry.register("rewrite_frame_turn", action_rewrite_frame_turn)
     registry.register("splice_frame", action_splice_frame)

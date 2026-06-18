@@ -1,8 +1,8 @@
 // patch_module.cue — Module-Frame Editor
 //
-// Sub-flow of file_ops, fired by check_import_fix for import-class fixes that
-// the symbol patch cannot express (a top-level import can't live inside a
-// rewritten function body — this trapped Mistral in a 6× loop).
+// Sub-flow of file_ops, fired by check_module_fix for module-class fixes that
+// the symbol patch cannot express (a top-level line — import, shebang, source —
+// can't live inside a rewritten function body — this trapped Mistral in a 6× loop).
 //
 // Part of the file_ops family:
 //   file_ops (orchestrator) → create | patch | add_symbol | rewrite | patch_module
@@ -38,7 +38,7 @@ patch_module: #FlowDefinition & {
 	input: {
 		required: ["target_file_path", "file_content", "flow_directive"]
 		optional: [
-			"import_directive",
+			"module_directive",
 			"change_spec",
 			"root_cause",
 			"working_directory",
@@ -67,7 +67,7 @@ patch_module: #FlowDefinition & {
 		rewrite_frame: #StepDefinition & {
 			action:      "rewrite_frame_turn"
 			description: "Model edits the module frame (single inference turn)"
-			context: optional: ["frame_text", "import_directive", "flow_directive"]
+			context: optional: ["frame_text", "module_directive", "flow_directive"]
 			resolver: {
 				type: "rule"
 				rules: [

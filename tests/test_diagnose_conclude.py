@@ -100,8 +100,8 @@ async def test_conclude_drops_primary_and_dedupes_related():
 
 
 @pytest.mark.asyncio
-async def test_conclude_publishes_import_fix_declaration_verbatim():
-    """kind == import_fix + literal import_statement publish unchanged —
+async def test_conclude_publishes_module_fix_declaration_verbatim():
+    """kind == module_fix + literal module_statement publish unchanged —
     file_ops routes on these structured fields, no prose extraction."""
     fenced = (
         "```json\n"
@@ -109,8 +109,8 @@ async def test_conclude_publishes_import_fix_declaration_verbatim():
         '  "target_file": "parser.py",\n'
         '  "root_cause": "parse_command instantiates InventoryCommand but parser.py never imports it",\n'
         '  "change_spec": "Import InventoryCommand so parse_command can instantiate it.",\n'
-        '  "kind": "import_fix",\n'
-        '  "import_statement": "from commands import InventoryCommand",\n'
+        '  "kind": "module_fix",\n'
+        '  "module_statement": "from commands import InventoryCommand",\n'
         '  "confidence": "HIGH",\n'
         '  "recommended_flow": "file_ops"\n'
         "}\n"
@@ -123,12 +123,12 @@ async def test_conclude_publishes_import_fix_declaration_verbatim():
 
     out = await action_conclude_diagnosis(step_input)
     cu = out.context_updates
-    assert cu["diagnosis_kind"] == "import_fix"
-    assert cu["import_statement"] == "from commands import InventoryCommand"
+    assert cu["diagnosis_kind"] == "module_fix"
+    assert cu["module_statement"] == "from commands import InventoryCommand"
 
 
 @pytest.mark.asyncio
-async def test_conclude_import_statement_defaults_empty():
+async def test_conclude_module_statement_defaults_empty():
     fenced = '```json\n{"target_file": "x.py", "kind": "fix"}\n```'
     effects = MockEffects(inference_responses=[fenced])
     step_input = _step_input(
@@ -136,7 +136,7 @@ async def test_conclude_import_statement_defaults_empty():
     )
 
     out = await action_conclude_diagnosis(step_input)
-    assert out.context_updates["import_statement"] == ""
+    assert out.context_updates["module_statement"] == ""
 
 
 @pytest.mark.asyncio

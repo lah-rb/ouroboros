@@ -158,15 +158,18 @@ CONCLUDE_PROMPT = (
     "orientation text where users expect one, no handler for "
     "input that should respond, missing field on a model class), "
     "`new_file` (a whole file needs to exist that currently "
-    "doesn't), `import_fix` (the code is right but a module-level "
-    "import is missing or wrong in ``target_file`` — a name it "
-    "uses is never imported). Prefer `import_fix` over `fix` "
-    "whenever the change is adding or correcting an import line.\n\n"
-    "  import_statement — REQUIRED when kind is `import_fix`; omit "
-    "otherwise. The exact literal statement to insert, exactly as "
-    "it should appear in the file. One complete statement.\n"
-    '    ✅ "import_statement": "from commands import InventoryCommand"\n'
-    '    ❌ "import_statement": "add an import for InventoryCommand at the top"\n\n'
+    "doesn't), `module_fix` (the code is right but a module-level "
+    "line is missing or wrong in ``target_file`` — a missing import, "
+    "a script's shebang, a `source`/`set` line; a name it uses is "
+    "never imported, or the script lacks its interpreter line). "
+    "Prefer `module_fix` over `fix` whenever the change is adding or "
+    "correcting a module-level line such as an import.\n\n"
+    "  module_statement — REQUIRED when kind is `module_fix`; omit "
+    "otherwise. The exact literal line(s) to insert, exactly as they "
+    "should appear in the file.\n"
+    '    ✅ "module_statement": "from commands import InventoryCommand"\n'
+    '    ✅ "module_statement": "#!/usr/bin/env bash"\n'
+    '    ❌ "module_statement": "add an import for InventoryCommand at the top"\n\n'
     "  confidence — one of: `HIGH`, `MEDIUM`, `LOW`.\n\n"
     "  recommended_flow — `file_ops` for code or data file "
     "changes (covers create, patch, add, rewrite internally); "
@@ -958,7 +961,7 @@ async def _conclude_diagnosis(
     target_symbol: str = ""
     change_spec: str = ""
     kind: str = ""
-    import_statement: str = ""
+    module_statement: str = ""
     confidence: str = ""
     root_cause: str = ""
     # Multi-symbol patching (505 round). List of co-dependent
@@ -978,7 +981,7 @@ async def _conclude_diagnosis(
             target_symbol = str(parsed.get("target_symbol", "") or "")
             change_spec = str(parsed.get("change_spec", "") or "")
             kind = str(parsed.get("kind", "") or "")
-            import_statement = str(parsed.get("import_statement", "") or "")
+            module_statement = str(parsed.get("module_statement", "") or "")
             confidence = str(parsed.get("confidence", "") or "")
             root_cause = str(parsed.get("root_cause", "") or "")
             raw_related = parsed.get("related_symbols", [])
@@ -1014,7 +1017,7 @@ async def _conclude_diagnosis(
         "related_symbols": related_symbols,
         "change_spec": change_spec,
         "diagnosis_kind": kind,
-        "import_statement": import_statement,
+        "module_statement": module_statement,
         "diagnosis_confidence": confidence,
         "root_cause": root_cause,
     }
@@ -1025,7 +1028,7 @@ async def _conclude_diagnosis(
         f"Turn {turn + 1}: conclude — diagnosis {len(diagnosis_text)} "
         f"chars, target={target_file}:{target_symbol or '<whole file>'}, "
         f"kind={kind!r}, related={len(related_symbols)}, "
-        f"import_statement={import_statement!r}, "
+        f"module_statement={module_statement!r}, "
         f"recommended_flow={recommended_flow!r}"
     )
 
@@ -1230,7 +1233,7 @@ async def action_systemic_scan(step_input: StepInput) -> StepOutput:
     if not effects or not session_id:
         return _passthrough("no session/effects — skipped")
     # Whole-file / new-file / import ops have no symbol-level siblings.
-    if not target_symbol or kind in ("new_file", "import_fix"):
+    if not target_symbol or kind in ("new_file", "module_fix"):
         return _passthrough("local op (no target symbol / new file / import) — skipped")
 
     # Structural sibling search (tree-sitter) — give the model the usage-site

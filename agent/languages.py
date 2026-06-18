@@ -59,11 +59,20 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
         name="python", extensions=("py",), grammar="python",
         def_node_kinds={},  # Python is dispatched by repomap's dedicated extractor, never via these
         label="Python file", frame_fence="python",
+        comment_prefix="#",
+        module_fix_placement=(
+            "with the other imports, after any `from __future__` imports and the "
+            "module docstring"
+        ),
     ),
     LanguageSpec(
         name="bash", extensions=("sh", "bash", "zsh"), grammar="bash",
         def_node_kinds={"function_definition": "function"},
         label="shell script", frame_fence="bash",
+        comment_prefix="#",
+        module_fix_placement=(
+            "right after the shebang line, or as line 1 if there is no shebang"
+        ),
     ),
     LanguageSpec(
         name="javascript", extensions=("js", "mjs", "cjs", "jsx"), grammar="javascript",
@@ -74,6 +83,8 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
             "method_definition": "method",
         },
         label="JavaScript file", frame_fence="javascript",
+        comment_prefix="//",
+        module_fix_placement="at the top of the file, after any existing imports",
     ),
     LanguageSpec(
         name="typescript", extensions=("ts",), grammar="typescript",
@@ -86,6 +97,8 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
             "method_signature": "method",
         },
         label="TypeScript file", frame_fence="typescript",
+        comment_prefix="//",
+        module_fix_placement="at the top of the file, after any existing imports",
     ),
     LanguageSpec(
         name="tsx", extensions=("tsx",), grammar="tsx",
@@ -96,6 +109,8 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
             "method_definition": "method",
         },
         label="TypeScript file", frame_fence="tsx",
+        comment_prefix="//",
+        module_fix_placement="at the top of the file, after any existing imports",
     ),
     LanguageSpec(
         name="go", extensions=("go",), grammar="go",
@@ -105,6 +120,11 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
             "type_declaration": "class",
         },
         label="Go file", frame_fence="go",
+        comment_prefix="//",
+        module_fix_placement=(
+            "inside the existing `import ( … )` block, or a new block right after "
+            "the `package` clause"
+        ),
     ),
     LanguageSpec(
         name="ruby", extensions=("rb",), grammar="ruby",
@@ -115,6 +135,7 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
             "module": "module",
         },
         label="Ruby file", frame_fence="ruby",
+        comment_prefix="#",  # module_fix_placement: out of first-cut scope
     ),
     LanguageSpec(
         name="rust", extensions=("rs",), grammar="rust",
@@ -125,6 +146,7 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
             "trait_item": "class",
         },
         label="Rust file", frame_fence="rust",
+        comment_prefix="//",  # module_fix_placement: out of first-cut scope
     ),
     LanguageSpec(
         name="java", extensions=("java",), grammar="java",
@@ -135,6 +157,7 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
             "interface_declaration": "class",
         },
         label="Java file", frame_fence="java",
+        comment_prefix="//",  # module_fix_placement: out of first-cut scope
     ),
 )
 
@@ -266,6 +289,22 @@ def frame_label_and_fence(path: str) -> tuple[str, str]:
     if spec and spec.label:
         return spec.label, spec.frame_fence
     return "file", ""
+
+
+def comment_prefix_for_path(path: str) -> str:
+    """Line-comment prefix for a file's language ('#', '//'), defaulting to '#'
+    for unknown/grammar-less paths. Used to render the frame-editor sentinel as a
+    real comment in the target language."""
+    spec = spec_for_path(path)
+    return spec.comment_prefix if (spec and spec.comment_prefix) else "#"
+
+
+def module_fix_placement_for_path(path: str) -> str | None:
+    """Per-language placement hint for a new module-level line (where it should
+    go), or None when the language has no specific rule. Injected into the
+    frame-edit directive for `module_fix`."""
+    spec = spec_for_path(path)
+    return spec.module_fix_placement if spec else None
 
 
 def is_source(ext: str) -> bool:

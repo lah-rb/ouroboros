@@ -90,3 +90,23 @@ def test_frame_lang_label_and_fence():
     assert _frame_lang("x.go") == ("Go file", "go")
     assert _frame_lang("x.py") == ("Python file", "python")
     assert _frame_lang("x.zzz") == ("file", "")
+
+
+def test_frame_sentinel_uses_language_comment_prefix():
+    # The body placeholder is a REAL comment in the target language ("//" for Go,
+    # not a stray "#" the model might "correct"); splice matches it prefix-
+    # agnostically so the round-trip survives any prefix.
+    from agent.actions.frame_actions import build_frame, splice_frame
+
+    go = 'package main\nimport "fmt"\nfunc greet() {\n  fmt.Println("hi")\n}\n'
+    frame, preserved, ok, _ = build_frame("m.go", go)
+    assert ok and "greet" in preserved
+    assert "// ⟦OUROBOROS-SYMBOL greet" in frame
+    assert "# ⟦OUROBOROS-SYMBOL" not in frame
+    content, sok, _ = splice_frame(frame, preserved, "m.go")
+    assert sok and "fmt.Println" in content
+
+    # Python keeps "#"
+    py = "import os\ndef f():\n    return 1\n"
+    pframe, _, _, _ = build_frame("a.py", py)
+    assert "# ⟦OUROBOROS-SYMBOL f" in pframe

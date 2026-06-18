@@ -134,3 +134,27 @@ def test_registry_is_a_dependency_light_leaf():
             mods.append(node.module or "")
     bad = [m for m in mods if m.split(".")[0] in {"agent", "tree_sitter", "tree_sitter_language_pack"}]
     assert bad == [], f"agent/languages.py must stay a stdlib-only leaf; found: {bad}"
+
+
+# ── module_fix fields (comment_prefix / module_fix_placement) ──
+def test_comment_prefix_populated_for_every_grammar_spec():
+    # Drives the frame-editor sentinel; must be a real comment in every language.
+    assert all(s.comment_prefix for s in L.LANGUAGES)
+    assert L.by_name("python").comment_prefix == "#"
+    assert L.by_name("bash").comment_prefix == "#"
+    assert L.by_name("ruby").comment_prefix == "#"
+    assert L.by_name("go").comment_prefix == "//"
+    assert L.by_name("javascript").comment_prefix == "//"
+    assert L.by_name("rust").comment_prefix == "//"
+    # path helper defaults unknown → "#"
+    assert L.comment_prefix_for_path("a.go") == "//"
+    assert L.comment_prefix_for_path("a.unknownext") == "#"
+
+
+def test_module_fix_placement_set_for_scope_langs_only():
+    for path in ("a.py", "a.go", "a.js", "a.ts", "a.tsx", "a.sh"):
+        assert L.module_fix_placement_for_path(path), path  # scope langs have a hint
+    # out of first-cut scope → None (no placement guidance yet)
+    assert L.module_fix_placement_for_path("a.rs") is None
+    assert L.module_fix_placement_for_path("a.rb") is None
+    assert L.module_fix_placement_for_path("a.unknownext") is None

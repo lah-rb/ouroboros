@@ -30,12 +30,12 @@
     },
     "kind": {
       "type": "string",
-      "enum": ["fix", "enhancement", "new_file", "import_fix"],
-      "description": "fix: existing code is broken. enhancement: an existing file needs a new symbol or behavior. new_file: a file needs to exist that currently doesn't (file_ops will route to create regardless, but the explicit signal aids diagnosis quality). import_fix: the code is right but a module-level import is missing or wrong in target_file — requires import_statement."
+      "enum": ["fix", "enhancement", "new_file", "module_fix"],
+      "description": "fix: existing code is broken. enhancement: an existing file needs a new symbol or behavior. new_file: a file needs to exist that currently doesn't (file_ops will route to create regardless, but the explicit signal aids diagnosis quality). module_fix: the code is right but a module-level line is missing or wrong in target_file — a missing import, a script's shebang, a source/set line — requires module_statement."
     },
-    "import_statement": {
+    "module_statement": {
       "type": "string",
-      "description": "Required when kind is import_fix: the exact literal import statement to insert, exactly as it should appear in the file (e.g. 'from commands import InventoryCommand'). One complete statement. file_ops routes to the module-frame editor on this — no heuristic extraction from prose."
+      "description": "Required when kind is module_fix: the exact literal module-level line(s) to insert, exactly as they should appear in the file (e.g. 'from commands import InventoryCommand' or '#!/usr/bin/env bash'). file_ops routes to the module-frame editor on this — no heuristic extraction from prose."
     },
     "confidence": {
       "type": "string",
@@ -53,8 +53,8 @@
       "description": "Additional issues noticed during investigation; does not block the primary change."
     }
   },
-  "if": {"properties": {"kind": {"const": "import_fix"}}},
-  "then": {"required": ["import_statement"]},
+  "if": {"properties": {"kind": {"const": "module_fix"}}},
+  "then": {"required": ["module_statement"]},
   "x-example": {
     "target_file": "engine.py",
     "target_symbol": "GameEngine.parse_command",

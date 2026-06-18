@@ -257,7 +257,7 @@ mission_control: #FlowDefinition & {
 					target_symbol:     {$ref: "context.dispatch_config.target_symbol", default: ""}
 					change_spec:       {$ref: "context.dispatch_config.change_spec", default: ""}
 					diagnosis_kind:    {$ref: "context.dispatch_config.diagnosis_kind", default: ""}
-					import_statement:  {$ref: "context.dispatch_config.import_statement", default: ""}
+					module_statement:  {$ref: "context.dispatch_config.module_statement", default: ""}
 					related_symbols:   {$ref: "context.dispatch_config.related_symbols", default: []}
 				}
 			}
@@ -444,9 +444,9 @@ mission_control: #FlowDefinition & {
 					target_symbol:            {$ref: "context.dispatch_config.target_symbol", default: ""}
 					change_spec:              {$ref: "context.dispatch_config.change_spec", default: ""}
 					diagnosis_kind:           {$ref: "context.dispatch_config.diagnosis_kind", default: ""}
-					// Structured import-fix declaration — literal
-					// statement accompanying kind == "import_fix".
-					import_statement:         {$ref: "context.dispatch_config.import_statement", default: ""}
+					// Structured module-fix declaration — the literal
+					// module-level line accompanying kind == "module_fix".
+					module_statement:         {$ref: "context.dispatch_config.module_statement", default: ""}
 					// Multi-symbol patching (505 round). List of
 					// co-dependent symbols in the same file that must
 					// change alongside target_symbol to keep the
@@ -551,7 +551,7 @@ mission_control: #FlowDefinition & {
 					target_symbol:     {$ref: "context.dispatch_config.target_symbol", default: ""}
 					change_spec:       {$ref: "context.dispatch_config.change_spec", default: ""}
 					diagnosis_kind:    {$ref: "context.dispatch_config.diagnosis_kind", default: ""}
-					import_statement:  {$ref: "context.dispatch_config.import_statement", default: ""}
+					module_statement:  {$ref: "context.dispatch_config.module_statement", default: ""}
 					related_symbols:   {$ref: "context.dispatch_config.related_symbols", default: []}
 				}
 			}

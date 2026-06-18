@@ -1942,7 +1942,7 @@
           "diagnosis_kind",
           "diagnosis_confidence",
           "root_cause",
-          "import_statement",
+          "module_statement",
           "related_symbols"
         ],
         "effects": [],
@@ -2048,7 +2048,7 @@
             "diagnosis_kind",
             "diagnosis_confidence",
             "root_cause",
-            "import_statement",
+            "module_statement",
             "related_symbols"
           ]
         },
@@ -2294,7 +2294,7 @@
         "target_symbol",
         "change_spec",
         "diagnosis_kind",
-        "import_statement",
+        "module_statement",
         "related_symbols"
       ]
     },
@@ -2428,7 +2428,7 @@
           "rules": [
             {
               "condition": "result.file_found == true",
-              "transition": "check_import_fix"
+              "transition": "check_module_fix"
             },
             {
               "condition": "true",
@@ -2439,9 +2439,9 @@
         "effects": [],
         "terminal": false
       },
-      "check_import_fix": {
-        "action": "check_import_fix",
-        "description": "Route a declared import-class fix to the module-frame editor",
+      "check_module_fix": {
+        "action": "check_module_fix",
+        "description": "Route a declared module-class fix to the module-frame editor",
         "context": {
           "required": [],
           "optional": [
@@ -2461,8 +2461,8 @@
             "$ref": "input.diagnosis_kind",
             "default": ""
           },
-          "import_statement": {
-            "$ref": "input.import_statement",
+          "module_statement": {
+            "$ref": "input.module_statement",
             "default": ""
           }
         },
@@ -2471,7 +2471,7 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.is_import_fix == true",
+              "condition": "result.is_module_fix == true",
               "transition": "run_module_frame_edit"
             },
             {
@@ -2481,15 +2481,15 @@
           ]
         },
         "publishes": [
-          "import_statement",
-          "import_directive"
+          "module_statement",
+          "module_directive"
         ],
         "effects": [],
         "terminal": false
       },
       "run_module_frame_edit": {
         "action": "flow",
-        "description": "Import-class fix \u2014 edit the module frame (bodies preserved)",
+        "description": "Module-class fix \u2014 edit the module frame (bodies preserved)",
         "context": {
           "required": [],
           "optional": []
@@ -2508,8 +2508,8 @@
           "flow_directive": {
             "$ref": "input.flow_directive"
           },
-          "import_directive": {
-            "$ref": "context.import_directive",
+          "module_directive": {
+            "$ref": "context.module_directive",
             "default": ""
           },
           "change_spec": {
@@ -3229,8 +3229,8 @@
             "$ref": "input.diagnosis_kind",
             "default": ""
           },
-          "import_statement": {
-            "$ref": "input.import_statement",
+          "module_statement": {
+            "$ref": "input.module_statement",
             "default": ""
           },
           "related_symbols": {
@@ -3286,8 +3286,8 @@
             "$ref": "input.diagnosis_kind",
             "default": ""
           },
-          "import_statement": {
-            "$ref": "input.import_statement",
+          "module_statement": {
+            "$ref": "input.module_statement",
             "default": ""
           },
           "related_symbols": {
@@ -5263,8 +5263,8 @@
               "$ref": "context.dispatch_config.diagnosis_kind",
               "default": ""
             },
-            "import_statement": {
-              "$ref": "context.dispatch_config.import_statement",
+            "module_statement": {
+              "$ref": "context.dispatch_config.module_statement",
               "default": ""
             },
             "related_symbols": {
@@ -5604,8 +5604,8 @@
               "$ref": "context.dispatch_config.diagnosis_kind",
               "default": ""
             },
-            "import_statement": {
-              "$ref": "context.dispatch_config.import_statement",
+            "module_statement": {
+              "$ref": "context.dispatch_config.module_statement",
               "default": ""
             },
             "related_symbols": {
@@ -5799,8 +5799,8 @@
               "$ref": "context.dispatch_config.diagnosis_kind",
               "default": ""
             },
-            "import_statement": {
-              "$ref": "context.dispatch_config.import_statement",
+            "module_statement": {
+              "$ref": "context.dispatch_config.module_statement",
               "default": ""
             },
             "related_symbols": {
@@ -6386,7 +6386,7 @@
         "flow_directive"
       ],
       "optional": [
-        "import_directive",
+        "module_directive",
         "change_spec",
         "root_cause",
         "working_directory"
@@ -6437,7 +6437,7 @@
           "required": [],
           "optional": [
             "frame_text",
-            "import_directive",
+            "module_directive",
             "flow_directive"
           ]
         },

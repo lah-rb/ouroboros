@@ -174,7 +174,7 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
     target_symbol = ""
     change_spec = ""
     diagnosis_kind = ""
-    import_statement = ""
+    module_statement = ""
     # Multi-symbol patching (505 round) — carry related_symbols
     # through so the dispatcher can thread them into subsequent
     # fix dispatches. Non-diagnose flows leave this empty.
@@ -185,7 +185,7 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
         target_symbol = str(diagnosis.get("target_symbol", "") or "")
         change_spec = str(diagnosis.get("change_spec", "") or "")
         diagnosis_kind = str(diagnosis.get("kind", "") or "")
-        import_statement = str(diagnosis.get("import_statement", "") or "")
+        module_statement = str(diagnosis.get("module_statement", "") or "")
         raw_rel = diagnosis.get("related_symbols", []) or []
         if isinstance(raw_rel, list):
             related_symbols = [str(s).strip() for s in raw_rel if str(s).strip()]
@@ -210,8 +210,8 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
         change_spec = str(params.get("change_spec", "") or "")
     if not diagnosis_kind:
         diagnosis_kind = str(params.get("diagnosis_kind", "") or "")
-    if not import_statement:
-        import_statement = str(params.get("import_statement", "") or "")
+    if not module_statement:
+        module_statement = str(params.get("module_statement", "") or "")
     if not related_symbols:
         params_rel = params.get("related_symbols", []) or []
         if isinstance(params_rel, list):
@@ -239,7 +239,7 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
         related_symbols=related_symbols,
         change_spec=change_spec,
         diagnosis_kind=diagnosis_kind,
-        import_statement=import_statement,
+        module_statement=module_statement,
     )
 
     return _wrap_report(report, flow_name, status)

@@ -1740,10 +1740,10 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
             struct_target_symbol = getattr(last_report, "target_symbol", "") or ""
             struct_change_spec = getattr(last_report, "change_spec", "") or ""
             struct_kind = getattr(last_report, "diagnosis_kind", "") or ""
-            # Structured import-fix declaration — literal statement
-            # accompanying kind == "import_fix"; file_ops's
-            # check_import_fix routes on it.
-            struct_import_statement = getattr(last_report, "import_statement", "") or ""
+            # Structured module-fix declaration — the literal module-level line
+            # accompanying kind == "module_fix"; file_ops's
+            # check_module_fix routes on it.
+            struct_module_statement = getattr(last_report, "module_statement", "") or ""
             # Multi-symbol patching (505 round). When diagnose
             # emits a list of co-dependent symbols, we thread them
             # through to file_ops → patch so the rewrite_queue
@@ -1902,7 +1902,7 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
                     "target_symbol": struct_target_symbol,
                     "change_spec": struct_change_spec,
                     "diagnosis_kind": struct_kind,
-                    "import_statement": struct_import_statement,
+                    "module_statement": struct_module_statement,
                     # Multi-symbol patching (505 round). Passed
                     # through file_ops input_map → patch input_map
                     # → prepare_next_rewrite, which seeds the
@@ -2218,7 +2218,7 @@ def _fileops_dispatch_from_quality_diagnosis(
         "target_symbol": target_symbol,
         "change_spec": str(_rget(report, "change_spec", "") or ""),
         "diagnosis_kind": str(_rget(report, "diagnosis_kind", "") or ""),
-        "import_statement": str(_rget(report, "import_statement", "") or ""),
+        "module_statement": str(_rget(report, "module_statement", "") or ""),
         "related_symbols": list(_rget(report, "related_symbols", []) or []),
     }
 

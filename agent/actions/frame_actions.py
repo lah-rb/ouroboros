@@ -1,20 +1,22 @@
-"""Module-frame editing: a structured import-fix router + an inference frame editor.
+"""Module-frame editing: a structured module-fix router + an inference frame editor.
 
-When a fix is import-class (a missing *module-level* import), the symbol-scoped
-patch flow can't express it — it only rewrites a named function/class body, where
-a top-level ``import`` can never live (this trapped Mistral in a 6× loop). This
-module keeps the project's "deterministic routing + inference edits" split:
+When a fix is module-class (a missing *module-level* line — an import, a script's
+shebang, a ``source``/``set`` line), the symbol-scoped patch flow can't express it
+— it only rewrites a named function/class body, where a top-level statement can
+never live (this trapped Mistral in a 6× loop). This module keeps the project's
+"deterministic routing + inference edits" split:
 
-  • action_check_import_fix — pure reader of the diagnosis's structured
-    ``import_fix`` declaration: validates the literal ``import_statement``
-    (a routing decision; nothing is written here).
+  • action_check_module_fix — pure reader of the diagnosis's structured
+    ``module_fix`` declaration: validates the literal ``module_statement`` and
+    routes per file type (imports for Python/Go/JS-TS, shebang/``source``/``set``
+    for shell) — a routing decision; nothing is written here.
   • action_prepare_frame / action_rewrite_frame_turn / action_splice_frame —
     the INFERENCE frame editor. The model edits the file's non-symbol "frame"
     (docstring, imports, top-level statements, ``__main__``) while every
     function/class body is preserved verbatim and spliced back deterministically.
-    The model chooses placement (after docstrings / ``from __future__`` / etc.);
-    determinism lives in the routing and the pinned bodies. Any splice mismatch
-    falls back to a full rewrite, so it is never stuck and never corrupts a file.
+    The model chooses placement (guided by the per-language module_fix_placement
+    hint); determinism lives in the routing and the pinned bodies. Any splice
+    mismatch falls back to a full rewrite — never stuck, never corrupts a file.
 """
 
 import ast as stdlib_ast
@@ -29,8 +31,11 @@ from agent.repomap import extract_file_symbols
 logger = logging.getLogger(__name__)
 
 # Distinctive sentinel that replaces a preserved symbol body in the frame view.
-_SENTINEL_PREFIX = "# ⟦OUROBOROS-SYMBOL "
-_SENTINEL_RE = re.compile(r"^\s*#\s*⟦OUROBOROS-SYMBOL (?P<name>[^⟧]+?)⟧")
+# The leading comment prefix is per-language (build_frame picks "#" / "//" so the
+# placeholder is a real comment in the target file); the MARKER is constant, and
+# _SENTINEL_RE matches it prefix-agnostically so splice round-trips any language.
+_SENTINEL_MARKER = "⟦OUROBOROS-SYMBOL "
+_SENTINEL_RE = re.compile(r"⟦OUROBOROS-SYMBOL (?P<name>[^⟧]+?)⟧")
 
 
 def _import_present(content, statement):
@@ -58,6 +63,34 @@ def _import_present(content, statement):
     return False
 
 
+def _statement_present(file_path, content, statement):
+    """True if the module-level statement already exists (idempotency).
+
+    Python *single* imports get the precise AST check (handles ``import a, b``
+    merging, ``from x import y`` aliasing). Everything else — a shell shebang, a
+    ``source``/``set`` line, a multi-line Go ``import ( … )`` block — uses
+    stripped-line equality: present iff every non-blank line of the statement
+    already appears as a line in the file. That avoids the substring false
+    positive a bare ``in`` would hit (e.g. ``# source x.sh`` in a comment) and is
+    best-effort for multi-line blocks; the splice parse-gate is the final net.
+    """
+    stmt = (statement or "").strip()
+    if not stmt:
+        return False
+    if file_path.endswith(".py"):
+        try:
+            body = stdlib_ast.parse(stmt).body
+        except SyntaxError:
+            body = []
+        if len(body) == 1 and isinstance(
+            body[0], (stdlib_ast.Import, stdlib_ast.ImportFrom)
+        ):
+            return _import_present(content, stmt)
+    want = [ln.strip() for ln in stmt.splitlines() if ln.strip()]
+    have = {ln.strip() for ln in content.splitlines() if ln.strip()}
+    return bool(want) and all(ln in have for ln in want)
+
+
 # ── Frame build / splice (deterministic, model-free) ─────────────────
 def build_frame(file_path, content):
     """Build the frame view + preserved bodies.
@@ -81,6 +114,7 @@ def build_frame(file_path, content):
     if len(names) != len(set(names)):
         return content, {}, False, "duplicate top-level symbol names"
 
+    prefix = languages.comment_prefix_for_path(file_path)  # "#" / "//" per language
     lines = content.splitlines(keepends=True)
     sym_by_start = {s.line: s for s in syms}
     preserved = {}
@@ -93,7 +127,7 @@ def build_frame(file_path, content):
             preserved[s.name] = "".join(lines[s.line - 1 : s.end_line])
             sig = (s.signature or s.name).strip().replace("\n", " ")
             out.append(
-                f"{_SENTINEL_PREFIX}{s.name}⟧ {sig}  (body preserved — keep this line)\n"
+                f"{prefix} {_SENTINEL_MARKER}{s.name}⟧ {sig}  (body preserved — keep this line)\n"
             )
             pos = s.end_line  # end_line is inclusive (1-indexed) → resume after it
         else:
@@ -113,7 +147,7 @@ def splice_frame(model_frame, preserved, file_path=""):
     out = []
     seen = set()
     for line in model_frame.splitlines(keepends=True):
-        m = _SENTINEL_RE.match(line)
+        m = _SENTINEL_RE.search(line)
         if m:
             name = m.group("name").strip()
             if name not in preserved:
@@ -152,61 +186,69 @@ def _ctx(step_input, key, default=""):
     return step_input.params.get(key) or step_input.context.get(key) or default
 
 
-def _not_import_fix(observation: str) -> StepOutput:
+def _not_module_fix(observation: str) -> StepOutput:
     return StepOutput(
-        result={"is_import_fix": False},
+        result={"is_module_fix": False},
         observations=observation,
-        context_updates={"import_statement": "", "import_directive": ""},
+        context_updates={"module_statement": "", "module_directive": ""},
     )
 
 
-async def action_check_import_fix(step_input: StepInput) -> StepOutput:
-    """Pure reader of the diagnosis's structured import-fix declaration.
+async def action_check_module_fix(step_input: StepInput) -> StepOutput:
+    """Pure reader of the diagnosis's structured module-fix declaration.
 
-    Honored only when diagnosis_kind == "import_fix". Validates the literal
-    import_statement (ast.parse to exactly one Import/ImportFrom node) plus
-    the idempotency check, then routes to the module-frame editor. Degenerate
-    declarations (missing/unparseable statement, non-.py target, import
-    already present) fall through to normal symbol routing. Pure routing —
-    no file is written here. Publishes is_import_fix +
-    import_statement/directive.
+    Honored only when diagnosis_kind == "module_fix". Validates the literal
+    ``module_statement`` (for ``.py``, that it parses as module-level code; other
+    languages are validated by the splice parse-gate downstream) plus an
+    idempotency check, then routes to the module-frame editor for any file type —
+    a Python/Go/JS-TS import, a shell shebang/``source``/``set`` line.
+    Degenerate declarations (missing/unparseable statement, line already present)
+    fall through to normal symbol routing. Pure routing — no file is written
+    here. Publishes is_module_fix + module_statement/directive.
+
+    NOTE: this action is on file_ops' hot path — read_target routes EVERY
+    existing-file edit through it — so the ``kind != "module_fix"`` early-return
+    below must stay first and cheap.
     """
+    kind = _ctx(step_input, "diagnosis_kind")
+    if kind != "module_fix":
+        return _not_module_fix("not declared a module fix")
+
     target = _ctx(step_input, "target_file_path")
     file_content = _ctx(step_input, "file_content")
-    kind = _ctx(step_input, "diagnosis_kind")
-    stmt = _ctx(step_input, "import_statement").strip()
+    stmt = _ctx(step_input, "module_statement").strip()
 
-    if kind != "import_fix":
-        return _not_import_fix("not declared an import fix")
-
-    ok = bool(stmt) and target.endswith(".py") and bool(file_content)
-    if ok:
+    ok = bool(stmt) and bool(file_content)
+    if ok and target.endswith(".py"):
+        # Python precision: it must at least parse as module-level code (any
+        # number of statements — a multi-import is fine). Other languages skip
+        # fragment-parsing here; the splice tree-sitter gate validates the result.
         try:
-            tree = stdlib_ast.parse(stmt)
-            ok = len(tree.body) == 1 and isinstance(
-                tree.body[0], (stdlib_ast.Import, stdlib_ast.ImportFrom)
-            )
+            stdlib_ast.parse(stmt)
         except SyntaxError:
             ok = False
     if not ok:
         logger.warning(
-            "check_import_fix: kind=import_fix but import_statement %r "
+            "check_module_fix: kind=module_fix but module_statement %r "
             "missing/unparseable for %s — falling through to symbol routing",
             stmt,
             target,
         )
-        return _not_import_fix(
-            f"import_fix declared but statement unusable ({stmt!r}) — symbol routing"
+        return _not_module_fix(
+            f"module_fix declared but statement unusable ({stmt!r}) — symbol routing"
         )
-    if _import_present(file_content, stmt):
-        return _not_import_fix(f"import already present: {stmt}")
+    if _statement_present(target, file_content, stmt):
+        return _not_module_fix(f"module-level line already present: {stmt}")
 
-    directive = f"Add the missing module-level import `{stmt}` to this file."
-    logger.info("check_import_fix: import-class fix for %s → %s", target, stmt)
+    placement = languages.module_fix_placement_for_path(target)
+    directive = f"Add the missing module-level line `{stmt}` to this file."
+    if placement:
+        directive += f" Place it {placement}."
+    logger.info("check_module_fix: module-class fix for %s → %s", target, stmt)
     return StepOutput(
-        result={"is_import_fix": True},
-        observations=f"import-class fix: {stmt}",
-        context_updates={"import_statement": stmt, "import_directive": directive},
+        result={"is_module_fix": True},
+        observations=f"module-class fix: {stmt}",
+        context_updates={"module_statement": stmt, "module_directive": directive},
     )
 
 
@@ -241,7 +283,7 @@ _FRAME_INSTRUCTION = (
     "- Edit ONLY top-level code: the file header/shebang, imports or includes, "
     "top-level statements, and any entry-point block. Do NOT touch function or "
     "class bodies.\n"
-    "- Lines beginning with `# ⟦OUROBOROS-SYMBOL ...⟧` are placeholders for "
+    "- Lines containing the `⟦OUROBOROS-SYMBOL ...⟧` placeholder stand in for "
     "function/class bodies that are preserved elsewhere. Keep each such line "
     "EXACTLY as-is — do not edit, remove, reorder, or add them.\n"
     "- Return the COMPLETE edited frame as one code block.\n\n"
@@ -254,7 +296,7 @@ async def action_rewrite_frame_turn(step_input: StepInput) -> StepOutput:
     effects = step_input.effects
     file_path = _ctx(step_input, "target_file_path") or _ctx(step_input, "file_path")
     frame_text = _ctx(step_input, "frame_text")
-    directive = _ctx(step_input, "import_directive") or _ctx(
+    directive = _ctx(step_input, "module_directive") or _ctx(
         step_input, "flow_directive"
     )
     label, fence = _frame_lang(file_path)

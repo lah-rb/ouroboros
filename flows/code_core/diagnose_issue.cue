@@ -352,9 +352,9 @@ diagnose_issue: #FlowDefinition & {
 				// diagnosis_text.
 				"target_file", "target_symbol", "change_spec",
 				"diagnosis_kind", "diagnosis_confidence", "root_cause",
-				// Structured import-fix declaration: literal statement
-				// accompanying kind == "import_fix".
-				"import_statement",
+				// Structured module-fix declaration: the literal module-level
+				// line accompanying kind == "module_fix".
+				"module_statement",
 				// Multi-symbol patching (505 round)
 				"related_symbols",
 			]
@@ -426,8 +426,8 @@ diagnose_issue: #FlowDefinition & {
 					// Phase A — structured fields from flattened schema
 					"target_file", "target_symbol", "change_spec",
 					"diagnosis_kind", "diagnosis_confidence", "root_cause",
-					// Structured import-fix declaration
-					"import_statement",
+					// Structured module-fix declaration
+					"module_statement",
 					// Multi-symbol patching (505 round)
 					"related_symbols",
 				]
