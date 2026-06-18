@@ -77,7 +77,9 @@ CPU_SAMPLE_MIN_INTERVAL_S = 0.08  # throttle ps sampling during a byte lull
 # the byte/CPU path when the probe can't be sampled.
 CONTAINER_ACTIVITY_EPS = 4096  # counter growth over the window that counts as "active"
 CONTAINER_SAMPLE_MIN_INTERVAL_S = 0.4  # throttle docker-exec probing (it costs ~50-150ms)
-CONTAINER_HARD_MAX_MS = 600_000  # absolute ceiling: an active container defers the backstop up to here
+CONTAINER_HARD_MAX_MS = 420_000  # absolute ceiling (~7min): an active container defers the
+# backstop up to here. MUST stay below the agent's send_input RPC timeout
+# (_INTERACT_RPC_TIMEOUT_S in interactive_actions.py) or the RPC aborts the deferral.
 
 # ── Prompt Detection ─────────────────────────────────────────────────
 #

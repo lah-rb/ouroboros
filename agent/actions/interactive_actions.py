@@ -20,6 +20,15 @@ from agent.models import StepInput, StepOutput
 
 logger = logging.getLogger(__name__)
 
+# RPC ceiling for send_input / read_output. The PTY settle's container-activity
+# gate DEFERS the no-output backstop while a container is still working (a long
+# --quiet download), up to CONTAINER_HARD_MAX_MS (~7min) server-side. This RPC
+# timeout MUST exceed that ceiling or the client aborts the call mid-download
+# (the original failure: settle deferred correctly, but the 60s RPC default cut
+# it off). Local sessions return at their settle (~30s), so this is just an
+# unused ceiling for them.
+_INTERACT_RPC_TIMEOUT_S = 450.0
+
 
 # ── start_interactive_session ─────────────────────────────────────────
 
@@ -297,6 +306,7 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
                     "settle_ms": action_data.get("settle_ms", 750),
                     "timeout_ms": action_data.get("timeout_ms", 30000),
                 },
+                timeout=_INTERACT_RPC_TIMEOUT_S,
             )
         except Exception as e:
             logger.error("read_output failed: %s", e)
@@ -463,6 +473,7 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
                 "settle_ms": action_data.get("settle_ms", default_settle),
                 "timeout_ms": action_data.get("timeout_ms", 30000),
             },
+            timeout=_INTERACT_RPC_TIMEOUT_S,
         )
     except Exception as e:
         logger.error("send_input failed: %s", e)
