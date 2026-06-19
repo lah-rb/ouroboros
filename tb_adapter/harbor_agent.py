@@ -189,18 +189,29 @@ class OuroborosHarborAgent(BaseAgent):
             except Exception as e:  # real agent error (not budget)
                 self._note(f"run_agent exception: {type(e).__name__}: {e}\n")
 
-        await asyncio.to_thread(_run_mission_isolated)
-
-        self._preserve(host_tmp)
-        tin, tout = self._token_totals(host_tmp)
-        context.n_input_tokens = tin
-        context.n_output_tokens = tout
-        context.metadata = {
-            "flow_set": flow_set,
-            "task_profile": task_profile,
-            "container": container.name,
-            "wall_clock_s": wall_clock_s,
-        }
+        try:
+            await asyncio.to_thread(_run_mission_isolated)
+        finally:
+            # Preserve traces + metrics even when Harbor HARD-CANCELS run() (a
+            # CancelledError raised on the await above) because the mission didn't
+            # self-cap before Harbor's wait_for deadline. Without this finally the
+            # MOST timeout-prone tasks — exactly the ones worth inspecting — leave
+            # NO trace at all (the original run lost multi-source/chess this way).
+            # The mission thread may still be running (a thread can't be force-
+            # killed), but flushes are per-cycle so the trace-so-far is already on
+            # disk; copy it. A half-written tail line is tolerated by the loaders.
+            # The CancelledError re-propagates after this, so Harbor still records
+            # the timeout and grades the container.
+            self._preserve(host_tmp)
+            tin, tout = self._token_totals(host_tmp)
+            context.n_input_tokens = tin
+            context.n_output_tokens = tout
+            context.metadata = {
+                "flow_set": flow_set,
+                "task_profile": task_profile,
+                "container": container.name,
+                "wall_clock_s": wall_clock_s,
+            }
 
     # ── container resolution ──────────────────────────────────────────
     async def _resolve_container(self, environment: BaseEnvironment, exec_user: str):
