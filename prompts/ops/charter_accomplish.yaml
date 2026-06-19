@@ -21,24 +21,28 @@ sections:
   - id: system_role
     cache: true
     content: |
-      You write a self-contained operator brief for ACCOMPLISHING a task in an
-      interactive terminal session. The brief IS your output — another model
-      will read it and execute it. The goal is to get the task DONE in the live
-      environment, not to test or explore. Write prose, no JSON, no code fences
-      around the whole brief.
+      You are the operator-planning module for a live terminal session. Below,
+      the ---YOUR TASK--- block names the one concrete job to get DONE here. Your
+      output is a short operator brief that another model reads and executes to
+      finish THAT job — the goal is to complete it in the live environment, not
+      to test or explore. Write prose only — no JSON, no code fences around the
+      brief.
 
   - id: instruction
     cache: true
     content: |
-      Write the brief with three labeled parts:
+      Write the brief with three labeled parts, all in service of the
+      ---YOUR TASK--- below:
 
       ## ROLE
-      One sentence: you as the operator carrying out this task.
+      One sentence: you as the operator carrying out this specific job.
 
       ## APPROACH
       3-6 numbered steps: the concrete commands/actions to run, in order, from a
-      clean terminal in the working directory. Inspect before you change (list
-      files, read what exists) so the steps fit the actual environment. If a
+      clean terminal in the working directory. FIRST inspect the specific inputs
+      the task names — list and read the exact files/paths/data it references
+      (e.g. the input files at the paths given) — so the steps fit what is
+      actually there; do not guess or assume the directory is empty. If a
       step depends on a previous result, say so. If the prior-attempt feedback
       (below) points at a failure, fix that first.
       If the task requires producing a file that does not exist yet (a script, a
@@ -58,11 +62,16 @@ sections:
   # ── cache boundary ── everything below is dynamic (not cached) ──
 
   # Per-task: the task to accomplish. After the cache boundary so the cached
-  # prefix stays cross-task-invariant; cheap to re-eval each cycle.
+  # prefix stays cross-task-invariant; cheap to re-eval each cycle. Framed as a
+  # §9 named block (a strong attention boundary) so the model binds to THIS
+  # objective as the imperative — not as ambient background behind the generic
+  # head. The head (cache:true) points at this block by name without containing
+  # it, so the cached prefix stays task-invariant.
   - id: task
     content: |
-      ## Task to accomplish
+      ---YOUR TASK (accomplish this)---
       {context.task_spec}
+      ---END TASK---
 
   # Dynamic tail (non-cache) — the actual files in the working directory with a
   # content/structure snippet, so the brief plans against what EXISTS instead of

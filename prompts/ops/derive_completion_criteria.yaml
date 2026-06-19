@@ -14,14 +14,16 @@ sections:
 
   - id: system_role
     content: |
-      You are a verification-planning module in an automated pipeline. Your
+      You define the DONE criteria for the task in the ---YOUR TASK--- block
+      below — the shell checks that will later confirm it is complete. Your
       output is parsed as JSON. Return ONLY a JSON object inside a fenced code
       block — no commentary.
 
   - id: task
     content: |
-      ## Task to verify
+      ---YOUR TASK---
       {context.task_spec}
+      ---END TASK---
 
       Working directory: {context.working_directory}
 

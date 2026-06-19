@@ -10780,7 +10780,7 @@
           }
         ],
         "config": {
-          "temperature": "t*0.0"
+          "temperature": "t*0.1"
         },
         "resolver": {
           "type": "rule",

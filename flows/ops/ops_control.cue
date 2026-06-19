@@ -116,7 +116,12 @@ ops_control: #FlowDefinition & {
 				{formatter: "format_mission_meta", output_key: "working_directory"
 					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
 			]
-			config: temperature: "t*0.0"
+			// t*0.1, not pure-greedy: an adversarial sweep (t*0.0–0.5) showed
+			// 0.0–0.3 equal on JSON validity + deliverable coverage (0.5 breaks),
+			// and a hair of entropy hedges the "stuck greedy path" failure mode on
+			// reasoning steps without any measured cost. Still within §11's
+			// structured-output range (t*0.0–0.2).
+			config: temperature: "t*0.1"
 			resolver: {
 				type: "rule"
 				rules: [
