@@ -66,6 +66,21 @@ class HealthStatus:
     generation_phase: str = "idle"  # idle, eval, generating, complete
     prompt_tokens: int = 0
     eval_duration: Optional[float] = None
+    # Deep-health: long-run degradation signals (pass 1). Memory residency
+    # catches the Apple-Silicon unified-memory KV/weight eviction mode; the
+    # flow-cache churn/fallback counters catch KV-cache instability under
+    # pressure. All default-safe so a backend that omits them stays valid.
+    mem_process_rss_mb: Optional[float] = None
+    mem_system_used_percent: Optional[float] = None
+    mem_system_available_mb: Optional[float] = None
+    mem_system_wired_mb: Optional[float] = None
+    flow_cache_entries: int = 0
+    resident_active: bool = False
+    flow_builds: int = 0
+    flow_hits: int = 0
+    flow_evicts: int = 0
+    flow_fallbacks: int = 0
+    runaway_captures: int = 0
 
 
 @strawberry.type
@@ -262,6 +277,17 @@ class Query:
             generation_phase=tracker_status.get("phase", "idle"),
             prompt_tokens=tracker_status.get("prompt_tokens", 0),
             eval_duration=tracker_status.get("eval_duration"),
+            mem_process_rss_mb=status.get("mem_process_rss_mb"),
+            mem_system_used_percent=status.get("mem_system_used_percent"),
+            mem_system_available_mb=status.get("mem_system_available_mb"),
+            mem_system_wired_mb=status.get("mem_system_wired_mb"),
+            flow_cache_entries=status.get("flow_cache_entries", 0),
+            resident_active=status.get("resident_active", False),
+            flow_builds=status.get("flow_builds", 0),
+            flow_hits=status.get("flow_hits", 0),
+            flow_evicts=status.get("flow_evicts", 0),
+            flow_fallbacks=status.get("flow_fallbacks", 0),
+            runaway_captures=status.get("runaway_captures", 0),
         )
 
     @strawberry.field

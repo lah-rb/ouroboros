@@ -123,6 +123,17 @@ class LlamaCppBackend(BaseBackend):
         self._flow_resident = self._resident_requested and bool(
             getattr(getattr(config, "model", None), "flow_kv_cache", False)
         )
+        # Health/degradation counters (cumulative for the server's lifetime),
+        # surfaced via get_health_status for long-run monitoring. Flow-cache
+        # churn + fallbacks indicate KV-cache pressure/instability; runaway
+        # captures indicate generation pathologies. A rising fallback rate on a
+        # box under memory pressure is the signature of the Apple-Silicon
+        # unified-memory KV/weight eviction failure mode.
+        self._h_flow_builds = 0
+        self._h_flow_hits = 0
+        self._h_flow_evicts = 0
+        self._h_flow_fallbacks = 0
+        self._h_runaway_captures = 0
         # Session flow-fork (Phase 2b): a memoryful session forks a pinned flow head
         # onto its live seq at turn 0. Reuses the same flow band as the stateless
         # cache; needs the band allocated even when flow_kv_cache itself is off.
@@ -455,6 +466,7 @@ class LlamaCppBackend(BaseBackend):
         old_key, old_seq = flow_seqs.popitem(last=False)  # evict LRU, reuse its seq
         inst._ctx.memory_seq_rm(old_seq, 0, -1)
         flow_seqs[flow_key] = old_seq
+        self._h_flow_evicts += 1
         log.info("resident flow LRU evict %r → reuse seq %d", old_key, old_seq)
         return old_seq
 
@@ -482,6 +494,7 @@ class LlamaCppBackend(BaseBackend):
                 inst.n_tokens = flow_prefix_len
                 inst.input_ids[:flow_prefix_len] = ids
                 inst._resident_flow_hit = True
+                self._h_flow_hits += 1
                 log.info(
                     "🔁 resident flow HIT %r (seq %d, %d tok)",
                     flow_key, seq, flow_prefix_len,
@@ -494,12 +507,14 @@ class LlamaCppBackend(BaseBackend):
                 ctx.memory_seq_rm(seq, 0, -1)
                 ctx.memory_seq_cp(SEQ_WORKING, seq, -1, -1)
                 inst.input_ids[:flow_prefix_len] = ids
+                self._h_flow_builds += 1
                 log.info(
                     "🆕 resident flow BUILD %r (seq %d, %d tok)",
                     flow_key, seq, flow_prefix_len,
                 )
             return flow_prefix_len
         except Exception as exc:  # noqa: BLE001 — fall back to the static base
+            self._h_flow_fallbacks += 1
             log.warning("resident flow failed for %r (%s) — static base", flow_key, exc)
             self._resident_restore_static(inst)
             return None
@@ -1300,6 +1315,7 @@ class LlamaCppBackend(BaseBackend):
                     self._flow_states.move_to_end(flow_key)
                     instance.load_state(self._flow_states[flow_key])
                     flow_hit_telemetry = True
+                    self._h_flow_hits += 1
                     log.info(
                         "🔁 flow_kv_cache HIT %r (%d tok pinned)",
                         flow_key, flow_prefix_len,
@@ -1323,12 +1339,15 @@ class LlamaCppBackend(BaseBackend):
                     )
                     while len(self._flow_states) > cap:
                         self._flow_states.popitem(last=False)
+                        self._h_flow_evicts += 1
+                    self._h_flow_builds += 1
                     log.info(
                         "🆕 flow_kv_cache BUILD %r (%d tok)",
                         flow_key, flow_prefix_len,
                     )
                 flow_n_static = flow_prefix_len
             except Exception as exc:  # noqa: BLE001 — save_state fragility net
+                self._h_flow_fallbacks += 1
                 log.warning(
                     "flow_kv_cache failed for %r (%s) — using static base",
                     flow_key, exc,
@@ -1496,6 +1515,7 @@ class LlamaCppBackend(BaseBackend):
                     reason = guard.observe(token)
                     if reason:
                         gen_end_reason = f"degenerate: {reason}"
+                        self._h_runaway_captures += 1
                         runaway_capture.dump_capture(
                             capture_dir or "./logs",
                             gen_end_reason,
@@ -1517,6 +1537,7 @@ class LlamaCppBackend(BaseBackend):
                     lc_reason = runaway_capture.detect_long_cycle(acc_bytes)
                     if lc_reason:
                         gen_end_reason = f"long-cycle: {lc_reason}"
+                        self._h_runaway_captures += 1
                         runaway_capture.dump_capture(
                             capture_dir or "./logs",
                             lc_reason,
@@ -1712,6 +1733,34 @@ class LlamaCppBackend(BaseBackend):
         if self._static_state is not None:
             info["static_state_tokens"] = self._static_state.n_tokens
             info["static_state_bytes"] = self._static_state.llama_state_size
+
+        # ── Deep-health: long-run degradation signals ──────────────────
+        # Memory residency/pressure — the Apple-Silicon unified-memory KV/weight
+        # eviction failure mode shows here as falling RSS / rising system %
+        # while a long run is active (cf. flow-cache fallbacks below).
+        try:
+            import psutil
+
+            vm = psutil.virtual_memory()
+            info["mem_process_rss_mb"] = round(psutil.Process().memory_info().rss / 1e6, 1)
+            info["mem_system_used_percent"] = vm.percent
+            info["mem_system_available_mb"] = round(vm.available / 1e6, 1)
+            # Wired (unevictable) bytes — on macOS a drop here while the model is
+            # loaded means weights/KV got evicted to the compressor.
+            wired = getattr(vm, "wired", None)
+            if wired is not None:
+                info["mem_system_wired_mb"] = round(wired / 1e6, 1)
+        except Exception:
+            pass
+        # Flow/resident KV-cache health: live size + cumulative churn. A rising
+        # fallback rate is the canary for KV-cache instability under pressure.
+        info["flow_cache_entries"] = len(self._flow_states)
+        info["resident_active"] = self._resident_active
+        info["flow_builds"] = self._h_flow_builds
+        info["flow_hits"] = self._h_flow_hits
+        info["flow_evicts"] = self._h_flow_evicts
+        info["flow_fallbacks"] = self._h_flow_fallbacks
+        info["runaway_captures"] = self._h_runaway_captures
         return info
 
     def strip_reasoning_replay(
