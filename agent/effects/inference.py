@@ -34,6 +34,8 @@ query Completion($request: CompletionRequest!) {
         generatedTokens
         cacheHit
         flowKey
+        prefillMs
+        decodeMs
     }
 }
 """
@@ -86,6 +88,8 @@ query SessionCompletion($request: SessionTurnRequest!) {
         generatedTokens
         cacheHit
         flowKey
+        prefillMs
+        decodeMs
     }
 }
 """
@@ -453,6 +457,8 @@ class InferenceEffect:
                     generated_tokens=completion.get("generatedTokens", 0) or 0,
                     cache_hit=bool(completion.get("cacheHit", False)),
                     flow_key=completion.get("flowKey", "") or "",
+                    prefill_ms=completion.get("prefillMs", 0.0) or 0.0,
+                    decode_ms=completion.get("decodeMs", 0.0) or 0.0,
                 )
 
             except httpx.ConnectError as e:

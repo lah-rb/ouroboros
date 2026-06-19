@@ -140,6 +140,10 @@ class CompletionResponse:
     generated_tokens: int = 0
     cache_hit: bool = False
     flow_key: str = ""
+    # Precise phase timing (server-measured): prefill = prompt eval, decode =
+    # generation. Lets the client trace split inference time per call.
+    prefill_ms: float = 0.0
+    decode_ms: float = 0.0
 
 
 @strawberry.type
@@ -377,6 +381,8 @@ class Query:
             generated_tokens=cache.get("generated_tokens", 0),
             cache_hit=cache.get("cache_hit", False),
             flow_key=cache.get("flow_key", ""),
+            prefill_ms=cache.get("prefill_ms", 0.0),
+            decode_ms=cache.get("decode_ms", 0.0),
         )
 
     @strawberry.field
@@ -431,6 +437,8 @@ class Query:
             generated_tokens=outcome.generated_tokens,
             cache_hit=outcome.cache_hit,
             flow_key=outcome.flow_key,
+            prefill_ms=outcome.prefill_ms,
+            decode_ms=outcome.decode_ms,
         )
 
     @strawberry.field
@@ -545,6 +553,8 @@ class Mutation:
             generated_tokens=outcome.generated_tokens,
             cache_hit=outcome.cache_hit,
             flow_key=outcome.flow_key,
+            prefill_ms=outcome.prefill_ms,
+            decode_ms=outcome.decode_ms,
         )
 
     @strawberry.mutation

@@ -147,6 +147,9 @@ class InferenceResult:
     generated_tokens: int = 0
     cache_hit: bool = False
     flow_key: str = ""
+    # Server-measured phase timing: prefill (prompt eval) vs decode (generation).
+    prefill_ms: float = 0.0
+    decode_ms: float = 0.0
 
 
 # ── Terminal output limits ────────────────────────────────────────────

@@ -757,6 +757,9 @@ class SessionManager:
         _inst = getattr(_sess, "instance", None)
         _cached = int(getattr(_inst, "_last_kv_base", 0) or 0)
         _fresh = int(getattr(_inst, "_last_dynamic_len", 0) or 0)
+        from core.generation_tracker import get_tracker
+
+        _diag = get_tracker().get_last_diagnostics()
         cache = {
             "prompt_tokens": _cached + _fresh,
             "cached_prefix_tokens": _cached,
@@ -766,6 +769,8 @@ class SessionManager:
             ),
             "cache_hit": bool(getattr(_inst, "_last_flow_hit", False)),
             "flow_key": str(getattr(_inst, "_last_flow_key", "") or ""),
+            "prefill_ms": round((_diag.get("eval_duration", 0) or 0) * 1000, 1),
+            "decode_ms": round((_diag.get("generation_duration", 0) or 0) * 1000, 1),
         }
 
         # Capture raw output for training before any post-processing

@@ -51,6 +51,11 @@ class CompletionOutcome:
     generated_tokens: int = 0
     cache_hit: bool = False
     flow_key: str = ""
+    # Precise phase timing (server-measured): prefill = prompt-eval (start ->
+    # first token), decode = generation (first token -> end). Lets the trace
+    # split inference time into prefill vs decode per call. 0 when unavailable.
+    prefill_ms: float = 0.0
+    decode_ms: float = 0.0
 
 
 def _get_delimiter() -> str:
@@ -373,6 +378,11 @@ async def run_completion(
         fresh_prefill = int(getattr(gen_target, "_last_dynamic_len", 0) or 0)
         tokens_generated = real_gen or _approximate_token_count(answer)
 
+        # Precise phase timing from the generation tracker (just-finished gen).
+        from core.generation_tracker import get_tracker
+
+        _diag = get_tracker().get_last_diagnostics()
+
         # Log interaction (non-streaming)
         log_interaction(prompt=prompt, response=answer, mode="non-stream")
         return CompletionOutcome(
@@ -384,6 +394,8 @@ async def run_completion(
             generated_tokens=real_gen,
             cache_hit=bool(getattr(gen_target, "_last_flow_hit", False)),
             flow_key=str(getattr(gen_target, "_last_flow_key", "") or ""),
+            prefill_ms=round((_diag.get("eval_duration", 0) or 0) * 1000, 1),
+            decode_ms=round((_diag.get("generation_duration", 0) or 0) * 1000, 1),
         )
 
     finally:

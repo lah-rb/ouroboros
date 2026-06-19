@@ -64,6 +64,14 @@ def render_finite_breakdown(summary: dict) -> list[str]:
             continue
         lines.append(f"    {cat:<16s} {_fmt_ms(ms):>9s}  {time_pct.get(cat, 0.0):5.1f}%")
     lines.append(f"    {'residual':<16s} {_fmt_ms(residual_ms):>9s}  {residual_pct:5.1f}%")
+    # Sub-split of the inference bucket: prefill (prompt eval) vs decode.
+    ph = summary.get("inference_phase", {})
+    if ph and (ph.get("prefill_ms") or ph.get("decode_ms")):
+        lines.append(
+            f"    └ of inference: prefill {_fmt_ms(ph.get('prefill_ms',0))} "
+            f"({ph.get('prefill_pct',0)}%) | decode {_fmt_ms(ph.get('decode_ms',0))} "
+            f"({ph.get('decode_pct',0)}%) | server-other {_fmt_ms(ph.get('server_other_ms',0))}"
+        )
     span = summary.get("session_span_ms", 0.0)
     if span:
         lines.append(f"  (sessions live {_fmt_ms(span)} total — overlaps inference)")

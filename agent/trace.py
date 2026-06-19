@@ -226,6 +226,10 @@ class InferenceCall(TraceEvent):
     generated_tokens: int = 0
     cache_hit: bool = False
     flow_key: str = ""
+    # Server-measured phase split of wall_ms: prefill (prompt eval) vs decode
+    # (generation). The remainder (wall_ms − prefill − decode) is queue/network.
+    prefill_ms: float = 0.0
+    decode_ms: float = 0.0
 
 
 # ── Sub-flow Events ──────────────────────────────────────────────────
@@ -439,6 +443,9 @@ def new_ledger() -> dict:
             "ws_calls": 0,
         },
         "cache": {"hit": 0, "miss": 0},  # counted only for real-token calls
+        # Server-measured phase split of the inference bucket (a sub-attribution
+        # of `inference` time, not a separate partition category).
+        "inf_phase": {"prefill_ms": 0.0, "decode_ms": 0.0},
         "counts": {
             "cycles": 0,
             "steps": 0,
@@ -494,6 +501,8 @@ def fold_event(ledger: dict, e: dict) -> None:
         t["prompt_render"] += e.get("prompt_render_ms", 0.0) or 0.0
         t["injection"] += e.get("injection_ms", 0.0) or 0.0
         t["pre_compute"] += e.get("pre_compute_ms", 0.0) or 0.0
+        ledger["inf_phase"]["prefill_ms"] += e.get("prefill_ms", 0.0) or 0.0
+        ledger["inf_phase"]["decode_ms"] += e.get("decode_ms", 0.0) or 0.0
         fb = _flow_bucket(ledger, flow)
         fb["inferences"] += 1
         fb["inference_ms"] += e.get("wall_ms", 0.0) or 0.0
@@ -573,6 +582,24 @@ def finalize_ledger(ledger: dict, total_wall_ms: float) -> dict:
         "time_ms": {k: round(v, 1) for k, v in t.items()},
         "time_pct": {k: pct(v) for k, v in t.items()},
         "residual_pct": pct(residual),
+        # Sub-attribution of the `inference` bucket into prefill vs decode
+        # (server-measured). server_other = the rest (queue/network/overhead).
+        "inference_phase": {
+            "prefill_ms": round(ledger["inf_phase"]["prefill_ms"], 1),
+            "decode_ms": round(ledger["inf_phase"]["decode_ms"], 1),
+            "server_other_ms": round(
+                max(0.0, t["inference"] - ledger["inf_phase"]["prefill_ms"]
+                    - ledger["inf_phase"]["decode_ms"]), 1
+            ),
+            "prefill_pct": (
+                round(100 * ledger["inf_phase"]["prefill_ms"] / t["inference"], 1)
+                if t["inference"] > 0 else 0.0
+            ),
+            "decode_pct": (
+                round(100 * ledger["inf_phase"]["decode_ms"] / t["inference"], 1)
+                if t["inference"] > 0 else 0.0
+            ),
+        },
         "counts": dict(ledger["counts"]),
         "session_span_ms": round(ledger["session_span_ms"], 1),
         "tokens": {
