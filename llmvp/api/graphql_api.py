@@ -81,6 +81,14 @@ class HealthStatus:
     flow_evicts: int = 0
     flow_fallbacks: int = 0
     runaway_captures: int = 0
+    # Rolling latency/throughput trend (pass 2). throughput_drift = recent
+    # decode tps / warm baseline; well under 1.0 flags generation slowdown.
+    trend_samples: int = 0
+    decode_tps_recent: Optional[float] = None
+    prefill_tps_recent: Optional[float] = None
+    ttft_recent_s: Optional[float] = None
+    decode_tps_baseline: Optional[float] = None
+    throughput_drift: Optional[float] = None
 
 
 @strawberry.type
@@ -261,7 +269,9 @@ class Query:
         from core.generation_tracker import get_tracker
 
         status = get_health_status()
-        tracker_status = get_tracker().get_status()
+        tracker = get_tracker()
+        tracker_status = tracker.get_status()
+        trend_status = tracker.get_trend()
 
         return HealthStatus(
             status=status["status"],
@@ -288,6 +298,13 @@ class Query:
             flow_evicts=status.get("flow_evicts", 0),
             flow_fallbacks=status.get("flow_fallbacks", 0),
             runaway_captures=status.get("runaway_captures", 0),
+            **{
+                k: trend_status.get(k)
+                for k in (
+                    "trend_samples", "decode_tps_recent", "prefill_tps_recent",
+                    "ttft_recent_s", "decode_tps_baseline", "throughput_drift",
+                )
+            },
         )
 
     @strawberry.field

@@ -20,7 +20,9 @@ running generation; all reads happen in the asyncio event loop.  The
 threading.Lock serializes access.
 """
 
+import collections
 import logging
+import statistics
 import threading
 import time
 from dataclasses import dataclass
@@ -58,6 +60,14 @@ class GenerationTracker:
         self._last_request_id: str = ""
         # Keep last completed status for post-mortem diagnostics
         self._last_status_snapshot: dict = {}
+        # Rolling latency/throughput trend (pass-2 deep-health). Each entry is
+        # (prefill_tps, decode_tps, ttft_s) from a completed, non-trivial
+        # generation. _baseline_decode_tps is the warm baseline (median of an
+        # early window, skipping cold starts) — throughput_drift = recent /
+        # baseline, so a value well under 1 flags slowdown (GPU spill/throttle,
+        # the Apple-Silicon memory-eviction signature) without any per-token cost.
+        self._trend: "collections.deque" = collections.deque(maxlen=64)
+        self._baseline_decode_tps: float | None = None
 
     def start(self, request_id: str = "", prompt_tokens: int = 0) -> None:
         """Mark the beginning of a new generation (entering eval phase)."""
@@ -148,6 +158,20 @@ class GenerationTracker:
                 ),
             }
 
+            # Fold into the rolling trend — only non-trivial generations (real
+            # decode time + tokens) so cache-hit/empty turns don't skew it.
+            if gen_time > 0.05 and s.tokens_generated >= 4:
+                decode_tps = s.tokens_generated / gen_time
+                prefill_tps = (
+                    s.prompt_tokens / s.eval_duration if s.eval_duration > 0.02 else 0.0
+                )
+                self._trend.append((prefill_tps, decode_tps, s.eval_duration))
+                # Establish the warm baseline once: median decode tps of an
+                # early window (skip the first 2 cold-start samples).
+                if self._baseline_decode_tps is None and len(self._trend) >= 10:
+                    warm = [t[1] for t in list(self._trend)[2:]]
+                    self._baseline_decode_tps = statistics.median(warm)
+
             s.active = False
 
         snap = self._last_status_snapshot
@@ -218,6 +242,36 @@ class GenerationTracker:
         """Get diagnostics from the last completed generation."""
         with self._lock:
             return dict(self._last_status_snapshot)
+
+    def get_trend(self) -> dict:
+        """Rolling latency/throughput trend for deep-health (read-only).
+
+        ``throughput_drift`` = recent decode tps / warm baseline; ~1.0 is
+        nominal, well under 1 means generation slowed (the degradation signal).
+        """
+        with self._lock:
+            samples = list(self._trend)
+            baseline = self._baseline_decode_tps
+        if not samples:
+            return {"trend_samples": 0}
+        recent = samples[-12:]
+
+        def _med(vals):
+            vals = [v for v in vals if v and v > 0]
+            return statistics.median(vals) if vals else None
+
+        dtps = _med(s[1] for s in recent)
+        ptps = _med(s[0] for s in recent)
+        ttft = _med(s[2] for s in recent)
+        drift = round(dtps / baseline, 3) if (dtps and baseline) else None
+        return {
+            "trend_samples": len(samples),
+            "decode_tps_recent": round(dtps, 1) if dtps else None,
+            "prefill_tps_recent": round(ptps, 1) if ptps else None,
+            "ttft_recent_s": round(ttft, 2) if ttft else None,
+            "decode_tps_baseline": round(baseline, 1) if baseline else None,
+            "throughput_drift": drift,
+        }
 
     def get_thinking(self, request_id: str = "") -> dict:
         """Get thinking content (for dedicated thinking endpoint)."""
