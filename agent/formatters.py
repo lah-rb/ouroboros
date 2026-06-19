@@ -350,9 +350,15 @@ def format_session_history(params: dict, namespaces: dict) -> str:
         return "No commands have been run yet."
     entries = [e for e in history if isinstance(e, dict)]
     cutoff = len(entries) - _RECENT_TURNS_FULL  # older than this → ledger
+    last_idx = len(entries) - 1  # the most recent turn
     lines = []
     for i, entry in enumerate(entries):
-        if i < cutoff:
+        # The most recent turn renders in full as the ---Observation--- block
+        # (format_last_turn — provably always paired with this formatter in
+        # run_session). Collapse it to a one-line ledger entry here so its body
+        # isn't duplicated into the prompt (leaner fresh tail per turn), while
+        # still recording that the command ran (reinforces §8 acceptance).
+        if i < cutoff or i == last_idx:
             lines.append(_ledger_line(entry))
             continue
         # Support both run_commands ('command') and interactive ('input') entries.
@@ -371,10 +377,19 @@ def format_session_history(params: dict, namespaces: dict) -> str:
 
 
 def format_last_turn(params: dict, namespaces: dict) -> str:
-    """Format the most recent turn with ---LAST TURN--- attention block.
+    """Frame the most recent terminal turn as the model's OWN tool result (§8).
 
-    Creates a prominent block around the last interaction so the model
-    can quickly orient to its current state in a multi-step session.
+    Without explicit framing the model reads the output as ambient project
+    context rather than the result of the command it just issued, and re-issues
+    the same command — the e39 trace-session re-request pathology (46-79% of
+    turns), which shows up in run_session as verbatim re-reads/re-runs
+    (`sed -n …` ×7, `ls -R .` ×6 in the TB2 microscope). Mirroring
+    trace_actions' framing: an explicit ``Observation`` label (the strongest
+    cross-framework anchor for tool-result delivery — ReAct/LangChain all use
+    it) plus naming the command as the acceptance signal — it tells the model
+    the command WAS executed and this is its output, so it neither re-runs nor
+    re-reads. ``(End of observation.)`` bounds where the tool data ends and the
+    next turn's prompt resumes.
     """
     history = params.get("source") or []
     if not history:
@@ -386,22 +401,31 @@ def format_last_turn(params: dict, namespaces: dict) -> str:
     action = last.get("action", "")
     cmd = last.get("command") or last.get("input", "")
     output = last.get("output", "")
+    turn = last.get("turn", "?")
 
-    lines = ["---LAST TURN---"]
-    if action == "shell_command":
-        lines.append(f"[Turn {last.get('turn', '?')}] $ {cmd}")
-    elif action == "send_input":
-        lines.append(f"[Turn {last.get('turn', '?')}] > {cmd}")
+    # First line of the command, bounded — heredocs/multi-line bodies would
+    # bloat the acceptance label; the model already holds the full command in
+    # its own prior turn, so the label only needs to be recognizable.
+    cmd_one = (cmd.strip().splitlines()[0] if cmd.strip() else "")[:100]
+    if cmd.strip().count("\n"):
+        cmd_one += " …"
+
+    if action == "send_input":
+        header = f"Observation — your input `{cmd_one}` was sent to the program (Turn {turn}):"
     elif action == "read_output":
-        lines.append(f"[Turn {last.get('turn', '?')}] (read_output)")
+        header = f"Observation — you read the program's output (Turn {turn}):"
+    elif cmd_one:
+        header = f"Observation — your command `{cmd_one}` ran (Turn {turn}):"
     else:
-        lines.append(f"[Turn {last.get('turn', '?')}] ({action}) {cmd}")
+        header = f"Observation (Turn {turn}):"
 
+    lines = [header, ""]
     if output:
         lines.append(_bound_output(output, _LAST_TURN_MAX, last.get("output_file")))
     if last.get("return_code", 0) != 0:
         lines.append(f"(exit code: {last['return_code']})")
-    lines.append("---END LAST TURN---")
+    lines.append("")
+    lines.append("(End of observation.)")
     return "\n".join(lines)
 
 

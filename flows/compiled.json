@@ -9516,8 +9516,8 @@
         },
         "pre_compute": [
           {
-            "formatter": "format_session_history",
-            "output_key": "session_history",
+            "formatter": "format_last_turn",
+            "output_key": "last_turn",
             "params": {
               "source": {
                 "$ref": "context.session_history"
@@ -9525,8 +9525,8 @@
             }
           },
           {
-            "formatter": "format_last_turn",
-            "output_key": "last_turn",
+            "formatter": "format_session_history",
+            "output_key": "session_history",
             "params": {
               "source": {
                 "$ref": "context.session_history"
@@ -9658,8 +9658,8 @@
         },
         "pre_compute": [
           {
-            "formatter": "format_session_history",
-            "output_key": "session_history",
+            "formatter": "format_last_turn",
+            "output_key": "last_turn",
             "params": {
               "source": {
                 "$ref": "context.session_history"
@@ -9667,8 +9667,8 @@
             }
           },
           {
-            "formatter": "format_last_turn",
-            "output_key": "last_turn",
+            "formatter": "format_session_history",
+            "output_key": "session_history",
             "params": {
               "source": {
                 "$ref": "context.session_history"

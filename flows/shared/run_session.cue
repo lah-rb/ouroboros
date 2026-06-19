@@ -131,14 +131,21 @@ run_session: #FlowDefinition & {
 				retries: 3
 			}
 			pre_compute: [
-				{
-					formatter:  "format_session_history"
-					output_key: "session_history"
-					params: source: {$ref: "context.session_history"}
-				},
+				// format_last_turn MUST run before format_session_history: the
+				// latter's output_key collides with its own input key
+				// ("session_history"), clobbering the entry list with a rendered
+				// string mid-chain (loader.run_pre_compute propagates each output
+				// into context immediately). If it ran first, format_last_turn
+				// would read a string — last char ≠ dict → empty block, the
+				// long-dead ---LAST TURN--- channel. Order = correctness here.
 				{
 					formatter:  "format_last_turn"
 					output_key: "last_turn"
+					params: source: {$ref: "context.session_history"}
+				},
+				{
+					formatter:  "format_session_history"
+					output_key: "session_history"
 					params: source: {$ref: "context.session_history"}
 				},
 			]
@@ -242,14 +249,21 @@ run_session: #FlowDefinition & {
 				retries: 2
 			}
 			pre_compute: [
-				{
-					formatter:  "format_session_history"
-					output_key: "session_history"
-					params: source: {$ref: "context.session_history"}
-				},
+				// format_last_turn MUST run before format_session_history: the
+				// latter's output_key collides with its own input key
+				// ("session_history"), clobbering the entry list with a rendered
+				// string mid-chain (loader.run_pre_compute propagates each output
+				// into context immediately). If it ran first, format_last_turn
+				// would read a string — last char ≠ dict → empty block, the
+				// long-dead ---LAST TURN--- channel. Order = correctness here.
 				{
 					formatter:  "format_last_turn"
 					output_key: "last_turn"
+					params: source: {$ref: "context.session_history"}
+				},
+				{
+					formatter:  "format_session_history"
+					output_key: "session_history"
 					params: source: {$ref: "context.session_history"}
 				},
 			]
