@@ -13,6 +13,98 @@ import glob
 from collections import defaultdict
 from typing import Any
 
+from agent.trace import summarize_events
+
+
+def _fmt_ms(ms: float) -> str:
+    """Human-friendly duration from milliseconds."""
+    secs = (ms or 0) / 1000.0
+    if secs >= 60:
+        return f"{int(secs // 60)}m {secs % 60:04.1f}s"
+    if secs >= 1:
+        return f"{secs:.2f}s"
+    return f"{ms:.0f}ms"
+
+
+def _load_summary_json(trace_path: str) -> dict | None:
+    """Load the companion <trace>.summary.json (the canonical finite head),
+    returning its inner ``summary`` dict — or None if absent/unreadable."""
+    if not trace_path.endswith(".jsonl"):
+        return None
+    path = trace_path[:-6] + ".summary.json"
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            record = json.load(f)
+        return record.get("summary") or None
+    except Exception:
+        return None
+
+
+def render_finite_breakdown(summary: dict) -> list[str]:
+    """The finite time + cache-aware token head, from a summary dict (the
+    companion summary.json, or summarize_events for an old trace)."""
+    lines: list[str] = []
+    total = summary.get("total_wall_ms", 0.0) or 0.0
+    completeness = summary.get("completeness_pct", 0.0)
+    residual_ms = summary.get("residual_ms", 0.0)
+    residual_pct = summary.get("residual_pct", 0.0)
+    time_ms = summary.get("time_ms", {})
+    time_pct = summary.get("time_pct", {})
+
+    lines.append("Time Breakdown (Σ categories + residual = total):")
+    lines.append(
+        f"  total wall {_fmt_ms(total)}  |  accounted {completeness:.1f}%  "
+        f"|  residual {_fmt_ms(residual_ms)} ({residual_pct:.1f}%)"
+    )
+    # Categories, largest first; hide dead-zero buckets for readability.
+    for cat, ms in sorted(time_ms.items(), key=lambda kv: -kv[1]):
+        if ms <= 0:
+            continue
+        lines.append(f"    {cat:<16s} {_fmt_ms(ms):>9s}  {time_pct.get(cat, 0.0):5.1f}%")
+    lines.append(f"    {'residual':<16s} {_fmt_ms(residual_ms):>9s}  {residual_pct:5.1f}%")
+    span = summary.get("session_span_ms", 0.0)
+    if span:
+        lines.append(f"  (sessions live {_fmt_ms(span)} total — overlaps inference)")
+    lines.append("")
+
+    # Cache-aware token panel.
+    tok = summary.get("tokens", {})
+    cache = summary.get("cache", {})
+    io = summary.get("io_ratio", {})
+    cached = tok.get("cached_prefix", 0)
+    fresh = tok.get("fresh_prefill", 0)
+    gen = tok.get("generated", 0)
+    lines.append("Tokens (cache-aware):")
+    if cached or fresh or gen:
+        lines.append(
+            f"  input: fresh {fresh:,} + cached {cached:,} = {fresh + cached:,}"
+            f"   |   generated {gen:,}"
+        )
+        hr = cache.get("hit_rate")
+        pr = cache.get("prefix_reuse_rate")
+        hits, miss = cache.get("hit", 0), cache.get("miss", 0)
+        if hr is not None:
+            lines.append(
+                f"  cache hit-rate {hr * 100:.0f}% ({hits}/{hits + miss} calls)"
+                + (f"   |   prefix reuse {pr * 100:.0f}%" if pr is not None else "")
+            )
+        fresh_io, ctx_io = io.get("fresh"), io.get("context")
+        if fresh_io is not None:
+            lines.append(
+                f"  in:out  {fresh_io} fresh:gen   |   {ctx_io} context:gen"
+            )
+    ws_calls = tok.get("whitespace_calls", 0)
+    if ws_calls:
+        lines.append(
+            f"  ({ws_calls} call(s) whitespace-approx — server predates cache "
+            f"telemetry: {tok.get('whitespace_in', 0):,} in / "
+            f"{tok.get('whitespace_out', 0):,} out)"
+        )
+    lines.append("")
+    return lines
+
 
 def find_trace_files(
     working_dir: str = ".", mission_id: str | None = None
@@ -80,6 +172,15 @@ def render_summary(events: list[dict], trace_path: str) -> str:
         f"Flows executed: {len(flows_executed)} unique"
     )
     lines.append("")
+
+    # ── The head: finite time breakdown + cache-aware token panel ──────
+    # Prefer the companion summary.json (authoritative — it has flush/
+    # persistence time the events don't carry); else recompute from events,
+    # using the legacy Σ cycle_duration_ms as the wall-clock denominator.
+    summary = _load_summary_json(trace_path)
+    if summary is None:
+        summary = summarize_events(events, total_wall_ms=total_duration_ms)
+    lines.extend(render_finite_breakdown(summary))
 
     # Flow breakdown
     flow_stats: dict[str, dict[str, Any]] = defaultdict(

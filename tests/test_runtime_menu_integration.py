@@ -23,6 +23,7 @@ from agent.effects.protocol import InferenceResult
 from agent.models import FlowDefinition, FlowMeta, StepInput, TurnDefinition
 from agent.runtime import _execute_turn_inference, _resolve_turn_transition
 from agent.schema_registry import set_default_registry
+from agent.trace import InferenceCall, step_context
 from agent.turn_renderer import TurnRenderer
 
 
@@ -380,3 +381,53 @@ async def test_publish_selection_absent_no_key_published(
     assert "selected" not in out.context_updates
     # inference_response still holds the full text
     assert out.context_updates["inference_response"] == '{"choice": "file_a.py"}'
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Soundness: inference traced on the session_id-set-but-no-session path
+# ──────────────────────────────────────────────────────────────────────
+
+
+class _TracingNoSessionEffects:
+    """run_inference + emit_trace, but deliberately NO session_inference, so
+    hasattr(effects, 'session_inference') is False."""
+
+    def __init__(self):
+        self.trace_events: list = []
+
+    async def run_inference(self, prompt, config_overrides=None):
+        return InferenceResult(
+            text='```json\n{"choice": "a"}\n```', tokens_generated=3
+        )
+
+    async def emit_trace(self, event):
+        self.trace_events.append(event)
+
+
+@pytest.mark.asyncio
+async def test_inference_traced_when_session_id_set_but_no_session_inference(
+    menu_renderer_fixture,
+) -> None:
+    """A step whose context carries session_id but whose effects lack
+    session_inference falls through to run_inference — and MUST still be
+    traced. The pre-fix guard gated emission on `not session_id`, leaving that
+    inference invisible; the fix gates on `actually_session` (did we route to a
+    real session?), so exactly one InferenceCall is emitted."""
+    turn = _menu_turn_with_projection()
+    flow = _wrap_in_flow(turn)
+    effects = _TracingNoSessionEffects()
+
+    with step_context(mission_id="m", cycle=0, flow="t", step="pick"):
+        await _execute_turn_inference(
+            step_def=flow.steps["pick"],
+            step_input=_make_step_input(context={"session_id": "sess-1"}),
+            flow_def=flow,
+            inputs={"menu_items": [{"id": "a", "description": "A"}]},
+            effects=effects,
+        )
+
+    inf = [e for e in effects.trace_events if isinstance(e, InferenceCall)]
+    # The point of the fix: the fallthrough inference is traced (pre-fix it was
+    # invisible because the guard was `not session_id`). Exactly one event.
+    assert len(inf) == 1, "fallthrough inference must be traced exactly once"
+    assert inf[0].purpose == "step_inference"

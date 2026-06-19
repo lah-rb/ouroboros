@@ -106,6 +106,17 @@ class CompletionResponse:
     tokens_generated: int
     finished: bool = True
     truncated: bool = False
+    # Cache-aware token telemetry (read-only; 0 when not applicable). The
+    # client requests these via the Completion / SessionCompletion queries and
+    # folds them into the trace's finite token breakdown. generated_tokens is
+    # the REAL completion count; cached_prefix = KV reused (skipped prefill);
+    # fresh_prefill = tokens actually prefilled; cache_hit = flow-cache HIT.
+    prompt_tokens: int = 0
+    cached_prefix_tokens: int = 0
+    fresh_prefill_tokens: int = 0
+    generated_tokens: int = 0
+    cache_hit: bool = False
+    flow_key: str = ""
 
 
 @strawberry.type
@@ -304,7 +315,7 @@ class Query:
         mgr = _get_session_manager()
         max_tokens = request.max_tokens or config.generation.max_tokens_default or 256
         temperature = request.temperature or 0.7
-        text, tokens = await mgr.session_turn_complete(
+        text, tokens, cache = await mgr.session_turn_complete(
             session_id=request.session_id,
             prompt=request.prompt,
             max_tokens=max_tokens,
@@ -317,6 +328,12 @@ class Query:
             tokens_generated=tokens,
             finished=True,
             truncated=truncated,
+            prompt_tokens=cache.get("prompt_tokens", 0),
+            cached_prefix_tokens=cache.get("cached_prefix_tokens", 0),
+            fresh_prefill_tokens=cache.get("fresh_prefill_tokens", 0),
+            generated_tokens=cache.get("generated_tokens", 0),
+            cache_hit=cache.get("cache_hit", False),
+            flow_key=cache.get("flow_key", ""),
         )
 
     @strawberry.field
@@ -353,7 +370,7 @@ class Query:
                 "flow_key": request.flow_cache_key,
             }
         )
-        answer, tokens_generated = await run_fn(
+        outcome = await run_fn(
             prompt=request.prompt,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
@@ -361,10 +378,16 @@ class Query:
             **extra,
         )
         return CompletionResponse(
-            text=answer,
-            tokens_generated=tokens_generated,
+            text=outcome.text,
+            tokens_generated=outcome.tokens_generated,
             finished=True,
-            truncated=tokens_generated >= effective_max,
+            truncated=outcome.tokens_generated >= effective_max,
+            prompt_tokens=outcome.prompt_tokens,
+            cached_prefix_tokens=outcome.cached_prefix_tokens,
+            fresh_prefill_tokens=outcome.fresh_prefill_tokens,
+            generated_tokens=outcome.generated_tokens,
+            cache_hit=outcome.cache_hit,
+            flow_key=outcome.flow_key,
         )
 
     @strawberry.field
@@ -463,16 +486,22 @@ class Mutation:
         Returns:
             CompletionResponse with generated text
         """
-        answer, tokens_generated = await run_completion(
+        outcome = await run_completion(
             prompt=request.prompt,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             grammar=request.grammar,
         )
         return CompletionResponse(
-            text=answer,
-            tokens_generated=tokens_generated,
+            text=outcome.text,
+            tokens_generated=outcome.tokens_generated,
             finished=True,
+            prompt_tokens=outcome.prompt_tokens,
+            cached_prefix_tokens=outcome.cached_prefix_tokens,
+            fresh_prefill_tokens=outcome.fresh_prefill_tokens,
+            generated_tokens=outcome.generated_tokens,
+            cache_hit=outcome.cache_hit,
+            flow_key=outcome.flow_key,
         )
 
     @strawberry.mutation

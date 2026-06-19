@@ -28,7 +28,7 @@ async def run(strip):
                 f"Step {t}: compute {t} times 7, think briefly, then reply with "
                 f'ONLY {{"r": <number>}}.'
             )
-            text, ntok = await sm.session_turn_complete(
+            text, ntok, _ = await sm.session_turn_complete(
                 info.session_id, p, max_tokens=400, temperature=0.3
             )
             kv = sm._sessions[info.session_id].instance.n_tokens

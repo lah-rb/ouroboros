@@ -300,13 +300,20 @@ async def run_agent(
             "_trace_cycle": cycle,
         }
 
+        # Finite-time breakdown: projection + tail-resolution are cycle-level
+        # work outside any step — time them so cycle_duration_ms decomposes
+        # exhaustively (carried on CycleEnd below).
+        projection_ms = 0.0
+        tail_resolution_ms = 0.0
         try:
             # Materialize projections before flow execution
+            _proj_start = time.monotonic()
             instrumented_inputs = await _materialize_projections(
                 flow_def,
                 instrumented_inputs,
                 effects,
             )
+            projection_ms = (time.monotonic() - _proj_start) * 1000
 
             flow_result = await execute_flow(
                 flow_def=flow_def,
@@ -315,7 +322,9 @@ async def run_agent(
                 effects=effects,
                 flow_registry=registry,
             )
+            _tail_start = time.monotonic()
             outcome = _resolve_tail_call(flow_result, flow_def, instrumented_inputs)
+            tail_resolution_ms = (time.monotonic() - _tail_start) * 1000
         except FlowRuntimeError as exc:
             # A flow could not execute correctly — its infinite-loop safety
             # tripped (MaxStepsExceeded) or it routed to a step whose required
@@ -383,6 +392,8 @@ async def run_agent(
                     target_flow=(outcome.target_flow if is_tail_call else None),
                     status=(None if is_tail_call else outcome.result.status),
                     cycle_duration_ms=((time.monotonic() - cycle_start_time) * 1000),
+                    projection_ms=projection_ms,
+                    tail_resolution_ms=tail_resolution_ms,
                 )
             )
             await effects.flush_traces()

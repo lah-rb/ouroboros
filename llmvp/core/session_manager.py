@@ -713,7 +713,7 @@ class SessionManager:
         max_tokens: int = 256,
         temperature: float = 0.7,
         grammar: str | None = None,
-    ) -> tuple[str, int]:
+    ) -> tuple[str, int, dict]:
         """Non-streaming session turn — returns full response.
 
         Collects raw output from the streaming generator, then runs
@@ -747,6 +747,27 @@ class SessionManager:
         raw_text = "".join(raw_parts)
         generated_tokens = len(raw_parts)
 
+        # Cache-aware token telemetry from the session instance's per-request
+        # stash (read-only). cached_prefix = full restored KV occupancy (static
+        # + all prior turns — what the model skipped prefilling this turn);
+        # fresh_prefill = the new turn's prefilled tokens. generated_tokens here
+        # is the REAL completion count (vs the chunk-count proxy returned for
+        # truncation). Empty when the instance didn't stash (degrades cleanly).
+        _sess = self._sessions.get(session_id)
+        _inst = getattr(_sess, "instance", None)
+        _cached = int(getattr(_inst, "_last_kv_base", 0) or 0)
+        _fresh = int(getattr(_inst, "_last_dynamic_len", 0) or 0)
+        cache = {
+            "prompt_tokens": _cached + _fresh,
+            "cached_prefix_tokens": _cached,
+            "fresh_prefill_tokens": _fresh,
+            "generated_tokens": len(
+                getattr(_inst, "_last_completion_tokens", []) or []
+            ),
+            "cache_hit": bool(getattr(_inst, "_last_flow_hit", False)),
+            "flow_key": str(getattr(_inst, "_last_flow_key", "") or ""),
+        }
+
         # Capture raw output for training before any post-processing
         from core.interaction_logger import log_raw_generation
 
@@ -761,7 +782,7 @@ class SessionManager:
         delim = _get_format_renderer(config.model.family).delimiter_pattern()
         if not delim:
             text = raw_text.strip()
-            return text, generated_tokens
+            return text, generated_tokens, cache
 
         # FSM-based delimiter stripping on the full raw output.
         # The FSM labels each atom as D/T/C/E based on current phase
@@ -807,7 +828,7 @@ class SessionManager:
             },
         )
 
-        return text, generated_tokens
+        return text, generated_tokens, cache
 
     async def end_session(self, session_id: str) -> bool:
         """Release the pinned instance and clean up."""

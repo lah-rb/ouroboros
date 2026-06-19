@@ -467,6 +467,9 @@ class LlamaCppBackend(BaseBackend):
         seq_cp. acquire_instance() has already forked SEQ_STATIC → seq 0 (global
         static). Returns flow_prefix_len on success, or None to fall back to base."""
         try:
+            # Telemetry: did THIS request reuse a pinned flow seq (HIT) or build
+            # it fresh (BUILD)? Read back by generate_stream_sync for cache_hit.
+            inst._resident_flow_hit = False
             flow_seqs = inst._flow_seqs
             ctx = inst._ctx
             ids = np.array(prompt_tokens[:flow_prefix_len], dtype=np.intc)
@@ -478,6 +481,7 @@ class LlamaCppBackend(BaseBackend):
                 ctx.memory_seq_cp(seq, SEQ_WORKING, -1, -1)
                 inst.n_tokens = flow_prefix_len
                 inst.input_ids[:flow_prefix_len] = ids
+                inst._resident_flow_hit = True
                 log.info(
                     "🔁 resident flow HIT %r (seq %d, %d tok)",
                     flow_key, seq, flow_prefix_len,
@@ -1274,6 +1278,7 @@ class LlamaCppBackend(BaseBackend):
         flow_key = kwargs.pop("flow_key", None)
         flow_prefix_len = int(kwargs.pop("flow_prefix_len", 0) or 0)
         flow_n_static = None
+        flow_hit_telemetry = False  # did this request reuse a pinned flow head?
         flow_eligible = bool(
             flow_key
             and getattr(self.config.model, "flow_kv_cache", False)
@@ -1286,11 +1291,15 @@ class LlamaCppBackend(BaseBackend):
             flow_n_static = self._resident_flow(
                 instance, flow_key, flow_prefix_len, prompt_tokens
             )
+            flow_hit_telemetry = flow_n_static is not None and bool(
+                getattr(instance, "_resident_flow_hit", False)
+            )
         elif flow_eligible:
             try:
                 if flow_key in self._flow_states:
                     self._flow_states.move_to_end(flow_key)
                     instance.load_state(self._flow_states[flow_key])
+                    flow_hit_telemetry = True
                     log.info(
                         "🔁 flow_kv_cache HIT %r (%d tok pinned)",
                         flow_key, flow_prefix_len,
@@ -1567,6 +1576,14 @@ class LlamaCppBackend(BaseBackend):
             # in-place KV compaction (Factor 4 / strip_reasoning).
             instance._last_completion_tokens = list(completion_tokens)
             instance._last_gen_start_pos = gen_start_pos
+            # Cache-aware token telemetry (read-only — what the run already
+            # computed). kv_base = KV the model SKIPPED prefilling (global static
+            # + flow head for stateless; full restored occupancy for sessions);
+            # dynamic_tokens = tokens actually prefilled this request.
+            instance._last_kv_base = int(kv_base)
+            instance._last_dynamic_len = int(len(dynamic_tokens))
+            instance._last_flow_hit = bool(flow_hit_telemetry)
+            instance._last_flow_key = flow_key or ""
         finally:
             # Abnormal exit with substantial output and no recorded reason:
             # the consumer abandoned the stream — in practice the agent-side

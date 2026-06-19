@@ -61,6 +61,16 @@ def step_context(
 
     Uses contextvars.Token so concurrent flow executions — if they ever
     happen — don't clobber each other's state.
+
+    INVARIANT (telemetry soundness): every ``emit_trace`` call site must run
+    on the asyncio side, NOT inside a ``run_in_threadpool`` worker. contextvars
+    propagate into ``asyncio`` tasks but NOT into threadpool threads (unless
+    ``copy_context()`` is used). Backend generation runs in a threadpool, but
+    the effects read this context and emit the trace back on the awaiting
+    coroutine — so attribution is correct today. If a future change moves an
+    ``emit_trace`` into a worker thread, the bound context silently becomes
+    None and the event loses its flow/step (and its ledger contribution lands
+    in the wrong bucket). Keep emits on the asyncio side.
     """
     token = _step_context.set(
         {
@@ -126,6 +136,12 @@ class CycleEnd(TraceEvent):
     target_flow: str | None = None  # If tail_call
     status: str | None = None  # If termination
     cycle_duration_ms: float = 0.0
+    # Finite-time breakdown: cycle-level work outside any step. Both carried on
+    # CycleEnd (CycleStart fires before projections run). projection =
+    # _materialize_projections (before the flow); tail_resolution =
+    # _resolve_tail_call ($ref + input_map, after the flow returns).
+    projection_ms: float = 0.0
+    tail_resolution_ms: float = 0.0
 
 
 # ── Step Events (emitted by runtime.py) ──────────────────────────────
@@ -141,6 +157,10 @@ class StepStart(TraceEvent):
     action: str = ""  # Action name
     context_consumed: list[str] = field(default_factory=list)
     context_required: list[str] = field(default_factory=list)
+    # Finite-time breakdown: _build_step_input (context filter + $ref resolve),
+    # measured before this StepStart is emitted. (pre_compute runs inside the
+    # action and is carried on InferenceCall.)
+    input_build_ms: float = 0.0
 
 
 @dataclass
@@ -154,6 +174,10 @@ class StepEnd(TraceEvent):
     resolver_decision: str = ""  # Transition chosen
     options_available: list[str] = field(default_factory=list)
     step_duration_ms: float = 0.0
+    # Transition-resolver wall time (rule eval or llm_menu) — the span after
+    # the action returns and before this StepEnd. (An llm_menu resolve also
+    # emits its own InferenceCall; this is the resolver's own overhead.)
+    resolver_ms: float = 0.0
 
 
 # ── Inference Events ──────────────────────────────────────────────────
@@ -174,9 +198,9 @@ class InferenceCall(TraceEvent):
 
     event_type: str = "inference_call"
     step: str = ""
-    tokens_in: int = 0  # Whitespace-split count of prompt
-    tokens_out: int = 0  # Whitespace-split count of response
-    wall_ms: float = 0.0  # Wall clock for this call
+    tokens_in: int = 0  # Real input tokens when available, else whitespace-split
+    tokens_out: int = 0  # Real generated tokens when available, else whitespace
+    wall_ms: float = 0.0  # Wall clock for the inference round-trip only
     temperature: float = 0.0
     max_tokens: int = 0
     purpose: str = ""  # "step_inference" | "llm_menu_resolve"
@@ -184,6 +208,24 @@ class InferenceCall(TraceEvent):
     prompt_content: str = ""  # Full rendered prompt (when --trace-prompts)
     response_content: str = ""  # Raw model response (when --trace-prompts)
     truncated: bool = False  # Generation cut off by max_tokens budget
+    # Finite-time breakdown: pre-inference work excluded from wall_ms (the
+    # round-trip clock starts after these). prompt_render = template render +
+    # cache-split; injection = consume_injections (turn path); pre_compute =
+    # run_pre_compute formatters for this inference step.
+    prompt_render_ms: float = 0.0
+    injection_ms: float = 0.0
+    pre_compute_ms: float = 0.0
+    # Cache-aware token accounting (real backend counts; 0 when the server
+    # doesn't report them — then tokens_in/out fall back to whitespace).
+    # cached_prefix = tokens the model SKIPPED prefilling (KV reuse: static
+    # prefix for stateless, full restored occupancy for sessions);
+    # fresh_prefill = tokens actually prefilled this call; generated = real
+    # completion token count. cache_hit = flow_kv_cache / resident-seq HIT.
+    cached_prefix_tokens: int = 0
+    fresh_prefill_tokens: int = 0
+    generated_tokens: int = 0
+    cache_hit: bool = False
+    flow_key: str = ""
 
 
 # ── Sub-flow Events ──────────────────────────────────────────────────
@@ -238,7 +280,11 @@ class SessionEnd(TraceEvent):
     step: str = ""
     session_id: str = ""
     success: bool = True
-    wall_ms: float = 0.0
+    wall_ms: float = 0.0  # close-RPC time only (end_inference_session call)
+    # Full session SPAN: start_inference_session → end. wall_ms above is just
+    # the teardown RPC; span_ms is the lifetime the session was live (across
+    # all its turns), the honest "session_lifecycle" time-ledger contribution.
+    span_ms: float = 0.0
 
 
 # ── Subprocess / MCP ─────────────────────────────────────────────────
@@ -322,3 +368,255 @@ class NotePushed(TraceEvent):
     source_flow: str = ""
     content_preview: str = ""
     success: bool = True
+
+
+# ── Finite time + token ledger ────────────────────────────────────────
+#
+# The finite breakdown: a run's total wall-clock decomposed into
+# NON-OVERLAPPING leaf categories that sum to the total minus an explicit
+# `residual`. Categories are disjoint by construction — e.g. prompt_render
+# is the time BEFORE an inference's wall_ms clock starts, so it never
+# double-counts inference; session span is reported as info, not summed
+# (it contains the session's inference calls, which already count under
+# `inference`). step/cycle durations are deliberately NOT summed (they are
+# containers overlapping the leaves) — they drive the per-flow rollup. The
+# residual (total − Σ leaves) captures async glue and any not-yet-
+# instrumented work; residual/total is the "accounting completeness"
+# metric, targeted toward 0.
+#
+# `flush` and `persistence` are accumulated directly on a live ledger via
+# ledger_add_ms (they are effects-internal, not trace events) — so batch
+# recompute from a complete trace file folds them into the residual.
+
+# Leaf categories that partition wall-clock. Order is display order.
+TIME_CATEGORIES = (
+    "inference",
+    "terminal",
+    "mcp",  # MCP tool calls incl. PTY send_input (settle/deferral time lands here)
+    "prompt_render",
+    "injection",
+    "pre_compute",
+    "input_build",
+    "resolver",
+    "projection",
+    "tail_resolution",
+    "session_rpc",
+    "persistence",
+    "flush",
+)
+
+
+@dataclass
+class RunSummary(TraceEvent):
+    """Terminal trace record: the finalized finite time + token breakdown.
+
+    Written as the last JSONL line on final flush and as the canonical
+    ``<trace>.summary.json`` companion. Old readers ignore the unknown
+    event_type; the markdown head (trace_cli) renders from it directly.
+    """
+
+    event_type: str = "run_summary"
+    total_wall_ms: float = 0.0
+    summary: dict = field(default_factory=dict)
+
+
+def new_ledger() -> dict:
+    """A fresh accumulator for the finite-time + token breakdown.
+
+    Plain dicts (no defaultdict) so it serializes cleanly and is safe on a
+    long-lived effects instance. Fold trace events with ``fold_event``; add
+    effects-internal time with ``ledger_add_ms``; finalize with
+    ``finalize_ledger``."""
+    return {
+        "time_ms": {c: 0.0 for c in TIME_CATEGORIES},
+        "tokens": {
+            "cached_prefix": 0,
+            "fresh_prefill": 0,
+            "generated": 0,
+            "ws_in": 0,
+            "ws_out": 0,
+            "real_calls": 0,
+            "ws_calls": 0,
+        },
+        "cache": {"hit": 0, "miss": 0},  # counted only for real-token calls
+        "counts": {
+            "cycles": 0,
+            "steps": 0,
+            "inferences": 0,
+            "commands": 0,
+            "mcp": 0,
+            "sessions": 0,
+            "notes": 0,
+        },
+        "session_span_ms": 0.0,
+        "flows": {},  # flow -> rollup
+    }
+
+
+def _flow_bucket(ledger: dict, flow: str) -> dict:
+    b = ledger["flows"].get(flow)
+    if b is None:
+        b = {
+            "cycles": 0,
+            "inferences": 0,
+            "inference_ms": 0.0,
+            "cached_prefix": 0,
+            "fresh_prefill": 0,
+            "generated": 0,
+        }
+        ledger["flows"][flow] = b
+    return b
+
+
+def fold_event(ledger: dict, e: dict) -> None:
+    """Fold one trace-event dict's numeric fields into the ledger.
+
+    Disjoint-by-construction: each timing field lands in exactly one leaf
+    category. Used both live (emit_trace) and in batch recompute (trace_cli).
+    """
+    et = e.get("event_type", "")
+    t = ledger["time_ms"]
+    flow = e.get("flow", "")
+    if et == "cycle_start":
+        ledger["counts"]["cycles"] += 1
+        _flow_bucket(ledger, flow)["cycles"] += 1
+    elif et == "cycle_end":
+        t["projection"] += e.get("projection_ms", 0.0) or 0.0
+        t["tail_resolution"] += e.get("tail_resolution_ms", 0.0) or 0.0
+    elif et == "step_start":
+        ledger["counts"]["steps"] += 1
+        t["input_build"] += e.get("input_build_ms", 0.0) or 0.0
+    elif et == "step_end":
+        t["resolver"] += e.get("resolver_ms", 0.0) or 0.0
+    elif et == "inference_call":
+        ledger["counts"]["inferences"] += 1
+        t["inference"] += e.get("wall_ms", 0.0) or 0.0
+        t["prompt_render"] += e.get("prompt_render_ms", 0.0) or 0.0
+        t["injection"] += e.get("injection_ms", 0.0) or 0.0
+        t["pre_compute"] += e.get("pre_compute_ms", 0.0) or 0.0
+        fb = _flow_bucket(ledger, flow)
+        fb["inferences"] += 1
+        fb["inference_ms"] += e.get("wall_ms", 0.0) or 0.0
+        tok = ledger["tokens"]
+        gen = int(e.get("generated_tokens", 0) or 0)
+        cp = int(e.get("cached_prefix_tokens", 0) or 0)
+        fp = int(e.get("fresh_prefill_tokens", 0) or 0)
+        if gen or cp or fp:  # real backend counts present
+            tok["cached_prefix"] += cp
+            tok["fresh_prefill"] += fp
+            tok["generated"] += gen
+            tok["real_calls"] += 1
+            fb["cached_prefix"] += cp
+            fb["fresh_prefill"] += fp
+            fb["generated"] += gen
+            if e.get("cache_hit"):
+                ledger["cache"]["hit"] += 1
+            else:
+                ledger["cache"]["miss"] += 1
+        else:  # whitespace fallback (server didn't report real counts)
+            tok["ws_in"] += int(e.get("tokens_in", 0) or 0)
+            tok["ws_out"] += int(e.get("tokens_out", 0) or 0)
+            tok["ws_calls"] += 1
+    elif et == "command_run":
+        ledger["counts"]["commands"] += 1
+        t["terminal"] += e.get("wall_ms", 0.0) or 0.0
+    elif et == "mcp_tool_call":
+        ledger["counts"]["mcp"] += 1
+        t["mcp"] += e.get("wall_ms", 0.0) or 0.0
+    elif et == "session_start":
+        ledger["counts"]["sessions"] += 1
+    elif et == "session_end":
+        t["session_rpc"] += e.get("wall_ms", 0.0) or 0.0
+        ledger["session_span_ms"] += e.get("span_ms", 0.0) or 0.0
+    elif et == "note_pushed":
+        ledger["counts"]["notes"] += 1
+
+
+def ledger_add_ms(ledger: dict, category: str, ms: float) -> None:
+    """Add directly-measured time not carried by a trace event (flush,
+    persistence). No-op for unknown categories."""
+    if category in ledger["time_ms"]:
+        ledger["time_ms"][category] += ms
+
+
+def finalize_ledger(ledger: dict, total_wall_ms: float) -> dict:
+    """Compute the residual + ratios; return the JSON-able summary dict.
+
+    ``residual_ms = total_wall_ms − Σ(leaf categories)``. By construction the
+    leaves are disjoint sub-spans of the run, so residual ≥ 0 up to clock
+    jitter; ``completeness_pct`` is the fraction of wall-clock attributed.
+    The in/out ratio is reported BOTH ways: ``fresh`` (compute actually done
+    = fresh_prefill : generated) and ``context`` (full prompt incl. cache =
+    (cached+fresh) : generated) — the gap between them is the cache payoff.
+    """
+    t = ledger["time_ms"]
+    accounted = sum(t.values())
+    residual = total_wall_ms - accounted
+    tok = ledger["tokens"]
+    real_in = tok["cached_prefix"] + tok["fresh_prefill"]
+    cache_total = ledger["cache"]["hit"] + ledger["cache"]["miss"]
+    prefix_total = tok["cached_prefix"] + tok["fresh_prefill"]
+
+    def pct(x: float) -> float:
+        return round(100.0 * x / total_wall_ms, 2) if total_wall_ms > 0 else 0.0
+
+    def ratio(a: int, b: int) -> float | None:
+        return round(a / b, 3) if b else None
+
+    return {
+        "total_wall_ms": round(total_wall_ms, 1),
+        "accounted_ms": round(accounted, 1),
+        "residual_ms": round(residual, 1),
+        "completeness_pct": (
+            round(100.0 * accounted / total_wall_ms, 2) if total_wall_ms > 0 else 0.0
+        ),
+        "time_ms": {k: round(v, 1) for k, v in t.items()},
+        "time_pct": {k: pct(v) for k, v in t.items()},
+        "residual_pct": pct(residual),
+        "counts": dict(ledger["counts"]),
+        "session_span_ms": round(ledger["session_span_ms"], 1),
+        "tokens": {
+            "cached_prefix": tok["cached_prefix"],
+            "fresh_prefill": tok["fresh_prefill"],
+            "generated": tok["generated"],
+            "real_input_total": real_in,
+            "whitespace_in": tok["ws_in"],
+            "whitespace_out": tok["ws_out"],
+            "real_calls": tok["real_calls"],
+            "whitespace_calls": tok["ws_calls"],
+        },
+        "cache": {
+            "hit": ledger["cache"]["hit"],
+            "miss": ledger["cache"]["miss"],
+            "hit_rate": (
+                round(ledger["cache"]["hit"] / cache_total, 4) if cache_total else None
+            ),
+            "prefix_reuse_rate": (
+                round(tok["cached_prefix"] / prefix_total, 4) if prefix_total else None
+            ),
+        },
+        "io_ratio": {
+            "fresh": ratio(tok["fresh_prefill"], tok["generated"]),
+            "context": ratio(real_in, tok["generated"]),
+        },
+        "flows": ledger["flows"],
+    }
+
+
+def summarize_events(events: list[dict], total_wall_ms: float | None = None) -> dict:
+    """Batch path: compute the finite summary from a complete event list.
+
+    Used by trace_cli to render an old/complete trace when no companion
+    summary.json exists. ``total_wall_ms`` falls back to Σ cycle_duration_ms
+    (the legacy denominator) — flush/persistence aren't in events, so they
+    fold into the residual here (the live summary.json is authoritative)."""
+    ledger = new_ledger()
+    for e in events:
+        fold_event(ledger, e)
+    if total_wall_ms is None:
+        total_wall_ms = sum(
+            e.get("cycle_duration_ms", 0.0) or 0.0
+            for e in events
+            if e.get("event_type") == "cycle_end"
+        )
+    return finalize_ledger(ledger, total_wall_ms)

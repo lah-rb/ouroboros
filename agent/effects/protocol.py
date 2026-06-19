@@ -134,6 +134,19 @@ class InferenceResult:
     finished: bool = True
     error: str | None = None
     truncated: bool = False
+    # Cache-aware token accounting from the backend. All default 0/False so a
+    # server that doesn't report them degrades gracefully (callers fall back to
+    # whitespace counts). generated_tokens is the real completion token count
+    # (tokens_generated above is kept for back-compat). cached_prefix = KV the
+    # model skipped prefilling (static prefix for stateless, full restored
+    # occupancy for sessions); fresh_prefill = tokens actually prefilled this
+    # call; cache_hit = flow_kv_cache / resident-seq HIT.
+    prompt_tokens: int = 0
+    cached_prefix_tokens: int = 0
+    fresh_prefill_tokens: int = 0
+    generated_tokens: int = 0
+    cache_hit: bool = False
+    flow_key: str = ""
 
 
 # ── Terminal output limits ────────────────────────────────────────────

@@ -10,6 +10,7 @@ Now uses the pluggable backend system for backend-agnostic inference.
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import AsyncGenerator, List, Optional, Tuple
 
 # Local imports
@@ -28,6 +29,28 @@ from formats.registry import get_renderer as _get_format_renderer
 # Set up logging
 config = get_config()
 log = logging.getLogger("llm-mvp")
+
+
+@dataclass
+class CompletionOutcome:
+    """run_completion result with cache-aware token telemetry.
+
+    ``generated_tokens`` is the REAL completion token count (the legacy
+    ``tokens_generated`` was a char approximation). ``cached_prefix_tokens`` =
+    KV the model skipped prefilling (global static + flow head for stateless;
+    full restored occupancy for sessions); ``fresh_prefill_tokens`` = tokens
+    actually prefilled this request. All read-only — surfaced from values the
+    backend already computed. Defaults are zero so the tool path (no cache
+    accounting) and any error path degrade cleanly."""
+
+    text: str
+    tokens_generated: int
+    prompt_tokens: int = 0
+    cached_prefix_tokens: int = 0
+    fresh_prefill_tokens: int = 0
+    generated_tokens: int = 0
+    cache_hit: bool = False
+    flow_key: str = ""
 
 
 def _get_delimiter() -> str:
@@ -309,9 +332,12 @@ async def run_completion(
             gen_kwargs["grammar"] = grammar
         gen_kwargs.update(flow_kwargs)
 
-        # Use backend's async generation
+        # Use backend's async generation. gen_target is where the backend
+        # stashes per-request cache telemetry (_last_*) — the pooled instance,
+        # or the backend itself when not manually pooled.
+        gen_target = instance or backend
         answer = await backend.generate_async(
-            instance=instance or backend,
+            instance=gen_target,
             prompt_tokens=full_prompt,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -338,12 +364,27 @@ async def run_completion(
             "run_completion: after strip len=%d, first100=%r", len(answer), answer[:100]
         )
 
-        # Approximate token count
-        tokens_generated = _approximate_token_count(answer)
+        # Cache-aware token telemetry from the backend stash (read-only). The
+        # real generated count replaces the char approximation. Falls back to
+        # the approximation if the stash is absent (e.g. a backend that doesn't
+        # set _last_*), so behavior degrades cleanly.
+        real_gen = len(getattr(gen_target, "_last_completion_tokens", []) or [])
+        cached_prefix = int(getattr(gen_target, "_last_kv_base", 0) or 0)
+        fresh_prefill = int(getattr(gen_target, "_last_dynamic_len", 0) or 0)
+        tokens_generated = real_gen or _approximate_token_count(answer)
 
         # Log interaction (non-streaming)
         log_interaction(prompt=prompt, response=answer, mode="non-stream")
-        return answer, tokens_generated
+        return CompletionOutcome(
+            text=answer,
+            tokens_generated=tokens_generated,
+            prompt_tokens=cached_prefix + fresh_prefill,
+            cached_prefix_tokens=cached_prefix,
+            fresh_prefill_tokens=fresh_prefill,
+            generated_tokens=real_gen,
+            cache_hit=bool(getattr(gen_target, "_last_flow_hit", False)),
+            flow_key=str(getattr(gen_target, "_last_flow_key", "") or ""),
+        )
 
     finally:
         if backend.capabilities.manual_pooling and instance is not None:
@@ -731,13 +772,21 @@ async def run_tool_completion(
         if not has_tool_call(answer):
             # No tool call — we're done
             log_interaction(prompt=prompt, response=answer, mode="tool")
-            return answer, total_tokens
+            return CompletionOutcome(
+            text=answer,
+            tokens_generated=total_tokens,
+            generated_tokens=total_tokens,
+        )
 
         tc = parse_tool_call(answer)
         if tc is None:
             # Malformed tool call — return as-is
             log_interaction(prompt=prompt, response=answer, mode="tool")
-            return answer, total_tokens
+            return CompletionOutcome(
+            text=answer,
+            tokens_generated=total_tokens,
+            generated_tokens=total_tokens,
+        )
 
         # Execute the tool
         log.info("🔧 Tool call [iter %d]: %s(%s)", iteration + 1, tc.name, tc.params)

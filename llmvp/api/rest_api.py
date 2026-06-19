@@ -91,14 +91,14 @@ async def completions(request: Request):
         )
     else:
         try:
-            answer, _ = await run_completion(
+            outcome = await run_completion(
                 prompt=user_prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 static_prefix=static_prefix,
                 flow_key=flow_key,
             )
-            return {"choices": [{"text": answer}]}
+            return {"choices": [{"text": outcome.text}]}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except RuntimeError as exc:

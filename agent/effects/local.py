@@ -25,13 +25,18 @@ from agent.trace import (
     InferenceCall,
     McpToolCall,
     NotePushed,
+    RunSummary,
     SessionEnd,
     SessionStart,
     TraceEvent,
     _NOTE_PREVIEW_CHARS,
     _truncate_preview,
     count_tokens,
+    fold_event,
+    finalize_ledger,
     get_step_context,
+    ledger_add_ms,
+    new_ledger,
 )
 from agent.effects.protocol import (
     CommandResult,
@@ -93,6 +98,16 @@ class LocalEffects:
         # Trace buffer — flushed to JSONL at cycle boundaries
         self._trace_buffer: list[TraceEvent] = []
         self._trace_file_path: str | None = None
+        # Finite time + token ledger (the "head"): folded incrementally in
+        # emit_trace, serialized to <trace>.summary.json each flush. Run span
+        # starts at the first emitted event. _traced_mission_id captures the
+        # first non-empty mission_id so the trace file isn't named unknown_*
+        # if a bootstrap event lacks it. _session_started_at backs SessionEnd
+        # span timing (the close-RPC wall_ms alone misses the session lifetime).
+        self._ledger: dict = new_ledger()
+        self._run_start_monotonic: float | None = None
+        self._traced_mission_id: str = ""
+        self._session_started_at: dict[str, float] = {}
         # Chain-of-thought capture — only fetch when flag is set
         self.trace_thinking: bool = trace_thinking
         # Full prompt/response capture — only store when flag is set
@@ -1081,6 +1096,9 @@ class LocalEffects:
         start = time.monotonic()
         inference = self._get_inference()
         session_id = await inference.start_session(config)
+        # Record the span start so SessionEnd can report the session lifetime
+        # (its wall_ms is only the close RPC — see SessionEnd.span_ms).
+        self._session_started_at[session_id] = time.monotonic()
         self._log_entry(
             "start_inference_session",
             f"config={config!r}",
@@ -1144,8 +1162,17 @@ class LocalEffects:
         # contextvars rather than an explicit trace_context parameter.
         ctx = get_step_context()
         if ctx is not None:
-            tokens_in = count_tokens(prompt)
-            tokens_out = count_tokens(result.text) if result.text else 0
+            # Cache-aware tokens: prefer real backend counts when LLMVP reports
+            # them; fall back to whitespace. cached_prefix for a session is the
+            # full restored KV occupancy (static + prior turns) — the tokens the
+            # model skipped prefilling this turn.
+            ws_in = count_tokens(prompt)
+            ws_out = count_tokens(result.text) if result.text else 0
+            gen = int(getattr(result, "generated_tokens", 0) or 0)
+            cp = int(getattr(result, "cached_prefix_tokens", 0) or 0)
+            fp = int(getattr(result, "fresh_prefill_tokens", 0) or 0)
+            tokens_in = (cp + fp) if (cp or fp) else ws_in
+            tokens_out = gen if gen else ws_out
             prompt_content = ""
             response_content = ""
             if self.trace_prompts:
@@ -1190,6 +1217,11 @@ class LocalEffects:
                     prompt_content=prompt_content,
                     response_content=response_content,
                     truncated=getattr(result, "truncated", False),
+                    cached_prefix_tokens=cp,
+                    fresh_prefill_tokens=fp,
+                    generated_tokens=gen,
+                    cache_hit=bool(getattr(result, "cache_hit", False)),
+                    flow_key=str(getattr(result, "flow_key", "") or ""),
                 )
             )
 
@@ -1213,6 +1245,10 @@ class LocalEffects:
             str(success),
             start,
         )
+        # Full session span (start → end), vs wall_ms which is only this close
+        # RPC. Pop so the dict doesn't grow across a long run.
+        started = self._session_started_at.pop(session_id, None)
+        span_ms = (time.monotonic() - started) * 1000 if started is not None else 0.0
         ctx = get_step_context()
         if ctx is not None:
             await self.emit_trace(
@@ -1224,6 +1260,7 @@ class LocalEffects:
                     session_id=session_id,
                     success=success,
                     wall_ms=(time.monotonic() - start) * 1000,
+                    span_ms=span_ms,
                 )
             )
         return success
@@ -1255,6 +1292,7 @@ class LocalEffects:
         pm = self._get_persistence()
         success = pm.save_mission(state)
         self._log_entry("save_mission", f"id={state.id}", str(success), start)
+        ledger_add_ms(self._ledger, "persistence", (time.monotonic() - start) * 1000)
         return success
 
     async def read_events(self) -> list:
@@ -1269,6 +1307,7 @@ class LocalEffects:
         pm = self._get_persistence()
         success = pm.push_event(event)
         self._log_entry("push_event", f"type={event.type}", str(success), start)
+        ledger_add_ms(self._ledger, "persistence", (time.monotonic() - start) * 1000)
         return success
 
     async def clear_events(self) -> bool:
@@ -1395,26 +1434,70 @@ class LocalEffects:
     # ── Tracing ───────────────────────────────────────────────────
 
     async def emit_trace(self, event: TraceEvent) -> None:
-        """Append a trace event to the in-memory buffer."""
+        """Append a trace event to the buffer and fold it into the ledger.
+
+        The ledger is the single choke point for the finite breakdown — every
+        event passes through here, so no event-emit site needs to know about
+        the summary. The run span starts at the first event."""
+        if self._run_start_monotonic is None:
+            self._run_start_monotonic = time.monotonic()
+        if not self._traced_mission_id and getattr(event, "mission_id", ""):
+            self._traced_mission_id = event.mission_id
+        try:
+            fold_event(self._ledger, event.to_dict())
+        except Exception:
+            # Telemetry must never break a run — a malformed event just
+            # doesn't contribute to the ledger.
+            logger.debug("ledger fold skipped for %r", getattr(event, "event_type", "?"))
         self._trace_buffer.append(event)
 
-    async def flush_traces(self) -> None:
-        """Write buffered trace events to JSONL and clear the buffer.
+    def _write_summary(self) -> None:
+        """Atomically (re)write the <trace>.summary.json companion — the
+        canonical machine-readable head. Rewritten each flush so the last one
+        is the final summary; trace_cli renders the markdown from it."""
+        import json
 
-        File path is .agent/traces/{mission_id}_{timestamp}.jsonl.
-        Uses append mode so multiple flushes write to the same file per run.
+        if self._trace_file_path is None or self._run_start_monotonic is None:
+            return
+        total_wall_ms = (time.monotonic() - self._run_start_monotonic) * 1000
+        summary = finalize_ledger(self._ledger, total_wall_ms)
+        record = RunSummary(
+            mission_id=self._traced_mission_id,
+            total_wall_ms=round(total_wall_ms, 1),
+            summary=summary,
+        )
+        path = self._trace_file_path[:-6] + ".summary.json"  # strip ".jsonl"
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(record.to_dict(), f, indent=2)
+            os.replace(tmp, path)
+        except Exception:
+            logger.debug("summary.json write skipped", exc_info=True)
+
+    async def flush_traces(self) -> None:
+        """Write buffered trace events to JSONL, accumulate flush time, and
+        refresh the summary.json head.
+
+        File path is .agent/traces/{mission_id}_{timestamp}.jsonl. Append mode
+        so multiple flushes write to the same file per run. The mission_id is
+        the first non-empty one seen (not the first buffered event), so a
+        bootstrap event with an empty id doesn't strand the file as unknown_*.
         """
         import json
 
         if not self._trace_buffer:
             return
 
-        # Determine file path on first flush
+        flush_start = time.monotonic()
+
+        # Determine file path on first flush (mission_id known by now).
         if self._trace_file_path is None:
             traces_dir = os.path.join(self._working_dir, ".agent", "traces")
             os.makedirs(traces_dir, exist_ok=True)
-            # Use mission_id from first event, or "unknown"
-            mission_id = self._trace_buffer[0].mission_id or "unknown"
+            mission_id = (
+                self._traced_mission_id or self._trace_buffer[0].mission_id or "unknown"
+            )
             ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
             self._trace_file_path = os.path.join(traces_dir, f"{mission_id}_{ts}.jsonl")
 
@@ -1422,9 +1505,11 @@ class LocalEffects:
             for event in self._trace_buffer:
                 f.write(json.dumps(event.to_dict()) + "\n")
 
-        logger.debug(
-            "Flushed %d trace events to %s",
-            len(self._trace_buffer),
-            self._trace_file_path,
-        )
+        n = len(self._trace_buffer)
         self._trace_buffer.clear()
+        # Self-time the flush (JSONL write) into the ledger before the summary
+        # recompute, so flush_ms is attributed rather than landing in residual.
+        ledger_add_ms(self._ledger, "flush", (time.monotonic() - flush_start) * 1000)
+        self._write_summary()
+
+        logger.debug("Flushed %d trace events to %s", n, self._trace_file_path)

@@ -28,6 +28,12 @@ query Completion($request: CompletionRequest!) {
         tokensGenerated
         finished
         truncated
+        promptTokens
+        cachedPrefixTokens
+        freshPrefillTokens
+        generatedTokens
+        cacheHit
+        flowKey
     }
 }
 """
@@ -74,6 +80,12 @@ query SessionCompletion($request: SessionTurnRequest!) {
         tokensGenerated
         finished
         truncated
+        promptTokens
+        cachedPrefixTokens
+        freshPrefillTokens
+        generatedTokens
+        cacheHit
+        flowKey
     }
 }
 """
@@ -433,6 +445,14 @@ class InferenceEffect:
                     tokens_generated=completion["tokensGenerated"],
                     finished=completion["finished"],
                     truncated=completion.get("truncated", False),
+                    # Cache-aware counts — .get with defaults so a server that
+                    # doesn't yet return these degrades to whitespace fallback.
+                    prompt_tokens=completion.get("promptTokens", 0) or 0,
+                    cached_prefix_tokens=completion.get("cachedPrefixTokens", 0) or 0,
+                    fresh_prefill_tokens=completion.get("freshPrefillTokens", 0) or 0,
+                    generated_tokens=completion.get("generatedTokens", 0) or 0,
+                    cache_hit=bool(completion.get("cacheHit", False)),
+                    flow_key=completion.get("flowKey", "") or "",
                 )
 
             except httpx.ConnectError as e:

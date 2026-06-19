@@ -195,6 +195,40 @@ def _safe_float_temp(val: Any) -> float:
     return 0.0
 
 
+# ── Cache-aware token readers ─────────────────────────────────────────
+#
+# The InferenceResult may carry real backend token counts (cached_prefix /
+# fresh_prefill / generated) once LLMVP reports them. These read with getattr
+# defaults so they degrade gracefully: against a server that doesn't yet
+# return the fields, the cache fields are 0 and tokens_in/out fall back to
+# the whitespace approximation — no behavior change until the server upgrades.
+
+
+def _cache_fields(result: Any) -> dict:
+    """Cache-aware token fields for an InferenceCall, read off the result."""
+    return {
+        "cached_prefix_tokens": int(getattr(result, "cached_prefix_tokens", 0) or 0),
+        "fresh_prefill_tokens": int(getattr(result, "fresh_prefill_tokens", 0) or 0),
+        "generated_tokens": int(getattr(result, "generated_tokens", 0) or 0),
+        "cache_hit": bool(getattr(result, "cache_hit", False)),
+        "flow_key": str(getattr(result, "flow_key", "") or ""),
+    }
+
+
+def _real_in(result: Any, ws_in: int) -> int:
+    """Real input tokens (cached_prefix + fresh_prefill) when the backend
+    reports them, else the whitespace fallback."""
+    cp = int(getattr(result, "cached_prefix_tokens", 0) or 0)
+    fp = int(getattr(result, "fresh_prefill_tokens", 0) or 0)
+    return (cp + fp) if (cp or fp) else ws_in
+
+
+def _real_out(result: Any, ws_out: int) -> int:
+    """Real generated tokens when the backend reports them, else whitespace."""
+    gen = int(getattr(result, "generated_tokens", 0) or 0)
+    return gen if gen else ws_out
+
+
 async def execute_flow(
     flow_def: FlowDefinition,
     inputs: dict[str, Any],
@@ -271,7 +305,11 @@ async def execute_flow(
                 step_visits[step_name],
             )
 
-            # Build StepInput with filtered context and effects
+            # Build StepInput with filtered context and effects. Timed for the
+            # finite breakdown — this runs before step_start_time, so without
+            # capturing it the context-filter/$ref-resolve cost would vanish
+            # into the residual.
+            _input_build_start = time.monotonic()
             step_input = _build_step_input(
                 step_def=step_def,
                 step_name=step_name,
@@ -294,6 +332,7 @@ async def execute_flow(
                         action=step_def.action,
                         context_consumed=list(step_input.context.keys()),
                         context_required=list(step_def.context.required),
+                        input_build_ms=(step_start_time - _input_build_start) * 1000,
                     )
                 )
 
@@ -500,6 +539,10 @@ async def execute_flow(
             #     decides, reading action-wrapper result flags. The turn's
             #     transitions block is fallback-only for the runtime's
             #     built-in dispatch and doesn't bind wrapper-driven flows.
+            # Finite-time breakdown: the transition-resolver span (rule eval or
+            # llm_menu) after the action returns. An llm_menu resolve also emits
+            # its own InferenceCall; this captures the resolver's own overhead.
+            _resolver_start = time.monotonic()
             turn_runtime_owned = (
                 step_def.turn is not None and step_def.action == "inference"
             )
@@ -571,6 +614,7 @@ async def execute_flow(
                         resolver_decision=next_step,
                         options_available=options,
                         step_duration_ms=((time.monotonic() - step_start_time) * 1000),
+                        resolver_ms=((time.monotonic() - _resolver_start) * 1000),
                     )
                 )
 
@@ -857,22 +901,28 @@ async def _execute_inference_action(
         },
     }
 
-    # Run pre_compute formatters — inject computed values into context
+    # Run pre_compute formatters — inject computed values into context. Timed
+    # for the finite breakdown (carried on the InferenceCall below).
+    pre_compute_ms = 0.0
     if step_def.pre_compute:
+        _pc_start = time.monotonic()
         computed = run_pre_compute(step_def.pre_compute, namespaces)
         step_input.context.update(computed)
         namespaces["context"].update(computed)
+        pre_compute_ms = (time.monotonic() - _pc_start) * 1000
 
     # Render the prompt. The split form also separates the leading cache:true
     # sections (the invariant static head) from the dynamic tail, so the LLMVP
     # backend can pin the head's KV per flow (opt-in via config.model.flow_kv_cache;
     # inert otherwise). static_prefix + dynamic == the full render exactly, so
     # output is unchanged whether or not caching is active.
+    _render_start = time.monotonic()
     renderer = _get_prompt_renderer()
     flow_static_prefix, flow_dynamic = renderer.render_with_cache_split(
         step_def.prompt_template.template, namespaces
     )
     rendered_prompt = flow_static_prefix + flow_dynamic
+    prompt_render_ms = (time.monotonic() - _render_start) * 1000
 
     # Build config overrides from merged step config
     config_overrides = {}
@@ -898,9 +948,15 @@ async def _execute_inference_action(
         or step_input.context.get("session_id")
     )
     tokens_in = count_tokens(rendered_prompt)
+    # actually_session = did we ROUTE to a memoryful session (which self-emits
+    # its own InferenceCall)? Distinct from "session_id is set": when session_id
+    # is set but effects lacks session_inference we fall through to run_inference
+    # and MUST trace here — gating on session_id alone left that inference
+    # invisible (soundness fix).
+    actually_session = bool(session_id) and hasattr(effects, "session_inference")
     infer_start = time.monotonic()
 
-    if session_id and hasattr(effects, "session_inference"):
+    if actually_session:
         logger.info(
             "Inference step %r using session %s",
             _step_name,
@@ -959,13 +1015,13 @@ async def _execute_inference_action(
         prompt_content = rendered_prompt
         response_content = result.text or ""
 
-    # Trace this inference — but ONLY for the stateless path. The session path
-    # (effects.session_inference) emits its own complete InferenceCall, so
-    # emitting here too would double-log every session inference (e.g. ops
-    # judge_step, which reuses run_session's session): two rows ~ms apart with
-    # identical content, inflating trace-based token/cost reports. Mirrors the
-    # same guard on the turn-based path below.
-    _can_trace = hasattr(effects, "emit_trace") and not session_id
+    # Trace this inference — but ONLY when we did NOT route to a session. The
+    # session path (effects.session_inference) emits its own complete
+    # InferenceCall, so emitting here too would double-log it (e.g. ops
+    # judge_step, which reuses run_session's session). We gate on
+    # actually_session (not session_id) so a session_id-set-but-no-session
+    # fallthrough still gets traced. Mirrors the turn-based path below.
+    _can_trace = hasattr(effects, "emit_trace") and not actually_session
     if _can_trace:
         await effects.emit_trace(
             InferenceCall(
@@ -973,8 +1029,8 @@ async def _execute_inference_action(
                 cycle=_trace_cycle,
                 flow=flow_def.flow,
                 step=_step_name,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
+                tokens_in=_real_in(result, tokens_in),
+                tokens_out=_real_out(result, tokens_out),
                 wall_ms=(time.monotonic() - infer_start) * 1000,
                 temperature=_safe_float_temp(config_overrides.get("temperature", 0)),
                 max_tokens=int(config_overrides.get("max_tokens", 0) or 0),
@@ -983,6 +1039,9 @@ async def _execute_inference_action(
                 prompt_content=prompt_content,
                 response_content=response_content,
                 truncated=getattr(result, "truncated", False),
+                prompt_render_ms=prompt_render_ms,
+                pre_compute_ms=pre_compute_ms,
+                **_cache_fields(result),
             )
         )
 
@@ -1073,15 +1132,21 @@ async def _execute_turn_inference(
         },
     }
 
-    # Pre-compute formatters — unchanged from legacy path.
+    # Pre-compute formatters — unchanged from legacy path. Timed for the
+    # finite breakdown (one-time cost, attributed to the first attempt below).
+    pre_compute_ms = 0.0
     if step_def.pre_compute:
+        _pc_start = time.monotonic()
         computed = run_pre_compute(step_def.pre_compute, namespaces)
         step_input.context.update(computed)
         namespaces["context"].update(computed)
+        pre_compute_ms = (time.monotonic() - _pc_start) * 1000
 
     # Render the prompt via TurnRenderer.
+    _render_start = time.monotonic()
     turn_renderer = _get_turn_renderer()
     rendered_prompt = turn_renderer.render(turn, namespaces)
+    prompt_render_ms = (time.monotonic() - _render_start) * 1000
 
     # Config overrides come from turn.config, with flow.defaults as
     # a floor for anything turn.config doesn't override.
@@ -1111,12 +1176,20 @@ async def _execute_turn_inference(
     # queue drains via context_updates so a single seed isn't replayed
     # across later steps.
     injection_clears: dict[str, Any] = {}
+    injection_ms = 0.0
     if session_id:
         from agent.session_injections import consume as consume_injections
 
+        _inj_start = time.monotonic()
         rendered_prompt, injection_clears = consume_injections(
             step_input.context, rendered_prompt
         )
+        injection_ms = (time.monotonic() - _inj_start) * 1000
+
+    # Did we route to a memoryful session (which self-emits its InferenceCall)?
+    # Gate tracing on this, not on session_id, so a session_id-set-but-no-
+    # session fallthrough is still traced (soundness fix; mirrors legacy path).
+    actually_session = bool(session_id) and hasattr(effects, "session_inference")
 
     # Retry loop: turn.retries additional attempts on empty response.
     # retries=0 means one attempt total (no retries). retries=3 (default)
@@ -1131,7 +1204,7 @@ async def _execute_turn_inference(
         attempts_made = attempt + 1
         infer_start = time.monotonic()
 
-        if session_id and hasattr(effects, "session_inference"):
+        if actually_session:
             if attempt == 0:
                 logger.info(
                     "Turn inference step %r using session %s",
@@ -1178,15 +1251,19 @@ async def _execute_turn_inference(
         # own InferenceCall trace event with correct timing and context,
         # so duplicating it here would produce two rows per inference in
         # the trace (inflating cost reports). See LocalEffects.session_inference.
-        if hasattr(effects, "emit_trace") and not session_id:
+        if hasattr(effects, "emit_trace") and not actually_session:
+            # One-time setup costs (render/pre_compute/injection) happen before
+            # the retry loop — attribute them to the first attempt only so
+            # retries don't multi-count them.
+            _setup = attempt == 0
             await effects.emit_trace(
                 InferenceCall(
                     mission_id=_trace_mission_id,
                     cycle=_trace_cycle,
                     flow=flow_def.flow,
                     step=_step_name,
-                    tokens_in=tokens_in,
-                    tokens_out=tokens_out,
+                    tokens_in=_real_in(result, tokens_in),
+                    tokens_out=_real_out(result, tokens_out),
                     wall_ms=(time.monotonic() - infer_start) * 1000,
                     temperature=_safe_float_temp(
                         config_overrides.get("temperature", 0)
@@ -1197,6 +1274,10 @@ async def _execute_turn_inference(
                     prompt_content=prompt_content,
                     response_content=response_content,
                     truncated=getattr(result, "truncated", False),
+                    prompt_render_ms=prompt_render_ms if _setup else 0.0,
+                    pre_compute_ms=pre_compute_ms if _setup else 0.0,
+                    injection_ms=injection_ms if _setup else 0.0,
+                    **_cache_fields(result),
                 )
             )
 
