@@ -297,6 +297,56 @@ async def action_store_completion_criteria(step_input: StepInput) -> StepOutput:
     )
 
 
+_FORMAT_CHECK_TYPES = {"exists", "line_count", "regex", "no_wrapping", "required_keys", "columns"}
+
+
+async def action_store_output_format(step_input: StepInput) -> StepOutput:
+    """Parse the derived output-format spec and store it on the TaskState.
+
+    The spec is {output_file, checks:[{type,...}]} — the format oracle
+    (action_check_output_format) validates the produced artifact's SHAPE against
+    it each cycle. CONSERVATIVE: an unparseable/empty/format-less spec stores None
+    so no format gate fires (never block a correct answer on a guessed shape).
+
+    Context: mission, inference_response
+    Result: format_check_count
+    Publishes: mission
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission or getattr(mission, "task_definition", None) is None:
+        return StepOutput(result={"format_check_count": 0}, observations="No task_definition")
+
+    parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
+    spec: dict | None = None
+    if isinstance(parsed, dict):
+        raw = parsed.get("checks")
+        checks = [
+            c for c in (raw if isinstance(raw, list) else [])
+            if isinstance(c, dict) and str(c.get("type", "")).lower() in _FORMAT_CHECK_TYPES
+        ]
+        out_file = parsed.get("output_file")
+        if checks:  # only a spec with at least one valid check gates anything
+            spec = {
+                "output_file": str(out_file).strip() if isinstance(out_file, str) else "",
+                "checks": checks,
+            }
+
+    mission.task_definition.output_format_spec = spec
+    if effects:
+        await effects.save_mission(mission)
+    n = len(spec["checks"]) if spec else 0
+    return StepOutput(
+        result={"format_check_count": n},
+        observations=(
+            f"Output-format spec: {n} shape check(s) on "
+            f"{spec.get('output_file') or 'artifact'}" if spec
+            else "Output-format spec: none (no concrete format in the brief)"
+        ),
+        context_updates={"mission": mission},
+    )
+
+
 async def action_judge_task_completion(step_input: StepInput) -> StepOutput:
     """Decide whether the task is done, conservatively.
 

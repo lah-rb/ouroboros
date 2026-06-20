@@ -269,6 +269,28 @@ ops_task: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
+				rules: [{condition: "true", transition: "check_format"}]
+			}
+			publishes: ["validation_results"]
+		}
+
+		// ── Output-format oracle: deterministic SHAPE check ──────────────
+		// Validates the produced artifact's shape against the conservative spec
+		// derived once up front (task_definition.output_format_spec): exact path,
+		// line count, value pattern, required JSON keys / CSV columns. Catches
+		// close-misses (right work, wrong shape: `[e2e4]` vs `e2e4`, a missing key,
+		// the wrong filename). Zero-inference; gates only when a spec exists AND the
+		// artifact is present; fail-safe on its own error. SHAPE only — correctness
+		// stays with the judge.
+		check_format: #StepDefinition & {
+			action:      "check_output_format"
+			description: "Output-format oracle: flag a shape mismatch vs the derived spec"
+			context: {
+				required: ["mission"]
+				optional: ["validation_results"]
+			}
+			resolver: {
+				type: "rule"
 				rules: [{condition: "true", transition: "probe_gate"}]
 			}
 			publishes: ["validation_results"]

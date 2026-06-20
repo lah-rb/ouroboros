@@ -667,6 +667,11 @@ class TaskState(BaseModel):
     # Definition of done: [{command, description}] — fed to
     # action_run_validation_checks (return_code == 0 ⇒ condition met).
     completion_criteria: list[dict] = Field(default_factory=list)
+    # Output-format spec derived once up front: {output_file, checks: [{type,...}]}
+    # — the format oracle (action_check_output_format) validates the produced
+    # artifact's SHAPE against it each cycle. None/empty ⇒ no format gate (the
+    # conservative default: never block a correct answer on a guessed format).
+    output_format_spec: dict | None = None
     # The latest judge feedback, seeded into the next run_session loop.
     last_feedback: str = ""
     attempts: int = 0

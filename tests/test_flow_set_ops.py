@@ -84,6 +84,15 @@ def test_compiled_ops_wiring():
     assert (
         c["ops_control"]["steps"]["retry_setup"]["tail_call"]["flow"] == "ops_control"
     )
+    # After the definition-of-done, derive the OPTIONAL output-format spec, then
+    # proceed. Unlike the mandatory criteria, a failed format derivation does NOT
+    # re-loop — it proceeds with no format gate (the conservative default).
+    ocs = c["ops_control"]["steps"]
+    assert ocs["store_criteria"]["resolver"]["rules"][0]["transition"] == "derive_output_format"
+    of = {r["condition"]: r["transition"] for r in ocs["derive_output_format"]["resolver"]["rules"]}
+    assert of["result.tokens_generated > 0"] == "store_output_format"
+    assert of["true"] == "check_phase"  # no retry — format gate is optional
+    assert ocs["store_output_format"]["resolver"]["rules"][0]["transition"] == "check_phase"
     assert c["ops_control"]["steps"]["dispatch_task"]["tail_call"]["flow"] == "ops_task"
     # ops_task reuses run_session verbatim and judges completion.
     steps = c["ops_task"]["steps"]
@@ -112,9 +121,12 @@ def test_compiled_ops_wiring():
     cs = {r["condition"]: r["transition"] for r in steps["check_sanity"]["resolver"]["rules"]}
     assert cs["result.check_plausibility == true"] == "sanity_plausibility"
     assert cs["true"] == "profile_oracle"  # sanity branch flows into the profile rung
-    # Profile-gated rung (service/data/invertible) sits before the probe/judge.
+    # Profile-gated rung (service/data/invertible) → output-format rung → probe/judge.
     assert steps["profile_oracle"]["action"] == "check_profile_oracle"
-    assert steps["profile_oracle"]["resolver"]["rules"][0]["transition"] == "probe_gate"
+    assert steps["profile_oracle"]["resolver"]["rules"][0]["transition"] == "check_format"
+    # Output-format oracle: deterministic shape check vs the derived spec.
+    assert steps["check_format"]["action"] == "check_output_format"
+    assert steps["check_format"]["resolver"]["rules"][0]["transition"] == "probe_gate"
     assert steps["judge_step"]["resolver"]["rules"][0]["transition"] == "reprobe_completion"
     rp = {r["condition"]: r["transition"] for r in steps["reprobe_completion"]["resolver"]["rules"]}
     assert rp["result.do_verify == true"] == "verify_completion"

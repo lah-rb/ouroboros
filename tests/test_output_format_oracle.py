@@ -1,0 +1,192 @@
+"""Output-format oracle — deterministic shape check vs a derived spec.
+
+Pins the contract: the rung flags a SHAPE mismatch (wrapping, missing key, wrong
+line count, wrong/absent filename) as a {required:true} validation_result, never
+on its own error (fail-safe), and NEVER on a correct answer (the conservatism that
+keeps it from blocking a right result on a guessed format). Includes a replay of
+the real v3 canary close-misses (chess `[e2e4]`, multi-source missing key).
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from agent.actions.operations_actions import action_store_output_format
+from agent.actions.oracle_actions import (
+    _apply_format_checks,
+    action_check_output_format,
+)
+from agent.effects.mock import MockEffects
+from agent.models import FlowMeta, StepInput
+from agent.persistence.models import MissionConfig, MissionState, TaskState
+
+
+def _mission(spec=None, criteria=None, objective="write the answer to /app/out.txt"):
+    m = MissionState(
+        objective=objective,
+        status="active",
+        config=MissionConfig(working_directory="/app", flow_set="ops"),
+    )
+    m.task_definition = TaskState(
+        task_spec=objective,
+        completion_criteria=criteria or [],
+        output_format_spec=spec,
+    )
+    return m
+
+
+def _si(mission, effects=None, response=None) -> StepInput:
+    ctx = {"mission": mission}
+    if response is not None:
+        ctx["inference_response"] = response
+    return StepInput(
+        context=ctx,
+        params={},
+        meta=FlowMeta(flow_name="ops_task", step_id="x"),
+        effects=effects if effects is not None else MockEffects(),
+    )
+
+
+# ── _apply_format_checks: per type ───────────────────────────────────────────
+
+
+def test_line_count_exact_and_max():
+    assert _apply_format_checks("a\nb\nc", [{"type": "line_count", "value": 1}])
+    assert not _apply_format_checks("only one", [{"type": "line_count", "value": 1}])
+    assert not _apply_format_checks("a\nb", [{"type": "line_count", "value": 3, "op": "<="}])
+    assert _apply_format_checks("a\nb\nc\nd", [{"type": "line_count", "value": 3, "op": "<="}])
+
+
+def test_regex_and_no_wrapping():
+    pat = "^[a-h][1-8][a-h][1-8][qrbn]?$"
+    assert not _apply_format_checks("e2e4", [{"type": "regex", "pattern": pat}])
+    assert _apply_format_checks("nope", [{"type": "regex", "pattern": pat}])
+    for wrapped in ("[e2e4]", '"e2e4"', "(e2e4)", "{e2e4}"):
+        assert _apply_format_checks(wrapped, [{"type": "no_wrapping"}]), wrapped
+    assert not _apply_format_checks("e2e4", [{"type": "no_wrapping"}])
+
+
+def test_required_keys_json_and_non_json():
+    assert not _apply_format_checks('{"total_conflicts": 3, "merged": 5}',
+                                    [{"type": "required_keys", "keys": ["total_conflicts"]}])
+    assert _apply_format_checks('{"merged": 5}',
+                                [{"type": "required_keys", "keys": ["total_conflicts"]}])
+    # non-JSON when keys are required is itself a shape miss (a finding, not a skip)
+    assert _apply_format_checks("not json at all",
+                                [{"type": "required_keys", "keys": ["x"]}])
+
+
+def test_columns_csv_header():
+    assert not _apply_format_checks("a,b,c\n1,2,3", [{"type": "columns", "columns": ["a", "c"]}])
+    assert _apply_format_checks("a,b\n1,2", [{"type": "columns", "columns": ["a", "d"]}])
+
+
+def test_fail_safe_skips_broken_check_applies_others():
+    # An invalid regex is the rung's own error → skip THAT check, still apply the rest.
+    out = _apply_format_checks("[e2e4]", [{"type": "regex", "pattern": "[unterminated"},
+                                          {"type": "no_wrapping"}])
+    assert len(out) == 1 and "wrapped" in out[0]
+    # Unknown check type → skipped, no crash.
+    assert _apply_format_checks("x", [{"type": "made_up"}]) == []
+
+
+# ── The rung: GATE / CHECK / APPEND / FAIL-SAFE ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_gate_skips_when_no_spec_or_no_checks():
+    out = await action_check_output_format(_si(_mission(spec=None)))
+    assert "validation_results" not in out.context_updates
+    out2 = await action_check_output_format(_si(_mission(spec={"output_file": "/app/o", "checks": []})))
+    assert out2.result["format_eligible"] is False
+
+
+@pytest.mark.asyncio
+async def test_flags_wrapped_scalar_passes_bare():
+    spec = {"output_file": "/app/move.txt",
+            "checks": [{"type": "no_wrapping"}, {"type": "line_count", "value": 1}]}
+    bad = await action_check_output_format(
+        _si(_mission(spec), MockEffects(files={"/app/move.txt": "[e2e4]"})))
+    vr = bad.context_updates["validation_results"]
+    assert len(vr) == 1 and vr[0]["required"] and not vr[0]["passed"]
+    good = await action_check_output_format(
+        _si(_mission(spec), MockEffects(files={"/app/move.txt": "e2e4"})))
+    assert good.result["format_passed"] is True
+    assert good.context_updates["validation_results"] == []  # no false gate
+
+
+@pytest.mark.asyncio
+async def test_absent_file_flags_only_with_exists_check():
+    # Wrong/absent output filename — flagged ONLY when the spec made the path a
+    # requirement (catches the path-tracing close-miss); else deferred.
+    spec_exists = {"output_file": "/app/reconstructed.ppm", "checks": [{"type": "exists"}]}
+    out = await action_check_output_format(_si(_mission(spec_exists), MockEffects(files={})))
+    assert out.context_updates["validation_results"][0]["passed"] is False
+    spec_no_exists = {"output_file": "/app/reconstructed.ppm", "checks": [{"type": "line_count", "value": 1}]}
+    out2 = await action_check_output_format(_si(_mission(spec_no_exists), MockEffects(files={})))
+    assert out2.result["format_eligible"] is False  # deferred to existence check
+
+
+@pytest.mark.asyncio
+async def test_fail_safe_on_read_error_appends_nothing():
+    class Boom(MockEffects):
+        async def read_file(self, path):  # noqa: ARG002
+            raise RuntimeError("io error")
+
+    out = await action_check_output_format(
+        _si(_mission({"output_file": "/app/o", "checks": [{"type": "no_wrapping"}]}), Boom()))
+    assert "validation_results" not in out.context_updates
+    assert out.result["format_eligible"] is False
+
+
+# ── Replay the real v3 canary close-misses end-to-end ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_replay_v3_chess_and_multisource():
+    chess = {"output_file": "/app/move.txt",
+             "checks": [{"type": "no_wrapping"},
+                        {"type": "regex", "pattern": "^[a-h][1-8][a-h][1-8][qrbn]?$"}]}
+    out = await action_check_output_format(
+        _si(_mission(chess), MockEffects(files={"/app/move.txt": "[e2e4]"})))
+    assert out.result["format_passed"] is False  # the bracket close-miss is caught
+
+    ms = {"output_file": "/app/conflicts.json",
+          "checks": [{"type": "required_keys", "keys": ["total_conflicts"]}]}
+    out2 = await action_check_output_format(
+        _si(_mission(ms), MockEffects(files={"/app/conflicts.json": '{"resolved": 4}'})))
+    assert out2.result["format_passed"] is False  # the missing-key close-miss is caught
+
+
+# ── The store action: parse + conservatism ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_store_parses_valid_spec():
+    m = _mission()
+    resp = '```json\n{"output_file": "/app/move.txt", "checks": [{"type": "no_wrapping"}]}\n```'
+    out = await action_store_output_format(_si(m, response=resp))
+    assert out.result["format_check_count"] == 1
+    assert m.task_definition.output_format_spec["output_file"] == "/app/move.txt"
+
+
+@pytest.mark.asyncio
+async def test_store_conservative_empty_and_unparseable():
+    # Conservatism: no checks → store None (no gate).
+    m = _mission()
+    out = await action_store_output_format(_si(m, response='{"checks": []}'))
+    assert out.result["format_check_count"] == 0
+    assert m.task_definition.output_format_spec is None
+    # Unparseable → None.
+    m2 = _mission()
+    await action_store_output_format(_si(m2, response="not json at all"))
+    assert m2.task_definition.output_format_spec is None
+
+
+@pytest.mark.asyncio
+async def test_store_filters_unknown_check_types():
+    m = _mission()
+    resp = '{"output_file": "o", "checks": [{"type": "no_wrapping"}, {"type": "bogus"}]}'
+    await action_store_output_format(_si(m, response=resp))
+    spec = m.task_definition.output_format_spec
+    assert len(spec["checks"]) == 1 and spec["checks"][0]["type"] == "no_wrapping"

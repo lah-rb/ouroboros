@@ -25,6 +25,7 @@ the floor cannot, and only fires when the floor passes on an answer task.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -215,6 +216,174 @@ async def action_record_output_sanity(step_input: StepInput) -> StepOutput:
     return StepOutput(
         result={"sanity_passed": False},
         observations=f"output-sanity IMPLAUSIBLE: {reason[:120]}",
+        context_updates=updates,
+    )
+
+
+# ── Output-format rung (deterministic shape check) ────────────────────────
+# Half the v3 canary failures were close-misses: the model solved the task but
+# missed the exact OUTPUT SHAPE it can't self-detect (wrote `[e2e4]` for `e2e4`,
+# omitted a required JSON key, used the wrong filename). A format spec is derived
+# ONCE up front (derive_output_format -> task_definition.output_format_spec); this
+# rung validates the produced artifact's SHAPE against it every cycle. SHAPE only
+# — it can't know the hidden correct VALUE, only the format; the conservatism
+# lives in the derive step (omit a check when the brief doesn't pin it).
+
+
+def _format_result(passed: bool, path: str, reason: str) -> dict:
+    """A validation_results dict for the format rung (shared contract shape)."""
+    return {
+        "name": f"output_format: {path}",
+        "command": f"format-check {path}",
+        "passed": passed,
+        "required": True,
+        "stdout": "" if passed else reason[:500],
+        "stderr": "",
+        "return_code": 0 if passed else 1,
+    }
+
+
+_NOT_JSON = object()  # sentinel: content didn't parse as JSON (distinct from null)
+
+
+def _apply_format_checks(content: str, checks: list) -> list[str]:
+    """Apply typed shape checks to artifact content. Returns a list of specific
+    violation strings (empty == clean). A malformed/unknown check is SKIPPED
+    (fail-safe), never a manufactured violation — only a genuine shape mismatch."""
+    s = (content or "").strip()
+    viol: list[str] = []
+    for chk in checks or []:
+        if not isinstance(chk, dict):
+            continue
+        t = str(chk.get("type", "")).lower()
+        try:
+            if t == "exists":
+                continue  # handled by the caller (content present ⇒ exists)
+            elif t == "line_count":
+                n = int(chk.get("value", 1))
+                actual = len(s.splitlines()) if s else 0
+                op = str(chk.get("op", "=="))
+                if op == "<=" and actual > n:
+                    viol.append(f"expected at most {n} line(s), got {actual}")
+                elif op == "==" and actual != n:
+                    viol.append(f"expected exactly {n} line(s), got {actual}")
+            elif t == "regex":
+                pat = str(chk.get("pattern", ""))
+                if pat and not re.search(pat, s):
+                    viol.append(f"content does not match the required pattern {pat!r}")
+            elif t == "no_wrapping":
+                if len(s) >= 2 and s[0] in "[({\"'" and s[-1] in "])}\"'":
+                    viol.append(
+                        f"value is wrapped in `{s[0]}…{s[-1]}` — emit the bare value, "
+                        f"not a list/quoted/parenthesized form"
+                    )
+            elif t == "required_keys":
+                keys = [str(k) for k in (chk.get("keys") or [])]
+                # A non-JSON output when the brief named JSON fields is itself a
+                # shape miss (a real finding) — catch it locally, don't let it fall
+                # to the fail-safe skip below.
+                try:
+                    obj = json.loads(s) if s else None
+                except (json.JSONDecodeError, ValueError):
+                    obj = _NOT_JSON
+                if isinstance(obj, dict):
+                    missing = [k for k in keys if k not in obj]
+                    if missing:
+                        viol.append(f"JSON missing required key(s): {', '.join(missing)}")
+                elif keys:
+                    viol.append("output is not a valid JSON object — required keys cannot be present")
+            elif t == "columns":
+                cols = [str(c) for c in (chk.get("columns") or [])]
+                header = [c.strip() for c in (s.splitlines()[0] if s else "").split(",")]
+                missing = [c for c in cols if c not in header]
+                if missing:
+                    viol.append(f"CSV header missing column(s): {', '.join(missing)}")
+            # unknown type → skip (fail-safe)
+        except (re.error, json.JSONDecodeError, ValueError, IndexError, TypeError):
+            # The rung's OWN error on a malformed check/value → skip it, append
+            # nothing. (A required_keys against non-JSON is handled above as a real
+            # finding; this only swallows genuinely broken checks.)
+            continue
+    return viol
+
+
+async def action_check_output_format(step_input: StepInput) -> StepOutput:
+    """Format oracle (deterministic). Validate the produced artifact's SHAPE
+    against the derived output_format_spec; append a REQUIRED fail on a violation
+    so the existing judge loops with the finding as feedback. Fail-safe: on the
+    rung's own error append nothing.
+
+    Context: mission (required); validation_results (optional).
+    Result: format_eligible, format_passed.
+    Publishes: validation_results.
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    results = list(step_input.context.get("validation_results") or [])
+    updates: dict = {"validation_results": results}
+
+    td = getattr(mission, "task_definition", None) if mission else None
+    spec = getattr(td, "output_format_spec", None) if td else None
+
+    def _skip(why: str) -> StepOutput:
+        return StepOutput(
+            result={"format_eligible": False},
+            observations=f"output-format skipped ({why})",
+            context_updates={},
+        )
+
+    # GATE — no spec, no checks, or no effects.
+    if not isinstance(spec, dict) or effects is None:
+        return _skip("no output_format_spec")
+    checks = spec.get("checks") or []
+    if not checks:
+        return _skip("spec has no checks")
+    # output_file from the spec, else the single artifact named by the criteria.
+    path = spec.get("output_file") or _extract_artifact_path(
+        list(getattr(td, "completion_criteria", None) or [])
+    )
+    if not path:
+        return _skip("no output_file in spec or criteria")
+
+    # CHECK — read the live artifact.
+    try:
+        fc = await effects.read_file(path)
+    except Exception as exc:  # FAIL-SAFE: own error → append nothing
+        return _skip(f"read error: {exc}")
+
+    has_exists_check = any(
+        isinstance(c, dict) and str(c.get("type", "")).lower() == "exists"
+        for c in checks
+    )
+    if not getattr(fc, "exists", False):
+        # The expected output path is absent. Only flag it when the spec made the
+        # exact path a requirement (catches the wrong-filename close-miss); else
+        # defer to the existence completion-check (don't double-report).
+        if has_exists_check:
+            results.append(_format_result(
+                False, path, f"expected output file {path} was not produced"))
+            updates["validation_results"] = results
+            return StepOutput(
+                result={"format_eligible": True, "format_passed": False},
+                observations=f"output-format FAIL: {path} absent",
+                context_updates=updates,
+            )
+        return _skip(f"{path} absent — left to the existence check")
+
+    content = getattr(fc, "content", "") or ""
+    viol = _apply_format_checks(content, checks)
+    if viol:
+        reason = "; ".join(viol)
+        results.append(_format_result(False, path, reason))
+        updates["validation_results"] = results
+        return StepOutput(
+            result={"format_eligible": True, "format_passed": False},
+            observations=f"output-format FAIL: {reason[:160]}",
+            context_updates=updates,
+        )
+    return StepOutput(
+        result={"format_eligible": True, "format_passed": True},
+        observations=f"output-format clean for {path}",
         context_updates=updates,
     )
 

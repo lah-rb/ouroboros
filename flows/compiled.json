@@ -10835,6 +10835,95 @@
           "rules": [
             {
               "condition": "true",
+              "transition": "derive_output_format"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "derive_output_format": {
+        "action": "inference",
+        "description": "Derive a conservative output-format spec once",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "ops/derive_output_format",
+          "context_keys": [
+            "task_spec",
+            "working_directory"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "task_spec",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          },
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "working_directory",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "config.working_directory"
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.1"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "store_output_format"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "store_output_format": {
+        "action": "store_output_format",
+        "description": "Parse + store the output-format spec on the TaskState",
+        "context": {
+          "required": [
+            "mission",
+            "inference_response"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
               "transition": "check_phase"
             }
           ]
@@ -11463,6 +11552,34 @@
           "optional": [
             "validation_results",
             "task_profile"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_format"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "check_format": {
+        "action": "check_output_format",
+        "description": "Output-format oracle: flag a shape mismatch vs the derived spec",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "validation_results"
           ]
         },
         "params": {},

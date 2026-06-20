@@ -156,6 +156,50 @@ ops_control: #FlowDefinition & {
 			context: required: ["mission", "inference_response"]
 			resolver: {
 				type: "rule"
+				rules: [{condition: "true", transition: "derive_output_format"}]
+			}
+			publishes: ["mission"]
+		}
+
+		// Output-format spec: a CONSERVATIVE set of shape checks the format oracle
+		// runs against the produced artifact each cycle (catches close-misses —
+		// wrong shape/key/filename on otherwise-correct work). Unlike the
+		// definition-of-done this is OPTIONAL: a failed/empty derivation just means
+		// no format gate (the safe default — never block a correct answer on a
+		// guessed shape), so its failure path proceeds to check_phase, not retry.
+		derive_output_format: #StepDefinition & {
+			action:      "inference"
+			description: "Derive a conservative output-format spec once"
+			context: required: ["mission"]
+			prompt_template: {
+				template: "ops/derive_output_format"
+				context_keys: ["task_spec", "working_directory"]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_mission_meta", output_key: "task_spec"
+					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+				{formatter: "format_mission_meta", output_key: "working_directory"
+					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
+			]
+			config: temperature: "t*0.1"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "store_output_format"},
+					// Inference failed — proceed with NO format gate (safe default).
+					{condition: "true", transition: "check_phase"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		store_output_format: #StepDefinition & {
+			action:      "store_output_format"
+			description: "Parse + store the output-format spec on the TaskState"
+			context: required: ["mission", "inference_response"]
+			resolver: {
+				type: "rule"
 				rules: [{condition: "true", transition: "check_phase"}]
 			}
 			publishes: ["mission"]

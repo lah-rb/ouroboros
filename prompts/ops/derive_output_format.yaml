@@ -1,0 +1,94 @@
+# Prompt template: ops/derive_output_format
+#
+# Derive a CONSERVATIVE output-format spec for a terminal task: typed shape checks
+# the format oracle (action_check_output_format) runs against the produced artifact
+# each cycle. SHAPE only — never correctness. The spec catches "close-miss"
+# failures where the work is right but the output shape is wrong (a scalar wrapped
+# in brackets, a missing JSON key, the wrong filename).
+#
+# Pre-computed: task_spec (the task statement), working_directory
+
+id: ops/derive_output_format
+description: "Derive conservative output-format shape checks for a terminal task"
+
+sections:
+
+  - id: system_role
+    content: |
+      You specify the OUTPUT FORMAT checks for the task in the ---YOUR TASK---
+      block below — the SHAPE the produced file must have, so a correct result
+      isn't failed on a formatting slip. Your output is parsed as JSON. Return
+      ONLY a JSON object inside a fenced code block — no commentary.
+
+  - id: task
+    content: |
+      ---YOUR TASK---
+      {context.task_spec}
+      ---END TASK---
+
+      Working directory: {context.working_directory}
+
+  - id: instructions
+    content: |
+      Emit ONLY checks the task EXPLICITLY pins about the output's shape — the
+      exact output path, an exact line count, a stated value format, named JSON
+      fields, named CSV columns. You are screening SHAPE, never correctness: you
+      do NOT know the right answer, only the form it must take.
+
+      THE PRIME DIRECTIVE IS CONSERVATISM. A missing check is harmless — a
+      separate judge still reads the content. A WRONG check is a false gate that
+      BLOCKS A CORRECT ANSWER and sends the agent to destroy a good result
+      chasing a format you invented. So:
+
+      - If the task does not state a concrete output format, return
+        {"checks": []}. Configure/install/service tasks usually have NO format
+        spec — that is the correct, safe answer.
+      - Only write a `regex` when the task NAMES the value's form (e.g. "in UCI
+        algebraic notation", "a single integer", "an ISO-8601 date"). Translate
+        that NAMED form to a pattern; never guess one.
+      - Only write `required_keys`/`columns` when the task NAMES the fields/columns.
+      - Prefer the weakest sufficient check. `exists` + (if stated) `line_count`
+        is almost always enough.
+
+      When unsure whether the task pins a detail, OMIT the check.
+
+  - id: output_format
+    content: |
+      Return a JSON object: an "output_file" (the exact path the task says to
+      write, or "" if it names none) and a "checks" array. Each check is one of:
+
+        {"type": "exists"}                       — the named output_file must be produced at that exact path
+        {"type": "line_count", "value": N, "op": "=="}   — exactly N lines ("op":"<=" for at most N)
+        {"type": "regex", "pattern": "^...$"}    — the (stripped) content matches a task-NAMED format
+        {"type": "no_wrapping"}                  — a scalar answer is bare, not wrapped in []/""/()
+        {"type": "required_keys", "keys": ["a","b"]}     — JSON object output contains these keys
+        {"type": "columns", "columns": ["x","y"]}        — CSV header contains these columns
+
+      The example below is from an UNRELATED task — it shows the SHAPE only.
+      Write checks for the actual task.
+
+      ✅ CORRECT (illustrative: "write the best move in UCI algebraic notation to
+      /app/move.txt"): the task names the path, that it's a move in UCI notation,
+      and a move is one token — so:
+      ```json
+      {
+        "output_file": "/app/move.txt",
+        "checks": [
+          {"type": "exists"},
+          {"type": "line_count", "value": 1, "op": "=="},
+          {"type": "no_wrapping"},
+          {"type": "regex", "pattern": "^[a-h][1-8][a-h][1-8][qrbn]?$"}
+        ]
+      }
+      ```
+
+      ❌ WRONG — invents a format the task never stated (the task only said "write
+      the answer to result.txt"). Asserting a regex here false-fails any answer
+      that doesn't match the guessed shape:
+      ```json
+      {"output_file": "result.txt", "checks": [{"type": "regex", "pattern": "^\\d+$"}]}
+      ```
+      Correct for that task: `{"output_file": "result.txt", "checks": [{"type": "exists"}]}`
+      — or `{"checks": []}` if even the path is unstated.
+
+      Return ONLY the fenced JSON object.

@@ -317,8 +317,10 @@ def build_action_registry() -> ActionRegistry:
         action_judge_task_completion,
         action_run_property_probe,
         action_store_completion_criteria,
+        action_store_output_format,
     )
     from agent.actions.oracle_actions import (
+        action_check_output_format,
         action_check_output_sanity,
         action_check_profile_oracle,
         action_record_completion_verify,
@@ -364,10 +366,13 @@ def build_action_registry() -> ActionRegistry:
     registry.register("derive_extraction_goals", action_derive_extraction_goals)
     registry.register("derive_task_goal", action_derive_task_goal)
     registry.register("store_completion_criteria", action_store_completion_criteria)
+    registry.register("store_output_format", action_store_output_format)
     registry.register("judge_task_completion", action_judge_task_completion)
     # Oracle rungs (non-degeneracy / sanity — backstops the credulous judge)
     registry.register("check_output_sanity", action_check_output_sanity)
     registry.register("record_output_sanity", action_record_output_sanity)
+    # Output-format oracle (deterministic shape check vs the derived spec)
+    registry.register("check_output_format", action_check_output_format)
     # Verify-before-harvest: re-probe the completion before harvesting "done"
     registry.register("reprobe_completion", action_reprobe_completion)
     registry.register("record_completion_verify", action_record_completion_verify)
