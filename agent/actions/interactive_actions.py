@@ -30,6 +30,47 @@ logger = logging.getLogger(__name__)
 _INTERACT_RPC_TIMEOUT_S = 450.0
 
 
+# Operator persona — hoisted into the session CHARTER (sent once, turn 1) rather
+# than re-rendered as a per-turn `role` section. The persona is invariant across
+# turns, so re-prefilling its ~370 tokens on every one of a session's turns was
+# ~11% of the run's total fresh prefill for no benefit (plan_interaction is 78% of
+# fresh prefill; this scaffolding is invariant). In the charter it lives in the
+# session KV from turn 1 and is never re-prefilled. Mirrors the established pattern
+# in diagnosis_session_actions.SYSTEM_PROMPT (persona in the session seed, §7).
+# The BUILD-vs-OBSERVE distinction here is canonical — the formerly-duplicate
+# `## Rules` block in plan_interaction_rules.yaml was dropped; its one unique
+# nuance ("deprecation warnings are not failures") is folded in below.
+OPERATOR_PERSONA = """\
+---ACT AS---
+You are driving an interactive terminal session to carry out YOUR BRIEF
+(stated in this session's opening message). Read your brief and act
+according to which KIND of brief it is:
+
+- BUILD / ACCOMPLISH brief (create a file, write a script, install a tool,
+  produce a deliverable): DO it. Use shell commands to write the files your
+  brief describes — `cat > path/file <<'EOF' … EOF` to create a script,
+  install any packages it needs, then run and verify what you created.
+  Producing the end state your brief describes IS the job; do not merely
+  observe, and do not assume "another flow" will write the file — you write
+  it here.
+- TEST / OBSERVE brief (exercise existing software, play a program, report
+  behaviour): RUN and OBSERVE only. Respond to prompts as a user would; do
+  NOT modify, patch, or install the software under test. If you see an error
+  trace, read it and report it — don't fix it. Deprecation warnings are not
+  failures.
+
+When a command fails in a way you don't expect, don't just retry the same
+thing — the environment may be set up differently than you assume (a tool
+aliased or installed somewhere unexpected, a missing or differently-named
+credential, a service listening on a non-default endpoint). Inspect what is
+actually there (run `--version`, `which`, list what's running) and adapt,
+rather than repeating a failing command.
+
+When the end state your brief calls for is reached (or you've seen enough for
+an observe brief), close the session cleanly.
+---END---"""
+
+
 # ── start_interactive_session ─────────────────────────────────────────
 
 
@@ -137,25 +178,27 @@ async def action_start_interactive_session(step_input: StepInput) -> StepOutput:
         "session_history": [],
     }
 
-    # Queue the session charter (execution_persona) as a session
-    # injection so the first plan_interaction turn receives it
-    # prepended to its prompt. Pre-Step-C the charter was baked into
-    # the plan_interaction prompt_template directly; after the Step C
-    # turn-schema migration, the turn render doesn't reference the
-    # charter at all — the persona template says "respond as the
-    # test charter would" but without this queue the charter would
-    # never reach the model. Runtime's _execute_turn_inference
-    # consumes session_injections before its first inference call.
+    # Queue the operator persona + session charter (execution_persona) as a
+    # session injection so the FIRST plan_interaction turn receives them prepended
+    # to its prompt; runtime's _execute_turn_inference consumes session_injections
+    # before its first inference call, after which they live in the session KV.
+    # The persona is hoisted here (sent once) rather than re-rendered per turn —
+    # the plan_interaction turn no longer carries a `role` section, so this is the
+    # only place the model sees it. Both are invariant, so they cost prefill once
+    # instead of every turn.
     session_goal = params.get("session_goal", "")
     if isinstance(session_goal, str) and session_goal.strip() and inference_session_id:
         from agent.session_injections import queue as queue_injection
 
-        seed = f"---TEST CHARTER---\n{session_goal.strip()}\n---END CHARTER---"
+        seed = (
+            f"{OPERATOR_PERSONA}\n\n"
+            f"---TEST CHARTER---\n{session_goal.strip()}\n---END CHARTER---"
+        )
         queue_injection(context_updates, step_input.context, seed)
         logger.info(
-            "Queued session charter for inference session %s (%d chars)",
+            "Queued persona + session charter for inference session %s (%d chars)",
             inference_session_id,
-            len(session_goal),
+            len(seed),
         )
 
     return StepOutput(

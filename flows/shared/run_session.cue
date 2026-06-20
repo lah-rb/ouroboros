@@ -87,7 +87,9 @@ run_session: #FlowDefinition & {
 			turn: #Turn & {
 				response_shape: "menu_compound"
 				sections: [
-					{type: "role", template:        "personas/run_session_operator"},
+					// No `role` section: the operator persona is hoisted into the
+					// session charter (interactive_actions.OPERATOR_PERSONA, sent once
+					// at session start) instead of re-prefilled here every turn.
 					{type: "evidence", template:    "run_in_terminal/session_state"},
 					{type: "instruction", template: "run_in_terminal/plan_interaction_rules"},
 					{type: "options"},

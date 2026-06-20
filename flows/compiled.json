@@ -9445,11 +9445,6 @@
           "response_shape": "menu_compound",
           "sections": [
             {
-              "type": "role",
-              "template": "personas/run_session_operator",
-              "required": false
-            },
-            {
               "type": "evidence",
               "template": "run_in_terminal/session_state",
               "required": false

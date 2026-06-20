@@ -328,3 +328,80 @@ def test_ambient_key_does_not_satisfy_required_declaration():
                 effects=MockEffects(),
             )
         )
+
+
+# ── Operator-persona hoist (prompt economy) ──────────────────────────
+#
+# The run_session operator persona is hoisted into the session CHARTER (queued
+# once at session start) instead of re-rendered as a per-turn `role` section —
+# it's invariant, so re-prefilling it every turn was ~11% of the run's fresh
+# prefill for nothing. These guards pin both ends so the hoist can't silently
+# regress: the action must queue persona+charter, and the per-turn prompt must
+# NOT carry the persona again (which would reintroduce the per-turn cost).
+
+
+def test_start_session_queues_persona_then_charter():
+    import asyncio
+    import json as _json
+
+    from agent.actions.interactive_actions import (
+        OPERATOR_PERSONA,
+        action_start_interactive_session,
+    )
+    from agent.effects.mock import MockEffects
+    from agent.models import StepInput
+
+    assert "---ACT AS---" in OPERATOR_PERSONA and "BUILD / ACCOMPLISH" in OPERATOR_PERSONA
+
+    eff = MockEffects()
+    eff._state["mcp_tool_responses"] = {"create_session": {"session_id": "pty_test"}}
+    goal = "Create a competitive CoreWars warrior at my_warrior.red and verify it wins."
+    out = asyncio.run(
+        action_start_interactive_session(
+            StepInput(params={"session_goal": goal}, context={}, effects=eff)
+        )
+    )
+    queued = out.context_updates.get("session_injections") or []
+    assert len(queued) == 1, "expected exactly one seed injection (persona+charter)"
+    seed = queued[0]
+    # Persona FIRST, then the task charter — the model reads its role then its job.
+    assert seed.startswith("---ACT AS---")
+    assert seed.index("---ACT AS---") < seed.index("---TEST CHARTER---")
+    assert "BUILD / ACCOMPLISH" in seed  # the canonical persona text rode along
+    assert "my_warrior.red" in seed  # the task charter rode along
+    del _json  # (imported for parity with sibling tests; unused here)
+
+
+def test_plan_interaction_turn_has_no_persona_section():
+    """The compiled per-turn plan_interaction prompt must NOT re-render the
+    persona (no `role`/run_session_operator section) — it lives in the charter."""
+    import json as _json
+
+    compiled = _json.load(
+        open("flows/compiled.json")  # noqa: SIM115 - small read in a test
+    )
+
+    def menu_turn_sections(o):
+        if isinstance(o, dict):
+            if o.get("response_shape") == "menu_compound":
+                secs = (o.get("turn", {}) or {}).get("sections") or o.get("sections") or []
+                if any(
+                    isinstance(s, dict) and s.get("template") == "run_in_terminal/session_state"
+                    for s in secs
+                ):
+                    yield secs
+            for v in o.values():
+                yield from menu_turn_sections(v)
+        elif isinstance(o, list):
+            for v in o:
+                yield from menu_turn_sections(v)
+
+    found = list(menu_turn_sections(compiled))
+    assert found, "no plan_interaction-style menu_compound turn found in compiled.json"
+    for secs in found:
+        templates = [s.get("template") for s in secs if isinstance(s, dict)]
+        types = [s.get("type") for s in secs if isinstance(s, dict)]
+        assert "personas/run_session_operator" not in templates, (
+            "persona section is back in the per-turn prompt — the hoist regressed"
+        )
+        assert "role" not in types
