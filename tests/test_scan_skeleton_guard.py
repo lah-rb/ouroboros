@@ -39,6 +39,25 @@ def test_excluded_dirs_and_egg_info():
     assert not _excluded("src/main.py")
 
 
+def test_non_ast_signature_is_head_tail_bounded():
+    # Prompt economy (plan_charter): non-AST files (shell/config/data) were the
+    # projection's verbosity hotspot — first-50-lines verbatim. Now bound head+tail
+    # so the entry point AND the tail (shell scripts execute at the bottom) survive
+    # without the verbose middle. Short files still render whole.
+    from agent.actions.refinement_actions import _extract_signature
+
+    short = "\n".join(f"line{i}" for i in range(20))
+    out = _extract_signature("run.sh", short, "full")
+    assert out == short  # at/under the threshold → whole file, no omission marker
+
+    long = "\n".join(f"line{i}" for i in range(100))
+    out = _extract_signature("run.sh", long, "full")
+    assert "line0" in out and "line11" in out  # head (first 12)
+    assert "line99" in out and "line82" in out  # tail (last 18)
+    assert "line50" not in out and "omitted" in out  # verbose middle dropped
+    assert len(out) < len(long)  # net smaller
+
+
 @pytest.mark.asyncio
 async def test_scan_excludes_vendor_and_skips_large_files():
     files = {

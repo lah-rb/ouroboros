@@ -200,7 +200,9 @@ _EXCLUDED_DIRS = frozenset({
 })
 _MAX_FILE_SIZE = 256 * 1024   # skip files larger than this (data/binary, not source)
 _MAX_SCAN_FILES = 300         # cap the manifest; the rest is reachable via trace/grep
-_SIGNATURE_MAX_CHARS = 2000   # byte-cap a per-file snippet (defeats minified one-liners)
+_SIGNATURE_MAX_CHARS = 1500   # byte-cap a per-file snippet (defeats minified one-liners).
+                              # 1500 keeps a full docstring+imports+~20 defs for AST
+                              # files while trimming the plan_charter projection (was 2000)
 
 
 def _excluded(filepath: str) -> bool:
@@ -294,9 +296,19 @@ def _extract_signature(filepath: str, content: str, depth: str) -> str:
     else:
         # Shell, config, and other non-AST files have no symbol-level repo map,
         # so this snippet is the ONLY content the architecture extractor sees for
-        # them. Capture enough to convey what a small script does (entry point,
-        # what it calls) rather than just its first few lines.
-        return "\n".join(lines[:50])
+        # them. Bound it head+tail rather than first-50-verbatim (the plan_charter
+        # projection's verbosity hotspot — shell scripts especially put setup at
+        # the top and the actual executed commands at the bottom, so the verbose
+        # middle adds tokens without signal). Files at/under the threshold render
+        # whole; longer ones keep the entry point and the tail.
+        if len(lines) <= 32:
+            return "\n".join(lines)
+        omitted = len(lines) - 30
+        return (
+            "\n".join(lines[:12])
+            + f"\n… [{omitted} lines omitted] …\n"
+            + "\n".join(lines[-18:])
+        )
 
 
 def _extract_python_signature(lines: list[str], depth: str) -> str:
