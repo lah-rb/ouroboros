@@ -14,10 +14,13 @@
 set -u
 ROOT=/Users/lah-rb/Repos/ouroboros
 LLMVP=$ROOT/llmvp
-LOG=/tmp/canary_tb2_v2.log
-SRVLOG=$LLMVP/logs/llmvp_server.log
 MODEL=gpt-oss-120b-a5
-RUNID=canary-tb2-v2
+# Run id is the first arg (default canary-tb2-v2) so successive batches don't
+# clobber each other's results — each is preserved under runs/<RUNID> for
+# before/after comparison.
+RUNID=${1:-canary-tb2-v2}
+LOG=/tmp/${RUNID//-/_}.log
+SRVLOG=$LLMVP/logs/llmvp_server.log
 OUT=$ROOT/runs/$RUNID
 cd "$ROOT"; : > "$LOG"
 export PATH="$HOME/.local/bin:$PATH"
