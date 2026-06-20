@@ -10,9 +10,10 @@ content: |
   stdin. shell_command is for when you're back at the shell prompt
   (`$ ` or `#`) and want to start a new command.
 
-  Example progression:
+  Example progression (ILLUSTRATIVE ONLY — the placeholders below are NOT
+  your task; always run what YOUR brief actually names):
 
-      Turn 1: {"choice": "shell_command", "command": "python main.py library.yaml"}
-              → Output: "Welcome. What is your name? > "
-      Turn 2: {"choice": "send_input", "text": "Hero\n"}
-              → Output: "Welcome! 3 collections loaded."
+      Turn 1: {"choice": "shell_command", "command": "<launch the program your brief names>"}
+              → it prints a prompt and waits, e.g.  "Enter your name: > "
+      Turn 2: {"choice": "send_input", "text": "<your reply>\n"}
+              → it continues, e.g.  "Welcome!"
