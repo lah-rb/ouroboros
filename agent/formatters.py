@@ -377,19 +377,23 @@ def format_session_history(params: dict, namespaces: dict) -> str:
 
 
 def format_last_turn(params: dict, namespaces: dict) -> str:
-    """Frame the most recent terminal turn as the model's OWN tool result (§8).
+    """Frame the most recent terminal turn as the model's OWN command output.
 
-    Without explicit framing the model reads the output as ambient project
-    context rather than the result of the command it just issued, and re-issues
-    the same command — the e39 trace-session re-request pathology (46-79% of
-    turns), which shows up in run_session as verbatim re-reads/re-runs
-    (`sed -n …` ×7, `ls -R .` ×6 in the TB2 microscope). Mirroring
-    trace_actions' framing: an explicit ``Observation`` label (the strongest
-    cross-framework anchor for tool-result delivery — ReAct/LangChain all use
-    it) plus naming the command as the acceptance signal — it tells the model
-    the command WAS executed and this is its output, so it neither re-runs nor
-    re-reads. ``(End of observation.)`` bounds where the tool data ends and the
-    next turn's prompt resumes.
+    Without framing the model reads the output as ambient project context rather
+    than the result of the command it just issued, and re-issues it — the e39
+    re-request pathology (46-79%), which showed up in run_session as verbatim
+    re-reads/re-runs. Naming the command ("your command `X`") is the acceptance
+    signal: it WAS executed and this is its output, so don't re-run or re-read.
+
+    DELIBERATELY NOT the ReAct ``Observation:`` / ``(End of observation.)``
+    framing. Canary v2 showed that the strong "observation → done" finality made
+    the model treat each command as complete and CLOSE the session early without
+    verifying — corewars wrote a warrior 6× but ran the simulator 0× and closed
+    claiming "win thresholds met" (a fabricated success). ReAct's Observation
+    label primes the "Thought: I now know the answer → Finish" rhythm; we want
+    the recognition (don't re-read) WITHOUT the done-signal. So: a neutral
+    "Output of your command `X`" header and a plain "(end of output)" boundary —
+    it bounds where the output ends and the menu resumes, nothing more.
     """
     history = params.get("source") or []
     if not history:
@@ -411,13 +415,13 @@ def format_last_turn(params: dict, namespaces: dict) -> str:
         cmd_one += " …"
 
     if action == "send_input":
-        header = f"Observation — your input `{cmd_one}` was sent to the program (Turn {turn}):"
+        header = f"Output after sending `{cmd_one}` to the program (Turn {turn}):"
     elif action == "read_output":
-        header = f"Observation — you read the program's output (Turn {turn}):"
+        header = f"Latest output read from the program (Turn {turn}):"
     elif cmd_one:
-        header = f"Observation — your command `{cmd_one}` ran (Turn {turn}):"
+        header = f"Output of your command `{cmd_one}` (Turn {turn}):"
     else:
-        header = f"Observation (Turn {turn}):"
+        header = f"Output (Turn {turn}):"
 
     lines = [header, ""]
     if output:
@@ -425,7 +429,7 @@ def format_last_turn(params: dict, namespaces: dict) -> str:
     if last.get("return_code", 0) != 0:
         lines.append(f"(exit code: {last['return_code']})")
     lines.append("")
-    lines.append("(End of observation.)")
+    lines.append("(end of output)")
     return "\n".join(lines)
 
 

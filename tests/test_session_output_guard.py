@@ -50,19 +50,24 @@ def test_last_turn_bounds_current_flood_keeps_final():
     assert "FINAL" in out  # the just-produced result's tail is preserved
 
 
-def test_last_turn_is_framed_as_observation_with_acceptance_signal():
-    # §8: the model must read the output as ITS OWN tool result (don't re-run /
-    # re-read). The command is named (acceptance signal) and the block is bounded
-    # by Observation: … (End of observation.).
+def test_last_turn_names_command_without_finality():
+    # The model must read the output as ITS OWN command result (acceptance signal
+    # = the command is named → don't re-run / re-read). But canary v2 showed the
+    # ReAct "Observation:"/"(End of observation.)" finality made the model close
+    # early without verifying, so the framing is DELIBERATELY softened: neutral
+    # "Output of your command" + a plain "(end of output)" boundary, no
+    # "Observation"/"ran"/"(End of observation.)" done-signal.
     last = [{"turn": 4, "action": "shell_command", "command": "ls -R .", "output": "a.txt"}]
     out = format_last_turn({"source": last}, {})
-    assert "Observation" in out and "your command `ls -R .` ran" in out
-    assert "(End of observation.)" in out
-    # send_input and read_output get their own acceptance phrasing
+    assert "your command `ls -R .`" in out  # acceptance signal retained
+    assert "(end of output)" in out  # light boundary
+    assert "Observation" not in out and "(End of observation.)" not in out  # finality removed
+    assert "ran" not in out.split("\n")[0]  # no completion verb in the header
+    # send_input and read_output get their own neutral phrasing
     si = format_last_turn({"source": [{"turn": 5, "action": "send_input", "input": "north"}]}, {})
-    assert "your input `north` was sent" in si
+    assert "after sending `north`" in si and "Observation" not in si
     ro = format_last_turn({"source": [{"turn": 6, "action": "read_output"}]}, {})
-    assert "you read the program's output" in ro
+    assert "Latest output read from the program" in ro and "Observation" not in ro
 
 
 def test_multiline_command_label_is_bounded_to_first_line():
@@ -184,7 +189,8 @@ def test_compiled_runs_last_turn_before_session_history():
 
 def test_last_turn_populates_through_real_pre_compute_chain():
     # The functional guard: run the ACTUAL compiled chain and assert last_turn is
-    # the Observation block (not the empty clobbered channel).
+    # the (softened) command-output block — populated, naming the command, NOT
+    # the empty clobbered channel and NOT the finality-laden Observation framing.
     pc = _plan_interaction_pre_compute()[0]
     hist = [
         {"turn": 0, "action": "shell_command", "command": "ls", "output": "a\nb"},
@@ -192,7 +198,7 @@ def test_last_turn_populates_through_real_pre_compute_chain():
     ]
     ns = {"context": {"session_history": list(hist)}}
     out = run_pre_compute(pc, ns)
-    assert "Observation" in out["last_turn"] and "hello" in out["last_turn"]
-    assert "(End of observation.)" in out["last_turn"]
+    assert "your command `cat a`" in out["last_turn"] and "hello" in out["last_turn"]
+    assert "Observation" not in out["last_turn"]  # finality removed (canary v2)
     # and the de-dup still collapses the last turn in the transcript
     assert "[Turn 1] $ cat a  →" in out["session_history"]
