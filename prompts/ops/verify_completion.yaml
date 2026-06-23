@@ -44,6 +44,15 @@ sections:
       - If the transcript is ambiguous or doesn't show enough to overturn a
         believable result, return `true` — do not refute a plausible completion on
         a hunch. Refutation requires evidence of failure, not absence of proof.
+      - FABRICATION: if the result is a specific value, name, or string, it must
+        APPEAR in the observed transcript (a command's output or a file's content).
+        A value the agent never read or computed — invented to look done — is
+        `"genuinely_done": false`. Absence-of-proof is not refutation, but an
+        answer with NO grounding in the transcript is evidence it was fabricated.
+      - For a COMPUTED answer, an independent cross-check in the transcript (the
+        value recomputed a different way and agreeing) is the strongest evidence —
+        prefer it when present. But do NOT refute on a re-derivation MISMATCH alone:
+        a slightly-wrong re-derivation would fail a correct answer.
 
       `"reason"` — one sentence; on a refutation, name what the next attempt must
       fix.

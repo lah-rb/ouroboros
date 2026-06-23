@@ -251,6 +251,9 @@ def _parse_completion_criteria(text: str) -> list[dict]:
     Accepts {"checks":[...]}, a bare list, or a lone {command} dict. Shared by the
     early store and the grounded reground store."""
     parsed = parse_llm_json(str(text or ""))
+    # Derive-guard: an action/command emitted in place of checks is not a criterion.
+    if isinstance(parsed, dict) and "action" in parsed and not (parsed.get("checks") or parsed.get("command")):
+        return []
     if isinstance(parsed, dict):
         items = parsed.get("checks") or ([parsed] if parsed.get("command") else [])
     elif isinstance(parsed, list):
@@ -342,6 +345,10 @@ def _parse_output_format_spec(text: str) -> dict | None:
     the early (derive) and late grounded (reground) store actions."""
     parsed = parse_llm_json(str(text or ""))
     if not isinstance(parsed, dict):
+        return None
+    # Derive-guard: the model sometimes emits an ACTION/command ({"action": ...})
+    # instead of a format spec — reject it as non-spec (the grounded reground fires).
+    if "action" in parsed and "checks" not in parsed:
         return None
     raw = parsed.get("checks")
     checks = [

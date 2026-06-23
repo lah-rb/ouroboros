@@ -340,3 +340,22 @@ async def test_store_reground_criteria_merges_tighten_only():
     assert "test -s /app/result.txt" in cmds  # grounded check added
     assert len(cmds) == 2                      # the dup was not re-added
     assert m.task_definition.completion_criteria_grounded is True
+
+
+# ── Tier 3 derive-guard: reject action-JSON emitted in place of a spec/checks ──
+
+
+def test_derive_guard_rejects_action_json():
+    from agent.actions.operations_actions import (
+        _parse_output_format_spec, _parse_completion_criteria,
+    )
+    # Output-format: an action/command emitted instead of a spec → None.
+    assert _parse_output_format_spec('{"action": "list_files", "path": ""}') is None
+    assert _parse_output_format_spec('{"action": "none"}') is None
+    # A real spec still parses.
+    assert _parse_output_format_spec('{"output_file": "/app/o", "checks": [{"type": "exists"}]}')
+    # Criteria: an action instead of checks → [].
+    assert _parse_completion_criteria('{"action": "run", "path": "."}') == []
+    # A real checks array still parses.
+    assert _parse_completion_criteria(
+        '{"checks": [{"command": "test -s /app/x", "description": "x"}]}')

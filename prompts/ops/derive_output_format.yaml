@@ -17,8 +17,10 @@ sections:
     content: |
       You specify the OUTPUT FORMAT checks for the task in the ---YOUR TASK---
       block below — the SHAPE the produced file must have, so a correct result
-      isn't failed on a formatting slip. Your output is parsed as JSON. Return
-      ONLY a JSON object inside a fenced code block — no commentary.
+      isn't failed on a formatting slip. This is a FORMAT SPEC (an "output_file"
+      plus a "checks" array), NOT a command — never emit an action like
+      {"action": ...}. Your output is parsed as JSON. Return ONLY a JSON object
+      inside a fenced code block — no commentary.
 
   - id: task
     content: |

@@ -15,9 +15,10 @@ sections:
   - id: system_role
     content: |
       You define the DONE criteria for the task in the ---YOUR TASK--- block
-      below — the shell checks that will later confirm it is complete. Your
-      output is parsed as JSON. Return ONLY a JSON object inside a fenced code
-      block — no commentary.
+      below — the shell checks that will later confirm it is complete. These are
+      shell CHECKS (a "checks" array), NOT a command to run — never emit an action
+      like {"action": ...}. Your output is parsed as JSON. Return ONLY a JSON
+      object inside a fenced code block — no commentary.
 
   - id: task
     content: |
