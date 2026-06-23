@@ -681,6 +681,12 @@ class TaskState(BaseModel):
     # The latest judge feedback, seeded into the next run_session loop.
     last_feedback: str = ""
     attempts: int = 0
+    # External-search (exa) findings, surfaced into the charter as NEW INFORMATION
+    # when a task is stuck (attempts >= 2). One-shot: set once, then the gate stops
+    # re-searching. Distinct from the static anti-give-up prompt language — this is
+    # dynamic tool-result delivery (§8), justified because the hits can redirect the
+    # fix the agent couldn't reach on its own.
+    search_findings: str = ""
     schema_version: int = 1
 
 

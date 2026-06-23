@@ -9485,7 +9485,7 @@
               },
               "close": {
                 "key": "close",
-                "description": "End the session. Use when you have enough information, the goal is achieved, or you're stuck after 3+ failed attempts.",
+                "description": "End the session \u2014 ONLY when the goal is genuinely achieved (the required output exists) or you have exhausted several DISTINCT approaches AFTER reframing the problem. A single dead end is a cue to reframe, not to close.",
                 "arg": {
                   "name": "reason",
                   "description": "Brief explanation of why closing"
@@ -11168,12 +11168,98 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "plan_provision"
+              "transition": "exa_probe_gate"
             }
           ]
         },
         "publishes": [
           "project_manifest"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "exa_probe_gate": {
+        "action": "exa_probe_gate",
+        "description": "Gate the stuck-task web search (attempts >= 2, once)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.should_search == true",
+              "transition": "exa_search"
+            },
+            {
+              "condition": "true",
+              "transition": "plan_provision"
+            }
+          ]
+        },
+        "publishes": [
+          "search_queries"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "exa_search": {
+        "action": "exa_search",
+        "description": "Web-search the stuck problem via the Exa MCP",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "search_queries"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "store_search_findings"
+            }
+          ]
+        },
+        "publishes": [
+          "raw_search_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "store_search_findings": {
+        "action": "store_search_findings",
+        "description": "Store the exa hits on the mission for the charter (one-shot)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "raw_search_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "plan_provision"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
         ],
         "effects": [],
         "terminal": false
@@ -11290,6 +11376,7 @@
           "context_keys": [
             "task_spec",
             "workspace_context",
+            "search_findings_block",
             "workspace_ledger",
             "feedback_block"
           ],
@@ -11330,6 +11417,15 @@
             "params": {
               "source": {
                 "$ref": "context.mission.task_definition"
+              }
+            }
+          },
+          {
+            "formatter": "format_search_findings",
+            "output_key": "search_findings_block",
+            "params": {
+              "source": {
+                "$ref": "context.mission"
               }
             }
           }

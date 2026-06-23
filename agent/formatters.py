@@ -232,6 +232,20 @@ def format_project_listing(params: dict, namespaces: dict) -> str:
     return "\n".join(lines)
 
 
+def format_search_findings(params: dict, namespaces: dict) -> str:
+    """Render stored exa findings (TaskState.search_findings) as an Observation
+    block for the stuck-task charter. Empty/sentinel -> '' (section is when:-gated)."""
+    mission = params.get("source")
+    td = getattr(mission, "task_definition", None) if mission else None
+    text = str(getattr(td, "search_findings", "") or "").strip() if td else ""
+    if not text or text.startswith("(no relevant"):
+        return ""
+    return (
+        "Observation (web search results for this stuck task — use them to find "
+        "an approach you have not tried):\n\n" + text + "\n\n(End of observation.)"
+    )
+
+
 def format_verified_behaviors(params: dict, namespaces: dict) -> str:
     """Render the verified-behaviors list from the quality_overview projection.
 
@@ -603,6 +617,7 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_mission_meta": format_mission_meta,
     "format_project_file_list": format_project_file_list,
     "format_project_listing": format_project_listing,
+    "format_search_findings": format_search_findings,
     "format_validation_results": format_validation_results,
     "format_verified_behaviors": format_verified_behaviors,
     "format_research_overview": format_research_overview,

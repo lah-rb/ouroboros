@@ -314,11 +314,13 @@ def build_action_registry() -> ActionRegistry:
     from agent.actions.operations_actions import (
         action_derive_task_goal,
         action_detect_solver_task,
+        action_exa_probe_gate,
         action_judge_task_completion,
         action_run_property_probe,
         action_store_completion_criteria,
         action_store_output_format,
         action_store_reground_output_format,
+        action_store_search_findings,
     )
     from agent.actions.oracle_actions import (
         action_check_output_format,
@@ -379,6 +381,10 @@ def build_action_registry() -> ActionRegistry:
     # store persists it + marks grounded — recovers blind-early empty specs.
     registry.register("gate_reground_output_format", action_gate_reground_output_format)
     registry.register("store_reground_output_format", action_store_reground_output_format)
+    # Stuck-task external search (anti-give-up dynamic arm): gate fires exa once on a
+    # looping task, store surfaces the hits to the charter as new information.
+    registry.register("exa_probe_gate", action_exa_probe_gate)
+    registry.register("store_search_findings", action_store_search_findings)
     # Verify-before-harvest: re-probe the completion before harvesting "done"
     registry.register("reprobe_completion", action_reprobe_completion)
     registry.register("record_completion_verify", action_record_completion_verify)

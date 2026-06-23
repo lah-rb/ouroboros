@@ -395,6 +395,70 @@ async def action_store_reground_output_format(step_input: StepInput) -> StepOutp
     )
 
 
+async def action_exa_probe_gate(step_input: StepInput) -> StepOutput:
+    """Gate the stuck-task external search. When a task has looped without
+    completing (attempts >= 2) and we haven't searched yet, derive a focused web
+    query from the objective and signal exa_search to run. One-shot via
+    task_definition.search_findings. The hits are NEW INFORMATION surfaced into the
+    next charter (§8 tool-result), NOT a creativity nudge — the static anti-give-up
+    language handles persistence; this brings in what the agent can't derive alone.
+
+    Context: mission (required).  Result: should_search.  Publishes: search_queries.
+    """
+    import re as _re
+    mission = step_input.context.get("mission")
+    td = getattr(mission, "task_definition", None) if mission else None
+    if td is None:
+        return StepOutput(result={"should_search": False}, observations="exa-probe: no task_definition")
+    attempts = int(getattr(td, "attempts", 0) or 0)
+    already = bool((getattr(td, "search_findings", "") or "").strip())
+    if attempts < 2 or already:
+        return StepOutput(
+            result={"should_search": False},
+            observations=f"exa-probe: skip (attempts={attempts}, searched={already})",
+        )
+    objective = str(getattr(mission, "objective", "") or "")
+    cleaned = _re.sub(r"[/\\]\S+|`[^`]*`", " ", objective)   # strip paths + backticked literals
+    query = _re.sub(r"\s+", " ", cleaned).strip()[:200] or objective[:200]
+    return StepOutput(
+        result={"should_search": True},
+        observations=f"exa-probe: searching (attempts={attempts})",
+        context_updates={"search_queries": [query]},
+    )
+
+
+async def action_store_search_findings(step_input: StepInput) -> StepOutput:
+    """Format the exa hits and store them on the TaskState so the charter surfaces
+    them as NEW INFORMATION next cycle. One-shot guard (sets search_findings — a
+    sentinel even on zero hits so the gate stops re-searching).
+
+    Context: mission, raw_search_results.  Publishes: mission.
+    """
+    import re as _re
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission or getattr(mission, "task_definition", None) is None:
+        return StepOutput(result={"n_hits": 0}, observations="no task_definition")
+    hits = step_input.context.get("raw_search_results") or []
+    lines = []
+    for h in hits[:5]:
+        if not isinstance(h, dict):
+            continue
+        url = str(h.get("url", "")).strip()
+        body = _re.sub(r"\s+", " ", str(h.get("content", "") or "")).strip()[:500]
+        if body:
+            lines.append(f"- {url}\n  {body}")
+    block = "\n".join(lines)
+    mission.task_definition.search_findings = block or "(no relevant web results found)"
+    if effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"n_hits": len(lines)},
+        observations=f"stored {len(lines)} search finding(s)",
+        context_updates={"mission": mission},
+    )
+
+
 async def action_judge_task_completion(step_input: StepInput) -> StepOutput:
     """Decide whether the task is done, conservatively.
 

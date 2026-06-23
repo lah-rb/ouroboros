@@ -67,7 +67,7 @@ ops_task: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "plan_provision"}]
+				rules: [{condition: "true", transition: "exa_probe_gate"}]
 			}
 			publishes: ["project_manifest"]
 		}
@@ -77,6 +77,53 @@ ops_task: #FlowDefinition & {
 		// bench expects agents to manipulate the env (its grader runs in the same
 		// container and supplies its own test deps). Reuses project_ops's
 		// install-runner; run_command routes into the container via the adapter.
+		// ── Stuck-task external search (anti-give-up dynamic arm) ──────
+		// When the task has looped without completing (attempts >= 2), pull in NEW
+		// information the agent can't derive alone: an exa web search on the problem,
+		// surfaced into the charter as an Observation. The STATIC anti-give-up language
+		// handles persistence; this is the one dynamic arm, fired once per stuck task.
+		exa_probe_gate: #StepDefinition & {
+			action:      "exa_probe_gate"
+			description: "Gate the stuck-task web search (attempts >= 2, once)"
+			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.should_search == true", transition: "exa_search"},
+					{condition: "true", transition: "plan_provision"},
+				]
+			}
+			publishes: ["search_queries"]
+		}
+
+		exa_search: #StepDefinition & {
+			action:      "exa_search"
+			description: "Web-search the stuck problem via the Exa MCP"
+			context: {
+				required: ["mission"]
+				optional: ["search_queries"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "store_search_findings"}]
+			}
+			publishes: ["raw_search_results"]
+		}
+
+		store_search_findings: #StepDefinition & {
+			action:      "store_search_findings"
+			description: "Store the exa hits on the mission for the charter (one-shot)"
+			context: {
+				required: ["mission"]
+				optional: ["raw_search_results"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "plan_provision"}]
+			}
+			publishes: ["mission"]
+		}
+
 		plan_provision: #StepDefinition & {
 			action:      "inference"
 			description: "Plan setup/install commands the task's environment needs"
@@ -127,7 +174,7 @@ ops_task: #FlowDefinition & {
 			}
 			prompt_template: {
 				template: "ops/charter_accomplish"
-				context_keys: ["task_spec", "workspace_context", "workspace_ledger", "feedback_block"]
+				context_keys: ["task_spec", "workspace_context", "search_findings_block", "workspace_ledger", "feedback_block"]
 				input_keys: []
 			}
 			pre_compute: [
@@ -139,6 +186,8 @@ ops_task: #FlowDefinition & {
 					params: {source: {$ref: "context.mission.workspace_ledger"}}},
 				{formatter: "format_feedback_block", output_key: "feedback_block"
 					params: {source: {$ref: "context.mission.task_definition"}}},
+				{formatter: "format_search_findings", output_key: "search_findings_block"
+					params: {source: {$ref: "context.mission"}}},
 			]
 			config: temperature: "t*0.4"
 			resolver: {

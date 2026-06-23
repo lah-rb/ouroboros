@@ -12,8 +12,10 @@ from __future__ import annotations
 import pytest
 
 from agent.actions.operations_actions import (
+    action_exa_probe_gate,
     action_store_output_format,
     action_store_reground_output_format,
+    action_store_search_findings,
 )
 from agent.actions.oracle_actions import (
     _apply_format_checks,
@@ -267,3 +269,47 @@ async def test_reground_store_marks_grounded_even_when_empty():
     assert m.task_definition.output_format_grounded is True
     # And once grounded, the gate no longer fires (no per-cycle inference leak).
     assert (await action_gate_reground_output_format(_si_term(m))).result["needs_reground"] is False
+
+
+# ── Stuck-task external search: gate + store (anti-give-up dynamic arm) ───────
+
+
+@pytest.mark.asyncio
+async def test_exa_probe_gate_fires_when_stuck():
+    m = _mission(objective="recover a truncated sqlite database at /app/trunc.db")
+    m.task_definition.attempts = 2
+    out = await action_exa_probe_gate(_si(m))
+    assert out.result["should_search"] is True
+    assert out.context_updates["search_queries"]  # a query was derived
+
+
+@pytest.mark.asyncio
+async def test_exa_probe_gate_skips_early_or_already_searched():
+    # < 2 attempts → not stuck yet.
+    m = _mission()
+    m.task_definition.attempts = 1
+    assert (await action_exa_probe_gate(_si(m))).result["should_search"] is False
+    # already searched → one-shot, never re-fires.
+    m2 = _mission()
+    m2.task_definition.attempts = 3
+    m2.task_definition.search_findings = "prior hits"
+    assert (await action_exa_probe_gate(_si(m2))).result["should_search"] is False
+
+
+@pytest.mark.asyncio
+async def test_store_search_findings_formats_and_one_shots():
+    m = _mission()
+    si = StepInput(
+        context={"mission": m, "raw_search_results": [
+            {"url": "http://x", "content": "use sqlite .recover to rebuild a truncated db"}]},
+        params={}, meta=FlowMeta(flow_name="ops_task", step_id="x"), effects=MockEffects())
+    out = await action_store_search_findings(si)
+    assert out.result["n_hits"] == 1
+    assert "sqlite .recover" in m.task_definition.search_findings
+    # empty hits → sentinel so the gate stops re-searching (one-shot).
+    m2 = _mission()
+    si2 = StepInput(
+        context={"mission": m2, "raw_search_results": []}, params={},
+        meta=FlowMeta(flow_name="ops_task", step_id="x"), effects=MockEffects())
+    await action_store_search_findings(si2)
+    assert m2.task_definition.search_findings.startswith("(no relevant")

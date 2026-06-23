@@ -17,3 +17,11 @@ content: |
               → it prints a prompt and waits, e.g.  "Enter your name: > "
       Turn 2: {"choice": "send_input", "text": "<your reply>\n"}
               → it continues, e.g.  "Welcome!"
+
+  PERSISTENCE: these tasks are solvable by design — when you hit a wall, your
+  approach is wrong, not the task. Before you ever `close` as stuck, do all
+  three: restate the objective to yourself in a different way; list every
+  factor and resource actually in play (the files present, the tools you have,
+  and exactly what the last error said); then try one concrete approach you
+  have NOT tried yet. A dead end is a prompt to reframe, not to quit. Never
+  `close` while the task's required output is still unwritten — produce it first.

@@ -98,14 +98,23 @@ def test_compiled_ops_wiring():
     steps = c["ops_task"]["steps"]
     # Ground the cycle in the real working directory BEFORE planning, so the
     # charter plans against actual files (not blind). load_state →
-    # gather_context (scan_project) → plan_provision.
+    # gather_context (scan_project) → exa_probe_gate → plan_provision.
     assert (
         steps["load_state"]["resolver"]["rules"][0]["transition"] == "gather_context"
     )
     assert steps["gather_context"]["action"] == "scan_project"
     assert (
-        steps["gather_context"]["resolver"]["rules"][0]["transition"] == "plan_provision"
+        steps["gather_context"]["resolver"]["rules"][0]["transition"] == "exa_probe_gate"
     )
+    # Stuck-task external-search arm: gate (attempts>=2, once) → exa_search → store →
+    # plan_provision; skips straight to plan_provision otherwise.
+    eg = {r["condition"]: r["transition"] for r in steps["exa_probe_gate"]["resolver"]["rules"]}
+    assert eg["result.should_search == true"] == "exa_search"
+    assert eg["true"] == "plan_provision"
+    assert steps["exa_search"]["action"] == "exa_search"
+    assert steps["exa_search"]["resolver"]["rules"][0]["transition"] == "store_search_findings"
+    assert steps["store_search_findings"]["resolver"]["rules"][0]["transition"] == "plan_provision"
+    assert "search_findings_block" in steps["plan_charter"]["prompt_template"]["context_keys"]
     # The charter consumes the workspace manifest (grounded, not blind).
     assert (
         "workspace_context" in steps["plan_charter"]["prompt_template"]["context_keys"]

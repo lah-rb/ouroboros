@@ -57,6 +57,10 @@ sections:
       finished (a file with certain contents, a command that now succeeds, a
       service that responds).
 
+      The task is solvable as posed — if the inputs look intractable, reframe
+      the approach in the brief rather than concede; never write a brief that
+      gives up or settles for a placeholder instead of the real deliverable.
+
       Target: under 180 words.
 
   # ── cache boundary ── everything below is dynamic (not cached) ──
@@ -94,6 +98,16 @@ sections:
     when: context.workspace_ledger
     content: |
       {context.workspace_ledger}
+
+  # Stuck-task external search (exa) — NEW information surfaced once the task has
+  # looped without completing, framed as an Observation (§8). when:-gated so it
+  # appears only after a search has run. Distinct from the static persistence
+  # language in the head: this is dynamic INFO that can redirect the approach,
+  # not a behavioural nudge.
+  - id: search_findings
+    when: context.search_findings_block
+    content: |
+      {context.search_findings_block}
 
   # Dynamic tail — last (recency) and ends the cached prefix.
   - id: feedback

@@ -112,7 +112,7 @@ run_session: #FlowDefinition & {
 						}
 						close: #MenuOption & {
 							key:         "close"
-							description: "End the session. Use when you have enough information, the goal is achieved, or you're stuck after 3+ failed attempts."
+							description: "End the session — ONLY when the goal is genuinely achieved (the required output exists) or you have exhausted several DISTINCT approaches AFTER reframing the problem. A single dead end is a cue to reframe, not to close."
 							arg: {name:  "reason", description: "Brief explanation of why closing"}
 						}
 					}
