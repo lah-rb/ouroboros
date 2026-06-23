@@ -210,9 +210,9 @@ def _si_term(mission, terminal="$ ls\nresult.txt stub present\n", response=None)
 
 
 @pytest.mark.asyncio
-async def test_gate_fires_on_empty_spec_with_session():
-    # Blind early pass left no usable spec, we now have terminal context, not yet
-    # grounded → re-derive (this is the 69%-empty-spec recovery).
+async def test_gate_fires_on_empty_spec():
+    # Blind early pass left no usable spec, not yet grounded → re-derive (the
+    # 69%-empty-spec recovery).
     out = await action_gate_reground_output_format(_si_term(_mission(spec=None)))
     assert out.result["needs_reground"] is True
     # A spec with no checks is "empty" too.
@@ -222,7 +222,20 @@ async def test_gate_fires_on_empty_spec_with_session():
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_when_usable_spec_or_grounded_or_no_session():
+async def test_gate_fires_even_without_terminal_output():
+    # Regression for the inert-port canary: terminal_output is NOT reliably a truthy
+    # string at the gate's position in the live ops_task flow. The gate must STILL
+    # fire (it is structurally post-scan/session; the reground grounds from
+    # project_manifest, not terminal_output). The old gate wrongly required a truthy
+    # terminal_output here and so never fired in production.
+    no_term = StepInput(
+        context={"mission": _mission(spec=None)}, params={},
+        meta=FlowMeta(flow_name="ops_task", step_id="x"), effects=MockEffects())
+    assert (await action_gate_reground_output_format(no_term)).result["needs_reground"] is True
+
+
+@pytest.mark.asyncio
+async def test_gate_skips_only_when_usable_spec_or_grounded():
     # A usable early spec is never re-derived (zero cost; trust the early pass).
     usable = {"output_file": "/app/o", "checks": [{"type": "exists"}]}
     out = await action_gate_reground_output_format(_si_term(_mission(spec=usable)))
@@ -231,11 +244,6 @@ async def test_gate_skips_when_usable_spec_or_grounded_or_no_session():
     m = _mission(spec=None)
     m.task_definition.output_format_grounded = True
     assert (await action_gate_reground_output_format(_si_term(m))).result["needs_reground"] is False
-    # No terminal context yet → don't re-derive blind (defeats the purpose).
-    no_term = StepInput(
-        context={"mission": _mission(spec=None)}, params={},
-        meta=FlowMeta(flow_name="ops_task", step_id="x"), effects=MockEffects())
-    assert (await action_gate_reground_output_format(no_term)).result["needs_reground"] is False
 
 
 @pytest.mark.asyncio

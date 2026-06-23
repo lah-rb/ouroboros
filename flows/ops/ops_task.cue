@@ -283,11 +283,8 @@ ops_task: #FlowDefinition & {
 		// empty-spec tasks; a good early spec skips straight to check_format.
 		gate_reground: #StepDefinition & {
 			action:      "gate_reground_output_format"
-			description: "Gate the grounded reground (empty spec + has session, once)"
-			context: {
-				required: ["mission"]
-				optional: ["terminal_output"]
-			}
+			description: "Gate the grounded reground (fires once on an empty early spec)"
+			context: required: ["mission"]
 			resolver: {
 				type: "rule"
 				rules: [
@@ -299,14 +296,14 @@ ops_task: #FlowDefinition & {
 
 		reground_output_format: #StepDefinition & {
 			action:      "inference"
-			description: "Re-derive the output-format spec grounded in the live terminal exploration"
+			description: "Re-derive the output-format spec grounded in the scanned workspace"
 			context: {
 				required: ["mission"]
-				optional: ["terminal_output"]
+				optional: ["project_manifest", "terminal_output"]
 			}
 			prompt_template: {
 				template: "ops/reground_output_format"
-				context_keys: ["task_spec", "working_directory", "session_tail"]
+				context_keys: ["task_spec", "working_directory", "workspace_context", "session_tail"]
 				input_keys: []
 			}
 			pre_compute: [
@@ -314,6 +311,8 @@ ops_task: #FlowDefinition & {
 					params: {mission: {$ref: "context.mission"}, field: "objective"}},
 				{formatter: "format_mission_meta", output_key: "working_directory"
 					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
+				{formatter: "format_project_listing", output_key: "workspace_context"
+					params: {source: {$ref: "context.project_manifest"}}},
 				{formatter: "format_session_tail", output_key: "session_tail"
 					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
 			]

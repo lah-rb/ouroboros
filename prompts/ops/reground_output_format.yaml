@@ -31,9 +31,15 @@ sections:
 
       Working directory: {context.working_directory}
 
+  - id: workspace
+    content: |
+      ---FILES IN THE WORKSPACE (the scan — your primary signal for the output path)---
+      {context.workspace_context}
+      ---END FILES---
+
   - id: exploration
     content: |
-      ---WHAT THE TERMINAL HAS SHOWN SO FAR (use this to locate the required output)---
+      ---WHAT THE TERMINAL HAS SHOWN SO FAR (secondary signal)---
       {context.session_tail}
       ---END EXPLORATION---
 
@@ -42,7 +48,8 @@ sections:
       Identify the ONE artifact the task is graded on — the file it must produce —
       and where it goes. Terminal tasks are almost always graded on a produced FILE
       at a specific path, and that path is OFTEN A CONVENTION the task statement does
-      NOT spell out. Use the exploration to find it:
+      NOT spell out. Use the WORKSPACE FILES above (then the terminal exploration) to
+      find it:
         - a stub / template / empty placeholder already present (e.g. an empty
           `result.txt`, an `output/` dir, a `solution.*` skeleton),
         - an instructions / README / task file naming the expected output,

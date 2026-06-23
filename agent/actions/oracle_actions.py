@@ -393,13 +393,18 @@ async def action_gate_reground_output_format(step_input: StepInput) -> StepOutpu
 
     The early derive_output_format runs blind in ops_control (task text only,
     pre-exploration) and so leaves NO usable spec for the ~69% of TB tasks whose
-    required output path is a convention. This fires a grounded re-derivation ONLY
-    when that early pass produced no usable spec AND we now have terminal context to
-    ground it AND the reground hasn't already run (output_format_grounded — one-shot).
-    A good early spec is never re-derived (zero cost); the enforcement stays with
-    check_format + decide.
+    required output path is a convention. This fires a grounded re-derivation when
+    that early pass produced no usable spec and the reground hasn't already run
+    (output_format_grounded — one-shot). A good early spec is never re-derived (zero
+    cost); enforcement stays with check_format + decide.
 
-    Context: mission (required); terminal_output (optional).
+    Position is the exploration guarantee: this rung sits after gather_context (a
+    live filesystem scan -> project_manifest) and run_session, so grounding always
+    exists. We deliberately DO NOT gate on terminal_output being a truthy string —
+    it is not reliably populated at this point in the live ops_task flow (the bug
+    the inert-port canary caught), and the reground grounds from project_manifest.
+
+    Context: mission (required).
     Result: needs_reground (bool).
     """
     mission = step_input.context.get("mission")
@@ -409,14 +414,13 @@ async def action_gate_reground_output_format(step_input: StepInput) -> StepOutpu
     spec = getattr(td, "output_format_spec", None)
     grounded = bool(getattr(td, "output_format_grounded", False))
     spec_usable = isinstance(spec, dict) and bool(spec.get("checks"))
-    has_session = bool(step_input.context.get("terminal_output"))
-    needs = (not grounded) and (not spec_usable) and has_session
+    needs = (not grounded) and (not spec_usable)
     return StepOutput(
         result={"needs_reground": needs},
         observations=(
             "reground: deriving grounded output-format spec"
             if needs else
-            f"reground: skip (grounded={grounded}, usable_spec={spec_usable}, session={has_session})"
+            f"reground: skip (grounded={grounded}, usable_spec={spec_usable})"
         ),
     )
 

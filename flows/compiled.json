@@ -11573,14 +11573,12 @@
       },
       "gate_reground": {
         "action": "gate_reground_output_format",
-        "description": "Gate the grounded reground (empty spec + has session, once)",
+        "description": "Gate the grounded reground (fires once on an empty early spec)",
         "context": {
           "required": [
             "mission"
           ],
-          "optional": [
-            "terminal_output"
-          ]
+          "optional": []
         },
         "params": {},
         "config": {},
@@ -11603,12 +11601,13 @@
       },
       "reground_output_format": {
         "action": "inference",
-        "description": "Re-derive the output-format spec grounded in the live terminal exploration",
+        "description": "Re-derive the output-format spec grounded in the scanned workspace",
         "context": {
           "required": [
             "mission"
           ],
           "optional": [
+            "project_manifest",
             "terminal_output"
           ]
         },
@@ -11618,6 +11617,7 @@
           "context_keys": [
             "task_spec",
             "working_directory",
+            "workspace_context",
             "session_tail"
           ],
           "input_keys": []
@@ -11641,6 +11641,15 @@
                 "$ref": "context.mission"
               },
               "field": "config.working_directory"
+            }
+          },
+          {
+            "formatter": "format_project_listing",
+            "output_key": "workspace_context",
+            "params": {
+              "source": {
+                "$ref": "context.project_manifest"
+              }
             }
           },
           {
