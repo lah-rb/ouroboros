@@ -14,12 +14,14 @@ import pytest
 from agent.actions.operations_actions import (
     action_exa_probe_gate,
     action_store_output_format,
+    action_store_reground_criteria,
     action_store_reground_output_format,
     action_store_search_findings,
 )
 from agent.actions.oracle_actions import (
     _apply_format_checks,
     action_check_output_format,
+    action_gate_reground_criteria,
     action_gate_reground_output_format,
 )
 from agent.effects.mock import MockEffects
@@ -313,3 +315,28 @@ async def test_store_search_findings_formats_and_one_shots():
         meta=FlowMeta(flow_name="ops_task", step_id="x"), effects=MockEffects())
     await action_store_search_findings(si2)
     assert m2.task_definition.search_findings.startswith("(no relevant")
+
+
+# ── Grounded completion-criteria reground: gate + tighten-only store ─────────
+
+
+@pytest.mark.asyncio
+async def test_gate_reground_criteria_fires_once():
+    m = _mission()
+    assert (await action_gate_reground_criteria(_si(m))).result["needs_reground"] is True
+    m.task_definition.completion_criteria_grounded = True
+    assert (await action_gate_reground_criteria(_si(m))).result["needs_reground"] is False
+
+
+@pytest.mark.asyncio
+async def test_store_reground_criteria_merges_tighten_only():
+    m = _mission(criteria=[{"command": "test -f /app/a", "name": "a", "required": True}])
+    resp = ('```json\n{"checks": ['
+            '{"command": "test -s /app/result.txt", "description": "result exists"}, '
+            '{"command": "test -f /app/a", "description": "dup"}]}\n```')
+    await action_store_reground_criteria(_si(m, response=resp))
+    cmds = [c["command"] for c in m.task_definition.completion_criteria]
+    assert "test -f /app/a" in cmds           # early check preserved (tighten-only)
+    assert "test -s /app/result.txt" in cmds  # grounded check added
+    assert len(cmds) == 2                      # the dup was not re-added
+    assert m.task_definition.completion_criteria_grounded is True

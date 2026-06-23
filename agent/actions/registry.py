@@ -319,6 +319,7 @@ def build_action_registry() -> ActionRegistry:
         action_run_property_probe,
         action_store_completion_criteria,
         action_store_output_format,
+        action_store_reground_criteria,
         action_store_reground_output_format,
         action_store_search_findings,
     )
@@ -326,6 +327,7 @@ def build_action_registry() -> ActionRegistry:
         action_check_output_format,
         action_check_output_sanity,
         action_check_profile_oracle,
+        action_gate_reground_criteria,
         action_gate_reground_output_format,
         action_record_completion_verify,
         action_record_output_sanity,
@@ -381,6 +383,10 @@ def build_action_registry() -> ActionRegistry:
     # store persists it + marks grounded — recovers blind-early empty specs.
     registry.register("gate_reground_output_format", action_gate_reground_output_format)
     registry.register("store_reground_output_format", action_store_reground_output_format)
+    # Grounded late re-derivation of the definition-of-done (criteria analog): gate
+    # fires once, store union-merges the grounded checks (tighten-only).
+    registry.register("gate_reground_criteria", action_gate_reground_criteria)
+    registry.register("store_reground_criteria", action_store_reground_criteria)
     # Stuck-task external search (anti-give-up dynamic arm): gate fires exa once on a
     # looping task, store surfaces the hits to the charter as new information.
     registry.register("exa_probe_gate", action_exa_probe_gate)

@@ -246,6 +246,28 @@ async def action_derive_task_goal(step_input: StepInput) -> StepOutput:
     )
 
 
+def _parse_completion_criteria(text: str) -> list[dict]:
+    """Parse the derived definition-of-done into [{command, name, required}].
+    Accepts {"checks":[...]}, a bare list, or a lone {command} dict. Shared by the
+    early store and the grounded reground store."""
+    parsed = parse_llm_json(str(text or ""))
+    if isinstance(parsed, dict):
+        items = parsed.get("checks") or ([parsed] if parsed.get("command") else [])
+    elif isinstance(parsed, list):
+        items = parsed
+    else:
+        items = []
+    out = []
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and str(item.get("command") or "").strip():
+            out.append({
+                "command": str(item["command"]).strip(),
+                "name": str(item.get("description") or item["command"])[:80],
+                "required": True,
+            })
+    return out
+
+
 async def action_store_completion_criteria(step_input: StepInput) -> StepOutput:
     """Parse the derived definition-of-done and store it on the TaskState.
 
@@ -264,27 +286,7 @@ async def action_store_completion_criteria(step_input: StepInput) -> StepOutput:
             result={"criteria_count": 0}, observations="No task_definition"
         )
 
-    parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
-    # Prefer {"checks": [...]} (what the prompt emits and the reused check-runner
-    # consumes). parse_llm_json collapses a top-level array to its first object,
-    # so also accept a bare list and a lone check dict.
-    if isinstance(parsed, dict):
-        items = parsed.get("checks") or ([parsed] if parsed.get("command") else [])
-    elif isinstance(parsed, list):
-        items = parsed
-    else:
-        items = []
-    criteria = []
-    for item in items if isinstance(items, list) else []:
-        if isinstance(item, dict) and str(item.get("command") or "").strip():
-            criteria.append(
-                {
-                    "command": str(item["command"]).strip(),
-                    "name": str(item.get("description") or item["command"])[:80],
-                    "required": True,
-                }
-            )
-
+    criteria = _parse_completion_criteria(str(step_input.context.get("inference_response", "")))
     mission.task_definition.completion_criteria = criteria
     if effects:
         await effects.save_mission(mission)
@@ -293,6 +295,39 @@ async def action_store_completion_criteria(step_input: StepInput) -> StepOutput:
     return StepOutput(
         result={"criteria_count": len(criteria)},
         observations=f"Definition-of-done: {len(criteria)} completion check(s)",
+        context_updates={"mission": mission},
+    )
+
+
+async def action_store_reground_criteria(step_input: StepInput) -> StepOutput:
+    """Merge the grounded re-derived criteria into the existing definition-of-done
+    (TIGHTEN-ONLY: union by command, never removes an early check) and mark criteria
+    grounded (one-shot). The early derive runs blind/pre-exploration; this grounds
+    the done-criteria in the explored workspace so they require the real artifact.
+
+    Context: mission, inference_response.  Publishes: mission.
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission or getattr(mission, "task_definition", None) is None:
+        return StepOutput(result={"criteria_count": 0}, observations="No task_definition")
+    td = mission.task_definition
+    new = _parse_completion_criteria(str(step_input.context.get("inference_response", "")))
+    merged = list(td.completion_criteria or [])
+    seen = {c.get("command") for c in merged}
+    added = 0
+    for c in new:
+        if c["command"] not in seen:
+            merged.append(c)
+            seen.add(c["command"])
+            added += 1
+    td.completion_criteria = merged
+    td.completion_criteria_grounded = True
+    if effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"criteria_count": len(merged)},
+        observations=f"Regrounded definition-of-done: {len(merged)} check(s) (+{added} grounded)",
         context_updates={"mission": mission},
     )
 

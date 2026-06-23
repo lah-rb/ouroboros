@@ -162,6 +162,14 @@ def test_compiled_ops_wiring():
     assert pp["result.tokens_generated > 0"] == "run_provision"
     assert steps["run_provision"]["resolver"]["rules"][0]["transition"] == "plan_charter"
     assert steps["run_terminal"]["flow"] == "run_session"
+    # run_terminal → grounded criteria reground (once) → run_checks: the done-criteria
+    # are re-derived grounded in the explored workspace, union-merged, then enforced.
+    assert steps["run_terminal"]["resolver"]["rules"][0]["transition"] == "gate_reground_criteria"
+    gc = {r["condition"]: r["transition"] for r in steps["gate_reground_criteria"]["resolver"]["rules"]}
+    assert gc["result.needs_reground == true"] == "reground_criteria"
+    assert gc["true"] == "run_checks"
+    assert steps["reground_criteria"]["resolver"]["rules"][0]["transition"] == "store_reground_criteria"
+    assert steps["store_reground_criteria"]["resolver"]["rules"][0]["transition"] == "run_checks"
     assert steps["run_checks"]["action"] == "run_validation_checks"
     assert steps["decide"]["action"] == "judge_task_completion"
     # Both decide branches release the memoryful inference session before

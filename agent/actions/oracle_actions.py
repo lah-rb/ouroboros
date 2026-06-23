@@ -425,6 +425,28 @@ async def action_gate_reground_output_format(step_input: StepInput) -> StepOutpu
     )
 
 
+async def action_gate_reground_criteria(step_input: StepInput) -> StepOutput:
+    """Gate the grounded completion-criteria re-derivation. Fires ONCE per mission
+    (completion_criteria_grounded) — the early criteria are derived blind in
+    ops_control (pre-exploration); this re-derives them grounded in the explored
+    workspace so the definition-of-done requires the real artifact. Position
+    (post-run_terminal) guarantees exploration, so — like the output-format reground
+    — it does NOT gate on terminal_output truthiness (the inert-port lesson).
+
+    Context: mission (required).  Result: needs_reground (bool).
+    """
+    mission = step_input.context.get("mission")
+    td = getattr(mission, "task_definition", None) if mission else None
+    if td is None:
+        return StepOutput(result={"needs_reground": False}, observations="reground-criteria: no task_definition")
+    grounded = bool(getattr(td, "completion_criteria_grounded", False))
+    return StepOutput(
+        result={"needs_reground": not grounded},
+        observations=("reground-criteria: re-deriving grounded criteria" if not grounded
+                      else "reground-criteria: skip (already grounded)"),
+    )
+
+
 # ── Verify-before-harvest: completion re-probe (D4) ───────────────────────
 # Don't harvest the judge's "done" on its word. When the judge claims complete,
 # RE-PROBE the completion criteria against the live container + re-read the

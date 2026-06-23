@@ -211,13 +211,75 @@ ops_task: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "run_checks"}]
+				rules: [{condition: "true", transition: "gate_reground_criteria"}]
 			}
 			publishes: ["terminal_output", "inference_session_id"]
 		}
 
 		// Definition-of-done checks (reused gate check-runner). The stored
 		// criteria are rendered into the {"checks":[...]} strategy it expects.
+		// ── Grounded definition-of-done re-assessment (criteria reground) ──
+		// The early derive_completion_criteria runs blind in ops_control (pre-
+		// exploration); this re-derives the done-criteria ONCE, grounded in the
+		// explored workspace, and UNION-MERGES them (tighten-only) so the gate now
+		// requires the real artifact. run_checks below then enforces them.
+		gate_reground_criteria: #StepDefinition & {
+			action:      "gate_reground_criteria"
+			description: "Gate the grounded criteria re-derivation (once)"
+			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.needs_reground == true", transition: "reground_criteria"},
+					{condition: "true", transition: "run_checks"},
+				]
+			}
+		}
+
+		reground_criteria: #StepDefinition & {
+			action:      "inference"
+			description: "Re-derive the definition-of-done grounded in the explored workspace"
+			context: {
+				required: ["mission"]
+				optional: ["project_manifest", "terminal_output"]
+			}
+			prompt_template: {
+				template: "ops/reground_completion_criteria"
+				context_keys: ["task_spec", "working_directory", "workspace_context", "session_tail"]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_mission_meta", output_key: "task_spec"
+					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+				{formatter: "format_mission_meta", output_key: "working_directory"
+					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
+				{formatter: "format_project_listing", output_key: "workspace_context"
+					params: {source: {$ref: "context.project_manifest"}}},
+				{formatter: "format_session_tail", output_key: "session_tail"
+					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
+			]
+			config: temperature: "t*0.1"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "store_reground_criteria"},
+					{condition: "true", transition: "run_checks"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		store_reground_criteria: #StepDefinition & {
+			action:      "store_reground_criteria"
+			description: "Union-merge the grounded checks into the done-criteria (tighten-only)"
+			context: required: ["mission", "inference_response"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "run_checks"}]
+			}
+			publishes: ["mission"]
+		}
+
 		run_checks: #StepDefinition & {
 			action:      "run_validation_checks"
 			description: "Run the completion checks against the final state"

@@ -667,6 +667,11 @@ class TaskState(BaseModel):
     # Definition of done: [{command, description}] — fed to
     # action_run_validation_checks (return_code == 0 ⇒ condition met).
     completion_criteria: list[dict] = Field(default_factory=list)
+    # True once the criteria were re-derived grounded in the explored workspace
+    # (reground_completion_criteria) — one-shot guard. The early derive is blind
+    # (pre-exploration); the grounded pass TIGHTENS the done-criteria to require the
+    # real artifact (union-merge, never removes an early check).
+    completion_criteria_grounded: bool = False
     # Output-format spec derived once up front: {output_file, checks: [{type,...}]}
     # — the format oracle (action_check_output_format) validates the produced
     # artifact's SHAPE against it each cycle. None/empty ⇒ no format gate (the

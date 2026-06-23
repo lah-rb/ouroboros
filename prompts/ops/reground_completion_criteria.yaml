@@ -1,0 +1,84 @@
+# Prompt template: ops/reground_completion_criteria
+#
+# LATE, GROUNDED re-derivation of the definition-of-done. The early
+# ops/derive_completion_criteria runs blind (task text only, pre-exploration), so it
+# can miss the artifact the grader actually checks for. This pass runs after the
+# agent has explored the terminal, so it can name the required output from the
+# evidence and add an existence/shape check for it. The result is MERGED into the
+# early criteria (tighten-only) — so add only what's robust.
+#
+# Pre-computed: task_spec, working_directory, workspace_context, session_tail
+
+id: ops/reground_completion_criteria
+description: "Re-derive the definition-of-done grounded in the explored workspace"
+
+sections:
+
+  - id: system_role
+    content: |
+      You add ADDITIONAL done-criteria for the task in the ---YOUR TASK--- block —
+      shell checks that confirm the REQUIRED OUTPUT was produced — now that the
+      workspace has been explored. Your output is parsed as JSON. Return ONLY a JSON
+      object inside a fenced code block — no commentary.
+
+  - id: task
+    content: |
+      ---YOUR TASK---
+      {context.task_spec}
+      ---END TASK---
+
+      Working directory: {context.working_directory}
+
+  - id: workspace
+    content: |
+      ---FILES IN THE WORKSPACE (the scan — your primary signal for the required output)---
+      {context.workspace_context}
+      ---END FILES---
+
+  - id: exploration
+    content: |
+      ---WHAT THE TERMINAL HAS SHOWN SO FAR (secondary signal)---
+      {context.session_tail}
+      ---END EXPLORATION---
+
+  - id: instructions
+    content: |
+      The early definition-of-done was written before any of this was known. Add the
+      checks it likely MISSED — above all, that the task's required output artifact
+      EXISTS at the path the grader will read. Terminal tasks are graded on a
+      produced file whose path is often a convention only visible after exploring (a
+      stub/template already present, an instructions file, the input/output directory
+      layout). Use the workspace files (then the exploration) to name it and require
+      it, e.g.:
+        {"command": "test -s /app/<required output>", "description": "the required output exists and is non-empty"}
+
+      Two rules keep this safe (the merge is TIGHTEN-ONLY, so a wrong check is the
+      only way to harm a correct answer):
+
+      1. ROBUST PREDICATES ONLY. Conditions the shell evaluates unambiguously:
+         `test -f path`, `test -s path`, `test -x path`, an exit code, a port probe,
+         or `grep -qF '<exact text>' path` ONLY when the task STATES that literal.
+      2. NEVER RE-DERIVE THE ANSWER INSIDE A CHECK. Do not recompute the task's own
+         work and compare — a slightly-wrong re-derivation FAILS A CORRECT ANSWER. If
+         you don't know the exact bytes, assert the artifact EXISTS and is NON-EMPTY
+         and leave correctness to the judge.
+
+      If the workspace makes no required output identifiable (a pure
+      configure/service task), return {"checks": []} — adding nothing is correct.
+
+  - id: output_format
+    content: |
+      Return a JSON object with a "checks" array (same shape as the definition-of-
+      done). The example is from an UNRELATED task — it shows the SHAPE only.
+
+      ✅ CORRECT (exploration showed the grader reads /app/result.txt):
+      ```json
+      {"checks": [{"command": "test -s /app/result.txt", "description": "result.txt exists and is non-empty"}]}
+      ```
+
+      ❌ WRONG — re-derives the answer inside the check (fails a correct result):
+      ```json
+      {"checks": [{"command": "[ \"$(recompute)\" = \"$(cat /app/result.txt)\" ]", "description": "value matches"}]}
+      ```
+
+      Return ONLY the fenced JSON object.
