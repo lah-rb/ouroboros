@@ -318,11 +318,13 @@ def build_action_registry() -> ActionRegistry:
         action_run_property_probe,
         action_store_completion_criteria,
         action_store_output_format,
+        action_store_reground_output_format,
     )
     from agent.actions.oracle_actions import (
         action_check_output_format,
         action_check_output_sanity,
         action_check_profile_oracle,
+        action_gate_reground_output_format,
         action_record_completion_verify,
         action_record_output_sanity,
         action_reprobe_completion,
@@ -373,6 +375,10 @@ def build_action_registry() -> ActionRegistry:
     registry.register("record_output_sanity", action_record_output_sanity)
     # Output-format oracle (deterministic shape check vs the derived spec)
     registry.register("check_output_format", action_check_output_format)
+    # Grounded late re-derivation (quality_gate port): gate fires the reground once,
+    # store persists it + marks grounded — recovers blind-early empty specs.
+    registry.register("gate_reground_output_format", action_gate_reground_output_format)
+    registry.register("store_reground_output_format", action_store_reground_output_format)
     # Verify-before-harvest: re-probe the completion before harvesting "done"
     registry.register("reprobe_completion", action_reprobe_completion)
     registry.register("record_completion_verify", action_record_completion_verify)

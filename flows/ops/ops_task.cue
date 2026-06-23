@@ -269,9 +269,74 @@ ops_task: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "check_format"}]
+				rules: [{condition: "true", transition: "gate_reground"}]
 			}
 			publishes: ["validation_results"]
+		}
+
+		// ── Grounded output-format re-assessment (quality_gate port) ─────
+		// The early derive_output_format runs blind in ops_control (task text only,
+		// pre-exploration) and leaves ~no spec for tasks whose required output path
+		// is a convention. This LATE rung re-derives the spec ONCE, grounded in the
+		// terminal exploration, so check_format can anchor the required artifact (the
+		// dominant TB2 failure: a confident answer, no file written). Gated to
+		// empty-spec tasks; a good early spec skips straight to check_format.
+		gate_reground: #StepDefinition & {
+			action:      "gate_reground_output_format"
+			description: "Gate the grounded reground (empty spec + has session, once)"
+			context: {
+				required: ["mission"]
+				optional: ["terminal_output"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.needs_reground == true", transition: "reground_output_format"},
+					{condition: "true", transition: "check_format"},
+				]
+			}
+		}
+
+		reground_output_format: #StepDefinition & {
+			action:      "inference"
+			description: "Re-derive the output-format spec grounded in the live terminal exploration"
+			context: {
+				required: ["mission"]
+				optional: ["terminal_output"]
+			}
+			prompt_template: {
+				template: "ops/reground_output_format"
+				context_keys: ["task_spec", "working_directory", "session_tail"]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_mission_meta", output_key: "task_spec"
+					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+				{formatter: "format_mission_meta", output_key: "working_directory"
+					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
+				{formatter: "format_session_tail", output_key: "session_tail"
+					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
+			]
+			config: temperature: "t*0.1"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "store_reground_format"},
+					{condition: "true", transition: "check_format"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		store_reground_format: #StepDefinition & {
+			action:      "store_reground_output_format"
+			description: "Parse + store the grounded spec; mark grounded (one-shot)"
+			context: required: ["mission", "inference_response"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "check_format"}]
+			}
+			publishes: ["mission"]
 		}
 
 		// ── Output-format oracle: deterministic SHAPE check ──────────────

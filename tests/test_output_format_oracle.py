@@ -11,10 +11,14 @@ from __future__ import annotations
 
 import pytest
 
-from agent.actions.operations_actions import action_store_output_format
+from agent.actions.operations_actions import (
+    action_store_output_format,
+    action_store_reground_output_format,
+)
 from agent.actions.oracle_actions import (
     _apply_format_checks,
     action_check_output_format,
+    action_gate_reground_output_format,
 )
 from agent.effects.mock import MockEffects
 from agent.models import FlowMeta, StepInput
@@ -190,3 +194,68 @@ async def test_store_filters_unknown_check_types():
     await action_store_output_format(_si(m, response=resp))
     spec = m.task_definition.output_format_spec
     assert len(spec["checks"]) == 1 and spec["checks"][0]["type"] == "no_wrapping"
+
+
+# ── Grounded reground: gate + store (quality_gate port) ──────────────────────
+
+
+def _si_term(mission, terminal="$ ls\nresult.txt stub present\n", response=None) -> StepInput:
+    ctx = {"mission": mission, "terminal_output": terminal}
+    if response is not None:
+        ctx["inference_response"] = response
+    return StepInput(
+        context=ctx, params={},
+        meta=FlowMeta(flow_name="ops_task", step_id="x"), effects=MockEffects(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_gate_fires_on_empty_spec_with_session():
+    # Blind early pass left no usable spec, we now have terminal context, not yet
+    # grounded → re-derive (this is the 69%-empty-spec recovery).
+    out = await action_gate_reground_output_format(_si_term(_mission(spec=None)))
+    assert out.result["needs_reground"] is True
+    # A spec with no checks is "empty" too.
+    out2 = await action_gate_reground_output_format(
+        _si_term(_mission(spec={"output_file": "o", "checks": []})))
+    assert out2.result["needs_reground"] is True
+
+
+@pytest.mark.asyncio
+async def test_gate_skips_when_usable_spec_or_grounded_or_no_session():
+    # A usable early spec is never re-derived (zero cost; trust the early pass).
+    usable = {"output_file": "/app/o", "checks": [{"type": "exists"}]}
+    out = await action_gate_reground_output_format(_si_term(_mission(spec=usable)))
+    assert out.result["needs_reground"] is False
+    # Already grounded → one-shot, never fires twice.
+    m = _mission(spec=None)
+    m.task_definition.output_format_grounded = True
+    assert (await action_gate_reground_output_format(_si_term(m))).result["needs_reground"] is False
+    # No terminal context yet → don't re-derive blind (defeats the purpose).
+    no_term = StepInput(
+        context={"mission": _mission(spec=None)}, params={},
+        meta=FlowMeta(flow_name="ops_task", step_id="x"), effects=MockEffects())
+    assert (await action_gate_reground_output_format(no_term)).result["needs_reground"] is False
+
+
+@pytest.mark.asyncio
+async def test_reground_store_sets_spec_and_grounds():
+    m = _mission(spec=None)
+    resp = '```json\n{"output_file": "/app/result.txt", "checks": [{"type": "exists"}]}\n```'
+    out = await action_store_reground_output_format(_si_term(m, response=resp))
+    assert out.result["format_check_count"] == 1
+    assert m.task_definition.output_format_spec["output_file"] == "/app/result.txt"
+    assert m.task_definition.output_format_grounded is True
+
+
+@pytest.mark.asyncio
+async def test_reground_store_marks_grounded_even_when_empty():
+    # One-shot: if the reground still finds nothing, mark grounded so it won't re-fire
+    # (and leave the existing spec untouched — stays conservative, no gate).
+    m = _mission(spec=None)
+    out = await action_store_reground_output_format(_si_term(m, response='{"checks": []}'))
+    assert out.result["format_check_count"] == 0
+    assert m.task_definition.output_format_spec is None
+    assert m.task_definition.output_format_grounded is True
+    # And once grounded, the gate no longer fires (no per-cycle inference leak).
+    assert (await action_gate_reground_output_format(_si_term(m))).result["needs_reground"] is False

@@ -121,9 +121,21 @@ def test_compiled_ops_wiring():
     cs = {r["condition"]: r["transition"] for r in steps["check_sanity"]["resolver"]["rules"]}
     assert cs["result.check_plausibility == true"] == "sanity_plausibility"
     assert cs["true"] == "profile_oracle"  # sanity branch flows into the profile rung
-    # Profile-gated rung (service/data/invertible) → output-format rung → probe/judge.
+    # Profile-gated rung (service/data/invertible) → grounded reground gate → output-format.
     assert steps["profile_oracle"]["action"] == "check_profile_oracle"
-    assert steps["profile_oracle"]["resolver"]["rules"][0]["transition"] == "check_format"
+    assert steps["profile_oracle"]["resolver"]["rules"][0]["transition"] == "gate_reground"
+    # Grounded output-format re-assessment (quality_gate port): gate fires the late
+    # re-derivation only on an empty early spec (else straight to check_format), the
+    # reground inference stores + marks grounded, then enforcement is check_format.
+    assert steps["gate_reground"]["action"] == "gate_reground_output_format"
+    gr = {r["condition"]: r["transition"] for r in steps["gate_reground"]["resolver"]["rules"]}
+    assert gr["result.needs_reground == true"] == "reground_output_format"
+    assert gr["true"] == "check_format"
+    rof = {r["condition"]: r["transition"] for r in steps["reground_output_format"]["resolver"]["rules"]}
+    assert rof["result.tokens_generated > 0"] == "store_reground_format"
+    assert rof["true"] == "check_format"
+    assert steps["store_reground_format"]["action"] == "store_reground_output_format"
+    assert steps["store_reground_format"]["resolver"]["rules"][0]["transition"] == "check_format"
     # Output-format oracle: deterministic shape check vs the derived spec.
     assert steps["check_format"]["action"] == "check_output_format"
     assert steps["check_format"]["resolver"]["rules"][0]["transition"] == "probe_gate"

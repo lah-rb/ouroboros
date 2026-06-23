@@ -388,6 +388,39 @@ async def action_check_output_format(step_input: StepInput) -> StepOutput:
     )
 
 
+async def action_gate_reground_output_format(step_input: StepInput) -> StepOutput:
+    """Gate the LATE grounded output-format re-derivation.
+
+    The early derive_output_format runs blind in ops_control (task text only,
+    pre-exploration) and so leaves NO usable spec for the ~69% of TB tasks whose
+    required output path is a convention. This fires a grounded re-derivation ONLY
+    when that early pass produced no usable spec AND we now have terminal context to
+    ground it AND the reground hasn't already run (output_format_grounded — one-shot).
+    A good early spec is never re-derived (zero cost); the enforcement stays with
+    check_format + decide.
+
+    Context: mission (required); terminal_output (optional).
+    Result: needs_reground (bool).
+    """
+    mission = step_input.context.get("mission")
+    td = getattr(mission, "task_definition", None) if mission else None
+    if td is None:
+        return StepOutput(result={"needs_reground": False}, observations="reground: no task_definition")
+    spec = getattr(td, "output_format_spec", None)
+    grounded = bool(getattr(td, "output_format_grounded", False))
+    spec_usable = isinstance(spec, dict) and bool(spec.get("checks"))
+    has_session = bool(step_input.context.get("terminal_output"))
+    needs = (not grounded) and (not spec_usable) and has_session
+    return StepOutput(
+        result={"needs_reground": needs},
+        observations=(
+            "reground: deriving grounded output-format spec"
+            if needs else
+            f"reground: skip (grounded={grounded}, usable_spec={spec_usable}, session={has_session})"
+        ),
+    )
+
+
 # ── Verify-before-harvest: completion re-probe (D4) ───────────────────────
 # Don't harvest the judge's "done" on its word. When the judge claims complete,
 # RE-PROBE the completion criteria against the live container + re-read the

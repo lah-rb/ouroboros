@@ -672,6 +672,12 @@ class TaskState(BaseModel):
     # artifact's SHAPE against it each cycle. None/empty ⇒ no format gate (the
     # conservative default: never block a correct answer on a guessed format).
     output_format_spec: dict | None = None
+    # True once the LATE grounded re-derivation (reground_output_format) has run —
+    # a one-shot guard so the grounded re-derivation fires at most once per mission,
+    # even when it still can't name a concrete artifact. The early pass is blind
+    # (pre-exploration); the grounded pass recovers tasks whose required output path
+    # is a convention only visible after exploring the terminal.
+    output_format_grounded: bool = False
     # The latest judge feedback, seeded into the next run_session loop.
     last_feedback: str = ""
     attempts: int = 0

@@ -300,6 +300,28 @@ async def action_store_completion_criteria(step_input: StepInput) -> StepOutput:
 _FORMAT_CHECK_TYPES = {"exists", "line_count", "regex", "no_wrapping", "required_keys", "columns"}
 
 
+def _parse_output_format_spec(text: str) -> dict | None:
+    """Parse an LLM output-format response into {output_file, checks} or None.
+    CONSERVATIVE: only a spec with >=1 valid check gates anything; an
+    unparseable/empty/check-less response yields None (no format gate). Shared by
+    the early (derive) and late grounded (reground) store actions."""
+    parsed = parse_llm_json(str(text or ""))
+    if not isinstance(parsed, dict):
+        return None
+    raw = parsed.get("checks")
+    checks = [
+        c for c in (raw if isinstance(raw, list) else [])
+        if isinstance(c, dict) and str(c.get("type", "")).lower() in _FORMAT_CHECK_TYPES
+    ]
+    if not checks:
+        return None
+    out_file = parsed.get("output_file")
+    return {
+        "output_file": str(out_file).strip() if isinstance(out_file, str) else "",
+        "checks": checks,
+    }
+
+
 async def action_store_output_format(step_input: StepInput) -> StepOutput:
     """Parse the derived output-format spec and store it on the TaskState.
 
@@ -317,20 +339,7 @@ async def action_store_output_format(step_input: StepInput) -> StepOutput:
     if not mission or getattr(mission, "task_definition", None) is None:
         return StepOutput(result={"format_check_count": 0}, observations="No task_definition")
 
-    parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
-    spec: dict | None = None
-    if isinstance(parsed, dict):
-        raw = parsed.get("checks")
-        checks = [
-            c for c in (raw if isinstance(raw, list) else [])
-            if isinstance(c, dict) and str(c.get("type", "")).lower() in _FORMAT_CHECK_TYPES
-        ]
-        out_file = parsed.get("output_file")
-        if checks:  # only a spec with at least one valid check gates anything
-            spec = {
-                "output_file": str(out_file).strip() if isinstance(out_file, str) else "",
-                "checks": checks,
-            }
+    spec = _parse_output_format_spec(str(step_input.context.get("inference_response", "")))
 
     mission.task_definition.output_format_spec = spec
     if effects:
@@ -342,6 +351,45 @@ async def action_store_output_format(step_input: StepInput) -> StepOutput:
             f"Output-format spec: {n} shape check(s) on "
             f"{spec.get('output_file') or 'artifact'}" if spec
             else "Output-format spec: none (no concrete format in the brief)"
+        ),
+        context_updates={"mission": mission},
+    )
+
+
+async def action_store_reground_output_format(step_input: StepInput) -> StepOutput:
+    """Store the LATE grounded output-format spec and mark the reground done.
+
+    Mirrors action_store_output_format but (a) is fed the grounded re-derivation
+    (task + live terminal exploration), so it can name the conventional artifact the
+    blind early pass missed, and (b) sets output_format_grounded=True so the gate
+    fires the reground at most ONCE per mission — even when it still finds no
+    concrete artifact (so we don't re-pay the inference every cycle). Conservative:
+    an empty parse leaves the existing spec untouched (no gate) but still marks
+    grounded.
+
+    Context: mission, inference_response
+    Result: format_check_count
+    Publishes: mission
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission or getattr(mission, "task_definition", None) is None:
+        return StepOutput(result={"format_check_count": 0}, observations="No task_definition")
+
+    spec = _parse_output_format_spec(str(step_input.context.get("inference_response", "")))
+    td = mission.task_definition
+    if spec is not None:
+        td.output_format_spec = spec
+    td.output_format_grounded = True  # one-shot guard regardless of parse outcome
+    if effects:
+        await effects.save_mission(mission)
+    n = len(spec["checks"]) if spec else 0
+    return StepOutput(
+        result={"format_check_count": n},
+        observations=(
+            f"Regrounded output-format: {n} shape check(s) on "
+            f"{spec.get('output_file') or 'artifact'}" if spec
+            else "Regrounded output-format: no concrete artifact identified (no gate)"
         ),
         context_updates={"mission": mission},
     )

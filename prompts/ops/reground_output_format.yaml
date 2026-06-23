@@ -1,0 +1,91 @@
+# Prompt template: ops/reground_output_format
+#
+# LATE, GROUNDED re-derivation of the output-format spec. The early
+# ops/derive_output_format pass runs blind (task text only, before any exploration)
+# and so returns no spec for tasks whose required output path is a CONVENTION the
+# bare task never states. This pass runs after the agent has explored the terminal,
+# so it can name the required artifact from the evidence — a stub/template file, an
+# expected output directory, an instructions/README, a "no such file" the grader
+# implies. SHAPE only — never correctness.
+#
+# Pre-computed: task_spec, working_directory, session_tail (the live exploration)
+
+id: ops/reground_output_format
+description: "Re-derive the output-format spec grounded in the live terminal exploration"
+
+sections:
+
+  - id: system_role
+    content: |
+      You specify the OUTPUT-FORMAT checks for the task in the ---YOUR TASK--- block
+      — the SHAPE and LOCATION of the file the task must produce, so a correct result
+      isn't failed on a formatting slip AND a finished-looking run that wrote nothing
+      is caught. You are screening SHAPE and EXISTENCE, never correctness. Your output
+      is parsed as JSON. Return ONLY a JSON object in a fenced code block.
+
+  - id: task
+    content: |
+      ---YOUR TASK---
+      {context.task_spec}
+      ---END TASK---
+
+      Working directory: {context.working_directory}
+
+  - id: exploration
+    content: |
+      ---WHAT THE TERMINAL HAS SHOWN SO FAR (use this to locate the required output)---
+      {context.session_tail}
+      ---END EXPLORATION---
+
+  - id: instructions
+    content: |
+      Identify the ONE artifact the task is graded on — the file it must produce —
+      and where it goes. Terminal tasks are almost always graded on a produced FILE
+      at a specific path, and that path is OFTEN A CONVENTION the task statement does
+      NOT spell out. Use the exploration to find it:
+        - a stub / template / empty placeholder already present (e.g. an empty
+          `result.txt`, an `output/` dir, a `solution.*` skeleton),
+        - an instructions / README / task file naming the expected output,
+        - the data layout (an `input_data/` implies a sibling `output_data/`),
+        - the phrasing of the ask ("write the answer to …", "save … to …").
+
+      When you can name the required artifact, REQUIRE it exists:
+        {"output_file": "<path>", "checks": [{"type": "exists"}]}
+      This is the high-value check — it catches the dominant failure (a confident
+      answer printed to the terminal but never written to the graded file).
+
+      Stay CONSERVATIVE on CONTENT shape — you do NOT know the right answer, only its
+      form. Add `line_count` / `regex` / `no_wrapping` / `required_keys` / `columns`
+      ONLY when the task or a discovered template NAMES that form. A wrong content
+      check false-fails a correct answer — when unsure, omit it and keep just
+      `exists`.
+
+      If after the exploration there is genuinely no identifiable required artifact
+      (a pure configure/install/service task with no graded file), return
+      {"checks": []} — that is the correct, safe answer.
+
+  - id: output_format
+    content: |
+      Return a JSON object with "output_file" (the exact path the produced file must
+      have, or "" if none) and a "checks" array. Each check is one of:
+
+        {"type": "exists"}                       — the output_file must be produced at that exact path
+        {"type": "line_count", "value": N, "op": "=="}   — exactly N lines ("op":"<=" for at most N)
+        {"type": "regex", "pattern": "^...$"}    — the (stripped) content matches a NAMED format
+        {"type": "no_wrapping"}                  — a scalar answer is bare, not wrapped in []/""/()
+        {"type": "required_keys", "keys": ["a","b"]}     — JSON object output contains these keys
+        {"type": "columns", "columns": ["x","y"]}        — CSV header contains these columns
+
+      ✅ CORRECT (the ask was conversational — "provide the best model in org/name
+      format" — but exploration showed the grader reads /app/result.txt):
+      ```json
+      {"output_file": "/app/result.txt", "checks": [{"type": "exists"}]}
+      ```
+
+      ❌ WRONG — invents a content format the task never named, false-failing a
+      correct answer:
+      ```json
+      {"output_file": "/app/result.txt", "checks": [{"type": "regex", "pattern": "^\\S+/\\S+$"}]}
+      ```
+
+      Return ONLY the fenced JSON object.
