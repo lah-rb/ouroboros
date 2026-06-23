@@ -6,14 +6,15 @@ built for this), the rest is terminal-accomplish (install/configure/run/extract/
 CTF — ops's single-pass operator brief fits). Routing each task to the flow set
 that fits is the M3 step of the container-target plan.
 
-The judge emits TWO labels in ONE cold-temperature LLMVP completion: the
-``flow_set`` (ops|code_core — the routing decision) AND a capability ``profile``
+The judge emits TWO labels in ONE LLMVP completion: the ``flow_set``
+(ops|code_core — the routing decision) AND a capability ``profile``
 (service|data_transform|invertible|repair|answer|plain) that GATES which
 completion oracles fire downstream (the oracle_actions rungs read it off the
-mission). Both fall back to deterministic keyword heuristics — independently —
-when LLMVP is unreachable or the answer is unparseable, and an explicit
-``OURO_FLOW_SET`` env override is a hard escape hatch for the flow set. The
-decision is returned with the method that produced it so the adapter can log it.
+mission). The LLM is the sole classifier: on an unreachable/unparseable answer it
+RETRIES up to a limit (canonical run_session style — no keyword-heuristic shadow
+classifier to drift out of sync), then defaults to (ops, plain) on exhaustion. An
+explicit ``OURO_FLOW_SET`` env override is a hard escape hatch for the flow set.
+The decision is returned with the method that produced it so the adapter can log it.
 
 Policy (current): default to ops; choose code_core only when the core deliverable
 is multi-file source the agent must write or fix.
@@ -38,6 +39,14 @@ VALID_FLOW_SETS = ("ops", "code_core")
 #   answer         a specific answer value to file → sanity rung (built) + differential
 #   plain          none of the above              → no extra oracle (configure/install/CTF)
 VALID_PROFILES = ("service", "data_transform", "invertible", "repair", "answer", "plain")
+
+# t*0.3 at the 0.7 model default (PROMPTING_CONVENTIONS §11). temp 0.0 is NOT
+# deterministic here (FP/concurrency noise flipped near-identical swe-bench tasks to
+# different routes), so a small positive temp costs nothing and is canonical.
+_JUDGE_TEMP = 0.7 * 0.3
+# Retry the classifier on an unreachable/unparseable answer (run_session style),
+# then default to (ops, plain) on exhaustion — no keyword-heuristic shadow.
+_MAX_RETRIES = 3
 
 # Static-first prompt (PROMPTING_CONVENTIONS): role, the buckets, examples, task last.
 _JUDGE_PROMPT = """\
@@ -75,91 +84,26 @@ Task:
 
 Answer with ONLY a JSON object: {"flow_set": "...", "profile": "..."}"""
 
-# Heuristic fallback: code_core ONLY on an explicit MULTI-FILE signal.
-_MULTIFILE_SIGNALS = re.compile(
-    r"""(?ix)
-      \b(the\ (?:scripts|files|modules|tests|programs)
-        | (?:multiple|several|across\ (?:the\ )?)(?:files|modules|scripts)
-        | repository|repo-wide|repository-wide|codebase|project-wide
-        | refactor\ .{0,40}?(?:across|modules|files)
-        | failing\ tests)\b
-    """,
-    re.VERBOSE,
-)
-
-# Profile heuristics — most-specific first; the LLM is primary, this is the net.
-_PROFILE_PATTERNS = [
-    ("service", re.compile(
-        r"(?i)\b(server|serve|daemon|listen(?:ing)?|on\ port|nginx|jupyter|uvicorn"
-        r"|gunicorn|flask|systemd|sshd|web\ ?server|start\ (?:the\ |a\ )?\w+\ ?server)\b")),
-    ("invertible", re.compile(
-        r"(?i)\b(compress|decompress|encrypt|decrypt|encode|decode|gzip|tarball"
-        r"|\btar\b|\bzip\b|unzip|archive)\b")),
-    ("repair", re.compile(
-        r"(?i)\b(fix|debug|repair|broken|failing|won'?t\ (?:run|work)|make\ .{0,30}?pass"
-        r"|resolve\ the\ (?:error|bug|failure))\b")),
-    ("answer", re.compile(
-        r"(?i)\b(how\ many|write\ the\ (?:integer|number|count|result|answer|value)"
-        r"|output\ the\ (?:value|number|count)|answer\.txt|final\ answer)\b")),
-    ("data_transform", re.compile(
-        r"(?i)\b(convert|reshard|reshape|transform|parquet|to\ csv|tokeniz"
-        r"|count\ (?:the\ )?(?:tokens|rows|records)|aggregate|resample|merge\ .{0,20}?data)\b")),
-]
-
-
-def _heuristic(instruction: str) -> str:
-    """Deterministic flow-set fallback: code_core only on a multi-file signal."""
-    return "code_core" if _MULTIFILE_SIGNALS.search(instruction or "") else "ops"
-
-
-def _heuristic_profile(instruction: str) -> str:
-    """Deterministic profile fallback: first matching pattern, else 'plain'."""
-    s = instruction or ""
-    for prof, pat in _PROFILE_PATTERNS:
-        if pat.search(s):
-            return prof
-    return "plain"
-
-
-def _parse(text: str) -> str | None:
-    """Pull a flow-set label out of the model's answer (robust to a thinking
-    preamble or a code fence). code_core is checked first (more specific)."""
-    low = (text or "").lower()
-    if "code_core" in low:
-        return "code_core"
-    if re.search(r"\bops\b", low):
-        return "ops"
-    return None
-
-
-def _parse_profile(text: str) -> str | None:
-    """Pull a profile label out of the answer (substring match, specific first)."""
-    low = (text or "").lower()
-    for prof in ("data_transform", "invertible", "service", "repair", "answer", "plain"):
-        if prof in low:
-            return prof
-    return None
-
-
 def _parse_judgment(text: str) -> tuple[str | None, str | None]:
-    """(flow_set, profile) from the JSON answer; falls back to substring matching
-    on each field independently so a non-JSON reply still yields what it can."""
-    flow_set, profile = None, None
+    """(flow_set, profile) from the model's JSON answer (robust to a thinking
+    preamble / code fence via the {...} extraction). Each field is validated
+    against its label set; an unparseable reply yields (None, None) so the caller
+    retries."""
     try:
         obj = json.loads(re.search(r"\{.*\}", text or "", re.DOTALL).group(0))
         if isinstance(obj, dict):
             fs, pr = obj.get("flow_set"), obj.get("profile")
-            flow_set = fs if fs in VALID_FLOW_SETS else None
-            profile = pr if pr in VALID_PROFILES else None
+            return (fs if fs in VALID_FLOW_SETS else None,
+                    pr if pr in VALID_PROFILES else None)
     except Exception:
         pass
-    return flow_set or _parse(text), profile or _parse_profile(text)
+    return None, None
 
 
 def _ask_llm(
     instruction: str, endpoint: str, timeout: float = 60.0
 ) -> tuple[str | None, str | None] | None:
-    """One cold-temp completion → (flow_set, profile) parsed from the answer, or
+    """One low-temp completion → (flow_set, profile) parsed from the answer, or
     None on any failure (unreachable, GraphQL error, fully unparseable)."""
     query = (
         "query Completion($request: CompletionRequest!) "
@@ -167,7 +111,7 @@ def _ask_llm(
     )
     request = {
         "prompt": _JUDGE_PROMPT.replace("{instruction}", (instruction or "").strip()),
-        "temperature": 0.0,
+        "temperature": _JUDGE_TEMP,
         "maxTokens": 512,
     }
     try:
@@ -191,25 +135,35 @@ def classify_flow_set(
     log_path: Path | None = None,
 ) -> tuple[str, str, str]:
     """Decide the flow set AND capability profile for a task. Returns
-    ``(flow_set, profile, method)`` where method ∈ {override, llm, heuristic} for
-    audit. Order: explicit env override (flow_set only) → LLM judge → keyword
-    heuristic. Never raises; worst case is (ops, plain, heuristic). Each label
-    falls back to its own heuristic independently.
+    ``(flow_set, profile, method)`` where method ∈ {override, llm, default} for
+    audit. Order: ask the LLM (retried up to _MAX_RETRIES on an unreachable/
+    unparseable answer, run_session style) — an explicit OURO_FLOW_SET override
+    wins the flow set; on retry exhaustion default to (ops, plain). Never raises.
 
-    When ``log_path`` is given, append a one-line JSON record of the decision.
+    When ``log_path`` is given, write a one-line JSON record of the decision.
     """
     override = os.environ.get("OURO_FLOW_SET")
+    # The LLM is the sole classifier; retry it for a valid flow set, keeping the
+    # first valid profile we see along the way.
+    llm_fs, llm_profile = None, None
+    for _ in range(_MAX_RETRIES):
+        result = _ask_llm(instruction, endpoint)
+        if not result:
+            continue
+        fs, pr = result
+        if pr in VALID_PROFILES and llm_profile is None:
+            llm_profile = pr
+        if fs in VALID_FLOW_SETS:
+            llm_fs = fs
+            break
+
     if override in VALID_FLOW_SETS:
         flow_set, method = override, "override"
-        profile = _heuristic_profile(instruction)
+    elif llm_fs in VALID_FLOW_SETS:
+        flow_set, method = llm_fs, "llm"
     else:
-        result = _ask_llm(instruction, endpoint)
-        if result and result[0] in VALID_FLOW_SETS:
-            flow_set, method = result[0], "llm"
-            profile = result[1] if result[1] in VALID_PROFILES else _heuristic_profile(instruction)
-        else:
-            flow_set, method = _heuristic(instruction), "heuristic"
-            profile = _heuristic_profile(instruction)
+        flow_set, method = "ops", "default"  # retry-exhausted safe default
+    profile = llm_profile if llm_profile in VALID_PROFILES else "plain"
 
     if log_path is not None:
         try:
