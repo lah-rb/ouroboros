@@ -207,8 +207,8 @@ def build_action_registry() -> ActionRegistry:
         action_create_fix_task_from_diagnosis,
     )
 
-    # ── Integration actions ───────────────────────────────────────
-    from agent.actions.integration_actions import (
+    # ── file_ops actions (the canonical guarded write) ────────────
+    from agent.actions.file_ops_actions import (
         action_apply_multi_file_changes,
     )
 

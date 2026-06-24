@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from agent.actions.integration_actions import action_apply_multi_file_changes
+from agent.actions.file_ops_actions import action_apply_multi_file_changes
 from agent.effects.mock import MockEffects
 from agent.markdown_fence import parse_file_blocks
 from agent.models import FlowMeta, StepInput

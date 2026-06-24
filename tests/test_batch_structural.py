@@ -123,6 +123,27 @@ async def test_slice_writes_declared_files_and_reports_missing():
 
 
 @pytest.mark.asyncio
+async def test_slice_anti_gut_guard_rejects_stub_over_existing_file():
+    # models.py already exists with real content; the batch generation emits a tiny
+    # stub for it. The slice now routes through the file_ops guarded write, so the
+    # stub is REJECTED — the slot stays MISSING for the serial needs_create sweep,
+    # never overwritten with a gut. A genuinely-new file (engine.py) writes normally.
+    existing = "class Deck:\n" + "    pass\n" * 200  # ~1.8k chars of real content
+    fx = MockEffects(mission=_mission(), files={"models.py": existing})
+    raw = _batch_response(
+        ("models.py", "x = 1"),  # ~5 chars → ~0.3% retention, well under 0.20
+        ("engine.py", "import models"),  # new file → no existing to gut
+    )
+    out = await action_slice_batch_files(
+        _si(fx, {"inference_response": raw, "mission": _mission()})
+    )
+    written_paths = [c.args["path"] for c in fx.calls_to("write_file")]
+    assert "models.py" not in written_paths  # guarded — the gut was rejected
+    assert "engine.py" in written_paths  # new file written
+    assert "models.py" in out.context_updates["batch_manifest"]["missing"]
+
+
+@pytest.mark.asyncio
 async def test_slice_skips_undeclared_blocks():
     fx = MockEffects(mission=_mission())
     raw = _batch_response(

@@ -24,6 +24,7 @@ import logging
 from typing import Any
 
 from agent import languages
+from agent.actions.file_ops_actions import guarded_write_file
 from agent.actions.pipeline_actions import (
     _load_env_config,
     _parse_data_file,
@@ -113,8 +114,14 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
             if norm not in declared_set:
                 extra.append(norm)
             continue
-        await effects.write_file(target, content)
-        written.append(target)
+        written_ok, err = await guarded_write_file(effects, target, content)
+        if written_ok:
+            written.append(target)
+        else:
+            # Guard rejected (a stub would gut an existing file) — leave it
+            # MISSING so the serial needs_create sweep regenerates it in full,
+            # never a stub. No generated-file write bypasses the guard now.
+            logger.warning("Batch slice: %s", err)
 
     # Preserve creation_order for downstream consumers.
     written = [f for f in declared if f in set(written)]
