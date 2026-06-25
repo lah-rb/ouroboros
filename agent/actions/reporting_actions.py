@@ -126,9 +126,21 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
         else "No detailed evidence available."
     )
 
-    # Build checks lists
+    # Build checks lists — and reconstruct the gate's failure text from the
+    # failed checks' captured stderr/stdout. The gate (run_checks) records each
+    # check's error output on the check dict, but only `validation_results` is
+    # threaded to this report step (not the formatted `validation_output`
+    # string, and not `terminal_output` — that key is set only by the interact
+    # flow's program run). So a file_ops/structural failure report otherwise
+    # lands with an EMPTY terminal_output, and the re-diagnose that reads
+    # last_report.terminal_output gets no live error: the diagnose seed drops
+    # its "## What crashed"/"## Transcript" sections and the model fixates on a
+    # stale prior-attempt headline. Proven cache-independent (reproduces
+    # identically with flow_kv_cache off). Rebuild it here so the report
+    # faithfully records what failed.
     checks_passed = []
     checks_failed = []
+    gate_error_blocks: list[str] = []
     if isinstance(validation_results, list):
         for check in validation_results:
             if isinstance(check, dict):
@@ -137,6 +149,14 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
                     checks_passed.append(name)
                 else:
                     checks_failed.append(name)
+                    detail = (
+                        str(check.get("stderr", "") or "").strip()
+                        or str(check.get("stdout", "") or "").strip()
+                    )
+                    gate_error_blocks.append(
+                        f"[FAIL] {name}" + (f"\n{detail}" if detail else "")
+                    )
+    gate_error = "\n".join(gate_error_blocks)
 
     # Files affected as list of strings
     files_list = _coerce_files_list(files_changed)
@@ -232,7 +252,9 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
         files_affected=files_list,
         checks_passed=checks_passed,
         checks_failed=checks_failed,
-        terminal_output=str(terminal_output) if terminal_output else "",
+        terminal_output=(
+            str(terminal_output) if terminal_output else gate_error
+        ),
         recommended_flow=recommended_flow,
         target_file=target_file,
         target_symbol=target_symbol,

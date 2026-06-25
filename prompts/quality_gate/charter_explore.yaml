@@ -78,3 +78,15 @@ sections:
     Project structure:
     {context.project_listing}
 
+- id: charter_reminder
+  content: |
+    ---
+    Now write the brief. The EXPLORE list must cover EVERY capability the
+    objective implies — name them concretely (each command, each feature,
+    each content element the vision calls out), not "the core features."
+    Then push past the happy path into the interactions the vision promises.
+    A feature that is missing, unreachable, or behaves trivially is a QUALITY
+    FINDING to report, never a reason to pass. End with the firm instruction
+    that the operator works through EVERY EXPLORE item before closing — an
+    item skipped is an item shipped unverified.
+

@@ -194,7 +194,11 @@ def format_mission_meta(params: dict, namespaces: dict) -> str:
 def format_project_file_list(params: dict, namespaces: dict) -> str:
     manifest = params.get("source") or {}
     if not manifest:
-        return ""
+        # Explicit empty-dir marker: a greenfield prompt renders "Existing Files:
+        # None" instead of dropping the section, so the dynamic tail (and the
+        # format/recency cue placed after it) stays present, and the designer is
+        # told plainly it's a fresh build.
+        return "None"
     if isinstance(manifest, dict):
         return "\n".join(f"- {p}" for p in manifest.keys())
     if isinstance(manifest, list):

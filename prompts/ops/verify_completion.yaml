@@ -82,3 +82,9 @@ sections:
     content: |
       ## Fresh re-probe of the end state
       {context.vbh_transcript}
+
+  - id: output_reminder
+    content: |
+      ---
+      Now respond with ONLY the output in the format specified above — nothing
+      else: no commentary, no files, no extra prose.

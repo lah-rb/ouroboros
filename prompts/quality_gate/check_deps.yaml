@@ -80,3 +80,8 @@ sections:
     Dependency manifest file(s):
     {context.dep_check_manifest}
 
+- id: output_reminder
+  content: |
+    ---
+    Now respond with ONLY the output in the format specified above — nothing
+    else: no commentary, no files, no extra prose.

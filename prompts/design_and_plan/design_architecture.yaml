@@ -219,3 +219,10 @@ sections:
     ## Existing Files
     {context.project_file_list}
 
+- id: output_reminder
+  content: |
+    ---
+    Now return ONLY the single fenced JSON blueprint defined under OUTPUT FORMAT
+    above — the architecture object itself. Do NOT write files, `# File:` blocks,
+    code, prose, or commands; the build steps that follow consume this blueprint.
+

@@ -312,7 +312,16 @@ async def run_completion(
         if n > 0:
             flow_kwargs = {"flow_key": flow_key, "flow_prefix_len": len(static_tokens) + n}
     else:
-        dynamic_ids = build_full_prompt(prompt, tokenizer)
+        # static_prefix carries the per-flow cache:true sections (instructions,
+        # OUTPUT FORMAT, examples). The client sends it separately from `prompt`
+        # UNCONDITIONALLY, expecting the server to prepend it. With flow_kv_cache
+        # off (or no flow_key) we don't PIN its KV, but we must still INCLUDE it —
+        # otherwise the model runs on the global static buffer + dynamic tail only
+        # and never sees the per-flow instructions (e.g. design then invents a
+        # schema because "there is no output format in the prompt"). Prepending it
+        # uncached makes the token sequence identical to the cached path; only the
+        # KV-reuse differs. (Regression introduced with the static-prefix split.)
+        dynamic_ids = build_full_prompt((static_prefix or "") + prompt, tokenizer)
     total_len = len(static_tokens) + len(dynamic_ids)
 
     if total_len > config.model.n_ctx:

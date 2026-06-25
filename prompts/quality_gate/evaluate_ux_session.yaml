@@ -41,3 +41,14 @@ sections:
     The project's mission objective is:
       {input.mission_objective}
 
+- id: eval_reminder
+  content: |
+    ---
+    Now assess. Go through the objective requirement by requirement and check
+    each against what you actually observed — every command it names, every
+    feature, every content element. A required capability that was missing,
+    unreachable, errored, or behaved more shallowly than the objective calls
+    for is a QUALITY FINDING — state it specifically with the command you ran
+    and what happened. Do not pass over a requirement you never exercised; name
+    it as unverified. "Core features worked" is not an assessment — be concrete.
+

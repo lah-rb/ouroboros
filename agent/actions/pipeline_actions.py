@@ -17,6 +17,26 @@ from agent.models import StepInput, StepOutput
 
 logger = logging.getLogger(__name__)
 
+
+def _cap_diagnostic(text: str, limit: int = 1200) -> str:
+    """Cap check/smoke output for storage, preserving a Python traceback's TAIL.
+
+    Tracebacks print "most recent call last" — the exception line and the
+    deepest frame (the actual fault site) are at the END. A plain head-cap
+    (``text[:500]``) therefore drops exactly the part the diagnose needs to
+    pick a fix target, leaving only the entry frames (e.g. ``main.py``), which
+    sends repair off chasing the wrong file. When a traceback is present, keep
+    the head (the marker + entry frames) AND the tail (deepest frames +
+    exception); otherwise fall back to a plain head-cap.
+    """
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    if "Traceback (most recent call last):" in text:
+        head = limit // 3
+        return text[:head] + "\n…[frames truncated]…\n" + text[-(limit - head):]
+    return text[:limit]
+
 # Extensions that skip validation (non-code files)
 _SKIP_EXTENSIONS = {
     "md",
@@ -297,8 +317,8 @@ async def action_run_validation_checks_from_env(
                 "passed": passed,
                 "tier": tier,
                 "required": tier == "syntax",
-                "stdout": result.stdout[:500] if hasattr(result, "stdout") else "",
-                "stderr": result.stderr[:500] if hasattr(result, "stderr") else "",
+                "stdout": _cap_diagnostic(result.stdout) if hasattr(result, "stdout") else "",
+                "stderr": _cap_diagnostic(result.stderr) if hasattr(result, "stderr") else "",
             }
             results.append(check)
 
@@ -359,15 +379,15 @@ async def action_run_validation_checks_from_env(
                     "passed": passed,
                     "tier": "smoke",
                     "required": True,
-                    "stdout": getattr(smoke, "stdout", "")[:500],
-                    "stderr": getattr(smoke, "stderr", "")[:500],
+                    "stdout": _cap_diagnostic(getattr(smoke, "stdout", "")),
+                    "stderr": _cap_diagnostic(getattr(smoke, "stderr", "")),
                 }
             )
             if not passed:
                 smoke_failed = True
                 output_lines.append(f"[FAIL] smoke_boot: {smoke_cmd}")
                 if getattr(smoke, "stderr", ""):
-                    output_lines.append(f"  stderr: {smoke.stderr[:500]}")
+                    output_lines.append(f"  stderr: {_cap_diagnostic(smoke.stderr)}")
                 output_lines.append(
                     "  The program no longer starts after this edit — the edit "
                     "must be corrected."

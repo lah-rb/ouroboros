@@ -139,3 +139,8 @@ sections:
     ## Existing Code Structure (AST-based)
     {context.repo_map_formatted}
 
+- id: output_reminder
+  content: |
+    ---
+    Now respond with ONLY the output in the format specified above — nothing
+    else: no commentary, no files, no extra prose.

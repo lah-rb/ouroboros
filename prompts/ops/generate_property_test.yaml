@@ -74,3 +74,9 @@ sections:
     content: |
       ## TASK SPECIFICATION (the candidate implements this)
       {context.task_spec}
+
+  - id: output_reminder
+    content: |
+      ---
+      Now respond with ONLY the output in the format specified above — nothing
+      else: no commentary, no files, no extra prose.

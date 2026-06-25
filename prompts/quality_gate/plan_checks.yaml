@@ -46,3 +46,8 @@ sections:
     Project files:
     {context.project_listing}
 
+- id: output_reminder
+  content: |
+    ---
+    Now respond with ONLY the output in the format specified above — nothing
+    else: no commentary, no files, no extra prose.

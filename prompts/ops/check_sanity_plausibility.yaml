@@ -76,3 +76,9 @@ sections:
     content: |
       ## The produced answer (path and contents)
       {context.sanity_artifact_excerpt}
+
+  - id: output_reminder
+    content: |
+      ---
+      Now respond with ONLY the output in the format specified above — nothing
+      else: no commentary, no files, no extra prose.
