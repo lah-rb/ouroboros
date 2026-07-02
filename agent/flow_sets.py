@@ -171,6 +171,31 @@ EXTRACTOR_PHASES: tuple[PhaseRule, ...] = (
     ),
 )
 
+# The curator pipeline — stage 3 of the corpus pipeline (scrape ->
+# extract -> CURATE). fig_review sweeps VLM figure readings (sidecar
+# tool batches); curate reviews + packs one paper per dispatch (a paper
+# is a session lifecycle: ingest once, snapshot, review, pack, purge).
+# The gate is derived: every extracted record terminal for both passes.
+CURATOR_PHASES: tuple[PhaseRule, ...] = (
+    PhaseRule(
+        kind="goal_type_incomplete",
+        phase="fig_review",
+        goal_type="fig_review",
+        observation="Figure-review phase: {incomplete}/{total} corpus goal(s) incomplete",
+    ),
+    PhaseRule(
+        kind="goal_type_incomplete",
+        phase="curate",
+        goal_type="curate",
+        observation="Curation phase: {incomplete}/{total} corpus goal(s) incomplete",
+    ),
+    PhaseRule(
+        kind="terminal",
+        phase="curate_gate",
+        observation="All curation goals complete — ready for curation gate",
+    ),
+)
+
 # The ops pipeline — a single terminal task worked until done. The task goal
 # (one, type "task_exec") is incomplete until the completion judge marks it
 # complete; then the run finishes. No multi-phase sweep.
@@ -208,6 +233,11 @@ FLOW_SETS: dict[str, FlowSetSpec] = {
         name="ops",
         entry_flow="ops_control",
         phases=OPS_PHASES,
+    ),
+    "curator": FlowSetSpec(
+        name="curator",
+        entry_flow="curate_control",
+        phases=CURATOR_PHASES,
     ),
 }
 

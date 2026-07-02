@@ -175,6 +175,8 @@ class GoalRecord(BaseModel):
         "extraction",
         "pdf_extract",
         "task_exec",
+        "fig_review",
+        "curate",
     ] = "structural"
     status: Literal["incomplete", "complete"] = "incomplete"
     associated_files: list[str] = Field(default_factory=list)
@@ -491,6 +493,19 @@ class ArchitectureState(BaseModel):
     # state.json poison class). Never list input data files here.
     transient_files: list[str] = Field(default_factory=list)
     notes: str = ""
+    # ── design_gate coherence critique (pre-build blueprint validation) ──
+    # Grounded, achievable fix-assertions the adversarial coherence critic
+    # produced for THIS blueprint (empty when coherent). Union-merged tighten-
+    # only across reconcile loops so a prior-iteration finding is never lost.
+    coherence_criteria: list[str] = Field(default_factory=list)
+    # One-shot guard: criteria grounded once (mirrors completion_criteria_grounded)
+    # so re-critique iterations don't re-ground from scratch.
+    coherence_grounded: bool = False
+    # Last critic reason (one sentence), surfaced to the reconcile step.
+    coherence_reason: str = ""
+    # Persisted loop counter — belt-and-suspenders for the in-flow meta.attempt
+    # budget guard, in case design_reconcile is ever refactored to tail-call.
+    coherence_attempts: int = 0
 
     @field_validator("import_scheme", mode="before")
     @classmethod
@@ -571,6 +586,33 @@ class ArchitectureState(BaseModel):
     def has_file(self, path: str) -> bool:
         """Check if a file path is in the architecture."""
         return any(m.file == path for m in self.modules)
+
+
+class CoherenceVerdict(BaseModel):
+    """The design_gate coherence critic's structured verdict.
+
+    Parsed (degradably) from the critique inference by
+    action_ground_design_gate_verdict. Default coherent=True is the
+    evidence-based, fail-open stance: a verdict that doesn't clearly assert
+    incoherence passes, so the mission is never BLOCKED on critic uncertainty.
+    """
+
+    coherent: bool = True
+    reason: str = ""
+    criteria: list[str] = Field(default_factory=list)
+
+    @field_validator("criteria", mode="before")
+    @classmethod
+    def _coerce_criteria(cls, v):
+        """Tolerate a bare string or null where a list of fix-assertions is
+        expected — a single-line critique shouldn't crash grounding."""
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v] if v.strip() else []
+        if isinstance(v, (list, tuple)):
+            return [str(x) for x in v if str(x).strip()]
+        return []
 
 
 # ── Dispatch History ──────────────────────────────────────────────────

@@ -1228,7 +1228,7 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "check_drift"
+              "transition": "design_gate_route"
             }
           ]
         },
@@ -1238,9 +1238,9 @@
         "effects": [],
         "terminal": false
       },
-      "check_drift": {
-        "action": "check_architecture_drift",
-        "description": "Compare architecture against files on disk to detect drift",
+      "design_gate_route": {
+        "action": "design_gate",
+        "description": "design_gate (mode:route) \u2014 drift facts route design/reconcile/derive",
         "context": {
           "required": [
             "mission"
@@ -1249,7 +1249,9 @@
             "project_manifest"
           ]
         },
-        "params": {},
+        "params": {
+          "mode": "route"
+        },
         "config": {},
         "resolver": {
           "type": "rule",
@@ -1437,8 +1439,8 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.architecture_parsed == true and context.mission.config.web_research == true",
-              "transition": "domain_research"
+              "condition": "result.architecture_parsed == true",
+              "transition": "design_gate_facts"
             },
             {
               "condition": "true",
@@ -1469,6 +1471,10 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "result.architecture_parsed == true",
+              "transition": "design_gate_facts"
+            },
+            {
               "condition": "true",
               "transition": "derive_goals"
             }
@@ -1478,6 +1484,193 @@
           "mission",
           "architecture"
         ],
+        "effects": [],
+        "terminal": false
+      },
+      "design_gate_facts": {
+        "action": "design_gate",
+        "description": "design_gate (mode:facts) \u2014 publish drift facts for the critic",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "project_manifest"
+          ]
+        },
+        "params": {
+          "mode": "facts"
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "design_gate_critique"
+            }
+          ]
+        },
+        "publishes": [
+          "drift_facts"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "design_gate_critique": {
+        "action": "inference",
+        "description": "Adversarially critique the blueprint for internal coherence",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "drift_facts"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "design_and_plan/critique_coherence",
+          "context_keys": [
+            "blueprint_summary",
+            "mission_objective",
+            "tooling_convention",
+            "drift_facts_rendered",
+            "prior_rejection"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_architecture_listing",
+            "output_key": "blueprint_summary",
+            "params": {
+              "source": {
+                "$ref": "context.mission.architecture"
+              }
+            }
+          },
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "mission_objective",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          },
+          {
+            "formatter": "format_tooling_convention",
+            "output_key": "tooling_convention",
+            "params": {
+              "source": {
+                "$ref": "context.mission.architecture"
+              }
+            }
+          },
+          {
+            "formatter": "format_drift_facts",
+            "output_key": "drift_facts_rendered",
+            "params": {
+              "source": {
+                "$ref": "context.drift_facts"
+              }
+            }
+          },
+          {
+            "formatter": "format_prior_rejection",
+            "output_key": "prior_rejection",
+            "params": {
+              "source": {
+                "$ref": "context.mission.architecture"
+              }
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.1"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "design_gate_ground"
+            },
+            {
+              "condition": "true",
+              "transition": "derive_goals"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "design_gate_ground": {
+        "action": "ground_design_gate_verdict",
+        "description": "Parse + ground the coherence verdict; decide pass / reconcile / block",
+        "context": {
+          "required": [
+            "mission",
+            "inference_response"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.coherent == true",
+              "transition": "design_gate_pass"
+            },
+            {
+              "condition": "result.coherent == false and meta.attempt <= 2",
+              "transition": "design_reconcile"
+            },
+            {
+              "condition": "true",
+              "transition": "failed"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "design_gate_feedback"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "design_gate_pass": {
+        "action": "noop",
+        "description": "Blueprint coherent \u2014 proceed (preserves the web_research fork)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "context.mission.config.web_research == true",
+              "transition": "domain_research"
+            },
+            {
+              "condition": "true",
+              "transition": "derive_goals"
+            }
+          ]
+        },
+        "publishes": [],
         "effects": [],
         "terminal": false
       },
@@ -9967,6 +10160,864 @@
       }
     },
     "entry": "scan",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "curate_control": {
+    "flow": "curate_control",
+    "version": 1,
+    "description": "Curator pipeline controller. Bootstraps the fig-review and\ncuration goals from the databank, sweeps both worklists, and\ncompletes when the deterministic curation gate passes and the\ncorpus dataset is built.",
+    "context_tier": "project_goal",
+    "returns": {
+      "final_status": {
+        "type": "string",
+        "from": "context.mission.status",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id"
+      ],
+      "optional": [
+        "last_result",
+        "last_status",
+        "last_goal_id"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state and event queue",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.mission.status == 'active'",
+              "transition": "apply_last_result"
+            },
+            {
+              "condition": "result.mission.status == 'paused'",
+              "transition": "idle"
+            },
+            {
+              "condition": "result.mission.status == 'completed'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "aborted"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_last_result": {
+        "action": "attach_directive_report",
+        "description": "Attach returning flow's directive report to goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "events",
+            "last_result",
+            "last_status",
+            "last_goal_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.events_pending == true",
+              "transition": "process_events"
+            },
+            {
+              "condition": "true",
+              "transition": "bootstrap_goals"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "process_events": {
+        "action": "handle_events",
+        "description": "Process user messages, abort/pause signals",
+        "context": {
+          "required": [
+            "mission",
+            "events"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.abort_requested == true",
+              "transition": "aborted"
+            },
+            {
+              "condition": "result.pause_requested == true",
+              "transition": "idle"
+            },
+            {
+              "condition": "true",
+              "transition": "bootstrap_goals"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "bootstrap_goals": {
+        "action": "derive_curation_goals",
+        "description": "Derive the fig_review + curate corpus goals from the databank",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.goals_ready == true",
+              "transition": "check_phase"
+            },
+            {
+              "condition": "true",
+              "transition": "completed"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "check_phase": {
+        "action": "check_pipeline_phase",
+        "description": "Determine the curator phase from goal statuses",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.phase == 'fig_review'",
+              "transition": "fig_review_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'curate'",
+              "transition": "curate_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'curate_gate'",
+              "transition": "dispatch_curate_gate"
+            },
+            {
+              "condition": "true",
+              "transition": "completed"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "fig_review_sweep_next": {
+        "action": "fig_review_sweep_next",
+        "description": "Dispatch the next fig-review batch",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.needs_fig_review == true",
+              "transition": "dispatch_fig_review"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_fig_review": {
+        "action": "noop",
+        "description": "Run the fig-review sidecar over the batch",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "fig_review",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id"
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "paper_keys": {
+              "$ref": "context.dispatch_config.paper_keys"
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
+      },
+      "curate_sweep_next": {
+        "action": "curate_sweep_next",
+        "description": "Dispatch the next paper to curate (repacks first)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.needs_curate == true",
+              "transition": "dispatch_curate"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_curate": {
+        "action": "noop",
+        "description": "Review + pack one paper in a session lifecycle",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "curate_paper",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id"
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "paper_key": {
+              "$ref": "context.dispatch_config.paper_key"
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
+      },
+      "dispatch_curate_gate": {
+        "action": "flow",
+        "description": "Curation gate + corpus dataset build",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "curate_gate",
+        "input_map": {
+          "mission_id": {
+            "$ref": "input.mission_id"
+          },
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          }
+        },
+        "params": {},
+        "publishes": [
+          "gate_results"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "reopen_goal"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "reopen_goal": {
+        "action": "reopen_curation_goal",
+        "description": "Gate failed \u2014 reopen the corpus goals for the sweeps",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "completed": {
+        "action": "finalize_mission",
+        "description": "Mark mission complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission",
+            "gate_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "completed"
+      },
+      "idle": {
+        "action": "enter_idle",
+        "description": "Wait for events",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "curate_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          },
+          "delay": 5
+        }
+      },
+      "aborted": {
+        "action": "finalize_mission",
+        "description": "Mission aborted",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {
+          "abort": true
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "aborted"
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "curate_gate": {
+    "flow": "curate_gate",
+    "version": 1,
+    "description": "Deterministic curation gate: every extracted paper terminal,\ncorpus.json built. The dataset + key registry are the next\nstage's input contract; zero silent inclusions by construction.",
+    "context_tier": "session_task",
+    "returns": {
+      "gate_passed": {
+        "type": "bool",
+        "from": "context.gate_passed",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "check": {
+        "action": "check_curation_complete",
+        "description": "Every extracted record terminal for both passes?",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.gate_passed == true",
+              "transition": "build_corpus"
+            },
+            {
+              "condition": "true",
+              "transition": "gate_fail"
+            }
+          ]
+        },
+        "publishes": [
+          "pending_curation"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "build_corpus": {
+        "action": "build_corpus_dataset",
+        "description": "Merge accepted envelopes + registry into corpus.json",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.built == true",
+              "transition": "gate_pass"
+            },
+            {
+              "condition": "true",
+              "transition": "gate_fail"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "gate_pass": {
+        "action": "noop",
+        "description": "Curation complete \u2014 corpus dataset ready",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "success"
+      },
+      "gate_fail": {
+        "action": "noop",
+        "description": "Papers pending or corpus inconsistent \u2014 controller reopens",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "failed"
+      }
+    },
+    "entry": "check",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "curate_paper": {
+    "flow": "curate_paper",
+    "version": 1,
+    "description": "Review one extracted paper (accept/deny as a data reference)\nand, if accepted, pack its raw data into the open-key dataset\nbehind deterministic gates. Ingest once, snapshot, branch.",
+    "context_tier": "flow_directive",
+    "returns": {
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "goal_id",
+        "flow_directive",
+        "paper_key",
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.4"
+      }
+    },
+    "steps": {
+      "ingest_review": {
+        "action": "curate_ingest_review",
+        "description": "Ingest the curator doc, review it, pin the snapshot",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.verdict == 'accepted'",
+              "transition": "pack_data"
+            },
+            {
+              "condition": "true",
+              "transition": "book_result"
+            }
+          ]
+        },
+        "publishes": [
+          "curate_state"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "pack_data": {
+        "action": "curate_pack_data",
+        "description": "Pack raw data behind the deterministic gates (one snapshot-fork retry)",
+        "context": {
+          "required": [
+            "curate_state"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "book_result"
+            }
+          ]
+        },
+        "publishes": [
+          "curate_state"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "book_result": {
+        "action": "curate_book_result",
+        "description": "Book the outcome; end session + purge snapshot (all paths)",
+        "context": {
+          "required": [
+            "curate_state"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success'",
+              "transition": "return_success"
+            },
+            {
+              "condition": "true",
+              "transition": "return_failed"
+            }
+          ]
+        },
+        "publishes": [
+          "directive_report"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "return_success": {
+        "action": "noop",
+        "description": "Report the paper's outcome to curate_control",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "curate_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      },
+      "return_failed": {
+        "action": "noop",
+        "description": "Report a booking failure to curate_control",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "curate_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "failed"
+          }
+        }
+      }
+    },
+    "entry": "ingest_review",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "fig_review": {
+    "flow": "fig_review",
+    "version": 1,
+    "description": "VLM figure readings (figtext) for a batch of extracted papers\nvia the fig_review sidecar; book results into the databank.",
+    "context_tier": "flow_directive",
+    "returns": {
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "goal_id",
+        "flow_directive",
+        "paper_keys",
+        "working_directory"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "review_figs": {
+        "action": "fig_review_batch",
+        "description": "Run the VLM sidecar and book figtext results",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'failed'",
+              "transition": "return_failed"
+            },
+            {
+              "condition": "true",
+              "transition": "return_success"
+            }
+          ]
+        },
+        "publishes": [
+          "directive_report"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "return_success": {
+        "action": "noop",
+        "description": "Report batch results to curate_control",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "curate_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      },
+      "return_failed": {
+        "action": "noop",
+        "description": "Report batch failure to curate_control",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "curate_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "failed"
+          }
+        }
+      }
+    },
+    "entry": "review_figs",
     "overflow": {
       "strategy": "split",
       "fallback": "reorganize"

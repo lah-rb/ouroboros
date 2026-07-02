@@ -245,6 +245,28 @@ FLOW_INPUTS = {
         "mission_id": "test-mission-001",
         "working_directory": "/tmp/test-project",
     },
+    # Curator flow set (corpus stage 3)
+    "curate_control": {
+        "mission_id": "test-mission-001",
+    },
+    "fig_review": {
+        "mission_id": "test-mission-001",
+        "goal_id": "goal-001",
+        "flow_directive": "VLM figure readings for 1 paper.",
+        "paper_keys": ["doi_10.1000_x.1"],
+        "working_directory": "/tmp/test-project",
+    },
+    "curate_paper": {
+        "mission_id": "test-mission-001",
+        "goal_id": "goal-001",
+        "flow_directive": "Review and pack paper doi_10.1000_x.1",
+        "paper_key": "doi_10.1000_x.1",
+        "working_directory": "/tmp/test-project",
+    },
+    "curate_gate": {
+        "mission_id": "test-mission-001",
+        "working_directory": "/tmp/test-project",
+    },
     # Ops flow set
     "ops_control": {
         "mission_id": "test-mission-001",

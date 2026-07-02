@@ -186,7 +186,9 @@ def build_action_registry() -> ActionRegistry:
         action_finalize_mission,
         action_enter_idle,
         action_check_architecture_drift,
+        action_design_gate,
         action_parse_and_store_architecture,
+        action_ground_design_gate_verdict,
         # Context Contract Architecture
         action_derive_project_goals,
         action_derive_directive_goals,
@@ -311,6 +313,18 @@ def build_action_registry() -> ActionRegistry:
         action_pdf_extract_sweep_next,
         action_reopen_extraction_goal,
     )
+    from agent.actions.curation_actions import (
+        action_build_corpus_dataset,
+        action_check_curation_complete,
+        action_curate_book_result,
+        action_curate_ingest_review,
+        action_curate_pack_data,
+        action_curate_sweep_next,
+        action_derive_curation_goals,
+        action_fig_review_batch,
+        action_fig_review_sweep_next,
+        action_reopen_curation_goal,
+    )
     from agent.actions.operations_actions import (
         action_derive_task_goal,
         action_detect_solver_task,
@@ -354,8 +368,12 @@ def build_action_registry() -> ActionRegistry:
     # Memoryful director session
     # Architecture state management
     registry.register("check_architecture_drift", action_check_architecture_drift)
+    registry.register("design_gate", action_design_gate)
     registry.register(
         "parse_and_store_architecture", action_parse_and_store_architecture
+    )
+    registry.register(
+        "ground_design_gate_verdict", action_ground_design_gate_verdict
     )
     # Goal derivation
     registry.register("derive_project_goals", action_derive_project_goals)
@@ -400,6 +418,16 @@ def build_action_registry() -> ActionRegistry:
     registry.register("extract_pdf_batch", action_extract_pdf_batch)
     registry.register("check_extraction_complete", action_check_extraction_complete)
     registry.register("reopen_extraction_goal", action_reopen_extraction_goal)
+    registry.register("derive_curation_goals", action_derive_curation_goals)
+    registry.register("fig_review_sweep_next", action_fig_review_sweep_next)
+    registry.register("fig_review_batch", action_fig_review_batch)
+    registry.register("curate_sweep_next", action_curate_sweep_next)
+    registry.register("curate_ingest_review", action_curate_ingest_review)
+    registry.register("curate_pack_data", action_curate_pack_data)
+    registry.register("curate_book_result", action_curate_book_result)
+    registry.register("check_curation_complete", action_check_curation_complete)
+    registry.register("build_corpus_dataset", action_build_corpus_dataset)
+    registry.register("reopen_curation_goal", action_reopen_curation_goal)
     registry.register("functional_sweep_next", action_functional_sweep_next)
     registry.register("harvest_quality_findings", action_harvest_quality_findings)
     registry.register("quality_sweep_next", action_quality_sweep_next)

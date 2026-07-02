@@ -278,3 +278,888 @@ def format_key_registry(registry: dict, top_n: int = REGISTRY_PROMPT_TOP_N) -> s
     if len(ranked) > top_n:
         lines.append(f"...and {len(ranked) - top_n} more keys")
     return "\n".join(lines)
+
+
+# ── Stage constants ───────────────────────────────────────────────────
+
+FIG_BATCH_SIZE = 3
+FIG_TIMEOUT_S = 3600
+CURATE_SESSION_TTL = 1800  # a paper's review+pack passes span many minutes
+
+FIG_GOAL_SIGNATURE = "corpus-fig-review"
+CURATE_GOAL_SIGNATURE = "corpus-curate"
+
+_FIG_TOOL_PY = "tools/fig_review/.venv/bin/python"
+_FIG_TOOL_SCRIPT = "tools/fig_review/fig_review.py"
+# M6's vision bake-off decides the production model; mid-size default.
+FIG_MODEL = "mlx-community/Qwen3-VL-8B-Instruct-8bit"
+
+
+def _repo_root() -> str:
+    import os
+
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _prompts_dir():
+    import os
+
+    return os.path.join(_repo_root(), "prompts")
+
+
+def _fig_pending(record: dict) -> bool:
+    """A record the fig-review pass still owes work to."""
+    return (
+        record.get("extraction_status") == "extracted"
+        and int(record.get("figure_count") or 0) > 0
+        and record.get("figtext_status") not in ("figtext_done", "figtext_failed")
+    )
+
+
+def _figtext_ready(record: dict) -> bool:
+    """Fig pass terminal for this record (done, failed, or no figures)."""
+    return int(record.get("figure_count") or 0) == 0 or record.get(
+        "figtext_status"
+    ) in ("figtext_done", "figtext_failed")
+
+
+def _curation_pending(record: dict) -> bool:
+    """A record the curate pass still owes work to.
+
+    Terminal review states: denied, review_failed. An accepted paper
+    stays pending until its pack reaches packed | pack_failed.
+    """
+    if record.get("extraction_status") != "extracted":
+        return False
+    if not _figtext_ready(record):
+        return False
+    review = record.get("review_status") or ""
+    if review in ("denied", "review_failed"):
+        return False
+    if review == "accepted":
+        return record.get("pack_status") not in ("packed", "pack_failed")
+    return True  # review not yet run
+
+
+async def _load_registry(effects) -> dict:
+    fc = await effects.read_file(KEY_REGISTRY_PATH)
+    if not getattr(fc, "exists", False) or not fc.content.strip():
+        return {}
+    try:
+        data = json.loads(fc.content)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        logger.warning("key_registry.json unparseable — starting fresh")
+        return {}
+
+
+async def _save_registry(effects, registry: dict) -> None:
+    await effects.write_file(
+        KEY_REGISTRY_PATH, json.dumps(registry, indent=1, ensure_ascii=False)
+    )
+
+
+async def _load_figtext(effects, paper_key: str) -> dict | None:
+    fc = await effects.read_file(f"{FIGTEXT_DIR}/{paper_key}.json")
+    if not getattr(fc, "exists", False):
+        return None
+    try:
+        data = json.loads(fc.content)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+# ── Actions: goals + sweeps ───────────────────────────────────────────
+
+
+async def action_derive_curation_goals(step_input):
+    """Bootstrap the two corpus-level goals (idempotent by signature).
+
+    fig_review sweeps VLM figure readings; curate reviews + packs each
+    paper. The databank is the plan — a databank without extracted
+    papers means this flow set has nothing to do.
+    """
+    from agent.actions.scholarly_actions import read_databank
+    from agent.models import StepOutput
+    from agent.persistence.models import GoalRecord
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission or not effects:
+        return StepOutput(
+            result={"goals_ready": False},
+            observations="No mission/effects — cannot derive curation goals",
+        )
+
+    databank = await read_databank(effects)
+    extracted = sum(
+        1 for r in databank.values() if r.get("extraction_status") == "extracted"
+    )
+    if not extracted:
+        return StepOutput(
+            result={"goals_ready": False, "created": 0},
+            observations=(
+                "Databank has no extracted papers — run an extractor mission first"
+            ),
+        )
+
+    created = 0
+    existing = {g.finding_signature for g in mission.goals}
+    if FIG_GOAL_SIGNATURE not in existing:
+        mission.goals.append(
+            GoalRecord(
+                description="VLM figure readings (figtext) for every extracted paper",
+                type="fig_review",
+                status="incomplete",
+                finding_signature=FIG_GOAL_SIGNATURE,
+            )
+        )
+        created += 1
+    if CURATE_GOAL_SIGNATURE not in existing:
+        mission.goals.append(
+            GoalRecord(
+                description=(
+                    f"Review + pack every extracted paper ({extracted} in the databank)"
+                ),
+                type="curate",
+                status="incomplete",
+                finding_signature=CURATE_GOAL_SIGNATURE,
+            )
+        )
+        created += 1
+    if created:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"goals_ready": True, "created": created},
+        observations=f"Curation goals ready ({extracted} extracted papers)",
+    )
+
+
+async def action_fig_review_sweep_next(step_input):
+    """Dispatch the next fig-review batch; empty worklist completes the goal."""
+    from agent.actions.scholarly_actions import read_databank
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission or not effects:
+        return StepOutput(
+            result={"sweep_complete": True}, observations="No mission/effects"
+        )
+    goal = next(
+        (
+            g
+            for g in mission.goals
+            if g.type == "fig_review" and g.status == "incomplete"
+        ),
+        None,
+    )
+    if goal is None:
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="No incomplete fig_review goal — sweep complete",
+        )
+
+    databank = await read_databank(effects)
+    batch = sorted(k for k, r in databank.items() if _fig_pending(r))[:FIG_BATCH_SIZE]
+    if not batch:
+        goal.status = "complete"
+        await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="Fig-review worklist empty — corpus goal complete",
+        )
+
+    remaining = sum(1 for r in databank.values() if _fig_pending(r))
+    return StepOutput(
+        result={"needs_fig_review": True},
+        observations=(
+            f"Fig-review sweep: dispatching {len(batch)} of {remaining} "
+            f"pending paper(s)"
+        ),
+        context_updates={
+            "dispatch_config": {
+                "goal_id": goal.id,
+                "paper_keys": batch,
+                "flow_directive": (
+                    f"VLM figure readings for {len(batch)} paper(s): "
+                    + ", ".join(batch)
+                ),
+            }
+        },
+    )
+
+
+async def action_fig_review_batch(step_input):
+    """Run the fig_review sidecar over one batch and book the results.
+
+    figtext is a CLAIM (advisory overlap only, no gate here — the
+    review pass judges the inlined reading in context). Tool errors
+    book figtext_failed directly: the curate pass proceeds md-only for
+    those papers rather than looping the sidecar.
+    """
+    import os
+
+    from agent.actions.scholarly_actions import append_records, read_databank
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    keys = list(step_input.inputs.get("paper_keys") or [])
+    working_dir = str(step_input.inputs.get("working_directory") or "")
+    if not effects or not keys:
+        return StepOutput(
+            result={"status": "failed"},
+            observations="No effects or empty fig batch",
+            context_updates={
+                "directive_report": {
+                    "flow": "fig_review",
+                    "status": "failed",
+                    "summary": "Empty fig-review batch",
+                }
+            },
+        )
+
+    root = _repo_root()
+    cmd = [
+        os.path.join(root, _FIG_TOOL_PY),
+        os.path.join(root, _FIG_TOOL_SCRIPT),
+        "--keys",
+        *keys,
+        "--figures-root",
+        os.path.join(working_dir, "databank", "figures"),
+        "--markdown-dir",
+        os.path.join(working_dir, "databank", "markdown"),
+        "--out-dir",
+        os.path.join(working_dir, FIGTEXT_DIR),
+        "--model",
+        FIG_MODEL,
+    ]
+    result = await effects.run_command(cmd, timeout=FIG_TIMEOUT_S)
+
+    reports: dict[str, dict] = {}
+    for line in (result.stdout or "").splitlines():
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(r, dict) and r.get("paper_key"):
+            reports[r["paper_key"]] = r
+
+    databank = await read_databank(effects)
+    updates, done, failed = [], 0, 0
+    for k in keys:
+        rec = dict(databank.get(k) or {"paper_key": k})
+        rep = reports.get(k)
+        if rep is not None and not rep.get("error"):
+            rec["figtext_status"] = "figtext_done"
+            rec["figtext_path"] = f"{FIGTEXT_DIR}/{k}.json"
+            done += 1
+        else:
+            rec["figtext_status"] = "figtext_failed"
+            rec["failure_reason"] = (
+                f"fig_review: {(rep or {}).get('error') or 'no report from tool'}"
+            )
+            failed += 1
+        updates.append(rec)
+    await append_records(effects, updates)
+
+    status = "success" if done else "failed"
+    summary = f"Fig review: {done} done, {failed} failed of {len(keys)}"
+    return StepOutput(
+        result={"status": status, "done": done, "failed": failed},
+        observations=summary,
+        context_updates={
+            "directive_report": {
+                "flow": "fig_review",
+                "status": status,
+                "summary": summary,
+            }
+        },
+    )
+
+
+async def action_curate_sweep_next(step_input):
+    """Dispatch the next paper to curate (one paper = one session lifecycle).
+
+    needs_repack (one failed pack gate behind it) takes priority; empty
+    worklist completes the corpus goal.
+    """
+    from agent.actions.scholarly_actions import read_databank
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission or not effects:
+        return StepOutput(
+            result={"sweep_complete": True}, observations="No mission/effects"
+        )
+    goal = next(
+        (g for g in mission.goals if g.type == "curate" and g.status == "incomplete"),
+        None,
+    )
+    if goal is None:
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="No incomplete curate goal — sweep complete",
+        )
+
+    databank = await read_databank(effects)
+    retry = sorted(
+        k
+        for k, r in databank.items()
+        if _curation_pending(r) and r.get("pack_status") == "needs_repack"
+    )
+    fresh = sorted(
+        k
+        for k, r in databank.items()
+        if _curation_pending(r) and r.get("pack_status") != "needs_repack"
+    )
+    worklist = retry + fresh
+    if not worklist:
+        goal.status = "complete"
+        await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="Curation worklist empty — corpus goal complete",
+        )
+
+    key = worklist[0]
+    return StepOutput(
+        result={"needs_curate": True},
+        observations=(
+            f"Curation sweep: dispatching {key} "
+            f"({len(worklist)} pending{', retry first' if retry else ''})"
+        ),
+        context_updates={
+            "dispatch_config": {
+                "goal_id": goal.id,
+                "paper_key": key,
+                "flow_directive": f"Review and pack paper {key}",
+            }
+        },
+    )
+
+
+# ── Actions: the per-paper session (ingest → review → pack) ──────────
+
+
+def _snapshot_key(paper_key: str) -> str:
+    return f"paper:{paper_key}"
+
+
+async def _render_prompt(template_id: str, context: dict) -> str:
+    from agent.loader import PromptRenderer
+
+    renderer = PromptRenderer(_prompts_dir())
+    return renderer.render(template_id, {"input": {}, "context": context, "meta": {}})
+
+
+async def _build_doc_for(effects, paper_key: str) -> str:
+    fc = await effects.read_file(f"databank/markdown/{paper_key}.md")
+    md = fc.content if getattr(fc, "exists", False) else ""
+    figtext = await _load_figtext(effects, paper_key)
+    return build_curator_doc(md, figtext)
+
+
+async def action_curate_ingest_review(step_input):
+    """Turn 1 of the paper session: ingest the curator doc + review it.
+
+    Starts the memoryful session, sends doc + review prompt as one
+    turn, parses the verdict (one bounded re-ask on unparseable
+    output), then pins the post-review snapshot — the pack retry forks
+    from it with the review still in context. A stale snapshot under
+    this paper's key (crashed prior dispatch) is purged first, so the
+    deterministic key self-heals leaks.
+
+    Publishes curate_state {session_id, paper_key, review{...}} for the
+    downstream steps of this flow.
+    """
+    from agent.llm_json import parse_llm_json
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    paper_key = str(step_input.inputs.get("paper_key") or "")
+    if not effects or not paper_key:
+        return StepOutput(
+            result={"verdict": "error"},
+            observations="No effects or paper_key",
+        )
+
+    doc = await _build_doc_for(effects, paper_key)
+    if not doc.strip():
+        return StepOutput(
+            result={"verdict": "error"},
+            observations=f"No markdown on disk for {paper_key}",
+            context_updates={
+                "curate_state": {"paper_key": paper_key, "session_id": ""}
+            },
+        )
+
+    # Self-heal a leaked snapshot from a crashed prior dispatch.
+    await effects.purge_inference_snapshot(_snapshot_key(paper_key))
+
+    review_prompt = await _render_prompt("curator/review_paper", {})
+    session_id = await effects.start_inference_session(
+        config={"ttl_seconds": CURATE_SESSION_TTL}
+    )
+    state = {"paper_key": paper_key, "session_id": session_id}
+    try:
+        result = await effects.session_inference(
+            session_id,
+            doc + "\n\n---\n\n" + review_prompt,
+            config_overrides={"max_tokens": 4096, "temperature": "t*0.4"},
+        )
+        review = parse_llm_json(result.text or "")
+        if not (
+            isinstance(review, dict) and review.get("verdict") in ("accept", "deny")
+        ):
+            # One bounded re-ask — same session, tiny turn.
+            result = await effects.session_inference(
+                session_id,
+                'Return ONLY the fenced JSON verdict object with "verdict" '
+                '("accept" or "deny"), "summary", and "issues".',
+                config_overrides={"max_tokens": 2048, "temperature": "t*0.4"},
+            )
+            review = parse_llm_json(result.text or "")
+
+        if not (
+            isinstance(review, dict) and review.get("verdict") in ("accept", "deny")
+        ):
+            state["review"] = {"status": "review_failed", "summary": "", "issues": []}
+            return StepOutput(
+                result={"verdict": "review_failed"},
+                observations=f"Review unparseable twice for {paper_key}",
+                context_updates={"curate_state": state},
+            )
+
+        verdict = "accepted" if review["verdict"] == "accept" else "denied"
+        state["review"] = {
+            "status": verdict,
+            "summary": str(review.get("summary") or "").strip(),
+            "issues": [str(i) for i in (review.get("issues") or [])][:20],
+        }
+        # Pin the post-review context: pack (turn 2) continues live; the
+        # pack RETRY forks from here with the review still in context.
+        snap = await effects.session_snapshot(session_id, _snapshot_key(paper_key))
+        state["snapshot"] = {
+            "resident": bool(snap.get("resident", True)),
+            "tokens": int(snap.get("tokens") or 0),
+        }
+        return StepOutput(
+            result={"verdict": verdict},
+            observations=(
+                f"Review {paper_key}: {verdict} "
+                f"({len(state['review']['issues'])} issue(s) noted)"
+            ),
+            context_updates={"curate_state": state},
+        )
+    except Exception as e:  # noqa: BLE001 — book the failure, never hang the sweep
+        logger.exception("curate ingest/review failed for %s", paper_key)
+        state["review"] = {
+            "status": "review_failed",
+            "summary": f"error: {type(e).__name__}: {e}"[:200],
+            "issues": [],
+        }
+        return StepOutput(
+            result={"verdict": "review_failed"},
+            observations=f"Review errored for {paper_key}: {type(e).__name__}",
+            context_updates={"curate_state": state},
+        )
+
+
+def _run_pack_gates(data: dict, doc: str, registry: dict) -> dict:
+    """All deterministic pack gates; returns verdict + feedback text."""
+    g = grounding_check(data, doc)
+    reg = registry_check(data, registry)
+    dups = near_duplicate_keys(reg["new_keys"], registry, data)
+    problems = []
+    if not g["passed"]:
+        missing = ", ".join(f"{u['path']}={u['token']}" for u in g["ungrounded"][:8])
+        problems.append(
+            f"UNGROUNDED VALUES (not stated in the paper — remove or fix): {missing}"
+        )
+    if reg["type_mismatches"]:
+        mm = ", ".join(
+            f"{m['key']} (registry: {m['expected']}, yours: {m['actual']})"
+            for m in reg["type_mismatches"][:8]
+        )
+        problems.append(f"TYPE MISMATCHES vs registry: {mm}")
+    return {
+        "passed": g["passed"] and not reg["type_mismatches"],
+        "feedback": "\n".join(problems),
+        "grounding": g,
+        "registry": reg,
+        "near_dups": dups,
+    }
+
+
+async def action_curate_pack_data(step_input):
+    """Turn 2: pack the paper's raw data; deterministic gates; one retry.
+
+    Attempt 1 runs in the live session (paper + review in context).
+    A gate failure retries ONCE by forking a fresh session from the
+    post-review snapshot with the gate findings as feedback — clean
+    context, no failed-attempt contamination. Second failure books
+    pack_failed (flagged, never silently included).
+    """
+    from agent.llm_json import parse_llm_json
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    state = dict(step_input.context.get("curate_state") or {})
+    paper_key = str(state.get("paper_key") or "")
+    session_id = str(state.get("session_id") or "")
+    if not effects or not paper_key or not session_id:
+        state["pack"] = {"status": "pack_failed", "reason": "no session/paper"}
+        return StepOutput(
+            result={"gate_passed": False},
+            observations="Pack skipped — no session state",
+            context_updates={"curate_state": state},
+        )
+
+    doc = await _build_doc_for(effects, paper_key)
+    registry = await _load_registry(effects)
+    pack_prompt = await _render_prompt(
+        "curator/pack_data",
+        {"key_registry_block": format_key_registry(registry), "gate_feedback": ""},
+    )
+
+    async def _attempt(sid: str, prompt: str) -> tuple[dict | None, str]:
+        result = await effects.session_inference(
+            sid,
+            prompt,
+            config_overrides={"max_tokens": 8192, "temperature": "t*0.4"},
+        )
+        data = parse_llm_json(result.text or "")
+        return (data if isinstance(data, dict) and data else None), (result.text or "")
+
+    attempts = 0
+    try:
+        attempts = 1
+        data, _raw = await _attempt(session_id, pack_prompt)
+        gates = (
+            _run_pack_gates(data, doc, registry)
+            if data is not None
+            else {"passed": False, "feedback": "output was not a JSON object"}
+        )
+
+        if not gates["passed"]:
+            # Retry once from the post-review snapshot: clean context +
+            # explicit gate findings. End the contaminated session first.
+            attempts = 2
+            await effects.end_inference_session(session_id)
+            retry_sid = await effects.start_inference_session(
+                config={"ttl_seconds": CURATE_SESSION_TTL},
+                from_snapshot=_snapshot_key(paper_key),
+            )
+            state["session_id"] = retry_sid
+            retry_prompt = await _render_prompt(
+                "curator/pack_data",
+                {
+                    "key_registry_block": format_key_registry(registry),
+                    "gate_feedback": gates["feedback"],
+                },
+            )
+            data, _raw = await _attempt(retry_sid, retry_prompt)
+            gates = (
+                _run_pack_gates(data, doc, registry)
+                if data is not None
+                else {"passed": False, "feedback": "output was not a JSON object"}
+            )
+
+        if not gates["passed"]:
+            state["pack"] = {
+                "status": "pack_failed",
+                "reason": f"gates failed twice: {gates['feedback'][:300]}",
+                "attempts": attempts,
+                "quality": {
+                    "grounding_rate": gates.get("grounding", {}).get("grounding_rate"),
+                    "parse_attempts": attempts,
+                },
+            }
+            return StepOutput(
+                result={"gate_passed": False},
+                observations=f"Pack gates failed twice for {paper_key}",
+                context_updates={"curate_state": state},
+            )
+
+        state["pack"] = {
+            "status": "packed",
+            "data": data,
+            "attempts": attempts,
+            "quality": {
+                "grounding_rate": gates["grounding"]["grounding_rate"],
+                "numeric_leaves": gates["grounding"]["numeric_leaves"],
+                "ungrounded": gates["grounding"]["ungrounded"],
+                "new_keys": len(gates["registry"]["new_keys"]),
+                "reused_keys": len(gates["registry"]["reused_keys"]),
+                "near_duplicate_flags": gates["near_dups"],
+                "parse_attempts": attempts,
+                "snapshot_rebuild": not state.get("snapshot", {}).get("resident", True),
+            },
+        }
+        return StepOutput(
+            result={"gate_passed": True},
+            observations=(
+                f"Packed {paper_key}: {len(data)} keys, grounding "
+                f"{gates['grounding']['grounding_rate']:.2f} "
+                f"(attempt {attempts})"
+            ),
+            context_updates={"curate_state": state},
+        )
+    except Exception as e:  # noqa: BLE001 — book the failure, never hang the sweep
+        logger.exception("curate pack failed for %s", paper_key)
+        state["pack"] = {
+            "status": "pack_failed",
+            "reason": f"error: {type(e).__name__}: {e}"[:200],
+            "attempts": attempts,
+        }
+        return StepOutput(
+            result={"gate_passed": False},
+            observations=f"Pack errored for {paper_key}: {type(e).__name__}",
+            context_updates={"curate_state": state},
+        )
+
+
+async def action_curate_book_result(step_input):
+    """Book the paper's outcome; ALWAYS ends the session + purges the snapshot.
+
+    The single exit step of curate_paper — every path (accepted+packed,
+    denied, review_failed, pack_failed) flows through here, so the
+    semi-permanent snapshot's explicit release is structural, not
+    best-effort. Accepted+packed papers get their dataset envelope
+    written and the key registry updated; every outcome lands in the
+    databank record with reasons.
+    """
+    from datetime import datetime, timezone
+
+    from agent.actions.scholarly_actions import append_records, read_databank
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    state = dict(step_input.context.get("curate_state") or {})
+    paper_key = str(state.get("paper_key") or "")
+    session_id = str(state.get("session_id") or "")
+    review = dict(state.get("review") or {})
+    pack = dict(state.get("pack") or {})
+
+    # Structural cleanup FIRST — even a booking error must not leak the
+    # pinned instance or the snapshot's context budget.
+    if effects and session_id:
+        try:
+            await effects.end_inference_session(session_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("end_session failed for %s", session_id)
+    if effects and paper_key:
+        try:
+            await effects.purge_inference_snapshot(_snapshot_key(paper_key))
+        except Exception:  # noqa: BLE001
+            logger.warning("snapshot purge failed for %s", paper_key)
+
+    if not effects or not paper_key:
+        return StepOutput(
+            result={"status": "failed"},
+            observations="Nothing to book",
+            context_updates={
+                "directive_report": {
+                    "flow": "curate_paper",
+                    "status": "failed",
+                    "summary": "Booking with no paper/effects",
+                }
+            },
+        )
+
+    databank = await read_databank(effects)
+    rec = dict(databank.get(paper_key) or {"paper_key": paper_key})
+    rec["review_status"] = review.get("status") or "review_failed"
+    rec["review_summary"] = review.get("summary") or ""
+    rec["review_issues"] = review.get("issues") or []
+
+    outcome = rec["review_status"]
+    if rec["review_status"] == "accepted":
+        if pack.get("status") == "packed":
+            data = pack.get("data") or {}
+            envelope = {
+                "paper_key": paper_key,
+                "title": rec.get("title", ""),
+                "doi": rec.get("doi", ""),
+                "arxiv_id": rec.get("arxiv_id", ""),
+                "license": rec.get("license", "") or "unknown",
+                "year": rec.get("year", 0),
+                "review": {
+                    "status": "accepted",
+                    "summary": rec["review_summary"],
+                },
+                "data": data,
+                "provenance": {
+                    "model": "llmvp-active-config",
+                    "figtext_model": FIG_MODEL,
+                    "packed_at": datetime.now(timezone.utc).isoformat(),
+                    "md_path": rec.get("md_path", ""),
+                },
+            }
+            problems = required_fields_check(envelope)
+            if problems:
+                # Envelope problems are catalog-side (missing license
+                # etc.), not model failures — book pack_failed with the
+                # reasons; the record stays flagged, never silent.
+                rec["pack_status"] = "pack_failed"
+                rec["failure_reason"] = f"envelope: {'; '.join(problems)}"
+                outcome = "pack_failed (envelope)"
+            else:
+                dataset_path = f"{DATASET_DIR}/{paper_key}.json"
+                await effects.write_file(
+                    dataset_path, json.dumps(envelope, indent=1, ensure_ascii=False)
+                )
+                registry = await _load_registry(effects)
+                update_key_registry(registry, data, paper_key)
+                await _save_registry(effects, registry)
+                rec["pack_status"] = "packed"
+                rec["dataset_path"] = dataset_path
+                rec["pack_quality"] = pack.get("quality") or {}
+                rec["failure_reason"] = ""
+                outcome = f"packed ({len(data)} keys)"
+        elif pack.get("status") == "needs_repack":
+            rec["pack_status"] = "needs_repack"
+            outcome = "needs_repack"
+        else:
+            rec["pack_status"] = "pack_failed"
+            rec["failure_reason"] = f"pack: {pack.get('reason') or 'no pack state'}"
+            outcome = "pack_failed"
+    rec["curation_method"] = f"llmvp+{FIG_MODEL.rsplit('/', 1)[-1]}"
+    await append_records(effects, [rec])
+
+    summary = f"Curated {paper_key}: {outcome}"
+    return StepOutput(
+        result={"status": "success", "outcome": outcome},
+        observations=summary,
+        context_updates={
+            "directive_report": {
+                "flow": "curate_paper",
+                "status": "success",
+                "summary": summary,
+            }
+        },
+    )
+
+
+# ── Actions: gate + corpus build ──────────────────────────────────────
+
+
+async def action_check_curation_complete(step_input):
+    """Gate: every extracted record terminal for BOTH curation passes."""
+    from agent.actions.scholarly_actions import read_databank
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    if not effects:
+        return StepOutput(result={"gate_passed": False}, observations="No effects")
+    databank = await read_databank(effects)
+    pending = sorted(
+        k for k, r in databank.items() if _fig_pending(r) or _curation_pending(r)
+    )
+    if pending:
+        return StepOutput(
+            result={"gate_passed": False, "pending": len(pending)},
+            observations=f"Curation gate: {len(pending)} paper(s) still pending",
+            context_updates={"pending_curation": pending[:50]},
+        )
+    return StepOutput(
+        result={"gate_passed": True},
+        observations="Curation gate: every extracted paper terminal",
+    )
+
+
+async def action_build_corpus_dataset(step_input):
+    """Deterministic merge of accepted dataset envelopes → corpus.json.
+
+    The v3 stage's single input artifact: every packed paper's envelope
+    plus the final key registry, with a per-key consistency re-check
+    (a registry that disagrees with the envelopes it admitted is a
+    booking bug and must fail the gate loudly).
+    """
+    from datetime import datetime, timezone
+
+    from agent.actions.scholarly_actions import read_databank
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    if not effects:
+        return StepOutput(result={"built": False}, observations="No effects")
+    databank = await read_databank(effects)
+    registry = await _load_registry(effects)
+
+    papers, inconsistencies = [], []
+    for key, rec in sorted(databank.items()):
+        if rec.get("pack_status") != "packed" or not rec.get("dataset_path"):
+            continue
+        fc = await effects.read_file(rec["dataset_path"])
+        if not getattr(fc, "exists", False):
+            inconsistencies.append(f"{key}: dataset file missing")
+            continue
+        try:
+            envelope = json.loads(fc.content)
+        except json.JSONDecodeError:
+            inconsistencies.append(f"{key}: dataset file unparseable")
+            continue
+        check = registry_check(envelope.get("data") or {}, registry)
+        for mm in check["type_mismatches"]:
+            inconsistencies.append(f"{key}: {mm['key']} type drift")
+        papers.append(envelope)
+
+    if inconsistencies:
+        return StepOutput(
+            result={"built": False, "inconsistencies": len(inconsistencies)},
+            observations=("Corpus build blocked: " + "; ".join(inconsistencies[:5])),
+        )
+
+    corpus = {
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "papers": papers,
+        "key_registry": registry,
+        "counts": {
+            "packed": len(papers),
+            "denied": sum(
+                1 for r in databank.values() if r.get("review_status") == "denied"
+            ),
+            "failed": sum(
+                1
+                for r in databank.values()
+                if r.get("review_status") == "review_failed"
+                or r.get("pack_status") == "pack_failed"
+            ),
+        },
+    }
+    await effects.write_file(
+        f"{DATASET_DIR}/corpus.json", json.dumps(corpus, indent=1, ensure_ascii=False)
+    )
+    return StepOutput(
+        result={"built": True, "papers": len(papers)},
+        observations=(
+            f"Corpus dataset built: {len(papers)} packed, "
+            f"{corpus['counts']['denied']} denied, "
+            f"{corpus['counts']['failed']} failed"
+        ),
+    )
+
+
+async def action_reopen_curation_goal(step_input):
+    """Gate failed — reopen incomplete corpus goals for another sweep."""
+    from agent.models import StepOutput
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission or not effects:
+        return StepOutput(result={"reopened": False}, observations="No mission")
+    reopened = 0
+    for g in mission.goals:
+        if g.type in ("fig_review", "curate") and g.status == "complete":
+            g.status = "incomplete"
+            reopened += 1
+    if reopened:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"reopened": reopened > 0},
+        observations=f"Reopened {reopened} curation goal(s) after gate failure",
+    )

@@ -1,0 +1,33 @@
+# Curation stage over the extracted HEA corpus (corpus pipeline v3).
+#
+# Stage three: operates on the EXISTING databank in the shared
+# working_dir — scrape and extract are not re-run. NO workspace wipe.
+# Requires: tools/fig_review venv (dev/setup_fig_tools.sh), an LLMVP
+# server on the model chosen by the M6 bake-off, and the snapshot tier
+# (llmvp resident cache active for ~zero-prefill pack retries; replay
+# fallback otherwise).
+#
+# Run:
+#   uv run ouroboros.py mission create --mission_config curate_hea
+#   uv run ouroboros.py start --working-dir /Users/lah-rb/corpora/ouroboros-hea
+# version: 1
+
+objective: >
+  Review every extracted paper in the high-entropy-materials corpus as
+  a data reference (accept/deny with reasons), and pack the accepted
+  papers' raw data into the open-key dataset behind deterministic
+  grounding gates, producing corpus.json for the application stage.
+
+flow_set: curator
+working_dir: "/Users/lah-rb/corpora/ouroboros-hea"
+effects_profile: local
+llmvp_endpoint: "http://localhost:8008/graphql"
+
+# One paper per curate dispatch (review + pack turns, minutes each) +
+# fig-review sidecar batches; run to the gate verdict with wall clock
+# as the backstop.
+run_until: completed
+max_wall_clock: 12h
+
+pre_create:
+  - "uv run ouroboros.py cue-compile"
