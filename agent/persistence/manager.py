@@ -60,6 +60,8 @@ class PersistenceManager:
     def __init__(self, working_directory: str) -> None:
         self._working_dir = os.path.realpath(working_directory)
         self._agent_dir = os.path.join(self._working_dir, AGENT_DIR)
+        # load_mission parse cache: ((mtime_ns, size), MissionState).
+        self._mission_cache: tuple[tuple[int, int], MissionState] | None = None
 
     @property
     def agent_dir(self) -> str:
@@ -126,12 +128,33 @@ class PersistenceManager:
         if not os.path.isfile(path):
             return None
 
+        # Parse cache, validated by stat: load_mission runs several times
+        # per cycle (projections, push_note, attach/save bookkeeping) and
+        # re-parsing a multi-MB Pydantic graph each time was the agent
+        # process's dominant allocator churn (memory audit). (mtime_ns,
+        # size) match -> serve the cached OBJECT — the same shared-mutable
+        # semantics actions already have within a cycle via context. An
+        # external writer (ouroboros.py message/pause/reopen while a run
+        # is live) changes mtime -> miss -> fresh parse.
+        try:
+            st = os.stat(path)
+            key = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            key = None
+        if key is not None and self._mission_cache is not None:
+            cached_key, cached_state = self._mission_cache
+            if cached_key == key:
+                return cached_state
+
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             # Schema is unstable during development — no version gating.
             # Pydantic defaults handle missing fields gracefully.
-            return MissionState.model_validate(data)
+            state = MissionState.model_validate(data)
+            if key is not None:
+                self._mission_cache = (key, state)
+            return state
         except Exception as e:
             raise PersistenceError(f"Failed to load mission: {e}") from e
 
@@ -148,6 +171,13 @@ class PersistenceManager:
 
         try:
             self._atomic_write(path, state.model_dump_json(indent=2))
+            # Refresh the parse cache with the object just persisted —
+            # the very next load_mission serves it without a re-parse.
+            try:
+                st = os.stat(path)
+                self._mission_cache = ((st.st_mtime_ns, st.st_size), state)
+            except OSError:
+                self._mission_cache = None
             logger.debug("Saved mission state: %s", state.id)
             return True
         except Exception as e:

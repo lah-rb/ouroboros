@@ -260,3 +260,80 @@ def test_finalize_mission_sweeps_last_goal(tmp_path):
     assert goal.reports == [] and goal.reports_archived == 1
     agent_dir = fx._get_persistence().agent_dir
     assert len(list(iter_archive(agent_dir, goal_id=goal.id))) == 1
+
+
+# ── load_mission parse cache (churn fix) ──────────────────────────────
+
+
+def _pm(tmp_path):
+    from agent.persistence.manager import PersistenceManager
+
+    pm = PersistenceManager(str(tmp_path))
+    pm.init_agent_dir()
+    return pm
+
+
+def test_load_mission_cache_serves_without_reparse(tmp_path, monkeypatch):
+    import agent.persistence.manager as mgr
+
+    pm = _pm(tmp_path)
+    pm.save_mission(_mission())
+
+    parses = {"n": 0}
+    real = mgr.json.load
+
+    def counting_load(*a, **k):
+        parses["n"] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(mgr.json, "load", counting_load)
+    m1 = pm.load_mission()
+    m2 = pm.load_mission()
+    m3 = pm.load_mission()
+    # save_mission primed the cache -> zero parses; same object served.
+    assert parses["n"] == 0
+    assert m1 is m2 is m3
+
+
+def test_external_write_invalidates_cache(tmp_path):
+    import json as _json
+    import os as _os
+
+    pm = _pm(tmp_path)
+    pm.save_mission(_mission())
+    m1 = pm.load_mission()
+
+    # Simulate the ouroboros.py CLI writing mission.json externally.
+    path = _os.path.join(pm.agent_dir, "mission.json")
+    data = _json.loads(open(path).read())
+    data["objective"] = "changed externally"
+    with open(path, "w") as f:
+        f.write(_json.dumps(data, indent=2))
+    _os.utime(
+        path, ns=(_os.stat(path).st_mtime_ns + 10, _os.stat(path).st_mtime_ns + 10)
+    )
+
+    m2 = pm.load_mission()
+    assert m2 is not m1
+    assert m2.objective == "changed externally"
+
+
+def test_fresh_pm_parses_then_caches(tmp_path, monkeypatch):
+    import agent.persistence.manager as mgr
+    from agent.persistence.manager import PersistenceManager
+
+    pm = _pm(tmp_path)
+    pm.save_mission(_mission())
+
+    pm2 = PersistenceManager(str(tmp_path))  # cold cache (CLI-style)
+    parses = {"n": 0}
+    real = mgr.json.load
+
+    def counting_load(*a, **k):
+        parses["n"] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(mgr.json, "load", counting_load)
+    pm2.load_mission()
+    pm2.load_mission()
+    assert parses["n"] == 1  # one cold parse, then cached
