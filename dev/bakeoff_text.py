@@ -151,7 +151,11 @@ async def run(args) -> None:
     label = args.label or _server_model(args.endpoint)
     papers = _pick_papers(databank, args.papers)
     gold = json.loads(GOLD_PATH.read_text()) if GOLD_PATH.is_file() else {}
-    gold_verdicts = {k: v.get("verdict") for k, v in gold.items() if v.get("verdict")}
+    gold_verdicts = {
+        k: v.get("verdict")
+        for k, v in gold.items()
+        if isinstance(v, dict) and v.get("verdict")  # skip __instructions__
+    }
 
     registry: dict = {}
     rows = []
