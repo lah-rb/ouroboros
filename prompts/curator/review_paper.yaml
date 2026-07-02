@@ -26,6 +26,10 @@ sections:
     content: |
       Review the ENTIRE paper as a candidate data reference:
 
+      - CORPUS FIT: is this paper actually about the corpus's subject
+        matter? A methodologically excellent paper from an unrelated
+        field (its data would poison the unified dataset) is a DENY —
+        say so plainly in the summary.
       - CONTENT QUALITY: does it report concrete, well-specified
         measurements or computations (named compositions, conditions,
         units), or only qualitative claims?
