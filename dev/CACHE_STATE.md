@@ -1,14 +1,15 @@
 # Cache State — KV reuse across the LLMVP server
 
-_Last updated: 2026-06-18. Scope: every KV-prefix/state reuse layer Ouroboros flows use against the local LLMVP server (`llama-cpp-python` 0.3.39 embedded). Supersedes the 2026-06-16 revision (which predated the resident-sequence transition and listed session caching as the top open lever — now solved)._
+_Last updated: 2026-07-02. Scope: every KV-prefix/state reuse layer Ouroboros flows use against the local LLMVP server (`llama-cpp-python` fork 0.3.40 embedded). Supersedes the 2026-06-18 revision (which predated the semi-permanent snapshot tier, the resident go-LIVE on gpt-oss, and the measured architecture matrix below)._
 
 ## TL;DR
 
-- **Caching is organized by LIFETIME**, not by code path. Four layers: **permanent** (global static buffer), **semi-permanent / flow** (`flow_kv_cache`), **semi-permanent / session** (memoryful session KV), and **single-turn** (the dynamic tail, uncached). See [Cache layers by lifetime](#cache-layers-by-lifetime).
+- **Caching is organized by LIFETIME**, not by code path. Five layers: **permanent** (global static buffer), **semi-permanent / flow** (`flow_kv_cache`), **semi-permanent / document** (session **snapshots** — pay a long-context ingest once, fork many passes; survives session end/TTL, freed only by explicit purge), **semi-permanent / session** (memoryful session KV), and **single-turn** (the dynamic tail, uncached). See [Cache layers by lifetime](#cache-layers-by-lifetime).
 - **Two implementation strategies coexist, flag-switched:**
   - **Legacy (currently LIVE in every config):** whole-context `save_state`/`load_state` (`LlamaState` blob) for the static buffer + flow cache; `session_full_replay` (re-prefill the whole history each turn) for sessions.
-  - **Resident (implemented + validated, DORMANT — `resident_seq_cache: false` everywhere):** KV stays **live in-context** on dedicated `seq_id`s, forked with `llama_memory_seq_cp`, never serialized. Replaces all three legacy paths. Flip `resident_seq_cache: true` to switch a model over. See [Implementation strategy](#implementation-strategy-resident-in-context-sequences).
-- **The resident path closes the deep-session problem** the legacy path can't: no `save_state` blob → no ~2 GB overflow crash; the session seq stays live → no per-turn re-prefill (the deep-session timeout lever). Validated flat per-turn prefill on gpt-oss-120b / Devstral / Qwen3-Next; bit-identical to legacy at temp 0.
+  - **Resident (LIVE on gpt-oss-120b since 2026-06-18; measured compatible on every non-pure-recurrent architecture — see the matrix):** KV stays **live in-context** on dedicated `seq_id`s, forked with `llama_memory_seq_cp`, never serialized. Replaces all three legacy paths. Flip `resident_seq_cache: true` to switch a model over; the `can_shift` gate makes the flag safe on ANY model (pure-recurrent degrades to legacy full-replay, correctly).
+- **The resident path closes the deep-session problem** the legacy path can't: no `save_state` blob → no ~2 GB overflow crash; the session seq stays live → no per-turn re-prefill (the deep-session timeout lever). Measured 2026-07-02 (compat matrix): flat 8–46-token per-turn prefill on gpt-oss / gemma-4 / Devstral / Qwen3-Next vs ~1.7k full-replay on Qwen3.6; bit-identical to legacy at temp 0.
+- **NEW (2026-07-02): the semi-permanent snapshot tier** — `sessionSnapshot(sid, key)` pins a session's context (hot seq band + cold token list), `startSession(fromSnapshot:)` forks from it (hot fork = 16–46 fresh tokens, 0.3–1.5 s), `purgeSnapshot(key)` frees. Survives session end/TTL/context-refresh (refresh demotes hot→cold; the next fork re-prefills and re-pins). Windowing is **forbidden** on snapshot-linked sessions (`SessionSnapshotOverflow`) — `seq_add` would shift cells the snapshot shares. Crash insurance: the orphan reaper age-sweeps unpurged snapshots (`session_snapshot_ttl_s`, default 2 h). Production consumer: the curator's per-paper ingest-once/branch-passes lifecycle; live stress = `dev/snapshot_stress.py` (30k-doc: fork prefill 24 vs 30,060 tokens).
 - **Hard dependency on SWA models: `swa_full: true`** (+ `kv_unified: true`) — without it any pinned/forked prefix corrupts (`llama_decode code -3` at the SWA window boundary). True for both strategies. See [SWA dependency](#swa-dependency).
 
 ---
@@ -19,6 +20,7 @@ _Last updated: 2026-06-18. Scope: every KV-prefix/state reuse layer Ouroboros fl
 |---|---|---|---|---|---|
 | **Permanent** (process) | Global static buffer (`SOUL.md` + knowledge) | the invariant identity/knowledge head (~1.8 k tok) | **every** request & flow, server-wide | server restart / buffer rebuild | only **generalizable** identity + principles that apply to *all* flows |
 | **Semi-permanent / flow** | `flow_kv_cache` static head | `[global static + flow head]` | all tasks/cycles of one `(flow, step)` | LRU, bound `flow_kv_cache_max` (8); restart | **task-invariant** per-flow framing — role · instructions · output-format |
+| **Semi-permanent / document** | session **snapshot** (`sessionSnapshot`/`fromSnapshot`) | a session's full ingested context (e.g. one paper) | every pass forked from the key, across sessions | **explicit `purgeSnapshot` only** (+ reaper age-sweep `session_snapshot_ttl_s`); capacity-rejected at `session_snapshot_max` | one **document/artifact** ingested once and branched over — never per-task content |
 | **Semi-permanent / session** | memoryful session KV | the live multi-turn transcript | all turns of one session (pinned instance) | session TTL (default **300 s**) / `end_session` | **persistent turn details** later turns reference (investigation transcript, plan state, prior answers) |
 | **Single-turn** | the dynamic tail | this request's variable prompt | nothing — prefilled then discarded | immediate (post-generation) | only the details **relevant to the exact task at hand** |
 
@@ -38,9 +40,12 @@ The go-forward strategy (dormant behind `resident_seq_cache` until enabled per m
 SEQ_WORKING  = 0    the live generation / session stream (the ONLY seq generated on)
 SEQ_STATIC   = 1    pristine global static template (fork source; never generated on)
 SEQ_FLOW_BASE= 2    per-flow prefixes occupy the band [2, 2 + flow_hot_set)
+SEQ_SNAP     = ...  session snapshots occupy [SEQ_FLOW_BASE + flow_hot_set,
+                    + session_snapshot_max) — own allocator: explicitly purged
+                    and capacity-rejected, never LRU-evicted
 ```
 
-`n_seq_max` widens to `2 + flow_hot_set` when the flow band is active, else `2`, else `1`.
+`n_seq_max` = `2 + (flow_hot_set if flow band) + session_snapshot_max` when resident is requested, else `1`.
 
 ### Primitives (no serialization)
 
@@ -72,6 +77,7 @@ When `pre_turn_pos + turn_tokens + max_tokens ≥ n_ctx`, `_window_resident_seq`
 | `flow_kv_cache` / `flow_kv_cache_max` | enable the flow layer / its LRU bound (8). Consumed by both strategies. |
 | `swa_full` / `kv_unified` | **required** on SWA models for either strategy (see below). |
 | `session_full_replay` | legacy session path (default **true**); ignored when resident is active. |
+| `session_snapshot_max` / `session_snapshot_ttl_s` | snapshot band size (default 2) / reaper age-sweep for crash-orphaned snapshots (default 2 h; 0 = pin forever). Replay-mode registrations are count-capped at `max(8, 4x band)`. |
 
 ---
 
@@ -85,19 +91,23 @@ The campaign harness ([cross_val_campaign.sh](cross_val_campaign.sh)) runs a 10-
 
 ---
 
-## Per-model config flags (current, LIVE)
+## Architecture × cache-mode matrix (MEASURED, 2026-07-02)
 
-All models currently run **legacy** (`resident_seq_cache` unset → off). Resident is validated for the can-shift models and ready to enable.
+Probe: `dev/cache_compat_matrix.sh` → per-model temp config requesting the full resident stack, then `dev/cache_compat_matrix.py` (3-turn session + needle recall + snapshot capture/end/fork/purge; discriminates modes by `freshPrefillTokens`). Rows: `dev/bakeoff_results/cache_matrix.jsonl`. Fork/turn numbers are fresh-prefill tokens over a ~1.5k-token ingested doc; needle recall passed on EVERY row (correctness, both modes).
 
-| Model | `flow_kv_cache` | `swa_full`·`kv_unified` | `session_full_replay` | `can_shift` (resident-eligible?) |
-|---|---|---|---|---|
-| gpt-oss-120b-a5 | ✅ | ✅ | ✅ | ✅ (SWA+swa_full) — validated |
-| step37-flash-196b-a11 | ✅ | ✅ | — | ✅ (SWA-512) — needs `temperature_floor` |
-| gemma-4-31b | ✅ | ✅ | — | ✅ (SWA) — resident **flow** validated |
-| qwen3.6-35b-a3 | ✅ | ✅ | ✅ | ❌ pure-recurrent → gate forces legacy |
-| qwen3-next-coder-80b | — | — | ✅ | ✅ (can-shift hybrid) — validated |
+| Model | Architecture class | resident gate | session mode (turn-2/3 fresh) | snapshot capture | fork (fresh tok · s) |
+|---|---|---|---|---|---|
+| gpt-oss-120b-a5 | SWA MoE (harmony) | ✅ active | resident-live (12/21) | hot seq | 21 · 0.5 s |
+| gemma-4-31b | SWA dense (gemma4) | ✅ active | resident-live (37/46) | hot seq | 46 · 1.2 s |
+| devstral-2-small-24b | dense (tekken) | ✅ active | resident-live (8/16) | hot seq | 16 · 0.3 s |
+| qwen3-next-coder-80b-a3 | **hybrid recurrent** (DeltaNet) | ✅ active | resident-live (12/21) | hot seq | 21 · 1.5 s |
+| qwen3.6-27b | **pure recurrent** | ❌ gate forces off | full-replay (~1.7k/turn) | replay (token list) | 1849 · 14.5 s |
 
-**To enable resident on a validated model:** set `resident_seq_cache: true` (and optionally `resident_strip_reasoning: true` for thinking families / `resident_session_flow_fork: true` for preamble-heavy session flows). The `can_shift` gate auto-reverts to legacy if the model can't support it, so the flag is safe to set anywhere.
+**Readings:**
+- **Every non-pure-recurrent architecture supports the FULL resident stack** — including the hybrid: per-turn state *surgery* (save/load splice) is what corrupts recurrent state; append-only residency + whole-seq `seq_cp` forks copy the DeltaNet state cleanly (needle-verified).
+- **The pure-recurrent fallback degrades gracefully, not incorrectly**: identical API, replay-mode snapshots (fork = full re-prefill, 14.5 s vs 0.3–1.5 s hot), needles still correct. `resident_seq_cache: true` is therefore safe to set in ANY config.
+- **Open (deliberately untested):** windowing (`seq_add`) on the hybrid — deep sessions past n_ctx on qwen3-next remain unvalidated; snapshot-linked sessions never window by design. step37-flash was skipped for time — same class as gpt-oss (SWA MoE), expected identical; run the probe before trusting.
+- **Production state:** resident LIVE on gpt-oss (config); the other capable models still ship `resident_seq_cache: false` — flipping gemma-4/devstral/qwen-next on is now measured-safe.
 
 ---
 
@@ -134,7 +144,7 @@ The flow cache is a correct, cheap conformance optimization — **not** the leve
 
 Terse, chronological — why the current design looks the way it does. Each line is a dead end we already paid for.
 
-1. **Whole-context `save_state`/`load_state` for sessions** — the original memoryful path. The `LlamaState` blob grows ~70 KB/token (with `swa_full`, which gpt-oss requires) and **overflows 2³¹ bytes at ~30–34 k tokens** → `"Negative size passed to PyBytes_FromStringAndSize"` crash on ~40-turn gpt-oss sessions. Dead end for deep sessions.
+1. **Whole-context `save_state`/`load_state` for sessions** — the original memoryful path. The `LlamaState` blob grows ~70 KB/token (with `swa_full`, which gpt-oss requires) and **overflows 2³¹ bytes at ~30–34 k tokens** → `"Negative size passed to PyBytes_FromStringAndSize"` crash on ~40-turn gpt-oss sessions. Dead end for deep sessions. _Post-mortem addendum (2026-07-02 memory audit): every blob ALSO carried a hidden ~1.6 GB `scores` copy — LLMVP allocated 2048 logits rows where upstream allocates 1; fixed in 4befb75 before any save_state path is re-armed._
 2. **Per-sequence state (`llama_state_seq_get/set_data`)** as a smaller blob — hits the **same ~2 GB wall** for a single deep sequence. No serialization format escapes a deep session.
 3. **`flow_kv_cache` via `save_state` on SWA without `swa_full`** — the pinned ~1.8 k prefix corrupted at the SWA window boundary → `llama_decode code -3` at pos ~1809, over a run. **Disabled `flow_kv_cache` entirely** until `swa_full: true` was found to fix it (memory `flow-kv-cache-corrupts-gptoss`).
 4. **`session_full_replay` as the workaround** — dodges the overflow + corruption by re-prefilling the whole history every turn. Correct but **re-prefills a growing transcript cold each turn** → 33–54 s/turn deep, the dominant deep-session timeout cost. Still the live default; the resident path is what retires it.
