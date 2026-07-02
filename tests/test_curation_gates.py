@@ -224,3 +224,24 @@ def test_numeric_overlap_advisory():
     assert fr.numeric_overlap("values 759 and 4.4", _FIXTURE_MD) == 1.0
     assert fr.numeric_overlap("reads 999 everywhere", _FIXTURE_MD) == 0.0
     assert fr.numeric_overlap("no numbers here", _FIXTURE_MD) == 1.0
+
+
+def test_grounding_matches_negative_values():
+    """_norm strips '-' from the doc; the packed token must match
+    unsigned — live, every negative quantity failed grounding while
+    sitting verbatim in the paper's tables."""
+    doc = "<table><tr><td>-448</td></tr></table> theta is negative."
+    result = grounding_check({"curie_theta_k": -448}, doc)
+    assert result["passed"] is True
+    # A genuinely absent negative still fails.
+    assert grounding_check({"curie_theta_k": -999}, doc)["passed"] is False
+
+
+def test_registry_scalar_list_widening_is_compatible():
+    registry = {}
+    update_key_registry(registry, {"lattice_parameter_angstrom": 3.59}, "p1")
+    result = registry_check({"lattice_parameter_angstrom": [3.59, 3.61]}, registry)
+    assert result["type_mismatches"] == []
+    # Real drift still fails.
+    result = registry_check({"lattice_parameter_angstrom": "3.59 A"}, registry)
+    assert len(result["type_mismatches"]) == 1

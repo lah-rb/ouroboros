@@ -144,10 +144,16 @@ def grounding_check(data: dict, doc: str) -> dict:
     doc_n = _norm(doc)
     doc_compact = re.sub(r"[\s,]", "", doc_n)
     tokens = _numeric_leaf_tokens(data)
+    # Match UNSIGNED: _norm strips '-' from the doc (markdown dash
+    # punctuation), so a signed packed token can never match — live,
+    # every negative quantity (Curie-Weiss theta, mixing enthalpies,
+    # interaction parameters) failed grounding while sitting verbatim
+    # in the paper's tables. Magnitude+digits is the grounding anchor;
+    # the sign is not a fabrication discriminator.
     ungrounded = [
         {"path": path, "token": tok}
         for path, tok in tokens
-        if tok not in doc_n and tok not in doc_compact
+        if (u := tok.lstrip("-")) not in doc_n and u not in doc_compact
     ]
     rate = 1.0 if not tokens else 1 - len(ungrounded) / len(tokens)
     return {
@@ -192,6 +198,17 @@ def _type_name(value) -> str:
     return type(value).__name__
 
 
+def _types_compatible(expected: str, actual: str) -> bool:
+    """T and list[T] are one vocabulary slot, not a mismatch.
+
+    The registry pins a key's type from its FIRST paper; a later paper
+    with several phases/samples honestly needs a list of the same
+    scalar (live: lattice_parameter_angstrom, one phase then three).
+    Real drift (number vs string) still fails.
+    """
+    return actual == f"list[{expected}]" or expected == f"list[{actual}]"
+
+
 def registry_check(data: dict, registry: dict) -> dict:
     """Per-key type consistency vs the registry + new-key inventory."""
     mismatches, new_keys, reused = [], [], []
@@ -203,7 +220,7 @@ def registry_check(data: dict, registry: dict) -> dict:
         reused.append(key)
         expected = str(entry.get("type") or "")
         actual = _type_name(value)
-        if expected and actual != expected:
+        if expected and actual != expected and not _types_compatible(expected, actual):
             mismatches.append({"key": key, "expected": expected, "actual": actual})
     return {"type_mismatches": mismatches, "new_keys": new_keys, "reused_keys": reused}
 
@@ -1040,9 +1057,7 @@ async def action_curate_book_result(step_input):
             rec["pack_status"] = "pack_failed"
             rec["failure_reason"] = f"pack: {pack.get('reason') or 'no pack state'}"
             outcome = "pack_failed"
-    rec["curation_method"] = (
-        f"{_active_text_model()}+{FIG_MODEL.rsplit('/', 1)[-1]}"
-    )
+    rec["curation_method"] = f"{_active_text_model()}+{FIG_MODEL.rsplit('/', 1)[-1]}"
     await append_records(effects, [rec])
 
     summary = f"Curated {paper_key}: {outcome}"
