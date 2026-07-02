@@ -329,10 +329,12 @@ def project_director_overview(mission: MissionState, params: dict) -> dict:
             }
         )
 
-    # Recent notes (last 8)
+    # Recent notes (last 8). The slice is load-bearing: without it every
+    # note ever pushed enters the director prompt every cycle, forever
+    # (memory audit: unbounded per-cycle prompt bloat on 24/7 missions).
     recent_notes = []
     sorted_notes = sorted(mission.notes, key=lambda n: n.timestamp, reverse=True)
-    for note in sorted_notes:
+    for note in sorted_notes[:8]:
         recent_notes.append(
             {
                 "category": note.category,

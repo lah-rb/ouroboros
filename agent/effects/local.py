@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -85,7 +86,10 @@ class LocalEffects:
         self._working_dir = os.path.realpath(working_directory)
         if not os.path.isdir(self._working_dir):
             raise ValueError(f"Working directory does not exist: {self._working_dir}")
-        self._log: list[EffectsLogEntry] = []
+        # Bounded: appended on EVERY effect call; an unbounded list was
+        # the agent process's one true leak on 24/7 missions (memory
+        # audit — nothing ever read or cleared it). Recent tail only.
+        self._log: deque[EffectsLogEntry] = deque(maxlen=2000)
         # Inference client — lazy-initialized only when run_inference is called
         self._inference: InferenceEffect | None = None
         # Persistence manager — lazy-initialized only when persistence methods are called

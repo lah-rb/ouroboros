@@ -153,6 +153,12 @@ class ModelConfig(BaseModel):
     # WINDOWING IS FORBIDDEN on snapshot-linked sessions (seq_add would shift
     # cells the snapshot seq shares — see SessionSnapshotOverflow).
     session_snapshot_max: int = 2
+    # Age sweep for crash-orphaned snapshots (orphan reaper): a client that
+    # dies between sessionSnapshot and purgeSnapshot would otherwise hold
+    # the registry entry + capacity slot for the server's lifetime. Sized
+    # for the curator's per-paper lifecycle (minutes) with a wide margin;
+    # 0 disables for workloads that pin snapshots deliberately for days.
+    session_snapshot_ttl_s: float = 7200.0
 
     @field_validator("thinking_mode")
     @classmethod

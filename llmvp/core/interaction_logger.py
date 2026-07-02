@@ -160,7 +160,7 @@ def log_training_example(
         from core.config import get_config
 
         config = get_config()
-        capture_path = config.logging.directory / "captured_raw.json"
+        capture_path = config.logging.directory / "captured_raw.jsonl"
         capture_path.parent.mkdir(parents=True, exist_ok=True)
 
         meta = generation_meta or {}
@@ -179,18 +179,13 @@ def log_training_example(
         if prompt_category:
             entry["notes"] = f"cat={prompt_category}; NEEDS_ANNOTATION"
 
-        existing: list = []
-        if capture_path.exists():
-            try:
-                with open(capture_path, encoding="utf-8") as f:
-                    existing = json.load(f)
-            except (json.JSONDecodeError, Exception):
-                existing = []
-
-        existing.append(entry)
-
-        with open(capture_path, "w", encoding="utf-8") as f:
-            json.dump(existing, f, indent=2, ensure_ascii=False)
+        # Append-only JSONL: the old read-append-rewrite reloaded the
+        # ENTIRE capture array into memory per request — O(n^2) disk IO
+        # and an unbounded per-request allocation on long capture runs
+        # (memory audit). One entry per line; annotate in place, then
+        # copy annotated entries into curated.json as before.
+        with open(capture_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         log.debug(
             "📊 Training example captured: id=%s, category=%s, %d chars",
@@ -229,7 +224,7 @@ def log_raw_generation(
         from core.config import get_config
 
         config = get_config()
-        capture_path = config.logging.directory / "captured_raw.json"
+        capture_path = config.logging.directory / "captured_raw.jsonl"
         capture_path.parent.mkdir(parents=True, exist_ok=True)
 
         if _training_log_mode and not _collection_mode:
@@ -262,18 +257,13 @@ def log_raw_generation(
         # because captures are spaced seconds apart (one per inference).
         import json
 
-        existing: list = []
-        if capture_path.exists():
-            try:
-                with open(capture_path, encoding="utf-8") as f:
-                    existing = json.load(f)
-            except (json.JSONDecodeError, Exception):
-                existing = []
-
-        existing.append(entry)
-
-        with open(capture_path, "w", encoding="utf-8") as f:
-            json.dump(existing, f, indent=2, ensure_ascii=False)
+        # Append-only JSONL: the old read-append-rewrite reloaded the
+        # ENTIRE capture array into memory per request — O(n^2) disk IO
+        # and an unbounded per-request allocation on long capture runs
+        # (memory audit). One entry per line; annotate in place, then
+        # copy annotated entries into curated.json as before.
+        with open(capture_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         if _training_log_mode:
             log.debug(

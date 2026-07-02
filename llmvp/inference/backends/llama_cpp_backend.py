@@ -347,7 +347,13 @@ class LlamaCppBackend(BaseBackend):
 
         # New mutable arrays
         inst.input_ids = np.ndarray((primary._n_ctx,), dtype=np.intc)
-        logits_rows = primary._n_ctx if primary._logits_all else primary.n_batch
+        # Match upstream Llama.__init__: ONE logits row when logits_all is
+        # false (llama.py:704). n_batch rows here silently inflated every
+        # save_state blob ~2048x — for gpt-oss's 201k vocab that is a
+        # ~1.6 GB scores copy PER BLOB (memory audit; the hidden weight
+        # behind the historical flow_kv_cache pain). The decode path only
+        # ever reads row 0 when logits_all is false.
+        logits_rows = primary._n_ctx if primary._logits_all else 1
         inst.scores = np.ndarray((logits_rows, primary._n_vocab), dtype=np.single)
         inst._candidates = internals.LlamaTokenDataArray(n_vocab=primary._n_vocab)
         inst.n_tokens = 0
@@ -517,12 +523,19 @@ class LlamaCppBackend(BaseBackend):
 
         started = time.perf_counter()
         # Drop the old context + batch — frees the accumulated/rotted KV state.
-        with contextlib.suppress(Exception):
+        # A failed close here silently leaks a multi-GB Metal KV allocation
+        # once per refresh (48/day at the time cap) — log it loudly; the
+        # rebuild itself can still proceed.
+        try:
             if inst._ctx is not None:
                 inst._ctx.close()
-        with contextlib.suppress(Exception):
+        except Exception:
+            log.exception("⚠️ context close FAILED during refresh — KV may leak")
+        try:
             if inst._batch is not None:
                 inst._batch.close()
+        except Exception:
+            log.exception("⚠️ batch close FAILED during refresh — buffer may leak")
         # Fresh context + batch from the SAME model (weights stay resident, no reload).
         inst._ctx = internals.LlamaContext(
             model=inst._model, params=inst.context_params, verbose=False
@@ -535,7 +548,8 @@ class LlamaCppBackend(BaseBackend):
         )
         # Reset per-instance mutable arrays + sampler (mirrors _create_shared_instance).
         inst.input_ids = np.ndarray((inst._n_ctx,), dtype=np.intc)
-        logits_rows = inst._n_ctx if inst._logits_all else inst.n_batch
+        # ONE row when logits_all is false — see _create_shared_instance.
+        logits_rows = inst._n_ctx if inst._logits_all else 1
         inst.scores = np.ndarray((logits_rows, inst._n_vocab), dtype=np.single)
         inst._candidates = internals.LlamaTokenDataArray(n_vocab=inst._n_vocab)
         inst.n_tokens = 0
@@ -556,6 +570,10 @@ class LlamaCppBackend(BaseBackend):
         # untouched, so from_snapshot still works; the next fork re-prefills.
         demoted = len(getattr(inst, "_snap_seqs", {}) or {})
         if demoted:
+            for key in getattr(inst, "_snap_seqs", {}):
+                entry = self._snap_registry.get(key)
+                if entry is not None:
+                    entry["resident"] = False  # cold until the next rebuild re-pins
             log.warning(
                 "🧊 context refresh demoted %d session snapshot(s) to cold — "
                 "next fork re-prefills",
@@ -805,12 +823,16 @@ class LlamaCppBackend(BaseBackend):
             raise RuntimeError(f"snapshot key {key!r} already exists — purge first")
         n_tokens = int(inst.n_tokens)
         static_len = self._resident_static_len
-        # Capacity: static + existing snapshots + this candidate must leave
-        # generation headroom in the shared n_ctx cell pool.
+        # Capacity: static + snapshots LIVE ON THIS INSTANCE + this
+        # candidate must leave generation headroom in the shared n_ctx
+        # cell pool. Live pins (inst._snap_seqs), not registry flags —
+        # a refresh demotes pins but leaves registry entries, and stale
+        # flags would brick snapshot creation until restart.
         live = sum(
-            len(e["dyn_tokens"]) + static_len
-            for e in self._snap_registry.values()
-            if e.get("resident")
+            len(self._snap_registry[k]["dyn_tokens"])
+            + self._snap_registry[k]["static_len"]
+            for k in getattr(inst, "_snap_seqs", {})
+            if k in self._snap_registry
         )
         n_ctx = int(getattr(inst, "_n_ctx", 0) or 0)
         if n_ctx and live + n_tokens + SNAP_GEN_RESERVE > n_ctx:
@@ -873,11 +895,17 @@ class LlamaCppBackend(BaseBackend):
         if dyn:
             inst.eval(dyn)
         n_total = int(inst.n_tokens)
-        if entry.get("resident") and self._resident_active:
+        if self._resident_active:
+            # Re-pin on backend CAPABILITY, not the entry's flag — the
+            # refresh demotion just cleared that flag, and gating on it
+            # would leave every snapshot permanently cold after the
+            # first refresh (caught by test). Pinning a replay-born
+            # entry on a resident backend is a pure win too.
             try:
                 seq = inst._snap_seqs.get(key) or self._alloc_snap_seq(inst, key)
                 inst._ctx.memory_seq_rm(seq, 0, -1)
                 inst._ctx.memory_seq_cp(SEQ_WORKING, seq, -1, -1)
+                entry["resident"] = True  # hot again after a refresh demotion
             except Exception as exc:  # noqa: BLE001 — fork source is optional
                 inst._snap_seqs.pop(key, None)
                 log.warning("snapshot %r re-pin failed (%s) — stays cold", key, exc)
@@ -906,6 +934,12 @@ class LlamaCppBackend(BaseBackend):
         Same registry, same purge, same API surface; telemetry marks the mode."""
         if key in self._snap_registry:
             raise RuntimeError(f"snapshot key {key!r} already exists — purge first")
+        cap = max(8, self._snapshot_max * 4)
+        if len(self._snap_registry) >= cap:
+            raise RuntimeError(
+                f"snapshot registry at capacity ({cap}) — purge stale keys "
+                f"(each replay entry holds its full token history in RAM)"
+            )
         self._snap_registry[key] = {
             "dyn_tokens": [int(t) for t in dyn_tokens],
             "static_len": 0,
@@ -915,6 +949,33 @@ class LlamaCppBackend(BaseBackend):
         }
         log.info("📸 snapshot %r registered (replay mode, %d tok)", key, len(dyn_tokens))
         return {"tokens": len(dyn_tokens), "resident": False}
+
+    def sweep_stale_snapshots(self, max_age_s: float) -> int:
+        """Purge snapshots older than max_age_s — crash insurance.
+
+        Snapshots survive session end/TTL/refresh BY DESIGN; the only
+        normal free path is an explicit purge. A mission that dies
+        between snapshot and purge would otherwise hold the entry (and
+        its capacity slot) for the server's lifetime. Called by the
+        session manager's orphan reaper. 0 disables.
+        """
+        if not max_age_s:
+            return 0
+        cutoff = time.time() - max_age_s
+        stale = [
+            k
+            for k, e in self._snap_registry.items()
+            if float(e.get("created_at") or 0) < cutoff
+        ]
+        for key in stale:
+            log.warning(
+                "🧹 sweeping stale snapshot %r (older than %.0fs — "
+                "crash-orphaned? normal paths purge explicitly)",
+                key,
+                max_age_s,
+            )
+            self.purge_snapshot(key)
+        return len(stale)
 
     def list_snapshots(self) -> List[dict]:
         return [

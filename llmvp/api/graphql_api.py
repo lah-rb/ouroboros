@@ -755,7 +755,10 @@ class Subscription:
                 event_type=event.event_type,
                 message=event.message,
             )
-            if event.event_type == "expired":
+            if event.event_type in ("expired", "closed", "error"):
+                # Terminal events end the subscription — without this the
+                # task parks on queue.get() for the websocket's lifetime
+                # after a normal endSession (memory audit).
                 return
 
 

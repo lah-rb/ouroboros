@@ -298,7 +298,7 @@ def main():
     parser.add_argument(
         "--log-training",
         action="store_true",
-        help="Capture raw model responses to captured_raw.json during serving. "
+        help="Capture raw model responses to captured_raw.jsonl during serving. "
         "Compatible with --backend. Captured examples can be annotated "
         "and added to knowledge/crf/curated.json as FSM regression fixtures.",
     )
@@ -361,7 +361,7 @@ def main():
         enable_training_log_mode(family, model_name)
         log.info(
             "📊 Infield training capture active — raw responses will be "
-            "saved to captured_raw.json (family=%s)",
+            "saved to captured_raw.jsonl (family=%s)",
             family,
         )
 

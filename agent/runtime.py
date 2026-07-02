@@ -677,9 +677,11 @@ async def _cleanup_orphaned_sessions(
     slots are not held by orphaned handles. Best-effort: never raises,
     so it can be called from exception handlers without risk.
 
-    MCP-managed terminal sessions are NOT ended here; they're tied to
-    their parent action (close_interactive_session) and will clean up
-    through their own lifecycle.
+    MCP terminal (PTY) sessions ARE closed here too: their normal
+    lifecycle owner (close_interactive_session) never runs on an
+    abnormal exit, and each orphan is a live child process + reader
+    thread in the terminal server for the rest of the run (memory
+    audit: per-crashed-flow process accumulation on 24/7 missions).
     """
     if effects is None:
         return
@@ -692,6 +694,17 @@ async def _cleanup_orphaned_sessions(
         try:
             await effects.end_inference_session(sid)
             logger.info("Cleaned up orphaned inference session %s (%s)", sid, reason)
+        except Exception:
+            pass  # Best-effort
+
+    conn_id = accumulator.get("mcp_connection_id", "")
+    pty_sid = accumulator.get("mcp_session_id", "")
+    if conn_id and pty_sid and hasattr(effects, "mcp_call_tool"):
+        try:
+            await effects.mcp_call_tool(
+                conn_id, "close_session", {"session_id": pty_sid}
+            )
+            logger.info("Cleaned up orphaned PTY session %s (%s)", pty_sid, reason)
         except Exception:
             pass  # Best-effort
 

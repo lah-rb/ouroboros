@@ -199,7 +199,7 @@ class SessionEvent:
     """Push notification for session lifecycle events."""
 
     session_id: str
-    event_type: str  # "expired" | "error"
+    event_type: str  # "expired" | "closed" | "error"
     message: str
 
 
@@ -981,6 +981,20 @@ class SessionManager:
             except asyncio.CancelledError:
                 pass
 
+        # Wake any session_events subscriber with a terminal event — the
+        # normal explicit-end path previously pushed nothing, parking the
+        # subscription task on queue.get() for the websocket's lifetime
+        # (memory audit: per-session task + queue accumulation).
+        if session.listener is not None:
+            with contextlib.suppress(Exception):
+                session.listener.put_nowait(
+                    SessionEvent(
+                        session_id=session_id,
+                        event_type="closed",
+                        message="session ended",
+                    )
+                )
+
         # Release instance back to pool
         await self._backend.release_instance(session.instance)
 
@@ -1073,6 +1087,27 @@ class SessionManager:
                             log.exception(
                                 "Orphan reaper failed to end session %s", sid
                             )
+                # Crash insurance for the semi-permanent tier: snapshots
+                # survive session end/TTL/refresh by design, so a client
+                # that dies between snapshot and purge would hold its
+                # registry entry (and capacity slot) forever. Sweep by
+                # age (config: model.session_snapshot_ttl_s; 0 = never).
+                sweep = getattr(self._backend, "sweep_stale_snapshots", None)
+                if sweep is not None:
+                    try:
+                        from core.config import get_config
+
+                        ttl = float(
+                            getattr(
+                                get_config().model,
+                                "session_snapshot_ttl_s",
+                                7200,
+                            )
+                            or 0
+                        )
+                        sweep(ttl)
+                    except Exception:
+                        log.exception("stale-snapshot sweep failed")
         except asyncio.CancelledError:
             return
 

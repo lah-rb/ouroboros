@@ -414,3 +414,68 @@ def test_opportunistic_refresh_requires_idle(monkeypatch):
     assert backend._refresh_decision() == "proactive-interval"
     backend._checked_out = 1
     assert backend._refresh_decision() is None
+
+
+# ── memory hardening: sweep, caps, terminal events ────────────────────
+
+
+def test_stale_snapshot_sweep_purges_old_entries(monkeypatch):
+    backend = _make_backend()
+    inst = _make_inst()
+    backend._all_instances = [inst]
+    backend.snapshot_working_seq(inst, "old")
+    backend._snap_registry["old"]["created_at"] -= 10_000
+    backend.snapshot_working_seq(inst, "fresh")
+    swept = backend.sweep_stale_snapshots(7200)
+    assert swept == 1
+    assert "old" not in backend._snap_registry
+    assert "fresh" in backend._snap_registry
+    assert backend.sweep_stale_snapshots(0) == 0  # 0 disables
+
+
+def test_replay_registry_count_cap():
+    backend = _make_backend(snapshot_max=1)
+    backend._resident_active = False
+    for i in range(8):  # cap = max(8, snapshot_max*4)
+        backend.register_replay_snapshot(f"k{i}", [1, 2])
+    import pytest as _pytest
+
+    with _pytest.raises(RuntimeError, match="registry at capacity"):
+        backend.register_replay_snapshot("overflow", [1, 2])
+
+
+def test_refresh_demotion_clears_resident_flag_and_rebuild_restores_it():
+    backend = _make_backend()
+    inst = _make_inst()
+    backend.snapshot_working_seq(inst, "k")
+    assert backend._snap_registry["k"]["resident"] is True
+    # Simulate the refresh demotion path's flag clear.
+    for key in inst._snap_seqs:
+        backend._snap_registry[key]["resident"] = False
+    inst._snap_seqs.clear()
+    fresh = _make_inst(n_tokens=0)
+    assert backend.fork_snapshot_seq(fresh, "k") is None  # cold
+    backend.rebuild_snapshot_cold(fresh, "k")
+    assert backend._snap_registry["k"]["resident"] is True  # re-pinned = hot
+
+
+def test_capacity_counts_live_pins_not_registry_flags():
+    backend = _make_backend(snapshot_max=2)
+    inst = _make_inst()
+    backend.snapshot_working_seq(inst, "a")
+    # Registry says resident, but a fresh instance has NO live pins —
+    # stale flags must not consume the budget on it.
+    fresh = _make_inst(n_tokens=1990)  # near the budget if 'a' counted
+    backend.snapshot_working_seq(fresh, "b")  # would raise if stale-counted
+    assert "b" in backend._snap_registry
+
+
+def test_end_session_pushes_terminal_event():
+    backend = FakeSnapBackend()
+    mgr = SessionManager(backend)
+    q: asyncio.Queue = asyncio.Queue()
+    sess = SessionState(instance=SimpleNamespace(), current_state=None, listener=q)
+    mgr._sessions["s1"] = sess
+    asyncio.run(mgr.end_session("s1"))
+    ev = q.get_nowait()
+    assert ev.event_type == "closed"

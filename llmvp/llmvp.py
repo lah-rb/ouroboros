@@ -18,7 +18,7 @@ Usage:
     uv run llmvp.py --benchmark [--requests 10] [--concurrency 2] [--live]
 
     # Training data collection (for FSM regression fixtures)
-    uv run llmvp.py --collect-training          # Run prompt suite, capture to logs/captured_raw.json
+    uv run llmvp.py --collect-training          # Run prompt suite, capture to logs/captured_raw.jsonl
 """
 
 import os
@@ -139,12 +139,12 @@ def run_collect_training():
         model_family = "unknown"
 
     endpoint = f"http://{config.app.host}:{config.app.port}/graphql"
-    capture_path = config.logging.directory / "captured_raw.json"
+    capture_path = config.logging.directory / "captured_raw.jsonl"
     capture_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Back up any previous capture file
     if capture_path.exists():
-        backup = capture_path.with_suffix(".json.bak")
+        backup = capture_path.with_suffix(".jsonl.bak")
         capture_path.rename(backup)
         print(f"   Backed up previous captures → {backup}")
 
@@ -295,6 +295,45 @@ def main():
     # Handle --collect-training flag
     if "--collect-training" in sys.argv:
         return 0 if run_collect_training() else 1
+
+    # Handle --restart: graceful --stop, wait for the process to fully exit, then
+    # relaunch --backend detached. A FULL process teardown clears accumulated
+    # system/memory state the in-process refresh can't (the ~weights + creep), for
+    # periodic maintenance or A/B-ing a restart against the refresh.
+    if "--restart" in sys.argv:
+        import subprocess
+        import time as _t
+
+        here = os.path.dirname(os.path.abspath(__file__))
+        me = os.path.join(here, "llmvp.py")
+        subprocess.run([sys.executable, me, "--stop"], cwd=here)
+        for _ in range(45):  # wait until the api/main.py process is gone
+            if not subprocess.run(
+                ["pgrep", "-f", "api/main.py"], capture_output=True
+            ).stdout.strip():
+                break
+            _t.sleep(2)
+        _t.sleep(3)  # let the 61GB teardown settle so the relaunch is clean
+        # Tidy break: flush the OS file cache so the relaunch is a COLD load. Without it
+        # the freed weights sit in the page cache and the new process re-reads them
+        # straight back ("dump to cache then jump right back") — not a clean break.
+        # Best-effort; needs the scoped NOPASSWD sudoers for /usr/sbin/purge.
+        if "--no-purge" not in sys.argv:
+            try:
+                r = subprocess.run(
+                    ["sudo", "-n", "/usr/sbin/purge"], capture_output=True, timeout=180
+                )
+                print("🧹 purge:", "ok" if r.returncode == 0
+                      else f"skipped ({r.stderr.decode()[:60].strip()})")
+            except Exception as e:  # noqa: BLE001
+                print(f"🧹 purge skipped: {e}")
+        logf = open("/tmp/llmvp_restart.log", "a")
+        subprocess.Popen(
+            [sys.executable, me, "--backend"],
+            cwd=here, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+        print("🔄 --restart: stopped + backend relaunching (detached -> /tmp/llmvp_restart.log)")
+        return 0
 
     # Add project root to Python path for proper imports
     project_root = os.path.dirname(os.path.abspath(__file__))
