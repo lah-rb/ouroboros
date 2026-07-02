@@ -103,6 +103,9 @@ def _run_mlx_model(model: str, figures, databank: Path) -> dict:
             t0 = time.time()
             try:
                 text = fr._chat_figure(port, model, str(fig_path), caption)
+                if not text.strip():
+                    results[f"{key}/{fig_path.name}"] = {"error": "empty output"}
+                    continue
                 results[f"{key}/{fig_path.name}"] = {
                     "figtext": text,
                     "overlap": round(fr.numeric_overlap(text, md), 3),
@@ -160,6 +163,14 @@ def _run_mtmd_model(name: str, paths: dict, figures, databank: Path) -> dict:
                 timeout=900,
             )
             text = proc.stdout.strip()
+            if not text:
+                # Empty output scores overlap 1.0 VACUOUSLY (no numerics,
+                # no misses) — the same hole as 0-verified-pages. Errors
+                # must look like errors.
+                results[f"{key}/{fig_path.name}"] = {
+                    "error": f"empty output; stderr: {proc.stderr.strip()[-300:]}"
+                }
+                continue
             results[f"{key}/{fig_path.name}"] = {
                 "figtext": text[-4000:],
                 "overlap": round(fr.numeric_overlap(text, md), 3),
