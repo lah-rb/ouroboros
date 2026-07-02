@@ -127,6 +127,25 @@ class SessionState:
     flow_key: Optional[str] = None
     flow_static_prefix: Optional[str] = None
     static_base: int = 0
+    # Semi-permanent snapshot linkage. snapshot_key: this session TOOK a
+    # snapshot (its live cells are shared with the pinned seq until the
+    # session ends). snapshot_forked: this session STARTED from one. Either
+    # way windowing is forbidden — memory_seq_add would shift shared cells
+    # and corrupt the snapshot (see SessionSnapshotOverflow).
+    snapshot_key: Optional[str] = None
+    snapshot_forked: bool = False
+
+
+class SessionSnapshotOverflow(RuntimeError):
+    """A snapshot-linked session outgrew the context window.
+
+    Windowing is the normal deep-session escape hatch, but it position-
+    shifts KV cells the session SHARES with a pinned snapshot seq —
+    corrupting the snapshot. Snapshot-linked sessions are sized to fit
+    (paper + passes ≪ n_ctx); overflow means the request is wrong, and
+    the caller's correct move is a smaller ask or a fresh fork, never
+    silent context loss.
+    """
 
 
 def _global_temperature_floor(requested: float, gen_cfg: Any) -> float:
@@ -200,6 +219,10 @@ class SessionManager:
         self._sessions: dict[str, SessionState] = {}
         self._expiry_tasks: dict[str, asyncio.Task] = {}
         self._turn_transition_cache: str | None = None
+        # Crash-proof backstop for the per-session TTL monitors (see _orphan_reaper).
+        # Lazily started on the first session; reclaims a pinned instance even if a
+        # monitor task dies, so a standard client kill (pkill) cannot leak it.
+        self._orphan_reaper_task: Optional[asyncio.Task] = None
 
     @property
     def active_session_count(self) -> int:
@@ -285,6 +308,7 @@ class SessionManager:
         ttl_seconds: int = 300,
         flow_key: Optional[str] = None,
         static_prefix: Optional[str] = None,
+        from_snapshot: Optional[str] = None,
     ) -> SessionInfo:
         """Acquire instance, save initial state, return session info.
 
@@ -292,7 +316,19 @@ class SessionManager:
         flow-fork (model.resident_session_flow_fork): the invariant preamble is
         pinned + forked onto the live seq at turn 0 so it isn't re-prefilled per
         session. Ignored unless resident_session_flow_fork is active.
+
+        ``from_snapshot`` forks the new session from a pinned snapshot (see
+        session_snapshot): hot = seq_cp (~zero prefill), cold/replay = re-
+        prefill from the registry's token list. turn_count is seeded from the
+        snapshot so the first turn renders the turn transition — the captured
+        KV holds a CLOSED prior turn. Unknown key raises KeyError before any
+        state is touched.
         """
+        snap_entry = None
+        if from_snapshot:
+            registry = getattr(self._backend, "_snap_registry", {})
+            snap_entry = registry[from_snapshot]  # KeyError = unknown snapshot
+
         instance = await self._backend.acquire_instance()
         session_id = _generate_session_id()
 
@@ -306,7 +342,7 @@ class SessionManager:
             async with self._generation_guard():
                 initial_state = await run_in_threadpool(instance.save_state)
 
-        self._sessions[session_id] = SessionState(
+        session = SessionState(
             instance=instance,
             current_state=initial_state,
             ttl=ttl_seconds,
@@ -316,10 +352,43 @@ class SessionManager:
             flow_static_prefix=static_prefix,
         )
 
-        # Start TTL expiry timer
+        if snap_entry is not None:
+            session.snapshot_forked = True
+            session.turn_count = int(snap_entry.get("turn_count") or 0)
+            if resident:
+                # Hot fork (~zero prefill); cold miss (refresh/instance
+                # mismatch/replay-only entry) rebuilds by re-prefill. Both
+                # leave seq 0 holding static + snapshot content — the live-KV
+                # turn path appends from there.
+                async with self._generation_guard():
+                    got = await run_in_threadpool(
+                        self._backend.fork_snapshot_seq, instance, from_snapshot
+                    )
+                    if got is None:
+                        await run_in_threadpool(
+                            self._backend.rebuild_snapshot_cold,
+                            instance,
+                            from_snapshot,
+                        )
+            else:
+                # Replay fallback (recurrent models / resident off): seed the
+                # history; turn 1 re-prefills it on the static base.
+                session.token_history = list(snap_entry["dyn_tokens"])
+            log.info(
+                "🌱 Session %s forked from snapshot %r (turn_count=%d, mode=%s)",
+                session_id,
+                from_snapshot,
+                session.turn_count,
+                "resident" if resident else "replay",
+            )
+
+        self._sessions[session_id] = session
+
+        # Start TTL expiry timer + ensure the crash-proof orphan reaper is running.
         self._expiry_tasks[session_id] = asyncio.create_task(
             self._ttl_monitor(session_id, ttl_seconds)
         )
+        self._ensure_orphan_reaper()
 
         log.info(
             "📌 Session %s started (ttl=%ds, pinned instance)",
@@ -510,6 +579,18 @@ class SessionManager:
                 # remaining context anyway; this just keeps a slice free.
                 gen_reserve = min(int(max_tokens or 0), _WINDOW_GEN_RESERVE)
                 if n_ctx and pre_turn_pos + len(turn_tokens) + gen_reserve >= n_ctx:
+                    if session.snapshot_key or session.snapshot_forked:
+                        # Windowing position-shifts (memory_seq_add) KV cells
+                        # this seq SHARES with a pinned snapshot — corruption,
+                        # not relief. Snapshot sessions are sized to fit;
+                        # overflow means the ask is wrong. Fail loudly.
+                        raise SessionSnapshotOverflow(
+                            f"session {session_id} is snapshot-linked "
+                            f"(key={session.snapshot_key or 'forked'}) and hit the "
+                            f"context window ({pre_turn_pos} + {len(turn_tokens)} "
+                            f"+ {gen_reserve} reserve >= {n_ctx}) — windowing is "
+                            f"forbidden; use a smaller pass or a fresh fork"
+                        )
                     pre_turn_pos = await run_in_threadpool(
                         self._backend._window_resident_seq, instance, n_keep
                     )
@@ -767,7 +848,7 @@ class SessionManager:
             "generated_tokens": len(
                 getattr(_inst, "_last_completion_tokens", []) or []
             ),
-            "cache_hit": bool(getattr(_inst, "_last_flow_hit", False)),
+            "cache_hit": bool(getattr(_inst, "_last_cache_hit", False)),
             "flow_key": str(getattr(_inst, "_last_flow_key", "") or ""),
             "prefill_ms": round((_diag.get("eval_duration", 0) or 0) * 1000, 1),
             "decode_ms": round((_diag.get("generation_duration", 0) or 0) * 1000, 1),
@@ -835,6 +916,56 @@ class SessionManager:
 
         return text, generated_tokens, cache
 
+    async def session_snapshot(self, session_id: str, key: str) -> dict:
+        """Pin the session's current context under ``key`` (semi-permanent).
+
+        Survives session end and TTL expiry; freed only by purge_snapshot.
+        Resident backends pin the live KV seq (hot fork source) AND record
+        the token stream (cold rebuild source); non-resident/recurrent
+        backends record the token history only — from_snapshot then pays a
+        re-prefill, same API. The session becomes snapshot-linked: windowing
+        is forbidden from here on (shared cells).
+        """
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise KeyError(f"unknown session {session_id}")
+        resident = bool(getattr(self._backend, "_resident_active", False))
+        async with self._generation_guard():
+            if resident:
+                info = await run_in_threadpool(
+                    self._backend.snapshot_working_seq, session.instance, key
+                )
+            else:
+                info = self._backend.register_replay_snapshot(
+                    key, list(session.token_history)
+                )
+        # The captured KV/history ends at a CLOSED turn — record the depth so
+        # forked sessions render the turn transition correctly.
+        self._backend._snap_registry[key]["turn_count"] = session.turn_count
+        session.snapshot_key = key
+        log.info(
+            "📸 Session %s snapshotted as %r (%d tokens, turn %d, %s)",
+            session_id,
+            key,
+            info.get("tokens", 0),
+            session.turn_count,
+            "resident" if info.get("resident") else "replay",
+        )
+        return {
+            "key": key,
+            "tokens": int(info.get("tokens", 0)),
+            "resident": bool(info.get("resident")),
+            "turn_count": session.turn_count,
+        }
+
+    async def purge_snapshot(self, key: str) -> bool:
+        """Free a pinned snapshot everywhere (the explicit-release call)."""
+        async with self._generation_guard():
+            return await run_in_threadpool(self._backend.purge_snapshot, key)
+
+    def list_snapshots(self) -> list:
+        return self._backend.list_snapshots()
+
     async def end_session(self, session_id: str) -> bool:
         """Release the pinned instance and clean up."""
         session = self._sessions.pop(session_id, None)
@@ -900,7 +1031,59 @@ class SessionManager:
         except asyncio.CancelledError:
             return
 
+    def _ensure_orphan_reaper(self) -> None:
+        """Start the orphan reaper if not already running. Lazily started from
+        start_session (it needs a running event loop, unlike __init__)."""
+        if self._orphan_reaper_task is None or self._orphan_reaper_task.done():
+            self._orphan_reaper_task = asyncio.create_task(self._orphan_reaper())
+
+    async def _orphan_reaper(self) -> None:
+        """Crash-proof backstop for the per-session TTL monitors.
+
+        Each session's _ttl_monitor reclaims its instance after ~TTL of inactivity,
+        but it is a fire-and-forget task guarded only against CancelledError — an
+        unexpected exception in its body would kill it silently and leak the pinned
+        instance forever. This central sweep (every 60s) force-ends any session idle
+        beyond 2x its TTL — the unambiguous signal that its monitor died — so a
+        standard client kill (pkill) can never permanently wedge the pool.
+
+        Reclaim-safe: 2x TTL (>= 240s) far exceeds any single generation (tens of
+        seconds), and it additionally skips the sweep whenever the backend reports an
+        active generation, so it never releases an instance that is mid-decode.
+        """
+        try:
+            while True:
+                await asyncio.sleep(60)
+                # Never reclaim while GPU work is in flight. (Single-instance: a held
+                # dead session blocks all generation, so this reads 0 and we proceed.)
+                if getattr(self._backend, "_active_generations", 0) > 0:
+                    continue
+                now = time.monotonic()
+                for sid, session in list(self._sessions.items()):
+                    idle = now - session.last_turn_at
+                    if idle > 2 * session.ttl:
+                        log.warning(
+                            "🧹 Orphan reaper: session %s idle %.0fs > 2x TTL (%ds) "
+                            "— TTL monitor likely died; force-releasing instance",
+                            sid, idle, session.ttl,
+                        )
+                        try:
+                            await self.end_session(sid)
+                        except Exception:
+                            log.exception(
+                                "Orphan reaper failed to end session %s", sid
+                            )
+        except asyncio.CancelledError:
+            return
+
     async def shutdown(self) -> None:
         """End all active sessions during server shutdown."""
+        if self._orphan_reaper_task is not None:
+            self._orphan_reaper_task.cancel()
+            try:
+                await self._orphan_reaper_task
+            except asyncio.CancelledError:
+                pass
+            self._orphan_reaper_task = None
         for sid in list(self._sessions.keys()):
             await self.end_session(sid)

@@ -9,6 +9,7 @@ Uses shared inference logic from core.inference.
 
 import json
 import logging
+import time
 from typing import AsyncGenerator, List, Optional
 
 import strawberry
@@ -81,6 +82,10 @@ class HealthStatus:
     flow_evicts: int = 0
     flow_fallbacks: int = 0
     runaway_captures: int = 0
+    # In-process context-refresh telemetry: cumulative rebuilds + requests since the
+    # last one. Drives/observes the periodic rot-clearing context rebuild.
+    context_refreshes: int = 0
+    requests_since_refresh: int = 0
     # Rolling latency/throughput trend (pass 2). throughput_drift = recent
     # decode tps / warm baseline; well under 1.0 flags generation slowdown.
     trend_samples: int = 0
@@ -221,6 +226,21 @@ class SessionConfig:
     # live seq at turn 0, keyed by flow_cache_key. Ignored unless the flag is on.
     flow_cache_key: Optional[str] = strawberry.field(default=None)
     static_prefix: Optional[str] = strawberry.field(default=None)
+    # Fork this session from a pinned semi-permanent snapshot (sessionSnapshot
+    # mutation): hot = ~zero prefill; cold/replay = re-prefill from the stored
+    # token stream. Unknown key errors before any state is touched.
+    from_snapshot: Optional[str] = strawberry.field(default=None)
+
+
+@strawberry.type
+class SnapshotInfoGQL:
+    """A pinned semi-permanent session snapshot."""
+
+    key: str
+    tokens: int
+    resident: bool
+    turn_count: int
+    created_at: float
 
 
 @strawberry.input
@@ -302,6 +322,8 @@ class Query:
             flow_evicts=status.get("flow_evicts", 0),
             flow_fallbacks=status.get("flow_fallbacks", 0),
             runaway_captures=status.get("runaway_captures", 0),
+            context_refreshes=status.get("context_refreshes", 0),
+            requests_since_refresh=status.get("requests_since_refresh", 0),
             **{
                 k: trend_status.get(k)
                 for k in (
@@ -492,6 +514,21 @@ class Query:
         ]
 
     @strawberry.field
+    def snapshots(self) -> List[SnapshotInfoGQL]:
+        """Pinned semi-permanent session snapshots (telemetry/harness view)."""
+        mgr = _get_session_manager()
+        return [
+            SnapshotInfoGQL(
+                key=s["key"],
+                tokens=s["tokens"],
+                resident=s["resident"],
+                turn_count=s["turn_count"],
+                created_at=s["created_at"],
+            )
+            for s in mgr.list_snapshots()
+        ]
+
+    @strawberry.field
     def tool_result(self, name: str, params: str) -> ToolResult:
         """
         Execute a registered tool by name.
@@ -520,6 +557,17 @@ class Query:
                 {"error": f"Unknown tool: {name!r}", "available": registry.tool_names()}
             )
         return ToolResult(tool_name=name, result=result)
+
+
+@strawberry.type
+class RefreshContextResult:
+    """Result of an in-process llama.cpp context refresh."""
+
+    status: str
+    refreshed: int
+    reason: str
+    elapsed_s: Optional[float] = None
+    total_refreshes: int = 0
 
 
 @strawberry.type
@@ -568,6 +616,7 @@ class Mutation:
             ttl_seconds=ttl,
             flow_key=config.flow_cache_key if config else None,
             static_prefix=config.static_prefix if config else None,
+            from_snapshot=config.from_snapshot if config else None,
         )
         return SessionInfoGQL(
             session_id=info.session_id,
@@ -580,6 +629,44 @@ class Mutation:
         """Release the pinned instance and clear session state."""
         mgr = _get_session_manager()
         return await mgr.end_session(session_id)
+
+    @strawberry.mutation
+    async def session_snapshot(self, session_id: str, key: str) -> SnapshotInfoGQL:
+        """Pin the session's current context as a semi-permanent snapshot.
+
+        Survives session end/TTL; freed only by purgeSnapshot. Later sessions
+        fork from it via SessionConfig.fromSnapshot — pay the long-context
+        prefill once, branch many passes."""
+        mgr = _get_session_manager()
+        info = await mgr.session_snapshot(session_id, key)
+        return SnapshotInfoGQL(
+            key=info["key"],
+            tokens=info["tokens"],
+            resident=info["resident"],
+            turn_count=info["turn_count"],
+            created_at=time.time(),
+        )
+
+    @strawberry.mutation
+    async def purge_snapshot(self, key: str) -> bool:
+        """Free a pinned semi-permanent snapshot (the explicit release)."""
+        mgr = _get_session_manager()
+        return await mgr.purge_snapshot(key)
+
+    @strawberry.mutation
+    async def refresh_context(self, reason: str = "manual") -> RefreshContextResult:
+        """Drop + rebuild the inference context in-process (weights kept) to clear the
+        LLMVP-process-level output rot ("souring") without a process restart/reboot."""
+        from core.inference import refresh_context as _refresh
+
+        r = await _refresh(reason)
+        return RefreshContextResult(
+            status=r.get("status", "unknown"),
+            refreshed=r.get("refreshed", 0),
+            reason=r.get("reason", reason),
+            elapsed_s=r.get("elapsed_s"),
+            total_refreshes=r.get("total_refreshes", 0),
+        )
 
 
 @strawberry.type

@@ -39,8 +39,24 @@ class ModelConfig(BaseModel):
     # Single unified KV cache cell allocation (vs per-sequence) — pairs with
     # swa_full to bound the memory cost on unified-memory (Metal) hardware.
     kv_unified: bool = False
-    flash_attention: bool = False
-    batch_size: int = 64
+    flash_attention: bool = False  # DEAD no-op (wrong kwarg name); see flash_attn_type
+    batch_size: int = 64           # DEAD no-op (wrong kwarg name); see n_batch
+    # The two fields above were silently swallowed by Llama()'s **kwargs (the binding
+    # has no `flash_attn`/`batch_size` params). These are the REAL llama.cpp knobs.
+    # Defaults preserve the prior EFFECTIVE behavior — flash_attn was AUTO, batch was
+    # the n_batch=2048 default — so wiring them changes nothing until explicitly tuned.
+    flash_attn_type: str = "auto"  # auto (-1, llama.cpp decides) | on (1) | off (0)
+    n_batch: int = 2048            # logical prefill batch (the prior silent default)
+    # Speculative decoding via the binding's native n-gram-map draft
+    # (LlamaNGramMapDecoding): O(1) incremental n-gram lookup over the live context,
+    # LOSSLESS (the target verifies every drafted token), zero extra model. Well-suited
+    # to the rewrite-heavy mining workload (prior file content is in-context -> long
+    # accepted drafts). Forces logits_all=True (extra prefill cost) — BENCHMARK before
+    # trusting it; speculative on a MoE under Metal can be net-negative. EAGLE-3 is
+    # unreachable from this binding (C++-only). The draft is per-instance (stateful).
+    speculative: bool = False
+    speculative_ngram_size: int = 3
+    speculative_num_pred: int = 10
     thinking: bool = True  # Master on/off: gates the <think>/[THINK] opening
     # Reasoning effort level rendered as a "Reasoning: <level>" line in the
     # system block (harmony + Step/chatml). None → use the family default.
@@ -117,7 +133,26 @@ class ModelConfig(BaseModel):
     # the flow head (per-session static base), not just the global static. Turn-0
     # win only (turns 1+ are already flat); valuable for high-churn short sessions
     # with a large shared preamble. Validated bit-identical fork==fresh-prefill.
-    resident_session_flow_fork: bool = False
+    # Default ON: it is gated on resident_seq_cache being active (can_shift), and
+    # is a pure no-op unless the agent threads a flow_key + static_prefix into
+    # start_session — so it only activates where the resident cache is on AND the
+    # caller opts a session in. Reclaims the cross-session persona re-prefill
+    # (~15% of wall-clock on session-heavy runs). seq_cp only — no save_state, so
+    # the flow_kv_cache corruption class does not apply.
+    resident_session_flow_fork: bool = True
+    # Semi-permanent session snapshots (the curator's ingest-once tier). A session
+    # may pin its current KV under a key (sessionSnapshot mutation); later sessions
+    # fork from it (SessionConfig.from_snapshot) paying ~zero prefill, until an
+    # explicit purgeSnapshot — the snapshot survives session end/TTL. Hot layer =
+    # a reserved seq band ABOVE the flow band, sized by this field (0 disables the
+    # band); cold layer = the captured token list, which survives context refresh
+    # and instance mismatch by re-prefill, and IS the whole mechanism on models
+    # where resident is inactive (recurrent: snapshot degrades to token-history
+    # storage — identical API, telemetry marks the mode). Snapshots share the
+    # n_ctx cell budget: capture is capacity-checked and rejected loudly, and
+    # WINDOWING IS FORBIDDEN on snapshot-linked sessions (seq_add would shift
+    # cells the snapshot seq shares — see SessionSnapshotOverflow).
+    session_snapshot_max: int = 2
 
     @field_validator("thinking_mode")
     @classmethod

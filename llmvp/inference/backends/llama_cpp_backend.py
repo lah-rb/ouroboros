@@ -37,6 +37,13 @@ log = logging.getLogger("llm-mvp")
 SEQ_WORKING = 0  # the live generation / session seq
 SEQ_STATIC = 1   # pristine static-prefix template (fork source); never generated on
 SEQ_FLOW_BASE = 2  # Phase 2: per-flow resident prefixes occupy seqs [2, 2+flow_hot_set)
+# Generation headroom a snapshot capture must leave free in the shared
+# n_ctx cell pool (capacity check in snapshot_working_seq).
+SNAP_GEN_RESERVE = 8192
+# Session snapshots occupy the band ABOVE the flow band:
+# [SEQ_FLOW_BASE + flow_hot_set, + session_snapshot_max). Own allocator —
+# snapshots are explicitly purged and capacity-rejected, never LRU-evicted,
+# so entangling them with the flow band's LRU would silently shrink it.
 
 
 @dataclasses.dataclass
@@ -134,6 +141,14 @@ class LlamaCppBackend(BaseBackend):
         self._h_flow_evicts = 0
         self._h_flow_fallbacks = 0
         self._h_runaway_captures = 0
+        # In-process context-refresh accounting. The vanilla-compare verdict proved
+        # the long-run output rot ("souring": the model emits short JSON action-stubs
+        # instead of full files) is LLMVP-PROCESS-level — it clears with a fresh
+        # llama.cpp context but NOT with a process/machine reboot, and it accumulates
+        # by inference VOLUME (~200 forks in observation). _requests_since_refresh
+        # drives the periodic refresh; _context_refreshes is the cumulative count.
+        self._h_context_refreshes = 0
+        self._h_requests_since_refresh = 0
         # Session flow-fork (Phase 2b): a memoryful session forks a pinned flow head
         # onto its live seq at turn 0. Reuses the same flow band as the stateless
         # cache; needs the band allocated even when flow_kv_cache itself is off.
@@ -143,12 +158,39 @@ class LlamaCppBackend(BaseBackend):
         # The flow seq band (n_seq_max widening + per-instance _flow_seqs allocator)
         # is allocated if EITHER flow consumer is on.
         self._flow_band = self._flow_resident or self._session_flow_fork
+        # Semi-permanent session snapshots (config.model.session_snapshot_max).
+        # Registry is backend-level (survives session end; refresh demotes hot →
+        # cold in ONE place): key -> {dyn_tokens, static_len, turn_count,
+        # created_at, resident}. Hot presence is per-instance (inst._snap_seqs).
+        self._snapshot_max = int(
+            getattr(getattr(config, "model", None), "session_snapshot_max", 2) or 0
+        )
+        self._snap_registry: "OrderedDict[str, dict]" = OrderedDict()
+        self._h_snapshot_rebuilds = 0
+        self._h_refresh_deferred = 0
         # JIT pool scaling
         jit_limit = config.resources.jit_concurrency_limit
         self._jit_enabled: bool = jit_limit is not None
         self._jit_limit: int = jit_limit or self._pool_size
         self._spawn_lock: asyncio.Lock = asyncio.Lock()
         self._scaler_task: Optional[asyncio.Task] = None
+        # Proactive in-process context refresh (see _refresh_loop). Pre-empts the
+        # LLMVP-process rot — BOTH stub-emission AND no-task-confusion thrashing —
+        # before it spoils a run; a premature ~0.85s refresh beats a spoiled mission.
+        self._refresh_loop_task: Optional[asyncio.Task] = None
+        self._refresh_interval = int(
+            getattr(getattr(config, "model", None), "context_refresh_interval", 75) or 75
+        )
+        # Time-based backstop for the refresh loop. The request-count + idle gate alone
+        # can starve under CONTINUOUS load: a long mission never goes idle, so the
+        # opportunistic refresh waited ~665 requests / 1h40m for a gap and a run soured
+        # in the meantime. This wall-clock cap fires the refresh even while busy (the
+        # graceful drain just lets the in-flight generation finish — real work, not
+        # overhead). Default 30 min.
+        self._refresh_seconds = int(
+            getattr(getattr(config, "model", None), "context_refresh_seconds", 1800) or 1800
+        )
+        self._last_refresh_monotonic: Optional[float] = None
         # Readiness gate — blocks acquire_instance() until initialize() completes
         self._ready_event: asyncio.Event = asyncio.Event()
         # Scaling gate — cleared during JIT scale-up/down to block all
@@ -204,6 +246,27 @@ class LlamaCppBackend(BaseBackend):
             self._llama_module = Llama
         return self._llama_module
 
+    # Map the human-readable flash_attn_type config to the llama.cpp enum.
+    _FLASH_ATTN = {"auto": -1, "off": 0, "on": 1}
+
+    def _make_draft(self) -> Any:
+        """A FRESH per-instance n-gram-map speculative draft, or None if disabled.
+
+        The draft (``LlamaNGramMapDecoding``) is STATEFUL — it holds its own n-gram
+        index + token history — so it must NOT be shared across pool instances; each
+        instance gets its own. It self-resets when the prompt isn't an incremental
+        continuation, so the resident-fork and context-refresh paths need NO special
+        handling: a stale draft simply rebuilds on the next request, and any wrong
+        draft token is rejected by the target during verification (lossless)."""
+        if not getattr(self.config.model, "speculative", False):
+            return None
+        from llama_cpp.llama_speculative import LlamaNGramMapDecoding
+
+        return LlamaNGramMapDecoding(
+            ngram_size=int(getattr(self.config.model, "speculative_ngram_size", 3) or 3),
+            num_pred_tokens=int(getattr(self.config.model, "speculative_num_pred", 10) or 10),
+        )
+
     def _create_primary_instance(self) -> Any:
         """Create the primary Llama instance that owns the model weights."""
         Llama = self._get_llama_class()
@@ -212,24 +275,36 @@ class LlamaCppBackend(BaseBackend):
             model_path=str(self.config.model.path),
             n_ctx=self.config.model.n_ctx,
             n_gpu_layers=self.config.model.n_gpu_layers,
-            gpu_backend="metal",
-            flash_attn=bool(self.config.model.flash_attention),
+            # flash_attn (bool) was a silent no-op; flash_attn_type is the real param
+            # (-1 AUTO / 0 OFF / 1 ON). Default "auto" == the prior effective behavior.
+            flash_attn_type=self._FLASH_ATTN.get(
+                str(getattr(self.config.model, "flash_attn_type", "auto")).lower(), -1
+            ),
             # Retain full KV for SWA layers so save_state/flow_kv_cache is sound on
             # sliding-window models (gpt-oss); kv_unified bounds the memory cost.
             swa_full=bool(getattr(self.config.model, "swa_full", False)),
             kv_unified=bool(getattr(self.config.model, "kv_unified", False)),
             # Resident cache needs SEQ_STATIC alongside the working seq; the flow
-            # hot-set adds one resident seq per cached flow prefix. Harmless if the
+            # hot-set adds one resident seq per cached flow prefix; the snapshot
+            # band adds one per pinnable session snapshot. Harmless if the
             # can_shift gate later disables the resident path.
             n_seq_max=(
-                (2 + self._flow_hot_set if self._flow_band else 2)
+                (
+                    2
+                    + (self._flow_hot_set if self._flow_band else 0)
+                    + self._snapshot_max
+                )
                 if self._resident_requested
                 else 1
             ),
             seed=self.config.model.seed,
             verbose=self.config.model.verbose,
             n_threads=self.config.resources.cpu_threads,
-            batch_size=getattr(self.config.model, "batch_size", 64),
+            # batch_size was a silent no-op; n_batch is the real param (the prior
+            # effective value was the 2048 default). draft_model wires the binding's
+            # native n-gram speculative decoding (gated by config.model.speculative).
+            n_batch=int(getattr(self.config.model, "n_batch", 2048) or 2048),
+            draft_model=self._make_draft(),
         )
 
     def _create_shared_instance(self, primary: Any) -> Any:
@@ -293,6 +368,12 @@ class LlamaCppBackend(BaseBackend):
             )
         else:
             inst._hybrid_cache_mgr = None
+
+        # The shallow copy aliased the primary's speculative draft, which is stateful
+        # (per-instance n-gram index/history) and must not be shared — give this
+        # instance its own (or None when speculative is off). _logits_all is already
+        # copied from the primary and stays consistent (True iff a draft is present).
+        inst.draft_model = self._make_draft()
 
         return inst
 
@@ -387,6 +468,10 @@ class LlamaCppBackend(BaseBackend):
                     llm_inst._ctx.memory_seq_cp(SEQ_WORKING, SEQ_STATIC, -1, -1)
                 # Per-instance flow-prefix allocator (Phase 2): flow_key -> seq_id.
                 llm_inst._flow_seqs = OrderedDict()
+                # Per-instance hot-snapshot presence: key -> seq_id. A fresh/
+                # refreshed context starts cold; the registry's token lists
+                # rebuild on demand (fork_snapshot_seq miss -> cold rebuild).
+                llm_inst._snap_seqs = OrderedDict()
                 log.debug(
                     "🧩 Pinned %d static tokens to SEQ_STATIC (pool slot #%d)",
                     n_tokens, idx,
@@ -410,6 +495,175 @@ class LlamaCppBackend(BaseBackend):
             "🔄 Re-warmed primary instance after scale-down in %.2fs",
             time.perf_counter() - started,
         )
+
+    def _refresh_context_sync(self, inst: Any) -> None:
+        """Tier-4 in-process context refresh: drop + rebuild the ``llama_context``
+        (KEEP the loaded weights), then re-warm.
+
+        The vanilla-compare control proved the long-run output rot is
+        LLMVP-PROCESS-level: a fresh llama.cpp context is clean on the identical
+        hard prompt while the aged context emits stubs, and a process/machine reboot
+        is NOT required. This rebuilds the context struct (fresh KV cells, fresh cell
+        metadata, fresh position counters) from the SAME in-memory model, so it is a
+        process-restart equivalent minus the multi-GB weight reload (~50-200ms).
+
+        Re-warm reuses ``_warm_up_instance``: it reloads the pristine ``_static_state``
+        snapshot (a one-time, CPU-resident blob immune to the runtime KV churn that
+        rots the live context) into the fresh context and re-pins SEQ_STATIC, the
+        resident fork source. MUST run with the scaling gate closed and generations
+        drained — see ``refresh_context`` — so nothing is mid-decode on this context.
+        """
+        from llama_cpp import internals
+
+        started = time.perf_counter()
+        # Drop the old context + batch — frees the accumulated/rotted KV state.
+        with contextlib.suppress(Exception):
+            if inst._ctx is not None:
+                inst._ctx.close()
+        with contextlib.suppress(Exception):
+            if inst._batch is not None:
+                inst._batch.close()
+        # Fresh context + batch from the SAME model (weights stay resident, no reload).
+        inst._ctx = internals.LlamaContext(
+            model=inst._model, params=inst.context_params, verbose=False
+        )
+        inst._batch = internals.LlamaBatch(
+            n_tokens=inst.n_batch,
+            embd=0,
+            n_seq_max=inst.context_params.n_seq_max,
+            verbose=False,
+        )
+        # Reset per-instance mutable arrays + sampler (mirrors _create_shared_instance).
+        inst.input_ids = np.ndarray((inst._n_ctx,), dtype=np.intc)
+        logits_rows = inst._n_ctx if inst._logits_all else inst.n_batch
+        inst.scores = np.ndarray((logits_rows, inst._n_vocab), dtype=np.single)
+        inst._candidates = internals.LlamaTokenDataArray(n_vocab=inst._n_vocab)
+        inst.n_tokens = 0
+        inst._mirostat_mu = ctypes.c_float(2.0 * 5.0)
+        inst._sampler = None
+        inst._sampling_ctx = None
+        inst.cache = None
+        if getattr(inst, "_hybrid_cache_mgr", None) is not None:
+            from llama_cpp.llama import HybridCheckpointCache
+
+            inst._hybrid_cache_mgr = HybridCheckpointCache(
+                inst._ctx.ctx,
+                max_checkpoints=getattr(inst, "ctx_checkpoints", 16),
+                verbose=False,
+            )
+        # Session snapshots: the fresh context has no pinned seqs — demote every
+        # hot snapshot to cold, LOUDLY. The registry (CPU-side token lists) is
+        # untouched, so from_snapshot still works; the next fork re-prefills.
+        demoted = len(getattr(inst, "_snap_seqs", {}) or {})
+        if demoted:
+            log.warning(
+                "🧊 context refresh demoted %d session snapshot(s) to cold — "
+                "next fork re-prefills",
+                demoted,
+            )
+        # Re-warm into the fresh context: reload the pristine static snapshot + re-pin
+        # SEQ_STATIC. _static_state is already computed, so this is a load, not a re-eval.
+        self._warm_up_instance(inst, 0)
+        log.info(
+            "🧼 In-process context refresh complete in %.2fs "
+            "(rebuild + re-warm, weights kept)",
+            time.perf_counter() - started,
+        )
+
+    async def refresh_context(self, reason: str = "manual") -> dict:
+        """Drop + rebuild every instance's ``llama_context`` in-process to clear the
+        LLMVP-process-level output rot WITHOUT a process restart or reboot.
+
+        Runs inside ``_scaling_operation`` (closes the scaling gate so no new GPU work
+        or checkout starts) and after ``_drain_in_flight`` (waits for in-flight
+        generations to finish) — the same exclusive-access envelope JIT teardown uses,
+        so we never free a context that is mid-decode. Resets the refresh counter.
+        """
+        if self._primary_instance is None:
+            return {"refreshed": 0, "reason": reason, "status": "not_initialized"}
+        started = time.perf_counter()
+        async with self._scaling_operation():
+            if not await self._drain_in_flight("context refresh"):
+                log.warning("⚠️ Context refresh aborted — generation drain timed out")
+                return {"refreshed": 0, "reason": reason, "status": "drain_timeout"}
+            targets = list(self._all_instances)
+            for inst in targets:
+                await run_in_threadpool(self._refresh_context_sync, inst)
+            self._h_context_refreshes += 1
+            self._h_requests_since_refresh = 0
+            self._last_refresh_monotonic = time.monotonic()  # resets the time-based cap
+        elapsed = time.perf_counter() - started
+        log.info(
+            "✅ In-process context refresh #%d: %d context(s) in %.2fs (reason=%s)",
+            self._h_context_refreshes, len(targets), elapsed, reason,
+        )
+        return {
+            "refreshed": len(targets),
+            "reason": reason,
+            "status": "ok",
+            "elapsed_s": round(elapsed, 3),
+            "total_refreshes": self._h_context_refreshes,
+        }
+
+    async def _refresh_loop(self) -> None:
+        """Proactively refresh the context to pre-empt the LLMVP-process rot (both
+        stub-emission souring and the no-task-confusion thrashing that drove missions
+        to 0 goals) BEFORE it spoils a run — a premature ~0.85s refresh beats a spoiled
+        mission. Two triggers:
+
+          (a) OPPORTUNISTIC — idle (no pinned session, no generation in flight) AND
+              `requests_since_refresh >= interval`. Cheap (~0.85s, no drain) and lands
+              at a natural session/mission gap. Preferred when it can fire.
+          (b) TIME-BASED CAP — `>= refresh_seconds` since the last refresh, fired even
+              while BUSY. This is the fix for continuous load: a long mission never goes
+              idle, so (a) alone starved (~665 requests / 1h40m before a gap) and a run
+              soured. refresh_context drains in-flight first, so the only "cost" is the
+              current generation finishing normally (real work) + the ~0.85s rebuild.
+
+        refresh_context closes the scaling gate + drains, so nothing sneaks in
+        mid-rebuild either way.
+        """
+        try:
+            self._last_refresh_monotonic = time.monotonic()
+            while True:
+                await asyncio.sleep(15)
+                if self._primary_instance is None:
+                    continue
+                reason = self._refresh_decision()
+                if reason:
+                    log.info(
+                        "🧼 proactive refresh (%s): %d req since last "
+                        "(interval %d), cap %ds — rebuilding context",
+                        reason, self._h_requests_since_refresh,
+                        self._refresh_interval, self._refresh_seconds,
+                    )
+                    await self.refresh_context(reason=reason)
+        except asyncio.CancelledError:
+            return
+
+    def _refresh_decision(self) -> Optional[str]:
+        """Should the proactive refresh fire now? None = no.
+
+        BOTH triggers require no instance checked out: a pinned session
+        between turns would have its context rebuilt to static-only under
+        it, silently vanishing every prior turn (refresh_context drains
+        generations, not sessions — the original time-capped branch fired
+        through pinned sessions). Deferral is bounded in practice: sessions
+        end within minutes and the loop re-checks every 15s; the deferred
+        counter makes starvation visible in health.
+        """
+        idle = self._checked_out == 0 and self._active_generations == 0
+        since = self._h_requests_since_refresh
+        elapsed = time.monotonic() - (self._last_refresh_monotonic or 0.0)
+        if idle and since >= self._refresh_interval:
+            return "proactive-interval"
+        if since > 0 and elapsed >= self._refresh_seconds:
+            if self._checked_out > 0:
+                self._h_refresh_deferred += 1
+                return None
+            if self._active_generations == 0:
+                return "proactive-timed"
+        return None
 
     def _resident_restore_static(self, inst: Any) -> None:
         """Restore seq 0 to the pristine static prefix by forking SEQ_STATIC onto it
@@ -518,6 +772,161 @@ class LlamaCppBackend(BaseBackend):
             log.warning("resident flow failed for %r (%s) — static base", flow_key, exc)
             self._resident_restore_static(inst)
             return None
+
+    # ------------------------------------------------------------------
+    # Semi-permanent session snapshots (hot seq band + cold token list)
+    # ------------------------------------------------------------------
+
+    def _snap_seq_base(self) -> int:
+        return SEQ_FLOW_BASE + (self._flow_hot_set if self._flow_band else 0)
+
+    def _alloc_snap_seq(self, inst: Any, key: str) -> int:
+        """Reserve a snapshot seq id. NO eviction: capacity errors are the
+        caller's signal to purge — a silently evicted snapshot would turn a
+        guaranteed ~zero-prefill fork into a surprise full re-prefill."""
+        used = set(inst._snap_seqs.values())
+        base = self._snap_seq_base()
+        for s in range(base, base + self._snapshot_max):
+            if s not in used:
+                inst._snap_seqs[key] = s
+                return s
+        raise RuntimeError(
+            f"snapshot capacity ({self._snapshot_max}) reached — purge one first"
+        )
+
+    def snapshot_working_seq(self, inst: Any, key: str) -> dict:
+        """Pin the live working seq's KV under ``key`` (hot) and record the
+        dynamic token stream (cold). The seq_cp shares cells (no copy); the
+        snapshot owns them alone once the working seq moves on. Registry entry
+        survives session end; only purge_snapshot frees it."""
+        if not self._resident_active:
+            raise RuntimeError("resident cache inactive — use the replay fallback")
+        if key in self._snap_registry:
+            raise RuntimeError(f"snapshot key {key!r} already exists — purge first")
+        n_tokens = int(inst.n_tokens)
+        static_len = self._resident_static_len
+        # Capacity: static + existing snapshots + this candidate must leave
+        # generation headroom in the shared n_ctx cell pool.
+        live = sum(
+            len(e["dyn_tokens"]) + static_len
+            for e in self._snap_registry.values()
+            if e.get("resident")
+        )
+        n_ctx = int(getattr(inst, "_n_ctx", 0) or 0)
+        if n_ctx and live + n_tokens + SNAP_GEN_RESERVE > n_ctx:
+            raise RuntimeError(
+                f"snapshot would exceed context budget "
+                f"({live} pinned + {n_tokens} candidate + {SNAP_GEN_RESERVE} "
+                f"reserve > {n_ctx})"
+            )
+        seq = self._alloc_snap_seq(inst, key)
+        try:
+            inst._ctx.memory_seq_rm(seq, 0, -1)
+            inst._ctx.memory_seq_cp(SEQ_WORKING, seq, -1, -1)
+        except Exception:
+            inst._snap_seqs.pop(key, None)
+            raise
+        entry = {
+            "dyn_tokens": [int(t) for t in inst.input_ids[static_len:n_tokens]],
+            "static_len": static_len,
+            "turn_count": 0,  # caller (session manager) overwrites
+            "created_at": time.time(),
+            "resident": True,
+        }
+        self._snap_registry[key] = entry
+        log.info(
+            "📸 snapshot %r pinned: seq %d, %d tokens (%d dynamic)",
+            key, seq, n_tokens, n_tokens - static_len,
+        )
+        return {"tokens": n_tokens, "resident": True}
+
+    def fork_snapshot_seq(self, inst: Any, key: str) -> Optional[int]:
+        """Fork snapshot ``key`` onto the working seq. HOT (pinned on this
+        instance): pure seq_cp, ~zero cost. Cold miss: returns None — caller
+        runs rebuild_snapshot_cold. Unknown key: KeyError."""
+        entry = self._snap_registry[key]
+        seq = inst._snap_seqs.get(key)
+        if seq is None or not entry.get("resident"):
+            return None
+        ctx = inst._ctx
+        static_len = int(entry["static_len"])
+        n_total = static_len + len(entry["dyn_tokens"])
+        ctx.memory_seq_rm(SEQ_WORKING, 0, -1)
+        ctx.memory_seq_cp(seq, SEQ_WORKING, -1, -1)
+        inst.input_ids[:static_len] = np.array(
+            self._resident_static_tokens, dtype=np.intc
+        )
+        inst.input_ids[static_len:n_total] = np.array(
+            entry["dyn_tokens"], dtype=np.intc
+        )
+        inst.n_tokens = n_total
+        log.info("🔁 snapshot fork HIT %r (seq %d, %d tok)", key, seq, n_total)
+        return n_total
+
+    def rebuild_snapshot_cold(self, inst: Any, key: str) -> int:
+        """Re-prefill snapshot ``key`` from its token list (after a context
+        refresh or on a different instance), then re-pin it hot. The cold path
+        costs one prefill — loudly counted, never silent."""
+        entry = self._snap_registry[key]
+        self._resident_restore_static(inst)
+        dyn = list(entry["dyn_tokens"])
+        if dyn:
+            inst.eval(dyn)
+        n_total = int(inst.n_tokens)
+        if entry.get("resident") and self._resident_active:
+            try:
+                seq = inst._snap_seqs.get(key) or self._alloc_snap_seq(inst, key)
+                inst._ctx.memory_seq_rm(seq, 0, -1)
+                inst._ctx.memory_seq_cp(SEQ_WORKING, seq, -1, -1)
+            except Exception as exc:  # noqa: BLE001 — fork source is optional
+                inst._snap_seqs.pop(key, None)
+                log.warning("snapshot %r re-pin failed (%s) — stays cold", key, exc)
+        self._h_snapshot_rebuilds += 1
+        log.info(
+            "🧊 snapshot %r cold rebuild: %d tokens re-prefixed", key, n_total
+        )
+        return n_total
+
+    def purge_snapshot(self, key: str) -> bool:
+        """Free ``key`` everywhere: hot seqs on every instance + registry."""
+        found = key in self._snap_registry
+        self._snap_registry.pop(key, None)
+        for inst in self._all_instances:
+            seq = getattr(inst, "_snap_seqs", {}).pop(key, None)
+            if seq is not None:
+                with contextlib.suppress(Exception):
+                    inst._ctx.memory_seq_rm(seq, 0, -1)
+        if found:
+            log.info("🗑️ snapshot %r purged", key)
+        return found
+
+    def register_replay_snapshot(self, key: str, dyn_tokens: List[int]) -> dict:
+        """Cold-only snapshot for the non-resident/recurrent fallback: no seq
+        ops, just the token history — from_snapshot seeds a full re-prefill.
+        Same registry, same purge, same API surface; telemetry marks the mode."""
+        if key in self._snap_registry:
+            raise RuntimeError(f"snapshot key {key!r} already exists — purge first")
+        self._snap_registry[key] = {
+            "dyn_tokens": [int(t) for t in dyn_tokens],
+            "static_len": 0,
+            "turn_count": 0,
+            "created_at": time.time(),
+            "resident": False,
+        }
+        log.info("📸 snapshot %r registered (replay mode, %d tok)", key, len(dyn_tokens))
+        return {"tokens": len(dyn_tokens), "resident": False}
+
+    def list_snapshots(self) -> List[dict]:
+        return [
+            {
+                "key": k,
+                "tokens": e["static_len"] + len(e["dyn_tokens"]),
+                "resident": bool(e.get("resident")),
+                "turn_count": int(e.get("turn_count") or 0),
+                "created_at": float(e.get("created_at") or 0.0),
+            }
+            for k, e in self._snap_registry.items()
+        ]
 
     # ------------------------------------------------------------------
     # Shared JIT scaling helpers
@@ -782,6 +1191,9 @@ class LlamaCppBackend(BaseBackend):
         # Signal that the backend is fully ready for inference.
         self._ready_event.set()
 
+        # Start the proactive context-refresh loop (interval-gated, idle-only).
+        self._refresh_loop_task = asyncio.create_task(self._refresh_loop())
+
     async def shutdown(self) -> None:
         """Clean up all instances and saved state.
 
@@ -790,6 +1202,11 @@ class LlamaCppBackend(BaseBackend):
         avoid use-after-free.
         """
         await self._cancel_scaler_task()
+        if self._refresh_loop_task is not None:
+            self._refresh_loop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._refresh_loop_task
+            self._refresh_loop_task = None
 
         pool_size = len(self._all_instances)
 
@@ -1605,6 +2022,13 @@ class LlamaCppBackend(BaseBackend):
             instance._last_dynamic_len = int(len(dynamic_tokens))
             instance._last_flow_hit = bool(flow_hit_telemetry)
             instance._last_flow_key = flow_key or ""
+            # Honest cache_hit: did this request skip prefilling MORE than the
+            # always-on global static fork? That captures resident-session reuse
+            # (the ~89% of real work) and flow-pin hits alike. The old signal read
+            # _last_flow_hit only — the flow-pin, which fires on the ~1/N stateless
+            # completions — so it reported ~0% while the resident cache was doing
+            # the heavy lifting. (_last_flow_hit is kept for flow-pin-specific stats.)
+            instance._last_cache_hit = bool(flow_hit_telemetry) or int(kv_base) > self._resident_static_len
         finally:
             # Abnormal exit with substantial output and no recorded reason:
             # the consumer abandoned the stream — in practice the agent-side
@@ -1646,6 +2070,7 @@ class LlamaCppBackend(BaseBackend):
         """
         nested = kwargs.pop("_nested_guard", False)
         async with self.generation_guard(nested=nested):
+            self._h_requests_since_refresh += 1  # drives the periodic context refresh
             return await run_in_threadpool(
                 self.generate_sync,
                 instance,
@@ -1675,6 +2100,7 @@ class LlamaCppBackend(BaseBackend):
         """
         nested = kwargs.pop("_nested_guard", False)
         async with self.generation_guard(nested=nested):
+            self._h_requests_since_refresh += 1  # drives the periodic context refresh
             async for chunk in iterate_in_threadpool(
                 self.generate_stream_sync(
                     instance, prompt_tokens, max_tokens, temperature, **kwargs
@@ -1761,6 +2187,8 @@ class LlamaCppBackend(BaseBackend):
         info["flow_evicts"] = self._h_flow_evicts
         info["flow_fallbacks"] = self._h_flow_fallbacks
         info["runaway_captures"] = self._h_runaway_captures
+        info["context_refreshes"] = self._h_context_refreshes
+        info["requests_since_refresh"] = self._h_requests_since_refresh
         return info
 
     def strip_reasoning_replay(
