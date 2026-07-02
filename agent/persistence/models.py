@@ -160,6 +160,13 @@ class GoalRecord(BaseModel):
 
     id: str = Field(default_factory=_new_id)
     description: str
+    # Archive counters (agent/persistence/archive.py): how many reports/
+    # failed attempts were RELOCATED to .agent/archive/goals/<id>.jsonl on
+    # completion. Additive defaults keep old mission.json files loading;
+    # readers that mean "was work ever attempted" must check list OR
+    # counter (see batch_attempted).
+    reports_archived: int = 0
+    attempts_archived: int = 0
     # "quality" goals are discovered by the quality gate (origin="quality_gate")
     # for issues with no clean interact re-test — they complete on a successful
     # patch (action_quality_sweep_next). functional/structural goals keep their
@@ -758,6 +765,11 @@ class MissionState(BaseModel):
     # keeps non-ops mission.json files loading unchanged.
     task_definition: TaskState | None = None
     dispatch_history: list[DispatchRecord] = Field(default_factory=list)
+    # Archive counters (agent/persistence/archive.py): notes/dispatch
+    # records RELOCATED to .agent/archive/*.jsonl when the rolling lists
+    # exceed their caps. Additive defaults; nothing is ever deleted.
+    notes_archived: int = 0
+    dispatch_archived: int = 0
     # Ops-task workspace ledger — durable effects (installs, downloads, files,
     # checks) recorded per cycle so later cycles build on prior progress instead
     # of re-doing it. Additive default keeps non-ops mission.json files loading.
