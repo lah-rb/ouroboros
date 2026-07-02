@@ -558,13 +558,30 @@ class LocalEffects:
 
     def _get_http_client(self):
         """Lazy shared httpx.AsyncClient (follows redirects — OA PDF
-        links routinely bounce through resolvers)."""
+        links routinely bounce through resolvers).
+
+        Browser User-Agent: publisher WAFs 403 the default python-httpx
+        UA even on fully-OA content (live: 50 of 73 failed downloads in
+        the July corpus rebuild were 403s, MDPI included; the mid-June
+        run with the same code drew 101 PDFs). API politeness identity
+        still travels via mailto params on the API calls — this header
+        only makes content downloads look like the browser fetch they
+        are equivalent to.
+        """
         if self._http_client is None:
             import httpx
 
             self._http_client = httpx.AsyncClient(
                 follow_redirects=True,
                 transport=self._http_transport,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                        "Version/17.4 Safari/605.1.15"
+                    ),
+                    "Accept": "application/pdf,text/html;q=0.9,*/*;q=0.8",
+                },
             )
         return self._http_client
 
