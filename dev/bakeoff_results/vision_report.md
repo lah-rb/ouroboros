@@ -954,3 +954,5 @@ The "Prediction" section on the right shows the application of the trained poten
 </think>
 
 The provided image is the first page of a scientific article titled "Impact of lattice relaxations on phase transitions in a high-entropy alloy studied by machine-learning potentials" from the journal npj Computational Materials. It contains the title, author list, abstract, introduction, and publication metadata. There are no figures, charts, graphs, schematics, or micrographs present on this page. Therefore, there is no data content to describe.
+
+**fork-mtmd lane (gemma-4-12b/31b): BLOCKED** — fork's libmtmd predates the gemma4uv projector (text arch supported, mmproj not); retest via dev/bakeoff_vision_fork.py after a fork rebase.
