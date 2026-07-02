@@ -41,6 +41,16 @@ MODELS = {
 }
 
 
+def _strip_thought(text: str) -> str:
+    """Drop gemma-4 <|channel>thought ... <channel|> blocks: with thinking
+    ON, deliberation is internal — only the final answer is the figtext,
+    and only IT should face the overlap metric (thought text enumerates
+    candidate values and would contaminate the score both ways)."""
+    import re
+
+    return re.sub(r"<\|channel>.*?(?:<channel\|>|$)", "", text, flags=re.S).strip()
+
+
 def _load(path, name):
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
@@ -53,6 +63,11 @@ def main() -> int:
     ap.add_argument("--model", choices=sorted(MODELS), required=True)
     ap.add_argument("--databank", default="~/corpora/ouroboros-hea/databank")
     ap.add_argument("--figures", type=int, default=20)
+    ap.add_argument(
+        "--thinking",
+        action="store_true",
+        help="enable the thought channel (stripped before scoring)",
+    )
     args = ap.parse_args()
 
     fr = _load(_ROOT / "tools" / "fig_review" / "fig_review.py", "fig_review")
@@ -67,11 +82,12 @@ def main() -> int:
 
     paths = MODELS[args.model]
     t_load = time.time()
-    # thinking OFF: figtext is a dense factual reading, and the other
-    # lanes don't spend tokens on CoT — apples to apples.
+    # thinking OFF by default: apples-to-apples with the other lanes.
+    # --thinking turns the thought channel on; the answer is scored
+    # AFTER stripping it (does deliberation improve the reading?).
     handler = Gemma4ChatHandler(
         clip_model_path=os.path.expanduser(paths["mmproj"]),
-        enable_thinking=False,
+        enable_thinking=args.thinking,
         verbose=False,
     )
     llm = Llama(
@@ -110,10 +126,15 @@ def main() -> int:
                         ],
                     }
                 ],
-                max_tokens=fr._MAX_FIGTEXT_TOKENS,
+                # Thinking needs headroom: the thought channel spends
+                # from the same budget as the answer (800-cap run: 1
+                # empty + 2 truncated answers).
+                max_tokens=(2048 if args.thinking else fr._MAX_FIGTEXT_TOKENS),
                 temperature=0.2,
             )
             text = str(out["choices"][0]["message"]["content"] or "").strip()
+            if args.thinking:
+                text = _strip_thought(text)
             if not text:
                 results[f"{key}/{fig_path.name}"] = {"error": "empty output"}
                 continue
@@ -130,14 +151,15 @@ def main() -> int:
     RESULTS_DIR.mkdir(exist_ok=True)
     merged_path = RESULTS_DIR / "vision_results.json"
     merged = json.loads(merged_path.read_text()) if merged_path.is_file() else {}
-    merged[f"{args.model} (fork-mtmd)"] = results
+    label = f"{args.model} (fork-mtmd{', think' if args.thinking else ''})"
+    merged[label] = results
     merged_path.write_text(json.dumps(merged, indent=1, ensure_ascii=False))
 
     ok = [r for r in results.values() if "figtext" in r]
     errs = len(results) - len(ok)
     mo = sum(r["overlap"] for r in ok) / len(ok) if ok else 0
     ms = sum(r["seconds"] for r in ok) / len(ok) if ok else 0
-    row = f"| {args.model} (fork-mtmd) | {len(ok)} | {errs} | {mo:.2f} | {ms:.1f} |"
+    row = f"| {label} | {len(ok)} | {errs} | {mo:.2f} | {ms:.1f} |"
     print(row)
     with open(RESULTS_DIR / "vision_report.md", "a") as f:
         f.write(f"\n{row}\n")

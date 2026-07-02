@@ -970,3 +970,17 @@ The provided image is the first page of a scientific article titled "Impact of l
 | gemma-4-31b (fork-mtmd) | 20 | 0 | 0.82 | 14.5 |
 
 gemma-4-31b posts the best overlap of any lane (0.82, +0.02 over Qwen3-VL-8B — within the 20-figure noise band) at +38% time. Production stays Qwen3-VL-8B (speed, M7-proven); gemma-4-31b is the quality alternate AND the one-runtime dual-duty option (text second-opinion + vision through the fork alone).
+
+| gemma-4-31b (fork-mtmd, think) | 19 | 1 | 0.80 | 15.6 |
+
+| gemma-4-31b (fork-mtmd, think) | 20 | 0 | 0.82 | 21.3 |
+
+### Thinking-mode probe (gemma-4-31b, fork lane)
+
+| variant | overlap | mean s/fig | notes |
+|---|---|---|---|
+| thinking off | 0.82 | 14.5 | baseline |
+| thinking on, 800-tok budget | 0.80 | 15.6 | 1 empty + 2 truncated — thought eats the answer budget |
+| thinking on, 2048-tok budget | 0.82 | 21.3 | identical overlap, +47% time |
+
+Verdict: deliberation does NOT improve figure reading (perception-bound, not reasoning-bound) — run gemma-4-31b vision with thinking off. Under shared budgets thinking actively hurts via truncation.
