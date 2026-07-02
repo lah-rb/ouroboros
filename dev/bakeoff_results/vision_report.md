@@ -955,4 +955,18 @@ The "Prediction" section on the right shows the application of the trained poten
 
 The provided image is the first page of a scientific article titled "Impact of lattice relaxations on phase transitions in a high-entropy alloy studied by machine-learning potentials" from the journal npj Computational Materials. It contains the title, author list, abstract, introduction, and publication metadata. There are no figures, charts, graphs, schematics, or micrographs present on this page. Therefore, there is no data content to describe.
 
-**fork-mtmd lane (gemma-4-12b/31b): BLOCKED** — fork's libmtmd predates the gemma4uv projector (text arch supported, mmproj not); retest via dev/bakeoff_vision_fork.py after a fork rebase.
+
+
+
+| gemma-4-12b (fork-mtmd) | 20 | 0 | 0.71 | 10.6 |
+
+| gemma-4-31b (fork-mtmd) | 20 | 0 | 0.82 | 14.5 |
+
+## Fork-mtmd lanes (0.3.40 advance, thinking off)
+
+| model | figs ok | errors | mean overlap | mean s/fig |
+|---|---|---|---|---|
+| gemma-4-12b (fork-mtmd) | 20 | 0 | 0.71 | 10.6 |
+| gemma-4-31b (fork-mtmd) | 20 | 0 | 0.82 | 14.5 |
+
+gemma-4-31b posts the best overlap of any lane (0.82, +0.02 over Qwen3-VL-8B — within the 20-figure noise band) at +38% time. Production stays Qwen3-VL-8B (speed, M7-proven); gemma-4-31b is the quality alternate AND the one-runtime dual-duty option (text second-opinion + vision through the fork alone).

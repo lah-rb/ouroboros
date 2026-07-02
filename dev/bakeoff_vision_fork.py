@@ -8,11 +8,8 @@ ONE model per invocation (crash isolation — load failures or Metal
 deaths never take sibling lanes down) over the SAME 20-figure sample
 and prompt as dev/bakeoff_vision.py, appending a comparable row.
 
-STATUS 2026-07-02: BLOCKED — the fork's libmtmd predates gemma4's
-multimodal projector ("clip_init: unknown projector type: gemma4uv",
-both 12B and 31B mmproj). Text arch landed, projector didn't; the
-same staleness class as the brew CLI, one layer deeper. Re-run this
-script unchanged after the fork rebases.
+STATUS 2026-07-02 (later): UNBLOCKED by the fork advance to 0.3.40
+(rev 8b38e72c) — gemma4uv projector supported; both models run 20/20.
 
 Run under llmvp's venv:
     llmvp/.venv/bin/python dev/bakeoff_vision_fork.py --model gemma-4-12b
@@ -70,8 +67,12 @@ def main() -> int:
 
     paths = MODELS[args.model]
     t_load = time.time()
+    # thinking OFF: figtext is a dense factual reading, and the other
+    # lanes don't spend tokens on CoT — apples to apples.
     handler = Gemma4ChatHandler(
-        clip_model_path=os.path.expanduser(paths["mmproj"]), verbose=False
+        clip_model_path=os.path.expanduser(paths["mmproj"]),
+        enable_thinking=False,
+        verbose=False,
     )
     llm = Llama(
         model_path=os.path.expanduser(paths["gguf"]),
