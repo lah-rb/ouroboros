@@ -394,23 +394,48 @@ class MockEffects:
             text = "Mock inference response"
         return text
 
-    async def start_inference_session(self, config: dict | None = None) -> str:
+    async def start_inference_session(
+        self,
+        config: dict | None = None,
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
+        from_snapshot: str | None = None,
+    ) -> str:
         """Start a mock session — returns a sequential session ID.
+
+        Accepts (and records) the optional ``static_prefix``/``flow_key``
+        cross-session-cache opt-in for test parity with LocalEffects; mock
+        behavior is unchanged. ``from_snapshot`` seeds the new session's
+        turn list from the snapshot's (deterministic fork parity) and
+        raises KeyError on unknown keys like the server does.
 
         Emits :class:`SessionStart` when inside a step context for test
         parity with LocalEffects.
         """
+        self._last_session_flow_key = flow_key
+        self._last_session_static_prefix = static_prefix
         # Ensure instance-level state
         if not hasattr(self, "_mock_sessions"):
             self._mock_sessions: dict[str, list[dict]] = {}
             self._mock_active_sessions: set[str] = set()
             self._mock_session_counter = 0
+        if not hasattr(self, "_mock_snapshots"):
+            self._mock_snapshots: dict[str, dict] = {}
+
+        seed_turns: list[dict] = []
+        if from_snapshot:
+            snap = self._mock_snapshots[from_snapshot]  # KeyError = unknown key
+            seed_turns = list(snap["turns"])
 
         self._mock_session_counter += 1
         session_id = f"mock-session-{self._mock_session_counter}"
-        self._mock_sessions[session_id] = []
+        self._mock_sessions[session_id] = seed_turns
         self._mock_active_sessions.add(session_id)
-        self._record("start_inference_session", {"config": config}, session_id)
+        self._record(
+            "start_inference_session",
+            {"config": config, "from_snapshot": from_snapshot},
+            session_id,
+        )
 
         from agent.trace import SessionStart, get_step_context
 
@@ -424,6 +449,7 @@ class MockEffects:
                     step=ctx.get("step", ""),
                     session_id=session_id,
                     config=dict(config) if config else {},
+                    from_snapshot=from_snapshot or "",
                 )
             )
         return session_id
@@ -515,6 +541,53 @@ class MockEffects:
                     success=found,
                 )
             )
+        return found
+
+    async def session_snapshot(self, session_id: str, key: str) -> dict:
+        """Pin a mock snapshot: records the session's turn list under key.
+
+        Deterministic fork parity: start_inference_session(from_snapshot=key)
+        seeds the new session's turns from this list. Duplicate keys raise
+        like the server does.
+        """
+        if not hasattr(self, "_mock_snapshots"):
+            self._mock_snapshots: dict[str, dict] = {}
+        if key in self._mock_snapshots:
+            raise RuntimeError(f"snapshot key {key!r} already exists — purge first")
+        turns = list(getattr(self, "_mock_sessions", {}).get(session_id) or [])
+        self._mock_snapshots[key] = {"turns": turns, "session_id": session_id}
+        info = {
+            "key": key,
+            "tokens": sum(len(t.get("prompt") or "") for t in turns),
+            "resident": True,
+            "turn_count": len(turns),
+        }
+        self._record("session_snapshot", {"session_id": session_id, "key": key}, info)
+
+        from agent.trace import SessionSnapshot, get_step_context
+
+        ctx = get_step_context()
+        if ctx is not None:
+            await self.emit_trace(
+                SessionSnapshot(
+                    mission_id=ctx.get("mission_id", ""),
+                    cycle=ctx.get("cycle", 0),
+                    flow=ctx.get("flow", ""),
+                    step=ctx.get("step", ""),
+                    session_id=session_id,
+                    key=key,
+                    tokens=info["tokens"],
+                    resident=True,
+                )
+            )
+        return info
+
+    async def purge_inference_snapshot(self, key: str) -> bool:
+        """Free a mock snapshot; False when it never existed."""
+        found = key in getattr(self, "_mock_snapshots", {})
+        if found:
+            del self._mock_snapshots[key]
+        self._record("purge_inference_snapshot", {"key": key}, found)
         return found
 
     # ── Persistence ───────────────────────────────────────────────

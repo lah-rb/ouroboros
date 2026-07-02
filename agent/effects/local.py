@@ -27,6 +27,7 @@ from agent.trace import (
     NotePushed,
     RunSummary,
     SessionEnd,
+    SessionSnapshot,
     SessionStart,
     TraceEvent,
     _NOTE_PREVIEW_CHARS,
@@ -1085,8 +1086,19 @@ class LocalEffects:
 
     # ── Memoryful inference sessions ──────────────────────────────
 
-    async def start_inference_session(self, config: dict | None = None) -> str:
+    async def start_inference_session(
+        self,
+        config: dict | None = None,
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
+        from_snapshot: str | None = None,
+    ) -> str:
         """Start a memoryful session via LLMVP GraphQL.
+
+        ``static_prefix`` + ``flow_key`` opt the session into the resident
+        cross-session flow-fork (pins the invariant persona head so later
+        same-flow sessions skip re-prefilling it). Absent → plain session.
+        ``from_snapshot`` forks from a pinned semi-permanent snapshot.
 
         Emits :class:`SessionStart` when called inside a bound step
         context, pairing with :class:`SessionEnd` at close time. The
@@ -1095,13 +1107,18 @@ class LocalEffects:
         """
         start = time.monotonic()
         inference = self._get_inference()
-        session_id = await inference.start_session(config)
+        session_id = await inference.start_session(
+            config,
+            static_prefix=static_prefix,
+            flow_key=flow_key,
+            from_snapshot=from_snapshot,
+        )
         # Record the span start so SessionEnd can report the session lifetime
         # (its wall_ms is only the close RPC — see SessionEnd.span_ms).
         self._session_started_at[session_id] = time.monotonic()
         self._log_entry(
             "start_inference_session",
-            f"config={config!r}",
+            f"config={config!r} from_snapshot={from_snapshot!r}",
             f"session={session_id}",
             start,
         )
@@ -1115,6 +1132,7 @@ class LocalEffects:
                     step=ctx.get("step", ""),
                     session_id=session_id,
                     config=dict(config) if config else {},
+                    from_snapshot=from_snapshot or "",
                 )
             )
         return session_id
@@ -1266,6 +1284,47 @@ class LocalEffects:
                 )
             )
         return success
+
+    async def session_snapshot(self, session_id: str, key: str) -> dict:
+        """Pin the session's context as a semi-permanent snapshot.
+
+        Survives end_inference_session/TTL; freed only by
+        purge_inference_snapshot. Emits :class:`SessionSnapshot` inside a
+        bound step context. Server rejections (capacity/budget/duplicate)
+        raise — the caller must never fork from a phantom.
+        """
+        start = time.monotonic()
+        inference = self._get_inference()
+        info = await inference.session_snapshot(session_id, key)
+        self._log_entry(
+            "session_snapshot",
+            f"session={session_id} key={key!r}",
+            f"tokens={info.get('tokens')} resident={info.get('resident')}",
+            start,
+        )
+        ctx = get_step_context()
+        if ctx is not None:
+            await self.emit_trace(
+                SessionSnapshot(
+                    mission_id=ctx.get("mission_id", ""),
+                    cycle=ctx.get("cycle", 0),
+                    flow=ctx.get("flow", ""),
+                    step=ctx.get("step", ""),
+                    session_id=session_id,
+                    key=key,
+                    tokens=int(info.get("tokens") or 0),
+                    resident=bool(info.get("resident", True)),
+                )
+            )
+        return info
+
+    async def purge_inference_snapshot(self, key: str) -> bool:
+        """Free a pinned semi-permanent snapshot (the explicit release)."""
+        start = time.monotonic()
+        inference = self._get_inference()
+        found = await inference.purge_snapshot(key)
+        self._log_entry("purge_inference_snapshot", f"key={key!r}", str(found), start)
+        return found
 
     # ── Persistence ───────────────────────────────────────────────
 
@@ -1450,7 +1509,9 @@ class LocalEffects:
         except Exception:
             # Telemetry must never break a run — a malformed event just
             # doesn't contribute to the ledger.
-            logger.debug("ledger fold skipped for %r", getattr(event, "event_type", "?"))
+            logger.debug(
+                "ledger fold skipped for %r", getattr(event, "event_type", "?")
+            )
         self._trace_buffer.append(event)
 
     def _write_summary(self) -> None:

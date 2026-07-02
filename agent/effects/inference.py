@@ -75,6 +75,23 @@ mutation EndSession($sessionId: String!) {
 }
 """
 
+SESSION_SNAPSHOT_MUTATION = """
+mutation SessionSnapshot($sessionId: String!, $key: String!) {
+    sessionSnapshot(sessionId: $sessionId, key: $key) {
+        key
+        tokens
+        resident
+        turnCount
+    }
+}
+"""
+
+PURGE_SNAPSHOT_MUTATION = """
+mutation PurgeSnapshot($key: String!) {
+    purgeSnapshot(key: $key)
+}
+"""
+
 SESSION_COMPLETION_QUERY = """
 query SessionCompletion($request: SessionTurnRequest!) {
     sessionCompletion(request: $request) {
@@ -313,7 +330,9 @@ class InferenceEffect:
             "PROMPT-SIZE BACKSTOP fired: static=%d + dynamic=%d chars exceeds the "
             "%d ceiling — an upstream context guard (G2 scan / G3 terminal / G4 "
             "session) missed this. Bounding the dynamic tail; investigate the source.",
-            len(static_prefix or ""), len(prompt), PROMPT_CHAR_CEILING,
+            len(static_prefix or ""),
+            len(prompt),
+            PROMPT_CHAR_CEILING,
         )
         head = int(budget * 0.6)
         tail = budget - head
@@ -321,8 +340,7 @@ class InferenceEffect:
         return (
             prompt[:head]
             + f"\n\n… [BACKSTOP: {omitted} chars bounded — an upstream guard missed "
-            "this; re-query a narrower slice] …\n\n"
-            + prompt[-tail:]
+            "this; re-query a narrower slice] …\n\n" + prompt[-tail:]
         )
 
     async def run_inference(
@@ -629,21 +647,44 @@ class InferenceEffect:
 
     # ── Memoryful session methods ─────────────────────────────────
 
-    async def start_session(self, config: dict | None = None) -> str:
+    async def start_session(
+        self,
+        config: dict | None = None,
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
+        from_snapshot: str | None = None,
+    ) -> str:
         """Start a memoryful session via GraphQL mutation.
+
+        ``static_prefix`` + ``flow_key`` opt the session into the resident
+        cross-session flow-fork (server flag ``resident_session_flow_fork``): the
+        invariant persona head named by ``flow_key`` is pinned once per instance
+        and reused on every later session of the same flow, so only the first
+        user message prefills instead of re-prefilling the preamble. Both must be
+        present to take effect; absent → today's plain session (no-op).
+
+        ``from_snapshot`` forks the session from a pinned semi-permanent
+        snapshot (see session_snapshot) — unknown keys error server-side
+        before any state is touched.
 
         Returns:
             session_id string.
         """
         client = await self._get_client()
         ttl = (config or {}).get("ttl_seconds", 300)
+        cfg: dict[str, Any] = {"ttlSeconds": ttl}
+        if static_prefix and flow_key:
+            cfg["staticPrefix"] = static_prefix
+            cfg["flowCacheKey"] = flow_key
+        if from_snapshot:
+            cfg["fromSnapshot"] = from_snapshot
 
         try:
             response = await client.post(
                 self._endpoint,
                 json={
                     "query": START_SESSION_MUTATION,
-                    "variables": {"config": {"ttlSeconds": ttl}},
+                    "variables": {"config": cfg},
                 },
             )
             response.raise_for_status()
@@ -734,4 +775,53 @@ class InferenceEffect:
 
         except Exception as e:
             logger.error("End session error: %s", e)
+            return False
+
+    async def session_snapshot(self, session_id: str, key: str) -> dict:
+        """Pin the session's current context as a semi-permanent snapshot.
+
+        Raises InferenceError on server rejection (capacity/budget/duplicate)
+        — the caller must know the snapshot does NOT exist rather than
+        proceeding to fork from a phantom.
+        """
+        client = await self._get_client()
+        response = await client.post(
+            self._endpoint,
+            json={
+                "query": SESSION_SNAPSHOT_MUTATION,
+                "variables": {"sessionId": session_id, "key": key},
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        if "errors" in data:
+            error_msg = "; ".join(e.get("message", str(e)) for e in data["errors"])
+            raise InferenceError(f"Session snapshot failed: {error_msg}")
+        snap = data["data"]["sessionSnapshot"]
+        return {
+            "key": snap["key"],
+            "tokens": snap["tokens"],
+            "resident": snap["resident"],
+            "turn_count": snap["turnCount"],
+        }
+
+    async def purge_snapshot(self, key: str) -> bool:
+        """Free a pinned semi-permanent snapshot. False = didn't exist."""
+        client = await self._get_client()
+        try:
+            response = await client.post(
+                self._endpoint,
+                json={
+                    "query": PURGE_SNAPSHOT_MUTATION,
+                    "variables": {"key": key},
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            if "errors" in data:
+                logger.error("Purge snapshot errors: %s", data["errors"])
+                return False
+            return bool(data["data"]["purgeSnapshot"])
+        except Exception as e:
+            logger.error("Purge snapshot error: %s", e)
             return False

@@ -373,11 +373,23 @@ class Effects(Protocol):
 
     # ── Memoryful inference sessions ──────────────────────────────
 
-    async def start_inference_session(self, config: dict | None = None) -> str:
+    async def start_inference_session(
+        self,
+        config: dict | None = None,
+        static_prefix: str | None = None,
+        flow_key: str | None = None,
+        from_snapshot: str | None = None,
+    ) -> str:
         """Start a memoryful inference session. Pins a pool instance.
 
         Args:
             config: Optional dict with 'ttl_seconds' (default 300).
+            static_prefix: Optional invariant persona head to pin for
+                cross-session reuse (with flow_key). Absent → plain session.
+            flow_key: Optional stable key naming the pinned persona head.
+            from_snapshot: Optional semi-permanent snapshot key to fork
+                from (see session_snapshot) — the session starts with the
+                snapshot's full context at ~zero prefill cost.
 
         Returns:
             session_id string identifying the session.
@@ -413,6 +425,28 @@ class Effects(Protocol):
 
         Returns:
             True if the session was found and ended.
+        """
+        ...
+
+    async def session_snapshot(self, session_id: str, key: str) -> dict:
+        """Pin the session's current context as a SEMI-PERMANENT snapshot.
+
+        Survives end_inference_session and TTL expiry; freed only by
+        purge_inference_snapshot. Later sessions fork from it via
+        start_inference_session(from_snapshot=key) — pay a long-context
+        prefill once, branch many passes (the curator's ingest-once tier).
+
+        Returns:
+            {"key", "tokens", "resident", "turn_count"} — resident=False
+            is the replay fallback (recurrent models): forks re-prefill.
+        """
+        ...
+
+    async def purge_inference_snapshot(self, key: str) -> bool:
+        """Free a pinned semi-permanent snapshot (the explicit release).
+
+        Returns:
+            True if the snapshot existed.
         """
         ...
 

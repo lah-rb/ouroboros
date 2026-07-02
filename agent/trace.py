@@ -274,6 +274,28 @@ class SessionStart(TraceEvent):
     step: str = ""
     session_id: str = ""
     config: dict = field(default_factory=dict)
+    # Semi-permanent snapshot this session forked from ("" = fresh). A
+    # forked session starts with the snapshot's whole context at ~zero
+    # prefill — the ledger must not read its cheap first turn as a
+    # short prompt.
+    from_snapshot: str = ""
+
+
+@dataclass
+class SessionSnapshot(TraceEvent):
+    """Emitted when a session pins a semi-permanent snapshot.
+
+    The snapshot outlives the session (freed only by an explicit purge)
+    — the (SessionSnapshot, later purge) pair is how the ledger
+    attributes the ingest-once prefill saving.
+    """
+
+    event_type: str = "session_snapshot"
+    step: str = ""
+    session_id: str = ""
+    key: str = ""
+    tokens: int = 0
+    resident: bool = True  # False = replay fallback (forks re-prefill)
 
 
 @dataclass
@@ -588,16 +610,23 @@ def finalize_ledger(ledger: dict, total_wall_ms: float) -> dict:
             "prefill_ms": round(ledger["inf_phase"]["prefill_ms"], 1),
             "decode_ms": round(ledger["inf_phase"]["decode_ms"], 1),
             "server_other_ms": round(
-                max(0.0, t["inference"] - ledger["inf_phase"]["prefill_ms"]
-                    - ledger["inf_phase"]["decode_ms"]), 1
+                max(
+                    0.0,
+                    t["inference"]
+                    - ledger["inf_phase"]["prefill_ms"]
+                    - ledger["inf_phase"]["decode_ms"],
+                ),
+                1,
             ),
             "prefill_pct": (
                 round(100 * ledger["inf_phase"]["prefill_ms"] / t["inference"], 1)
-                if t["inference"] > 0 else 0.0
+                if t["inference"] > 0
+                else 0.0
             ),
             "decode_pct": (
                 round(100 * ledger["inf_phase"]["decode_ms"] / t["inference"], 1)
-                if t["inference"] > 0 else 0.0
+                if t["inference"] > 0
+                else 0.0
             ),
         },
         "counts": dict(ledger["counts"]),
