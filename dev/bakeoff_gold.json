@@ -1,0 +1,4 @@
+{
+  "__instructions__": "Hand-labeled accept/deny verdicts for the curator bake-off (gold_agreement metric). Fill after the corpus rebuild: pick the ~10 papers dev/bakeoff_text.py selects (it prints the keys), skim each markdown, and record the verdict a careful curator would give. verdict: accept|deny; note: one line of why.",
+  "__example_paper_key__": {"verdict": "accept", "note": "solid tensile tables, clean extraction"}
+}

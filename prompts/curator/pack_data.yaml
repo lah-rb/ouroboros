@@ -53,7 +53,11 @@ sections:
         complete and invented.
 
   - id: gate_feedback
+    when: context.gate_feedback
     content: |
+      Your previous pack attempt FAILED these deterministic gates —
+      fix exactly these findings:
+
       {context.gate_feedback}
 
   - id: output_format
