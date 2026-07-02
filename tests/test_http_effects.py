@@ -178,3 +178,35 @@ async def test_mock_download_default_writes_file_and_canned_failure():
     bad = await fx.http_download("https://x.org/closed.pdf", "pdfs/closed.pdf")
     assert bad.success is False
     assert fx.call_count("http_download") == 2
+
+
+def test_download_rejects_non_pdf_magic_for_pdf_target(tmp_path):
+    """Content-type lies happen: an OA 'PDF' URL serving a JPEG passed
+    the html check and became a vacuously-verified corpus paper (live).
+    A .pdf destination declares intent — magic bytes are enforced."""
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            content=b"\xff\xd8\xff\xe0 jpeg bytes",
+            headers={"content-type": "image/jpeg"},
+        )
+
+    fx = _local(tmp_path, handler)
+    r = asyncio.run(fx.http_download("https://x.org/fig.pdf", "pdfs/p.pdf"))
+    assert r.success is False
+    assert "not a PDF" in (r.error or "")
+    assert not (tmp_path / "pdfs" / "p.pdf").exists()
+
+
+def test_download_magic_check_only_for_pdf_targets(tmp_path):
+    def handler(request):
+        return httpx.Response(
+            200,
+            content=b"plain data",
+            headers={"content-type": "application/octet-stream"},
+        )
+
+    fx = _local(tmp_path, handler)
+    r = asyncio.run(fx.http_download("https://x.org/data.bin", "data/blob.bin"))
+    assert r.success is True

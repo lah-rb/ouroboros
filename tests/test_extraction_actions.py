@@ -264,3 +264,42 @@ async def test_gate_fails_with_pending_then_reopen():
     )
     assert out2.result["reopened"] is True
     assert mission.goals[0].status == "incomplete"
+
+
+@pytest.mark.asyncio
+async def test_batch_zero_verified_pages_never_passes():
+    """A report with 0 verified pages passes rate thresholds VACUOUSLY
+    (nothing checkable -> nothing missed). Live: a JPEG served as the
+    'PDF' scored 1.00/1.00 over 0 verified pages and entered the corpus.
+    Unverifiable output must fail, not pass."""
+    import os
+
+    from agent.actions import extraction_actions as ea
+
+    fx = _fx([_bank_line("jpeg_asset")])
+    report = json.dumps(
+        {
+            "paper_key": "jpeg_asset",
+            "md_path": "markdown/jpeg_asset.md",
+            "pages": 1,
+            "verified_pages": 0,
+            "unverified_pages": 1,
+            "numeric_match_rate": 1.0,
+            "span_pass_rate": 1.0,
+            "figures_kept": 0,
+            "figures_dropped": 0,
+            "seconds": 2.0,
+            "error": "",
+        }
+    )
+    tool = os.path.join(ea._repo_root(), ea._TOOL_PY)
+    fx._commands[tool] = CommandResult(
+        return_code=0, stdout=report, stderr="", command="x"
+    )
+    await action_extract_pdf_batch(
+        _si(inputs=_batch_inputs(["jpeg_asset"]), effects=fx)
+    )
+    from agent.actions.scholarly_actions import read_databank
+
+    bank = await read_databank(fx)
+    assert bank["jpeg_asset"]["extraction_status"] == "needs_reextract"

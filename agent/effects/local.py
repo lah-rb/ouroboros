@@ -686,8 +686,11 @@ class LocalEffects:
                     )
                 os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
                 written = 0
+                head = b""
                 with open(resolved, "wb") as f:
                     async for chunk in response.aiter_bytes():
+                        if len(head) < 8:
+                            head += chunk[: 8 - len(head)]
                         written += len(chunk)
                         if written > max_bytes:
                             f.close()
@@ -707,6 +710,23 @@ class LocalEffects:
                                 error=f"body exceeded max_bytes={max_bytes}",
                             )
                         f.write(chunk)
+            if path.lower().endswith(".pdf") and not head.startswith(b"%PDF"):
+                # Content-type lies happen: an OA "PDF" URL that serves a
+                # JPEG figure asset passed every prior check (live: a
+                # 393KB JPEG became a vacuously-verified 1-page paper).
+                # The declared destination is the intent — enforce magic.
+                os.unlink(resolved)
+                self._log_entry(
+                    "http_download", url, f"rejected non-PDF magic {head[:8]!r}", start
+                )
+                return DownloadResult(
+                    success=False,
+                    url=url,
+                    path=path,
+                    status=200,
+                    content_type=content_type,
+                    error=f"response is not a PDF (magic {head[:8]!r})",
+                )
             self._log_entry("http_download", url, f"{written}b -> {path}", start)
             return DownloadResult(
                 success=True,

@@ -254,6 +254,12 @@ async def action_extract_pdf_batch(step_input: StepInput) -> StepOutput:
         ok = (
             rep is not None
             and not rep.get("error")
+            # ZERO verified pages passes the rate thresholds vacuously
+            # (nothing checkable -> nothing missed). Live: a JPEG served
+            # as the "PDF" produced a 1-page, 0-verified, 276-byte
+            # markdown that scored 1.00/1.00. Unverifiable output is a
+            # claim we refuse, not one we wave through.
+            and rep.get("verified_pages", 0) > 0
             and rep.get("numeric_match_rate", 0) >= MIN_NUMERIC_RATE
             and rep.get("span_pass_rate", 0) >= MIN_SPAN_RATE
         )
