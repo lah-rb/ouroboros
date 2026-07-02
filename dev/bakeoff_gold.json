@@ -1,4 +1,13 @@
 {
-  "__instructions__": "Hand-labeled accept/deny verdicts for the curator bake-off (gold_agreement metric). Fill after the corpus rebuild: pick the ~10 papers dev/bakeoff_text.py selects (it prints the keys), skim each markdown, and record the verdict a careful curator would give. verdict: accept|deny; note: one line of why.",
-  "__example_paper_key__": {"verdict": "accept", "note": "solid tensile tables, clean extraction"}
+  "__instructions__": "Hand-labeled accept/deny verdicts for the curator bake-off (gold_agreement metric). Labeled 2026-07-02 against the rebuilt corpus pick set by skimming each markdown: accept = extractable, trustworthy raw data (measurements/computations with conditions); deny = qualitative/perspective pieces or damaged extractions. Verdicts judge DATA-reference quality, not aspect relevance (tagging already handled relevance).",
+  "doi_10.1016_j.scriptamat.2016.07.001": {"verdict": "accept", "note": "configurational-entropy BCC/FCC study; concrete simulation data + table"},
+  "doi_10.20517_jmi.2025.79": {"verdict": "deny", "note": "perspective piece on ML-assisted discovery — qualitative synthesis, no primary measurements"},
+  "doi_10.1038_s41467-025-64871-4": {"verdict": "accept", "note": "AM nanolamellar HEA; primary tensile/microstructure measurements"},
+  "doi_10.1038_s41524-019-0195-y": {"verdict": "accept", "note": "ML-potential phase transitions; primary computed transition data"},
+  "doi_10.1038_s44334-025-00035-y": {"verdict": "accept", "note": "PBF-LB eutectic MPEA; dense primary data (206 decimals, 3 tables)"},
+  "doi_10.1007_s40145-021-0563-1": {"verdict": "accept", "note": "HE ceramic TBC; dense thermo-physical measurements (348 decimals)"},
+  "doi_10.1016_j.commatsci.2022.111898": {"verdict": "accept", "note": "first-principles Al-Li phase diagram; primary computed data"},
+  "doi_10.1007_s40145-021-0524-8": {"verdict": "accept", "note": "medium-entropy layered oxide cathode; electrochemical tables"},
+  "doi_10.1007_s40820-025-01891-1": {"verdict": "accept", "note": "HEO memristor REVIEW but with dense compiled device-metric tables — extractable"},
+  "doi_10.1021_acs.jcim.4c00873": {"verdict": "accept", "note": "ML predictive modeling; model metrics + dataset tables (5 tables)"}
 }
