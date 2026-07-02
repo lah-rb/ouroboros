@@ -592,6 +592,24 @@ class MockEffects:
 
     # ── Persistence ───────────────────────────────────────────────
 
+    def _get_persistence(self):
+        """A REAL PersistenceManager on a throwaway temp dir.
+
+        The archive sweep (agent/persistence/archive.py) writes append-
+        only JSONL under agent_dir — giving the mock a real disposable
+        directory keeps flow tests able to assert relocation without
+        faking the file layer. Mission load/save stay in-memory below.
+        """
+        if not hasattr(self, "_mock_persistence"):
+            import tempfile
+
+            from agent.persistence.manager import PersistenceManager
+
+            self._mock_persistence = PersistenceManager(
+                tempfile.mkdtemp(prefix="mock-agent-")
+            )
+        return self._mock_persistence
+
     async def load_mission(self) -> Any:
         result = self._state.get("mission")
         self._record("load_mission", {}, result)

@@ -252,9 +252,7 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
         files_affected=files_list,
         checks_passed=checks_passed,
         checks_failed=checks_failed,
-        terminal_output=(
-            str(terminal_output) if terminal_output else gate_error
-        ),
+        terminal_output=(str(terminal_output) if terminal_output else gate_error),
         recommended_flow=recommended_flow,
         target_file=target_file,
         target_symbol=target_symbol,
@@ -372,8 +370,10 @@ def _maybe_complete_goal(goal: Any) -> None:
         checks_failed = getattr(last_report, "checks_failed", [])
         if structural_block_reason(goal, checks_failed) is None:
             goal.status = "complete"
-            if hasattr(goal, "failed_attempts"):
-                goal.failed_attempts.clear()
+            # failed_attempts are NOT cleared here anymore: the archive
+            # sweep relocates them to .agent/archive/goals/<id>.jsonl —
+            # clearing was the codebase's one data-destruction site and
+            # retry patterns are prime behavioral-mining material.
             logger.info(
                 "Goal completed: %s (%d reports preserved)",
                 getattr(goal, "description", "")[:60],
@@ -500,6 +500,21 @@ async def action_attach_directive_report(step_input: StepInput) -> StepOutput:
                     "Environment verified via project_ops (%s)",
                     report_data.get("status"),
                 )
+
+    # Archive sweep — the single choke point for all goal-completion
+    # sites: completed goals' reports/attempts RELOCATE to append-only
+    # JSONL (never deleted), rolling notes/dispatch overflow beyond
+    # their caps. Runs every cycle in every flow set's control loop.
+    if effects:
+        try:
+            from agent.persistence.archive import archive_mission_overflow
+
+            pm = effects._get_persistence()
+            archive_mission_overflow(pm.agent_dir, mission)
+        except AttributeError:
+            pass  # effects without a persistence dir (mock paths archive in-memory via save)
+        except Exception:
+            logger.exception("archive sweep failed — records stay in mission.json")
 
     # Save updated state
     if effects:

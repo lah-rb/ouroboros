@@ -101,3 +101,14 @@ def test_curator_end_to_end_mock():
     # Structural cleanup: no leaked sessions, no leaked snapshots.
     assert not fx._mock_active_sessions
     assert not getattr(fx, "_mock_snapshots", {})
+
+    # Archive sweep ran on completion: completed goals' reports RELOCATED
+    # to append-only JSONL (never deleted), counters preserved on record.
+    from agent.persistence.archive import iter_archive
+
+    agent_dir = fx._get_persistence().agent_dir
+    archived = list(iter_archive(agent_dir, kind="report"))
+    assert archived, "completed goals' reports must land in the archive"
+    total_counters = sum(g.reports_archived for g in saved.goals)
+    assert total_counters == len(archived)
+    assert all(not g.reports for g in saved.goals if g.status == "complete")

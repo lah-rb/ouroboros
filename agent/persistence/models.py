@@ -87,8 +87,11 @@ class DirectiveReport(BaseModel):
     (project_ops) build the report directly from returns data.
 
     Lifecycle: reports accumulate on a goal while it is incomplete.
-    Once the goal passes its completion gate, reports are archived in
-    place — the projection stops surfacing them in active director context.
+    Once the goal completes, the archive sweep RELOCATES them (with any
+    failed_attempts) to .agent/archive/goals/<goal_id>.jsonl — append-
+    only, never deleted; the behavioral-mining substrate — and the goal
+    keeps reports_archived/attempts_archived counters. See
+    agent/persistence/archive.py.
     """
 
     flow: str  # which flow produced this ("file_ops", "interact", etc.)

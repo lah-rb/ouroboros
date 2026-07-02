@@ -193,3 +193,70 @@ def test_archive_lines_are_plain_jq_able(tmp_path):
     assert len(lines) == 1
     rec = json.loads(lines[0])  # every line standalone-parseable
     assert rec["kind"] == "report" and rec["flow"] == "file_ops"
+
+
+# ── wire-in: the sweep runs from attach + finalize ────────────────────
+
+
+def test_attach_report_sweeps_completed_goals(tmp_path):
+    import asyncio
+
+    from agent.actions.reporting_actions import action_attach_directive_report
+    from agent.effects.mock import MockEffects
+    from agent.models import FlowMeta, StepInput
+
+    goal = GoalRecord(description="g", status="incomplete", type="structural")
+    mission = _mission([goal])
+    fx = MockEffects(mission=mission)
+
+    si = StepInput(
+        context={
+            "mission": mission,
+            "last_goal_id": goal.id,
+            "last_status": "success",
+            "last_result": {
+                "directive_report": {
+                    "flow": "file_ops",
+                    "status": "success",
+                    "summary": "done",
+                }
+            },
+        },
+        inputs={},
+        params={},
+        meta=FlowMeta(flow_name="mission_control", step_id="apply_last_result"),
+        effects=fx,
+    )
+    asyncio.run(action_attach_directive_report(si))
+    # file_ops success + no block reason -> goal completes -> sweep
+    # relocates the report in the SAME cycle's attach pass.
+    assert goal.status == "complete"
+    assert goal.reports == [] and goal.reports_archived == 1
+    agent_dir = fx._get_persistence().agent_dir
+    records = list(iter_archive(agent_dir, goal_id=goal.id))
+    assert len(records) == 1 and records[0]["summary"] == "done"
+
+
+def test_finalize_mission_sweeps_last_goal(tmp_path):
+    import asyncio
+
+    from agent.actions.mission_actions import action_finalize_mission
+    from agent.effects.mock import MockEffects
+    from agent.models import FlowMeta, StepInput
+
+    goal = GoalRecord(description="g", status="complete")
+    goal.reports = [_report(0)]
+    mission = _mission([goal])
+    fx = MockEffects(mission=mission)
+    si = StepInput(
+        context={"mission": mission},
+        inputs={},
+        params={},
+        meta=FlowMeta(flow_name="mission_control", step_id="completed"),
+        effects=fx,
+    )
+    out = asyncio.run(action_finalize_mission(si))
+    assert out.result["finalized"] is True
+    assert goal.reports == [] and goal.reports_archived == 1
+    agent_dir = fx._get_persistence().agent_dir
+    assert len(list(iter_archive(agent_dir, goal_id=goal.id))) == 1

@@ -161,104 +161,105 @@ async def action_handle_events(step_input: StepInput) -> StepOutput:
 # ══════════════════════════════════════════════════════════════════════
 
 
-async def action_check_architecture_drift(step_input: StepInput) -> StepOutput:
-    """Deterministically compare architecture against files on disk.
+async def action_design_gate(step_input: StepInput) -> StepOutput:
+    """Design-gate drift action — the unified ``design_gate`` action, two modes.
 
-    Compares architecture.canonical_files() against project_manifest keys.
-    Detects files on disk not in architecture (drift → reconciliation needed).
+    ``mode="route"`` (default): the PRE-design routing pass. Compares the stored
+      architecture's canonical files against project_manifest keys and returns
+      has_architecture/has_tasks/drift_detected/new_files so design_and_plan
+      routes design vs reconcile vs derive_goals. Byte-for-byte the former
+      ``action_check_architecture_drift``.
+    ``mode="facts"``: the POST-parse pass. The SAME drift facts, additionally
+      published to context as ``drift_facts`` for the coherence critic's evidence
+      bundle. No routing decision rides on it.
 
     Infrastructure files (pyproject.toml, README.md, __init__.py, etc.) are
     excluded from drift detection since they're not application architecture.
-
-    Returns:
-        has_architecture: bool
-        has_tasks: bool
-        drift_detected: bool
-        new_files: list of files on disk not in architecture
     """
+    mode = (step_input.params.get("mode") or "route").strip().lower()
     mission = step_input.context.get("mission")
     manifest = step_input.context.get("project_manifest", {})
 
-    if not mission:
-        return StepOutput(
-            result={
-                "has_architecture": False,
-                "has_tasks": False,
-                "drift_detected": False,
-            },
-            observations="No mission in context",
-        )
-
-    has_architecture = mission.architecture is not None
-    has_tasks = len(mission.goals) > 0
-
-    if not has_architecture:
-        return StepOutput(
-            result={
-                "has_architecture": False,
-                "has_tasks": has_tasks,
-                "drift_detected": False,
-            },
-            observations="No architecture exists — initial design needed",
-        )
-
-    # Get canonical files from architecture
-    arch_files = set(mission.architecture.canonical_files())
-
-    # Get project files from manifest, excluding infrastructure
-    infrastructure = {
-        "pyproject.toml",
-        "setup.cfg",
-        "setup.py",
-        "requirements.txt",
-        "uv.lock",
-        "README.md",
-        "readme.md",
-        "CHANGELOG.md",
-        ".gitignore",
-        ".editorconfig",
-        ".flake8",
-        ".pre-commit-config.yaml",
-        "Makefile",
-        "Dockerfile",
-        "docker-compose.yml",
-    }
-    infrastructure_prefixes = (".", "tests/", "test_", "__pycache__/")
-    infrastructure_suffixes = ("__init__.py",)
-
-    disk_files = set()
-    for filepath in manifest.keys():
-        basename = os.path.basename(filepath)
-        if basename in infrastructure:
-            continue
-        if any(filepath.startswith(p) for p in infrastructure_prefixes):
-            continue
-        if any(filepath.endswith(s) for s in infrastructure_suffixes):
-            continue
-        disk_files.add(filepath)
-
-    # Detect drift: files on disk that architecture doesn't know about
-    new_on_disk = sorted(disk_files - arch_files)
-
-    drift_detected = len(new_on_disk) > 0
     drift_summary = ""
-    if drift_detected:
-        drift_summary = (
-            f"Architecture drift: {len(new_on_disk)} file(s) on disk "
-            f"not in architecture: {', '.join(new_on_disk)}"
-        )
+    if not mission:
+        result = {
+            "has_architecture": False,
+            "has_tasks": False,
+            "drift_detected": False,
+            "new_files": [],
+        }
+        observations = "No mission in context"
+    elif mission.architecture is None:
+        result = {
+            "has_architecture": False,
+            "has_tasks": len(mission.goals) > 0,
+            "drift_detected": False,
+            "new_files": [],
+        }
+        observations = "No architecture exists — initial design needed"
+    else:
+        has_tasks = len(mission.goals) > 0
+        arch_files = set(mission.architecture.canonical_files())
+        infrastructure = {
+            "pyproject.toml",
+            "setup.cfg",
+            "setup.py",
+            "requirements.txt",
+            "uv.lock",
+            "README.md",
+            "readme.md",
+            "CHANGELOG.md",
+            ".gitignore",
+            ".editorconfig",
+            ".flake8",
+            ".pre-commit-config.yaml",
+            "Makefile",
+            "Dockerfile",
+            "docker-compose.yml",
+        }
+        infrastructure_prefixes = (".", "tests/", "test_", "__pycache__/")
+        infrastructure_suffixes = ("__init__.py",)
 
-    return StepOutput(
-        result={
+        disk_files = set()
+        for filepath in manifest.keys():
+            basename = os.path.basename(filepath)
+            if basename in infrastructure:
+                continue
+            if any(filepath.startswith(p) for p in infrastructure_prefixes):
+                continue
+            if any(filepath.endswith(s) for s in infrastructure_suffixes):
+                continue
+            disk_files.add(filepath)
+
+        new_on_disk = sorted(disk_files - arch_files)
+        drift_detected = len(new_on_disk) > 0
+        if drift_detected:
+            drift_summary = (
+                f"Architecture drift: {len(new_on_disk)} file(s) on disk "
+                f"not in architecture: {', '.join(new_on_disk)}"
+            )
+        result = {
             "has_architecture": True,
             "has_tasks": has_tasks,
             "drift_detected": drift_detected,
             "new_files": new_on_disk,
-        },
-        observations=drift_summary
-        or f"No drift — architecture matches disk ({len(arch_files)} files)",
-        context_updates={"drift_summary": drift_summary},
-    )
+        }
+        observations = (
+            drift_summary
+            or f"No drift — architecture matches disk ({len(arch_files)} files)"
+        )
+
+    updates: dict = {}
+    if drift_summary:
+        updates["drift_summary"] = drift_summary
+    if mode == "facts":
+        updates["drift_facts"] = result
+    return StepOutput(result=result, observations=observations, context_updates=updates)
+
+
+# Back-compat alias — the pre-design routing step historically dispatched
+# "check_architecture_drift"; the unified two-mode action powers it now.
+action_check_architecture_drift = action_design_gate
 
 
 async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutput:
@@ -413,6 +414,154 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
     )
 
 
+def _ground_coherence_criteria(criteria: list, arch) -> list[str]:
+    """Achievability filter: keep only critique criteria that reference something
+    the blueprint actually has — a declared module file (path / basename / top
+    dir) or a load-bearing execution field (run/smoke command, import scheme,
+    working directory, the src-vs-`python -m` layout vocabulary). A criterion
+    naming a module the blueprint does NOT declare is an un-achievable
+    hallucination and is dropped."""
+    anchors: set[str] = set()
+    for m in getattr(arch, "modules", []):
+        f = (getattr(m, "file", "") or "").strip()
+        if not f:
+            continue
+        anchors.add(f.lower())
+        anchors.add(os.path.basename(f).lower())
+        top = f.split("/")[0].lower()
+        if top:
+            anchors.add(top)
+    field_terms = (
+        "run_command",
+        "run command",
+        "smoke_command",
+        "smoke command",
+        "import_scheme",
+        "import scheme",
+        "working_directory",
+        "working directory",
+        "python -m",
+        "-m ",
+        "pythonpath",
+        "editable",
+        "pip install",
+        "src/",
+        "src ",
+    )
+    grounded: list[str] = []
+    for c in criteria:
+        cl = str(c).lower()
+        if any(a in cl for a in anchors) or any(t in cl for t in field_terms):
+            grounded.append(str(c).strip())
+    return grounded
+
+
+async def action_ground_design_gate_verdict(step_input: StepInput) -> StepOutput:
+    """Parse the coherence critic's verdict, ground its criteria to achievable
+    fixes, decide coherent vs loop, and persist. Pre-build gate — enforcement is
+    the verdict, not a shell check (there are no files yet). Mirrors
+    ``action_parse_and_store_architecture``: parse_llm_json → CoherenceVerdict
+    (degradable) → save once.
+
+    Grounding (achievability + evidence-based over-block guard):
+      - drop criteria that name modules the blueprint doesn't declare;
+      - if the verdict is incoherent but NO concrete criterion survives grounding,
+        flip to coherent — never BLOCK the mission on an ungrounded critique;
+      - union-merge tighten-only the survivors onto ``architecture.coherence_criteria``.
+
+    Fail-safe: an unparseable/invalid verdict loops (coherent=False) while the
+    budget holds, then degrades to coherent=True once the budget is spent
+    (fail-open — a parse glitch must not BLOCK the mission).
+    """
+    from agent.llm_json import parse_llm_json
+    from agent.persistence.models import CoherenceVerdict, NoteRecord
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    response = step_input.context.get("inference_response", "")
+
+    if not mission or mission.architecture is None:
+        return StepOutput(
+            result={"coherent": True},
+            observations="design_gate: no architecture to critique — passing",
+            context_updates=({"mission": mission} if mission else {}),
+        )
+
+    arch = mission.architecture
+    # In-flow visits and this persisted counter both count gate iterations; the
+    # persisted one is the durable audit / belt-and-suspenders for the resolver's
+    # meta.attempt guard.
+    arch.coherence_attempts = int(getattr(arch, "coherence_attempts", 0) or 0) + 1
+    attempt = arch.coherence_attempts
+    budget = 2  # ≤2 reconcile loops (matches file_ops check_retry)
+
+    data = parse_llm_json(response)
+    criteria: list[str] = []
+    if not isinstance(data, dict):
+        coherent = attempt > budget  # fail-open only once the budget is spent
+        reason = "critic verdict unparseable"
+    else:
+        try:
+            verdict = CoherenceVerdict(
+                coherent=bool(data.get("coherent", True)),
+                reason=str(data.get("reason", "") or ""),
+                criteria=data.get("criteria", []),
+            )
+        except Exception as e:  # ValidationError / malformed shapes
+            logger.warning("Coherence verdict validation failed: %s", e)
+            coherent = attempt > budget
+            reason = f"critic verdict invalid: {e}"
+        else:
+            coherent = verdict.coherent
+            reason = verdict.reason
+            criteria = _ground_coherence_criteria(verdict.criteria, arch)
+            if not coherent and not criteria:
+                # Evidence-based over-block guard: no concrete incoherence survived.
+                coherent = True
+                reason = reason or "no concrete incoherence survived grounding"
+
+    if coherent:
+        arch.coherence_criteria = []
+        arch.coherence_reason = ""
+        arch.coherence_grounded = True
+        mission.architecture = arch
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"coherent": True},
+            observations=f"design_gate: coherent (attempt {attempt})",
+            context_updates={"mission": mission, "design_gate_feedback": ""},
+        )
+
+    # Incoherent — union-merge tighten-only (never drop a prior-iteration finding).
+    merged = list(arch.coherence_criteria)
+    for c in criteria:
+        if c and c not in merged:
+            merged.append(c)
+    arch.coherence_criteria = merged
+    arch.coherence_reason = reason
+    arch.coherence_grounded = True
+    mission.architecture = arch
+    feedback = reason + ("\n" + "\n".join(f"- {c}" for c in merged) if merged else "")
+    mission.notes.append(
+        NoteRecord(
+            content=(
+                f"design_gate rejected the blueprint (attempt {attempt}): {reason}. "
+                f"Required fixes: {'; '.join(merged) if merged else '(none extracted)'}"
+            ),
+            category="architecture_blueprint",
+            source_flow="design_and_plan",
+        )
+    )
+    if effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"coherent": False},
+        observations=f"design_gate: incoherent (attempt {attempt}) — {reason}",
+        context_updates={"mission": mission, "design_gate_feedback": feedback},
+    )
+
+
 # B5: Stale flow names the model sometimes produces from memory.
 # Maps old names → current canonical names.
 _FLOW_NAME_REMAP: dict[str, str] = {
@@ -446,6 +595,20 @@ async def action_finalize_mission(step_input: StepInput) -> StepOutput:
         mission.status = "aborted"
     else:
         mission.status = "completed"
+
+    # Terminal archive sweep: the per-cycle sweep (attach_directive_report)
+    # never runs AFTER the final goal completes — this catches the last
+    # goal's records before the run ends. Relocation, never deletion.
+    if effects:
+        try:
+            from agent.persistence.archive import archive_mission_overflow
+
+            pm = effects._get_persistence()
+            archive_mission_overflow(pm.agent_dir, mission)
+        except AttributeError:
+            pass  # effects without a persistence dir
+        except Exception:
+            logger.exception("terminal archive sweep failed")
 
     if effects:
         await effects.save_mission(mission)
@@ -641,8 +804,7 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
             description = f"Create {d['file_path']} with content: {content_brief}"
         else:
             description = (
-                f"Create data file {d['file_path']} "
-                f"(consumed by {d['consumed_by']})"
+                f"Create data file {d['file_path']} (consumed by {d['consumed_by']})"
             )
 
         goal = GoalRecord(
@@ -942,7 +1104,9 @@ def _get_sweep_files(arch: Any) -> list[str]:
     ordered = (
         list(arch.creation_order)
         if hasattr(arch, "creation_order") and arch.creation_order
-        else [m.file for m in arch.modules] if hasattr(arch, "modules") else []
+        else [m.file for m in arch.modules]
+        if hasattr(arch, "modules")
+        else []
     )
     seen = set(ordered)
 
@@ -1087,7 +1251,9 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
     # gate-failed files → diagnose-first repair below.
     if mode == "parallel":
         structural_goals = [g for g in mission.goals if g.type == "structural"]
-        batch_attempted = any(g.reports for g in structural_goals) or any(
+        batch_attempted = any(
+            g.reports or getattr(g, "reports_archived", 0) for g in structural_goals
+        ) or any(
             "batch_structural" in (getattr(n, "tags", None) or [])
             for n in mission.notes
         )
@@ -1532,8 +1698,8 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
         # interact success means goal_met was true (the flow routes on this)
         if report_flow == "interact" and report_status == "success":
             goal.status = "complete"
-            if hasattr(goal, "failed_attempts"):
-                goal.failed_attempts.clear()
+            # failed_attempts survive completion — the archive sweep
+            # relocates them (retry patterns are mining material).
             logger.info("Functional sweep: '%s' completed", goal.description[:50])
             if effects:
                 await effects.save_mission(mission)
