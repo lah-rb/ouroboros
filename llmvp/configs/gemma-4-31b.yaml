@@ -14,6 +14,8 @@ graphql:
 model:
   name: "gemma-4-31b"
   family: "gemma"
+  # RESIDENT cache economics (dev/CACHE_STATE.md matrix): SWA dense — measured full-stack 2026-07-02 (resident-live 37/46 tok turns, hot snapshot forks 1.2s).
+  resident_seq_cache: true
   # Gemma-4 produces its own <|channel>thought reasoning preamble; do NOT
   # inject a thinking opener into the generation prompt.
   thinking: false
@@ -34,9 +36,6 @@ model:
   # Full re-prefill per turn from the pristine static snapshot — the safe
   # session path on every model until resident is validated per-model.
   session_full_replay: true
-  # Candidate after a memory_can_shift() check on this arch; keep the safe
-  # default until a validation run like gpt-oss's A/B exists for gemma-4.
-  resident_seq_cache: false
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

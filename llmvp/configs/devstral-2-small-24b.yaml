@@ -14,6 +14,10 @@ graphql:
 model:
   name: "devstral-2-small-24b"
   family: "tekken"
+  # RESIDENT cache economics (dev/CACHE_STATE.md matrix): dense — measured full-stack 2026-07-02 (resident-live 8/16 tok turns, hot snapshot forks 0.3s).
+  swa_full: true
+  kv_unified: true
+  resident_seq_cache: true
   path: /Users/lah-rb/.lmstudio/models/byteshape/Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-IQ4_XS-4.04bpw.gguf
   n_ctx: 131072
   n_gpu_layers: -1   

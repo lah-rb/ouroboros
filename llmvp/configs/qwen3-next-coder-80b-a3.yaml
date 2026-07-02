@@ -14,6 +14,10 @@ graphql:
 model:
   name: "qwen3-next-coder-80b-a3"
   family: "chatml"
+  # RESIDENT cache economics (dev/CACHE_STATE.md matrix): hybrid DeltaNet — measured full-stack 2026-07-02 (append-only residency + seq_cp forks are SAFE on the hybrid; it is per-turn state SURGERY that corrupts recurrent state).
+  swa_full: true
+  kv_unified: true
+  resident_seq_cache: true
   path: /Users/lah-rb/.lmstudio/models/noctrex/Qwen3-Coder-Next-MXFP4_MOE-GGUF/Qwen3-Coder-Next-MXFP4_MOE_BF16.gguf
   n_ctx: 262144
   n_gpu_layers: -1   
