@@ -1,0 +1,9 @@
+[project]
+name = "fig-review"
+version = "0.1.0"
+description = "Figure -> text (figtext) sidecar for the curator stage"
+requires-python = ">=3.11"
+dependencies = [
+    "mlx-vlm>=0.3.11",
+    "pillow>=10.0",
+]

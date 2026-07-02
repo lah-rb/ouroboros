@@ -1,0 +1,79 @@
+# Prompt template: curator/pack_data
+#
+# Data-pack pass: strip the paper's useful raw data into one open-key
+# JSON object. Keys are NOT prescribed — the current key registry is
+# presented and the model must reuse an equivalent existing key rather
+# than coin a synonym; genuinely new quantities get new keys. Every
+# numeric value faces the deterministic grounding gate (must appear in
+# the ingested document) — fabricated or "estimated" values are
+# rejected. Runs inside the per-paper curator session (paper already
+# in context), typically forked from the post-ingest snapshot.
+# Context: key_registry_block (format_key_registry),
+#          gate_feedback (retry only — prior attempt's gate findings)
+
+id: curator/pack_data
+description: "Pack a reviewed paper's raw data into the open-key dataset JSON"
+
+sections:
+
+  - id: system_role
+    content: |
+      You are a materials-science data curator packing raw data from
+      the paper above into a machine-readable dataset. Your output will
+      be parsed as JSON and every numeric value will be checked against
+      the paper's text — a number the paper does not state WILL be
+      rejected. Return ONLY a JSON object inside a fenced code block.
+
+  - id: key_registry
+    content: |
+      Current dataset key vocabulary (reuse before coining):
+
+      {context.key_registry_block}
+
+  - id: instruction
+    content: |
+      Extract the paper's useful RAW DATA into one flat-ish JSON object:
+      measured/computed values with their conditions, named
+      compositions, processing parameters, model/method identifiers.
+
+      Rules:
+      - REUSE a registry key whenever an equivalent exists — do NOT
+        invent "yield_strength_mpa" if "yield_strength" is listed. Add
+        a NEW key only for a quantity the registry genuinely lacks.
+      - Key style: lower_snake_case, unit-suffixed where a unit is
+        fixed (e.g. "hardness_hv"), value carries the number.
+      - Group repeated measurements as lists of objects under one key
+        (e.g. "tensile_tests": [{"temperature_k": 77, ...}, ...]).
+      - Numbers VERBATIM from the paper (text, tables, or the labeled
+        figure readings). Never average, convert units, extrapolate, or
+        estimate — if the paper says "approximately 1.2 GPa", pack 1.2.
+      - Include the source conditions a value is meaningless without
+        (temperature, composition, processing state).
+      - Omit what the paper does not state. Sparse and grounded beats
+        complete and invented.
+
+  - id: gate_feedback
+    content: |
+      {context.gate_feedback}
+
+  - id: output_format
+    content: |
+      ✅ CORRECT (shape only — keys follow the registry + the paper):
+      ```json
+      {
+        "composition": "CoCrFeMnNi",
+        "processing_route": "arc melting + cold rolling",
+        "tensile_tests": [
+          {"temperature_k": 77, "yield_strength_mpa": 759, "elongation_pct": 71}
+        ],
+        "grain_size_um": 4.4
+      }
+      ```
+
+      ❌ WRONG — invented average, unit conversion, synonym key:
+      ```json
+      {"yield_strength_gpa_avg": 0.76, "tensile_strength_megapascals": 1280}
+      ```
+
+      Return ONLY the fenced JSON object of packed data (no envelope,
+      no paper_key/title — those are recorded for you).

@@ -7,7 +7,7 @@ app:
 
 graphql:
   max_query_depth: 10
-  max_tokens: 32768
+  max_tokens: 65536
   max_aliases: 50
   introspection_enabled: true
 
@@ -18,27 +18,38 @@ model:
   # inject a thinking opener into the generation prompt.
   thinking: false
   path: /Users/lah-rb/.lmstudio/models/lmstudio-community/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf
-  n_ctx: 32768
-  n_gpu_layers: -1   
+  # Curator bake-off ingests whole papers (long reviews ~35k tokens) plus
+  # prompt + generation headroom; 32768 could not hold one.
+  n_ctx: 65536
+  n_gpu_layers: -1
   seed: -1
   verbose: false
-  flash_attention: true
-  flow_kv_cache: true
-  kv_unified: true
+  flash_attn_type: auto   # REAL knob (old flash_attention: true was a silent no-op)
+  n_batch: 2048           # REAL knob (old batch_size: 512 was a silent no-op)
   swa_full: true
-  batch_size: 512
+  kv_unified: true
+  # save_state churn corrupts deep-session KV (the gpt-oss `code -3` class);
+  # this config predated that finding with flow_kv_cache: true — now off.
+  flow_kv_cache: false
+  # Full re-prefill per turn from the pristine static snapshot — the safe
+  # session path on every model until resident is validated per-model.
+  session_full_replay: true
+  # Candidate after a memory_can_shift() check on this arch; keep the safe
+  # default until a validation run like gpt-oss's A/B exists for gemma-4.
+  resident_seq_cache: false
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
 
 generation:
-  max_tokens_default: 32768
+  max_tokens_default: 65536
   temperature_default: 1.0
   top_p: 0.95
   top_k: 64
-  #min_p: 0.00
-  #presence_penalty: 0.0
   repeat_penalty: 1.0
+  # Deep session turns are repetition attractors (gemma-4 token loops are
+  # the documented degenerate-purge case); floor sampling from turn 3 on.
+  session_temp_floor: 0.35
   streaming_default: true
 
 knowledge:
@@ -48,7 +59,7 @@ knowledge:
 resources:
   cpu_threads: 15
   max_concurrent_requests: 1
-  jit_concurrency_limit: null  
+  jit_concurrency_limit: null
 
 tools:
   enabled: false

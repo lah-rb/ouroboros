@@ -8,7 +8,7 @@
 #
 # Run:
 #   uv run ouroboros.py mission create --mission_config hea_scrape
-#   uv run ouroboros.py start --working-dir /tmp/ouroboros-hea-scrape
+#   uv run ouroboros.py start --working-dir /Users/lah-rb/corpora/ouroboros-hea
 # version: 1
 
 objective: >
@@ -25,7 +25,8 @@ objective: >
   compositions.
 
 flow_set: scraper
-working_dir: "/tmp/ouroboros-hea-scrape"
+# Durable home — /tmp held the first corpus and macOS wiped it on reboot.
+working_dir: "/Users/lah-rb/corpora/ouroboros-hea"
 effects_profile: local
 llmvp_endpoint: "http://localhost:8008/graphql"
 
@@ -36,5 +37,5 @@ run_until: completed
 max_wall_clock: 4h
 
 pre_create:
-  - "rm -rf /tmp/ouroboros-hea-scrape && mkdir -p /tmp/ouroboros-hea-scrape"
+  - "mkdir -p /Users/lah-rb/corpora/ouroboros-hea"
   - "uv run ouroboros.py cue-compile"
