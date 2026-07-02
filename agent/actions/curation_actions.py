@@ -301,6 +301,19 @@ def _repo_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _active_text_model() -> str:
+    """The LLMVP config name serving this run (per-paper provenance —
+    the denial second-opinion pass runs a different model over the same
+    corpus, so 'which model said this' must live on the record)."""
+    import os
+
+    try:
+        path = os.path.join(_repo_root(), "llmvp", "active_config.txt")
+        return open(path).read().strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
 def _prompts_dir():
     import os
 
@@ -993,7 +1006,7 @@ async def action_curate_book_result(step_input):
                 },
                 "data": data,
                 "provenance": {
-                    "model": "llmvp-active-config",
+                    "model": _active_text_model(),
                     "figtext_model": FIG_MODEL,
                     "packed_at": datetime.now(timezone.utc).isoformat(),
                     "md_path": rec.get("md_path", ""),
@@ -1027,7 +1040,9 @@ async def action_curate_book_result(step_input):
             rec["pack_status"] = "pack_failed"
             rec["failure_reason"] = f"pack: {pack.get('reason') or 'no pack state'}"
             outcome = "pack_failed"
-    rec["curation_method"] = f"llmvp+{FIG_MODEL.rsplit('/', 1)[-1]}"
+    rec["curation_method"] = (
+        f"{_active_text_model()}+{FIG_MODEL.rsplit('/', 1)[-1]}"
+    )
     await append_records(effects, [rec])
 
     summary = f"Curated {paper_key}: {outcome}"
