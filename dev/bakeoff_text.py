@@ -184,7 +184,13 @@ async def run(args) -> None:
                 "curator/review_paper", {"input": {}, "context": {}, "meta": {}}
             )
         )
-        raw = await _completion(args.endpoint, review_prompt)
+        try:
+            raw = await _completion(args.endpoint, review_prompt)
+        except Exception as e:  # degenerate/runaway: book the paper, keep the run
+            row["error"] = f"{type(e).__name__}: {e}"[:200]
+            rows.append(row)
+            print(f"  {key[:44]:44s} ERROR {row['error'][:60]}")
+            continue
         review = parse_llm_json(raw)
         if isinstance(review, dict) and review.get("verdict") in ("accept", "deny"):
             row["review_parsed"] = True
@@ -208,7 +214,11 @@ async def run(args) -> None:
                 )
                 + (NEEDLE_QUESTION if is_needle else "")
             )
-            raw = await _completion(args.endpoint, pack_prompt, max_tokens=8192)
+            try:
+                raw = await _completion(args.endpoint, pack_prompt, max_tokens=8192)
+            except Exception as e:
+                row["error"] = f"pack: {type(e).__name__}: {e}"[:200]
+                raw = ""
             data = parse_llm_json(raw)
             if isinstance(data, dict) and data:
                 row["pack_parsed"] = True
