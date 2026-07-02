@@ -1,0 +1,260 @@
+{
+ "model": "gpt-oss-120b-a5",
+ "papers": 10,
+ "parse_rate_review": 1.0,
+ "parse_rate_pack": 1.0,
+ "accepts": 7,
+ "gold_agreement": 0.8,
+ "grounding_rate": 0.9492,
+ "envelope_pass_rate": 1.0,
+ "new_key_rate": 0.803,
+ "near_dup_flags": 0,
+ "needle_accuracy": 1.0,
+ "minutes": 17.2,
+ "rows": [
+  {
+   "paper_key": "doi_10.1016_j.scriptamat.2016.07.001",
+   "doc_chars": 23584,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 4,
+   "grounding": {
+    "grounding_rate": 0.7143,
+    "numeric_leaves": 28,
+    "ungrounded": [
+     {
+      "path": "enthalpy_of_mixing_eV_per_atom[0].value",
+      "token": "-0.1244"
+     },
+     {
+      "path": "enthalpy_of_mixing_eV_per_atom[1].value",
+      "token": "-0.0849"
+     },
+     {
+      "path": "enthalpy_of_mixing_eV_per_atom[2].value",
+      "token": "-0.1738"
+     },
+     {
+      "path": "enthalpy_of_mixing_eV_per_atom[3].value",
+      "token": "-0.1354"
+     },
+     {
+      "path": "enthalpy_of_mixing_eV_per_atom[4].value",
+      "token": "-0.056"
+     },
+     {
+      "path": "enthalpy_of_mixing_eV_per_atom[5].value",
+      "token": "-0.0168"
+     },
+     {
+      "path": "enthalpy_of_mixing_eV_per_atom[6].value",
+      "token": "-0.2654"
+     },
+     {
+      "path": "enthalpy_of_mixing_eV_per_atom[7].value",
+      "token": "-0.2291"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 16,
+   "reused_keys": 0,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 16
+  },
+  {
+   "paper_key": "doi_10.20517_jmi.2025.79",
+   "doc_chars": 40689,
+   "review_parsed": true,
+   "verdict": "deny",
+   "pack_parsed": false,
+   "needle": null,
+   "issues": 5
+  },
+  {
+   "paper_key": "doi_10.1038_s41467-025-64871-4",
+   "doc_chars": 48040,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 4,
+   "grounding": {
+    "grounding_rate": 0.913,
+    "numeric_leaves": 23,
+    "ungrounded": [
+     {
+      "path": "atom_counts.total",
+      "token": "12000000"
+     },
+     {
+      "path": "md_strain_rate_per_s",
+      "token": "500000000.0"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 17,
+   "reused_keys": 5,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 22
+  },
+  {
+   "paper_key": "doi_10.1038_s41524-019-0195-y",
+   "doc_chars": 49175,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 4,
+   "grounding": {
+    "grounding_rate": 0.8095,
+    "numeric_leaves": 21,
+    "ungrounded": [
+     {
+      "path": "mc_iterations_high_temp",
+      "token": "20000000"
+     },
+     {
+      "path": "mc_iterations_mid_temp",
+      "token": "200000000"
+     },
+     {
+      "path": "mc_iterations_low_temp",
+      "token": "2000000000"
+     },
+     {
+      "path": "enthalpy_gain_layered_structure_meV_per_atom",
+      "token": "-20"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 21,
+   "reused_keys": 4,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 25
+  },
+  {
+   "paper_key": "doi_10.1038_s44334-025-00035-y",
+   "doc_chars": 52669,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.95,
+    "numeric_leaves": 20,
+    "ungrounded": [
+     {
+      "path": "yield_strength_gpa",
+      "token": "1.265"
+     }
+    ],
+    "passed": true
+   },
+   "new_keys": 0,
+   "reused_keys": 13,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 13
+  },
+  {
+   "paper_key": "doi_10.1007_s40145-021-0563-1",
+   "doc_chars": 58251,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 4,
+   "grounding": {
+    "grounding_rate": 0.9677,
+    "numeric_leaves": 31,
+    "ungrounded": [
+     {
+      "path": "oxygen_vacancy_fraction",
+      "token": "0.125"
+     }
+    ],
+    "passed": true
+   },
+   "new_keys": 18,
+   "reused_keys": 0,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 18
+  },
+  {
+   "paper_key": "doi_10.1016_j.commatsci.2022.111898",
+   "doc_chars": 60427,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 5,
+   "grounding": {
+    "grounding_rate": 1.0,
+    "numeric_leaves": 35,
+    "ungrounded": [],
+    "passed": true
+   },
+   "new_keys": 10,
+   "reused_keys": 2,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 12
+  },
+  {
+   "paper_key": "doi_10.1007_s40145-021-0524-8",
+   "doc_chars": 67068,
+   "review_parsed": true,
+   "verdict": "deny",
+   "pack_parsed": false,
+   "needle": null,
+   "issues": 7
+  },
+  {
+   "paper_key": "doi_10.1007_s40820-025-01891-1",
+   "doc_chars": 145706,
+   "review_parsed": true,
+   "verdict": "deny",
+   "pack_parsed": false,
+   "needle": null,
+   "issues": 7
+  },
+  {
+   "paper_key": "doi_10.1021_acs.jcim.4c00873",
+   "doc_chars": 155940,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": true,
+   "issues": 5,
+   "grounding": {
+    "grounding_rate": 1.0,
+    "numeric_leaves": 157,
+    "ungrounded": [],
+    "passed": true
+   },
+   "new_keys": 16,
+   "reused_keys": 0,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 16
+  }
+ ],
+ "final_registry_keys": 98
+}

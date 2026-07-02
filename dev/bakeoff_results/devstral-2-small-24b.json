@@ -1,0 +1,669 @@
+{
+ "model": "devstral-2-small-24b",
+ "papers": 10,
+ "parse_rate_review": 1.0,
+ "parse_rate_pack": 1.0,
+ "accepts": 10,
+ "gold_agreement": 0.9,
+ "grounding_rate": 0.8303,
+ "envelope_pass_rate": 1.0,
+ "new_key_rate": 0.421,
+ "near_dup_flags": 1,
+ "needle_accuracy": 1.0,
+ "minutes": 48.7,
+ "rows": [
+  {
+   "paper_key": "doi_10.1016_j.scriptamat.2016.07.001",
+   "doc_chars": 23584,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.6133,
+    "numeric_leaves": 75,
+    "ungrounded": [
+     {
+      "path": "compositions[0].bcc_lattice_parameter_angstrom",
+      "token": "2.86"
+     },
+     {
+      "path": "compositions[0].fcc_lattice_parameter_angstrom",
+      "token": "3.57"
+     },
+     {
+      "path": "compositions[1].bcc_lattice_parameter_angstrom",
+      "token": "2.86"
+     },
+     {
+      "path": "compositions[1].fcc_lattice_parameter_angstrom",
+      "token": "3.57"
+     },
+     {
+      "path": "compositions[2].bcc_lattice_parameter_angstrom",
+      "token": "2.86"
+     },
+     {
+      "path": "compositions[2].fcc_lattice_parameter_angstrom",
+      "token": "3.57"
+     },
+     {
+      "path": "compositions[3].bcc_lattice_parameter_angstrom",
+      "token": "2.91"
+     },
+     {
+      "path": "simulation_parameters[0].pressure_pa",
+      "token": "101325"
+     },
+     {
+      "path": "thermodynamic_properties[0].enthalpy_mix_ev_per_atom",
+      "token": "-0.1244"
+     },
+     {
+      "path": "thermodynamic_properties[1].enthalpy_mix_ev_per_atom",
+      "token": "-0.0849"
+     },
+     {
+      "path": "thermodynamic_properties[1].configurational_entropy_kb_per_atom",
+      "token": "8.36"
+     },
+     {
+      "path": "thermodynamic_properties[2].enthalpy_mix_ev_per_atom",
+      "token": "-0.1738"
+     },
+     {
+      "path": "thermodynamic_properties[3].enthalpy_mix_ev_per_atom",
+      "token": "-0.1354"
+     },
+     {
+      "path": "thermodynamic_properties[4].enthalpy_mix_ev_per_atom",
+      "token": "-0.056"
+     },
+     {
+      "path": "thermodynamic_properties[4].configurational_entropy_kb_per_atom",
+      "token": "8.36"
+     },
+     {
+      "path": "thermodynamic_properties[5].enthalpy_mix_ev_per_atom",
+      "token": "-0.0168"
+     },
+     {
+      "path": "thermodynamic_properties[5].configurational_entropy_kb_per_atom",
+      "token": "8.37"
+     },
+     {
+      "path": "thermodynamic_properties[6].enthalpy_mix_ev_per_atom",
+      "token": "-0.2654"
+     },
+     {
+      "path": "thermodynamic_properties[6].configurational_entropy_kb_per_atom",
+      "token": "8.36"
+     },
+     {
+      "path": "thermodynamic_properties[7].enthalpy_mix_ev_per_atom",
+      "token": "-0.2291"
+     },
+     {
+      "path": "thermodynamic_properties[7].configurational_entropy_kb_per_atom",
+      "token": "8.37"
+     },
+     {
+      "path": "configurational_entropy_vs_temperature[4].configurational_entropy_kb_per_atom[0]",
+      "token": "8.36"
+     },
+     {
+      "path": "configurational_entropy_vs_temperature[4].configurational_entropy_kb_per_atom[1]",
+      "token": "8.37"
+     },
+     {
+      "path": "configurational_entropy_vs_temperature[5].configurational_entropy_kb_per_atom[0]",
+      "token": "8.37"
+     },
+     {
+      "path": "configurational_entropy_vs_temperature[5].configurational_entropy_kb_per_atom[1]",
+      "token": "8.36"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 6,
+   "reused_keys": 0,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 6
+  },
+  {
+   "paper_key": "doi_10.20517_jmi.2025.79",
+   "doc_chars": 40689,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.6184,
+    "numeric_leaves": 76,
+    "ungrounded": [
+     {
+      "path": "compositions[0].specific_yield_strength_mpa_g_cm3",
+      "token": "147"
+     },
+     {
+      "path": "compositions[1].al_content_at_pct[1]",
+      "token": "1.6"
+     },
+     {
+      "path": "compositions[1].al_content_at_pct[2]",
+      "token": "3.2"
+     },
+     {
+      "path": "compositions[1].al_content_at_pct[3]",
+      "token": "4.8"
+     },
+     {
+      "path": "compositions[1].al_content_at_pct[4]",
+      "token": "6.4"
+     },
+     {
+      "path": "simulation_parameters[0].temperature_k",
+      "token": "300"
+     },
+     {
+      "path": "simulation_parameters[0].pressure_pa",
+      "token": "101325"
+     },
+     {
+      "path": "thermodynamic_properties[0].mono_vacancy_formation_energy_ev",
+      "token": "2.5"
+     },
+     {
+      "path": "thermodynamic_properties[1].density_g_cm3",
+      "token": "4.1"
+     },
+     {
+      "path": "thermodynamic_properties[2].melting_point_k",
+      "token": "1800"
+     },
+     {
+      "path": "thermodynamic_properties[6].corrosion_potential_v",
+      "token": "-0.2"
+     },
+     {
+      "path": "thermodynamic_properties[7].microhardness_hv",
+      "token": "750"
+     },
+     {
+      "path": "thermodynamic_properties[9].microhardness_hv",
+      "token": "800"
+     },
+     {
+      "path": "configurational_entropy_vs_temperature[0].temperature_range_k[0]",
+      "token": "300"
+     },
+     {
+      "path": "configurational_entropy_vs_temperature[0].temperature_range_k[1]",
+      "token": "1500"
+     },
+     {
+      "path": "configurational_entropy_vs_temperature[0].configurational_entropy_kb_per_atom",
+      "token": "1.6"
+     },
+     {
+      "path": "mechanical_properties[0].hardness_hv",
+      "token": "450"
+     },
+     {
+      "path": "mechanical_properties[1].yield_strength_mpa",
+      "token": "550"
+     },
+     {
+      "path": "mechanical_properties[3].yield_strength_mpa",
+      "token": "450"
+     },
+     {
+      "path": "mechanical_properties[4].hardness_hv",
+      "token": "500"
+     },
+     {
+      "path": "mechanical_properties[4].corrosion_rate_mm_year",
+      "token": "0.01"
+     },
+     {
+      "path": "mechanical_properties[5].yield_strength_mpa",
+      "token": "300"
+     },
+     {
+      "path": "mechanical_properties[6].yield_strength_mpa",
+      "token": "2000"
+     },
+     {
+      "path": "mechanical_properties[7].oxidation_rate_mm_year",
+      "token": "0.001"
+     },
+     {
+      "path": "mechanical_properties[8].corrosion_potential_v",
+      "token": "-0.2"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 4,
+   "reused_keys": 6,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 10
+  },
+  {
+   "paper_key": "doi_10.1038_s41467-025-64871-4",
+   "doc_chars": 48040,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.9583,
+    "numeric_leaves": 48,
+    "ungrounded": [
+     {
+      "path": "mechanical_properties[0].strain_hardening_rate_gpa",
+      "token": "2.0"
+     },
+     {
+      "path": "simulation_parameters[0].strain_rate_s^-1",
+      "token": "500000000.0"
+     }
+    ],
+    "passed": true
+   },
+   "new_keys": 4,
+   "reused_keys": 4,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 8
+  },
+  {
+   "paper_key": "doi_10.1038_s41524-019-0195-y",
+   "doc_chars": 49175,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.75,
+    "numeric_leaves": 40,
+    "ungrounded": [
+     {
+      "path": "thermodynamic_properties[0].heat_capacity_cv_j_per_mol_k.unrelaxed[1].cv",
+      "token": "2.0"
+     },
+     {
+      "path": "thermodynamic_properties[0].heat_capacity_cv_j_per_mol_k.relaxed[0].cv",
+      "token": "1.8"
+     },
+     {
+      "path": "thermodynamic_properties[0].heat_capacity_cv_j_per_mol_k.relaxed[1].cv",
+      "token": "2.2"
+     },
+     {
+      "path": "thermodynamic_properties[0].formation_energy_mev_per_atom.random_phase",
+      "token": "-13"
+     },
+     {
+      "path": "thermodynamic_properties[0].formation_energy_mev_per_atom.ordered_phase",
+      "token": "-15"
+     },
+     {
+      "path": "thermodynamic_properties[0].formation_energy_mev_per_atom.semiordered_phase",
+      "token": "-15"
+     },
+     {
+      "path": "configurational_entropy_vs_temperature[0].configurational_entropy_kb_per_atom",
+      "token": "1.38"
+     },
+     {
+      "path": "supercell_sizes[3].atoms",
+      "token": "432000"
+     },
+     {
+      "path": "supercell_sizes[4].atoms",
+      "token": "40000"
+     },
+     {
+      "path": "short_range_order_parameters[0].parameters[1].alpha_ij",
+      "token": "0.9"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 1,
+   "reused_keys": 8,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 9
+  },
+  {
+   "paper_key": "doi_10.1038_s44334-025-00035-y",
+   "doc_chars": 52669,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.9846,
+    "numeric_leaves": 130,
+    "ungrounded": [
+     {
+      "path": "microstructure_features[0].fcc_lattice_parameter_angstrom",
+      "token": "3.57"
+     },
+     {
+      "path": "microstructure_features[0].bcc_lattice_parameter_angstrom",
+      "token": "2.86"
+     }
+    ],
+    "passed": true
+   },
+   "new_keys": 3,
+   "reused_keys": 5,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 8
+  },
+  {
+   "paper_key": "doi_10.1007_s40145-021-0563-1",
+   "doc_chars": 58251,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.9821,
+    "numeric_leaves": 56,
+    "ungrounded": [
+     {
+      "path": "compositions[0].lattice_parameter_angstrom",
+      "token": "5.477"
+     }
+    ],
+    "passed": true
+   },
+   "new_keys": 2,
+   "reused_keys": 5,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 7
+  },
+  {
+   "paper_key": "doi_10.1016_j.commatsci.2022.111898",
+   "doc_chars": 60427,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 2,
+   "grounding": {
+    "grounding_rate": 0.8923,
+    "numeric_leaves": 65,
+    "ungrounded": [
+     {
+      "path": "thermodynamic_properties[0].vibrational_free_energy_ev_per_atom",
+      "token": "-0.012"
+     },
+     {
+      "path": "thermodynamic_properties[1].vibrational_free_energy_ev_per_atom",
+      "token": "-0.015"
+     },
+     {
+      "path": "thermodynamic_properties[2].vibrational_free_energy_ev_per_atom",
+      "token": "-0.018"
+     },
+     {
+      "path": "thermodynamic_properties[3].vibrational_free_energy_ev_per_atom",
+      "token": "-0.021"
+     },
+     {
+      "path": "thermodynamic_properties[4].vibrational_free_energy_ev_per_atom",
+      "token": "-0.024"
+     },
+     {
+      "path": "thermodynamic_properties[5].vibrational_free_energy_ev_per_atom",
+      "token": "-0.027"
+     },
+     {
+      "path": "thermodynamic_properties[6].vibrational_free_energy_ev_per_atom",
+      "token": "-0.03"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 2,
+   "reused_keys": 5,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 7
+  },
+  {
+   "paper_key": "doi_10.1007_s40145-021-0524-8",
+   "doc_chars": 67068,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.9268,
+    "numeric_leaves": 41,
+    "ungrounded": [
+     {
+      "path": "electrochemical_impedance_spectroscopy[0].exchange_current_density_ma_cm2",
+      "token": "0.0051"
+     },
+     {
+      "path": "electrochemical_impedance_spectroscopy[1].exchange_current_density_ma_cm2",
+      "token": "0.0046"
+     },
+     {
+      "path": "electrochemical_impedance_spectroscopy[2].exchange_current_density_ma_cm2",
+      "token": "0.00031"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 3,
+   "reused_keys": 2,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 5
+  },
+  {
+   "paper_key": "doi_10.1007_s40820-025-01891-1",
+   "doc_chars": 145706,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": true,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.9091,
+    "numeric_leaves": 88,
+    "ungrounded": [
+     {
+      "path": "electrochemical_performance[0].on_off_ratio",
+      "token": "100000.0"
+     },
+     {
+      "path": "structural_properties[1].lattice_parameter_angstrom",
+      "token": "8.3"
+     },
+     {
+      "path": "resistive_switching_properties[0].reset_voltage_v",
+      "token": "-1.0"
+     },
+     {
+      "path": "resistive_switching_properties[1].reset_voltage_v",
+      "token": "-3.0"
+     },
+     {
+      "path": "resistive_switching_properties[2].endurance_cycles",
+      "token": "70000.0"
+     },
+     {
+      "path": "resistive_switching_properties[3].endurance_cycles",
+      "token": "4500.0"
+     },
+     {
+      "path": "resistive_switching_properties[4].retention_time_s",
+      "token": "72000.0"
+     },
+     {
+      "path": "resistive_switching_properties[5].retention_time_s",
+      "token": "10000.0"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 3,
+   "reused_keys": 11,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 14
+  },
+  {
+   "paper_key": "doi_10.1021_acs.jcim.4c00873",
+   "doc_chars": 155940,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": true,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.7386,
+    "numeric_leaves": 153,
+    "ungrounded": [
+     {
+      "path": "composition[0].bcc_lattice_parameter_angstrom",
+      "token": "2.86"
+     },
+     {
+      "path": "composition[0].fcc_lattice_parameter_angstrom",
+      "token": "3.57"
+     },
+     {
+      "path": "composition[1].hardness_hv",
+      "token": "450"
+     },
+     {
+      "path": "simulation_parameters[0].temperature_k",
+      "token": "300"
+     },
+     {
+      "path": "simulation_parameters[0].pressure_pa",
+      "token": "101325"
+     },
+     {
+      "path": "thermodynamic_properties[0].enthalpy_mix_ev_per_atom",
+      "token": "-0.1244"
+     },
+     {
+      "path": "thermodynamic_properties[0].configurational_entropy_kb_per_atom",
+      "token": "1.61"
+     },
+     {
+      "path": "thermodynamic_properties[1].enthalpy_mix_ev_per_atom",
+      "token": "-0.05"
+     },
+     {
+      "path": "thermodynamic_properties[1].configurational_entropy_kb_per_atom",
+      "token": "1.48"
+     },
+     {
+      "path": "configurational_entropy_vs_temperature[0].configurational_entropy_kb_per_atom",
+      "token": "1.61"
+     },
+     {
+      "path": "mechanical_properties[0].hardness_hv",
+      "token": "450"
+     },
+     {
+      "path": "thermal_expansion_coefficient[0].temperature_range_c[1]",
+      "token": "1400"
+     },
+     {
+      "path": "thermal_expansion_coefficient[0].tec_x10_6_k_1",
+      "token": "12.0"
+     },
+     {
+      "path": "phase_stability[0].stable_up_to_c",
+      "token": "1400"
+     },
+     {
+      "path": "electrochemical_performance[0].rate_performance_mah_g[1].capacity_mah_g",
+      "token": "65.2"
+     },
+     {
+      "path": "structural_properties[0].lattice_parameters_angstrom.a",
+      "token": "2.894"
+     },
+     {
+      "path": "structural_properties[0].lattice_parameters_angstrom.c",
+      "token": "11.216"
+     },
+     {
+      "path": "phase_prediction_accuracy[0].accuracy_pct",
+      "token": "98.9"
+     },
+     {
+      "path": "phase_prediction_accuracy[1].accuracy_pct",
+      "token": "98.5"
+     },
+     {
+      "path": "relative_density_pct[0].scan_speed_mm_s",
+      "token": "300"
+     },
+     {
+      "path": "relative_density_pct[0].relative_density_pct",
+      "token": "95.72"
+     },
+     {
+      "path": "relative_density_pct[1].relative_density_pct",
+      "token": "96.15"
+     },
+     {
+      "path": "phase_quantification[0].composition",
+      "token": "16.2"
+     },
+     {
+      "path": "phase_quantification[0].composition",
+      "token": "10.4"
+     },
+     {
+      "path": "phase_quantification[0].composition",
+      "token": "30.7"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 25,
+   "reused_keys": 27,
+   "type_mismatches": 0,
+   "near_dup_flags": 1,
+   "envelope_problems": [],
+   "data_keys": 52
+  }
+ ],
+ "final_registry_keys": 53
+}

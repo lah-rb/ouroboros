@@ -1,0 +1,276 @@
+{
+ "model": "gemma-4-31b",
+ "papers": 10,
+ "parse_rate_review": 1.0,
+ "parse_rate_pack": 1.0,
+ "accepts": 8,
+ "gold_agreement": 0.9,
+ "grounding_rate": 0.9317,
+ "envelope_pass_rate": 1.0,
+ "new_key_rate": 0.532,
+ "near_dup_flags": 1,
+ "needle_accuracy": 1.0,
+ "minutes": 63.8,
+ "rows": [
+  {
+   "paper_key": "doi_10.1016_j.scriptamat.2016.07.001",
+   "doc_chars": 23584,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 2,
+   "grounding": {
+    "grounding_rate": 0.7576,
+    "numeric_leaves": 33,
+    "ungrounded": [
+     {
+      "path": "enthalpy_of_mixing_ev_atom[0].bcc",
+      "token": "-0.1244"
+     },
+     {
+      "path": "enthalpy_of_mixing_ev_atom[0].fcc",
+      "token": "-0.0849"
+     },
+     {
+      "path": "enthalpy_of_mixing_ev_atom[1].bcc",
+      "token": "-0.1738"
+     },
+     {
+      "path": "enthalpy_of_mixing_ev_atom[1].fcc",
+      "token": "-0.1354"
+     },
+     {
+      "path": "enthalpy_of_mixing_ev_atom[2].bcc",
+      "token": "-0.056"
+     },
+     {
+      "path": "enthalpy_of_mixing_ev_atom[2].fcc",
+      "token": "-0.0168"
+     },
+     {
+      "path": "enthalpy_of_mixing_ev_atom[3].bcc",
+      "token": "-0.2654"
+     },
+     {
+      "path": "enthalpy_of_mixing_ev_atom[3].fcc",
+      "token": "-0.2291"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 5,
+   "reused_keys": 0,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 5
+  },
+  {
+   "paper_key": "doi_10.20517_jmi.2025.79",
+   "doc_chars": 40689,
+   "review_parsed": true,
+   "verdict": "deny",
+   "pack_parsed": false,
+   "needle": null,
+   "issues": 3
+  },
+  {
+   "paper_key": "doi_10.1038_s41467-025-64871-4",
+   "doc_chars": 48040,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 2,
+   "grounding": {
+    "grounding_rate": 0.9259,
+    "numeric_leaves": 27,
+    "ungrounded": [
+     {
+      "path": "methodology.md_strain_rate_s_inv",
+      "token": "500000000.0"
+     },
+     {
+      "path": "supercell_sizes.atom_count",
+      "token": "12000000"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 5,
+   "reused_keys": 2,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 7
+  },
+  {
+   "paper_key": "doi_10.1038_s41524-019-0195-y",
+   "doc_chars": 49175,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 2,
+   "grounding": {
+    "grounding_rate": 0.8966,
+    "numeric_leaves": 29,
+    "ungrounded": [
+     {
+      "path": "methodology.mc_iterations.above_600k",
+      "token": "20000000"
+     },
+     {
+      "path": "methodology.mc_iterations.400_600k",
+      "token": "200000000"
+     },
+     {
+      "path": "methodology.mc_iterations.below_400k",
+      "token": "2000000000"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 3,
+   "reused_keys": 3,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 6
+  },
+  {
+   "paper_key": "doi_10.1038_s44334-025-00035-y",
+   "doc_chars": 52669,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 2,
+   "grounding": {
+    "grounding_rate": 1.0,
+    "numeric_leaves": 22,
+    "ungrounded": [],
+    "passed": true
+   },
+   "new_keys": 0,
+   "reused_keys": 5,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 5
+  },
+  {
+   "paper_key": "doi_10.1007_s40145-021-0563-1",
+   "doc_chars": 58251,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 0.9643,
+    "numeric_leaves": 28,
+    "ungrounded": [
+     {
+      "path": "thermal_properties[2].thermal_expansion_coefficient_k_inv",
+      "token": "1.2e-05"
+     }
+    ],
+    "passed": true
+   },
+   "new_keys": 3,
+   "reused_keys": 3,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 6
+  },
+  {
+   "paper_key": "doi_10.1016_j.commatsci.2022.111898",
+   "doc_chars": 60427,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": null,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 1.0,
+    "numeric_leaves": 22,
+    "ungrounded": [],
+    "passed": true
+   },
+   "new_keys": 2,
+   "reused_keys": 4,
+   "type_mismatches": 0,
+   "near_dup_flags": 1,
+   "envelope_problems": [],
+   "data_keys": 6
+  },
+  {
+   "paper_key": "doi_10.1007_s40145-021-0524-8",
+   "doc_chars": 67068,
+   "review_parsed": true,
+   "verdict": "deny",
+   "pack_parsed": false,
+   "needle": null,
+   "issues": 4
+  },
+  {
+   "paper_key": "doi_10.1007_s40820-025-01891-1",
+   "doc_chars": 145706,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": true,
+   "issues": 2,
+   "grounding": {
+    "grounding_rate": 0.9211,
+    "numeric_leaves": 38,
+    "ungrounded": [
+     {
+      "path": "memristor_performance_metrics[0].retention_s",
+      "token": "72000"
+     },
+     {
+      "path": "memristor_performance_metrics[1].on_off_ratio",
+      "token": "100000"
+     },
+     {
+      "path": "memristor_performance_metrics[1].retention_s",
+      "token": "10000"
+     }
+    ],
+    "passed": false
+   },
+   "new_keys": 4,
+   "reused_keys": 4,
+   "type_mismatches": 2,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 8
+  },
+  {
+   "paper_key": "doi_10.1021_acs.jcim.4c00873",
+   "doc_chars": 155940,
+   "review_parsed": true,
+   "verdict": "accept",
+   "pack_parsed": true,
+   "needle": true,
+   "issues": 3,
+   "grounding": {
+    "grounding_rate": 1.0,
+    "numeric_leaves": 50,
+    "ungrounded": [],
+    "passed": true
+   },
+   "new_keys": 3,
+   "reused_keys": 1,
+   "type_mismatches": 0,
+   "near_dup_flags": 0,
+   "envelope_problems": [],
+   "data_keys": 4
+  }
+ ],
+ "final_registry_keys": 25
+}
