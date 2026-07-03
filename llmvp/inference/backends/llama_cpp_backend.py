@@ -141,6 +141,11 @@ class LlamaCppBackend(BaseBackend):
         self._h_flow_evicts = 0
         self._h_flow_fallbacks = 0
         self._h_runaway_captures = 0
+        # Harmony final-channel dynamic stop (see inference/final_channel_stop):
+        # how many session turns ended at a non-empty final close rather than the
+        # (history-form-shadowed) <|return|>. Non-zero confirms the stop is doing
+        # real work; a spike alongside short turns would flag premature firing.
+        self._h_final_channel_stops = 0
         # In-process context-refresh accounting. The vanilla-compare verdict proved
         # the long-run output rot ("souring": the model emits short JSON action-stubs
         # instead of full files) is LLMVP-PROCESS-level — it clears with a fresh
@@ -2073,6 +2078,12 @@ class LlamaCppBackend(BaseBackend):
                 if final_stop is not None and final_stop.update(acc_bytes):
                     should_stop = True
                     gen_end_reason = "final_channel_close"
+                    self._h_final_channel_stops += 1
+                    log.debug(
+                        "🛑 final-channel stop: turn ended at non-empty final "
+                        "close (%d tokens)",
+                        len(completion_tokens),
+                    )
 
                 # Yield only the *new* bytes that form valid UTF-8. Decode the
                 # cumulative tail (never `piece` alone — a token can be a UTF-8
@@ -2089,8 +2100,11 @@ class LlamaCppBackend(BaseBackend):
                     break
 
             # Flush any remaining bytes (final multi-byte char or buffered-mode
-            # content). The accumulator already holds everything.
-            gen_end_reason = "completed"
+            # content). The accumulator already holds everything. Preserve a
+            # specific in-loop reason (e.g. final_channel_close) — only the
+            # plain budget/EOG exits fall through to "completed".
+            if gen_end_reason is None:
+                gen_end_reason = "completed"
             if acc_bytes and len(acc_bytes) > returned_bytes:
                 yield acc_bytes[returned_bytes:].decode("utf-8", errors="replace")
 
@@ -2272,6 +2286,7 @@ class LlamaCppBackend(BaseBackend):
         info["flow_evicts"] = self._h_flow_evicts
         info["flow_fallbacks"] = self._h_flow_fallbacks
         info["runaway_captures"] = self._h_runaway_captures
+        info["final_channel_stops"] = self._h_final_channel_stops
         info["context_refreshes"] = self._h_context_refreshes
         info["requests_since_refresh"] = self._h_requests_since_refresh
         return info

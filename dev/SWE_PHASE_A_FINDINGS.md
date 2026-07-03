@@ -18,6 +18,54 @@ on a transient Docker-registry stall overnight — not reproducible.)
 | fsspec | timeout ✗ | timeout ✗ (101 inf) | timeout ✗ | parse_error (agent corrupted pyproject.toml) |
 | astropy-2 | parse_error | timeout ✗ (83 inf) | parse_error | timeout ✗ (40 inf) |
 
+## Retest (post seal + dynamic stop + brownfield fixes 2–4), 2026-07-03 PM
+
+Baselines preserved: `runs/hh-{ops,code_core}-2026{0623,0703}`.
+
+| task | ops RETEST | code_core RETEST |
+|---|---|---|
+| langcodes | ✗ timeout (117 inf) — nondet flip | **RESOLVED ✓** (886s, 64 inf) |
+| fsspec | ✗ timeout (81 inf) | ✗ timeout (63 inf) — parse_error GONE |
+| astropy-2 | parse_error (astropy conftest) | parse_error (astropy conftest) |
+
+**Headline: code_core's FIRST SWE-bench solve (langcodes).** Mission trace
+proves the brownfield path end-to-end: interact → diagnose_issue →
+file_ops on `langcodes/__init__.py` (the REAL source) → interact re-test,
+structural goal complete, `test__hash__ PASSED`. No design-gate trap (fix 2),
+no clobber, no arch-parse death (fix 3). The 07-03 early-exit (8 inf / 175s)
+is closed.
+
+**fsspec: parse_error → clean timeout on BOTH arms.** The scaffold parse floor
++ protect_existing (fix 4) held — the agent no longer corrupts pyproject.toml;
+it now simply runs out of time. Remaining blocker is repo-scale localization
+(Phase B.5), not scaffolding.
+
+**astropy-2 parse_error is NOT our regression.** Cause:
+`AttributeError: module 'builtins' has no attribute '_xdg_config_home_orig'`
+in astropy's OWN `conftest.py::pytest_unconfigure` — its teardown hook crashes
+when a test session is interrupted before setup completed. Astropy is the
+hardest task (big repo, py3.9 source build) and is localization-bound anyway;
+the gold patch resolves clean (oracle 4/4), so this is an interrupted-run
+teardown artifact, not agent damage.
+
+**ops/langcodes regression = nondeterminism, confirmed.** seed=-1; the 07-03
+solve was itself a marginal timeout-boundary pass (729s, flagged
+agent_timeout). Retest turns are clean (117 turns, mean 283 tok, ZERO
+zero/sub-5-token turns) and NO degeneration aborts fired in the window — so
+the seal/stop did not truncate anything. The seal is extraction-only and the
+stop only ends generation EARLIER, so neither can raise inference count; this
+is the model taking a longer unsuccessful path. ops does not get the
+brownfield fixes.
+
+**Scorecard:** code_core 0/3 (all broken by clobber/trap/corruption) → 1/3
+clean solve + 2 legitimate non-regression failures. Small-repo editing
+competence proven on both arms; the wall is repo-scale localization.
+
+**Telemetry gap found:** `gen_end_reason = "final_channel_close"` is
+overwritten by `"completed"` before logging, so the dynamic stop's firing
+isn't observable in the server log (0 hits despite clean turns). One-line fix
+pending (needs a restart to take effect).
+
 **First SWE-bench resolution ever** (ops/langcodes — `test__hash__ PASSED`).
 
 ## What improved
