@@ -13,7 +13,6 @@ import pytest
 
 from agent.actions.operations_actions import (
     action_exa_probe_gate,
-    action_store_output_format,
     action_store_reground_criteria,
     action_store_reground_output_format,
     action_store_search_findings,
@@ -170,37 +169,25 @@ async def test_replay_v3_chess_and_multisource():
 
 
 @pytest.mark.asyncio
-async def test_store_parses_valid_spec():
-    m = _mission()
-    resp = '```json\n{"output_file": "/app/move.txt", "checks": [{"type": "no_wrapping"}]}\n```'
-    out = await action_store_output_format(_si(m, response=resp))
-    assert out.result["format_check_count"] == 1
-    assert m.task_definition.output_format_spec["output_file"] == "/app/move.txt"
-
-
-@pytest.mark.asyncio
-async def test_store_conservative_empty_and_unparseable():
-    # Conservatism: no checks → store None (no gate).
-    m = _mission()
-    out = await action_store_output_format(_si(m, response='{"checks": []}'))
-    assert out.result["format_check_count"] == 0
-    assert m.task_definition.output_format_spec is None
-    # Unparseable → None.
-    m2 = _mission()
-    await action_store_output_format(_si(m2, response="not json at all"))
-    assert m2.task_definition.output_format_spec is None
-
-
-@pytest.mark.asyncio
 async def test_store_filters_unknown_check_types():
     m = _mission()
     resp = '{"output_file": "o", "checks": [{"type": "no_wrapping"}, {"type": "bogus"}]}'
-    await action_store_output_format(_si(m, response=resp))
+    await action_store_reground_output_format(_si(m, response=resp))
     spec = m.task_definition.output_format_spec
     assert len(spec["checks"]) == 1 and spec["checks"][0]["type"] == "no_wrapping"
 
 
-# ── Grounded reground: gate + store (quality_gate port) ──────────────────────
+@pytest.mark.asyncio
+async def test_store_unparseable_leaves_no_spec():
+    # Conservatism: an unparseable response stores no spec (no format gate) —
+    # but still marks grounded (the format gate is optional; one-shot).
+    m = _mission()
+    await action_store_reground_output_format(_si(m, response="not json at all"))
+    assert m.task_definition.output_format_spec is None
+    assert m.task_definition.output_format_grounded is True
+
+
+# ── Grounded derivation: gate + store ("reground" = historical name) ─────────
 
 
 def _si_term(mission, terminal="$ ls\nresult.txt stub present\n", response=None) -> StepInput:
@@ -215,8 +202,8 @@ def _si_term(mission, terminal="$ ls\nresult.txt stub present\n", response=None)
 
 @pytest.mark.asyncio
 async def test_gate_fires_on_empty_spec():
-    # Blind early pass left no usable spec, not yet grounded → re-derive (the
-    # 69%-empty-spec recovery).
+    # No usable spec stored, not yet grounded → derive (fires on the first
+    # cycle; the blind pre-exploration derivation no longer exists).
     out = await action_gate_reground_output_format(_si_term(_mission(spec=None)))
     assert out.result["needs_reground"] is True
     # A spec with no checks is "empty" too.
@@ -240,7 +227,7 @@ async def test_gate_fires_even_without_terminal_output():
 
 @pytest.mark.asyncio
 async def test_gate_skips_only_when_usable_spec_or_grounded():
-    # A usable early spec is never re-derived (zero cost; trust the early pass).
+    # A usable stored spec is never re-derived (zero cost).
     usable = {"output_file": "/app/o", "checks": [{"type": "exists"}]}
     out = await action_gate_reground_output_format(_si_term(_mission(spec=usable)))
     assert out.result["needs_reground"] is False
@@ -262,7 +249,7 @@ async def test_reground_store_sets_spec_and_grounds():
 
 @pytest.mark.asyncio
 async def test_reground_store_marks_grounded_even_when_empty():
-    # One-shot: if the reground still finds nothing, mark grounded so it won't re-fire
+    # One-shot: if the derivation finds nothing, mark grounded so it won't re-fire
     # (and leave the existing spec untouched — stays conservative, no gate).
     m = _mission(spec=None)
     out = await action_store_reground_output_format(_si_term(m, response='{"checks": []}'))
@@ -317,11 +304,11 @@ async def test_store_search_findings_formats_and_one_shots():
     assert m2.task_definition.search_findings.startswith("(no relevant")
 
 
-# ── Grounded completion-criteria reground: gate + tighten-only store ─────────
+# ── Grounded completion-criteria derivation: gate + tighten-only store ───────
 
 
 @pytest.mark.asyncio
-async def test_gate_reground_criteria_fires_once():
+async def test_gate_reground_criteria_fires_until_grounded():
     m = _mission()
     assert (await action_gate_reground_criteria(_si(m))).result["needs_reground"] is True
     m.task_definition.completion_criteria_grounded = True
@@ -336,7 +323,7 @@ async def test_store_reground_criteria_merges_tighten_only():
             '{"command": "test -f /app/a", "description": "dup"}]}\n```')
     await action_store_reground_criteria(_si(m, response=resp))
     cmds = [c["command"] for c in m.task_definition.completion_criteria]
-    assert "test -f /app/a" in cmds           # early check preserved (tighten-only)
+    assert "test -f /app/a" in cmds           # prior check preserved (tighten-only)
     assert "test -s /app/result.txt" in cmds  # grounded check added
     assert len(cmds) == 2                      # the dup was not re-added
     assert m.task_definition.completion_criteria_grounded is True

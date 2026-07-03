@@ -1,11 +1,12 @@
 // ops_task.cue — Ops work cycle (v1)
 //
 // One pass at the task: craft an "accomplish" operator brief, drive the
-// terminal via run_session, run the definition-of-done checks, and judge
-// completion. Marks the task goal complete (done) or stores feedback and
-// loops (not done), then returns to ops_control. Dispatched per cycle from
-// ops_control's task_exec phase; the loop is bounded by the cycle/wall-clock
-// budget.
+// terminal via run_session, derive the definition-of-done GROUNDED in the
+// explored workspace (first pass; retried while empty), run the done-checks
+// + the artifact oracle, and judge completion. Marks the task goal complete
+// (done) or stores feedback and loops (not done), then returns to
+// ops_control. Dispatched per cycle from ops_control's task_exec phase; the
+// loop is bounded by the cycle/wall-clock budget.
 
 package ouroboros
 
@@ -216,16 +217,16 @@ ops_task: #FlowDefinition & {
 			publishes: ["terminal_output", "inference_session_id"]
 		}
 
-		// Definition-of-done checks (reused gate check-runner). The stored
-		// criteria are rendered into the {"checks":[...]} strategy it expects.
-		// ── Grounded definition-of-done re-assessment (criteria reground) ──
-		// The early derive_completion_criteria runs blind in ops_control (pre-
-		// exploration); this re-derives the done-criteria ONCE, grounded in the
-		// explored workspace, and UNION-MERGES them (tighten-only) so the gate now
-		// requires the real artifact. run_checks below then enforces them.
+		// ── Grounded definition-of-done derivation ("reground" = historical name) ──
+		// Derives the done-criteria grounded in the explored workspace so the
+		// gate requires the real artifact (the blind pre-exploration derivation
+		// was removed — this is the only pass). The definition-of-done is
+		// MANDATORY: the store marks it grounded only when non-empty, so a
+		// failed/empty derivation retries next cycle (bounded by the budget).
+		// run_checks below then enforces the stored criteria.
 		gate_reground_criteria: #StepDefinition & {
 			action:      "gate_reground_criteria"
-			description: "Gate the grounded criteria re-derivation (once)"
+			description: "Gate the grounded criteria derivation (until grounded)"
 			context: required: ["mission"]
 			resolver: {
 				type: "rule"
@@ -238,7 +239,7 @@ ops_task: #FlowDefinition & {
 
 		reground_criteria: #StepDefinition & {
 			action:      "inference"
-			description: "Re-derive the definition-of-done grounded in the explored workspace"
+			description: "Derive the definition-of-done grounded in the explored workspace"
 			context: {
 				required: ["mission"]
 				optional: ["project_manifest", "terminal_output"]
@@ -271,7 +272,7 @@ ops_task: #FlowDefinition & {
 
 		store_reground_criteria: #StepDefinition & {
 			action:      "store_reground_criteria"
-			description: "Union-merge the grounded checks into the done-criteria (tighten-only)"
+			description: "Store the grounded done-criteria (union-merge; retry while empty)"
 			context: required: ["mission", "inference_response"]
 			resolver: {
 				type: "rule"
@@ -299,31 +300,97 @@ ops_task: #FlowDefinition & {
 			params: max_checks: 8
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "check_sanity"}]
+				rules: [{condition: "true", transition: "gate_reground"}]
 			}
 			publishes: ["validation_results"]
 		}
 
-		// ── Rung 0: output non-degeneracy / sanity oracle ────────────────
-		// Backstops the credulous judge: for an answer-producing task it reads
-		// the produced artifact and appends a REQUIRED fail if the content is
-		// obviously degenerate (empty / error-trace / bare 0 / placeholder) —
-		// the literal-"0" gaming that passed count-dataset-tokens. The floor is
-		// zero-inference; a clean floor on an answer task routes to a light
-		// plausibility turn (wrong type/magnitude). Configure/run tasks with no
-		// single produced artifact skip cleanly.
-		check_sanity: #StepDefinition & {
-			action:      "check_output_sanity"
-			description: "Rung 0: flag a degenerate produced answer (deterministic floor)"
+		// ── Grounded output-format derivation ("reground" = historical name) ──
+		// Derives the output-format spec ONCE, grounded in the workspace scan +
+		// terminal exploration, so the format rung can anchor the required
+		// artifact (the dominant TB2 failure: a confident answer, no file
+		// written). The blind pre-exploration derivation was removed — this is
+		// the only pass. One-shot even on an empty result (the format gate is
+		// optional); once a spec exists this skips at zero cost.
+		gate_reground: #StepDefinition & {
+			action:      "gate_reground_output_format"
+			description: "Gate the grounded output-format derivation (fires once)"
+			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.needs_reground == true", transition: "reground_output_format"},
+					{condition: "true", transition: "artifact_oracle"},
+				]
+			}
+		}
+
+		reground_output_format: #StepDefinition & {
+			action:      "inference"
+			description: "Re-derive the output-format spec grounded in the scanned workspace"
 			context: {
 				required: ["mission"]
-				optional: ["validation_results"]
+				optional: ["project_manifest", "terminal_output"]
+			}
+			prompt_template: {
+				template: "ops/reground_output_format"
+				context_keys: ["task_spec", "working_directory", "workspace_context", "session_tail"]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_mission_meta", output_key: "task_spec"
+					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+				{formatter: "format_mission_meta", output_key: "working_directory"
+					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
+				{formatter: "format_project_listing", output_key: "workspace_context"
+					params: {source: {$ref: "context.project_manifest"}}},
+				{formatter: "format_session_tail", output_key: "session_tail"
+					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
+			]
+			config: temperature: "t*0.1"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "store_reground_format"},
+					{condition: "true", transition: "artifact_oracle"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		store_reground_format: #StepDefinition & {
+			action:      "store_reground_output_format"
+			description: "Parse + store the grounded spec; mark grounded (one-shot)"
+			context: required: ["mission", "inference_response"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "artifact_oracle"}]
+			}
+			publishes: ["mission"]
+		}
+
+		// ── Artifact oracle: all deterministic rungs, ONE artifact read ──
+		// Runs the sanity floor (degenerate answer: empty / error-trace / bare
+		// 0 / placeholder — the literal-"0" gaming that passed count-dataset-
+		// tokens), the output-format SHAPE check vs the derived spec (`[e2e4]`
+		// vs `e2e4`, a missing key, the wrong filename), and the profile-gated
+		// rung (service liveness / transform conservation / archive round-trip)
+		// in one step over one cached read of the produced artifact. Each rung
+		// keeps its own gate/fail-safe semantics and appends REQUIRED fails to
+		// validation_results; a clean sanity floor on an answer task routes to
+		// the light plausibility turn. Zero inference.
+		artifact_oracle: #StepDefinition & {
+			action:      "check_artifact_oracles"
+			description: "Deterministic artifact rungs (sanity + format + profile), one read"
+			context: {
+				required: ["mission"]
+				optional: ["validation_results", "task_profile"]
 			}
 			resolver: {
 				type: "rule"
 				rules: [
 					{condition: "result.check_plausibility == true", transition: "sanity_plausibility"},
-					{condition: "true", transition: "profile_oracle"},
+					{condition: "true", transition: "probe_gate"},
 				]
 			}
 			publishes: ["validation_results", "sanity_artifact_excerpt"]
@@ -356,113 +423,6 @@ ops_task: #FlowDefinition & {
 			context: {
 				required: ["inference_response"]
 				optional: ["validation_results", "sanity_artifact_excerpt"]
-			}
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "profile_oracle"}]
-			}
-			publishes: ["validation_results"]
-		}
-
-		// ── Profile-gated oracle: service / data_transform / invertible ───
-		// Reads mission.config.task_profile (set by the task judge) and runs the
-		// matching rung — liveness (the service responds), conservation (the
-		// transform output isn't empty/zero-row), or round-trip (a produced
-		// archive is intact) — appending a REQUIRED fail on an unambiguous
-		// failure. Skips for other profiles; best-effort + fail-safe, so it can
-		// only tighten the gate.
-		profile_oracle: #StepDefinition & {
-			action:      "check_profile_oracle"
-			description: "Profile-gated completion oracle (service/data/invertible)"
-			context: {
-				required: ["mission"]
-				optional: ["validation_results", "task_profile"]
-			}
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "gate_reground"}]
-			}
-			publishes: ["validation_results"]
-		}
-
-		// ── Grounded output-format re-assessment (quality_gate port) ─────
-		// The early derive_output_format runs blind in ops_control (task text only,
-		// pre-exploration) and leaves ~no spec for tasks whose required output path
-		// is a convention. This LATE rung re-derives the spec ONCE, grounded in the
-		// terminal exploration, so check_format can anchor the required artifact (the
-		// dominant TB2 failure: a confident answer, no file written). Gated to
-		// empty-spec tasks; a good early spec skips straight to check_format.
-		gate_reground: #StepDefinition & {
-			action:      "gate_reground_output_format"
-			description: "Gate the grounded reground (fires once on an empty early spec)"
-			context: required: ["mission"]
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.needs_reground == true", transition: "reground_output_format"},
-					{condition: "true", transition: "check_format"},
-				]
-			}
-		}
-
-		reground_output_format: #StepDefinition & {
-			action:      "inference"
-			description: "Re-derive the output-format spec grounded in the scanned workspace"
-			context: {
-				required: ["mission"]
-				optional: ["project_manifest", "terminal_output"]
-			}
-			prompt_template: {
-				template: "ops/reground_output_format"
-				context_keys: ["task_spec", "working_directory", "workspace_context", "session_tail"]
-				input_keys: []
-			}
-			pre_compute: [
-				{formatter: "format_mission_meta", output_key: "task_spec"
-					params: {mission: {$ref: "context.mission"}, field: "objective"}},
-				{formatter: "format_mission_meta", output_key: "working_directory"
-					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
-				{formatter: "format_project_listing", output_key: "workspace_context"
-					params: {source: {$ref: "context.project_manifest"}}},
-				{formatter: "format_session_tail", output_key: "session_tail"
-					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
-			]
-			config: temperature: "t*0.1"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "store_reground_format"},
-					{condition: "true", transition: "check_format"},
-				]
-			}
-			publishes: ["inference_response"]
-		}
-
-		store_reground_format: #StepDefinition & {
-			action:      "store_reground_output_format"
-			description: "Parse + store the grounded spec; mark grounded (one-shot)"
-			context: required: ["mission", "inference_response"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "check_format"}]
-			}
-			publishes: ["mission"]
-		}
-
-		// ── Output-format oracle: deterministic SHAPE check ──────────────
-		// Validates the produced artifact's shape against the conservative spec
-		// derived once up front (task_definition.output_format_spec): exact path,
-		// line count, value pattern, required JSON keys / CSV columns. Catches
-		// close-misses (right work, wrong shape: `[e2e4]` vs `e2e4`, a missing key,
-		// the wrong filename). Zero-inference; gates only when a spec exists AND the
-		// artifact is present; fail-safe on its own error. SHAPE only — correctness
-		// stays with the judge.
-		check_format: #StepDefinition & {
-			action:      "check_output_format"
-			description: "Output-format oracle: flag a shape mismatch vs the derived spec"
-			context: {
-				required: ["mission"]
-				optional: ["validation_results"]
 			}
 			resolver: {
 				type: "rule"
@@ -611,24 +571,27 @@ ops_task: #FlowDefinition & {
 
 		record_completion_verify: #StepDefinition & {
 			action:      "record_completion_verify"
-			description: "Derive the verdict; restore the judge verdict for decide"
+			description: "Append a required fail on a confident not-done verify verdict"
 			context: {
 				required: ["inference_response"]
-				optional: ["validation_results", "judge_response"]
+				optional: ["validation_results"]
 			}
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "decide"}]
 			}
-			publishes: ["validation_results", "inference_response"]
+			publishes: ["validation_results"]
 		}
 
+		// decide reads the judge verdict from judge_response when the verify
+		// turn ran (reprobe_completion published it; verify_completion then
+		// overwrote inference_response), else from inference_response directly.
 		decide: #StepDefinition & {
 			action:      "judge_task_completion"
 			description: "Complete the goal (done) or store feedback (loop)"
 			context: {
 				required: ["mission", "inference_response"]
-				optional: ["validation_results"]
+				optional: ["validation_results", "judge_response"]
 			}
 			resolver: {
 				type: "rule"

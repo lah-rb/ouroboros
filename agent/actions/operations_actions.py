@@ -189,11 +189,12 @@ async def action_derive_task_goal(step_input: StepInput) -> StepOutput:
     """Bootstrap the single task goal + TaskState from the objective (idempotent).
 
     The objective is the task statement — no planning turn. Mirrors
-    derive_extraction_goals' signature-idempotency. Reports whether the
-    definition-of-done still needs deriving (empty completion_criteria).
+    derive_extraction_goals' signature-idempotency. The definition-of-done is
+    NOT derived here: it is derived grounded inside ops_task (post-scan,
+    post-exploration) via the reground path.
 
     Context: mission
-    Result: goals_ready, criteria_needed, created
+    Result: goals_ready, created
     Publishes: mission
     """
     from agent.persistence.models import GoalRecord, TaskState
@@ -231,25 +232,16 @@ async def action_derive_task_goal(step_input: StepInput) -> StepOutput:
         if effects:
             await effects.save_mission(mission)
 
-    criteria_needed = not mission.task_definition.completion_criteria
     return StepOutput(
-        result={
-            "goals_ready": True,
-            "criteria_needed": criteria_needed,
-            "created": created,
-        },
-        observations=(
-            f"Ops task goal {'created' if created else 'present'}; "
-            f"definition-of-done {'pending' if criteria_needed else 'set'}"
-        ),
+        result={"goals_ready": True, "created": created},
+        observations=f"Ops task goal {'created' if created else 'present'}",
         context_updates={"mission": mission},
     )
 
 
 def _parse_completion_criteria(text: str) -> list[dict]:
     """Parse the derived definition-of-done into [{command, name, required}].
-    Accepts {"checks":[...]}, a bare list, or a lone {command} dict. Shared by the
-    early store and the grounded reground store."""
+    Accepts {"checks":[...]}, a bare list, or a lone {command} dict."""
     parsed = parse_llm_json(str(text or ""))
     # Derive-guard: an action/command emitted in place of checks is not a criterion.
     if isinstance(parsed, dict) and "action" in parsed and not (parsed.get("checks") or parsed.get("command")):
@@ -271,42 +263,13 @@ def _parse_completion_criteria(text: str) -> list[dict]:
     return out
 
 
-async def action_store_completion_criteria(step_input: StepInput) -> StepOutput:
-    """Parse the derived definition-of-done and store it on the TaskState.
-
-    The criteria are a JSON array of shell checks (same shape as the quality
-    gate's validation strategy); they are the stable target the work loop
-    checks against each cycle.
-
-    Context: mission, inference_response
-    Result: criteria_count
-    Publishes: mission
-    """
-    effects = step_input.effects
-    mission = step_input.context.get("mission")
-    if not mission or getattr(mission, "task_definition", None) is None:
-        return StepOutput(
-            result={"criteria_count": 0}, observations="No task_definition"
-        )
-
-    criteria = _parse_completion_criteria(str(step_input.context.get("inference_response", "")))
-    mission.task_definition.completion_criteria = criteria
-    if effects:
-        await effects.save_mission(mission)
-    if not criteria:
-        logger.warning("Definition-of-done parsed to 0 checks for ops task")
-    return StepOutput(
-        result={"criteria_count": len(criteria)},
-        observations=f"Definition-of-done: {len(criteria)} completion check(s)",
-        context_updates={"mission": mission},
-    )
-
-
 async def action_store_reground_criteria(step_input: StepInput) -> StepOutput:
-    """Merge the grounded re-derived criteria into the existing definition-of-done
-    (TIGHTEN-ONLY: union by command, never removes an early check) and mark criteria
-    grounded (one-shot). The early derive runs blind/pre-exploration; this grounds
-    the done-criteria in the explored workspace so they require the real artifact.
+    """Store the grounded definition-of-done (THE derivation — the blind early
+    pass was removed; "reground" is the historical name). Union-merges by command
+    into any existing criteria (TIGHTEN-ONLY: never removes a stored check) and
+    marks criteria grounded ONLY when the result is non-empty — the definition-
+    of-done is mandatory, so an empty parse leaves the gate un-grounded and the
+    next cycle re-derives (the retry, bounded by the cycle/wall-clock budget).
 
     Context: mission, inference_response.  Publishes: mission.
     """
@@ -325,12 +288,15 @@ async def action_store_reground_criteria(step_input: StepInput) -> StepOutput:
             seen.add(c["command"])
             added += 1
     td.completion_criteria = merged
-    td.completion_criteria_grounded = True
+    if merged:
+        td.completion_criteria_grounded = True
+    else:
+        logger.warning("Definition-of-done parsed to 0 checks — will re-derive next cycle")
     if effects:
         await effects.save_mission(mission)
     return StepOutput(
         result={"criteria_count": len(merged)},
-        observations=f"Regrounded definition-of-done: {len(merged)} check(s) (+{added} grounded)",
+        observations=f"Grounded definition-of-done: {len(merged)} check(s) (+{added} this pass)",
         context_updates={"mission": mission},
     )
 
@@ -341,8 +307,7 @@ _FORMAT_CHECK_TYPES = {"exists", "line_count", "regex", "no_wrapping", "required
 def _parse_output_format_spec(text: str) -> dict | None:
     """Parse an LLM output-format response into {output_file, checks} or None.
     CONSERVATIVE: only a spec with >=1 valid check gates anything; an
-    unparseable/empty/check-less response yields None (no format gate). Shared by
-    the early (derive) and late grounded (reground) store actions."""
+    unparseable/empty/check-less response yields None (no format gate)."""
     parsed = parse_llm_json(str(text or ""))
     if not isinstance(parsed, dict):
         return None
@@ -364,50 +329,15 @@ def _parse_output_format_spec(text: str) -> dict | None:
     }
 
 
-async def action_store_output_format(step_input: StepInput) -> StepOutput:
-    """Parse the derived output-format spec and store it on the TaskState.
-
-    The spec is {output_file, checks:[{type,...}]} — the format oracle
-    (action_check_output_format) validates the produced artifact's SHAPE against
-    it each cycle. CONSERVATIVE: an unparseable/empty/format-less spec stores None
-    so no format gate fires (never block a correct answer on a guessed shape).
-
-    Context: mission, inference_response
-    Result: format_check_count
-    Publishes: mission
-    """
-    effects = step_input.effects
-    mission = step_input.context.get("mission")
-    if not mission or getattr(mission, "task_definition", None) is None:
-        return StepOutput(result={"format_check_count": 0}, observations="No task_definition")
-
-    spec = _parse_output_format_spec(str(step_input.context.get("inference_response", "")))
-
-    mission.task_definition.output_format_spec = spec
-    if effects:
-        await effects.save_mission(mission)
-    n = len(spec["checks"]) if spec else 0
-    return StepOutput(
-        result={"format_check_count": n},
-        observations=(
-            f"Output-format spec: {n} shape check(s) on "
-            f"{spec.get('output_file') or 'artifact'}" if spec
-            else "Output-format spec: none (no concrete format in the brief)"
-        ),
-        context_updates={"mission": mission},
-    )
-
-
 async def action_store_reground_output_format(step_input: StepInput) -> StepOutput:
-    """Store the LATE grounded output-format spec and mark the reground done.
-
-    Mirrors action_store_output_format but (a) is fed the grounded re-derivation
-    (task + live terminal exploration), so it can name the conventional artifact the
-    blind early pass missed, and (b) sets output_format_grounded=True so the gate
-    fires the reground at most ONCE per mission — even when it still finds no
-    concrete artifact (so we don't re-pay the inference every cycle). Conservative:
-    an empty parse leaves the existing spec untouched (no gate) but still marks
-    grounded.
+    """Store the grounded output-format spec and mark the derivation done (THE
+    derivation — the blind early pass was removed; "reground" is the historical
+    name). Fed the grounded derivation (task + live terminal exploration), so it
+    can name the conventional artifact a blind pass would miss. Sets
+    output_format_grounded=True so the gate fires at most ONCE per mission — even
+    when it finds no concrete artifact (the format gate is OPTIONAL; don't re-pay
+    the inference every cycle). Conservative: an empty parse leaves the existing
+    spec untouched (no gate) but still marks grounded.
 
     Context: mission, inference_response
     Result: format_check_count
@@ -511,7 +441,13 @@ async def action_judge_task_completion(step_input: StepInput) -> StepOutput:
     run_session, and the task goal stays incomplete (the loop continues until
     done or the budget caps).
 
-    Context: mission, inference_response, validation_results (from checks)
+    The judge verdict is read from judge_response when present (the verify-
+    before-harvest turn overwrote inference_response with the VERIFY output;
+    reprobe_completion stashed the judge's raw verdict), else from
+    inference_response (the verify path was skipped).
+
+    Context: mission, inference_response, judge_response (optional),
+             validation_results (from checks)
     Result: task_done
     Publishes: mission
     """
@@ -539,7 +475,11 @@ async def action_judge_task_completion(step_input: StepInput) -> StepOutput:
         checks_passed = False
         no_criteria = not criteria_defined
 
-    parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
+    judge_raw = str(
+        step_input.context.get("judge_response")
+        or step_input.context.get("inference_response", "")
+    )
+    parsed = parse_llm_json(judge_raw)
     parsed = parsed if isinstance(parsed, dict) else {}
     judge_done = bool(parsed.get("task_complete"))
     feedback = str(parsed.get("feedback") or "").strip()

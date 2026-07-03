@@ -1,25 +1,29 @@
 # Prompt template: ops/reground_completion_criteria
 #
-# LATE, GROUNDED re-derivation of the definition-of-done. The early
-# ops/derive_completion_criteria runs blind (task text only, pre-exploration), so it
-# can miss the artifact the grader actually checks for. This pass runs after the
-# agent has explored the terminal, so it can name the required output from the
-# evidence and add an existence/shape check for it. The result is MERGED into the
-# early criteria (tighten-only) — so add only what's robust.
+# THE definition-of-done derivation, grounded in the explored workspace. (The
+# name is historical: this began as a late re-grounding pass patching a blind
+# pre-exploration derivation in ops_control; that blind pass was systematically
+# wrong about the graded artifact and was removed, so this grounded pass is now
+# the only derivation.) It runs after the workspace scan + the first terminal
+# exploration, so it can name the required output from evidence. Stored checks
+# are union-merged (tighten-only) and retried on an empty result — the
+# definition-of-done is mandatory.
 #
 # Pre-computed: task_spec, working_directory, workspace_context, session_tail
 
 id: ops/reground_completion_criteria
-description: "Re-derive the definition-of-done grounded in the explored workspace"
+description: "Derive the definition-of-done grounded in the explored workspace"
 
 sections:
 
   - id: system_role
     content: |
-      You add ADDITIONAL done-criteria for the task in the ---YOUR TASK--- block —
-      shell checks that confirm the REQUIRED OUTPUT was produced — now that the
-      workspace has been explored. Your output is parsed as JSON. Return ONLY a JSON
-      object inside a fenced code block — no commentary.
+      You define the DONE criteria for the task in the ---YOUR TASK--- block —
+      the shell checks that will later confirm it is complete, informed by the
+      explored workspace below. These are shell CHECKS (a "checks" array), NOT a
+      command to run — never emit an action like {"action": ...}. Your output is
+      parsed as JSON. Return ONLY a JSON object inside a fenced code block — no
+      commentary.
 
   - id: task
     content: |
@@ -43,42 +47,73 @@ sections:
 
   - id: instructions
     content: |
-      The early definition-of-done was written before any of this was known. Add the
-      checks it likely MISSED — above all, that the task's required output artifact
-      EXISTS at the path the grader will read. Terminal tasks are graded on a
-      produced file whose path is often a convention only visible after exploring (a
-      stub/template already present, an instructions file, the input/output directory
-      layout). Use the workspace files (then the exploration) to name it and require
-      it, e.g.:
+      Produce the DEFINITION OF DONE: shell checks that inspect the FINAL state
+      (files exist, are non-empty/executable, a service responds, exit codes) —
+      NOT the steps taken to get there. Each check exits 0 iff a required
+      end-state condition holds. Prefer the smallest set of necessary,
+      independent conditions (2-5), run in the working directory with standard
+      tools.
+
+      Above all: require that the task's REQUIRED OUTPUT ARTIFACT exists at the
+      path the grader will read. Terminal tasks are graded on a produced file
+      whose path is often a convention the task statement never spells out — a
+      stub/template already present, an instructions file, the input/output
+      directory layout. Use the workspace files (then the exploration) to name
+      it and require it, e.g.:
         {"command": "test -s /app/<required output>", "description": "the required output exists and is non-empty"}
 
-      Two rules keep this safe (the merge is TIGHTEN-ONLY, so a wrong check is the
-      only way to harm a correct answer):
+      These checks are a SCREEN, not the full grader — a separate judge reads
+      the actual output and rules on content. So you do NOT have to prove
+      correctness; you have to prove the right artifacts exist in the right
+      shape, with checks that cannot be "almost right". Two rules make that
+      reliable:
 
-      1. ROBUST PREDICATES ONLY. Conditions the shell evaluates unambiguously:
-         `test -f path`, `test -s path`, `test -x path`, an exit code, a port probe,
-         or `grep -qF '<exact text>' path` ONLY when the task STATES that literal.
-      2. NEVER RE-DERIVE THE ANSWER INSIDE A CHECK. Do not recompute the task's own
-         work and compare — a slightly-wrong re-derivation FAILS A CORRECT ANSWER. If
-         you don't know the exact bytes, assert the artifact EXISTS and is NON-EMPTY
-         and leave correctness to the judge.
+      1. ROBUST PREDICATES ONLY. Use conditions the shell evaluates
+         unambiguously: `test -f path`, `test -s path` (exists and non-empty),
+         `test -x path`, an exit code, a running-port probe, or
+         `grep -qF '<exact text>' path` — but a content match ONLY when the task
+         STATES the exact literal to look for. Existence + shape is almost
+         always enough for the screen.
 
-      If the workspace makes no required output identifiable (a pure
-      configure/service task), return {"checks": []} — adding nothing is correct.
+      2. NEVER RE-DERIVE THE ANSWER INSIDE A CHECK. Do not extract, recompute,
+         or re-run the task's own work inside a check and compare it to the
+         result (no `cmp <(re-extract …) out`, no `[ "$(recompute)" = out ]`).
+         Such a check is circular: if your re-derivation is even slightly wrong
+         it FAILS A CORRECT ANSWER, and the agent will then destroy a good
+         result chasing it. If you do not already know the exact expected
+         content, do NOT write a content check at all — assert the artifact
+         EXISTS and is NON-EMPTY and leave correctness to the judge. A weaker
+         sound check beats a precise wrong one.
+
+      (Shell aside, since it bites even existence checks: `$(…)` strips trailing
+      newlines — to assert a file ends in a newline use `[ -z "$(tail -c1 f)" ]`.)
 
   - id: output_format
     content: |
-      Return a JSON object with a "checks" array (same shape as the definition-of-
-      done). The example is from an UNRELATED task — it shows the SHAPE only.
+      Return a JSON object with a "checks" array. The examples are from
+      UNRELATED tasks — they show the SHAPE only. Write checks for the actual
+      task.
 
-      ✅ CORRECT (exploration showed the grader reads /app/result.txt):
+      ✅ CORRECT — the exploration showed the grader reads /app/result.txt; a
+      content match only on a literal the task named:
       ```json
-      {"checks": [{"command": "test -s /app/result.txt", "description": "result.txt exists and is non-empty"}]}
+      {
+        "checks": [
+          {"command": "test -s /app/result.txt", "description": "result.txt exists and is non-empty"},
+          {"command": "grep -qF 'logging: enabled' config.yaml", "description": "the named literal 'logging: enabled' is present"}
+        ]
+      }
       ```
 
-      ❌ WRONG — re-derives the answer inside the check (fails a correct result):
+      ❌ WRONG — re-derives the answer inside the check (fails a correct
+      result):
       ```json
       {"checks": [{"command": "[ \"$(recompute)\" = \"$(cat /app/result.txt)\" ]", "description": "value matches"}]}
+      ```
+
+      ❌ WRONG — asserts a step ran instead of final state, or adds prose:
+      ```json
+      {"checks": [{"command": "echo done", "description": "ran the command"}]}
       ```
 
       Return ONLY the fenced JSON object.

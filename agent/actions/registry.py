@@ -331,13 +331,12 @@ def build_action_registry() -> ActionRegistry:
         action_exa_probe_gate,
         action_judge_task_completion,
         action_run_property_probe,
-        action_store_completion_criteria,
-        action_store_output_format,
         action_store_reground_criteria,
         action_store_reground_output_format,
         action_store_search_findings,
     )
     from agent.actions.oracle_actions import (
+        action_check_artifact_oracles,
         action_check_output_format,
         action_check_output_sanity,
         action_check_profile_oracle,
@@ -389,20 +388,20 @@ def build_action_registry() -> ActionRegistry:
     # Extractor flow set (scraper v2 — PDF -> markdown+figures)
     registry.register("derive_extraction_goals", action_derive_extraction_goals)
     registry.register("derive_task_goal", action_derive_task_goal)
-    registry.register("store_completion_criteria", action_store_completion_criteria)
-    registry.register("store_output_format", action_store_output_format)
     registry.register("judge_task_completion", action_judge_task_completion)
     # Oracle rungs (non-degeneracy / sanity — backstops the credulous judge)
     registry.register("check_output_sanity", action_check_output_sanity)
     registry.register("record_output_sanity", action_record_output_sanity)
     # Output-format oracle (deterministic shape check vs the derived spec)
     registry.register("check_output_format", action_check_output_format)
-    # Grounded late re-derivation (quality_gate port): gate fires the reground once,
-    # store persists it + marks grounded — recovers blind-early empty specs.
+    # Combined artifact oracle: sanity + format + profile rungs, one artifact read
+    registry.register("check_artifact_oracles", action_check_artifact_oracles)
+    # Grounded output-format derivation ("reground" = historical name): gate fires
+    # once, store persists the spec + marks grounded.
     registry.register("gate_reground_output_format", action_gate_reground_output_format)
     registry.register("store_reground_output_format", action_store_reground_output_format)
-    # Grounded late re-derivation of the definition-of-done (criteria analog): gate
-    # fires once, store union-merges the grounded checks (tighten-only).
+    # Grounded definition-of-done derivation (criteria analog): gate fires until a
+    # non-empty store grounds it; store union-merges (tighten-only).
     registry.register("gate_reground_criteria", action_gate_reground_criteria)
     registry.register("store_reground_criteria", action_store_reground_criteria)
     # Stuck-task external search (anti-give-up dynamic arm): gate fires exa once on a

@@ -75,24 +75,14 @@ def test_compiled_ops_wiring():
     transitions = {r["condition"]: r["transition"] for r in rules}
     assert transitions["result.phase == 'task_exec'"] == "dispatch_task"
     assert transitions["result.phase == 'complete'"] == "completed"
-    # Empty definition-of-done derivation re-loops to re-derive (mandatory gate),
-    # rather than storing 0 checks and running a session against no gate.
-    derive_rules = c["ops_control"]["steps"]["derive_criteria"]["resolver"]["rules"]
-    dt = {r["condition"]: r["transition"] for r in derive_rules}
-    assert dt["result.tokens_generated > 0"] == "store_criteria"
-    assert dt["true"] == "retry_setup"
-    assert (
-        c["ops_control"]["steps"]["retry_setup"]["tail_call"]["flow"] == "ops_control"
-    )
-    # After the definition-of-done, derive the OPTIONAL output-format spec, then
-    # proceed. Unlike the mandatory criteria, a failed format derivation does NOT
-    # re-loop — it proceeds with no format gate (the conservative default).
+    # The blind pre-exploration derivations were REMOVED from ops_control — the
+    # definition-of-done + output-format spec derive grounded inside ops_task.
     ocs = c["ops_control"]["steps"]
-    assert ocs["store_criteria"]["resolver"]["rules"][0]["transition"] == "derive_output_format"
-    of = {r["condition"]: r["transition"] for r in ocs["derive_output_format"]["resolver"]["rules"]}
-    assert of["result.tokens_generated > 0"] == "store_output_format"
-    assert of["true"] == "check_phase"  # no retry — format gate is optional
-    assert ocs["store_output_format"]["resolver"]["rules"][0]["transition"] == "check_phase"
+    for gone in ("derive_criteria", "retry_setup", "store_criteria",
+                 "derive_output_format", "store_output_format"):
+        assert gone not in ocs, f"blind early derivation step {gone} resurrected"
+    bg = {r["condition"]: r["transition"] for r in ocs["bootstrap_goals"]["resolver"]["rules"]}
+    assert bg["result.goals_ready == true"] == "check_phase"
     assert c["ops_control"]["steps"]["dispatch_task"]["tail_call"]["flow"] == "ops_task"
     # ops_task reuses run_session verbatim and judges completion.
     steps = c["ops_task"]["steps"]
@@ -124,30 +114,27 @@ def test_compiled_ops_wiring():
         and pc.get("output_key") == "workspace_context"
         for pc in steps["plan_charter"]["pre_compute"]
     )
-    # Oracle rungs: the sanity floor gates the judge; verify-before-harvest
-    # re-probes the completion before "done" is harvested.
-    assert steps["run_checks"]["resolver"]["rules"][0]["transition"] == "check_sanity"
-    cs = {r["condition"]: r["transition"] for r in steps["check_sanity"]["resolver"]["rules"]}
-    assert cs["result.check_plausibility == true"] == "sanity_plausibility"
-    assert cs["true"] == "profile_oracle"  # sanity branch flows into the profile rung
-    # Profile-gated rung (service/data/invertible) → grounded reground gate → output-format.
-    assert steps["profile_oracle"]["action"] == "check_profile_oracle"
-    assert steps["profile_oracle"]["resolver"]["rules"][0]["transition"] == "gate_reground"
-    # Grounded output-format re-assessment (quality_gate port): gate fires the late
-    # re-derivation only on an empty early spec (else straight to check_format), the
-    # reground inference stores + marks grounded, then enforcement is check_format.
+    # Definition-of-done enforcement → grounded format derivation → the combined
+    # artifact oracle (sanity + format + profile rungs over ONE read).
+    assert steps["run_checks"]["resolver"]["rules"][0]["transition"] == "gate_reground"
     assert steps["gate_reground"]["action"] == "gate_reground_output_format"
     gr = {r["condition"]: r["transition"] for r in steps["gate_reground"]["resolver"]["rules"]}
     assert gr["result.needs_reground == true"] == "reground_output_format"
-    assert gr["true"] == "check_format"
+    assert gr["true"] == "artifact_oracle"
     rof = {r["condition"]: r["transition"] for r in steps["reground_output_format"]["resolver"]["rules"]}
     assert rof["result.tokens_generated > 0"] == "store_reground_format"
-    assert rof["true"] == "check_format"
+    assert rof["true"] == "artifact_oracle"
     assert steps["store_reground_format"]["action"] == "store_reground_output_format"
-    assert steps["store_reground_format"]["resolver"]["rules"][0]["transition"] == "check_format"
-    # Output-format oracle: deterministic shape check vs the derived spec.
-    assert steps["check_format"]["action"] == "check_output_format"
-    assert steps["check_format"]["resolver"]["rules"][0]["transition"] == "probe_gate"
+    assert steps["store_reground_format"]["resolver"]["rules"][0]["transition"] == "artifact_oracle"
+    # The combined oracle replaced the separate check_sanity/profile_oracle/
+    # check_format steps (three reads of the same artifact → one).
+    for gone in ("check_sanity", "profile_oracle", "check_format"):
+        assert gone not in steps, f"standalone rung step {gone} resurrected"
+    assert steps["artifact_oracle"]["action"] == "check_artifact_oracles"
+    ao = {r["condition"]: r["transition"] for r in steps["artifact_oracle"]["resolver"]["rules"]}
+    assert ao["result.check_plausibility == true"] == "sanity_plausibility"
+    assert ao["true"] == "probe_gate"
+    assert steps["record_sanity"]["resolver"]["rules"][0]["transition"] == "probe_gate"
     assert steps["judge_step"]["resolver"]["rules"][0]["transition"] == "reprobe_completion"
     rp = {r["condition"]: r["transition"] for r in steps["reprobe_completion"]["resolver"]["rules"]}
     assert rp["result.do_verify == true"] == "verify_completion"
@@ -155,6 +142,10 @@ def test_compiled_ops_wiring():
     assert (
         steps["record_completion_verify"]["resolver"]["rules"][0]["transition"] == "decide"
     )
+    # No restore dance: record_completion_verify publishes only its findings; the
+    # judge verdict reaches decide via the dedicated judge_response key.
+    assert steps["record_completion_verify"]["publishes"] == ["validation_results"]
+    assert "judge_response" in steps["decide"]["context"]["optional"]
     # Provision the env BEFORE the work session (reuse project_ops's install
     # runner), so run_session stays observe-only and tb env-setup works.
     assert steps["run_provision"]["action"] == "execute_project_setup"

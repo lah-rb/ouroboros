@@ -1,11 +1,15 @@
 // ops_control.cue — Ops Pipeline Controller (v1)
 //
 // Promotes run_session to a mission type: the objective IS a terminal task.
-// Bootstraps ONE task goal from the objective and derives a "definition of
-// done" (observable shell checks) once, then works the task in run_session
-// cycles, judging completion against those checks until done or the budget
-// caps. Targets terminal-bench, which grades by final container state — the
-// self-checks mirror the grader's shape.
+// Bootstraps ONE task goal from the objective, then works the task in
+// run_session cycles, judging completion against a "definition of done"
+// (observable shell checks) until done or the budget caps. The definition-
+// of-done is derived GROUNDED inside ops_task (post-scan, post-exploration)
+// — the blind pre-exploration derivation this controller used to run was
+// systematically wrong about the graded artifact and existed only to be
+// patched by the grounded pass; it was removed, so the grounded pass IS the
+// derivation. Targets terminal-bench, which grades by final container state
+// — the self-checks mirror the grader's shape.
 //
 // Phases (OPS_PHASES in agent/flow_sets.py — names must match):
 //   task_exec — the task goal is incomplete; run a work cycle
@@ -17,9 +21,10 @@ ops_control: #FlowDefinition & {
 	flow:    "ops_control"
 	version: 1
 	description: """
-		Ops pipeline controller. Derives one task goal + a definition-of-done
-		from the objective, then drives run_session work cycles and judges
-		completion against the done-checks until the task is complete.
+		Ops pipeline controller. Derives one task goal from the objective,
+		then drives run_session work cycles (which derive the grounded
+		definition-of-done) and judges completion against the done-checks
+		until the task is complete.
 		"""
 
 	context_tier: "project_goal"
@@ -83,8 +88,10 @@ ops_control: #FlowDefinition & {
 		}
 
 		// The objective IS the task: derive the single task goal + TaskState
-		// deterministically (idempotent by signature). Then derive the
-		// definition-of-done ONCE (criteria_needed) before working.
+		// deterministically (idempotent by signature). The definition-of-done is
+		// derived grounded inside ops_task (after the workspace scan + terminal
+		// exploration), not here — a blind pre-exploration derivation misses the
+		// graded artifact.
 		bootstrap_goals: #StepDefinition & {
 			action:      "derive_task_goal"
 			description: "Derive the single task goal + TaskState from the objective"
@@ -92,115 +99,9 @@ ops_control: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.criteria_needed == true", transition: "derive_criteria"},
 					{condition: "result.goals_ready == true", transition: "check_phase"},
 					{condition: "true", transition: "completed"},
 				]
-			}
-			publishes: ["mission"]
-		}
-
-		// Definition of done: observable shell checks that prove the task done.
-		derive_criteria: #StepDefinition & {
-			action:      "inference"
-			description: "Derive the definition-of-done (completion checks) once"
-			context: required: ["mission"]
-			prompt_template: {
-				template: "ops/derive_completion_criteria"
-				context_keys: ["task_spec", "working_directory"]
-				input_keys: []
-			}
-			pre_compute: [
-				{formatter: "format_mission_meta", output_key: "task_spec"
-					params: {mission: {$ref: "context.mission"}, field: "objective"}},
-				{formatter: "format_mission_meta", output_key: "working_directory"
-					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
-			]
-			// t*0.1, not pure-greedy: an adversarial sweep (t*0.0–0.5) showed
-			// 0.0–0.3 equal on JSON validity + deliverable coverage (0.5 breaks),
-			// and a hair of entropy hedges the "stuck greedy path" failure mode on
-			// reasoning steps without any measured cost. Still within §11's
-			// structured-output range (t*0.0–0.2).
-			config: temperature: "t*0.1"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "store_criteria"},
-					{condition: "true", transition: "retry_setup"},
-				]
-			}
-			publishes: ["inference_response"]
-		}
-
-		// Derivation came back empty (e.g. a transient inference error). The
-		// definition-of-done is mandatory — an ops task is never certified done
-		// without it — so re-loop the controller (after a short delay to let the
-		// inference instance free) and re-derive, rather than storing 0 checks
-		// and running a work session against no gate. Bounded by the cycle /
-		// wall-clock budget like any other loop.
-		retry_setup: #StepDefinition & {
-			action:      "noop"
-			description: "Empty definition-of-done — re-loop to re-derive it"
-			tail_call: {
-				flow: "ops_control"
-				input_map: {
-					mission_id: {$ref: "input.mission_id"}
-				}
-				delay: 3
-			}
-		}
-
-		store_criteria: #StepDefinition & {
-			action:      "store_completion_criteria"
-			description: "Parse + store the definition-of-done on the TaskState"
-			context: required: ["mission", "inference_response"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "derive_output_format"}]
-			}
-			publishes: ["mission"]
-		}
-
-		// Output-format spec: a CONSERVATIVE set of shape checks the format oracle
-		// runs against the produced artifact each cycle (catches close-misses —
-		// wrong shape/key/filename on otherwise-correct work). Unlike the
-		// definition-of-done this is OPTIONAL: a failed/empty derivation just means
-		// no format gate (the safe default — never block a correct answer on a
-		// guessed shape), so its failure path proceeds to check_phase, not retry.
-		derive_output_format: #StepDefinition & {
-			action:      "inference"
-			description: "Derive a conservative output-format spec once"
-			context: required: ["mission"]
-			prompt_template: {
-				template: "ops/derive_output_format"
-				context_keys: ["task_spec", "working_directory"]
-				input_keys: []
-			}
-			pre_compute: [
-				{formatter: "format_mission_meta", output_key: "task_spec"
-					params: {mission: {$ref: "context.mission"}, field: "objective"}},
-				{formatter: "format_mission_meta", output_key: "working_directory"
-					params: {mission: {$ref: "context.mission"}, field: "config.working_directory"}},
-			]
-			config: temperature: "t*0.1"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "store_output_format"},
-					// Inference failed — proceed with NO format gate (safe default).
-					{condition: "true", transition: "check_phase"},
-				]
-			}
-			publishes: ["inference_response"]
-		}
-
-		store_output_format: #StepDefinition & {
-			action:      "store_output_format"
-			description: "Parse + store the output-format spec on the TaskState"
-			context: required: ["mission", "inference_response"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "check_phase"}]
 			}
 			publishes: ["mission"]
 		}

@@ -349,8 +349,11 @@ FLOW_INPUTS = {
 FLOW_MAX_STEPS = {}
 
 # Flows where hitting max_steps is expected with mock effects
-# (exploratory loops that need real LLM menu responses to terminate)
-EXPECTED_MAX_STEPS = {"run_session"}
+# (exploratory loops that need real LLM menu responses to terminate).
+# ops_task is an honestly-long straight DAG (~25 steps, no internal loop)
+# that also EMBEDS run_session as a subflow — under mocks it exhausts any
+# budget inside that loop, exactly like run_session itself.
+EXPECTED_MAX_STEPS = {"run_session", "ops_task"}
 
 
 async def smoke_test_flow(flow_name, flow_def, registry, all_flows, max_steps=15):

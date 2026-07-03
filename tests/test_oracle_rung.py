@@ -2,7 +2,9 @@
 
 Pins the contract: each rung appends a {required:true} validation_result only on
 a GENUINE finding, never on its own error (fail-safe); the sanity floor defers on
-a 0 the criteria names; and the VBH loop restores the judge verdict for decide.
+a 0 the criteria names; the VBH judge verdict rides the dedicated judge_response
+key (no inference_response restore); and the combined artifact oracle runs all
+rungs over ONE artifact read.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import json
 import pytest
 
 from agent.actions.oracle_actions import (
+    action_check_artifact_oracles,
     action_check_output_sanity,
     action_check_profile_oracle,
     action_record_completion_verify,
@@ -136,40 +139,35 @@ async def test_reprobe_builds_transcript_and_saves_judge():
 
 
 @pytest.mark.asyncio
-async def test_record_verify_refute_appends_fail_and_restores_judge():
-    judge = json.dumps({"task_complete": True, "feedback": ""})
+async def test_record_verify_refute_appends_fail():
     si = _si(
         _mission(),
         inference_response=json.dumps({"genuinely_done": False, "reason": "holds 0"}),
-        judge_response=judge,
     )
     out = await action_record_completion_verify(si)
     vr = out.context_updates["validation_results"]
     assert len(vr) == 1 and not vr[0]["passed"] and vr[0]["name"] == "completion_verify"
-    assert out.context_updates["inference_response"] == judge  # restored for decide
+    # No restore dance: the judge verdict reaches decide via judge_response.
+    assert "inference_response" not in out.context_updates
 
 
 @pytest.mark.asyncio
-async def test_record_verify_confirmed_no_fail_restores_judge():
-    judge = json.dumps({"task_complete": True})
+async def test_record_verify_confirmed_no_fail():
     si = _si(
         _mission(),
         inference_response=json.dumps({"genuinely_done": True, "reason": "ok"}),
-        judge_response=judge,
     )
     out = await action_record_completion_verify(si)
     assert out.context_updates.get("validation_results", []) == []
-    assert out.context_updates["inference_response"] == judge
+    assert "inference_response" not in out.context_updates
 
 
 @pytest.mark.asyncio
 async def test_record_verify_inconclusive_failsafe():
-    judge = json.dumps({"task_complete": True})
     out = await action_record_completion_verify(
-        _si(_mission(), inference_response="garbage", judge_response=judge)
+        _si(_mission(), inference_response="garbage")
     )
     assert out.context_updates.get("validation_results", []) == []  # no fail manufactured
-    assert out.context_updates["inference_response"] == judge  # still restored
 
 
 # ── Profile-gated rungs (Phase 2): liveness / conservation / round-trip ────
@@ -264,3 +262,57 @@ async def test_regression_skips_when_pytest_absent():
         return_code=1, stdout="", stderr="No module named pytest", command="x")})
     out = await action_check_profile_oracle(_si(_mission_p("repair"), eff))
     assert out.context_updates.get("validation_results", []) == []
+
+
+# ── Combined artifact oracle: all rungs, ONE read ──────────────────────────
+
+
+class _CountingEffects(MockEffects):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.read_calls = 0
+
+    async def read_file(self, path):
+        self.read_calls += 1
+        return await super().read_file(path)
+
+
+@pytest.mark.asyncio
+async def test_artifact_oracle_runs_all_rungs_over_one_read():
+    # Degenerate answer (sanity rung) + shape miss (format rung) on the SAME
+    # artifact: both findings append, and the artifact is read exactly once
+    # even though sanity + format + (conservation-eligible) profile all want it.
+    m = _mission_p("data_transform", CRIT)
+    m.task_definition.output_format_spec = {
+        "output_file": "/app/answer.txt", "checks": [{"type": "line_count", "value": 1}]}
+    eff = _CountingEffects(files={"/app/answer.txt": ""})  # empty → degenerate + 0 lines
+    out = await action_check_artifact_oracles(_si(m, eff))
+    names = [r["name"] for r in out.context_updates["validation_results"]]
+    assert any(n.startswith("output_sanity") for n in names)
+    assert any(n.startswith("output_format") for n in names)
+    assert any(n == "data_transform_oracle" for n in names)
+    assert eff.read_calls == 1  # the whole point: one read, all rungs
+    assert out.result["check_plausibility"] is False  # degenerate → no plausibility turn
+
+
+@pytest.mark.asyncio
+async def test_artifact_oracle_clean_answer_routes_to_plausibility():
+    m = _mission(CRIT)
+    eff = _CountingEffects(files={"/app/answer.txt": "10994372"})
+    out = await action_check_artifact_oracles(_si(m, eff))
+    assert out.context_updates["validation_results"] == []
+    assert out.result["check_plausibility"] is True
+    assert "10994372" in out.context_updates["sanity_artifact_excerpt"]
+
+
+@pytest.mark.asyncio
+async def test_artifact_oracle_threads_prior_results_through():
+    # Findings from run_checks (already in validation_results) survive, and the
+    # rungs' appends land after them.
+    m = _mission(CRIT)
+    prior = [{"name": "dod", "passed": False, "required": True}]
+    eff = _CountingEffects(files={"/app/answer.txt": "0"})
+    out = await action_check_artifact_oracles(_si(m, eff, validation_results=prior))
+    vr = out.context_updates["validation_results"]
+    assert vr[0]["name"] == "dod"
+    assert any(r["name"].startswith("output_sanity") for r in vr[1:])

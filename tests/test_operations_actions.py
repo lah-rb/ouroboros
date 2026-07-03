@@ -2,9 +2,10 @@
 
 The ops mission is a single terminal task worked until done. These pin the
 three deterministic contracts: one idempotent task goal + TaskState from the
-objective; the definition-of-done parsed/stored from the criteria inference;
-and the conservative "done" rule — checks pass AND judge confirms, else loop
-with feedback (the anti-placeholder posture: don't declare done on weak
+objective; the grounded definition-of-done parsed/stored from the derivation
+inference (empty parse leaves it un-grounded so the next cycle retries); and
+the conservative "done" rule — checks pass AND judge confirms, else loop with
+feedback (the anti-placeholder posture: don't declare done on weak
 self-criteria).
 """
 
@@ -18,7 +19,7 @@ from agent.actions.operations_actions import (
     TASK_GOAL_SIGNATURE,
     action_derive_task_goal,
     action_judge_task_completion,
-    action_store_completion_criteria,
+    action_store_reground_criteria,
 )
 from agent.effects.mock import MockEffects
 from agent.models import FlowMeta, StepInput
@@ -59,24 +60,16 @@ def _si(mission, **ctx) -> StepInput:
 async def test_derive_task_goal_creates_one_idempotently():
     m = _mission()
     out = await action_derive_task_goal(_si(m))
-    assert out.result == {"goals_ready": True, "criteria_needed": True, "created": 1}
+    assert out.result == {"goals_ready": True, "created": 1}
     assert m.task_definition is not None
     assert sum(1 for g in m.goals if g.type == "task_exec") == 1
-    # Re-run: no duplicate, criteria still pending (none stored yet).
+    # Re-run: no duplicate.
     out2 = await action_derive_task_goal(_si(m))
-    assert out2.result == {"goals_ready": True, "criteria_needed": True, "created": 0}
+    assert out2.result == {"goals_ready": True, "created": 0}
     assert sum(1 for g in m.goals if g.type == "task_exec") == 1
 
 
-@pytest.mark.asyncio
-async def test_derive_task_goal_criteria_satisfied_once_stored():
-    m = _mission(task=True)
-    m.task_definition.completion_criteria = [{"command": "test -f config.yaml"}]
-    out = await action_derive_task_goal(_si(m))
-    assert out.result["criteria_needed"] is False
-
-
-# ── definition of done ────────────────────────────────────────────────
+# ── definition of done (grounded derivation, ops_task) ────────────────
 
 
 @pytest.mark.asyncio
@@ -91,10 +84,11 @@ async def test_store_criteria_filters_junk():
             ]
         }
     )
-    out = await action_store_completion_criteria(_si(m, inference_response=resp))
+    out = await action_store_reground_criteria(_si(m, inference_response=resp))
     assert out.result["criteria_count"] == 1
     c = m.task_definition.completion_criteria[0]
     assert c["command"] == "test -f config.yaml" and c["required"] is True
+    assert m.task_definition.completion_criteria_grounded is True
 
 
 @pytest.mark.asyncio
@@ -103,8 +97,19 @@ async def test_store_criteria_tolerates_bare_array_first_object():
     # must still capture that one check rather than zero.
     m = _mission(task=True)
     resp = json.dumps([{"command": "grep -q logging config.yaml"}])
-    out = await action_store_completion_criteria(_si(m, inference_response=resp))
+    out = await action_store_reground_criteria(_si(m, inference_response=resp))
     assert out.result["criteria_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_store_criteria_empty_parse_stays_ungrounded_for_retry():
+    # The definition-of-done is MANDATORY: an empty/unparseable derivation must
+    # NOT mark the criteria grounded — the gate re-fires next cycle (the retry
+    # that replaced ops_control's retry_setup loop).
+    m = _mission(task=True)
+    out = await action_store_reground_criteria(_si(m, inference_response="not json"))
+    assert out.result["criteria_count"] == 0
+    assert m.task_definition.completion_criteria_grounded is False
 
 
 # ── completion judge ──────────────────────────────────────────────────
@@ -158,6 +163,23 @@ async def test_judge_not_done_stores_judge_feedback():
     )
     assert out.result["task_done"] is False
     assert m.task_definition.last_feedback == "logging key still missing"
+
+
+@pytest.mark.asyncio
+async def test_judge_reads_judge_response_over_inference_response():
+    # After the verify-before-harvest turn, inference_response holds the VERIFY
+    # output; the judge's own verdict rides the dedicated judge_response key
+    # (published by reprobe_completion). decide must read that one.
+    m = _mission(task=True)
+    out = await action_judge_task_completion(
+        _si(
+            m,
+            validation_results=_vr(True),
+            inference_response=json.dumps({"genuinely_done": True}),  # verify output
+            judge_response=json.dumps({"task_complete": True, "feedback": ""}),
+        )
+    )
+    assert out.result["task_done"] is True
 
 
 @pytest.mark.asyncio

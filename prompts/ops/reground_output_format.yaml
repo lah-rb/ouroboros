@@ -1,17 +1,19 @@
 # Prompt template: ops/reground_output_format
 #
-# LATE, GROUNDED re-derivation of the output-format spec. The early
-# ops/derive_output_format pass runs blind (task text only, before any exploration)
-# and so returns no spec for tasks whose required output path is a CONVENTION the
-# bare task never states. This pass runs after the agent has explored the terminal,
-# so it can name the required artifact from the evidence — a stub/template file, an
-# expected output directory, an instructions/README, a "no such file" the grader
-# implies. SHAPE only — never correctness.
+# THE output-format spec derivation, grounded in the explored workspace. (The
+# name is historical: this began as a late re-grounding pass patching a blind
+# pre-exploration derivation in ops_control; that blind pass returned no spec
+# for tasks whose required output path is a CONVENTION the bare task never
+# states, and was removed — this grounded pass is now the only derivation.) It
+# runs after the agent has explored the terminal, so it can name the required
+# artifact from the evidence — a stub/template file, an expected output
+# directory, an instructions/README, a "no such file" the grader implies.
+# SHAPE only — never correctness.
 #
 # Pre-computed: task_spec, working_directory, session_tail (the live exploration)
 
 id: ops/reground_output_format
-description: "Re-derive the output-format spec grounded in the live terminal exploration"
+description: "Derive the output-format spec grounded in the live terminal exploration"
 
 sections:
 

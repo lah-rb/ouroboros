@@ -224,10 +224,11 @@ async def action_record_output_sanity(step_input: StepInput) -> StepOutput:
 # Half the v3 canary failures were close-misses: the model solved the task but
 # missed the exact OUTPUT SHAPE it can't self-detect (wrote `[e2e4]` for `e2e4`,
 # omitted a required JSON key, used the wrong filename). A format spec is derived
-# ONCE up front (derive_output_format -> task_definition.output_format_spec); this
-# rung validates the produced artifact's SHAPE against it every cycle. SHAPE only
-# — it can't know the hidden correct VALUE, only the format; the conservatism
-# lives in the derive step (omit a check when the brief doesn't pin it).
+# once, grounded post-exploration (reground_output_format ->
+# task_definition.output_format_spec); this rung validates the produced artifact's
+# SHAPE against it every cycle. SHAPE only — it can't know the hidden correct
+# VALUE, only the format; the conservatism lives in the derive step (omit a check
+# when the brief doesn't pin it).
 
 
 def _format_result(passed: bool, path: str, reason: str) -> dict:
@@ -389,20 +390,19 @@ async def action_check_output_format(step_input: StepInput) -> StepOutput:
 
 
 async def action_gate_reground_output_format(step_input: StepInput) -> StepOutput:
-    """Gate the LATE grounded output-format re-derivation.
+    """Gate the grounded output-format derivation ("reground" is the historical
+    name — the blind pre-exploration pass in ops_control was removed, so this IS
+    the derivation).
 
-    The early derive_output_format runs blind in ops_control (task text only,
-    pre-exploration) and so leaves NO usable spec for the ~69% of TB tasks whose
-    required output path is a convention. This fires a grounded re-derivation when
-    that early pass produced no usable spec and the reground hasn't already run
-    (output_format_grounded — one-shot). A good early spec is never re-derived (zero
-    cost); enforcement stays with check_format + decide.
+    Fires once per mission (output_format_grounded) when no usable spec is stored
+    — ~69% of TB tasks have a required output path that is a convention only
+    visible after exploring. Enforcement stays with the format oracle + decide.
 
     Position is the exploration guarantee: this rung sits after gather_context (a
     live filesystem scan -> project_manifest) and run_session, so grounding always
     exists. We deliberately DO NOT gate on terminal_output being a truthy string —
     it is not reliably populated at this point in the live ops_task flow (the bug
-    the inert-port canary caught), and the reground grounds from project_manifest.
+    the inert-port canary caught), and the derivation grounds from project_manifest.
 
     Context: mission (required).
     Result: needs_reground (bool).
@@ -426,12 +426,14 @@ async def action_gate_reground_output_format(step_input: StepInput) -> StepOutpu
 
 
 async def action_gate_reground_criteria(step_input: StepInput) -> StepOutput:
-    """Gate the grounded completion-criteria re-derivation. Fires ONCE per mission
-    (completion_criteria_grounded) — the early criteria are derived blind in
-    ops_control (pre-exploration); this re-derives them grounded in the explored
-    workspace so the definition-of-done requires the real artifact. Position
-    (post-run_terminal) guarantees exploration, so — like the output-format reground
-    — it does NOT gate on terminal_output truthiness (the inert-port lesson).
+    """Gate the grounded completion-criteria derivation ("reground" is the
+    historical name — the blind pre-exploration pass in ops_control was removed,
+    so this IS the derivation). Fires until grounded (completion_criteria_grounded
+    is set only on a non-empty store, so an empty/failed derivation retries next
+    cycle — the definition-of-done is mandatory). Grounded in the explored
+    workspace so the done-criteria require the real artifact. Position
+    (post-run_terminal) guarantees exploration, so — like the output-format gate —
+    it does NOT gate on terminal_output truthiness (the inert-port lesson).
 
     Context: mission (required).  Result: needs_reground (bool).
     """
@@ -465,10 +467,10 @@ def _bounded(s: str, n: int) -> str:
 async def action_reprobe_completion(step_input: StepInput) -> StepOutput:
     """Gate + re-probe. If the judge claimed done, re-run the completion criteria
     and re-read the produced artifact into a FRESH, context-bounded transcript for
-    the verify turn, and stash the judge's raw verdict (judge_response) so decide
-    still sees it after the verify turn overwrites inference_response. Skips
-    straight to decide when the judge didn't claim done, there are no criteria, or
-    effects are unavailable (never blocks on infra).
+    the verify turn, and publish the judge's raw verdict as judge_response — the
+    dedicated key decide reads (the verify turn overwrites inference_response).
+    Skips straight to decide when the judge didn't claim done, there are no
+    criteria, or effects are unavailable (never blocks on infra).
 
     Context: mission (required); inference_response (optional).
     Result: do_verify (route flag).
@@ -524,21 +526,19 @@ async def action_reprobe_completion(step_input: StepInput) -> StepOutput:
 
 
 async def action_record_completion_verify(step_input: StepInput) -> StepOutput:
-    """Derive the verdict from the verify turn and RESTORE the judge's verdict for
-    decide. Append a REQUIRED fail only on a confident not-done verdict;
-    inconclusive (unparseable / missing key) appends nothing — defer to the prior
-    checks+judge pass, never loop forever on an infra/parse miss. decide then sees
-    any fail and loops with the reason surfaced in the validation summary.
+    """Derive the verdict from the verify turn. Append a REQUIRED fail only on a
+    confident not-done verdict; inconclusive (unparseable / missing key) appends
+    nothing — defer to the prior checks+judge pass, never loop forever on an
+    infra/parse miss. decide then sees any fail and loops with the reason surfaced
+    in the validation summary. The judge's own verdict reaches decide via the
+    judge_response key reprobe_completion published — no restore dance here.
 
-    Context: inference_response (required, the verify output); validation_results,
-             judge_response (optional).
-    Publishes: validation_results, inference_response (restored judge verdict).
+    Context: inference_response (required, the verify output); validation_results
+             (optional).
+    Publishes: validation_results.
     """
     results = list(step_input.context.get("validation_results") or [])
-    judge_raw = str(step_input.context.get("judge_response", "") or "")
     updates: dict = {"validation_results": results}
-    if judge_raw:
-        updates["inference_response"] = judge_raw  # restore for decide
 
     parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
     if not isinstance(parsed, dict) or "genuinely_done" not in parsed:
@@ -760,3 +760,84 @@ async def action_check_profile_oracle(step_input: StepInput) -> StepOutput:
         result={"profile_checked": True, "profile_passed": False},
         observations=f"{profile} oracle FAIL: {reason[:120]}",
         context_updates={"validation_results": results})
+
+
+# ── Combined artifact oracle (one read, all applicable rungs) ─────────────
+# The sanity floor, the format oracle, and the profile rung each read the same
+# produced artifact; run as separate flow steps they read it up to three times
+# and cost three step dispatches. This runs them in sequence over ONE cached
+# read, threading validation_results through so each rung sees the prior rungs'
+# findings. Per-rung semantics (gate/check/append/fail-safe) are exactly the
+# standalone actions' — they are called, not reimplemented.
+
+
+class _ReadCachingEffects:
+    """Effects proxy that caches read_file by path for one oracle pass, so the
+    rungs share a single read of the produced artifact. Everything else passes
+    through untouched."""
+
+    def __init__(self, effects):
+        self._effects = effects
+        self._reads: dict[str, object] = {}
+
+    def __getattr__(self, name):
+        return getattr(self._effects, name)
+
+    async def read_file(self, path):
+        if path not in self._reads:
+            self._reads[path] = await self._effects.read_file(path)
+        return self._reads[path]
+
+
+async def action_check_artifact_oracles(step_input: StepInput) -> StepOutput:
+    """Run the deterministic artifact rungs — sanity floor, format oracle,
+    profile oracle — over a single artifact read, appending any REQUIRED fails
+    to validation_results. Publishes the sanity excerpt + check_plausibility
+    route flag exactly as the standalone sanity rung does, so the flow can still
+    route to the light plausibility turn.
+
+    Context: mission (required); validation_results, task_profile (optional).
+    Result: check_plausibility (route flag), rungs with per-rung results.
+    Publishes: validation_results, sanity_artifact_excerpt.
+    """
+    effects = (
+        _ReadCachingEffects(step_input.effects)
+        if step_input.effects is not None
+        else None
+    )
+    results = list(step_input.context.get("validation_results") or [])
+    updates: dict = {"validation_results": results}
+    check_plausibility = False
+    notes: list[str] = []
+    rungs: dict = {}
+
+    for name, sub in (
+        ("sanity", action_check_output_sanity),
+        ("format", action_check_output_format),
+        ("profile", action_check_profile_oracle),
+    ):
+        sub_input = StepInput(
+            context={**step_input.context, "validation_results": results},
+            inputs=step_input.inputs,
+            params=step_input.params,
+            meta=step_input.meta,
+            effects=effects,
+        )
+        out = await sub(sub_input)
+        cu = out.context_updates or {}
+        if "validation_results" in cu:
+            results = list(cu["validation_results"])
+        if name == "sanity":
+            check_plausibility = bool(out.result.get("check_plausibility"))
+            if cu.get("sanity_artifact_excerpt"):
+                updates["sanity_artifact_excerpt"] = cu["sanity_artifact_excerpt"]
+        rungs[name] = out.result
+        if out.observations:
+            notes.append(out.observations)
+
+    updates["validation_results"] = results
+    return StepOutput(
+        result={"check_plausibility": check_plausibility, "rungs": rungs},
+        observations="; ".join(notes),
+        context_updates=updates,
+    )

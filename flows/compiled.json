@@ -11618,7 +11618,7 @@
   "ops_control": {
     "flow": "ops_control",
     "version": 1,
-    "description": "Ops pipeline controller. Derives one task goal + a definition-of-done\nfrom the objective, then drives run_session work cycles and judges\ncompletion against the done-checks until the task is complete.",
+    "description": "Ops pipeline controller. Derives one task goal from the objective,\nthen drives run_session work cycles (which derive the grounded\ndefinition-of-done) and judges completion against the done-checks\nuntil the task is complete.",
     "context_tier": "project_goal",
     "returns": {
       "final_status": {
@@ -11766,216 +11766,12 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.criteria_needed == true",
-              "transition": "derive_criteria"
-            },
-            {
               "condition": "result.goals_ready == true",
               "transition": "check_phase"
             },
             {
               "condition": "true",
               "transition": "completed"
-            }
-          ]
-        },
-        "publishes": [
-          "mission"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "derive_criteria": {
-        "action": "inference",
-        "description": "Derive the definition-of-done (completion checks) once",
-        "context": {
-          "required": [
-            "mission"
-          ],
-          "optional": []
-        },
-        "params": {},
-        "prompt_template": {
-          "template": "ops/derive_completion_criteria",
-          "context_keys": [
-            "task_spec",
-            "working_directory"
-          ],
-          "input_keys": []
-        },
-        "pre_compute": [
-          {
-            "formatter": "format_mission_meta",
-            "output_key": "task_spec",
-            "params": {
-              "mission": {
-                "$ref": "context.mission"
-              },
-              "field": "objective"
-            }
-          },
-          {
-            "formatter": "format_mission_meta",
-            "output_key": "working_directory",
-            "params": {
-              "mission": {
-                "$ref": "context.mission"
-              },
-              "field": "config.working_directory"
-            }
-          }
-        ],
-        "config": {
-          "temperature": "t*0.1"
-        },
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "result.tokens_generated > 0",
-              "transition": "store_criteria"
-            },
-            {
-              "condition": "true",
-              "transition": "retry_setup"
-            }
-          ]
-        },
-        "publishes": [
-          "inference_response"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "retry_setup": {
-        "action": "noop",
-        "description": "Empty definition-of-done \u2014 re-loop to re-derive it",
-        "context": {
-          "required": [],
-          "optional": []
-        },
-        "params": {},
-        "config": {},
-        "publishes": [],
-        "effects": [],
-        "terminal": false,
-        "tail_call": {
-          "flow": "ops_control",
-          "input_map": {
-            "mission_id": {
-              "$ref": "input.mission_id"
-            }
-          },
-          "delay": 3
-        }
-      },
-      "store_criteria": {
-        "action": "store_completion_criteria",
-        "description": "Parse + store the definition-of-done on the TaskState",
-        "context": {
-          "required": [
-            "mission",
-            "inference_response"
-          ],
-          "optional": []
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "true",
-              "transition": "derive_output_format"
-            }
-          ]
-        },
-        "publishes": [
-          "mission"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "derive_output_format": {
-        "action": "inference",
-        "description": "Derive a conservative output-format spec once",
-        "context": {
-          "required": [
-            "mission"
-          ],
-          "optional": []
-        },
-        "params": {},
-        "prompt_template": {
-          "template": "ops/derive_output_format",
-          "context_keys": [
-            "task_spec",
-            "working_directory"
-          ],
-          "input_keys": []
-        },
-        "pre_compute": [
-          {
-            "formatter": "format_mission_meta",
-            "output_key": "task_spec",
-            "params": {
-              "mission": {
-                "$ref": "context.mission"
-              },
-              "field": "objective"
-            }
-          },
-          {
-            "formatter": "format_mission_meta",
-            "output_key": "working_directory",
-            "params": {
-              "mission": {
-                "$ref": "context.mission"
-              },
-              "field": "config.working_directory"
-            }
-          }
-        ],
-        "config": {
-          "temperature": "t*0.1"
-        },
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "result.tokens_generated > 0",
-              "transition": "store_output_format"
-            },
-            {
-              "condition": "true",
-              "transition": "check_phase"
-            }
-          ]
-        },
-        "publishes": [
-          "inference_response"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "store_output_format": {
-        "action": "store_output_format",
-        "description": "Parse + store the output-format spec on the TaskState",
-        "context": {
-          "required": [
-            "mission",
-            "inference_response"
-          ],
-          "optional": []
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "true",
-              "transition": "check_phase"
             }
           ]
         },
@@ -12539,7 +12335,7 @@
       },
       "gate_reground_criteria": {
         "action": "gate_reground_criteria",
-        "description": "Gate the grounded criteria re-derivation (once)",
+        "description": "Gate the grounded criteria derivation (until grounded)",
         "context": {
           "required": [
             "mission"
@@ -12567,7 +12363,7 @@
       },
       "reground_criteria": {
         "action": "inference",
-        "description": "Re-derive the definition-of-done grounded in the explored workspace",
+        "description": "Derive the definition-of-done grounded in the explored workspace",
         "context": {
           "required": [
             "mission"
@@ -12653,7 +12449,7 @@
       },
       "store_reground_criteria": {
         "action": "store_reground_criteria",
-        "description": "Union-merge the grounded checks into the done-criteria (tighten-only)",
+        "description": "Store the grounded done-criteria (union-merge; retry while empty)",
         "context": {
           "required": [
             "mission",
@@ -12709,146 +12505,6 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "check_sanity"
-            }
-          ]
-        },
-        "publishes": [
-          "validation_results"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "check_sanity": {
-        "action": "check_output_sanity",
-        "description": "Rung 0: flag a degenerate produced answer (deterministic floor)",
-        "context": {
-          "required": [
-            "mission"
-          ],
-          "optional": [
-            "validation_results"
-          ]
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "result.check_plausibility == true",
-              "transition": "sanity_plausibility"
-            },
-            {
-              "condition": "true",
-              "transition": "profile_oracle"
-            }
-          ]
-        },
-        "publishes": [
-          "validation_results",
-          "sanity_artifact_excerpt"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "sanity_plausibility": {
-        "action": "inference",
-        "description": "Judge whether the produced answer is plausible (type/magnitude)",
-        "context": {
-          "required": [
-            "mission",
-            "sanity_artifact_excerpt"
-          ],
-          "optional": []
-        },
-        "params": {},
-        "prompt_template": {
-          "template": "ops/check_sanity_plausibility",
-          "context_keys": [
-            "task_spec",
-            "sanity_artifact_excerpt"
-          ],
-          "input_keys": []
-        },
-        "pre_compute": [
-          {
-            "formatter": "format_mission_meta",
-            "output_key": "task_spec",
-            "params": {
-              "mission": {
-                "$ref": "context.mission"
-              },
-              "field": "objective"
-            }
-          }
-        ],
-        "config": {
-          "temperature": "t*0.1"
-        },
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "true",
-              "transition": "record_sanity"
-            }
-          ]
-        },
-        "publishes": [
-          "inference_response"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "record_sanity": {
-        "action": "record_output_sanity",
-        "description": "Append a required fail on a confident implausible verdict",
-        "context": {
-          "required": [
-            "inference_response"
-          ],
-          "optional": [
-            "validation_results",
-            "sanity_artifact_excerpt"
-          ]
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "true",
-              "transition": "profile_oracle"
-            }
-          ]
-        },
-        "publishes": [
-          "validation_results"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "profile_oracle": {
-        "action": "check_profile_oracle",
-        "description": "Profile-gated completion oracle (service/data/invertible)",
-        "context": {
-          "required": [
-            "mission"
-          ],
-          "optional": [
-            "validation_results",
-            "task_profile"
-          ]
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "true",
               "transition": "gate_reground"
             }
           ]
@@ -12861,7 +12517,7 @@
       },
       "gate_reground": {
         "action": "gate_reground_output_format",
-        "description": "Gate the grounded reground (fires once on an empty early spec)",
+        "description": "Gate the grounded output-format derivation (fires once)",
         "context": {
           "required": [
             "mission"
@@ -12879,7 +12535,7 @@
             },
             {
               "condition": "true",
-              "transition": "check_format"
+              "transition": "artifact_oracle"
             }
           ]
         },
@@ -12963,7 +12619,7 @@
             },
             {
               "condition": "true",
-              "transition": "check_format"
+              "transition": "artifact_oracle"
             }
           ]
         },
@@ -12990,7 +12646,7 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "check_format"
+              "transition": "artifact_oracle"
             }
           ]
         },
@@ -13000,15 +12656,99 @@
         "effects": [],
         "terminal": false
       },
-      "check_format": {
-        "action": "check_output_format",
-        "description": "Output-format oracle: flag a shape mismatch vs the derived spec",
+      "artifact_oracle": {
+        "action": "check_artifact_oracles",
+        "description": "Deterministic artifact rungs (sanity + format + profile), one read",
         "context": {
           "required": [
             "mission"
           ],
           "optional": [
-            "validation_results"
+            "validation_results",
+            "task_profile"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.check_plausibility == true",
+              "transition": "sanity_plausibility"
+            },
+            {
+              "condition": "true",
+              "transition": "probe_gate"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results",
+          "sanity_artifact_excerpt"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "sanity_plausibility": {
+        "action": "inference",
+        "description": "Judge whether the produced answer is plausible (type/magnitude)",
+        "context": {
+          "required": [
+            "mission",
+            "sanity_artifact_excerpt"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "ops/check_sanity_plausibility",
+          "context_keys": [
+            "task_spec",
+            "sanity_artifact_excerpt"
+          ],
+          "input_keys": []
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "task_spec",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.1"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "record_sanity"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "record_sanity": {
+        "action": "record_output_sanity",
+        "description": "Append a required fail on a confident implausible verdict",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": [
+            "validation_results",
+            "sanity_artifact_excerpt"
           ]
         },
         "params": {},
@@ -13296,14 +13036,13 @@
       },
       "record_completion_verify": {
         "action": "record_completion_verify",
-        "description": "Derive the verdict; restore the judge verdict for decide",
+        "description": "Append a required fail on a confident not-done verify verdict",
         "context": {
           "required": [
             "inference_response"
           ],
           "optional": [
-            "validation_results",
-            "judge_response"
+            "validation_results"
           ]
         },
         "params": {},
@@ -13318,8 +13057,7 @@
           ]
         },
         "publishes": [
-          "validation_results",
-          "inference_response"
+          "validation_results"
         ],
         "effects": [],
         "terminal": false
@@ -13333,7 +13071,8 @@
             "inference_response"
           ],
           "optional": [
-            "validation_results"
+            "validation_results",
+            "judge_response"
           ]
         },
         "params": {},
