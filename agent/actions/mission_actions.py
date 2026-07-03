@@ -1561,6 +1561,15 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
             # diagnose seed as error_output, so the fix loop sees exactly how
             # the code is called. Falls through to the normal dispatch when no
             # suite matches or the profile isn't repair.
+            #
+            # capability_absent goals are NOT excluded here: on a repair
+            # mission the "absent capability" has a failing test naming it —
+            # the test IS the build spec (fsspec: `test_open_async` calls the
+            # missing method with the exact signature). The first retest
+            # excluded them and BOTH repo-scale tasks silently skipped the
+            # whole loop, falling back to exploratory interact + static-grep
+            # acceptance checks (the signature-blind trap this loop replaces).
+            # The explore-charter path remains for non-repair missions.
             from agent.actions.pipeline_actions import (
                 derive_repair_tests,
                 is_repair_profile,
@@ -1568,7 +1577,6 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
 
             if (
                 is_repair_profile(mission)
-                and not getattr(goal, "capability_absent", False)
                 and not (getattr(goal, "repair_tests", None) or {}).get("derived")
             ):
                 rt = await derive_repair_tests(effects, goal.description)

@@ -115,20 +115,25 @@ async def derive_repair_tests(effects, goal_description: str) -> dict:
     content_pattern = "|".join(re.escape(t) for t in terms)
 
     # search_files: broad *.py filename glob + content grep; we filter to test
-    # files by PATH ourselves so the divergent pattern-glob semantics across
-    # LocalEffects (path glob) / ContainerEffects (grep --include) / Mock
-    # (fnmatch) don't matter — only that content grep is recursive (it is).
-    try:
-        res = await effects.search_files("*.py", content_pattern=content_pattern)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("repair-tests: search_files failed (%s)", e)
-        return {}
-
+    # files by PATH ourselves. Pattern-glob semantics DIVERGE across backends:
+    # ContainerEffects greps recursively with --include=*.py (full tree), and
+    # Mock fnmatches "*" across "/" — but LocalEffects expands the glob
+    # relative to the working dir, where "*.py" is TOP-LEVEL ONLY. Query both
+    # patterns and merge: "**/*.py" covers the local recursive case (harmless
+    # elsewhere — grep --include matches basenames, so it just adds nothing).
     hits: dict[str, int] = {}
-    for m in getattr(res, "matches", []) or []:
-        fp = getattr(m, "file_path", "")
-        if _is_test_path(fp):
-            hits[fp] = hits.get(fp, 0) + 1
+    for pattern in ("*.py", "**/*.py"):
+        try:
+            res = await effects.search_files(pattern, content_pattern=content_pattern)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("repair-tests: search_files(%s) failed (%s)", pattern, e)
+            continue
+        for m in getattr(res, "matches", []) or []:
+            fp = getattr(m, "file_path", "")
+            if _is_test_path(fp):
+                hits[fp] = hits.get(fp, 0) + 1
+    # A file found by both patterns double-counts consistently, so hit-count
+    # ranking is unaffected.
     if not hits:
         return {}
 

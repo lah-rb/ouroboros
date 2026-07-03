@@ -314,3 +314,62 @@ async def test_smoke_check_stands_down_when_baseline_failing():
     # smoke stood down → not counted as a failure → no whole-file self-correct
     assert out.result["smoke_failed"] is False
     assert any("BASELINE" in line for line in out.context_updates["validation_output"].splitlines())
+
+
+# ── Retest regressions: capability_absent + recursive search ──────────
+
+
+@pytest.mark.asyncio
+async def test_repair_loop_engages_for_capability_absent_goals():
+    # The first B.5 retest regression: BOTH repo-scale goals were
+    # capability_absent (replan frames "supports X" as a build), and the repair
+    # branch excluded them — the whole loop silently skipped. On a repair
+    # mission the failing test IS the build spec; the loop must engage.
+    from agent.actions.mission_actions import action_functional_sweep_next
+
+    goal = GoalRecord(
+        description="DirFileSystem supports open_async",
+        type="functional",
+        capability_absent=True,
+    )
+    m = _mission(goals=[goal])
+    fx = MockEffects(
+        mission=m,
+        files={"tests/test_dirfs.py": "def test_open_async():\n    fs.open_async('x', 'rb', 5)\n"},
+        commands={
+            "/bin/sh": CommandResult(
+                return_code=1,
+                stdout="FAILED tests/test_dirfs.py::test_open_async - AttributeError",
+                stderr="",
+                command="pytest",
+            )
+        },
+    )
+    si = StepInput(
+        context={"mission": m},
+        params={},
+        meta=FlowMeta(flow_name="mission_control", step_id="functional_sweep_next"),
+        effects=fx,
+    )
+    out = await action_functional_sweep_next(si)
+    dc = out.context_updates["dispatch_config"]
+    assert dc["interaction_mode"] == "deterministic"
+    assert goal.repair_tests.get("derived") is True
+
+
+@pytest.mark.asyncio
+async def test_derive_repair_tests_finds_nested_test_dirs_local_glob():
+    # LocalEffects expands "*.py" non-recursively; the double-pattern query
+    # ("**/*.py") must still find test files in nested dirs. MockEffects
+    # fnmatch is permissive for both, so pin the CALL pattern by asserting a
+    # nested path is selected.
+    fx = MockEffects(
+        files={
+            "pkg/sub/tests/test_deep.py": "def test_thing():\n    DeepThing().frob()\n"
+        },
+        commands={
+            "/bin/sh": CommandResult(return_code=0, stdout="1 passed", stderr="", command="pytest")
+        },
+    )
+    rt = await derive_repair_tests(fx, "DeepThing.frob returns wrong value")
+    assert rt.get("test_files") == ["pkg/sub/tests/test_deep.py"]
