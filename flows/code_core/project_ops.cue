@@ -94,8 +94,16 @@ project_ops: #FlowDefinition & {
 		}
 
 		// ── Phase 3: Write config files ─────────────────────────────
+		//
+		// protect_existing: the env phase CREATES missing config, never
+		// REPLACES existing files — the setup planner regenerates
+		// scaffolding it deems "typical" on brownfield repos (fsspec: a
+		// Poetry pyproject over the real one broke the grader's install).
+		// Targeted edits to existing configs belong to diagnosis-driven
+		// flows, not setup.
 
 		write_files: #StepDefinition & _templates.write_files & {
+			params: protect_existing: true
 			resolver: {
 				type: "rule"
 				rules: [

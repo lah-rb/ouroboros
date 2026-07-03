@@ -362,7 +362,15 @@ async def smoke_test_flow(flow_name, flow_def, registry, all_flows, max_steps=15
     Returns (success: bool, error: str | None, steps_executed: list)
     """
     inputs = FLOW_INPUTS.get(flow_name, {"mission_id": "test-mission-001"})
-    effects = make_effects()
+    # mission_control: use a FRESH mission (no goals, no architecture) so the
+    # phase machine routes to plan → dispatch_planning (a terminal tail-call
+    # the smoke can observe). The default fixture (goals but no architecture)
+    # is a brownfield state that now correctly routes to the structural sweep
+    # — which can't progress under mock effects and reads as a loop.
+    if flow_name == "mission_control":
+        effects = make_effects(mission=make_mock_mission(with_plan=False))
+    else:
+        effects = make_effects()
 
     actual_max = FLOW_MAX_STEPS.get(flow_name, max_steps)
 

@@ -298,13 +298,20 @@ class InterfaceContract(BaseModel):
     signature: str = ""
 
     # Built raw from LLM output in the same ingest/replan path as ModuleSpec; a
-    # foreign repo or terse model can null any of these. Coerce to empty rather
-    # than crash the flow (downstream filters empty contracts) — matches the
-    # codebase's "tolerate shape, never fail validation mid-cycle" stance.
+    # foreign repo or terse model can null any of these — or emit a LIST (a
+    # brownfield ingest listed every exported symbol in one contract's
+    # `symbol`, killing the whole architecture parse on swe-bench-langcodes).
+    # Coerce to empty / joined rather than crash the flow (downstream filters
+    # empty contracts) — matches the codebase's "tolerate shape, never fail
+    # validation mid-cycle" stance.
     @field_validator("caller", "callee", "symbol", "signature", mode="before")
     @classmethod
     def _coerce_interface_str(cls, v):
-        return "" if v is None else v
+        if v is None:
+            return ""
+        if isinstance(v, (list, tuple)):
+            return ", ".join(str(x) for x in v if str(x).strip())
+        return v
 
 
 class DataShapeContract(BaseModel):

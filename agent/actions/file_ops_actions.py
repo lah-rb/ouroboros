@@ -11,11 +11,64 @@ through ``guarded_write_file`` here, so no path writes around the anti-gut guard
 
 from __future__ import annotations
 
+import configparser
+import json
 import logging
+import os
+import tomllib
 
 from agent.models import StepInput, StepOutput
 
 logger = logging.getLogger(__name__)
+
+
+# ── Scaffolding parse floor ───────────────────────────────────────────
+# Repo scaffolding (pyproject/tox/package.json/…) is load-bearing for
+# graders and toolchains: an edit that leaves it syntactically invalid
+# kills every downstream `pip install` / build (the swe-bench-fsspec
+# parse_error — an invalid pyproject.toml at line 56 broke the grader's
+# install). Deterministic floor: content written to a parseable config
+# format must parse. Fail-safe: if the EXISTING file already doesn't
+# parse (a templated yaml, a jinja config), the floor stands down — we
+# only refuse to make a parseable file unparseable (or to create a new
+# unparseable one).
+
+
+def _parse_config(path: str, content: str) -> str | None:
+    """Parse `content` per the file's format. Returns an error string, or
+    None when it parses / the format isn't one we validate."""
+    name = os.path.basename(path).lower()
+    ext = name.rsplit(".", 1)[-1] if "." in name else ""
+    try:
+        if ext == "toml":
+            tomllib.loads(content)
+        elif ext == "json":
+            json.loads(content)
+        elif ext in ("yaml", "yml"):
+            try:
+                import yaml
+            except ImportError:
+                return None
+            yaml.safe_load(content)
+        elif ext == "ini" or name == "setup.cfg":
+            configparser.ConfigParser().read_string(content)
+        return None
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+
+
+def scaffold_parse_error(
+    path: str, content: str, existing_content: str | None
+) -> str | None:
+    """The floor: an error string when `content` fails to parse for a
+    validated config format AND the existing file (if any) parses — else
+    None (write allowed)."""
+    err = _parse_config(path, content)
+    if err is None:
+        return None
+    if existing_content and _parse_config(path, existing_content) is not None:
+        return None  # file was already unparseable (template) — stand down
+    return err
 
 
 # ── The guarded write (the one safe write path) ───────────────────────
@@ -29,12 +82,16 @@ async def guarded_write_file(
     Anti-gut guard: reject a rewrite that would shrink an existing non-empty file
     below ``min_retention_ratio`` of its current size — the stub-clobbers-a-real-
     file hazard (a regeneration overwriting a brownfield file, or a catastrophic
-    gut). Returns ``(written, error)``: ``error`` is set on a guard rejection or a
-    failed write, ``None`` on success.
+    gut). Scaffolding parse floor: content for a parseable config format
+    (toml/json/yaml/ini) must parse — never hand the grader/toolchain a broken
+    pyproject. Returns ``(written, error)``: ``error`` is set on a guard
+    rejection or a failed write, ``None`` on success.
     """
+    existing_content: str | None = None
     if min_retention_ratio > 0:
         existing = await effects.read_file(file_path)
         if existing.exists and len(existing.content) > 0:
+            existing_content = existing.content
             ratio = len(content) / len(existing.content)
             if ratio < min_retention_ratio:
                 logger.warning(
@@ -49,6 +106,16 @@ async def guarded_write_file(
                     f"{len(existing.content)} to {len(content)} chars "
                     f"({ratio:.0%} retention, minimum is {min_retention_ratio:.0%})."
                 )
+    parse_err = scaffold_parse_error(file_path, content, existing_content)
+    if parse_err:
+        logger.warning(
+            "Scaffold parse floor rejected write to %s: %s", file_path, parse_err
+        )
+        return False, (
+            f"Scaffold parse floor: the new content for {file_path} does not "
+            f"parse ({parse_err}). Fix the syntax — a broken config breaks "
+            f"every downstream install/build."
+        )
     wr = await effects.write_file(file_path, content)
     if wr.success:
         return True, None
@@ -111,13 +178,29 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
         )
 
     min_retention_ratio = float(step_input.params.get("min_retention_ratio", 0.20))
+    # protect_existing (project_ops/env phase): CREATE missing files, never
+    # REPLACE an existing non-empty one. On a brownfield repo the setup
+    # planner regenerates scaffolding it deems "typical" (swe-bench-fsspec:
+    # a Poetry pyproject.toml over the real hatch one — broke the grader's
+    # install); the env phase's job is filling gaps, and targeted edits to
+    # existing configs belong to the diagnosis-driven flows.
+    protect_existing = bool(step_input.params.get("protect_existing", False))
 
     files_written = 0
     errors = []
     files_changed = []
+    skipped_existing = []
 
     for file_path, content in file_blocks:
         try:
+            if protect_existing:
+                existing = await effects.read_file(file_path)
+                if getattr(existing, "exists", False) and (existing.content or "").strip():
+                    skipped_existing.append(file_path)
+                    logger.info(
+                        "protect_existing: %s already present — not replaced", file_path
+                    )
+                    continue
             written_ok, err = await guarded_write_file(
                 effects, file_path, content, min_retention_ratio
             )
@@ -130,16 +213,23 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
         except Exception as e:
             errors.append(f"Error writing {file_path}: {e}")
 
-    all_written = files_written == len(file_blocks) and len(errors) == 0
+    attempted = len(file_blocks) - len(skipped_existing)
+    all_written = files_written == attempted and len(errors) == 0
 
     return StepOutput(
         result={
             "all_written": all_written,
             "files_written": files_written,
             "total_files": len(file_blocks),
+            "skipped_existing": len(skipped_existing),
             "errors": errors,
         },
         observations=f"Wrote {files_written}/{len(file_blocks)} files"
+        + (
+            f" ({len(skipped_existing)} existing protected)"
+            if skipped_existing
+            else ""
+        )
         + (f", errors: {errors}" if errors else ""),
         context_updates={"files_changed": files_changed},
     )

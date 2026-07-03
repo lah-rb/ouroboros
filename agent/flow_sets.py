@@ -265,10 +265,23 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
         if rule.kind == "requires_planning":
             if not mission:
                 return rule.phase, "No mission — needs planning"
-            if not getattr(mission, rule.attr, None):
-                return rule.phase, f"No {rule.attr} — needs planning"
+            # The plan object exists to derive the FIRST goals. Once goals
+            # exist, never re-enter blueprint design just because the plan
+            # attr is missing: a brownfield ingest whose architecture parse
+            # failed (swe-bench-langcodes) still has replan-derived goals,
+            # and greenfield blueprint design on a foreign repo produces an
+            # empty blueprint the design gate rightly rejects until the
+            # mission dies. Work the goals; projections tolerate a missing
+            # architecture (empty shells).
             if not getattr(mission, "goals", []):
+                if not getattr(mission, rule.attr, None):
+                    return rule.phase, f"No {rule.attr} — needs planning"
                 return rule.phase, "No goals — needs planning"
+            if not getattr(mission, rule.attr, None):
+                logger.info(
+                    "No %s but goals exist — skipping plan phase (brownfield)",
+                    rule.attr,
+                )
             continue
 
         if rule.kind == "goal_type_incomplete":

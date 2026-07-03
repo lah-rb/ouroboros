@@ -167,7 +167,13 @@ async def action_translate_data_ops_turn(step_input: StepInput) -> StepOutput:
 
 
 async def action_apply_data_ops(step_input: StepInput) -> StepOutput:
-    """Write the dry-run-validated patched text. Deterministic; no inference."""
+    """Write the dry-run-validated patched text. Deterministic; no inference.
+
+    Scaffolding parse floor (shared with guarded_write_file): a patched
+    toml/json/yaml/ini must still parse — never hand the grader/toolchain a
+    broken config."""
+    from agent.actions.file_ops_actions import scaffold_parse_error
+
     effects = step_input.effects
     path = str(_param(step_input, "target_file_path"))
     text = str(step_input.context.get("data_patched_text", ""))
@@ -176,6 +182,11 @@ async def action_apply_data_ops(step_input: StepInput) -> StepOutput:
     if effects is None:
         return _defer("no effects available")
     try:
+        existing = await effects.read_file(path)
+        existing_content = existing.content if getattr(existing, "exists", False) else None
+        parse_err = scaffold_parse_error(path, text, existing_content)
+        if parse_err:
+            return _defer(f"patched {path} would not parse ({parse_err})")
         wr = await effects.write_file(path, text)
     except Exception as e:  # noqa: BLE001
         return _defer(f"write raised ({type(e).__name__})")

@@ -7381,7 +7381,8 @@
           "optional": []
         },
         "params": {
-          "content_key": "inference_response"
+          "content_key": "inference_response",
+          "protect_existing": true
         },
         "config": {},
         "resolver": {

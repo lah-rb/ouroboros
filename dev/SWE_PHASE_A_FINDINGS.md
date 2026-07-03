@@ -30,22 +30,47 @@ on a transient Docker-registry stall overnight — not reproducible.)
 
 ## New defect list (Phase B priorities, in order)
 
-1. **Agent loop dies on a degenerate inference.** gpt-oss hit the repetition
-   guard ("GraphQL inference errors: run-length 48 of token 26178") on
-   code_core/langcodes and the loop EXITED at 175s with 1025s of budget left
-   and the correct functional goal already derived. The loop must treat a
-   degeneration abort as a retryable turn (re-roll / temperature nudge /
-   session refresh), never a run-ender. Cheapest, highest-leverage fix —
-   this task was one patch away from a likely second solve.
-2. **Brownfield still re-designs.** After ingest + replan derived the right
-   goal, design_and_plan ran (6 inferences) and design_gate rejected
-   blueprints twice ("Import scheme 'flat' conflicts…"). Brownfield missions
-   should skip blueprint derivation/gating for the adopted architecture —
-   dispatch the functional goal directly.
+1. **[CORRECTED 2026-07-03] "Degeneration" = post-answer rambling, not model
+   failure — and it was on astropy-2, not langcodes.** Deep-dive (runaway
+   capture `llmvp/logs/runaway_captures/20260703T152322_106343.json`): in a
+   diagnose menu turn the model produced a clean CoT ("Now inspect
+   _line_type…") and a COMPLETE, correct final channel
+   (`{"choice": "trace", "symbol_ref": "astropy/io/ascii/qdp.py:_line_type"}<|end|>`)
+   — then generation was allowed to continue (Harmony stops are only
+   `<|return|>` + fake-user opener, by design — see renderer.py stop_tokens
+   design note re the 91% analysis→final reopen pattern), chained an empty
+   analysis + a second final, began HALLUCINATING the observation it
+   expected next (the `_line_type` docstring), and looped on the RST
+   ``!``-style double-backticks inside it (token 26178 = '``', run 48).
+   The guard then errored the WHOLE turn — discarding the perfect answer
+   already in the buffer. Server-side session recovery was clean (purged
+   turn span back to pos 6766); server temp floor was active (0.35 over the
+   client's 0.0). The agent loop did NOT die — diagnose treated it as a
+   junk turn and concluded with an empty target.
+   Fixes (LLMVP, not the agent loop):
+   a. **Salvage on guard abort**: when the repetition guard fires, run FSM
+      extraction over the captured text; a complete final channel = return
+      it as a successful turn (log the anomaly). Zero-risk net.
+   b. **FSM-driven session stop**: stop generation when the FIRST final
+      channel closes (`final … <|end|>`) in session mode — stateful stop at
+      the labeller layer, NOT a `<|start|>assistant` substring stop (that
+      was the e75 46%-empty regression). Saves the wasted decode and the
+      self-poisoning ramble entirely.
+   c. (Defensive, agent) retry a menu turn once on an inference error.
+2. **Brownfield still re-designs — root is the ingest parse failure (#3).**
+   Chain on langcodes: extract_architecture parse DIED on the pydantic
+   error → no adopted architecture stored → phase machine saw greenfield →
+   design_and_plan produced a near-empty blueprint ("Modules list empty,
+   files exist on disk the blueprint does not declare") → design_gate
+   correctly rejected 3× → terminal exit at 175s with 1025s left. Fix both
+   ends: (a) coercion so ingest parse succeeds (#3), (b) structurally,
+   a brownfield mission (pending_directive set / ingest entry) must never
+   fall into blueprint design+gate — retry ingest or dispatch goals
+   architecture-less.
 3. **extract_architecture type coercion.** Pydantic:
-   `InterfaceContract — Input should be a valid string, got list`. The
-   brownfield architecture parse needs lenient coercion (list → joined
-   string) instead of a validation error mid-ingest.
+   `InterfaceContract.symbol — Input should be a valid string, got list`
+   (model emitted a list of exported symbols). Coerce list → joined string
+   (and similar lenient shapes) instead of failing the ingest.
 4. **Scaffolding-edit floor.** fsspec: an in-place pyproject.toml edit left
    invalid TOML (line 56) → grader pip install died → parse_error. After any
    edit to a parseable config (toml/yaml/json/cfg), a deterministic
