@@ -1894,9 +1894,25 @@ class LlamaCppBackend(BaseBackend):
 
         # Use caller-provided stops when given (session mode) — otherwise
         # default to completion-mode stops from the renderer.
+        session_mode = stop_texts is not None
         if stop_texts is None:
             stop_texts = get_renderer(self.config.model.family).stop_tokens()
         stop_bytes = [s.encode("utf-8") for s in stop_texts]
+
+        # Final-channel completion detector (Harmony session mode only). Harmony
+        # converts the <|return|> terminator to the history-form <|end|> once a
+        # turn ages into the KV, so a deep session never sees <|return|> and the
+        # model closes its answer with <|end|> and keeps generating (the
+        # astropy-2 runaway). A stateless stop can't distinguish that close from
+        # the legal analysis→final reopen; this stateful detector terminates the
+        # turn when a NON-EMPTY final message closes. Off for completions (a
+        # single final is the whole answer, and <|return|> fires normally) and
+        # for non-Harmony families (their gen_stop has no history-form collision).
+        final_stop = None
+        if session_mode and self.config.model.family == "harmony":
+            from inference.final_channel_stop import FinalChannelStop
+
+            final_stop = FinalChannelStop()
         # Scan only a bounded tail for stop sequences (incremental detok keeps a
         # cumulative byte accumulator; a freshly-emitted stop is always near the
         # tail). Slack covers a stop split across the last couple of tokens.
@@ -2049,6 +2065,14 @@ class LlamaCppBackend(BaseBackend):
                 # is NOT stripped — it stays in the output so downstream
                 # consumers (FSM labeller, capture log) see the full output.
                 should_stop = any(sb in acc_bytes[-stop_tail:] for sb in stop_bytes)
+
+                # Harmony session terminator: stop when a non-empty final-channel
+                # message closes (the answer is complete; anything further is
+                # self-play). Stateful — see FinalChannelStop. Runs on the full
+                # accumulator (channel state spans the turn, not just the tail).
+                if final_stop is not None and final_stop.update(acc_bytes):
+                    should_stop = True
+                    gen_end_reason = "final_channel_close"
 
                 # Yield only the *new* bytes that form valid UTF-8. Decode the
                 # cumulative tail (never `piece` alone — a token can be a UTF-8
