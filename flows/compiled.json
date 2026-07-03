@@ -3262,6 +3262,10 @@
           "files": {
             "$ref": "context.files_changed",
             "default": []
+          },
+          "target_symbol": {
+            "$ref": "input.target_symbol",
+            "default": ""
           }
         },
         "config": {},
@@ -3273,8 +3277,16 @@
               "transition": "compile_report_success"
             },
             {
+              "condition": "result.syntax_failed == true and result.oversized_symbol_fix == true",
+              "transition": "check_diagnose_budget"
+            },
+            {
               "condition": "result.syntax_failed == true",
               "transition": "check_retry"
+            },
+            {
+              "condition": "result.smoke_failed == true and result.oversized_symbol_fix == true",
+              "transition": "check_diagnose_budget"
             },
             {
               "condition": "result.smoke_failed == true",
@@ -5485,6 +5497,10 @@
               "transition": "quality_sweep_next"
             },
             {
+              "condition": "result.phase == 'test_suite'",
+              "transition": "dispatch_test_gate"
+            },
+            {
               "condition": "result.phase == 'quality'",
               "transition": "dispatch_quality_gate"
             },
@@ -6194,6 +6210,32 @@
         },
         "publishes": [
           "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_test_gate": {
+        "action": "run_test_suite_gate",
+        "description": "Run the repo's test suite; harvest fix goals or certify",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
         ],
         "effects": [],
         "terminal": false

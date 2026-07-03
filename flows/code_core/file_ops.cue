@@ -413,16 +413,25 @@ file_ops: #FlowDefinition & {
 			params: {
 				target: {$ref: "input.target_file_path"}
 				files:  {$ref: "context.files_changed", default: []}
+				// target_symbol lets a check failure on a LARGE file re-diagnose a
+				// fresh symbol-scoped patch instead of whole-file self-correcting
+				// (the rewrite flow regenerated a 19KB qdp.py twice; that's where
+				// an invalid py3.9 `str | None` annotation entered).
+				target_symbol: {$ref: "input.target_symbol", default: ""}
 			}
 			resolver: {
 				type: "rule"
 				rules: [
 					{condition: "result.all_passing == true", transition: "compile_report_success"},
+					// Oversized target + known symbol: escalate to diagnose (fresh
+					// symbol-scoped patch), never whole-file self-correct.
+					{condition: "result.syntax_failed == true and result.oversized_symbol_fix == true", transition: "check_diagnose_budget"},
 					{condition: "result.syntax_failed == true", transition: "check_retry"},
 					// The edit broke program startup (smoke command fails on a
 					// previously-bootable program) — correct it in THIS dispatch
 					// rather than letting the gate find the wreck N cycles later
 					// (observed live: one bad edit cascaded into 9 reopened goals).
+					{condition: "result.smoke_failed == true and result.oversized_symbol_fix == true", transition: "check_diagnose_budget"},
 					{condition: "result.smoke_failed == true", transition: "check_retry"},
 					{condition: "result.has_issues == true", transition: "log_and_report_success"},
 				]

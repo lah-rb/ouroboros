@@ -24,7 +24,7 @@ from agent.persistence.models import (
 )
 
 
-def _mission(goals=None, *, arch=True, env_verified=False):
+def _mission(goals=None, *, arch=True, env_verified=False, tests_verified=True):
     config = MissionConfig(working_directory="/tmp/x")
     m = MissionState(
         objective="t",
@@ -36,6 +36,10 @@ def _mission(goals=None, *, arch=True, env_verified=False):
         ),
     )
     m.environment_verified = env_verified
+    # Default tests_verified=True so the test-suite gate (which sits between
+    # functional completion and quality) doesn't intercept the quality-phase
+    # assertions; the gate's own routing is pinned in test_test_suite_gate.
+    m.tests_verified = tests_verified
     return m
 
 
@@ -133,6 +137,33 @@ async def test_all_complete_is_quality_gate():
         "quality",
         "All goals complete — ready for quality gate",
     )
+
+
+@pytest.mark.asyncio
+async def test_test_suite_gate_between_functional_and_quality():
+    # Functional complete but tests not yet verified → the test-suite gate
+    # fires before the quality gate (Phase B.5).
+    m = _mission(
+        [_goal("structural", "complete"), _goal("functional", "complete")],
+        env_verified=True,
+        tests_verified=False,
+    )
+    assert await _phase(m) == (
+        "test_suite",
+        "Functional complete — running the repo's test suite",
+    )
+
+
+@pytest.mark.asyncio
+async def test_incomplete_functional_precedes_test_gate():
+    # A harvested fix goal (incomplete functional) is worked BEFORE the gate
+    # re-fires — the functional rule sits ahead of test_suite.
+    m = _mission(
+        [_goal("structural", "complete"), _goal("functional", "incomplete")],
+        env_verified=True,
+        tests_verified=False,
+    )
+    assert (await _phase(m))[0] == "functional"
 
 
 # ── brownfield replan (pending_directive) ─────────────────────────────

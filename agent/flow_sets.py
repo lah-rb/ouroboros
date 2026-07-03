@@ -105,6 +105,18 @@ CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
         goal_type="functional",
         observation="Functional phase: {incomplete}/{total} incomplete",
     ),
+    # Test-suite gate (Phase B.5): after functional goals complete, run the
+    # repo's OWN suite before the quality gate. Fires until tests_verified is
+    # set (the gate sets it when the suite passes / stands down; failures
+    # harvest functional fix goals, which the functional rule above works
+    # first, then this re-fires). Positioned after functional so harvested
+    # fixes route back through the fix loop, not into this gate.
+    PhaseRule(
+        kind="flag_unset",
+        phase="test_suite",
+        flag="tests_verified",
+        observation="Functional complete — running the repo's test suite",
+    ),
     # Quality goals are harvested from gate findings (origin="quality_gate")
     # for issues with no clean interact re-test; they're worked AFTER
     # functional so the build is otherwise sound. functional/structural

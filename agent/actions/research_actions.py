@@ -134,11 +134,23 @@ async def action_build_and_query_repomap(step_input: StepInput) -> StepOutput:
             seen.add(fp)
             unique_related.append(fp)
 
-    # Step 6: Build schema context (Level 1 + 2 — always on)
+    # Step 6: Build schema context (Level 1 + 2 — always on). CAPPED: on a
+    # repo-scale checkout this block dwarfs everything else (swe-bench-astropy
+    # ingest: 107KB of Data Schemas inside a 154KB / 47k-token prompt that took
+    # 167s to prefill — 15% of the task budget before any work started). The
+    # repomap itself is budgeted via max_chars; hold the schema appendix to
+    # twice that budget so huge repos degrade to "the biggest schemas" instead
+    # of "every schema".
     from agent.schema_extract import build_schema_context
 
     schema_context = build_schema_context(file_contents)
     if schema_context:
+        schema_budget = max_chars * 2
+        if len(schema_context) > schema_budget:
+            schema_context = (
+                schema_context[:schema_budget]
+                + f"\n… (schema context truncated at {schema_budget} chars — repo-scale checkout)"
+            )
         formatted += f"\n\n## Data Schemas\n{schema_context}"
 
     # Count total definitions

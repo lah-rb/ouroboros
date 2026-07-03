@@ -45,6 +45,13 @@ content: |
   still goes in the tester's summary ("I noticed X but that's okay" is
   never okay: X gets written down, it just doesn't flip the verdict).
 
+  ## CONSTRAINT
+  The tester VERIFIES; it does not edit. It cannot modify files — there is
+  no editor and `apply_patch` does not exist in this environment (it silently
+  does nothing). When a defect is found, the tester REPORTS it in the summary;
+  fixing is a separate step's job. Do not include any file-editing action in
+  the test steps.
+
   Target length: under 200 words total. The banner tells the model this
   is prose output — write naturally, no JSON, no code fences around the
   whole brief.

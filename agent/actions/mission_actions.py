@@ -1554,6 +1554,65 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
 
         # Check the latest report to determine what this goal needs
         if not goal.reports:
+            # Repair test loop (Phase B.5): on a repair-profile mission, the
+            # repo's OWN failing tests are the goal's ground truth. Derive them
+            # once and dispatch a DETERMINISTIC pytest verification (zero
+            # inference) — its pytest output (failing node ids) flows into the
+            # diagnose seed as error_output, so the fix loop sees exactly how
+            # the code is called. Falls through to the normal dispatch when no
+            # suite matches or the profile isn't repair.
+            from agent.actions.pipeline_actions import (
+                derive_repair_tests,
+                is_repair_profile,
+            )
+
+            if (
+                is_repair_profile(mission)
+                and not getattr(goal, "capability_absent", False)
+                and not (getattr(goal, "repair_tests", None) or {}).get("derived")
+            ):
+                rt = await derive_repair_tests(effects, goal.description)
+                goal.repair_tests = rt or {"derived": True}
+                if rt.get("command"):
+                    cmds = {c.get("command") for c in (goal.acceptance_checks or [])}
+                    if rt["command"] not in cmds:
+                        goal.acceptance_checks = list(goal.acceptance_checks or []) + [
+                            {"command": rt["command"], "name": "repair suite",
+                             "required": True}
+                        ]
+                    if effects:
+                        await effects.save_mission(mission)
+                    dispatch_config = {
+                        "goal_id": goal.id,
+                        "goal_description": goal.description,
+                        "goal_type": "functional",
+                        "goal_files": goal.associated_files or [],
+                        "flow": "interact",
+                        "target_file_path": "",
+                        "flow_directive": (
+                            "Verify this repair against the repo's own tests:\n"
+                            + goal.description
+                        ),
+                        "interaction_mode": "deterministic",
+                        "run_command": rt["command"],
+                        "interactive_prompt": "",
+                    }
+                    logger.info(
+                        "Functional sweep: repair test-loop for %s → %s",
+                        goal.description[:50],
+                        rt["test_files"],
+                    )
+                    return StepOutput(
+                        result={"sweep_complete": False, "needs_test": True},
+                        observations=(
+                            f"Functional sweep: repair suite {rt['test_files']} "
+                            f"for '{goal.description[:50]}'"
+                        ),
+                        context_updates={"dispatch_config": dispatch_config},
+                    )
+                if effects:
+                    await effects.save_mission(mission)
+                # No matching suite — fall through to the normal dispatch.
             # capability_absent goals (brownfield directive) name a feature that
             # does NOT exist yet — a thing to BUILD, not verify. Default interact
             # would charter "prove this works" and immediately fail on absence.
@@ -1753,6 +1812,108 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
             )
 
             if report_status == "success":
+                # Repair goal: re-test against the repo's OWN suite, and run a
+                # cheap COLLECTION FLOOR first. An edit that breaks imports (the
+                # astropy `str | None` on py3.9) fails the WHOLE suite at
+                # collection — pytest returns INTERNALERROR / parser_results
+                # null, which reads as an unparseable grade. Catch it with a
+                # `--collect-only` and route straight back to diagnose with the
+                # import error, UNLESS the baseline already couldn't collect
+                # (unbuilt checkout → stand down, never blame the edit).
+                rt = getattr(goal, "repair_tests", None) or {}
+                if rt.get("command") and effects is not None:
+                    if rt.get("collect_ok", True) and rt.get("test_files"):
+                        from agent.actions.pipeline_actions import _parse_pytest_output
+
+                        collect_cmd = "python -m pytest --collect-only -q " + " ".join(
+                            rt["test_files"]
+                        )
+                        collect_ok_now = True
+                        cout = ""
+                        try:
+                            cres = await effects.run_command(
+                                ["/bin/sh", "-c", collect_cmd], timeout=60
+                            )
+                            cout = (getattr(cres, "stdout", "") or "") + (
+                                getattr(cres, "stderr", "") or ""
+                            )
+                            _n, collect_ok_now = _parse_pytest_output(cout)
+                        except Exception:
+                            collect_ok_now = True  # infra miss → don't block
+                        if not collect_ok_now:
+                            logger.info(
+                                "Functional sweep: fix broke test collection for "
+                                "%s — re-diagnosing",
+                                goal.description[:50],
+                            )
+                            dispatch_config = {
+                                "goal_id": goal.id,
+                                "goal_description": goal.description,
+                                "goal_type": "functional",
+                                "goal_files": goal.associated_files or [],
+                                "flow": "diagnose_issue",
+                                "target_file_path": "",
+                                "flow_directive": (
+                                    "The last edit broke test COLLECTION — the "
+                                    "suite no longer imports. Fix the import/"
+                                    "syntax breakage (this is collateral damage, "
+                                    "not the original bug):\n" + goal.description
+                                ),
+                                "error_output": cout[:4000],
+                                "what_happened": "the fix broke test collection",
+                                "error_headline": "test collection failed after edit",
+                                "failed_attempts_context": [
+                                    {
+                                        "target_file": a.target_file,
+                                        "target_symbol": getattr(a, "target_symbol", ""),
+                                        "flow": a.flow,
+                                        "reason": a.reason,
+                                        "diagnosis_summary": a.diagnosis_summary,
+                                        "pre_headline": getattr(a, "pre_headline", ""),
+                                    }
+                                    for a in goal.failed_attempts
+                                ],
+                            }
+                            if effects:
+                                await effects.save_mission(mission)
+                            return StepOutput(
+                                result={"sweep_complete": False, "needs_fix": True},
+                                observations=(
+                                    f"Functional sweep: fix broke collection for "
+                                    f"'{goal.description[:50]}' — re-diagnosing"
+                                ),
+                                context_updates={"dispatch_config": dispatch_config},
+                            )
+                    # Collection clean (or baseline stood down) — re-test on the
+                    # repo's own suite, deterministically.
+                    dispatch_config = {
+                        "goal_id": goal.id,
+                        "goal_description": goal.description,
+                        "goal_type": "functional",
+                        "goal_files": goal.associated_files or [],
+                        "flow": "interact",
+                        "target_file_path": "",
+                        "flow_directive": _functional_retest_directive(
+                            goal, after="fix"
+                        ),
+                        "interaction_mode": "deterministic",
+                        "run_command": rt["command"],
+                        "interactive_prompt": "",
+                    }
+                    logger.info(
+                        "Functional sweep: re-testing %s after fix (repair suite)",
+                        goal.description[:50],
+                    )
+                    if effects:
+                        await effects.save_mission(mission)
+                    return StepOutput(
+                        result={"sweep_complete": False, "needs_test": True},
+                        observations=(
+                            f"Functional sweep: re-testing '{goal.description[:50]}' "
+                            "after fix (repair suite)"
+                        ),
+                        context_updates={"dispatch_config": dispatch_config},
+                    )
                 # Fix applied — re-test to see if it actually resolved
                 # the functional failure
                 dispatch_config = {
@@ -2544,6 +2705,143 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
             f"Quality gate: harvested {created} new + {reopened} reopened goal(s) "
             f"({skipped} already in flight, {suppressed} suppressed)"
         ),
+    )
+
+
+_TEST_GATE_SIG = "test-gate:"
+
+
+async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
+    """Test-suite gate (Phase B.5): run the repo's OWN suite between functional
+    completion and the quality gate; failures harvest fix goals.
+
+    Config-togglable (mission.config.test_gate):
+      off  → set tests_verified, pass through (no change for suite-less projects
+             that opt out).
+      auto → self-gate on detection: run when a suite is found, else set
+             tests_verified silently (a project with no tests needs no config).
+      on   → run when found; passes when none found (nothing to run) but never
+             skips by choice.
+
+    On failures: harvest ≤N functional fix goals (origin="test_gate",
+    finding_signature per failing node, repro=[the pytest command]) — idempotent
+    by signature — and DON'T set tests_verified, so the functional→fix loop runs
+    first; the gate re-fires and clears once the suite passes. On a clean/absent
+    suite: set tests_verified so the flag_unset phase rule stops firing.
+
+    Context: mission (required). Publishes: mission.
+    """
+    from agent.actions.pipeline_actions import _parse_pytest_output, derive_repair_tests
+    from agent.persistence.models import GoalRecord
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission:
+        return StepOutput(result={"done": True}, observations="No mission")
+
+    mode = getattr(getattr(mission, "config", None), "test_gate", "auto")
+
+    def _pass(reason: str) -> StepOutput:
+        mission.tests_verified = True
+        return StepOutput(
+            result={"tests_verified": True, "harvested": 0},
+            observations=f"Test gate: {reason}",
+            context_updates={"mission": mission},
+        )
+
+    if mode == "off":
+        return _pass("disabled (test_gate=off)")
+    if effects is None:
+        return _pass("no effects — cannot run suite")
+
+    # Resolve the suite command: union of goals' already-derived repair tests
+    # (their test files), else derive from the objective (reuses the repair-test
+    # selection). A repair mission's functional goals already carry repair_tests.
+    test_files: list[str] = []
+    baseline_collect_ok = True
+    for g in mission.goals:
+        rt = getattr(g, "repair_tests", None) or {}
+        for tf in rt.get("test_files", []) or []:
+            if tf not in test_files:
+                test_files.append(tf)
+        if rt.get("collect_ok") is False:
+            baseline_collect_ok = False
+    if not test_files:
+        derived = await derive_repair_tests(effects, getattr(mission, "objective", ""))
+        test_files = derived.get("test_files", []) or []
+        if derived.get("collect_ok") is False:
+            baseline_collect_ok = False
+
+    if not test_files:
+        # No suite discoverable. auto/on both pass (nothing to run); the
+        # distinction only matters if we later add a hard "on requires a suite".
+        return _pass("no test suite found — nothing to verify")
+    if not baseline_collect_ok:
+        # The suite couldn't even collect at baseline (unbuilt checkout) — it
+        # can't certify anything; stand down rather than loop on an
+        # environmental failure.
+        return _pass("suite did not collect at baseline — standing down")
+
+    command = "python -m pytest -q --no-header " + " ".join(test_files[:3])
+    try:
+        res = await effects.run_command(["/bin/sh", "-c", command], timeout=180)
+        out = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
+        rc = getattr(res, "return_code", 1)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Test gate: suite run failed (%s) — standing down", e)
+        return _pass(f"suite run errored ({type(e).__name__}) — standing down")
+
+    failing_nodes, collect_ok = _parse_pytest_output(out)
+    if not collect_ok:
+        # Post-hoc collection break with a clean baseline → a fix broke imports;
+        # harvest it as a fix goal like any other failure (node = the file).
+        failing_nodes = failing_nodes or [f"{tf}::collection" for tf in test_files[:1]]
+    if rc == 0 and not failing_nodes:
+        return _pass(f"suite passed ({len(test_files)} file(s))")
+
+    # Harvest fix goals from failing nodes, idempotent by signature.
+    by_sig = {
+        getattr(g, "finding_signature", ""): g
+        for g in mission.goals
+        if getattr(g, "finding_signature", "")
+    }
+    created = reopened = 0
+    for node in failing_nodes[:8]:
+        sig = _TEST_GATE_SIG + node
+        existing = by_sig.get(sig)
+        if existing is not None:
+            if existing.status == "complete":
+                existing.status = "incomplete"
+                reopened += 1
+            continue
+        mission.goals.append(
+            GoalRecord(
+                description=f"Fix failing test: {node}",
+                type="functional",
+                status="incomplete",
+                origin="test_gate",
+                finding_signature=sig,
+                repro_commands=[f"python -m pytest -q {node}"],
+            )
+        )
+        created += 1
+
+    if not (created or reopened):
+        # Failures exist but every node already has an in-flight goal — avoid a
+        # spin: certify so the mission can finalize rather than loop the gate.
+        return _pass(
+            f"{len(failing_nodes)} failing but all already in flight — finalizing"
+        )
+
+    if effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"tests_verified": False, "harvested": created, "reopened": reopened},
+        observations=(
+            f"Test gate: {len(failing_nodes)} failing node(s) → "
+            f"{created} new + {reopened} reopened fix goal(s)"
+        ),
+        context_updates={"mission": mission},
     )
 
 

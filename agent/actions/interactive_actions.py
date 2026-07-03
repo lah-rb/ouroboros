@@ -13,6 +13,7 @@ Actions:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 
@@ -165,8 +166,15 @@ async def action_start_interactive_session(step_input: StepInput) -> StepOutput:
     inference_session_id = ""
     if hasattr(effects, "start_inference_session"):
         try:
+            # Pin the interact OPERATOR_PERSONA head across sessions (it leads
+            # every charter seed) — later interact sessions skip re-prefilling it.
+            _interact_key = (
+                f"interact:plan:{hashlib.md5(OPERATOR_PERSONA.encode('utf-8')).hexdigest()[:10]}"
+            )
             inference_session_id = await effects.start_inference_session(
-                {"ttl_seconds": 300}
+                {"ttl_seconds": 300},
+                static_prefix=OPERATOR_PERSONA,
+                flow_key=_interact_key,
             )
         except Exception:
             inference_session_id = ""
@@ -457,6 +465,28 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
     # parse_llm_json; this is the belt-and-suspenders guarantee at the boundary.)
     if action_type == "shell_command":
         text = action_data.get("command", "")
+        # apply_patch guard: `apply_patch` is a codex-harness verb, NOT a shell
+        # command — in these containers it no-ops with "command not found",
+        # silently leaving the file unchanged. The fsspec/astropy testers
+        # burned turns "patching" via apply_patch heredocs that never applied,
+        # then reported the unchanged file as a failure. Intercept it, don't
+        # send it, and steer back to the tester's actual role: verify + report,
+        # never edit. (Editing is a separate flow's job.)
+        if text.strip().startswith("apply_patch"):
+            return StepOutput(
+                result={"command_sent": False, "apply_patch_blocked": True},
+                observations=(
+                    "apply_patch is not available in this environment and does "
+                    "nothing here — the file was NOT changed. You are verifying, "
+                    "not editing: do not attempt to modify files. Continue "
+                    "exercising the behavior and REPORT what you observe; a "
+                    "defect you find is reported, not fixed, in this session."
+                ),
+                context_updates={
+                    "mcp_session_id": session_id,
+                    "session_history": session_history,
+                },
+            )
         if text and not text.endswith("\n"):
             text += "\n"
     elif action_type == "send_input":

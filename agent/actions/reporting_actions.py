@@ -494,12 +494,47 @@ async def action_attach_directive_report(step_input: StepInput) -> StepOutput:
     # Without this, project_ops failure loops forever in the environment phase.
     if report_data and isinstance(report_data, dict):
         if report_data.get("flow") == "project_ops":
+            first_env_flip = hasattr(mission, "environment_verified") and not (
+                mission.environment_verified
+            )
             if hasattr(mission, "environment_verified"):
                 mission.environment_verified = True
                 logger.info(
                     "Environment verified via project_ops (%s)",
                     report_data.get("status"),
                 )
+            # Smoke BASELINE: measure the smoke command once on the (still
+            # largely untouched) repo, so the post-write smoke check can stand
+            # down on failures that pre-date any edit (unbuilt brownfield
+            # checkouts). Only on the FIRST flip; best-effort.
+            if (
+                first_env_flip
+                and effects is not None
+                and getattr(mission, "smoke_baseline_ok", "absent") is None
+            ):
+                smoke_cmd = (
+                    getattr(
+                        getattr(mission, "architecture", None),
+                        "effective_smoke_command",
+                        "",
+                    )
+                    or ""
+                ).strip()
+                if smoke_cmd:
+                    try:
+                        res = await effects.run_command(
+                            ["/bin/sh", "-c", smoke_cmd], timeout=20
+                        )
+                        mission.smoke_baseline_ok = (
+                            res.return_code == 0 and not res.timed_out
+                        )
+                    except Exception:
+                        mission.smoke_baseline_ok = False
+                    logger.info(
+                        "Smoke baseline on untouched repo: %s (`%s`)",
+                        "OK" if mission.smoke_baseline_ok else "FAILING",
+                        smoke_cmd[:80],
+                    )
             # Workspace ledger (ops port): one durable provision line per
             # project_ops run, so setup planning and diagnose seeds see what
             # the environment already holds instead of re-deriving/re-doing

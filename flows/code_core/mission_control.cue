@@ -131,6 +131,10 @@ mission_control: #FlowDefinition & {
 					// structural quality-origin goals are caught by the rules above
 					// and ride those sweeps instead.
 					{condition: "result.phase == 'quality_fix'", transition: "quality_sweep_next"},
+					// Test-suite gate (Phase B.5): run the repo's own tests after
+					// functional completion; failures harvest fix goals, a pass
+					// sets tests_verified and falls through to the quality gate.
+					{condition: "result.phase == 'test_suite'", transition: "dispatch_test_gate"},
 					{condition: "result.phase == 'quality'", transition: "dispatch_quality_gate"},
 					{condition: "result.phase == 'complete'", transition: "completed"},
 					{condition: "true", transition: "dispatch_planning"},
@@ -526,6 +530,23 @@ mission_control: #FlowDefinition & {
 				]
 			}
 			publishes: ["dispatch_config"]
+		}
+
+		// Test-suite gate (Phase B.5): run the repo's own suite deterministically
+		// (no inference), then re-enter phase routing. A pass sets tests_verified
+		// (→ quality gate next); failures harvest functional fix goals (→ the
+		// functional sweep works them, then this re-fires). Config-togglable
+		// (mission.config.test_gate auto|on|off); auto stands down silently when
+		// no suite is found, so suite-less projects need no config change.
+		dispatch_test_gate: #StepDefinition & {
+			action:      "run_test_suite_gate"
+			description: "Run the repo's test suite; harvest fix goals or certify"
+			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "check_phase"}]
+			}
+			publishes: ["mission"]
 		}
 
 		// Tail-call the diagnose_issue/file_ops sub-flow named in dispatch_config

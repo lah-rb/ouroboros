@@ -237,6 +237,58 @@ SCAN_PROMPT = (
 )
 
 
+_FAILED_NODE_RE = re.compile(r"(?m)^(?:FAILED|ERROR) (\S+?\.py)::(\S+)")
+
+
+async def _failing_test_block(effects, error_output: str) -> str:
+    """Extract the body of up to 2 failing tests named in a pytest transcript,
+    so the diagnose seed shows how the code under test is actually called.
+    Best-effort: returns '' on any miss (no effects, no node ids, unreadable
+    file, symbol not found)."""
+    if effects is None or not error_output:
+        return ""
+    seen: list[tuple[str, str]] = []
+    for path, node in _FAILED_NODE_RE.findall(error_output):
+        key = (path, node)
+        if key not in seen:
+            seen.append(key)
+        if len(seen) >= 2:
+            break
+    if not seen:
+        return ""
+
+    from agent.repomap import extract_file_symbols
+
+    blocks: list[str] = []
+    file_cache: dict[str, str] = {}
+    for path, node in seen:
+        # node may be "TestClass::test_x" or "test_x" or "test_x[param]".
+        fn = node.split("::")[-1].split("[")[0]
+        try:
+            if path not in file_cache:
+                fc = await effects.read_file(path)
+                file_cache[path] = getattr(fc, "content", "") or "" if getattr(
+                    fc, "exists", False
+                ) else ""
+            content = file_cache[path]
+            if not content:
+                continue
+            defs, _refs = extract_file_symbols(path, content)
+            match = next((d for d in defs if d.name == fn), None)
+            if match is None:
+                continue
+            lines = content.splitlines()
+            start = max(0, match.line - 1)
+            end = match.end_line if match.end_line else match.line
+            body = "\n".join(lines[start:end])[:1500]
+            blocks.append(f"# {path}::{node}\n{body}")
+        except Exception:  # noqa: BLE001 — seed enrichment is best-effort
+            continue
+    if not blocks:
+        return ""
+    return "```python\n" + "\n\n".join(blocks) + "\n```"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Phase 0: Start session
 # ══════════════════════════════════════════════════════════════════════
@@ -351,6 +403,22 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         parts.append("```")
         parts.append(error_output)
         parts.append("```")
+        parts.append("")
+
+    # ── ## Failing test (how the code is CALLED) ────────────────
+    # Repair-goal ground truth: the repo's failing test shows the exact
+    # interface — argument count, keyword names, return shape, the guard it
+    # expects. The retest's signal wrong-fix (fsspec's `open_async(self, path,
+    # mode, **kwargs)` — "takes 2 to 3 positional but 4 were given") happened
+    # BOTH arms because neither ever read the failing test. Seed its body so
+    # diagnose matches the call site exactly. Best-effort; parses FAILED node
+    # ids out of the transcript.
+    test_block = await _failing_test_block(effects, error_output)
+    if test_block:
+        parts.append(
+            "## Failing test (how the code is CALLED — match this interface exactly)"
+        )
+        parts.append(test_block)
         parts.append("")
 
     # ── ## Project ──────────────────────────────────────────────

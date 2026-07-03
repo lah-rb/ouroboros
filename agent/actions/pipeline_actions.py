@@ -10,12 +10,198 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 
 from agent import languages
 from agent.models import StepInput, StepOutput
 
 logger = logging.getLogger(__name__)
+
+
+# ── Repair test loop (Phase B.5) ──────────────────────────────────────
+# For a repair-profile brownfield goal, the repo's OWN failing tests are the
+# ground truth: the verification, the interface spec (how the code is called),
+# and the feedback loop. The retest proved every failing run had the right
+# file/symbol but no working test-in-the-loop; langcodes won because 7 of 30
+# turns were real pytest runs iterated to green. These helpers select the
+# relevant test files from goal terms (via the unused search_files effect) and
+# capture a baseline so downstream can (a) dispatch a deterministic pytest
+# verification and (b) seed diagnose with the failing test's call signature.
+
+_STOPWORDS = frozenset(
+    "the a an and or but for with when then this that from into via must should "
+    "make sure ensure fix add remove change update value values same produce "
+    "produces produced correctly correct properly using use uses given return "
+    "returns object objects method function class test tests case cases "
+    # low-signal bug-report prose — present in the description, absent in code
+    "missing broken incorrect wrong fails failing failed raise raises raised "
+    "error errors bug issue does not doesnt implement implemented support "
+    "supported handle handled expected actual instead currently".split()
+)
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+_BACKTICK_RE = re.compile(r"`([^`]+)`")
+_TEST_PATH_RE = re.compile(r"(^|/)(test_|tests?/|conftest)")
+
+
+def extract_repair_terms(description: str) -> list[str]:
+    """Identifier-ish terms from a goal description, most-specific first.
+
+    Prioritizes quoted `literals` and CamelCase/snake_case/dotted identifiers
+    (the names a test file would actually reference), drops prose stopwords,
+    dedupes preserving order. These become the content-search alternation.
+    """
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def _add(t: str) -> None:
+        t = t.strip().strip(".")
+        if not t or t.lower() in _STOPWORDS or len(t) < 3:
+            return
+        if t not in seen:
+            seen.add(t)
+            terms.append(t)
+
+    # Backticked literals first — highest signal (dotted paths, call exprs).
+    for m in _BACKTICK_RE.finditer(description):
+        for tok in _IDENT_RE.findall(m.group(1)):
+            _add(tok)
+    # Then CamelCase / snake_case / has_underscore / mixed-case identifiers.
+    for tok in _IDENT_RE.findall(description):
+        if "_" in tok or not tok.islower() or not tok.isalpha():
+            _add(tok)
+    # Fill with remaining lowercase content words (bounded).
+    for tok in _IDENT_RE.findall(description):
+        if len(terms) >= 12:
+            break
+        _add(tok)
+    return terms[:12]
+
+
+def _is_test_path(path: str) -> bool:
+    return bool(_TEST_PATH_RE.search(path)) and path.endswith(".py")
+
+
+def _parse_pytest_output(out: str) -> tuple[list[str], bool]:
+    """Return (failing_node_ids, collect_ok). collect_ok is False when the run
+    died at collection/import (an INTERNALERROR / import error / errors during
+    collection) — the baseline stand-down signal: a suite that can't collect at
+    baseline can never indict an edit."""
+    nodes = re.findall(r"(?m)^FAILED (\S+)", out)
+    nodes += [n for n in re.findall(r"(?m)^ERROR (\S+::\S+)", out) if n not in nodes]
+    collect_broken = bool(
+        re.search(
+            r"errors during collection|ImportError while importing|INTERNALERROR|"
+            r"ERROR collecting|ModuleNotFoundError",
+            out,
+        )
+    )
+    return nodes, not collect_broken
+
+
+async def derive_repair_tests(effects, goal_description: str) -> dict:
+    """Select ≤2 relevant test files for a repair goal and baseline them.
+
+    Returns {command, test_files, failing_nodes, collect_ok, derived: True},
+    or {} when no test file references the goal terms (→ caller falls back to
+    the LLM evaluator). Uses the search_files effect (grep --include on the
+    container) ranked by term-hit count.
+    """
+    if effects is None:
+        return {}
+    terms = extract_repair_terms(goal_description)
+    if not terms:
+        return {}
+    content_pattern = "|".join(re.escape(t) for t in terms)
+
+    # search_files: broad *.py filename glob + content grep; we filter to test
+    # files by PATH ourselves so the divergent pattern-glob semantics across
+    # LocalEffects (path glob) / ContainerEffects (grep --include) / Mock
+    # (fnmatch) don't matter — only that content grep is recursive (it is).
+    try:
+        res = await effects.search_files("*.py", content_pattern=content_pattern)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("repair-tests: search_files failed (%s)", e)
+        return {}
+
+    hits: dict[str, int] = {}
+    for m in getattr(res, "matches", []) or []:
+        fp = getattr(m, "file_path", "")
+        if _is_test_path(fp):
+            hits[fp] = hits.get(fp, 0) + 1
+    if not hits:
+        return {}
+
+    test_files = [fp for fp, _ in sorted(hits.items(), key=lambda kv: (-kv[1], kv[0]))[:2]]
+    command = "python -m pytest -q -x --no-header " + " ".join(test_files)
+
+    failing_nodes: list[str] = []
+    collect_ok = True
+    try:
+        base = await effects.run_command(["/bin/sh", "-c", command], timeout=120)
+        out = (getattr(base, "stdout", "") or "") + (getattr(base, "stderr", "") or "")
+        failing_nodes, collect_ok = _parse_pytest_output(out)
+    except Exception as e:  # noqa: BLE001 — baseline is best-effort
+        logger.warning("repair-tests: baseline run failed (%s)", e)
+
+    return {
+        "command": command,
+        "test_files": test_files,
+        "failing_nodes": failing_nodes,
+        "collect_ok": collect_ok,
+        "derived": True,
+    }
+
+
+def is_repair_profile(mission) -> bool:
+    return (
+        getattr(getattr(mission, "config", None), "task_profile", "") == "repair"
+    )
+
+
+async def action_derive_repair_tests(step_input: StepInput) -> StepOutput:
+    """Standalone action: derive + persist a repair goal's test loop onto the
+    goal (repair_tests + a tighten-only acceptance check). Idempotent via
+    repair_tests.derived. Reused by the functional sweep and the test gate.
+
+    Context: mission (required). Inputs: goal_id. Publishes: mission.
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    goal_id = str((step_input.inputs or {}).get("goal_id", "") or "")
+    goal = next(
+        (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id), None
+    )
+    if goal is None or not is_repair_profile(mission):
+        return StepOutput(result={"derived": False}, observations="not a repair goal")
+    if (getattr(goal, "repair_tests", None) or {}).get("derived"):
+        return StepOutput(
+            result={"derived": True, "cached": True},
+            observations="repair tests already derived",
+        )
+    rt = await derive_repair_tests(effects, goal.description)
+    goal.repair_tests = rt
+    if rt.get("command"):
+        # Tighten-only acceptance check: the pytest command runs each
+        # verification pass and vetoes a credulous goal_met (C4 field).
+        cmds = {c.get("command") for c in (goal.acceptance_checks or [])}
+        if rt["command"] not in cmds:
+            goal.acceptance_checks = list(goal.acceptance_checks or []) + [
+                {"command": rt["command"], "name": "repair suite", "required": True}
+            ]
+    if effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"derived": bool(rt), "test_files": rt.get("test_files", [])},
+        observations=(
+            f"repair tests: {rt.get('test_files')} "
+            f"(collect_ok={rt.get('collect_ok')}, "
+            f"{len(rt.get('failing_nodes', []))} failing)"
+            if rt
+            else "repair tests: no matching suite — LLM evaluator fallback"
+        ),
+        context_updates={"mission": mission},
+    )
 
 
 def _cap_diagnostic(text: str, limit: int = 1200) -> str:
@@ -355,12 +541,27 @@ async def action_run_validation_checks_from_env(
     smoke_failed = False
     if not syntax_failed:
         smoke_cmd = ""
+        smoke_baseline_ok = None
         try:
             mission = await effects.load_mission()
             if mission is not None and getattr(mission, "environment_verified", False):
                 arch = getattr(mission, "architecture", None)
                 smoke_cmd = (getattr(arch, "effective_smoke_command", "") or "").strip()
+                smoke_baseline_ok = getattr(mission, "smoke_baseline_ok", None)
         except Exception:
+            smoke_cmd = ""
+        # BASELINE STAND-DOWN: the smoke command already failed on the
+        # untouched repo (unbuilt brownfield checkout — swe-bench-astropy's
+        # `import astropy` fails regardless of the edit). A check that failed
+        # at baseline can never indict THIS edit; running it would route a
+        # correct patch into the self-correct rewrite loop chasing an
+        # unappeasable environmental failure (~290s of whole-file rewrites
+        # observed). Skip it entirely and say so.
+        if smoke_cmd and smoke_baseline_ok is False:
+            output_lines.append(
+                f"[SKIP] smoke_boot: {smoke_cmd} — failing at BASELINE "
+                "(pre-existing, cannot indict this edit)"
+            )
             smoke_cmd = ""
         if smoke_cmd:
             try:
@@ -397,12 +598,30 @@ async def action_run_validation_checks_from_env(
 
     validation_output = "\n".join(output_lines)
 
+    # Oversized-symbol-fix signal (M4 defense-in-depth): a large target file
+    # with a known symbol should re-diagnose a fresh symbol-scoped patch on a
+    # check failure, NOT whole-file self-correct (swe-bench-astropy regenerated
+    # a 19KB qdp.py twice, ~102s each, and that regeneration is where an
+    # invalid `str | None` py3.9 annotation crept in). The whole-file rewrite
+    # path is fine for small files; it's the escalation on big ones that hurts.
+    oversized_symbol_fix = False
+    tgt_symbol = str(step_input.params.get("target_symbol", "") or "").strip()
+    if tgt_symbol and target:
+        try:
+            fc = await effects.read_file(target)
+            if getattr(fc, "exists", False):
+                if len((fc.content or "").splitlines()) > 300:
+                    oversized_symbol_fix = True
+        except Exception:
+            pass
+
     return StepOutput(
         result={
             "all_passing": not syntax_failed and not has_issues and not smoke_failed,
             "syntax_failed": syntax_failed,
             "smoke_failed": smoke_failed,
             "has_issues": has_issues,
+            "oversized_symbol_fix": oversized_symbol_fix,
         },
         observations=f"Validation: {sum(1 for r in results if r['passed'])}/{len(results)} checks passed",
         context_updates={

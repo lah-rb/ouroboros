@@ -57,6 +57,16 @@ sections:
       finished (a file with certain contents, a command that now succeeds, a
       service that responds).
 
+      If the job is to fix code that a TEST checks: run that test file FIRST to
+      see the real failure, and re-run it after every change — it is the
+      feedback loop, not an afterthought. READ the failing test's source and
+      match the exact call signature it uses (argument count, keyword names,
+      return shape); a fix that changes a signature the test doesn't expect
+      fails even when the logic is right. Edit code by rewriting the COMPLETE
+      function via a quoted heredoc (`cat > file <<'EOF' … EOF` or a Python
+      rewrite); never hand-escape a `sed -i` regex — the backslash-escaping
+      spiral corrupts the file and wastes the session.
+
       The task is solvable as posed — if the inputs look intractable, reframe
       the approach in the brief rather than concede; never write a brief that
       gives up or settles for a placeholder instead of the real deliverable.

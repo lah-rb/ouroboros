@@ -198,6 +198,7 @@ def build_action_registry() -> ActionRegistry:
         action_functional_sweep_next,
         action_harvest_quality_findings,
         action_quality_sweep_next,
+        action_run_test_suite_gate,
         # Fix target resolution
         action_apply_fix_target,
         action_fallback_fix_target,
@@ -433,6 +434,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("functional_sweep_next", action_functional_sweep_next)
     registry.register("harvest_quality_findings", action_harvest_quality_findings)
     registry.register("quality_sweep_next", action_quality_sweep_next)
+    registry.register("run_test_suite_gate", action_run_test_suite_gate)
     # Fix target resolution — menu assembly moved to fix_target_menu projection
     registry.register("apply_fix_target", action_apply_fix_target)
     registry.register("fallback_fix_target", action_fallback_fix_target)
@@ -558,6 +560,7 @@ def build_action_registry() -> ActionRegistry:
     # Deterministic evaluation (interact flow — run_commands path)
     from agent.actions.pipeline_actions import (
         action_apply_acceptance_verdict,
+        action_derive_repair_tests,
         action_evaluate_deterministic_result,
         action_gate_goal_acceptance,
         action_store_goal_acceptance,
@@ -572,6 +575,9 @@ def build_action_registry() -> ActionRegistry:
     registry.register("gate_goal_acceptance", action_gate_goal_acceptance)
     registry.register("store_goal_acceptance", action_store_goal_acceptance)
     registry.register("apply_acceptance_verdict", action_apply_acceptance_verdict)
+    # Repair test loop (Phase B.5): select + baseline the repo's own failing
+    # tests for a repair goal (reused by the functional sweep + test gate).
+    registry.register("derive_repair_tests", action_derive_repair_tests)
 
     # ── Tier Records: Reporting Chain ────────────────────────────────
     from agent.actions.reporting_actions import (

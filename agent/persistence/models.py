@@ -70,6 +70,15 @@ class MissionConfig(BaseModel):
     run_until: Literal["cycle_budget", "completed"] = "cycle_budget"
     max_cycles: int | None = None
     max_wall_clock_s: float | None = None
+    # Test-suite gate (Phase B.5) — runs the repo's own test suite between
+    # functional completion and the quality gate; failures harvest fix goals.
+    #   "auto" (default): self-gate on detection — run when a suite is found
+    #           (pytest present + tests exist), else pass through silently.
+    #           A project with no tests needs no config and sees no change.
+    #   "on":   require a suite (still passes when none is found — nothing to
+    #           run — but never skipped by choice).
+    #   "off":  skip entirely (tests_verified set immediately).
+    test_gate: Literal["auto", "on", "off"] = "auto"
 
 
 # ── Directive Reports ─────────────────────────────────────────────────
@@ -232,6 +241,16 @@ class GoalRecord(BaseModel):
     # has looped (len(failed_attempts) >= 2). One-shot sentinel — set once
     # (even to the no-results marker) so the gate never re-searches.
     search_findings: str = ""
+    # Repair test loop (Phase B.5): for a repair-profile functional goal, the
+    # repo's OWN failing tests are the goal's ground truth. Derived once
+    # (action_derive_repair_tests): {command, test_files, failing_nodes,
+    # collect_ok, derived}. command is the pytest invocation dispatched
+    # deterministically (interact run_command); failing_nodes seed the diagnose
+    # "how the code is called" section; collect_ok is the collection-floor
+    # baseline stand-down (a suite that couldn't collect at baseline can't
+    # indict an edit). Empty when no suite matched — falls back to the LLM
+    # evaluator (pre-B.5 behavior).
+    repair_tests: dict = Field(default_factory=dict)
 
 
 class FailedAttempt(BaseModel):
@@ -800,6 +819,19 @@ class MissionState(BaseModel):
     # seeds. Additive default keeps old mission.json files loading.
     workspace_ledger: list[WorkspaceLedgerEntry] = Field(default_factory=list)
     environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
+    # Smoke-command result on the UNTOUCHED repo, captured once when
+    # environment_verified flips (None = no smoke command / not measured).
+    # The post-write smoke check stands down when this is False: a check that
+    # failed at baseline can never indict an edit (swe-bench-astropy: an
+    # unbuilt source checkout fails `import astropy` regardless of any edit,
+    # and the self-correct loop burned ~290s of whole-file rewrites appeasing
+    # it). Same stand-down family as the scaffold parse floor.
+    smoke_baseline_ok: bool | None = None
+    # Test-suite gate (Phase B.5): set once the repo's own suite passes (or the
+    # gate stands down — off, or auto with no suite). A flag_unset phase rule
+    # (test_suite) fires the gate until this is set. Failures harvest fix goals
+    # instead of setting it, so the functional→fix loop runs first.
+    tests_verified: bool = False
     # How many times this mission has been reopened after reaching a terminal
     # state (completed/aborted) via `mission reopen`. 0 = original run. Stamped
     # onto goals added in a later generation so reports can distinguish scope
