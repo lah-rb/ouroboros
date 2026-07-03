@@ -37,15 +37,32 @@ class _Out:
         self.result = result
 
 
-def test_successful_startup_opens_ux_phase():
-    """The startup sub-flow completing (status success) runs the explorer."""
+def test_successful_startup_routes_through_boot_liveness_floor():
+    """The startup sub-flow completing (status success) hits the deterministic
+    boot-liveness floor before the explorer — an exit-0 boot that printed a
+    traceback must not reach the UX session (ops sanity-rung port)."""
     target = resolve_rule(
         _startup_resolver(),
         step_output=_Out({"status": "success"}),
         context={},
         meta={},
     )
-    assert target == "plan_ux_charter"
+    assert target == "check_boot_liveness"
+
+
+def test_boot_liveness_routes_clean_to_ux_dirty_to_summarize():
+    compiled = json.loads(
+        (Path(__file__).resolve().parent.parent / "flows" / "compiled.json").read_text()
+    )
+    resolver = compiled["quality_gate"]["steps"]["check_boot_liveness"]["resolver"]
+    assert (
+        resolve_rule(resolver, step_output=_Out({"boot_clean": True}), context={}, meta={})
+        == "plan_ux_charter"
+    )
+    assert (
+        resolve_rule(resolver, step_output=_Out({"boot_clean": False}), context={}, meta={})
+        == "summarize"
+    )
 
 
 def test_failed_terminal_skips_ux_phase():

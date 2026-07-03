@@ -518,7 +518,14 @@ def project_setup_context(mission: MissionState, params: dict) -> dict:
 
     Schema shape: see state.cue project_setup_context documentation.
     """
+    from agent.formatters import format_workspace_ledger
+
     arch = mission.architecture
+    # Ledger block (ops port): what prior cycles already installed/provisioned,
+    # so setup planning builds on the environment instead of re-doing it.
+    ledger_block = format_workspace_ledger(
+        {"source": getattr(mission, "workspace_ledger", None) or []}, {}
+    )
 
     if not arch:
         return {
@@ -529,6 +536,7 @@ def project_setup_context(mission: MissionState, params: dict) -> dict:
             "module_files": [],
             "data_files": [],
             "working_directory": mission.config.working_directory,
+            "workspace_ledger_block": ledger_block,
         }
 
     data_files = [
@@ -545,6 +553,7 @@ def project_setup_context(mission: MissionState, params: dict) -> dict:
         "module_files": arch.canonical_files(),
         "data_files": data_files,
         "working_directory": mission.config.working_directory,
+        "workspace_ledger_block": ledger_block,
     }
 
 

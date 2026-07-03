@@ -26,45 +26,33 @@ def _record_workspace_ledger(
     """Append durable workspace effects to the mission ledger (best-effort).
 
     Deterministic provision entries from ``setup_results`` (one per setup action
-    that did something) plus one coarse per-cycle ``session`` entry from the judge.
-    Successful provisions are de-duped against prior entries so a cycle that
-    re-reports the same install doesn't bloat the ledger; the window is bounded.
+    that did something) plus one coarse per-cycle ``session`` entry from the
+    judge. Dedupe + the 60-entry bound live in MissionState.add_ledger_entry
+    (shared with code_core's project_ops recording).
     """
-    from agent.persistence.models import WorkspaceLedgerEntry
-
-    led = getattr(mission, "workspace_ledger", None)
-    if led is None:  # non-ops mission or old state — nothing to record onto
-        return
+    if getattr(mission, "workspace_ledger", None) is None:
+        return  # old state — nothing to record onto
     cycle = int(step_input.context.get("cycle", 0) or 0)
-    seen = {(e.kind, e.description) for e in led}
     for r in step_input.context.get("setup_results") or []:
-        desc = str(r.get("name", "")).strip()
-        if not desc:
-            continue
         status = (
             "success"
             if r.get("passed")
             else ("skipped" if r.get("skipped") else "failed")
         )
-        if ("provision", desc) in seen and status != "failed":
-            continue  # already have a non-failed provision of this
-        led.append(
-            WorkspaceLedgerEntry(
-                cycle=cycle, kind="provision", description=desc, status=status
-            )
+        mission.add_ledger_entry(
+            cycle=cycle,
+            kind="provision",
+            description=str(r.get("name", "")),
+            status=status,
         )
-        seen.add(("provision", desc))
     if session_desc:
-        led.append(
-            WorkspaceLedgerEntry(
-                cycle=cycle,
-                kind="session",
-                description=session_desc[:200],
-                status=session_status,
-            )
+        mission.add_ledger_entry(
+            cycle=cycle,
+            kind="session",
+            description=session_desc,
+            status=session_status,
+            dedupe=False,  # per-cycle narrative — every attempt is a data point
         )
-    if len(led) > 60:  # bound growth — keep the most recent
-        del led[:-60]
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +84,21 @@ async def action_detect_solver_task(step_input: StepInput) -> StepOutput:
     that through). The extra probe turn is cheap now that swa_full keeps the
     static prefill cached. Deterministic — zero inference; incomplete/non-eligible
     cycles still pay nothing.
+
+    Shared with code_core's quality_gate (which holds no mission object): the
+    objective falls back to the mission_objective flow input, and a mode input
+    of "checkpoint" suppresses the probe (behavioral rungs are completion-mode).
+    Publishes task_spec so a mission-less caller's probe_generate prompt can
+    render the objective.
     """
     mission = step_input.context.get("mission")
     obj = str(getattr(mission, "objective", "") or "") if mission else ""
+    if not obj:
+        obj = str(
+            (step_input.inputs or {}).get("mission_objective", "")
+            or step_input.context.get("mission_objective", "")
+            or ""
+        )
     is_solver = bool(_SOLVER_FN_RE.search(obj) and _EXAMPLE_RE.search(obj))
 
     results = step_input.context.get("validation_results") or []
@@ -106,14 +106,19 @@ async def action_detect_solver_task(step_input: StepInput) -> StepOutput:
         r.get("passed") for r in results if r.get("required", True)
     )
 
-    run_probe = is_solver and checks_passed
+    checkpoint = (step_input.inputs or {}).get("mode") == "checkpoint"
+    run_probe = is_solver and checks_passed and not checkpoint
     return StepOutput(
         result={"run_probe": run_probe, "is_solver_task": is_solver},
         observations=(
             "asym-probe firing (complete candidate — re-verify)"
             if run_probe
-            else f"asym-probe skipped (solver={is_solver}, checks_passed={checks_passed})"
+            else (
+                f"asym-probe skipped (solver={is_solver}, "
+                f"checks_passed={checks_passed}, checkpoint={checkpoint})"
+            )
         ),
+        context_updates={"task_spec": obj},
     )
 
 

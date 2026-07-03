@@ -1,9 +1,11 @@
-"""Ops workspace ledger: harvest durable effects so cycles don't redo work.
+"""Workspace ledger: harvest durable effects so cycles don't redo work.
 
 `_record_workspace_ledger` turns a cycle's setup_results (deterministic) + a coarse
-judge note into WorkspaceLedgerEntry rows on the mission; `format_workspace_ledger`
-renders the rolling window into the next cycle's plan_provision/plan_charter. These
-test the harvest + de-dup + the additive schema (old mission.json loads).
+judge note into WorkspaceLedgerEntry rows on the mission (dedupe + the 60-entry
+bound live in MissionState.add_ledger_entry, shared with code_core's project_ops
+recording); `format_workspace_ledger` renders the rolling window into the next
+cycle's plan_provision/plan_charter. These test the harvest + de-dup + the
+additive schema (old mission.json loads).
 """
 
 from __future__ import annotations
@@ -12,10 +14,13 @@ from types import SimpleNamespace
 
 from agent.actions.operations_actions import _record_workspace_ledger
 from agent.formatters import format_workspace_ledger
+from agent.persistence.models import MissionConfig, MissionState
 
 
 def _mission():
-    return SimpleNamespace(workspace_ledger=[])
+    return MissionState(
+        objective="x", config=MissionConfig(working_directory="/tmp")
+    )
 
 
 def _step(ctx):

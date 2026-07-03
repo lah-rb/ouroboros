@@ -762,6 +762,54 @@ async def action_check_profile_oracle(step_input: StepInput) -> StepOutput:
         context_updates={"validation_results": results})
 
 
+# ── Boot-liveness floor (code_core quality gate, rung 0 analog) ───────────
+# run_startup_check gates on the run_commands STATUS — an exit-0 boot that
+# printed a traceback/ImportError sails through to the expensive UX session
+# and the credulous summarize. This deterministic floor scans the captured
+# startup output with the shared liveness predicate and appends a REQUIRED
+# fail on an error trace, so the gate fails with the trace as evidence
+# instead of exploring a program that never actually came up. Zero inference.
+
+
+async def action_check_boot_liveness(step_input: StepInput) -> StepOutput:
+    """Deterministic floor on the startup-check output. Appends a REQUIRED
+    fail when the boot output contains an error trace despite a passing exit
+    status. Fail-safe: empty/missing output appends nothing (the startup
+    check's own status routing already handled hard failures).
+
+    Context: terminal_output (optional), validation_results (optional).
+    Result: boot_clean (route flag).
+    Publishes: validation_results.
+    """
+    output = str(step_input.context.get("terminal_output", "") or "")
+    errs = liveness_scan(output)
+    if not errs:
+        return StepOutput(
+            result={"boot_clean": True},
+            observations="boot-liveness floor clean",
+            context_updates={},
+        )
+    results = list(step_input.context.get("validation_results") or [])
+    reason = (
+        "startup output contains an error trace despite a passing exit "
+        f"status: {', '.join(errs)}"
+    )
+    results.append({
+        "name": "boot_liveness",
+        "command": "startup output scan",
+        "passed": False,
+        "required": True,
+        "stdout": reason[:500],
+        "stderr": "",
+        "return_code": 1,
+    })
+    return StepOutput(
+        result={"boot_clean": False},
+        observations=f"boot-liveness FAIL: {', '.join(errs)}",
+        context_updates={"validation_results": results},
+    )
+
+
 # ── Combined artifact oracle (one read, all applicable rungs) ─────────────
 # The sanity floor, the format oracle, and the profile rung each read the same
 # produced artifact; run as separate flow steps they read it up to three times

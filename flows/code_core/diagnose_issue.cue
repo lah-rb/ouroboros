@@ -93,6 +93,55 @@ diagnose_issue: #FlowDefinition & {
 	steps: {
 
 		// ══════════════════════════════════════════════════════════
+		// Phase -1: Stuck-goal external search (ops port, one-shot)
+		// ══════════════════════════════════════════════════════════
+		//
+		// When this goal has already looped through diagnose/fix twice
+		// without completing, pull in NEW information via an exa web
+		// search before investigating again — the dynamic anti-give-up
+		// arm. One-shot per goal (goal.search_findings sentinel); the
+		// seed builder surfaces stored hits on every later diagnose.
+
+		search_gate: #StepDefinition & {
+			action:      "goal_search_gate"
+			description: "Gate the stuck-goal web search (>= 2 failed attempts, once)"
+			context: optional: ["error_headline"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.should_search == true", transition: "exa_search"},
+					{condition: "true", transition: "start_session"},
+				]
+			}
+			publishes: ["mission", "search_queries"]
+		}
+
+		exa_search: #StepDefinition & {
+			action:      "exa_search"
+			description: "Web-search the stuck problem via the Exa MCP"
+			context: optional: ["search_queries"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "store_search_findings"}]
+			}
+			publishes: ["raw_search_results"]
+		}
+
+		store_search_findings: #StepDefinition & {
+			action:      "store_goal_search_findings"
+			description: "Store the exa hits on the goal (one-shot sentinel)"
+			context: {
+				required: ["mission"]
+				optional: ["raw_search_results"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "start_session"}]
+			}
+			publishes: ["mission"]
+		}
+
+		// ══════════════════════════════════════════════════════════
 		// Phase 0: Start memoryful session, seed with facts
 		// ══════════════════════════════════════════════════════════
 
@@ -497,5 +546,5 @@ diagnose_issue: #FlowDefinition & {
 		}
 	}
 
-	entry: "start_session"
+	entry: "search_gate"
 }

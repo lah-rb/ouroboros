@@ -1008,3 +1008,129 @@ def _derive_failure_headline(terminal_output: str, found_errors: list[str]) -> s
     if lines:
         return lines[-1][:140]
     return "Command failed with no diagnostic output"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Per-goal grounded acceptance checks (ops definition-of-done port)
+# ══════════════════════════════════════════════════════════════════════
+# A functional goal's "definition of done" was the goal description alone,
+# judged by the interact evaluator's goal_met. These three actions add the
+# ops-side machinery per GOAL: derive shell acceptance checks ONCE, grounded
+# in the explored session (interact's derive_acceptance step), store them
+# tighten-only on the goal, run them each verification pass, and fold the
+# result into the evaluator's verdict as a deterministic TIGHTENER — the
+# checks can veto a credulous goal_met, never certify a goal on their own,
+# and zero checks means the evaluator judges alone (no vacuous verification).
+
+
+async def action_gate_goal_acceptance(step_input: StepInput) -> StepOutput:
+    """Gate the per-goal acceptance-check derivation. Fires once per eligible
+    goal (functional/quality, not yet grounded); always publishes the goal's
+    stored checks so the run step enforces them on every pass.
+
+    Inputs: goal_id.  Result: needs_derive.
+    Publishes: mission, goal_acceptance_checks.
+    """
+    effects = step_input.effects
+    goal_id = str(step_input.inputs.get("goal_id", "") or "")
+    try:
+        mission = await effects.load_mission() if effects else None
+    except Exception:
+        mission = None
+    goal = next(
+        (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id), None
+    )
+    if goal is None or getattr(goal, "type", "") not in ("functional", "quality"):
+        return StepOutput(
+            result={"needs_derive": False},
+            observations="goal-acceptance: no eligible goal — evaluator judges alone",
+            context_updates={"goal_acceptance_checks": []},
+        )
+    checks = list(getattr(goal, "acceptance_checks", None) or [])
+    needs = not bool(getattr(goal, "acceptance_grounded", False))
+    return StepOutput(
+        result={"needs_derive": needs},
+        observations=(
+            "goal-acceptance: deriving grounded checks"
+            if needs
+            else f"goal-acceptance: {len(checks)} stored check(s)"
+        ),
+        context_updates={"mission": mission, "goal_acceptance_checks": checks},
+    )
+
+
+async def action_store_goal_acceptance(step_input: StepInput) -> StepOutput:
+    """Parse the derived acceptance checks and merge them onto the goal
+    (TIGHTEN-ONLY union by command). One-shot: acceptance_grounded is set even
+    on an empty parse — unlike ops' mandatory task definition-of-done, the
+    per-goal checks are an optional tightener, so we never re-pay the
+    derivation inference on a goal the model couldn't pin with robust checks.
+
+    Context: mission, inference_response.  Inputs: goal_id.
+    Publishes: mission, goal_acceptance_checks.
+    """
+    from agent.actions.operations_actions import _parse_completion_criteria
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    goal_id = str(step_input.inputs.get("goal_id", "") or "")
+    goal = next(
+        (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id), None
+    )
+    if goal is None:
+        return StepOutput(
+            result={"criteria_count": 0},
+            observations="goal-acceptance: no goal",
+            context_updates={"goal_acceptance_checks": []},
+        )
+    new = _parse_completion_criteria(
+        str(step_input.context.get("inference_response", ""))
+    )
+    merged = list(getattr(goal, "acceptance_checks", None) or [])
+    seen = {c.get("command") for c in merged}
+    added = 0
+    for c in new:
+        if c["command"] not in seen:
+            merged.append(c)
+            seen.add(c["command"])
+            added += 1
+    goal.acceptance_checks = merged
+    goal.acceptance_grounded = True
+    if effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"criteria_count": len(merged)},
+        observations=f"goal-acceptance: {len(merged)} check(s) (+{added} grounded)",
+        context_updates={"mission": mission, "goal_acceptance_checks": merged},
+    )
+
+
+async def action_apply_acceptance_verdict(step_input: StepInput) -> StepOutput:
+    """Fold the acceptance-check run into a deterministic verdict for the
+    evaluator. acceptance_ok means "no deterministic objection" — with zero
+    checks run it is vacuously True and acceptance_summary stays EMPTY (the
+    vacuous-verification rule: never render 0 checks as evidence of passing);
+    a required failure makes it False, which vetoes the evaluator's goal_met
+    in parse_evaluation's resolver.
+
+    Context: validation_results (optional).
+    Publishes: acceptance_ok, acceptance_summary.
+    """
+    from agent.formatters import format_validation_results
+
+    results = list(step_input.context.get("validation_results") or [])
+    if not results:
+        return StepOutput(
+            result={"acceptance_ok": True, "checks_run": 0},
+            observations="goal-acceptance: no checks ran — evaluator judges alone",
+            context_updates={"acceptance_ok": True, "acceptance_summary": ""},
+        )
+    ok = all(r.get("passed") for r in results if r.get("required", True))
+    summary = format_validation_results({"source": results}, {})
+    return StepOutput(
+        result={"acceptance_ok": ok, "checks_run": len(results)},
+        observations=(
+            f"goal-acceptance: {'PASS' if ok else 'FAIL'} ({len(results)} check(s))"
+        ),
+        context_updates={"acceptance_ok": ok, "acceptance_summary": summary},
+    )

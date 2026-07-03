@@ -1,0 +1,376 @@
+"""Ops → code_core ports: ledger, boot floor, asym-probe, stuck search, DoD.
+
+Pins the five incorporations from the ops flow set into code_core:
+  C1 workspace_ledger — project_ops report path records durable provisions;
+     the setup projection renders the "already done" block.
+  C2 boot-liveness floor — an exit-0 startup that printed an error trace
+     appends a REQUIRED fail and skips the UX session.
+  C3 asym-probe in quality_gate — solver-shaped objectives with passing
+     checks get a property test; checkpoint mode suppresses it.
+  C4 per-goal acceptance checks — derived once grounded per goal,
+     tighten-only, deterministic veto on the evaluator's goal_met, never
+     vacuous.
+  C5 stuck-goal web search — one-shot exa gate at >= 2 failed attempts;
+     hits stored on the goal and surfaced by the diagnose seed.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+import pytest
+
+from agent.actions.diagnosis_session_actions import (
+    action_goal_search_gate,
+    action_store_goal_search_findings,
+)
+from agent.actions.operations_actions import action_detect_solver_task
+from agent.actions.oracle_actions import action_check_boot_liveness
+from agent.actions.pipeline_actions import (
+    action_apply_acceptance_verdict,
+    action_gate_goal_acceptance,
+    action_store_goal_acceptance,
+)
+from agent.effects.mock import MockEffects
+from agent.models import FlowMeta, StepInput
+from agent.persistence.models import (
+    FailedAttempt,
+    GoalRecord,
+    MissionConfig,
+    MissionState,
+)
+
+
+def _mission(goals=None) -> MissionState:
+    return MissionState(
+        objective="build a text adventure",
+        status="active",
+        config=MissionConfig(working_directory="/tmp/x"),
+        goals=goals or [],
+    )
+
+
+def _si(effects=None, inputs=None, **ctx) -> StepInput:
+    return StepInput(
+        context=ctx,
+        inputs=inputs or {},
+        params={},
+        meta=FlowMeta(flow_name="x", step_id="x"),
+        effects=effects if effects is not None else MockEffects(),
+    )
+
+
+def _compiled():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "flows", "compiled.json")) as f:
+        return json.load(f)
+
+
+# ── C1: workspace ledger ──────────────────────────────────────────────
+
+
+def test_add_ledger_entry_dedupes_and_caps():
+    m = _mission()
+    assert m.add_ledger_entry(cycle=0, kind="provision", description="pip install x", status="success")
+    # Re-reporting the same successful provision: deduped.
+    assert not m.add_ledger_entry(cycle=1, kind="provision", description="pip install x", status="success")
+    # A FAILED retry of a known entry still records.
+    assert m.add_ledger_entry(cycle=2, kind="provision", description="pip install x", status="failed")
+    # dedupe=False (per-cycle narrative) always appends.
+    assert m.add_ledger_entry(cycle=3, kind="session", description="n", status="attempt", dedupe=False)
+    assert m.add_ledger_entry(cycle=4, kind="session", description="n", status="attempt", dedupe=False)
+    # Cap at 60, most recent kept.
+    for i in range(70):
+        m.add_ledger_entry(cycle=i, kind="provision", description=f"e{i}", status="success")
+    assert len(m.workspace_ledger) == 60
+
+
+@pytest.mark.asyncio
+async def test_project_ops_report_records_ledger_entry():
+    from agent.actions.reporting_actions import action_attach_directive_report
+
+    goal = GoalRecord(description="env", status="incomplete", type="structural")
+    m = _mission([goal])
+    fx = MockEffects(mission=m)
+    si = StepInput(
+        context={
+            "mission": m,
+            "last_goal_id": goal.id,
+            "last_status": "success",
+            "last_result": {
+                "directive_report": {
+                    "flow": "project_ops",
+                    "status": "success",
+                    "summary": "installed pytest and created pyproject.toml",
+                }
+            },
+        },
+        inputs={},
+        params={},
+        meta=FlowMeta(flow_name="mission_control", step_id="apply_last_result"),
+        effects=fx,
+    )
+    await action_attach_directive_report(si)
+    assert m.environment_verified is True
+    provisions = [e for e in m.workspace_ledger if e.kind == "provision"]
+    assert len(provisions) == 1
+    assert "installed pytest" in provisions[0].description
+
+
+def test_setup_projection_renders_ledger_block():
+    from agent.projections import MATERIALIZER_REGISTRY
+
+    m = _mission()
+    m.add_ledger_entry(cycle=0, kind="provision", description="pip install rich", status="success")
+    ctx = MATERIALIZER_REGISTRY["project_setup_context"](m, {})
+    assert "pip install rich" in ctx["workspace_ledger_block"]
+    assert "ALREADY DONE THIS MISSION" in ctx["workspace_ledger_block"]
+    # Empty ledger → empty block (section omits cleanly).
+    assert (
+        MATERIALIZER_REGISTRY["project_setup_context"](_mission(), {})[
+            "workspace_ledger_block"
+        ]
+        == ""
+    )
+
+
+# ── C2: boot-liveness floor ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_boot_liveness_flags_exit0_traceback():
+    out = await action_check_boot_liveness(
+        _si(terminal_output="starting...\nTraceback (most recent call last):\n  ...\nKeyError: 'x'")
+    )
+    assert out.result["boot_clean"] is False
+    vr = out.context_updates["validation_results"]
+    assert vr[0]["name"] == "boot_liveness" and vr[0]["required"] and not vr[0]["passed"]
+
+
+@pytest.mark.asyncio
+async def test_boot_liveness_clean_and_empty_are_safe():
+    clean = await action_check_boot_liveness(_si(terminal_output="app started on :8080"))
+    assert clean.result["boot_clean"] is True
+    assert clean.context_updates == {}
+    empty = await action_check_boot_liveness(_si())
+    assert empty.result["boot_clean"] is True
+
+
+def test_quality_gate_wiring_boot_and_probe():
+    steps = _compiled()["quality_gate"]["steps"]
+    # startup success → boot floor → UX; dirty boot → summarize.
+    assert steps["run_startup_check"]["resolver"]["rules"][0]["transition"] == "check_boot_liveness"
+    bl = {r["condition"]: r["transition"] for r in steps["check_boot_liveness"]["resolver"]["rules"]}
+    assert bl["result.boot_clean == true"] == "plan_ux_charter"
+    assert bl["true"] == "summarize"
+    # profile oracle → asym-probe gate → dep coverage.
+    assert steps["profile_oracle"]["resolver"]["rules"][0]["transition"] == "probe_gate"
+    pg = {r["condition"]: r["transition"] for r in steps["probe_gate"]["resolver"]["rules"]}
+    assert pg["result.run_probe == true"] == "probe_generate"
+    assert pg["true"] == "gather_dep_info"
+    assert steps["probe_run"]["resolver"]["rules"][0]["transition"] == "gather_dep_info"
+
+
+# ── C3: asym-probe gate for mission-less callers ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_detect_solver_falls_back_to_input_objective():
+    si = StepInput(
+        context={"validation_results": [{"passed": True, "required": True}]},
+        inputs={
+            "mission_objective": "Implement the function transform(grid) — examples: input [[1]] -> output [[1]]",
+            "mode": "completion",
+        },
+        params={},
+        meta=FlowMeta(flow_name="quality_gate", step_id="probe_gate"),
+        effects=MockEffects(),
+    )
+    out = await action_detect_solver_task(si)
+    assert out.result["run_probe"] is True
+    assert "transform(grid)" in out.context_updates["task_spec"]
+
+
+@pytest.mark.asyncio
+async def test_detect_solver_suppressed_in_checkpoint_mode():
+    si = StepInput(
+        context={"validation_results": [{"passed": True, "required": True}]},
+        inputs={
+            "mission_objective": "Implement the function transform(grid) — examples: input [[1]] -> output [[1]]",
+            "mode": "checkpoint",
+        },
+        params={},
+        meta=FlowMeta(flow_name="quality_gate", step_id="probe_gate"),
+        effects=MockEffects(),
+    )
+    out = await action_detect_solver_task(si)
+    assert out.result["run_probe"] is False
+
+
+# ── C4: per-goal acceptance checks ────────────────────────────────────
+
+
+def _functional_goal(**kw) -> GoalRecord:
+    return GoalRecord(description="saving works", type="functional", **kw)
+
+
+@pytest.mark.asyncio
+async def test_gate_acceptance_fires_once_per_eligible_goal():
+    goal = _functional_goal()
+    fx = MockEffects(mission=_mission([goal]))
+    out = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": goal.id}))
+    assert out.result["needs_derive"] is True
+    goal.acceptance_grounded = True
+    goal.acceptance_checks = [{"command": "test -s save.json", "name": "s", "required": True}]
+    out2 = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": goal.id}))
+    assert out2.result["needs_derive"] is False
+    assert out2.context_updates["goal_acceptance_checks"] == goal.acceptance_checks
+
+
+@pytest.mark.asyncio
+async def test_gate_acceptance_skips_structural_and_missing_goal():
+    goal = GoalRecord(description="module", type="structural")
+    fx = MockEffects(mission=_mission([goal]))
+    out = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": goal.id}))
+    assert out.result["needs_derive"] is False
+    out2 = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": "nope"}))
+    assert out2.result["needs_derive"] is False
+
+
+@pytest.mark.asyncio
+async def test_store_acceptance_merges_tighten_only_and_one_shots():
+    goal = _functional_goal()
+    goal.acceptance_checks = [{"command": "test -f a", "name": "a", "required": True}]
+    m = _mission([goal])
+    resp = ('```json\n{"checks": ['
+            '{"command": "test -s save.json", "description": "save exists"}, '
+            '{"command": "test -f a", "description": "dup"}]}\n```')
+    out = await action_store_goal_acceptance(
+        _si(MockEffects(), inputs={"goal_id": goal.id}, mission=m, inference_response=resp)
+    )
+    cmds = [c["command"] for c in goal.acceptance_checks]
+    assert cmds == ["test -f a", "test -s save.json"]  # prior kept, dup dropped
+    assert goal.acceptance_grounded is True
+    assert out.result["criteria_count"] == 2
+    # One-shot even on an empty parse (optional tightener, unlike ops' DoD).
+    g2 = _functional_goal()
+    await action_store_goal_acceptance(
+        _si(MockEffects(), inputs={"goal_id": g2.id}, mission=_mission([g2]), inference_response="junk")
+    )
+    assert g2.acceptance_grounded is True and g2.acceptance_checks == []
+
+
+@pytest.mark.asyncio
+async def test_acceptance_verdict_never_vacuous_and_vetoes():
+    # Zero checks: acceptance_ok True but summary EMPTY (no vacuous evidence).
+    none = await action_apply_acceptance_verdict(_si())
+    assert none.result["acceptance_ok"] is True
+    assert none.context_updates["acceptance_summary"] == ""
+    # A required failure → veto.
+    fail = await action_apply_acceptance_verdict(
+        _si(validation_results=[{"name": "s", "passed": False, "required": True}])
+    )
+    assert fail.result["acceptance_ok"] is False
+    assert fail.context_updates["acceptance_summary"]
+
+
+def test_interact_wiring_acceptance_rung():
+    steps = _compiled()["interact"]["steps"]
+    assert steps["run_session"]["resolver"]["rules"][0]["transition"] == "gate_acceptance"
+    ga = {r["condition"]: r["transition"] for r in steps["gate_acceptance"]["resolver"]["rules"]}
+    assert ga["result.needs_derive == true"] == "derive_acceptance"
+    assert ga["true"] == "run_acceptance_checks"
+    assert steps["store_acceptance"]["resolver"]["rules"][0]["transition"] == "run_acceptance_checks"
+    assert steps["run_acceptance_checks"]["action"] == "run_validation_checks"
+    assert steps["acceptance_verdict"]["resolver"]["rules"][0]["transition"] == "evaluate_outcome"
+    # The deterministic veto: goal_met AND acceptance_ok.
+    cond = steps["parse_evaluation"]["resolver"]["rules"][0]["condition"]
+    assert "acceptance_ok" in cond and "goal_met" in cond
+
+
+# ── C5: stuck-goal web search ─────────────────────────────────────────
+
+
+def _stuck_goal(n_attempts=2) -> GoalRecord:
+    g = _functional_goal()
+    for i in range(n_attempts):
+        g.failed_attempts.append(
+            FailedAttempt(target_file="a.py", flow="file_ops", reason=f"r{i}", diagnosis_summary="d")
+        )
+    return g
+
+
+@pytest.mark.asyncio
+async def test_goal_search_gate_fires_when_stuck_once():
+    goal = _stuck_goal(2)
+    fx = MockEffects(mission=_mission([goal]))
+    out = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
+    assert out.result["should_search"] is True
+    assert out.context_updates["search_queries"]
+    # One-shot: stored findings (even the no-results sentinel) stop re-search.
+    goal.search_findings = "(no relevant web results found)"
+    out2 = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
+    assert out2.result["should_search"] is False
+
+
+@pytest.mark.asyncio
+async def test_goal_search_gate_skips_fresh_goal():
+    goal = _stuck_goal(1)
+    fx = MockEffects(mission=_mission([goal]))
+    out = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
+    assert out.result["should_search"] is False
+
+
+@pytest.mark.asyncio
+async def test_store_goal_search_findings_and_sentinel():
+    goal = _stuck_goal(2)
+    m = _mission([goal])
+    out = await action_store_goal_search_findings(
+        _si(
+            MockEffects(),
+            inputs={"goal_id": goal.id},
+            mission=m,
+            raw_search_results=[{"url": "http://x", "content": "use pty not pipes for interactive apps"}],
+        )
+    )
+    assert out.result["n_hits"] == 1
+    assert "pty not pipes" in goal.search_findings
+    # Zero hits → sentinel so the gate one-shots.
+    g2 = _stuck_goal(2)
+    await action_store_goal_search_findings(
+        _si(MockEffects(), inputs={"goal_id": g2.id}, mission=_mission([g2]), raw_search_results=[])
+    )
+    assert g2.search_findings.startswith("(no relevant")
+
+
+def test_diagnose_wiring_search_arm():
+    flow = _compiled()["diagnose_issue"]
+    assert flow["entry"] == "search_gate"
+    steps = flow["steps"]
+    sg = {r["condition"]: r["transition"] for r in steps["search_gate"]["resolver"]["rules"]}
+    assert sg["result.should_search == true"] == "exa_search"
+    assert sg["true"] == "start_session"
+    assert steps["exa_search"]["resolver"]["rules"][0]["transition"] == "store_search_findings"
+    assert steps["store_search_findings"]["resolver"]["rules"][0]["transition"] == "start_session"
+
+
+@pytest.mark.asyncio
+async def test_diagnose_seed_surfaces_ledger_and_findings():
+    from agent.actions.diagnosis_session_actions import action_start_diagnosis_session
+
+    goal = _stuck_goal(2)
+    goal.search_findings = "- http://x\n  use pty not pipes for interactive apps"
+    m = _mission([goal])
+    m.add_ledger_entry(cycle=0, kind="provision", description="pip install rich", status="success")
+    fx = MockEffects(mission=m)
+    out = await action_start_diagnosis_session(
+        _si(fx, inputs={"mission_id": m.id, "goal_id": goal.id}, goal_description="saving works")
+    )
+    assert out.result["session_started"] is True
+    # The seed is queued as a session injection in context_updates.
+    injected = "\n".join(
+        str(v) for v in out.context_updates.values() if isinstance(v, (str, list))
+    )
+    assert "ALREADY DONE THIS MISSION" in injected
+    assert "pty not pipes" in injected

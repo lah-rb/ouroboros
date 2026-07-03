@@ -420,6 +420,12 @@ def render_project_setup_context(params: dict, namespaces: dict) -> str:
         for df in data_files:
             lines.append(f"  {df['file']}: {df['structure']}")
 
+    # Durable-effects memory (workspace_ledger): what prior cycles already
+    # installed/provisioned — plan on top of it, don't repeat it.
+    ledger_block = ctx.get("workspace_ledger_block", "")
+    if ledger_block:
+        lines.append("\n" + ledger_block)
+
     return "\n".join(lines)
 
 

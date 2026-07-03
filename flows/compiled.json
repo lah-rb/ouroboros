@@ -1917,6 +1917,91 @@
       "project_ops"
     ],
     "steps": {
+      "search_gate": {
+        "action": "goal_search_gate",
+        "description": "Gate the stuck-goal web search (>= 2 failed attempts, once)",
+        "context": {
+          "required": [],
+          "optional": [
+            "error_headline"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.should_search == true",
+              "transition": "exa_search"
+            },
+            {
+              "condition": "true",
+              "transition": "start_session"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "search_queries"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "exa_search": {
+        "action": "exa_search",
+        "description": "Web-search the stuck problem via the Exa MCP",
+        "context": {
+          "required": [],
+          "optional": [
+            "search_queries"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "store_search_findings"
+            }
+          ]
+        },
+        "publishes": [
+          "raw_search_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "store_search_findings": {
+        "action": "store_goal_search_findings",
+        "description": "Store the exa hits on the goal (one-shot sentinel)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "raw_search_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "start_session"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
       "start_session": {
         "action": "start_diagnosis_session",
         "description": "Open session; inject Goal / What happened / What crashed / Transcript / Project / Prior attempts",
@@ -2410,7 +2495,7 @@
         }
       }
     },
-    "entry": "start_session",
+    "entry": "search_gate",
     "overflow": {
       "strategy": "split",
       "fallback": "reorganize"
@@ -4513,10 +4598,187 @@
           "rules": [
             {
               "condition": "true",
+              "transition": "gate_acceptance"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "gate_acceptance": {
+        "action": "gate_goal_acceptance",
+        "description": "Gate the per-goal acceptance-check derivation (once per goal)",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.needs_derive == true",
+              "transition": "derive_acceptance"
+            },
+            {
+              "condition": "true",
+              "transition": "run_acceptance_checks"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "goal_acceptance_checks"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "derive_acceptance": {
+        "action": "inference",
+        "description": "Derive acceptance checks grounded in the explored session",
+        "context": {
+          "required": [],
+          "optional": [
+            "terminal_output"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "interact/derive_goal_acceptance",
+          "context_keys": [
+            "session_tail"
+          ],
+          "input_keys": [
+            "flow_directive"
+          ]
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_session_tail",
+            "output_key": "session_tail",
+            "params": {
+              "source": {
+                "$ref": "context.terminal_output"
+              },
+              "max_chars": 3000
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.1"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "store_acceptance"
+            },
+            {
+              "condition": "true",
+              "transition": "run_acceptance_checks"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "store_acceptance": {
+        "action": "store_goal_acceptance",
+        "description": "Merge the derived checks onto the goal (tighten-only, one-shot)",
+        "context": {
+          "required": [
+            "mission",
+            "inference_response"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "run_acceptance_checks"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "goal_acceptance_checks"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_acceptance_checks": {
+        "action": "run_validation_checks",
+        "description": "Run the goal's stored acceptance checks against live state",
+        "context": {
+          "required": [],
+          "optional": [
+            "goal_acceptance_checks",
+            "validation_strategy"
+          ]
+        },
+        "params": {
+          "max_checks": 6
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_completion_criteria",
+            "output_key": "validation_strategy",
+            "params": {
+              "source": {
+                "$ref": "context.goal_acceptance_checks"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "acceptance_verdict"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "acceptance_verdict": {
+        "action": "apply_acceptance_verdict",
+        "description": "Fold the check run into a deterministic verdict for the evaluator",
+        "context": {
+          "required": [],
+          "optional": [
+            "validation_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
               "transition": "evaluate_outcome"
             }
           ]
         },
+        "publishes": [
+          "acceptance_ok",
+          "acceptance_summary"
+        ],
+        "effects": [],
         "terminal": false
       },
       "evaluate_outcome": {
@@ -4526,7 +4788,8 @@
           "required": [],
           "optional": [
             "terminal_output",
-            "inference_session_id"
+            "inference_session_id",
+            "acceptance_summary"
           ]
         },
         "params": {},
@@ -4543,6 +4806,14 @@
               "ref": {
                 "$ref": "context.terminal_output"
               },
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.acceptance_summary"
+              },
+              "title": "Acceptance checks",
               "required": false
             },
             {
@@ -4600,7 +4871,7 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.get('goal_met') == true",
+              "condition": "result.get('goal_met') == true and context.get('acceptance_ok', true) == true",
               "transition": "end_eval_session_success"
             },
             {
@@ -7634,6 +7905,108 @@
           "rules": [
             {
               "condition": "true",
+              "transition": "probe_gate"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_results"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "probe_gate": {
+        "action": "detect_solver_task",
+        "description": "Gate the asym-probe to function+examples objectives (completion mode)",
+        "context": {
+          "required": [],
+          "optional": [
+            "validation_results",
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.run_probe == true",
+              "transition": "probe_generate"
+            },
+            {
+              "condition": "true",
+              "transition": "gather_dep_info"
+            }
+          ]
+        },
+        "publishes": [
+          "task_spec"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "probe_generate": {
+        "action": "inference",
+        "description": "Generate a property-based differential test for the candidate",
+        "context": {
+          "required": [],
+          "optional": [
+            "task_spec"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "ops/generate_property_test",
+          "context_keys": [
+            "task_spec"
+          ],
+          "input_keys": []
+        },
+        "config": {
+          "temperature": "t*0.2"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "probe_run"
+            },
+            {
+              "condition": "true",
+              "transition": "gather_dep_info"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "probe_run": {
+        "action": "run_property_probe",
+        "description": "Run the property test; append PASS/FAIL as a required check",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": [
+            "validation_results"
+          ]
+        },
+        "params": {
+          "working_directory": {
+            "$ref": "input.working_directory"
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
               "transition": "gather_dep_info"
             }
           ]
@@ -7806,6 +8179,33 @@
           "rules": [
             {
               "condition": "result.status == 'success'",
+              "transition": "check_boot_liveness"
+            },
+            {
+              "condition": "true",
+              "transition": "summarize"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "check_boot_liveness": {
+        "action": "check_boot_liveness",
+        "description": "Deterministic floor: error trace in exit-0 startup output",
+        "context": {
+          "required": [],
+          "optional": [
+            "terminal_output",
+            "validation_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.boot_clean == true",
               "transition": "plan_ux_charter"
             },
             {
@@ -7814,6 +8214,10 @@
             }
           ]
         },
+        "publishes": [
+          "validation_results"
+        ],
+        "effects": [],
         "terminal": false
       },
       "plan_ux_charter": {

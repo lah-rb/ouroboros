@@ -527,6 +527,38 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
                 )
         parts.append("")
 
+    # ── ## Already done / ## External findings (ops ports) ─────
+    # Load the mission once (stat-cached) and surface two durable-memory
+    # blocks the dispatch plumbing doesn't thread:
+    #   workspace_ledger — what prior cycles installed/provisioned, so an
+    #     environment-flavored diagnosis doesn't recommend re-doing it;
+    #   goal.search_findings — the stuck-goal web-search hits (one-shot,
+    #     stored by store_goal_search_findings) as NEW INFORMATION.
+    try:
+        mission = await effects.load_mission()
+    except Exception:
+        mission = None
+    if mission is not None:
+        from agent.formatters import format_workspace_ledger
+
+        ledger_block = format_workspace_ledger(
+            {"source": getattr(mission, "workspace_ledger", None) or []}, {}
+        )
+        if ledger_block:
+            parts.append(ledger_block)
+            parts.append("")
+        goal_id = str(step_input.inputs.get("goal_id", "") or "")
+        goal = next((g for g in mission.goals if g.id == goal_id), None)
+        findings = (getattr(goal, "search_findings", "") or "").strip()
+        if findings and not findings.startswith("(no relevant"):
+            parts.append("## External findings (web search)")
+            parts.append(
+                "Fresh information from a web search on this stuck problem — "
+                "weigh it against the local evidence:"
+            )
+            parts.append(findings)
+            parts.append("")
+
     # Final safety net: force every `parts` entry to str before join.
     # Upstream context plumbing has surprised us with list shapes more
     # than once — the earlier _as_text() coercion handles the known
@@ -1322,4 +1354,89 @@ async def action_systemic_scan(step_input: StepInput) -> StepOutput:
             "related_symbols": related,
             "change_spec": change_spec,
         },
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Stuck-goal external search (ops port — the anti-give-up dynamic arm)
+# ══════════════════════════════════════════════════════════════════════
+# Mirrors ops_task's exa_probe_gate → exa_search → store_search_findings,
+# scoped per GOAL: when a goal has looped through the diagnose/fix cycle
+# without completing (len(failed_attempts) >= 2) and hasn't been searched,
+# pull in NEW information the agent can't derive alone. One-shot via
+# goal.search_findings (a sentinel even on zero hits); the seed builder
+# (start_diagnosis_session) surfaces the stored hits every later diagnose.
+
+
+async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
+    """Gate the stuck-goal web search. Fires once per goal when the goal has
+    >= 2 failed attempts and no stored findings; derives a focused query from
+    the goal description + current headline (paths/backticked literals
+    stripped — they poison web queries).
+
+    Inputs: goal_id.  Result: should_search.
+    Publishes: mission, search_queries (when firing).
+    """
+    effects = step_input.effects
+    goal_id = str(step_input.inputs.get("goal_id", "") or "")
+    try:
+        mission = await effects.load_mission() if effects else None
+    except Exception:
+        mission = None
+    goal = next(
+        (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id), None
+    )
+    if goal is None:
+        return StepOutput(
+            result={"should_search": False},
+            observations="goal-search: no goal — skip",
+        )
+    attempts = len(getattr(goal, "failed_attempts", None) or [])
+    already = bool((getattr(goal, "search_findings", "") or "").strip())
+    if attempts < 2 or already:
+        return StepOutput(
+            result={"should_search": False},
+            observations=f"goal-search: skip (attempts={attempts}, searched={already})",
+        )
+    seed = f"{goal.description} {step_input.context.get('error_headline', '') or ''}"
+    cleaned = re.sub(r"[/\\]\S+|`[^`]*`", " ", seed)
+    query = re.sub(r"\s+", " ", cleaned).strip()[:200] or goal.description[:200]
+    return StepOutput(
+        result={"should_search": True},
+        observations=f"goal-search: searching (attempts={attempts})",
+        context_updates={"mission": mission, "search_queries": [query]},
+    )
+
+
+async def action_store_goal_search_findings(step_input: StepInput) -> StepOutput:
+    """Format the exa hits and store them on the GOAL so every later diagnose
+    seed surfaces them. One-shot guard: sets goal.search_findings even on zero
+    hits so the gate never re-searches.
+
+    Context: mission, raw_search_results.  Inputs: goal_id.  Publishes: mission.
+    """
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    goal_id = str(step_input.inputs.get("goal_id", "") or "")
+    goal = next(
+        (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id), None
+    )
+    if goal is None:
+        return StepOutput(result={"n_hits": 0}, observations="goal-search: no goal")
+    hits = step_input.context.get("raw_search_results") or []
+    lines = []
+    for h in hits[:5]:
+        if not isinstance(h, dict):
+            continue
+        url = str(h.get("url", "")).strip()
+        body = re.sub(r"\s+", " ", str(h.get("content", "") or "")).strip()[:500]
+        if body:
+            lines.append(f"- {url}\n  {body}")
+    goal.search_findings = "\n".join(lines) or "(no relevant web results found)"
+    if effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"n_hits": len(lines)},
+        observations=f"goal-search: stored {len(lines)} finding(s)",
+        context_updates={"mission": mission},
     )

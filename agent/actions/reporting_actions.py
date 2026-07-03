@@ -500,6 +500,27 @@ async def action_attach_directive_report(step_input: StepInput) -> StepOutput:
                     "Environment verified via project_ops (%s)",
                     report_data.get("status"),
                 )
+            # Workspace ledger (ops port): one durable provision line per
+            # project_ops run, so setup planning and diagnose seeds see what
+            # the environment already holds instead of re-deriving/re-doing
+            # it. The coarse environment_verified flag says "ran once"; the
+            # ledger says WHAT happened, per cycle, success or failure.
+            if hasattr(mission, "add_ledger_entry"):
+                from agent.trace import get_step_context
+
+                sc = get_step_context() or {}
+                mission.add_ledger_entry(
+                    cycle=int(sc.get("cycle", 0) or 0),
+                    kind="provision",
+                    description=str(
+                        report_data.get("summary") or "project environment setup"
+                    ),
+                    status=(
+                        "success"
+                        if report_data.get("status") == "success"
+                        else "failed"
+                    ),
+                )
 
     # Archive sweep — the single choke point for all goal-completion
     # sites: completed goals' reports/attempts RELOCATE to append-only

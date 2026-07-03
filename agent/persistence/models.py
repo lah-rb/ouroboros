@@ -219,6 +219,19 @@ class GoalRecord(BaseModel):
     # the default "test this capability works" verification. Composes with
     # interaction_mode="exploratory". See action_functional_sweep_next.
     capability_absent: bool = False
+    # Per-goal grounded acceptance checks (ops port — TaskState.completion_criteria
+    # analog): [{command, name, required}] shell checks derived ONCE per goal,
+    # grounded in the explored session (interact's derive_acceptance step), then
+    # run each verification pass. A TIGHTENER on the LLM evaluator's goal_met —
+    # never the sole certifier, and optional (empty = evaluator-only, the
+    # pre-port behavior). acceptance_grounded is the one-shot guard.
+    acceptance_checks: list[dict] = Field(default_factory=list)
+    acceptance_grounded: bool = False
+    # Stuck-goal external search (ops port — TaskState.search_findings analog):
+    # exa hits surfaced into the diagnose seed as NEW INFORMATION once a goal
+    # has looped (len(failed_attempts) >= 2). One-shot sentinel — set once
+    # (even to the no-results marker) so the gate never re-searches.
+    search_findings: str = ""
 
 
 class FailedAttempt(BaseModel):
@@ -773,9 +786,11 @@ class MissionState(BaseModel):
     # exceed their caps. Additive defaults; nothing is ever deleted.
     notes_archived: int = 0
     dispatch_archived: int = 0
-    # Ops-task workspace ledger — durable effects (installs, downloads, files,
-    # checks) recorded per cycle so later cycles build on prior progress instead
-    # of re-doing it. Additive default keeps non-ops mission.json files loading.
+    # Workspace ledger — durable effects (installs, downloads, files, checks)
+    # recorded per cycle so later cycles build on prior progress instead of
+    # re-doing it. Born in the ops flow set; code_core writes it from the
+    # project_ops report path and renders it into setup planning + diagnose
+    # seeds. Additive default keeps old mission.json files loading.
     workspace_ledger: list[WorkspaceLedgerEntry] = Field(default_factory=list)
     environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
     # How many times this mission has been reopened after reaching a terminal
@@ -794,6 +809,46 @@ class MissionState(BaseModel):
     updated_at: str = Field(default_factory=_now_iso)
     config: MissionConfig
     schema_version: int = 6
+
+    def add_ledger_entry(
+        self,
+        *,
+        cycle: int,
+        kind: str,
+        description: str,
+        status: str,
+        details: dict | None = None,
+        dedupe: bool = True,
+    ) -> bool:
+        """Append a durable workspace effect to the ledger, deduped and capped.
+
+        Dedupe (default on — pass dedupe=False for per-cycle narrative entries
+        like ops session notes): a (kind, description) pair already recorded
+        with a non-failed outcome is not re-appended (a cycle re-reporting the
+        same install must not bloat the ledger); a FAILED retry of a known
+        entry still records. The window is bounded at 60 (most recent kept).
+        Returns True when an entry was appended.
+        """
+        description = (description or "").strip()[:200]
+        if not description:
+            return False
+        if dedupe and status != "failed" and any(
+            e.kind == kind and e.description == description
+            for e in self.workspace_ledger
+        ):
+            return False
+        self.workspace_ledger.append(
+            WorkspaceLedgerEntry(
+                cycle=cycle,
+                kind=kind,
+                description=description,
+                status=status,
+                details=details or {},
+            )
+        )
+        if len(self.workspace_ledger) > 60:
+            del self.workspace_ledger[:-60]
+        return True
 
 
 # ── Events ────────────────────────────────────────────────────────────

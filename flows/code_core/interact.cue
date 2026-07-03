@@ -18,7 +18,10 @@
 // The exploratory path crafts an execution_persona for run_session —
 // telling the model WHO it is and WHAT to look for, not WHAT commands
 // to run. The persona planner reads the project structure to determine
-// how to launch and interact with the program.
+// how to launch and interact with the program. After the session, the
+// per-goal acceptance rung (ops definition-of-done port) derives shell
+// checks ONCE grounded in the observed behavior, runs them each pass,
+// and can deterministically veto a credulous goal_met.
 
 package ouroboros
 
@@ -243,10 +246,96 @@ interact: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "true", transition: "evaluate_outcome"},
+					{condition: "true", transition: "gate_acceptance"},
 				]
 			}
 			publishes: ["terminal_output", "inference_session_id"]
+		}
+
+		// ── Per-goal grounded acceptance checks (ops DoD port) ─────
+		// Once per functional/quality goal, derive shell acceptance checks
+		// GROUNDED in what the session just showed (a durable artifact, a
+		// produced file, a state the goal requires), store them tighten-only
+		// on the goal, then run them every verification pass. The result is
+		// a deterministic TIGHTENER on the evaluator: a required failure
+		// vetoes a credulous goal_met; zero checks means the evaluator
+		// judges alone (never vacuous verification).
+		gate_acceptance: #StepDefinition & {
+			action:      "gate_goal_acceptance"
+			description: "Gate the per-goal acceptance-check derivation (once per goal)"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.needs_derive == true", transition: "derive_acceptance"},
+					{condition: "true", transition: "run_acceptance_checks"},
+				]
+			}
+			publishes: ["mission", "goal_acceptance_checks"]
+		}
+
+		derive_acceptance: #StepDefinition & {
+			action:      "inference"
+			description: "Derive acceptance checks grounded in the explored session"
+			context: optional: ["terminal_output"]
+			prompt_template: {
+				template: "interact/derive_goal_acceptance"
+				context_keys: ["session_tail"]
+				input_keys: ["flow_directive"]
+			}
+			pre_compute: [
+				{formatter: "format_session_tail", output_key: "session_tail"
+					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
+			]
+			config: temperature: "t*0.1"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "store_acceptance"},
+					{condition: "true", transition: "run_acceptance_checks"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		store_acceptance: #StepDefinition & {
+			action:      "store_goal_acceptance"
+			description: "Merge the derived checks onto the goal (tighten-only, one-shot)"
+			context: required: ["mission", "inference_response"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "run_acceptance_checks"}]
+			}
+			publishes: ["mission", "goal_acceptance_checks"]
+		}
+
+		run_acceptance_checks: #StepDefinition & {
+			action:      "run_validation_checks"
+			description: "Run the goal's stored acceptance checks against live state"
+			context: {
+				optional: ["goal_acceptance_checks", "validation_strategy"]
+			}
+			pre_compute: [{
+				formatter:  "format_completion_criteria"
+				output_key: "validation_strategy"
+				params: {source: {$ref: "context.goal_acceptance_checks"}}
+			}]
+			params: max_checks: 6
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "acceptance_verdict"}]
+			}
+			publishes: ["validation_results"]
+		}
+
+		acceptance_verdict: #StepDefinition & {
+			action:      "apply_acceptance_verdict"
+			description: "Fold the check run into a deterministic verdict for the evaluator"
+			context: optional: ["validation_results"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "evaluate_outcome"}]
+			}
+			publishes: ["acceptance_ok", "acceptance_summary"]
 		}
 
 		// ══════════════════════════════════════════════════════════
@@ -266,7 +355,7 @@ interact: #FlowDefinition & {
 			action:      "inference"
 			description: "Evaluate whether the product interaction achieved its goal"
 			context: {
-				optional: ["terminal_output", "inference_session_id"]
+				optional: ["terminal_output", "inference_session_id", "acceptance_summary"]
 			}
 			turn: #Turn & {
 				response_shape: "json_document"
@@ -276,6 +365,10 @@ interact: #FlowDefinition & {
 					// context (inference_session_id) still carries the history
 					// and terminal_output isn't separately needed.
 					{type: "evidence", ref:         {$ref: "context.terminal_output"}},
+					// Deterministic acceptance-check results (empty when no
+					// checks ran — omits cleanly). A required failure here is
+					// hard evidence the goal's end-state is not met.
+					{type: "evidence", ref:         {$ref: "context.acceptance_summary"}, title: "Acceptance checks"},
 					{type: "problem", template:     "interact/test_objective_bounded"},
 					{type: "instruction", template: "interact/evaluate_rules"},
 					{type: "envelope"},
@@ -296,6 +389,10 @@ interact: #FlowDefinition & {
 
 		// Parse the evaluation JSON to extract goal_met as a typed boolean.
 		// Replaces fragile string-matching in the resolver condition.
+		// acceptance_ok is the deterministic veto (ops "checks pass AND judge
+		// confirms" rule): a required acceptance-check failure blocks success
+		// even when the evaluator says goal_met. Defaults True when no checks
+		// ran, so evaluator-only goals behave exactly as before.
 		parse_evaluation: #StepDefinition & {
 			action:      "parse_inference_json"
 			description: "Extract goal_met, headline, summary from evaluation response"
@@ -307,7 +404,7 @@ interact: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.get('goal_met') == true", transition: "end_eval_session_success"},
+					{condition: "result.get('goal_met') == true and context.get('acceptance_ok', true) == true", transition: "end_eval_session_success"},
 					{condition: "true", transition: "end_eval_session_failure"},
 				]
 			}

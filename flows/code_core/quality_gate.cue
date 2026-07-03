@@ -150,6 +150,63 @@ quality_gate: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
+				rules: [{condition: "true", transition: "probe_gate"}]
+			}
+			publishes: ["validation_results"]
+		}
+
+		// ── Tiered asym-probe (ops port — property-based differential test) ──
+		// Only rule-inference objectives (implement a callable pinned by worked
+		// examples that may under-determine the rule) with ALL deterministic
+		// checks passing reach the probe; everything else — including
+		// checkpoint mode (the action gates on the mode input) — skips at zero
+		// inference cost. A property violation appends a REQUIRED fail, so the
+		// summarize/evaluate pass fails the gate with the counterexample as
+		// evidence and the fix loop gets it as a finding.
+		probe_gate: #StepDefinition & {
+			action:      "detect_solver_task"
+			description: "Gate the asym-probe to function+examples objectives (completion mode)"
+			context: optional: ["validation_results", "mission"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.run_probe == true", transition: "probe_generate"},
+					{condition: "true", transition: "gather_dep_info"},
+				]
+			}
+			publishes: ["task_spec"]
+		}
+
+		probe_generate: #StepDefinition & {
+			action:      "inference"
+			description: "Generate a property-based differential test for the candidate"
+			context: optional: ["task_spec"]
+			prompt_template: {
+				template: "ops/generate_property_test"
+				context_keys: ["task_spec"]
+				input_keys: []
+			}
+			config: temperature: "t*0.2"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "probe_run"},
+					{condition: "true", transition: "gather_dep_info"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		probe_run: #StepDefinition & {
+			action:      "run_property_probe"
+			description: "Run the property test; append PASS/FAIL as a required check"
+			context: {
+				required: ["inference_response"]
+				optional: ["validation_results"]
+			}
+			params: working_directory: {$ref: "input.working_directory"}
+			resolver: {
+				type: "rule"
 				rules: [{condition: "true", transition: "gather_dep_info"}]
 			}
 			publishes: ["validation_results"]
@@ -263,11 +320,34 @@ quality_gate: #FlowDefinition & {
 					// command completed; if the program runs-but-crashes the explorer simply
 					// reports the crash (a valid quality finding), and a terminal that fails
 					// to start yields status!='success' and still skips. Robust, no _returns.
-					{condition: "result.status == 'success'", transition: "plan_ux_charter"},
+					{condition: "result.status == 'success'", transition: "check_boot_liveness"},
 					{condition: "true", transition: "summarize"},
 				]
 			}
 			publishes: ["terminal_output"]
+		}
+
+		// Phase 2a-ii: boot-liveness floor (ops sanity-rung port). status ==
+		// 'success' only proves the startup COMMAND completed — an exit-0 boot
+		// that printed a traceback would still reach the UX session and a
+		// credulous summarize. Scan the captured output with the shared
+		// liveness predicate; an error trace appends a REQUIRED fail and
+		// routes straight to summarize (fail with the trace as evidence, do
+		// not explore a program that never came up). Zero inference.
+		check_boot_liveness: #StepDefinition & {
+			action:      "check_boot_liveness"
+			description: "Deterministic floor: error trace in exit-0 startup output"
+			context: {
+				optional: ["terminal_output", "validation_results"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.boot_clean == true", transition: "plan_ux_charter"},
+					{condition: "true", transition: "summarize"},
+				]
+			}
+			publishes: ["validation_results"]
 		}
 
 		// Phase 2b-i: Author the EXPLORER charter (quality gate's counterpart

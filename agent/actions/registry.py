@@ -337,6 +337,7 @@ def build_action_registry() -> ActionRegistry:
     )
     from agent.actions.oracle_actions import (
         action_check_artifact_oracles,
+        action_check_boot_liveness,
         action_check_output_format,
         action_check_output_sanity,
         action_check_profile_oracle,
@@ -396,6 +397,8 @@ def build_action_registry() -> ActionRegistry:
     registry.register("check_output_format", action_check_output_format)
     # Combined artifact oracle: sanity + format + profile rungs, one artifact read
     registry.register("check_artifact_oracles", action_check_artifact_oracles)
+    # Boot-liveness floor (quality gate): error trace in exit-0 startup output
+    registry.register("check_boot_liveness", action_check_boot_liveness)
     # Grounded output-format derivation ("reground" = historical name): gate fires
     # once, store persists the spec + marks grounded.
     registry.register("gate_reground_output_format", action_gate_reground_output_format)
@@ -553,11 +556,22 @@ def build_action_registry() -> ActionRegistry:
     registry.register("parse_inference_json", action_parse_inference_json)
 
     # Deterministic evaluation (interact flow — run_commands path)
-    from agent.actions.pipeline_actions import action_evaluate_deterministic_result
+    from agent.actions.pipeline_actions import (
+        action_apply_acceptance_verdict,
+        action_evaluate_deterministic_result,
+        action_gate_goal_acceptance,
+        action_store_goal_acceptance,
+    )
 
     registry.register(
         "evaluate_deterministic_result", action_evaluate_deterministic_result
     )
+    # Per-goal grounded acceptance checks (ops definition-of-done port):
+    # gate fires the derivation once per goal, store merges tighten-only,
+    # verdict folds the check run into the evaluator's decision.
+    registry.register("gate_goal_acceptance", action_gate_goal_acceptance)
+    registry.register("store_goal_acceptance", action_store_goal_acceptance)
+    registry.register("apply_acceptance_verdict", action_apply_acceptance_verdict)
 
     # ── Tier Records: Reporting Chain ────────────────────────────────
     from agent.actions.reporting_actions import (
@@ -575,6 +589,8 @@ def build_action_registry() -> ActionRegistry:
         action_start_diagnosis_session,
         action_execute_symbol_trace,
         action_conclude_diagnosis,
+        action_goal_search_gate,
+        action_store_goal_search_findings,
         action_systemic_scan,
     )
 
@@ -582,5 +598,9 @@ def build_action_registry() -> ActionRegistry:
     registry.register("execute_symbol_trace", action_execute_symbol_trace)
     registry.register("conclude_diagnosis", action_conclude_diagnosis)
     registry.register("systemic_scan", action_systemic_scan)
+    # Stuck-goal external search (ops port): fires exa once per looping goal,
+    # stores the hits on the goal; the diagnose seed surfaces them.
+    registry.register("goal_search_gate", action_goal_search_gate)
+    registry.register("store_goal_search_findings", action_store_goal_search_findings)
 
     return registry

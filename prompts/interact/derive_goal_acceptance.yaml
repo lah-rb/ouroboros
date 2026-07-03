@@ -1,0 +1,79 @@
+# Prompt template: interact/derive_goal_acceptance
+#
+# Per-goal grounded acceptance checks (ops definition-of-done port). Derived
+# ONCE per functional/quality goal, right after the interact session has
+# explored the live program, so the checks are grounded in observed behavior
+# rather than the goal text alone. They are a TIGHTENER on the LLM evaluator's
+# goal_met verdict — a required failure vetoes a credulous pass; passing
+# checks never certify the goal on their own.
+#
+# Pre-computed: session_tail.  Inputs: flow_directive (the goal directive).
+
+id: interact/derive_goal_acceptance
+description: "Derive per-goal acceptance checks grounded in the explored session"
+
+sections:
+
+  - id: system_role
+    content: |
+      You define ACCEPTANCE CHECKS for the goal in the ---GOAL--- block —
+      shell checks that confirm its observable end-state, informed by the live
+      session below. These are shell CHECKS (a "checks" array), NOT a command
+      to run — never emit an action like {"action": ...}. Your output is
+      parsed as JSON. Return ONLY a JSON object inside a fenced code block —
+      no commentary.
+
+  - id: goal
+    content: |
+      ---GOAL---
+      {input.flow_directive}
+      ---END GOAL---
+
+  - id: exploration
+    content: |
+      ---WHAT THE SESSION HAS SHOWN (the live program's actual behavior)---
+      {context.session_tail}
+      ---END SESSION---
+
+  - id: instructions
+    content: |
+      Produce checks that inspect OBSERVABLE END-STATE (files exist and are
+      non-empty, an artifact the goal produces, an exit code, a port probe) —
+      NOT the steps taken. Each check exits 0 iff a required condition holds.
+      Prefer the smallest set of necessary, independent conditions (0-3), run
+      in the working directory with standard tools.
+
+      These checks are a SCREEN layered under a separate behavioral evaluator
+      that judges the session itself — you do NOT have to prove the behavior
+      correct, only pin the durable artifacts/state the goal requires. Two
+      rules keep the screen safe (a failing check VETOES an otherwise-passing
+      evaluation, so a wrong check is the only way to harm a correct result):
+
+      1. ROBUST PREDICATES ONLY: `test -f path`, `test -s path`,
+         `test -x path`, an exit code, a port probe, or
+         `grep -qF '<exact text>' path` ONLY when the goal STATES that
+         literal.
+      2. NEVER RE-DERIVE THE PROGRAM'S OWN WORK inside a check and compare —
+         a slightly-wrong re-derivation fails a correct result forever.
+
+      Most purely-behavioral goals (interactive flows, conversational
+      output) have NO robust shell-checkable end-state — for those return
+      {"checks": []}; adding nothing is correct and the evaluator judges
+      alone.
+
+  - id: output_format
+    content: |
+      Return a JSON object with a "checks" array. The example is from an
+      UNRELATED goal — it shows the SHAPE only.
+
+      ✅ CORRECT (the goal requires a save file to be produced):
+      ```json
+      {"checks": [{"command": "test -s saves/slot1.json", "description": "the save file exists and is non-empty"}]}
+      ```
+
+      ❌ WRONG — re-derives the answer inside the check:
+      ```json
+      {"checks": [{"command": "[ \"$(recompute)\" = \"$(cat out.txt)\" ]", "description": "value matches"}]}
+      ```
+
+      Return ONLY the fenced JSON object.
