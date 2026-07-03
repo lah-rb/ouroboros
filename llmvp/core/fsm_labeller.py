@@ -209,7 +209,9 @@ def _bracket_think_start_phase(atoms: list["Atom"]) -> "Phase":
     return Phase.CONTENT
 
 
-def label_atoms(atoms: list[Atom], family: str = "harmony") -> list[tuple[str, str]]:
+def label_atoms(
+    atoms: list[Atom], family: str = "harmony", single_turn: bool = True
+) -> list[tuple[str, str]]:
     """Label each atom with D/T/C/E using an explicit FSM.
 
     Args:
@@ -222,6 +224,22 @@ def label_atoms(atoms: list[Atom], family: str = "harmony") -> list[tuple[str, s
                 markers in the generation (tekken, mistral) start in
                 CONTENT immediately since the whole generation is
                 assistant output.
+        single_turn: The stream is ONE logical generation (the default —
+                every extraction call site labels a single model turn).
+                Seals the labelling after the first NON-EMPTY content
+                phase closes: everything past that close labels D. A
+                model that keeps generating after its final answer is
+                self-playing (the a7ff rambling pathology — it chains
+                fake turns, hallucinates the next observation, and can
+                spiral into a degenerate loop; see the astropy-2 runaway
+                capture 20260703T152322). Without the seal, extraction
+                CONCATENATED every "final" channel, so a completed
+                ramble polluted the real answer with the hallucination.
+                An EMPTY first content phase does not seal (the e75
+                lesson: analysis→final legitimately reopens the
+                assistant role mid-turn, and a truncated/empty final
+                must not block a later real one). Pass False to label a
+                multi-turn transcript verbatim.
 
     Returns:
         List of (atom_text, label) pairs suitable for downstream phase
@@ -282,6 +300,13 @@ def label_atoms(atoms: list[Atom], family: str = "harmony") -> list[tuple[str, s
 
     result: list[tuple[str, str]] = []
 
+    # single_turn seal state: content_seen flips on the first non-whitespace
+    # C-labelled atom; sealed flips when a non-empty content phase CLOSES
+    # (MARKER_END / MARKER_IM_END). Once sealed, every later atom labels D —
+    # post-answer self-play is structural noise, never content.
+    content_seen = False
+    sealed = False
+
     # When we recognize a compound marker like <think>, </think>, [INST],
     # [/INST], [THINK], [/THINK], the individual single-char atoms that
     # make up that compound must be labelled D even though they're not
@@ -312,6 +337,11 @@ def label_atoms(atoms: list[Atom], family: str = "harmony") -> list[tuple[str, s
         if cat == ObsCategory.EOS:
             result.append((atom.text, "E"))
             pending_close_cats = set()
+            continue
+
+        # ── Sealed (single_turn): the answer already completed ────
+        if sealed:
+            result.append((atom.text, "D"))
             continue
 
         # ── Structural atoms always emit D, regardless of phase ──
@@ -396,6 +426,8 @@ def label_atoms(atoms: list[Atom], family: str = "harmony") -> list[tuple[str, s
 
         # ── ChatML <|im_end|> → back to DELIM ────────────────────
         if cat == ObsCategory.MARKER_IM_END:
+            if single_turn and phase == Phase.CONTENT and content_seen:
+                sealed = True  # first non-empty content phase closed
             phase = Phase.DELIM
 
         # ── Emit label for this atom ─────────────────────────────
@@ -424,6 +456,8 @@ def label_atoms(atoms: list[Atom], family: str = "harmony") -> list[tuple[str, s
                 result.append((atom.text, "T"))
             elif phase == Phase.CONTENT:
                 result.append((atom.text, "C"))
+                if atom.text.strip():
+                    content_seen = True
             else:
                 # In DELIM phase, content atoms shouldn't normally
                 # appear — but if they do (pre-amble text before any
@@ -436,8 +470,13 @@ def label_atoms(atoms: list[Atom], family: str = "harmony") -> list[tuple[str, s
         # ── Post-atom: <|end|> resets us to DELIM phase ──────────
         # This is the key fix over the CRF: <|end|> always brings us
         # back to structural territory, regardless of what came before.
-        # The next <|channel|> will put us back in a content phase.
+        # The next <|channel|> will put us back in a content phase —
+        # unless the single_turn seal fires: a NON-EMPTY content phase
+        # closing here means the answer is complete, and any further
+        # generation is self-play (see the docstring).
         if cat == ObsCategory.MARKER_END:
+            if single_turn and phase == Phase.CONTENT and content_seen:
+                sealed = True
             phase = Phase.DELIM
             saw_chan_final = False
             saw_chan_analysis_or_commentary = False
@@ -445,17 +484,21 @@ def label_atoms(atoms: list[Atom], family: str = "harmony") -> list[tuple[str, s
     return result
 
 
-def extract_content(atoms: list[Atom], family: str = "harmony") -> str:
+def extract_content(
+    atoms: list[Atom], family: str = "harmony", single_turn: bool = True
+) -> str:
     """Extract only the content-phase text, joined back together."""
-    labelled = label_atoms(atoms, family=family)
+    labelled = label_atoms(atoms, family=family, single_turn=single_turn)
     content_parts = [text for text, lbl in labelled if lbl == "C"]
     return "".join(content_parts).strip()
 
 
-def extract_phases(atoms: list[Atom], family: str = "harmony") -> dict[str, str]:
+def extract_phases(
+    atoms: list[Atom], family: str = "harmony", single_turn: bool = True
+) -> dict[str, str]:
     """Extract text grouped by phase label. Returns a dict keyed by
     D/T/C/E with the concatenated text for each label, stripped."""
-    labelled = label_atoms(atoms, family=family)
+    labelled = label_atoms(atoms, family=family, single_turn=single_turn)
     phases: dict[str, list[str]] = {"D": [], "T": [], "C": [], "E": []}
     for text, lbl in labelled:
         phases[lbl].append(text)
@@ -465,19 +508,25 @@ def extract_phases(atoms: list[Atom], family: str = "harmony") -> dict[str, str]
 # ── Convenience wrappers that take raw text ──────────────────────────
 
 
-def fsm_decode(raw_text: str, family: str = "harmony") -> list[tuple[str, str]]:
+def fsm_decode(
+    raw_text: str, family: str = "harmony", single_turn: bool = True
+) -> list[tuple[str, str]]:
     """Featurize raw text and return per-atom (text, label) pairs."""
     atoms = featurize(raw_text)
-    return label_atoms(atoms, family=family)
+    return label_atoms(atoms, family=family, single_turn=single_turn)
 
 
-def fsm_extract_content(raw_text: str, family: str = "harmony") -> str:
+def fsm_extract_content(
+    raw_text: str, family: str = "harmony", single_turn: bool = True
+) -> str:
     """Featurize raw text and return only the content-phase text."""
     atoms = featurize(raw_text)
-    return extract_content(atoms, family=family)
+    return extract_content(atoms, family=family, single_turn=single_turn)
 
 
-def fsm_extract_phases(raw_text: str, family: str = "harmony") -> dict[str, str]:
+def fsm_extract_phases(
+    raw_text: str, family: str = "harmony", single_turn: bool = True
+) -> dict[str, str]:
     """Featurize raw text and return all phases as a {D,T,C,E} dict."""
     atoms = featurize(raw_text)
-    return extract_phases(atoms, family=family)
+    return extract_phases(atoms, family=family, single_turn=single_turn)

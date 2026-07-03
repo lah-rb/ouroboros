@@ -401,7 +401,7 @@ async def run_completion(
             cached_prefix_tokens=cached_prefix,
             fresh_prefill_tokens=fresh_prefill,
             generated_tokens=real_gen,
-            cache_hit=bool(getattr(gen_target, "_last_flow_hit", False)),
+            cache_hit=bool(getattr(gen_target, "_last_cache_hit", False)),
             flow_key=str(getattr(gen_target, "_last_flow_key", "") or ""),
             prefill_ms=round((_diag.get("eval_duration", 0) or 0) * 1000, 1),
             decode_ms=round((_diag.get("generation_duration", 0) or 0) * 1000, 1),
@@ -1009,3 +1009,18 @@ def get_health_status() -> dict:
         }
 
     return backend.get_health_status()
+
+
+async def refresh_context(reason: str = "manual") -> dict:
+    """Trigger an in-process llama.cpp context refresh.
+
+    Drops + rebuilds the inference context (keeping weights loaded) to clear the
+    LLMVP-process-level output rot ("souring") without a process restart or reboot.
+    Returns the backend's status dict; a no-op on backends that don't support it.
+    """
+    backend = get_backend()
+    if backend is None:
+        return {"refreshed": 0, "reason": reason, "status": "not_initialized"}
+    if not hasattr(backend, "refresh_context"):
+        return {"refreshed": 0, "reason": reason, "status": "unsupported"}
+    return await backend.refresh_context(reason)

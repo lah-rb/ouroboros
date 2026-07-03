@@ -364,11 +364,16 @@ class FormatRenderer:
             where ~46% of inference calls returned empty strings.
 
             The a7ff rambling pathology (model emits multiple final
-            channels in one generation) is better addressed at the
-            labeller layer: the FSM's ``<|end|> → DELIM`` reset is
-            sufficient. We don't need generation stops to guard against
-            rambling; we need correct labelling, and the FSM delivers
-            that deterministically.
+            channels in one generation) is instead addressed at the
+            labeller layer. The ``<|end|> → DELIM`` reset alone was NOT
+            sufficient — extraction still concatenated every "final"
+            channel, so a completed ramble polluted the real answer with
+            self-play hallucination (proven by the astropy-2 runaway
+            capture 20260703T152322: perfect final answer, then a
+            hallucinated next-observation that degenerated). The FSM's
+            ``single_turn`` seal completes the doctrine: the first
+            NON-EMPTY content phase to close wins; everything after
+            labels D.
 
             The ``mode`` parameter is retained for future cases where
             we may genuinely want different stops in session contexts.

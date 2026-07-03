@@ -255,14 +255,25 @@ def featurize(text: str) -> list[Atom]:
                     # Mistral / Tekken Magistral-style [THINK] / [/THINK]
                     # — uppercase between brackets, just like INST / END.
                     cat = ObsCategory.MARKER_THINK
-            elif marker_context in ("angle_pipe", "angle"):
-                # Harmony <|...|> and ChatML <think> tags use
-                # lowercase. The case-insensitive lookup is preserved
-                # here.
+            elif marker_context == "angle_pipe":
+                # Genuine Harmony delimiter territory (<|start|> <|end|>
+                # <|message|> <|channel|> ...): full marker + channel lookup.
                 if lower in _MARKER_WORDS:
                     cat = _MARKER_WORDS[lower]
                 elif lower in _CHANNEL_NAMES:
                     cat = _CHANNEL_NAMES[lower]
+            elif marker_context == "angle":
+                # Bare '<' / '</': the ONLY marker that legitimately uses a bare
+                # angle bracket is the ChatML inline tag <think>/</think>. The
+                # Harmony pipe-markers (start/end/message/return/channel/call/
+                # constrain) REQUIRE '<|'. A bare '<' before one of those words
+                # is a comparison in generated code — `x < end`, `if k < start:`
+                # — NOT a delimiter. Tagging it structural made the FSM strip/
+                # truncate valid code before it reached disk (e.g. a B+tree
+                # range method: `start <= key < end`). See the module-top
+                # corruption note.
+                if lower == "think":
+                    cat = ObsCategory.MARKER_THINK
             elif after_channel_marker and lower in _CHANNEL_NAMES:
                 # Channel name right after <|channel|> — e.g. "final", "analysis"
                 cat = _CHANNEL_NAMES[lower]

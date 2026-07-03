@@ -22,10 +22,13 @@ model:
   n_gpu_layers: -1   
   seed: -1
   verbose: false
-  flash_attention: true
-  batch_size: 512
+  flash_attn_type: auto   # REAL knob (old flash_attention: true was a silent no-op); auto = prior effective
+  n_batch: 2048           # REAL knob (old batch_size: 512 was a silent no-op; 2048 was the actual default)
+  # speculative: false (default) — A/B verdict 2026-06-29: n-gram draft was 23-33% SLOWER on
+  # Metal/MoE (verify + logits_all overhead > accepted-draft gain) and not cleanly lossless
+  # (truncated the rewrite output). Code is config-gated + dormant; revisit only with EAGLE-3.
   thinking: true
-  thinking_mode: medium   # harmony "Reasoning: medium" (explicit; was the default)
+  thinking_mode: medium
   # gpt-oss-120b uses sliding-window attention (128-tok window on alternating
   # layers). swa_full keeps the FULL KV for those layers so the ~1809-tok static
   # prefix is consistent across save_state/load_state — without it, restoring a
@@ -38,7 +41,7 @@ model:
   # OPT-IN per-flow static-prefix KV cache. Re-enabled 2026-06-16 now that
   # swa_full removes the SWA window-boundary corruption (the `code -3` at pos
   # 1809). Inert unless callers pass static_prefix + flow_cache_key.
-  flow_kv_cache: true
+  flow_kv_cache: false
   # gpt-oss uses the save_state/load_state session path, which corrupts the 120B
   # KV at deep context. A 6h/80-task sweep crashed the server with `llama_decode
   # code -1` (Invalid input batch at Pos 2174) inside session_turn, right after a

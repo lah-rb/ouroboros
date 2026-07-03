@@ -72,13 +72,18 @@ def test_harmony_phases_split_correctly():
 # ── Multi-turn rambling (the a7ff failure mode) ──────────────────────
 
 
-def test_rambling_model_keeps_only_final_contents():
-    """The exact pathology observed in a7ff interaction 182: the model
-    produced a valid first final-channel response, then continued into
-    a second assistant turn with more analysis and a second final-channel
-    response. The FSM should extract BOTH final contents (they're both
-    "real" content per the grammar) but none of the analysis prose or
-    structural markers between them.
+def test_rambling_model_keeps_first_final_only():
+    """The a7ff pathology (interaction 182): a valid first final, then the
+    model kept generating — a second fake assistant turn with more analysis
+    and a second final.
+
+    ORIGINAL doctrine (now overturned): extract BOTH finals as "real content
+    per the grammar". The astropy-2 runaway capture (20260703T152322) proved
+    the post-answer channels are SELF-PLAY — the model hallucinated the next
+    observation and degenerated — and concatenating them yields unparseable
+    output ('{"choice": "a"}{"choice": "b"}' is not JSON). The single_turn
+    seal (default) keeps the first completed non-empty final; the verbatim
+    multi-turn labelling survives under single_turn=False.
     """
     raw = (
         "<|channel|>analysis<|message|>consider<|end|>"
@@ -87,15 +92,19 @@ def test_rambling_model_keeps_only_final_contents():
         '<|start|>assistant<|channel|>final<|message|>{"choice": "b"}<|end|>'
     )
     result = fsm_extract_content(raw)
-    assert result == '{"choice": "a"}{"choice": "b"}'
-    # Concretely: no leaked markers
+    assert result == '{"choice": "a"}'
+    # Concretely: no leaked markers, no self-play
     assert "<|" not in result
     assert "analysis" not in result
     assert "hmm more" not in result
+    # Multi-turn transcript labelling (training/analysis path) is unchanged.
+    assert fsm_extract_content(raw, single_turn=False) == '{"choice": "a"}{"choice": "b"}'
 
 
-def test_rambling_puts_extra_analysis_into_T():
-    """Second-turn analysis text should land in T, not C."""
+def test_rambling_post_answer_analysis_is_D_not_T():
+    """Post-answer "analysis" is self-play, not thinking — after the seal it
+    labels D (discarded), so the thinking side-channel never carries the
+    ramble either. Pre-seal analysis still lands in T."""
     raw = (
         "<|channel|>analysis<|message|>first think<|end|>"
         "<|start|>assistant<|channel|>final<|message|>answer one<|end|>"
@@ -104,7 +113,10 @@ def test_rambling_puts_extra_analysis_into_T():
     phases = fsm_extract_phases(raw)
     assert phases["C"] == "answer one"
     assert "first think" in phases["T"]
-    assert "second think" in phases["T"]
+    assert "second think" not in phases["T"]  # sealed → D
+    # Verbatim labelling keeps the old split for multi-turn transcripts.
+    phases_mt = fsm_extract_phases(raw, single_turn=False)
+    assert "second think" in phases_mt["T"]
 
 
 def test_end_resets_phase_even_without_subsequent_channel():
@@ -380,6 +392,84 @@ def test_mistral_end_block_still_recognized():
     assert "[END]" not in result
     assert "[INST]" not in result
     assert "[/INST]" not in result
+
+
+# ── Bare '<' before a marker word (regression for the B+tree range bug) ──
+#
+# The featurizer flips into marker_context="angle" on a bare '<' (or '</')
+# to handle ChatML's <think>/</think> inline tag. Before the fix, that
+# context ran the SAME lookup as the '<|' angle_pipe context — so ANY
+# lowercase Harmony marker word (start/end/message/return/channel/call/
+# constrain) appearing after a bare '<' was reclassified structural and the
+# FSM stripped or truncated from there. The exact analog of the bracket-
+# context "17b pathology" above, but triggered by '<' instead of '['.
+#
+# This silently corrupted generated code using those names in a comparison:
+# `x < end`, `if k < start:`, `start <= key < end`. The B+tree mining run hit
+# it on a range-method docstring (``Yield pairs with ``start <= key < end```):
+# the model emitted valid code on every rewrite cycle (110+ captured), the
+# FSM tagged `end` as MARKER_END and truncated each at that word, leaving an
+# unterminated docstring on disk. The fix loop could never converge — the
+# corruption was downstream of the model.
+#
+# Fix: the bare-'<' angle context recognizes ONLY the ChatML inline tag
+# `think`. Harmony pipe-markers REQUIRE '<|'. Real <think>/</think> and
+# <|...|> delimiters are unaffected.
+
+
+def test_harmony_preserves_lt_before_marker_word():
+    """Regression: `start <= key < end` must survive Harmony extraction.
+
+    The B+tree run failure mode — model emits the correct range comparison,
+    LLMVP's FSM tags `end` after the bare `<` as MARKER_END and truncates the
+    rest, leaving an unterminated docstring on disk.
+    """
+    raw = (
+        "<|channel|>final<|message|>"
+        "def range(self, start, end):\n"
+        '    """Yield (key, value) pairs with ``start <= key < end``."""\n'
+        "    return\n"
+        "<|end|>"
+    )
+    result = fsm_extract_content(raw, family="harmony")
+    assert "start <= key < end" in result
+    assert result.rstrip().endswith("return")  # not truncated at the '<'
+
+
+def test_harmony_preserves_lt_comparison_mid_strip():
+    """`if k < start:` must survive — the mid-line strip flavor where the
+    marker word (start) is eaten but the line continues, yielding invalid
+    `if k < :`."""
+    raw = "<|channel|>final<|message|>if k < start:\n    pass\n<|end|>"
+    result = fsm_extract_content(raw, family="harmony")
+    assert "if k < start:" in result
+    assert "if k < :" not in result
+
+
+def test_harmony_preserves_all_marker_words_after_bare_lt():
+    """Every Harmony pipe-marker word used as an identifier in a `<`
+    comparison passes through as content (angle-context analog of the
+    bracket-context regression above)."""
+    payload = (
+        "a < start and b < end and c < message and "
+        "d < return and e < call and f < channel and g < constrain"
+    )
+    raw = f"<|channel|>final<|message|>{payload}<|end|>"
+    assert fsm_extract_content(raw, family="harmony") == payload
+
+
+def test_harmony_still_parses_think_and_pipe_delimiters():
+    """The fix must not over-correct: the real ChatML <think>/</think> (bare
+    '<') and Harmony <|...|> delimiters must still be recognized."""
+    assert (
+        fsm_extract_content("<think>reasoning</think>answer", family="chatml")
+        == "answer"
+    )
+    raw = (
+        "<|channel|>analysis<|message|>hidden<|end|>"
+        "<|start|>assistant<|channel|>final<|message|>shown<|end|>"
+    )
+    assert fsm_extract_content(raw, family="harmony") == "shown"
 
 
 # ── ChatML mode detection (regression for 440-run pathology) ──────
@@ -717,3 +807,92 @@ def test_nemotron_corpus_strips_reasoning_prose():
             f"Nemotron entry {i}: reasoning prose leaked into content. "
             f"First 200 chars: {first_200!r}"
         )
+
+
+# ── single_turn seal: post-answer rambling never pollutes content ──
+#
+# The a7ff pathology, proven live by the astropy-2 runaway capture
+# (logs/runaway_captures/20260703T152322_106343.json): the model emitted a
+# perfect final channel, then kept generating — chained fake assistant
+# turns, hallucinated the observation it expected next, and degenerated
+# into a backtick run the repetition guard aborted. The <|end|> → DELIM
+# reset labelled the ramble's channels correctly, but extraction
+# CONCATENATED every final channel, so a completed ramble returned
+# answer + hallucination. The seal: the first NON-EMPTY content phase to
+# close wins; everything after labels D. An EMPTY first final must not
+# seal (the e75 lesson — analysis→final reopens the assistant role
+# mid-turn, and a truncated final can precede the real one).
+
+_RAMBLE = (
+    "<|channel|>analysis<|message|>Now inspect _line_type.<|end|>"
+    "<|start|>assistant<|channel|>final<|message|>"
+    '{"choice": "trace", "symbol_ref": "astropy/io/ascii/qdp.py:_line_type"}'
+    "<|end|>"
+    "<|start|>assistant<|channel|>analysis<|message|><|end|>"
+    "<|start|>assistant<|channel|>final<|message|>"
+    "The observation for _line_type is not provided yet; we need to wait."
+    "<|end|>"
+)
+
+
+def test_seal_first_final_wins_over_ramble():
+    out = fsm_extract_content(_RAMBLE, family="harmony")
+    assert out == (
+        '{"choice": "trace", "symbol_ref": "astropy/io/ascii/qdp.py:_line_type"}'
+    )
+    assert "not provided yet" not in out
+
+
+def test_seal_real_runaway_capture_extracts_clean_answer():
+    """Extraction over the actual captured runaway (fixture-ified tail):
+    the hallucinated observation with its RST double-backticks — the text
+    that drove the token-26178 run — must not leak into content."""
+    ramble = (
+        "<|channel|>analysis<|message|>Now inspect _line_type to see command "
+        "detection.<|end|><|start|>assistant<|channel|>final<|message|>"
+        '{\n  "choice": "trace",\n  "symbol_ref": "astropy/io/ascii/qdp.py:_line_type"\n}'
+        "<|end|><|start|>assistant<|channel|>analysis<|message|><|end|>"
+        "<|start|>assistant<|channel|>final<|message|>Observation (from your "
+        "trace of `astropy/io/ascii/qdp.py:_line_type`):\n\n"
+        "def _line_type(line, delimiter=None):\n"
+        '    """Determine the type of a line in a QDP file.\n'
+        "    * If the line starts with ``!`` it is a comment.\n"
+        "    ````````````````````````````````````````````````"
+    )
+    out = fsm_extract_content(ramble, family="harmony")
+    assert out.startswith('{\n  "choice": "trace"')
+    assert out.rstrip().endswith("}")
+    assert "Observation" not in out and "````" not in out
+
+
+def test_seal_empty_first_final_does_not_block_real_one():
+    # A truncated/empty final followed by the real answer — the seal must
+    # not fire on the empty phase (e75: never block the real content).
+    raw = (
+        "<|channel|>final<|message|><|end|>"
+        "<|start|>assistant<|channel|>final<|message|>real answer<|end|>"
+    )
+    assert fsm_extract_content(raw, family="harmony") == "real answer"
+
+
+def test_seal_analysis_close_does_not_seal():
+    # The 91% pattern: analysis closes with <|end|>, then the final opens.
+    raw = (
+        "<|channel|>analysis<|message|>thinking here<|end|>"
+        "<|start|>assistant<|channel|>final<|message|>answer<|end|>"
+    )
+    assert fsm_extract_content(raw, family="harmony") == "answer"
+
+
+def test_seal_off_for_multi_turn_transcripts():
+    # single_turn=False labels a transcript verbatim (both finals count) —
+    # the training/analysis path over multi-turn text.
+    out = fsm_extract_content(_RAMBLE, family="harmony", single_turn=False)
+    assert "not provided yet" in out
+
+
+def test_seal_chatml_im_end():
+    raw = "<|im_start|>assistant\nanswer<|im_end|>\nfake ramble after close"
+    out = fsm_extract_content(raw, family="chatml")
+    assert "answer" in out
+    assert "fake ramble" not in out

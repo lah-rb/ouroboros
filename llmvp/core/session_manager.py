@@ -600,11 +600,15 @@ class SessionManager:
             if grammar:
                 gen_kwargs["grammar"] = grammar
 
-            # Session-mode stops: include the fake-assistant-turn opener
-            # (e.g. <|start|>assistant for Harmony) so the model stops if it
-            # tries to continue generating a second turn after <|end|>. This
-            # is the critical guard against the multi-turn rambling pathology
-            # that motivated the FSM labeller.
+            # Session-mode stops. NOTE: these do NOT include the fake-
+            # assistant-turn opener — stopping on <|start|>assistant cut the
+            # legitimate analysis→final reopen mid-turn (the e75 46%-empty
+            # regression; see renderer.stop_tokens' design note). Post-answer
+            # rambling (the a7ff pathology: the model chains fake turns after
+            # its final answer) is instead neutralized at extraction by the
+            # FSM labeller's single_turn seal (first non-empty content phase
+            # wins), with the repetition guard as the backstop when a ramble
+            # degenerates (astropy-2 runaway capture 20260703T152322).
             gen_kwargs["stop_texts"] = renderer.stop_tokens(mode="session")
 
             # turn_tokens are PURELY incremental — the restored KV already holds
