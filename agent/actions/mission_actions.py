@@ -973,6 +973,15 @@ async def action_derive_directive_goals(step_input: StepInput) -> StepOutput:
             observations="No pending directive to decompose",
         )
 
+    from agent.actions.pipeline_actions import is_repair_profile
+
+    # Repair missions FIX existing code; a derived functional goal is a fix,
+    # not an absent capability to explore-and-build. capability_absent stays
+    # False so the goal routes diagnose-first (bounded CONCLUDE schema) instead
+    # of the explore-and-build path that exploded pilot-1's scope. (Semantic
+    # correction, not a bypass — see dev/SWE_PILOT_1_FINDINGS.md.)
+    repair = is_repair_profile(mission)
+
     parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
     parsed = parsed if isinstance(parsed, dict) else {}
     new_files = parsed.get("new_files") or []
@@ -1042,7 +1051,9 @@ async def action_derive_directive_goals(step_input: StepInput) -> StepOutput:
                 description=full_desc,
                 type="functional",
                 origin="directive",
-                capability_absent=True,
+                # Repair goals are FIXES to existing code (diagnose-first);
+                # only a greenfield directive builds an absent capability.
+                capability_absent=not repair,
                 interaction_mode="exploratory",
                 finding_signature=sig,
             )

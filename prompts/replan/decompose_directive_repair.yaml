@@ -1,0 +1,124 @@
+# Prompt template: replan/decompose_directive_repair
+#
+# REPAIR-profile decomposition. The directive is a BUG REPORT against existing
+# code, pinned by a failing test — not a feature to build. Output is parsed by
+# action_derive_directive_goals (same {new_files, capabilities} schema), which
+# on a repair mission stamps the functional goals capability_absent=FALSE so
+# they route diagnose-first. This prompt exists because the greenfield decompose
+# (replan/decompose_directive) SPLITS one fix into foundational + integration +
+# docstring goals and frames each as explore-and-build — the over-scoping that
+# sank SWE pilot 1. Here: fewest goals, fix-framing, no docs/tests/new files.
+#
+# Pre-computed context keys: mission_objective, pending_directive,
+#   existing_architecture, existing_goals, repo_map_formatted
+
+id: replan/decompose_directive_repair
+description: "Decompose a bug-fix directive into the minimal fix goal(s)"
+
+sections:
+
+- id: system_role
+  content: |
+    You are a bug-triage module in an automated repair pipeline. A working
+    project already exists and a failing test pins a defect in it. Your job is
+    to state the SMALLEST fix, not to design features. Your output is parsed by
+    a JSON extractor. Return ONLY a JSON object inside a fenced code block.
+  cache: true
+
+- id: instructions
+  content: |
+    ## Scope the Fix
+
+    The direction below is a DEFECT in existing code. A hidden test already
+    exercises it; your fix must make that test pass with the SMALLEST change to
+    the EXISTING code. This is a FIX, not a build.
+
+    Emit the FEWEST goals — almost always exactly ONE. Put the fix in
+    `capabilities`; keep `new_files` EMPTY unless the fix genuinely cannot be
+    made without a new source module (rare — a bug fix edits existing files).
+
+    Each `capabilities` entry:
+      - `description`: the OBSERVABLE BEHAVIOR that must hold once fixed,
+        phrased as the correct end-state (e.g. "Point.distance accounts for all
+        dimensions when the two points differ in length"). This is what the
+        failing test checks.
+      - `placement`: the existing file/symbol the fix most likely touches
+        (e.g. "sympy/geometry/point.py, Point.distance"). Best-effort — the
+        diagnosis step confirms it; you are pointing, not prescribing.
+
+    HARD RULES — the failing test defines "done", so:
+      - ONE logical fix = ONE goal. Do NOT split it into a "foundational" part
+        and an "integrated" part. Do NOT add helper/refactor sub-goals.
+      - Do NOT emit documentation, docstring, comment, or code-style goals.
+      - Do NOT emit a goal to WRITE OR ADD A TEST. The test already exists and
+        is supplied by the grader; authoring one is wasted work and pollutes
+        the fix.
+      - Only emit a SECOND capability if the defect genuinely spans two
+        INDEPENDENT observable behaviors that separate tests would check —
+        otherwise one goal.
+
+    The example below is from an UNRELATED project — it shows the SHAPE only.
+
+    ✅ CORRECT — one fix goal, points at the existing symbol:
+    ```json
+    {
+      "new_files": [],
+      "capabilities": [
+        {
+          "description": "distance() between two points of different dimensionality accounts for every coordinate instead of dropping the extra ones",
+          "placement": "sympy/geometry/point.py, Point.distance"
+        }
+      ]
+    }
+    ```
+
+    ❌ WRONG — split into helper + integration + docstring goals (the pilot-1 explosion):
+    ```json
+    {"new_files": [], "capabilities": [
+      {"description": "add a helper that zero-pads the shorter point", "placement": "..."},
+      {"description": "use the helper in distance()", "placement": "..."},
+      {"description": "update the module docstring and add inline comments", "placement": "..."}
+    ]}
+    ```
+
+    ❌ WRONG — authoring a test / adding scaffolding:
+    ```json
+    {"new_files": [{"file": "tests/test_distance.py", ...}], "capabilities": []}
+    ```
+
+    Return ONLY the fenced JSON.
+  cache: true
+
+- id: objective
+  content: |
+    ## Original Objective
+    {context.mission_objective}
+
+- id: directive
+  content: |
+    ## The Defect to Fix
+    {context.pending_directive}
+
+- id: existing_architecture
+  when: context.existing_architecture
+  content: |
+    ## Existing Architecture — the fix EDITS this, does not rebuild it
+    {context.existing_architecture}
+
+- id: existing_goals
+  when: context.existing_goals
+  content: |
+    ## Already Built / Planned (do NOT re-emit these)
+    {context.existing_goals}
+
+- id: repo_map
+  when: context.repo_map_formatted
+  content: |
+    ## Existing Code Structure (AST-based) — locate the fix here
+    {context.repo_map_formatted}
+
+- id: output_reminder
+  content: |
+    ---
+    Now respond with ONLY the JSON in the format above — the minimal fix,
+    usually a single goal. No commentary, no tests, no docs.

@@ -244,11 +244,16 @@ async def action_escalation_write(step_input: StepInput) -> StepOutput:
             "JSON action.",
         )
 
+    from agent.actions.file_ops_actions import _is_repair_mission
+
+    repair_mode = await _is_repair_mission(effects)
     written: list[str] = []
     rejections: list[str] = []
     for path, content in blocks:
         try:
-            ok, err = await guarded_write_file(effects, path, content)
+            ok, err = await guarded_write_file(
+                effects, path, content, repair_mode=repair_mode
+            )
         except Exception as e:  # noqa: BLE001
             ok, err = False, f"write raised: {e}"
         if ok:

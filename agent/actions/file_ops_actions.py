@@ -15,6 +15,7 @@ import configparser
 import json
 import logging
 import os
+import re
 import tomllib
 
 from agent.models import StepInput, StepOutput
@@ -71,11 +72,63 @@ def scaffold_parse_error(
     return err
 
 
+# ── Repair-mission write guard ────────────────────────────────────────
+# A repair mission FIXES existing code against a failing test the grader
+# supplies. CREATING a new test file (pilot 1: django wrote its own
+# test_*.py across 7 cycles — wasted work + patch pollution) or new
+# scaffolding is never part of a fix, so on a repair mission a NEW file of
+# these classes is refused. Editing an EXISTING file is untouched — this only
+# blocks CREATION.
+_TEST_PATH_RE = re.compile(r"(^|/)(tests?)(/|$)|(^|/)(test_[^/]*|[^/]*_test)\.py$")
+_SCAFFOLD_NAMES = {
+    "readme", "readme.md", "readme.rst", "readme.txt",
+    "pyproject.toml", "setup.py", "setup.cfg", "tox.ini", "makefile",
+    ".gitignore", ".flake8", "ruff.toml", ".python-version",
+    "requirements.txt", "requirements-dev.txt", "dev-requirements.txt",
+    "gruntfile.js", "package.json",
+}
+
+
+async def _is_repair_mission(effects) -> bool:
+    """True when the current mission is repair-profile (best-effort)."""
+    if effects is None:
+        return False
+    try:
+        from agent.actions.pipeline_actions import is_repair_profile
+
+        return is_repair_profile(await effects.load_mission())
+    except Exception:
+        return False
+
+
+def repair_write_reason(file_path: str) -> str | None:
+    """Return a rejection reason if `file_path` is a NEW test/scaffolding file
+    a repair mission must not create, else None. (Caller checks existence —
+    this classifies the PATH only.)"""
+    name = os.path.basename(file_path).lower()
+    if _TEST_PATH_RE.search(file_path):
+        return (
+            f"{file_path} is a test file — repair missions do not author tests "
+            "(the grader supplies the failing test). Edit the SOURCE that the "
+            "existing test exercises instead."
+        )
+    if name in _SCAFFOLD_NAMES or (name.startswith("requirements") and name.endswith(".txt")):
+        return (
+            f"{file_path} is project scaffolding — a repair does not create it. "
+            "Edit existing source to make the failing test pass."
+        )
+    return None
+
+
 # ── The guarded write (the one safe write path) ───────────────────────
 
 
 async def guarded_write_file(
-    effects, file_path: str, content: str, min_retention_ratio: float = 0.20
+    effects,
+    file_path: str,
+    content: str,
+    min_retention_ratio: float = 0.20,
+    repair_mode: bool = False,
 ) -> tuple[bool, str | None]:
     """Write a generated file through the anti-gut guard — the ONE write path.
 
@@ -88,6 +141,15 @@ async def guarded_write_file(
     rejection or a failed write, ``None`` on success.
     """
     existing_content: str | None = None
+    # Repair guard: refuse to CREATE a new test/scaffolding file (edits to an
+    # existing one still pass — only creation is blocked).
+    if repair_mode:
+        reason = repair_write_reason(file_path)
+        if reason is not None:
+            existing = await effects.read_file(file_path)
+            if not (getattr(existing, "exists", False) and (existing.content or "")):
+                logger.warning("Repair write guard rejected NEW file %s", file_path)
+                return False, f"Repair write guard: {reason}"
     if min_retention_ratio > 0:
         existing = await effects.read_file(file_path)
         if existing.exists and len(existing.content) > 0:
@@ -185,6 +247,9 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
     # install); the env phase's job is filling gaps, and targeted edits to
     # existing configs belong to the diagnosis-driven flows.
     protect_existing = bool(step_input.params.get("protect_existing", False))
+    # Repair missions must not CREATE new test/scaffolding files (see
+    # repair_write_reason). Resolve the profile once via the mission.
+    repair_mode = await _is_repair_mission(effects)
 
     files_written = 0
     errors = []
@@ -202,7 +267,7 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
                     )
                     continue
             written_ok, err = await guarded_write_file(
-                effects, file_path, content, min_retention_ratio
+                effects, file_path, content, min_retention_ratio, repair_mode=repair_mode
             )
             if written_ok:
                 files_written += 1

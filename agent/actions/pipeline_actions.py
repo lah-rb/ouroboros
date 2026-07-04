@@ -111,13 +111,33 @@ def _parse_pytest_output(out: str) -> tuple[list[str], bool]:
     return nodes, not collect_broken
 
 
+def _module_stems(terms: list[str]) -> set[str]:
+    """Module-name stems (lowercased) worth matching a test file against: the
+    identifier parts of the terms (e.g. a fix naming `sympy/geometry/point.py`
+    or `Point.distance` → {'point','distance',...}). Case-insensitive — `Point`
+    must match `test_point.py`. Extra stems are harmless: they only help when a
+    test BASENAME equals one."""
+    stems: set[str] = set()
+    for t in terms:
+        base = t.rsplit("/", 1)[-1].rsplit(".", 1)[0]  # path/ext tail
+        for part in re.split(r"[^A-Za-z0-9]+", base):
+            if len(part) >= 3 and part.isalpha():
+                stems.add(part.lower())
+    return stems
+
+
 async def _grep_test_files(effects, terms: list[str]) -> list[str]:
-    """Rank test files by hit count for a term alternation (both glob patterns
-    — LocalEffects expands its glob non-recursively, container grep and mock
-    fnmatch recurse; a file found by both double-counts consistently)."""
+    """Rank candidate test files. Primary key: MODULE-NAME MATCH — a test whose
+    basename is test_<module> / <module>_test for a module named in the terms
+    (sympy pilot: point.py's real regression lives in test_point.py, but plain
+    term-hit ranking picked test_args/test_line and verified green against the
+    wrong suite). Secondary key: term-hit count. Both glob patterns queried
+    (LocalEffects expands non-recursively; container grep + mock fnmatch
+    recurse; a double-hit counts consistently)."""
     if not terms:
         return []
     content_pattern = "|".join(re.escape(t) for t in terms)
+    stems = _module_stems(terms)
     hits: dict[str, int] = {}
     for pattern in ("*.py", "**/*.py"):
         try:
@@ -129,7 +149,21 @@ async def _grep_test_files(effects, terms: list[str]) -> list[str]:
             fp = getattr(m, "file_path", "")
             if _is_test_path(fp):
                 hits[fp] = hits.get(fp, 0) + 1
-    return [fp for fp, _ in sorted(hits.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+    def _module_match(fp: str) -> int:
+        stem = os.path.basename(fp)[:-3]  # strip .py
+        base = stem[5:] if stem.startswith("test_") else (
+            stem[:-5] if stem.endswith("_test") else stem
+        )
+        return 1 if base in stems else 0
+
+    # module-match first (desc), then hit count (desc), then path (stable).
+    return [
+        fp
+        for fp, _ in sorted(
+            hits.items(), key=lambda kv: (-_module_match(kv[0]), -kv[1], kv[0])
+        )
+    ]
 
 
 async def _baseline(effects, test_files: list[str]) -> tuple[str, list[str], bool, bool]:

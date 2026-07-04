@@ -68,9 +68,26 @@ replan: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "decompose_directive"}]
+				rules: [{condition: "true", transition: "choose_decompose"}]
 			}
 			publishes: ["repo_map_formatted"]
+		}
+
+		// Repair-profile missions get the FIX-scoped decompose (fewest goals, no
+		// build/docs/test split); feature directives get the build-scoped one.
+		// Two inference steps + a selector because a CUE prompt_template is a
+		// literal — same pattern as interact's choose_charter.
+		choose_decompose: #StepDefinition & {
+			action:      "noop"
+			description: "Select the repair vs feature decomposition prompt by profile"
+			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "context.mission.config.task_profile == 'repair'", transition: "decompose_repair"},
+					{condition: "true", transition: "decompose_directive"},
+				]
+			}
 		}
 
 		decompose_directive: #StepDefinition & {
@@ -92,6 +109,46 @@ replan: #FlowDefinition & {
 			]
 			prompt_template: {
 				template: "replan/decompose_directive"
+				context_keys: [
+					"mission_objective", "pending_directive",
+					"existing_architecture", "existing_goals",
+					"repo_map_formatted",
+				]
+				input_keys: []
+			}
+			config: temperature: "t*0.2"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "derive_directive_goals"},
+					{condition: "true", transition: "failed"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		// Repair variant: identical wiring, FIX-scoped prompt. derive_directive_goals
+		// reads task_profile and stamps these functional goals capability_absent=False
+		// (diagnose-first, not explore-and-build).
+		decompose_repair: #StepDefinition & {
+			action:      "inference"
+			description: "Decompose a bug-fix directive into the minimal fix goal(s)"
+			context: {
+				required: ["mission"]
+				optional: ["repo_map_formatted"]
+			}
+			pre_compute: [
+				{formatter: "format_mission_meta", output_key: "mission_objective"
+					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+				{formatter: "format_mission_meta", output_key: "pending_directive"
+					params: {mission: {$ref: "context.mission"}, field: "pending_directive"}},
+				{formatter: "format_existing_architecture", output_key: "existing_architecture"
+					params: {source: {$ref: "context.mission.architecture"}}},
+				{formatter: "format_existing_goals", output_key: "existing_goals"
+					params: {source: {$ref: "context.mission.goals"}}},
+			]
+			prompt_template: {
+				template: "replan/decompose_directive_repair"
 				context_keys: [
 					"mission_objective", "pending_directive",
 					"existing_architecture", "existing_goals",
