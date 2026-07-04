@@ -160,7 +160,7 @@ project_ops: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.commands_found == true", transition: "run_installs"},
-					{condition: "true", transition: "build_report_success"},
+					{condition: "true", transition: "collect_test_installs"},
 				]
 			}
 			publishes: ["install_commands"]
@@ -181,11 +181,58 @@ project_ops: #FlowDefinition & {
 				rules: [
 					// all_passed lives in context (via publishes), not in
 					// result (sub-flow returns nest under result._returns).
-					{condition: "context.get('all_passed') == true", transition: "build_report_success"},
+					{condition: "context.get('all_passed') == true", transition: "collect_test_installs"},
 					{condition: "true", transition: "build_report_failure"},
 				]
 			}
 			publishes: ["all_passed"]
+		}
+
+		// ── Test dependencies — an LLM-set env category ───────────
+		//
+		// `test_install_command` is a category the tooling detector fills per
+		// language when the project DECLARES test deps ([test]/[dev] extras,
+		// requirements-dev, poetry dev group, npm dev deps, pytest plugins
+		// imported by conftest). Capability-bound + language-agnostic: no
+		// hardcoded `pip install -e .[test]` reflex — the detector reads the
+		// project's own config. This is what makes the repo's test suite
+		// actually runnable (the b5e fsspec wall: pytest-mock absent → every
+		// re-test ERRORED at setup and the failing-test seed could never
+		// fire). Best-effort: a failed test-deps install must not fail the
+		// env phase — the deterministic pytest-error grading surfaces any
+		// residue downstream.
+
+		collect_test_installs: #StepDefinition & {
+			action:      "collect_env_field"
+			description: "Collect test-dependency install commands from env config"
+			params: {
+				field:      "test_install_command"
+				output_key: "test_install_commands"
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.commands_found == true", transition: "run_test_installs"},
+					{condition: "true", transition: "build_report_success"},
+				]
+			}
+			publishes: ["test_install_commands"]
+		}
+
+		run_test_installs: #StepDefinition & {
+			action:      "flow"
+			description: "Install the project's test dependencies (best-effort)"
+			flow:        "run_commands"
+			input_map: {
+				commands:          {$ref: "context.test_install_commands"}
+				working_directory: {$ref: "input.working_directory"}
+				timeout:           120
+				stop_on_error:     false
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "build_report_success"}]
+			}
 		}
 
 		// ── Build directive reports before tail-call ────────────────

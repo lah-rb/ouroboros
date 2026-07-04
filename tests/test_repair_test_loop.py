@@ -535,3 +535,49 @@ async def test_gate_stale_baseline_recheck():
     out = await action_run_test_suite_gate(si)
     assert m.tests_verified is False  # gate ran and harvested, not stood down
     assert out.result["harvested"] == 1
+
+
+# ── Test-extras provisioning: an LLM-set env category ─────────────────
+
+
+def test_project_ops_wires_test_install_leg():
+    import json as _json
+    import os as _os
+
+    root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    with open(_os.path.join(root, "flows", "compiled.json")) as f:
+        steps = _json.load(f)["project_ops"]["steps"]
+    ci = {r["condition"]: r["transition"] for r in steps["collect_installs"]["resolver"]["rules"]}
+    assert ci["result.commands_found == true"] == "run_installs"
+    assert ci["true"] == "collect_test_installs"  # no main installs → still check test deps
+    ri = {r["condition"]: r["transition"] for r in steps["run_installs"]["resolver"]["rules"]}
+    assert ri["context.get('all_passed') == true"] == "collect_test_installs"
+    cti = steps["collect_test_installs"]
+    assert cti["params"]["field"] == "test_install_command"
+    rti = steps["run_test_installs"]
+    assert rti["input_map"]["stop_on_error"] is False  # best-effort
+    assert rti["resolver"]["rules"][0]["transition"] == "build_report_success"
+
+
+@pytest.mark.asyncio
+async def test_collect_env_field_picks_up_test_install_command():
+    from agent.actions.pipeline_actions import action_collect_env_field
+
+    fx = MockEffects(
+        files={
+            ".agent/env.json": (
+                '{"py": {"install_command": ["pip", "install", "-e", "."],'
+                ' "test_install_command": ["pip", "install", "-e", ".[test]", "pytest-mock"]}}'
+            )
+        }
+    )
+    si = StepInput(
+        context={}, inputs={},
+        params={"field": "test_install_command", "output_key": "test_install_commands"},
+        meta=FlowMeta(flow_name="project_ops", step_id="collect_test_installs"),
+        effects=fx,
+    )
+    out = await action_collect_env_field(si)
+    assert out.result["commands_found"] is True
+    cmds = out.context_updates["test_install_commands"]
+    assert cmds == ["pip install -e .[test] pytest-mock"]  # verbatim — no uv rewrite

@@ -7951,7 +7951,7 @@
             },
             {
               "condition": "true",
-              "transition": "build_report_success"
+              "transition": "collect_test_installs"
             }
           ]
         },
@@ -7990,11 +7990,75 @@
           "rules": [
             {
               "condition": "context.get('all_passed') == true",
-              "transition": "build_report_success"
+              "transition": "collect_test_installs"
             },
             {
               "condition": "true",
               "transition": "build_report_failure"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "collect_test_installs": {
+        "action": "collect_env_field",
+        "description": "Collect test-dependency install commands from env config",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {
+          "field": "test_install_command",
+          "output_key": "test_install_commands"
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.commands_found == true",
+              "transition": "run_test_installs"
+            },
+            {
+              "condition": "true",
+              "transition": "build_report_success"
+            }
+          ]
+        },
+        "publishes": [
+          "test_install_commands"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_test_installs": {
+        "action": "flow",
+        "description": "Install the project's test dependencies (best-effort)",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "effects": [],
+        "flow": "run_commands",
+        "input_map": {
+          "commands": {
+            "$ref": "context.test_install_commands"
+          },
+          "working_directory": {
+            "$ref": "input.working_directory"
+          },
+          "timeout": 120,
+          "stop_on_error": false
+        },
+        "publishes": [],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "build_report_success"
             }
           ]
         },

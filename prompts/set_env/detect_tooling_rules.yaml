@@ -10,6 +10,19 @@ content: |
     into a clean per-project venv that is created automatically — the program
     is run from source, so do NOT editable-install the package, and do NOT use
     bare `pip`).  Node.js: `npm install`.
+  - `test_install_command` — install the project's TEST dependencies
+    (optional; include it whenever the project declares them). This is what
+    makes the project's own test suite runnable — missing test plugins are a
+    classic silent killer (a pytest run that ERRORS on a missing `mocker`
+    fixture because pytest-mock was never installed). Read the project
+    config for where test deps are declared and emit the matching command:
+    a `[test]`/`[dev]` extra (`pip install -e '.[test]'`), a dev
+    requirements file (`pip install -r requirements-dev.txt`), a Poetry/uv
+    dev group (`poetry install --with dev`), Node dev deps
+    (`npm install --include=dev`), etc. Also scan the tests' conftest/
+    imports for pytest plugins the config forgot (`pytest-mock`,
+    `pytest-asyncio`, …) and append them. Omit only when the project
+    declares no test dependencies anywhere.
   - `formatter` — auto-format the file (optional but strongly recommended).
     Python: `black` or `ruff format`.
   - `syntax` — does the file parse/compile? **Required for every extension.**
