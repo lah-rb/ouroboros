@@ -58,6 +58,10 @@ def test_extract_model_patch_returns_diff():
     joined = " ".join(c.last_cmd)
     assert "git add -A" in joined and "git diff --cached" in joined
     assert "/testbed" in joined
+    # scaffolding + build noise are excluded (the pilot leaked .agent into all
+    # 12 patches and 66 build/ files into requests-1142)
+    assert "rm -rf .agent" in joined
+    assert ":(exclude).agent" in joined and ":(exclude)build/**" in joined
 
 
 def test_extract_model_patch_empty_is_empty_string_not_none():

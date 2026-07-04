@@ -20,17 +20,36 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def extract_model_patch(container, repo_dir: str = "/testbed") -> str:
-    """Return the unified diff of all changes in `repo_dir`, or "" on failure.
+# Paths that are NEVER part of a solution and must be kept out of model_patch:
+#   .agent          — OUR scaffolding (set_env writes .agent/env.json via a
+#                     RELATIVE path, which ContainerEffects routes into the
+#                     container repo — it leaked into all 12 pilot patches).
+#   build/dist/*.egg-info/__pycache__/.pytest_cache — build+cache artifacts an
+#                     install/test command drops (requests-1142: 66 build/ files
+#                     dwarfed the 8 real ones and broke `git apply`).
+# Excluded via git pathspec magic on the diff itself (no repo mutation).
+_PATCH_EXCLUDES = (
+    ":(exclude).agent",
+    ":(exclude).agent/**",
+    ":(exclude)build/**",
+    ":(exclude)dist/**",
+    ":(exclude)**/*.egg-info/**",
+    ":(exclude)**/__pycache__/**",
+    ":(exclude).pytest_cache/**",
+)
 
-    Runs `git add -A && git diff --cached` via a direct container exec. Always
-    returns a string (never None) so a caller can write a predictions row
-    unconditionally — an empty patch is a valid (unsolved) prediction, not an
-    error.
+
+def extract_model_patch(container, repo_dir: str = "/testbed") -> str:
+    """Return the unified diff of source changes in `repo_dir`, or "" on failure.
+
+    `git add -A` (so new source files are captured) then `git diff --cached`
+    with the scaffolding/artifact pathspec exclusions above. Always returns a
+    string (never None) — an empty patch is a valid (unsolved) prediction.
     """
+    excludes = " ".join(f"'{e}'" for e in _PATCH_EXCLUDES)
     script = (
         f"cd {repo_dir} && git config --global --add safe.directory {repo_dir} "
-        f"2>/dev/null; git add -A && git diff --cached"
+        f"2>/dev/null; rm -rf .agent; git add -A && git diff --cached -- . {excludes}"
     )
     try:
         res = container.exec_run(cmd=["bash", "-lc", script], demux=True)
