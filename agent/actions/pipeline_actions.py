@@ -1199,6 +1199,23 @@ async def action_evaluate_deterministic_result(step_input: StepInput) -> StepOut
     for pattern in _FAILURE_PATTERNS:
         if pattern in terminal_output:
             found_errors.append(pattern.rstrip(":"))
+    # Pytest error idioms — NOT Python tracebacks, so the shared pattern list
+    # misses them: a fixture/setup error run ("fixture 'mocker' not found",
+    # the ==== ERRORS ==== bar, collection errors) was graded goal_met when
+    # the exit-code capture also missed it (the b5d fsspec false success —
+    # the mission completed confidently while the grader still failed).
+    for pat, label in (
+        ("= ERRORS =", "pytest ERRORS"),
+        ("' not found\n", "pytest missing fixture"),
+        ("errors during collection", "pytest collection error"),
+        ("ERROR at setup", "pytest setup error"),
+        ("INTERNALERROR", "pytest internal error"),
+    ):
+        if pat in terminal_output and label not in found_errors:
+            found_errors.append(label)
+    if "fixture '" in terminal_output and "not found" in terminal_output:
+        if "pytest missing fixture" not in found_errors:
+            found_errors.append("pytest missing fixture")
 
     # Determine goal_met
     if not all_passed:

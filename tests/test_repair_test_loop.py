@@ -228,7 +228,10 @@ async def test_gate_certifies_on_clean_suite():
 
 
 @pytest.mark.asyncio
-async def test_gate_stands_down_on_baseline_collection_failure():
+async def test_gate_stands_down_only_when_collection_STILL_broken():
+    # Stale-baseline refresh (b5d): the gate re-checks collection live. Still
+    # broken -> stand down (unbuildable checkout); the fixed-mid-mission case
+    # is pinned in test_gate_stale_baseline_recheck.
     from agent.actions.mission_actions import action_run_test_suite_gate
 
     goal = GoalRecord(
@@ -238,9 +241,17 @@ async def test_gate_stands_down_on_baseline_collection_failure():
         repair_tests={"test_files": ["tests/test_x.py"], "collect_ok": False, "derived": True},
     )
     m = _mission(goals=[goal])
-    out = await action_run_test_suite_gate(_gate_si(m, MockEffects(mission=m)))
+    fx = MockEffects(
+        mission=m,
+        commands={
+            "/bin/sh": CommandResult(
+                return_code=2, stdout="", stderr="errors during collection", command="c"
+            )
+        },
+    )
+    out = await action_run_test_suite_gate(_gate_si(m, fx))
     assert m.tests_verified is True
-    assert "baseline" in out.observations
+    assert "still does not collect" in out.observations
 
 
 # ── M2: failing-test source seeds the diagnose prompt ─────────────────
@@ -450,3 +461,77 @@ async def test_strong_terms_exclude_prose_only_hits():
     )
     rt = await derive_repair_tests(fx, "The QDP reader accepts command lines in any letter case")
     assert rt["test_files"] == ["tests/test_qdp.py"]
+
+
+# ── b5d regressions: pytest-error grading + stale-baseline refresh ─────
+
+
+@pytest.mark.asyncio
+async def test_deterministic_eval_fails_fixture_error_even_with_exit0():
+    # The b5d false success: a pytest run that ERRORED at setup (missing
+    # `mocker` fixture — pytest-mock not installed) was graded goal_met
+    # because the exit-code capture reported success and the pattern net only
+    # knew Python tracebacks. Pytest error idioms must fail the grade
+    # regardless of the captured exit code.
+    from agent.actions.pipeline_actions import action_evaluate_deterministic_result
+
+    si = StepInput(
+        context={
+            "terminal_output": (
+                "==== ERRORS ====\n"
+                "ERROR at setup of test_open[sync]\n"
+                "file test_dirfs.py, line 12\n"
+                "  def make_fs(mocker):\n"
+                "E       fixture 'mocker' not found\n"
+            ),
+            "all_passed": True,  # the mis-captured exit code
+        },
+        inputs={}, params={},
+        meta=FlowMeta(flow_name="interact", step_id="evaluate_deterministic"),
+        effects=MockEffects(),
+    )
+    out = await action_evaluate_deterministic_result(si)
+    assert out.result["goal_met"] is False
+
+
+@pytest.mark.asyncio
+async def test_gate_stale_baseline_recheck():
+    # Baseline said collection was broken, but the agent fixed the blocker
+    # mid-mission — the gate must re-check NOW and run the suite (not stand
+    # down on the stale flag and certify a still-failing repo).
+    from agent.actions.mission_actions import action_run_test_suite_gate
+
+    goal = GoalRecord(
+        description="fix it",
+        type="functional",
+        status="complete",
+        repair_tests={"test_files": ["tests/test_x.py"], "collect_ok": False, "derived": True},
+    )
+    m = _mission(goals=[goal])
+
+    class _Seq(MockEffects):
+        def __init__(self, results, **kw):
+            super().__init__(**kw)
+            self._seq = list(results)
+
+        async def run_command(self, command, **kw):
+            if command and command[0] == "/bin/sh" and self._seq:
+                return self._seq.pop(0)
+            return await super().run_command(command, **kw)
+
+    # collect-only now CLEAN, then the suite run FAILS a node → harvest.
+    fx = _Seq(
+        [
+            CommandResult(return_code=0, stdout="3 tests collected", stderr="", command="c"),
+            CommandResult(return_code=1, stdout="FAILED tests/test_x.py::test_y - Boom", stderr="", command="p"),
+        ],
+        mission=m,
+    )
+    si = StepInput(
+        context={"mission": m}, inputs={}, params={},
+        meta=FlowMeta(flow_name="mission_control", step_id="dispatch_test_gate"),
+        effects=fx,
+    )
+    out = await action_run_test_suite_gate(si)
+    assert m.tests_verified is False  # gate ran and harvested, not stood down
+    assert out.result["harvested"] == 1

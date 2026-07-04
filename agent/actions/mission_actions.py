@@ -2785,10 +2785,27 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
         # distinction only matters if we later add a hard "on requires a suite".
         return _pass("no test suite found — nothing to verify")
     if not baseline_collect_ok:
-        # The suite couldn't even collect at baseline (unbuilt checkout) — it
-        # can't certify anything; stand down rather than loop on an
-        # environmental failure.
-        return _pass("suite did not collect at baseline — standing down")
+        # The suite couldn't collect at BASELINE — but baselines go STALE: on
+        # the b5d fsspec run the agent fixed the collection blocker mid-mission
+        # (created the missing _version module), and standing down on the stale
+        # flag certified a still-failing repo. Re-check collection NOW; stand
+        # down only if it is STILL broken (a genuinely unbuildable checkout —
+        # never loop on an environmental failure).
+        try:
+            cres = await effects.run_command(
+                ["/bin/sh", "-c",
+                 "python -m pytest --collect-only -q " + " ".join(test_files[:3])],
+                timeout=60,
+            )
+            cout = (getattr(cres, "stdout", "") or "") + (
+                getattr(cres, "stderr", "") or ""
+            )
+            _n, collect_ok_now = _parse_pytest_output(cout)
+        except Exception:
+            collect_ok_now = False
+        if not collect_ok_now:
+            return _pass("suite still does not collect — standing down")
+        logger.info("Test gate: stale baseline — collection now clean, proceeding")
 
     command = "python -m pytest -q --no-header " + " ".join(test_files[:3])
     try:
