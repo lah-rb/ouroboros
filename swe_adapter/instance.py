@@ -40,24 +40,27 @@ class SweInstance:
         )
 
 
-# Curated pilot: small-repo instances first (editing-competence read — the
-# langcodes/marshmallow/flask-scale repos where the repair loop is proven),
-# then a few large-repo SCOUTS (django/sympy/matplotlib) so the first run maps
-# the localization/scale wall explicitly rather than hiding it. These ids are
-# real SWE-bench_Verified instances; adjust after the first dataset load
-# confirms availability (load_instances warns on any id not in the dataset).
+# Curated pilot, from the SMALLEST CODEBASES in Verified first (the
+# editing-competence read — Verified has no langcodes-tiny repos, so requests/
+# flask/pylint/pytest/astropy are the floor), then large-repo SCOUTS
+# (django/sympy) so the first run maps the localization/scale wall explicitly.
+# All ids verified present in princeton-nlp/SWE-bench_Verified (2026-07-04);
+# load_instances warns + skips any id later absent.
 PILOT_SMALL = [
-    "marshmallow-code__marshmallow-1359",
-    "pvlib__pvlib-python-1854",
-    "pydicom__pydicom-1256",
-    "sqlfluff__sqlfluff-1625",
-    "pylint-dev__astroid-1866",
-    "pallets__flask-4045",
+    "psf__requests-1142",
+    "psf__requests-1724",
+    "pallets__flask-5014",
+    "pylint-dev__pylint-4551",
+    "pylint-dev__pylint-4604",
+    "pytest-dev__pytest-10051",
+    "pytest-dev__pytest-10081",
+    "astropy__astropy-12907",
+    "astropy__astropy-13033",
 ]
 PILOT_LARGE_SCOUTS = [
-    "django__django-11099",
-    "sympy__sympy-20154",
-    "matplotlib__matplotlib-23913",
+    "django__django-10097",
+    "django__django-10554",
+    "sympy__sympy-11618",
 ]
 PILOT_INSTANCES = PILOT_SMALL + PILOT_LARGE_SCOUTS
 
