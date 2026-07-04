@@ -44,38 +44,50 @@ _BACKTICK_RE = re.compile(r"`([^`]+)`")
 _TEST_PATH_RE = re.compile(r"(^|/)(test_|tests?/|conftest)")
 
 
-def extract_repair_terms(description: str) -> list[str]:
-    """Identifier-ish terms from a goal description, most-specific first.
+def extract_repair_terms_tiered(description: str) -> tuple[list[str], list[str]]:
+    """(strong, weak) terms from a goal description.
 
-    Prioritizes quoted `literals` and CamelCase/snake_case/dotted identifiers
-    (the names a test file would actually reference), drops prose stopwords,
-    dedupes preserving order. These become the content-search alternation.
+    strong — quoted `literals` and CamelCase/snake_case/mixed-case identifiers
+    (the names a test file would actually reference). weak — remaining
+    lowercase prose words. The tiers matter: the corrected-retest miss came
+    from weak words ("file", "open", "lines") polluting the grep alternation —
+    big generic test files out-hit the right one on prose, so fsspec selected
+    test_local/test_cached over test_dirfs and astropy selected
+    test_c_reader/test_table over test_qdp. Search STRONG terms alone whenever
+    any exist; weak is a fallback for identifier-free descriptions only.
     """
-    terms: list[str] = []
+    strong: list[str] = []
+    weak: list[str] = []
     seen: set[str] = set()
 
-    def _add(t: str) -> None:
+    def _add(t: str, bucket: list[str]) -> None:
         t = t.strip().strip(".")
         if not t or t.lower() in _STOPWORDS or len(t) < 3:
             return
         if t not in seen:
             seen.add(t)
-            terms.append(t)
+            bucket.append(t)
 
     # Backticked literals first — highest signal (dotted paths, call exprs).
     for m in _BACKTICK_RE.finditer(description):
         for tok in _IDENT_RE.findall(m.group(1)):
-            _add(tok)
-    # Then CamelCase / snake_case / has_underscore / mixed-case identifiers.
+            _add(tok, strong)
+    # CamelCase / snake_case / has_underscore / mixed-case identifiers.
     for tok in _IDENT_RE.findall(description):
         if "_" in tok or not tok.islower() or not tok.isalpha():
-            _add(tok)
-    # Fill with remaining lowercase content words (bounded).
+            _add(tok, strong)
+    # Lowercase content words (bounded) — weak tier.
     for tok in _IDENT_RE.findall(description):
-        if len(terms) >= 12:
+        if len(weak) >= 8:
             break
-        _add(tok)
-    return terms[:12]
+        _add(tok, weak)
+    return strong[:12], weak
+
+
+def extract_repair_terms(description: str) -> list[str]:
+    """Flat view of the tiered extraction (strong first)."""
+    strong, weak = extract_repair_terms_tiered(description)
+    return (strong + weak)[:12]
 
 
 def _is_test_path(path: str) -> bool:
@@ -99,28 +111,13 @@ def _parse_pytest_output(out: str) -> tuple[list[str], bool]:
     return nodes, not collect_broken
 
 
-async def derive_repair_tests(effects, goal_description: str) -> dict:
-    """Select ≤2 relevant test files for a repair goal and baseline them.
-
-    Returns {command, test_files, failing_nodes, collect_ok, derived: True},
-    or {} when no test file references the goal terms (→ caller falls back to
-    the LLM evaluator). Uses the search_files effect (grep --include on the
-    container) ranked by term-hit count.
-    """
-    if effects is None:
-        return {}
-    terms = extract_repair_terms(goal_description)
+async def _grep_test_files(effects, terms: list[str]) -> list[str]:
+    """Rank test files by hit count for a term alternation (both glob patterns
+    — LocalEffects expands its glob non-recursively, container grep and mock
+    fnmatch recurse; a file found by both double-counts consistently)."""
     if not terms:
-        return {}
+        return []
     content_pattern = "|".join(re.escape(t) for t in terms)
-
-    # search_files: broad *.py filename glob + content grep; we filter to test
-    # files by PATH ourselves. Pattern-glob semantics DIVERGE across backends:
-    # ContainerEffects greps recursively with --include=*.py (full tree), and
-    # Mock fnmatches "*" across "/" — but LocalEffects expands the glob
-    # relative to the working dir, where "*.py" is TOP-LEVEL ONLY. Query both
-    # patterns and merge: "**/*.py" covers the local recursive case (harmless
-    # elsewhere — grep --include matches basenames, so it just adds nothing).
     hits: dict[str, int] = {}
     for pattern in ("*.py", "**/*.py"):
         try:
@@ -132,30 +129,74 @@ async def derive_repair_tests(effects, goal_description: str) -> dict:
             fp = getattr(m, "file_path", "")
             if _is_test_path(fp):
                 hits[fp] = hits.get(fp, 0) + 1
-    # A file found by both patterns double-counts consistently, so hit-count
-    # ranking is unaffected.
-    if not hits:
-        return {}
+    return [fp for fp, _ in sorted(hits.items(), key=lambda kv: (-kv[1], kv[0]))]
 
-    test_files = [fp for fp, _ in sorted(hits.items(), key=lambda kv: (-kv[1], kv[0]))[:2]]
+
+async def _baseline(effects, test_files: list[str]) -> tuple[str, list[str], bool, bool]:
+    """Run the candidate suite once. Returns (command, failing_nodes,
+    collect_ok, witnessed) — witnessed = the suite FAILS at baseline, i.e. it
+    actually exhibits the defect this goal exists to fix."""
     command = "python -m pytest -q -x --no-header " + " ".join(test_files)
-
     failing_nodes: list[str] = []
     collect_ok = True
+    rc = 0
     try:
         base = await effects.run_command(["/bin/sh", "-c", command], timeout=120)
         out = (getattr(base, "stdout", "") or "") + (getattr(base, "stderr", "") or "")
+        rc = getattr(base, "return_code", 1)
         failing_nodes, collect_ok = _parse_pytest_output(out)
     except Exception as e:  # noqa: BLE001 — baseline is best-effort
         logger.warning("repair-tests: baseline run failed (%s)", e)
+        return command, [], True, True  # infra miss — don't reject the pick
+    witnessed = bool(failing_nodes) or not collect_ok or rc not in (0, 5)
+    return command, failing_nodes, collect_ok, witnessed
 
-    return {
-        "command": command,
-        "test_files": test_files,
-        "failing_nodes": failing_nodes,
-        "collect_ok": collect_ok,
-        "derived": True,
-    }
+
+async def derive_repair_tests(effects, goal_description: str) -> dict:
+    """Select ≤2 relevant test files for a repair goal and baseline them.
+
+    Returns {command, test_files, failing_nodes, collect_ok, derived: True},
+    or {} when no candidate WITNESSES the defect (→ caller falls back to the
+    LLM evaluator).
+
+    THE WITNESS RULE: on a repair mission, a suite that is fully green at
+    baseline cannot be the ground truth — the bug is unfixed, so the right
+    tests must be failing. The corrected retest proved both halves live:
+    fsspec/astropy selected green suites (weak-term pollution) and completed
+    confidently wrong; langcodes selected a baseline-failing suite and
+    RESOLVED. Strong terms are searched alone when any exist; a green first
+    pick retries the next-ranked candidates once before falling back.
+    """
+    if effects is None:
+        return {}
+    strong, weak = extract_repair_terms_tiered(goal_description)
+    ranked = await _grep_test_files(effects, strong if strong else weak)
+    if not ranked and strong:
+        ranked = await _grep_test_files(effects, weak)  # identifier miss — try prose
+    if not ranked:
+        return {}
+
+    # Try up to two candidate pairs, requiring a baseline witness.
+    for start in (0, 2):
+        test_files = ranked[start : start + 2]
+        if not test_files:
+            break
+        command, failing_nodes, collect_ok, witnessed = await _baseline(
+            effects, test_files
+        )
+        if witnessed:
+            return {
+                "command": command,
+                "test_files": test_files,
+                "failing_nodes": failing_nodes,
+                "collect_ok": collect_ok,
+                "derived": True,
+            }
+        logger.info(
+            "repair-tests: %s green at baseline — not a witness, trying next",
+            test_files,
+        )
+    return {}
 
 
 def is_repair_profile(mission) -> bool:

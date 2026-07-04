@@ -368,8 +368,85 @@ async def test_derive_repair_tests_finds_nested_test_dirs_local_glob():
             "pkg/sub/tests/test_deep.py": "def test_thing():\n    DeepThing().frob()\n"
         },
         commands={
-            "/bin/sh": CommandResult(return_code=0, stdout="1 passed", stderr="", command="pytest")
+            "/bin/sh": CommandResult(
+                return_code=1,
+                stdout="FAILED pkg/sub/tests/test_deep.py::test_thing - AssertionError",
+                stderr="", command="pytest",
+            )
         },
     )
     rt = await derive_repair_tests(fx, "DeepThing.frob returns wrong value")
     assert rt.get("test_files") == ["pkg/sub/tests/test_deep.py"]
+
+
+# ── The witness rule + tiered term search (corrected-retest regressions) ──
+
+
+class _SeqEffects(MockEffects):
+    """MockEffects whose /bin/sh results are a per-call sequence."""
+
+    def __init__(self, results, **kw):
+        super().__init__(**kw)
+        self._seq = list(results)
+
+    async def run_command(self, command, **kw):
+        if command and command[0] == "/bin/sh" and self._seq:
+            return self._seq.pop(0)
+        return await super().run_command(command, **kw)
+
+
+@pytest.mark.asyncio
+async def test_witness_rule_rejects_green_suite_tries_next():
+    # First-ranked pick is green at baseline (the fsspec trap: test_local/
+    # test_cached pass while the real defect lives in test_dirfs) → rejected;
+    # the next-ranked candidate fails at baseline → selected.
+    files = {
+        # Most term-hits → ranked as the first PAIR, but green at baseline
+        "tests/test_big_green.py": "DirFileSystem\n" * 5,
+        "tests/test_also_green.py": "DirFileSystem\n" * 4,
+        # Fewer hits → next-ranked candidate, and it witnesses the defect
+        "tests/test_dirfs.py": "def test_open_async():\n    DirFileSystem().open_async('x')\n",
+    }
+    fx = _SeqEffects(
+        [
+            CommandResult(return_code=0, stdout="12 passed", stderr="", command="p"),
+            CommandResult(
+                return_code=1,
+                stdout="FAILED tests/test_dirfs.py::test_open_async - TypeError",
+                stderr="", command="p",
+            ),
+        ],
+        files=files,
+    )
+    rt = await derive_repair_tests(fx, "DirFileSystem supports open_async")
+    assert rt.get("derived") is True
+    # the green pair was rejected; the witnessing candidate got selected
+    assert "tests/test_dirfs.py" in rt["test_files"]
+    assert rt["failing_nodes"] == ["tests/test_dirfs.py::test_open_async"]
+
+
+@pytest.mark.asyncio
+async def test_witness_rule_all_green_falls_back_to_evaluator():
+    fx = _SeqEffects(
+        [CommandResult(return_code=0, stdout="12 passed", stderr="", command="p")] * 2,
+        files={"tests/test_a.py": "DirFileSystem\n", "tests/test_b.py": "DirFileSystem\n"},
+    )
+    rt = await derive_repair_tests(fx, "DirFileSystem supports open_async")
+    assert rt == {}  # no witness anywhere → LLM-evaluator fallback
+
+
+@pytest.mark.asyncio
+async def test_strong_terms_exclude_prose_only_hits():
+    # The astropy trap: prose words ("reader", "lines", "case") out-hit the
+    # identifier in big generic test files. With tiered search, a file hit
+    # ONLY by prose words is invisible when a strong term (QDP) exists.
+    files = {
+        "tests/test_generic.py": "reader lines case reader lines case\n" * 20,
+        "tests/test_qdp.py": "def test_lowercase():\n    QDP().read('read serr 1 2')\n",
+    }
+    fx = _SeqEffects(
+        [CommandResult(return_code=1, stdout="FAILED tests/test_qdp.py::test_lowercase - ValueError", stderr="", command="p")],
+        files=files,
+    )
+    rt = await derive_repair_tests(fx, "The QDP reader accepts command lines in any letter case")
+    assert rt["test_files"] == ["tests/test_qdp.py"]
