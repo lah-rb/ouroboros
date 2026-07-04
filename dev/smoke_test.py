@@ -333,6 +333,15 @@ FLOW_INPUTS = {
         "task_description": "Created main.py with TODO class",
         "target_file_path": "main.py",
     },
+    # Escalation layer (shared recovery primitive)
+    "escalate": {
+        "mission_id": "test-mission-001",
+        "failure_evidence": "[FAIL] syntax: main.py\n  stderr: SyntaxError",
+        "expected_outcome": "The validation checks pass for main.py.",
+        "target_file_path": "main.py",
+        "working_directory": "/tmp/test-project",
+        "invoking_flow": "file_ops",
+    },
     # Terminal sub-flows
     "run_commands": {
         "commands": ["echo 'hello'"],

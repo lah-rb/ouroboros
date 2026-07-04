@@ -1,0 +1,28 @@
+id: escalate/work_instruction
+content: |
+  Turn {context.escalation_turn} of 6.
+
+  Each turn you pick ONE action: `read_file`, `run_command`, `write_file`,
+  or `conclude`.
+
+  Response format:
+      {"choice": "read_file", "path": "<workspace-relative path>"}
+      {"choice": "run_command", "command": "<exact shell command>"}
+      {"choice": "write_file", "path": "<workspace-relative path>"}
+      {"choice": "conclude"}
+
+  For `write_file`, this SAME response must also contain the COMPLETE new
+  file content in a fenced code block whose first line is the file marker:
+
+      {"choice": "write_file", "path": "src/module.py"}
+      ```python
+      # === FILE: src/module.py ===
+      ...the complete file content...
+      ```
+
+  Partial content is not applied — the fence replaces the whole file, so
+  include everything the file must contain. Guarded writes reject a gutting
+  rewrite or a config file that no longer parses; if a write is rejected,
+  read the rejection and make a smaller, valid change instead.
+
+  Emit the one JSON action first; only `write_file` carries a fence after it.

@@ -609,4 +609,19 @@ def build_action_registry() -> ActionRegistry:
     registry.register("goal_search_gate", action_goal_search_gate)
     registry.register("store_goal_search_findings", action_store_goal_search_findings)
 
+    # ── Escalation layer v1 (shared mid-flow recovery primitive) ────
+    from agent.actions.escalation_actions import (
+        action_conclude_escalation,
+        action_escalation_read,
+        action_escalation_run,
+        action_escalation_write,
+        action_open_escalation_session,
+    )
+
+    registry.register("open_escalation_session", action_open_escalation_session)
+    registry.register("escalation_read", action_escalation_read)
+    registry.register("escalation_run", action_escalation_run)
+    registry.register("escalation_write", action_escalation_write)
+    registry.register("conclude_escalation", action_conclude_escalation)
+
     return registry

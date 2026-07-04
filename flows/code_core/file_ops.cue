@@ -455,30 +455,34 @@ file_ops: #FlowDefinition & {
 			}
 		}
 
+		// Escalation layer v1: the self-correct reflex is no longer a
+		// hardcoded whole-file rewrite (2×102s regenerations chasing an
+		// unappeasable check on astropy). The failure hands to the shared
+		// escalate flow — a bounded read/run/write REACT loop whose writes
+		// ride the guarded path — and rejoins here:
+		//   resolved → lookup_env (re-validate; NOT straight to run_checks —
+		//              it re-selects the validator by file type, the data-file
+		//              missing-context crash of old)
+		//   deferred → check_diagnose_budget (the existing diagnose
+		//              escalation; never a dead end)
 		self_correct: #StepDefinition & {
 			action:      "flow"
-			description: "Validation failed — rewrite file to fix errors"
-			flow:        "rewrite"
-			context: required: ["validation_results"]
+			description: "Validation failed — escalate (bounded read/run/write recovery)"
+			flow:        "escalate"
+			context: required: ["validation_output"]
 			input_map: {
 				mission_id:        {$ref: "input.mission_id"}
-				goal_id:           {$ref: "input.goal_id"}
-				flow_directive:    "Fix validation errors in the file"
 				working_directory: {$ref: "input.working_directory"}
 				target_file_path:  {$ref: "input.target_file_path"}
-				file_context:      {$ref: "input.file_context"}
-				validation_errors: {$ref: "context.validation_results"}
+				failure_evidence:  {$ref: "context.validation_output"}
+				expected_outcome:  "The deterministic validation checks pass for the changed file(s)."
+				invoking_flow:     "file_ops"
 			}
 			resolver: {
 				type: "rule"
 				rules: [
-					// Re-route through lookup_env (NOT straight to run_checks):
-					// it re-selects the validator by file type. A data file's
-					// validation_commands are never published (data files route
-					// to run_data_check), so a data-file self-correct that
-					// jumped to run_checks crashed on the missing context key.
-					{condition: "result.status == 'success'", transition: "lookup_env"},
-					{condition: "true", transition: "compile_report_failure"},
+					{condition: "result.status == 'resolved'", transition: "lookup_env"},
+					{condition: "true", transition: "check_diagnose_budget"},
 				]
 			}
 			publishes: ["files_changed"]
