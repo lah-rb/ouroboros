@@ -29,3 +29,14 @@ dependencies = [
     "weasyprint>=68.1",
     "jedi>=0.20.0",
 ]
+
+[project.optional-dependencies]
+# Bench-facing harness deps (swe_adapter). Heavy (datasets → pyarrow) and only
+# needed to load SWE-bench instances + run the official evaluator, so kept out
+# of the core install — the swe_adapter tests import-guard them. Install with
+# `uv sync --extra swe`. (terminal_bench follows the same in-venv-not-core
+# pattern for tb_adapter.)
+swe = [
+    "swebench>=3.0.0",
+    "datasets>=2.0.0",
+]
