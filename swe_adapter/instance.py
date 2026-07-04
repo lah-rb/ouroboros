@@ -46,10 +46,16 @@ class SweInstance:
 # (django/sympy) so the first run maps the localization/scale wall explicitly.
 # All ids verified present in princeton-nlp/SWE-bench_Verified (2026-07-04);
 # load_instances warns + skips any id later absent.
+# EVERY id below is GOLD-ORACLE-VERIFIED on this machine (2026-07-04: gold
+# patch resolves under the official grader). The oracle rejected
+# django-10097 + requests-1724/1766/2317 — psf/requests gold-fails
+# systematically here (3 of 4 tried; ancient test infra under Rosetta), so
+# exactly one requests instance made the cut. Never add a pilot id without a
+# gold pass first (dev/swe_eval.sh --gold RUNID id1,id2).
 PILOT_SMALL = [
     "psf__requests-1142",
-    "psf__requests-1724",
     "pallets__flask-5014",
+    "mwaskom__seaborn-3069",
     "pylint-dev__pylint-4551",
     "pylint-dev__pylint-4604",
     "pytest-dev__pytest-10051",
@@ -58,8 +64,8 @@ PILOT_SMALL = [
     "astropy__astropy-13033",
 ]
 PILOT_LARGE_SCOUTS = [
-    "django__django-10097",
     "django__django-10554",
+    "django__django-10880",
     "sympy__sympy-11618",
 ]
 PILOT_INSTANCES = PILOT_SMALL + PILOT_LARGE_SCOUTS
