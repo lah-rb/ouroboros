@@ -141,7 +141,10 @@ async def _baseline(effects, test_files: list[str]) -> tuple[str, list[str], boo
     collect_ok = True
     rc = 0
     try:
-        base = await effects.run_command(["/bin/sh", "-c", command], timeout=120)
+        # 90s: must fit inside the TB adapter's wall-clock park margin
+        # (0.1 x deadline = ~100s) — a longer exec straddling the deadline gets
+        # its container torn down mid-flight (the b5c 404 teardown race).
+        base = await effects.run_command(["/bin/sh", "-c", command], timeout=90)
         out = (getattr(base, "stdout", "") or "") + (getattr(base, "stderr", "") or "")
         rc = getattr(base, "return_code", 1)
         failing_nodes, collect_ok = _parse_pytest_output(out)

@@ -2792,7 +2792,8 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
 
     command = "python -m pytest -q --no-header " + " ".join(test_files[:3])
     try:
-        res = await effects.run_command(["/bin/sh", "-c", command], timeout=180)
+        # 90s cap — see the b5c teardown race note in derive_repair_tests.
+        res = await effects.run_command(["/bin/sh", "-c", command], timeout=90)
         out = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
         rc = getattr(res, "return_code", 1)
     except Exception as e:  # noqa: BLE001
