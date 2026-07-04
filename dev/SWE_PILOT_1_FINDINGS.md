@@ -37,31 +37,68 @@ fix: honest, human-readable patches; no 882KB junk at scale.
   134 inferences (0/2 goals), flask-5014 83 (and resolved). High-volume thrash
   vs. convergence.
 
-## Read
+## Read (CORRECTED after CoT/trace deep-dive)
 
-code_core's small-surface editing competence is real and now has an official
-data point (flask). Everything past a handful of files hits the localization +
-throughput wall we consciously parked after Phase B — confirmed here with clean
-attribution rather than inferred. The pilot did its job: it isolated hygiene
-(fixed) from capability (the next phase) and gave a real baseline (8.3%) to
-move from.
+The first-pass "repo-scale localization wall" read was WRONG — the traces
+overturn it. Source localization mostly WORKS: **8/12 missions edited the
+correct gold file** (only 4 genuinely missed). The failures are downstream of
+finding the file, and the dominant cause is **over-scoped work plans**, not
+localization and not raw inference speed:
 
-## Next-phase levers (ranked by the taxonomy)
+- **The brownfield replan/decompose turns a surgical bug-fix into a multi-goal
+  BUILD.** astropy-12907 (gold = ~15 lines in one function) decomposed into
+  goals like "a helper function that recursively flattens nested
+  CompoundModel", "update the module docstring and add inline comments", plus
+  several "fix failing test" goals → +107 lines added, 16 dispatches (all
+  *succeeding*), then PAUSED. It wasn't stuck; it built a small project for a
+  3-line task.
+- **Self-authored tests + scaffolding churn burn the budget.** django-10554
+  spent SEVEN file_ops writing its own test file
+  (`django/tests/queryset_union_ordering.py`) — the grader supplies the test —
+  then fixed the two gold files. Nearly every mission also edited
+  README/requirements/pyproject/ruff.toml (non-fix scaffolding). Pure wasted
+  throughput + patch pollution.
+- **Over-broad, non-minimal edits** (+57..+107 lines vs ~15 gold) follow
+  directly from the over-scoped goals — and add their own failure surface.
+- **Verification/test-selection gap** (sympy-11618, COMPLETED but wrong): the
+  repair-test selection picked `test_args.py`/`test_line.py`, NOT
+  `test_point.py` where the regression lives — verified green against
+  irrelevant tests, self-certified done, and shipped a fix with a **missing
+  `zip_longest` import** (NameError under the real test). The fix LOGIC was
+  arguably better than gold; it failed on an import + wrong-test verification.
+- **Genuine source-localization miss: 4/12** (astropy-13033, django-10880,
+  pylint-4551, pylint-4604) — real, but the minority.
 
-1. **Repo-scale localization** — the dominant failure. The diffuse 21-file
-   edits + wall-clock pauses say the agent can't cheaply find + bound the
-   change site on a large tree. This is the Phase B.5 hypothesis that the
-   head-to-head disproved for SMALL repos but is clearly live at Verified
-   scale. Issue-guided retrieval (repomap query + grep from the problem
-   statement) feeding a FOCUSED file_context, so diagnose/patch don't wander.
-2. **Inference economy / budget** — 10/12 pausing means the 20-min cap is
-   binding; either faster convergence (fewer, better-targeted edits) or a
-   larger budget for the scouts. Measure inferences-to-first-edit.
-3. **Surgical-edit discipline** — a 21-file diff for one issue is almost never
-   right; the escalation/repair loop should resist broadening.
+**Speed vs capability vs localization:** 10/12 paused, but the pause is
+LARGELY SELF-INFLICTED — the agent spends 3-5× the necessary work per task
+(helper/docstring/test goals, scaffolding edits, wholesale rewrites). The
+hardware isn't the wall; the work plan is. Tightening scope recovers the
+throughput without faster inference.
+
+## Next-phase levers (RE-RANKED by the CoT evidence)
+
+1. **Repair-scope discipline (the #1 lever).** Brownfield repair must be a
+   MINIMAL diff that makes the failing test pass — not a decomposed build.
+   The replan/decompose phase is generating helper/docstring/refactor goals
+   and self-authored-test goals for what is usually a one-symbol patch. Fixing
+   this directly removes both the over-broad edits AND most of the wall-clock
+   pauses. (This is a repair-profile scoping constraint, not new machinery.)
+2. **Don't author tests; don't touch scaffolding.** The grader supplies tests;
+   an agent writing its own (django: 7 cycles) is waste + pollution. Repair
+   missions should be barred from creating test files / editing
+   README/requirements/pyproject.
+3. **Test-selection correctness (sympy).** Select the actual regression test
+   (include the problem statement's own repro / the file whose name matches
+   the changed module) — the witness rule needs the RIGHT test, not just a
+   baseline-failing one.
+4. **Minimal-edit discipline.** +107 lines for a 15-line fix; resist wholesale
+   function rewrites.
+5. **Issue-guided retrieval** — still worth it for the 4 real localization
+   misses, but demoted: it is NOT the dominant failure.
 
 ## Non-goals confirmed
 
 Not a hygiene problem (proven by re-grade); not a harness problem (gold 12/12);
-not the small-surface editing path (flask works). The wall is localization +
-throughput at repo scale — the next build.
+NOT primarily a localization wall (8/12 found the file); NOT primarily a
+hardware-speed wall (the pauses are self-inflicted by over-scoped work). The
+lever is repair-scope discipline.
