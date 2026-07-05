@@ -94,6 +94,37 @@ async def test_persist_routing_ops_does_not_seed_directive():
 
 
 @pytest.mark.asyncio
+async def test_repair_floor_forces_code_core_even_if_menu_picked_ops():
+    # Policy: profile=repair ALWAYS routes code_core (the only path with
+    # diagnose + witnessed-test verification), overriding an ops menu pick.
+    from agent.actions.mission_actions import action_persist_routing
+
+    m = _mission()
+    fx = MockEffects(mission=m)
+    out = await action_persist_routing(
+        _si(m, fx, routed_flow_set="ops", routed_profile="repair")
+    )
+    assert m.config.flow_set == "code_core"  # ops → code_core (repair floor)
+    assert m.config.task_profile == "repair"
+    assert m.pending_directive == m.objective  # code_core seeds the directive
+    assert out.result["flow_set"] == "code_core"
+    assert "repair_floor" in out.result["method"]
+
+
+@pytest.mark.asyncio
+async def test_non_repair_ops_pick_is_not_forced():
+    # The floor is repair-only — a produce/operate task the menu sent to ops stays ops.
+    from agent.actions.mission_actions import action_persist_routing
+
+    m = _mission()
+    fx = MockEffects(mission=m)
+    await action_persist_routing(
+        _si(m, fx, routed_flow_set="ops", routed_profile="data_transform")
+    )
+    assert m.config.flow_set == "ops"
+
+
+@pytest.mark.asyncio
 async def test_persist_routing_defaults_ops_plain_on_no_selection():
     # no_answer path: neither choice published → safe (ops, plain) default.
     from agent.actions.mission_actions import action_persist_routing

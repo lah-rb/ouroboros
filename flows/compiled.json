@@ -711,12 +711,12 @@
             "options": {
               "ops": {
                 "key": "ops",
-                "description": "Lightweight single-pass DEFAULT \u2014 install/configure, manage files/permissions, extract/compress, create resources, run a tool, CTF, AND single-file software work (author/implement/fix ONE file, convert data). ops reads, writes, and runs code; it fits whenever the work is one file or one goal.",
+                "description": "PRODUCE or OPERATE: author a NEW file/script from scratch, install/configure, run a tool, manage files/permissions, extract/compress, start a service, transform/count data, CTF. One fast pass; does NOT diagnose existing code and does NOT verify against a test suite.",
                 "terminal": false
               },
               "code_core": {
                 "key": "code_core",
-                "description": "Heavy, many-step (whole-repo ingest, multi-file diagnose/patch). SLOW; choose ONLY on an EXPLICIT multi-file signal: \"the scripts/files/tests\" (plural), a repository/project-wide change, a refactor across modules, or several named source files. A SINGLE file \u2014 even authored from scratch \u2014 is ops.",
+                "description": "REPAIR or MODIFY code that ALREADY EXISTS (fix a bug, debug, change behavior), OR any multi-file/repo-wide change or refactor. Diagnoses the code and verifies the fix against the repo's tests. Choose this for ANY fix to existing code \u2014 even a single file.",
                 "terminal": false
               }
             },
@@ -794,7 +794,7 @@
               },
               "repair": {
                 "key": "repair",
-                "description": "Fixes or debugs EXISTING code so it works.",
+                "description": "Fixes or debugs EXISTING SOURCE CODE so it works (a bug fix / behavior correction). NOT installing, configuring, or fixing a config file \u2014 those are plain.",
                 "terminal": false
               },
               "answer": {

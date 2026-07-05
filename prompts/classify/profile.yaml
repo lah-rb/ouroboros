@@ -21,4 +21,5 @@ content: |
      to /app/answer.txt."                                   -> answer
     "The scripts fail; debug and fix them so the run
      completes."                                            -> repair
+    "distance() ignores the 3rd dimension — fix it."        -> repair
     "Install ripgrep and set /etc/app.conf read-only."      -> plain

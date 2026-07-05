@@ -77,11 +77,11 @@ classify: #FlowDefinition & {
 					options: {
 						ops: #MenuOption & {
 							key: "ops"
-							description: "Lightweight single-pass DEFAULT — install/configure, manage files/permissions, extract/compress, create resources, run a tool, CTF, AND single-file software work (author/implement/fix ONE file, convert data). ops reads, writes, and runs code; it fits whenever the work is one file or one goal."
+							description: "PRODUCE or OPERATE: author a NEW file/script from scratch, install/configure, run a tool, manage files/permissions, extract/compress, start a service, transform/count data, CTF. One fast pass; does NOT diagnose existing code and does NOT verify against a test suite."
 						}
 						code_core: #MenuOption & {
 							key: "code_core"
-							description: "Heavy, many-step (whole-repo ingest, multi-file diagnose/patch). SLOW; choose ONLY on an EXPLICIT multi-file signal: \"the scripts/files/tests\" (plural), a repository/project-wide change, a refactor across modules, or several named source files. A SINGLE file — even authored from scratch — is ops."
+							description: "REPAIR or MODIFY code that ALREADY EXISTS (fix a bug, debug, change behavior), OR any multi-file/repo-wide change or refactor. Diagnoses the code and verifies the fix against the repo's tests. Choose this for ANY fix to existing code — even a single file."
 						}
 					}
 					publish_selection: "routed_flow_set"
@@ -127,7 +127,7 @@ classify: #FlowDefinition & {
 						}
 						repair: #MenuOption & {
 							key:         "repair"
-							description: "Fixes or debugs EXISTING code so it works."
+							description: "Fixes or debugs EXISTING SOURCE CODE so it works (a bug fix / behavior correction). NOT installing, configuring, or fixing a config file — those are plain."
 						}
 						answer: #MenuOption & {
 							key:         "answer"

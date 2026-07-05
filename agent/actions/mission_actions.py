@@ -3100,6 +3100,19 @@ async def action_persist_routing(step_input: StepInput) -> StepOutput:
     profile = picked_pr if picked_pr in _ROUTABLE_PROFILES else "plain"
     method = "llm" if picked_fs in _ROUTABLE_FLOW_SETS else "default"
 
+    # Repair floor: a repair (fixing/modifying EXISTING code) ALWAYS routes to
+    # code_core — the only path with a diagnosis session + a baseline-witnessed
+    # test loop. ops is a terminal-session grader (LLM-derived done-checks + a
+    # collect-only regression rung); it has no diagnose and no test witness, so
+    # a repair sent to ops skips the machinery that makes a fix verifiable. The
+    # flow_set prompt reasons this way too, but this is the deterministic
+    # invariant so the policy holds even if the menu picks ops (user decision
+    # 2026-07-05; the tb-swe run routed all 4 repairs to ops).
+    if profile == "repair" and flow_set != "code_core":
+        logger.info("Routing: profile=repair forces flow_set %s→code_core", flow_set)
+        flow_set = "code_core"
+        method = f"{method}+repair_floor"
+
     mission.config.flow_set = flow_set
     mission.config.task_profile = profile
     # code_core adopts the existing workspace: ingest_workspace scans + extracts
