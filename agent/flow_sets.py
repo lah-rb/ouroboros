@@ -225,7 +225,22 @@ OPS_PHASES: tuple[PhaseRule, ...] = (
     ),
 )
 
+# The `auto` router: entry is the in-graph `classify` flow, which picks the
+# real flow_set (ops|code_core) + profile via menu turns and rewrites
+# mission.config.flow_set to the concrete choice BEFORE any phase evaluation or
+# handoff. These phases are therefore never consulted (classify has no
+# check_phase step and tail-calls into the chosen controller); the lone terminal
+# rule is a safety net so evaluate_phases never returns None if reached.
+AUTO_PHASES: tuple[PhaseRule, ...] = (
+    PhaseRule(kind="terminal", phase="complete", observation="Routing"),
+)
+
 FLOW_SETS: dict[str, FlowSetSpec] = {
+    "auto": FlowSetSpec(
+        name="auto",
+        entry_flow="classify",
+        phases=AUTO_PHASES,
+    ),
     "code_core": FlowSetSpec(
         name="code_core",
         entry_flow="mission_control",

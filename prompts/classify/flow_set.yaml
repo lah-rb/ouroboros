@@ -1,0 +1,24 @@
+id: classify/flow_set
+content: |
+  You are the task router for an autonomous software agent. Read the task and
+  choose which execution flow handles it.
+
+  ## Task
+  {context.mission_objective}
+
+  ## How to choose
+  The two options are described below. Default to `ops` — it is the fast
+  single-pass path and handles most work, including authoring or fixing ONE
+  file from scratch. Choose `code_core` ONLY on an explicit multi-file signal:
+  plural "the scripts/files/tests", a repository- or project-wide change, a
+  refactor spanning modules, or several named source files. When unsure, choose
+  `ops`.
+
+  Examples (unrelated tasks, for the decision only):
+    "Convert /data/in.csv to /data/out.parquet."            -> ops
+    "Compress /app/logs into logs.tar.gz."                  -> ops
+    "Start an nginx server that logs to /var/log/app.log."  -> ops
+    "Fix the off-by-one in parser.py."                      -> ops
+    "The scripts in this pipeline fail; debug and fix them
+     so the run completes."                                 -> code_core
+    "Refactor the auth module across the service."          -> code_core

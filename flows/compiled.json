@@ -621,6 +621,329 @@
       "fallback": "reorganize"
     }
   },
+  "classify": {
+    "flow": "classify",
+    "version": 1,
+    "description": "In-graph task router: pick flow_set (ops|code_core) + capability profile\nvia two menu turns, persist them onto the mission, and hand off to the\nchosen controller. The full-local autonomy entry (flow_set==\"auto\");\nexplicit config skips it.",
+    "context_tier": "mission_objective",
+    "returns": {},
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.3"
+      }
+    },
+    "steps": {
+      "load_mission": {
+        "action": "load_mission_state",
+        "description": "",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.mission.status == 'active'",
+              "transition": "classify_flow_set"
+            },
+            {
+              "condition": "true",
+              "transition": "failed"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "classify_flow_set": {
+        "action": "inference",
+        "description": "Route the task: ops (single-pass) or code_core (multi-file)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "mission_objective",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          }
+        ],
+        "turn": {
+          "response_shape": "menu_single",
+          "sections": [
+            {
+              "type": "instruction",
+              "template": "classify/flow_set",
+              "required": false
+            },
+            {
+              "type": "options",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {
+            "options": {
+              "ops": {
+                "key": "ops",
+                "description": "Lightweight single-pass DEFAULT \u2014 install/configure, manage files/permissions, extract/compress, create resources, run a tool, CTF, AND single-file software work (author/implement/fix ONE file, convert data). ops reads, writes, and runs code; it fits whenever the work is one file or one goal.",
+                "terminal": false
+              },
+              "code_core": {
+                "key": "code_core",
+                "description": "Heavy, many-step (whole-repo ingest, multi-file diagnose/patch). SLOW; choose ONLY on an EXPLICIT multi-file signal: \"the scripts/files/tests\" (plural), a repository/project-wide change, a refactor across modules, or several named source files. A SINGLE file \u2014 even authored from scratch \u2014 is ops.",
+                "terminal": false
+              }
+            },
+            "publish_selection": "routed_flow_set"
+          },
+          "transitions": {
+            "default": "classify_profile",
+            "no_answer": "no_selection"
+          },
+          "config": {
+            "temperature": "t*0.3"
+          },
+          "retries": 3
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "classify_profile": {
+        "action": "inference",
+        "description": "Label the task's end-state profile (gates completion oracles)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "pre_compute": [
+          {
+            "formatter": "format_mission_meta",
+            "output_key": "mission_objective",
+            "params": {
+              "mission": {
+                "$ref": "context.mission"
+              },
+              "field": "objective"
+            }
+          }
+        ],
+        "turn": {
+          "response_shape": "menu_single",
+          "sections": [
+            {
+              "type": "instruction",
+              "template": "classify/profile",
+              "required": false
+            },
+            {
+              "type": "options",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {
+            "options": {
+              "service": {
+                "key": "service",
+                "description": "Starts a running service/daemon/server (listens on a port, serves).",
+                "terminal": false
+              },
+              "data_transform": {
+                "key": "data_transform",
+                "description": "Reshapes data from input to output (convert, reshard, count).",
+                "terminal": false
+              },
+              "invertible": {
+                "key": "invertible",
+                "description": "A reversible transform (compress, encrypt, encode, archive).",
+                "terminal": false
+              },
+              "repair": {
+                "key": "repair",
+                "description": "Fixes or debugs EXISTING code so it works.",
+                "terminal": false
+              },
+              "answer": {
+                "key": "answer",
+                "description": "Produces a specific answer VALUE written to a file (a count, a result).",
+                "terminal": false
+              },
+              "plain": {
+                "key": "plain",
+                "description": "None of the above (configure, install, set permissions, a CTF flag).",
+                "terminal": false
+              }
+            },
+            "publish_selection": "routed_profile"
+          },
+          "transitions": {
+            "default": "persist_routing",
+            "no_answer": "no_selection"
+          },
+          "config": {
+            "temperature": "t*0.3"
+          },
+          "retries": 3
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "no_selection": {
+        "action": "noop",
+        "description": "No menu answer \u2014 persist with the safe (ops, plain) default",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "persist_routing"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "persist_routing": {
+        "action": "persist_routing",
+        "description": "Write flow_set + profile onto the mission; seed pending_directive for code_core",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "routed_flow_set",
+            "routed_profile"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.flow_set == 'code_core'",
+              "transition": "handoff_code_core"
+            },
+            {
+              "condition": "true",
+              "transition": "handoff_ops"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "handoff_code_core": {
+        "action": "noop",
+        "description": "Routed code_core \u2014 ingest the workspace, then mission_control",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "ingest_workspace",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          }
+        }
+      },
+      "handoff_ops": {
+        "action": "noop",
+        "description": "Routed ops \u2014 enter the ops controller",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "ops_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          }
+        }
+      },
+      "failed": {
+        "action": "log_completion",
+        "description": "Mission not active \u2014 cannot route",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {
+          "message": "classify: mission not active"
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "failed"
+      }
+    },
+    "entry": "load_mission",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "create": {
     "flow": "create",
     "version": 2,

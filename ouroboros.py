@@ -102,10 +102,15 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         or "http://localhost:8008/graphql"
     )
 
+    # Precedence: OURO_FLOW_SET env (hard override) > CLI flag > YAML > "auto".
+    # "auto" (the full-local default) routes in-graph via the `classify` flow
+    # (LLM picks flow_set + profile); any concrete value SKIPS routing — the
+    # override path for human/API-managed runs.
     flow_set = (
-        getattr(args, "flow_set", None)
+        os.environ.get("OURO_FLOW_SET")
+        or getattr(args, "flow_set", None)
         or (yaml_config.flow_set if yaml_config else None)
-        or "code_core"
+        or "auto"
     )
     from agent.flow_sets import FLOW_SETS
 
@@ -941,7 +946,8 @@ def main() -> None:
     create_p.add_argument("--llmvp-endpoint", help="LLMVP GraphQL endpoint URL")
     create_p.add_argument(
         "--flow-set",
-        help="Flow set to run the mission with (default: code_core)",
+        help="Flow set to run the mission with (default: 'auto' — the LLM routes "
+        "ops vs code_core in-graph; name a set to skip routing)",
     )
     create_p.add_argument("--tasks", nargs="*", help="Initial task descriptions")
 

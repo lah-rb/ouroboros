@@ -3062,6 +3062,74 @@ async def action_fallback_fix_target(step_input: StepInput) -> StepOutput:
     )
 
 
+# ── In-graph task router (classify flow) ──────────────────────────────
+# The `classify` flow's two menu turns publish the picked labels to context
+# (routed_flow_set / routed_profile); this action writes them onto the mission
+# so the chosen controller derives the right phases, then the handoff tail-calls
+# the set's entry flow. Full-local autonomy: reached when flow_set=="auto";
+# explicit config skips the whole flow. Label sets mirror tb_adapter.task_judge
+# (the router this generalizes) — kept inline to avoid an agent→tb_adapter dep.
+_ROUTABLE_FLOW_SETS = ("ops", "code_core")
+_ROUTABLE_PROFILES = (
+    "service", "data_transform", "invertible", "repair", "answer", "plain",
+)
+
+
+async def action_persist_routing(step_input: StepInput) -> StepOutput:
+    """Persist the classify flow's menu choices onto the mission.
+
+    Reads context.routed_flow_set / routed_profile (the raw option keys the menu
+    turns published). Writes mission.config.flow_set + task_profile, defaulting
+    to (ops, plain) when a choice is missing/invalid (no_answer path) — the same
+    safe default as classify_flow_set's exhaustion. When code_core, seeds
+    pending_directive = objective so ingest_workspace → replan drives the
+    brownfield sweep (mirrors the adapter entry logic). Best-effort audit record
+    to .agent/ouroboros-routing.json.
+
+    Context: mission (required), routed_flow_set / routed_profile (optional).
+    Publishes: mission. Result carries flow_set for the handoff resolver.
+    """
+    mission = step_input.context.get("mission")
+    effects = step_input.effects
+    if not mission:
+        return StepOutput(result={"flow_set": "ops"}, observations="No mission")
+
+    picked_fs = str(step_input.context.get("routed_flow_set", "") or "")
+    picked_pr = str(step_input.context.get("routed_profile", "") or "")
+    flow_set = picked_fs if picked_fs in _ROUTABLE_FLOW_SETS else "ops"
+    profile = picked_pr if picked_pr in _ROUTABLE_PROFILES else "plain"
+    method = "llm" if picked_fs in _ROUTABLE_FLOW_SETS else "default"
+
+    mission.config.flow_set = flow_set
+    mission.config.task_profile = profile
+    # code_core adopts the existing workspace: ingest_workspace scans + extracts
+    # the architecture, then the pending directive drives replan → the sweep.
+    if flow_set == "code_core":
+        mission.pending_directive = getattr(mission, "objective", "") or ""
+
+    if effects:
+        await effects.save_mission(mission)
+        try:  # best-effort routing audit (parity with task_judge's log)
+            rec = {
+                "flow_set": flow_set, "profile": profile, "method": method,
+                "objective": (getattr(mission, "objective", "") or "")[:500],
+            }
+            await effects.write_file(
+                ".agent/ouroboros-routing.json", json.dumps(rec, indent=2)
+            )
+        except Exception:  # noqa: BLE001 — audit is non-critical
+            pass
+
+    logger.info(
+        "Routing: flow_set=%s profile=%s (%s)", flow_set, profile, method
+    )
+    return StepOutput(
+        result={"flow_set": flow_set, "profile": profile, "method": method},
+        observations=f"Routed to {flow_set} / {profile} ({method})",
+        context_updates={"mission": mission},
+    )
+
+
 async def action_apply_fix_target(step_input: StepInput) -> StepOutput:
     """Apply the LLM-selected fix target to the dispatch_config.
 

@@ -199,6 +199,8 @@ def build_action_registry() -> ActionRegistry:
         action_harvest_quality_findings,
         action_quality_sweep_next,
         action_run_test_suite_gate,
+        # In-graph task router (classify flow)
+        action_persist_routing,
         # Fix target resolution
         action_apply_fix_target,
         action_fallback_fix_target,
@@ -436,6 +438,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("quality_sweep_next", action_quality_sweep_next)
     registry.register("run_test_suite_gate", action_run_test_suite_gate)
     # Fix target resolution — menu assembly moved to fix_target_menu projection
+    registry.register("persist_routing", action_persist_routing)
     registry.register("apply_fix_target", action_apply_fix_target)
     registry.register("fallback_fix_target", action_fallback_fix_target)
 
