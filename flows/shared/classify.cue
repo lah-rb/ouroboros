@@ -182,9 +182,24 @@ classify: #FlowDefinition & {
 			context: required: ["router_session_id"]
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "persist_routing"}]
+				rules: [{condition: "true", transition: "end_router_session"}]
 			}
 			publishes: ["routed_flow_set", "routed_profile", "router_findings"]
+		}
+
+		// Release the memoryful session BEFORE the handoff — the router opened it
+		// and must free it, or the single-instance LLMVP pool leaks and later
+		// missions can't open one (their open_router_session fails → they default
+		// to ops/plain without exploring). Same discipline as escalate's
+		// end_session steps.
+		end_router_session: #StepDefinition & {
+			action:      "end_inference_session"
+			description: "Release the router exploration session"
+			context: optional: ["inference_session_id"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "persist_routing"}]
+			}
 		}
 
 		persist_routing: #StepDefinition & {

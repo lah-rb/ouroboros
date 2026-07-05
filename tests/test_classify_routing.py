@@ -174,6 +174,15 @@ def test_classify_conclude_publishes_route_and_findings():
     assert set(cr["publishes"]) >= {"routed_flow_set", "routed_profile", "router_findings"}
 
 
+def test_classify_releases_the_router_session_before_handoff():
+    # The router MUST free its memoryful session or the single-instance LLMVP
+    # pool leaks and later missions default without exploring (swe-tb-router-3).
+    s = _classify()
+    assert s["conclude_route"]["resolver"]["rules"][0]["transition"] == "end_router_session"
+    assert s["end_router_session"]["action"] == "end_inference_session"
+    assert s["end_router_session"]["resolver"]["rules"][0]["transition"] == "persist_routing"
+
+
 def test_classify_budget_gate_bounds_the_scout():
     s = _classify()
     rules = {r["condition"]: r["transition"] for r in s["check_budget"]["resolver"]["rules"]}

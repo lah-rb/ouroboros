@@ -891,7 +891,7 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "persist_routing"
+              "transition": "end_router_session"
             }
           ]
         },
@@ -900,6 +900,30 @@
           "routed_profile",
           "router_findings"
         ],
+        "effects": [],
+        "terminal": false
+      },
+      "end_router_session": {
+        "action": "end_inference_session",
+        "description": "Release the router exploration session",
+        "context": {
+          "required": [],
+          "optional": [
+            "inference_session_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "persist_routing"
+            }
+          ]
+        },
+        "publishes": [],
         "effects": [],
         "terminal": false
       },
