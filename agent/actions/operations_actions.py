@@ -17,6 +17,7 @@ import logging
 import re
 
 from agent.llm_json import parse_llm_json
+from agent.actions.check_result import check_result
 from agent.models import StepInput, StepOutput
 
 
@@ -171,17 +172,14 @@ async def action_run_property_probe(step_input: StepInput) -> StepOutput:
             context_updates=updates,
         )
 
-    results.append(
-        {
-            "name": "asym_property_probe",
-            "command": f"python3 {test_name}",
-            "passed": passed,
-            "required": True,
-            "stdout": (res.stdout or "")[:500],
-            "stderr": (res.stderr or "")[:500],
-            "return_code": res.return_code,
-        }
-    )
+    results.append(check_result(
+        "asym_property_probe",
+        f"python3 {test_name}",
+        passed,
+        stdout=res.stdout or "",
+        stderr=res.stderr or "",
+        return_code=res.return_code,
+    ))
     updates["validation_results"] = results
     return StepOutput(
         result={"probe_passed": passed, "probe_ran": True},

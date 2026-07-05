@@ -29,6 +29,7 @@ import json
 import logging
 import re
 
+from agent.actions.check_result import check_result
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
 
@@ -108,15 +109,12 @@ def _degenerate_reason(content: str, criteria: list) -> str | None:
 
 def _sanity_result(passed: bool, path: str, reason: str) -> dict:
     """A validation_results dict in the shared contract shape."""
-    return {
-        "name": f"output_sanity: {path}",
-        "command": f"sanity-check {path}",
-        "passed": passed,
-        "required": True,
-        "stdout": "" if passed else reason[:500],
-        "stderr": "",
-        "return_code": 0 if passed else 1,
-    }
+    return check_result(
+        f"output_sanity: {path}",
+        f"sanity-check {path}",
+        passed,
+        stdout="" if passed else reason,
+    )
 
 
 async def action_check_output_sanity(step_input: StepInput) -> StepOutput:
@@ -233,15 +231,12 @@ async def action_record_output_sanity(step_input: StepInput) -> StepOutput:
 
 def _format_result(passed: bool, path: str, reason: str) -> dict:
     """A validation_results dict for the format rung (shared contract shape)."""
-    return {
-        "name": f"output_format: {path}",
-        "command": f"format-check {path}",
-        "passed": passed,
-        "required": True,
-        "stdout": "" if passed else reason[:500],
-        "stderr": "",
-        "return_code": 0 if passed else 1,
-    }
+    return check_result(
+        f"output_format: {path}",
+        f"format-check {path}",
+        passed,
+        stdout="" if passed else reason,
+    )
 
 
 _NOT_JSON = object()  # sentinel: content didn't parse as JSON (distinct from null)
@@ -550,15 +545,9 @@ async def action_record_completion_verify(step_input: StepInput) -> StepOutput:
                           observations="completion verified genuinely done",
                           context_updates=updates)
     reason = str(parsed.get("reason", ""))[:400]
-    results.append({
-        "name": "completion_verify",
-        "command": "verify-before-harvest re-probe",
-        "passed": False,
-        "required": True,
-        "stdout": reason[:500],
-        "stderr": "",
-        "return_code": 1,
-    })
+    results.append(check_result(
+        "completion_verify", "verify-before-harvest re-probe", False, stdout=reason,
+    ))
     updates["validation_results"] = results
     return StepOutput(result={"verified_done": False},
                       observations=f"completion REFUTED on re-probe: {reason[:120]}",
@@ -747,15 +736,9 @@ async def action_check_profile_oracle(step_input: StepInput) -> StepOutput:
             result={"profile_checked": True, "profile_passed": True},
             observations=f"{profile} oracle passed",
             context_updates={"validation_results": results})
-    results.append({
-        "name": f"{profile}_oracle",
-        "command": f"{profile} verification",
-        "passed": False,
-        "required": True,
-        "stdout": reason[:500],
-        "stderr": "",
-        "return_code": 1,
-    })
+    results.append(check_result(
+        f"{profile}_oracle", f"{profile} verification", False, stdout=reason,
+    ))
     return StepOutput(
         result={"profile_checked": True, "profile_passed": False},
         observations=f"{profile} oracle FAIL: {reason[:120]}",
@@ -794,15 +777,9 @@ async def action_check_boot_liveness(step_input: StepInput) -> StepOutput:
         "startup output contains an error trace despite a passing exit "
         f"status: {', '.join(errs)}"
     )
-    results.append({
-        "name": "boot_liveness",
-        "command": "startup output scan",
-        "passed": False,
-        "required": True,
-        "stdout": reason[:500],
-        "stderr": "",
-        "return_code": 1,
-    })
+    results.append(check_result(
+        "boot_liveness", "startup output scan", False, stdout=reason,
+    ))
     return StepOutput(
         result={"boot_clean": False},
         observations=f"boot-liveness FAIL: {', '.join(errs)}",

@@ -13,6 +13,7 @@ import logging
 import re
 from typing import Any
 
+from agent.actions.check_result import check_result
 from agent.models import StepInput, StepOutput
 
 logger = logging.getLogger(__name__)
@@ -725,17 +726,15 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
         cmd_result = await effects.run_command(cmd, timeout=check_timeout)
         passed = cmd_result.return_code == 0
 
-        results.append(
-            {
-                "name": check.get("name", "unnamed check"),
-                "command": check.get("command", ""),
-                "passed": passed,
-                "required": check.get("required", True),
-                "stdout": cmd_result.stdout[:500],
-                "stderr": cmd_result.stderr[:500],
-                "return_code": cmd_result.return_code,
-            }
-        )
+        results.append(check_result(
+            check.get("name", "unnamed check"),
+            check.get("command", ""),
+            passed,
+            required=check.get("required", True),
+            stdout=cmd_result.stdout,
+            stderr=cmd_result.stderr,
+            return_code=cmd_result.return_code,
+        ))
 
         if not passed and check.get("required", True):
             all_required_passing = False
