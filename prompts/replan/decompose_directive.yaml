@@ -121,6 +121,12 @@ sections:
     ## New Direction (what to add now)
     {context.pending_directive}
 
+- id: router_findings
+  when: context.router_findings
+  content: |
+    ## Router investigation findings (a head start — the router already scouted)
+    {context.router_findings}
+
 - id: existing_architecture
   when: context.existing_architecture
   content: |

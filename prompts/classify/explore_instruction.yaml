@@ -1,0 +1,18 @@
+id: classify/explore_instruction
+content: |
+  Scout turn {context.router_turn} of 5.
+
+  Pick ONE action to understand the task well enough to route it:
+      {"choice": "run_command", "command": "<exact shell command>"}
+      {"choice": "read_file", "path": "<workspace-relative path>"}
+      {"choice": "conclude"}
+
+  Good moves: list the workspace, grep for the symbol/behavior the task names,
+  run the failing test to see the error, `git status`, or read the file the
+  task points at. You are scouting — a few actions, not a full diagnosis.
+
+  The key question your scouting must answer, because it decides the route:
+  is the change LOCALIZED (one file / one symbol) or DIFFUSE (spanning
+  multiple files/modules)? Conclude as soon as you can answer that.
+
+  Emit ONLY the one JSON action.

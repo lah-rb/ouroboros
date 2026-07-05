@@ -175,7 +175,7 @@ ops_task: #FlowDefinition & {
 			}
 			prompt_template: {
 				template: "ops/charter_accomplish"
-				context_keys: ["task_spec", "workspace_context", "search_findings_block", "workspace_ledger", "feedback_block"]
+				context_keys: ["task_spec", "workspace_context", "search_findings_block", "workspace_ledger", "feedback_block", "router_findings"]
 				input_keys: []
 			}
 			pre_compute: [
@@ -189,6 +189,8 @@ ops_task: #FlowDefinition & {
 					params: {source: {$ref: "context.mission.task_definition"}}},
 				{formatter: "format_search_findings", output_key: "search_findings_block"
 					params: {source: {$ref: "context.mission"}}},
+				{formatter: "format_mission_meta", output_key: "router_findings"
+					params: {mission: {$ref: "context.mission"}, field: "router_findings"}},
 			]
 			config: temperature: "t*0.4"
 			resolver: {

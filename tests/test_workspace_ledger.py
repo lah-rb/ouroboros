@@ -86,7 +86,7 @@ def test_old_mission_json_loads_without_ledger():
         updated_at="t",
     )
     assert m.workspace_ledger == []
-    assert m.schema_version == 6
+    assert m.schema_version == 7
 
 
 def test_formatter_renders_window_and_empty():

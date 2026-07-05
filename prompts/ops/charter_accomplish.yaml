@@ -119,6 +119,14 @@ sections:
     content: |
       {context.search_findings_block}
 
+  # Router head-start: the exploratory router already scouted the workspace to
+  # decide this task belongs in ops; its findings point you at the target.
+  - id: router_findings
+    when: context.router_findings
+    content: |
+      ## Router investigation findings (a head start)
+      {context.router_findings}
+
   # Dynamic tail — last (recency) and ends the cached prefix.
   - id: feedback
     when: context.feedback_block

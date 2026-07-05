@@ -853,10 +853,18 @@ class MissionState(BaseModel):
     # phase has derived goals from it. (`reopen --add-goal` skips this and
     # appends goals directly.)
     pending_directive: str = ""
+    # The exploratory router's findings (classify's conclude_route): what the
+    # task needs + the file(s)/symbol(s) it identified + localized-vs-diffuse.
+    # Persisted so it survives the handoff tail_call (which re-loads the mission
+    # from id and drops context) and gives the routed flow a warm start —
+    # surfaced into the replan decompose + ops charter prompts via
+    # format_mission_meta(field="router_findings"). Empty for config-routed /
+    # non-auto missions.
+    router_findings: str = ""
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)
     config: MissionConfig
-    schema_version: int = 6
+    schema_version: int = 7
 
     def add_ledger_entry(
         self,

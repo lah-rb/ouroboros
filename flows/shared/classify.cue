@@ -48,124 +48,151 @@ classify: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.mission.status == 'active'", transition: "classify_flow_set"},
+					{condition: "result.mission.status == 'active'", transition: "open_router_session"},
 					{condition: "true", transition: "failed"},
 				]
 			}
 			publishes: ["mission"]
 		}
 
-		// Turn 1: pick the flow set. Option descriptions carry the routing
-		// guidance (ported from task_judge's _JUDGE_PROMPT); the instruction
-		// shows the task and the "when unsure, ops" policy.
-		classify_flow_set: #StepDefinition & {
-			action:      "inference"
-			description: "Route the task: ops (single-pass) or code_core (multi-file)"
-			context: required: ["mission"]
-			pre_compute: [
-				{formatter: "format_mission_meta", output_key: "mission_objective"
-					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+		// Open the memoryful router session (persona seeded as static head).
+		// No session → default route (persist_routing falls to ops/plain).
+		open_router_session: #StepDefinition & {
+			action:      "open_router_session"
+			description: "Open the read-only exploration session, seeded with the task"
+			context: optional: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.session_started == true", transition: "explore"},
+					{condition: "true", transition: "persist_routing"},
+				]
+			}
+			publishes: [
+				"inference_session_id", "router_session_id",
+				"router_turn", "router_corrections",
 			]
+		}
+
+		// One compound action per scout turn: run a command, read a file, or
+		// conclude. The session is memoryful — do_run/do_read queue their
+		// observations back into it, so the next explore turn sees them.
+		explore: #StepDefinition & {
+			action:      "inference"
+			description: "Scout the workspace: run a command, read a file, or conclude"
+			context: {
+				required: ["router_session_id"]
+				optional: ["router_turn"]
+			}
 			turn: #Turn & {
-				response_shape: "menu_single"
+				response_shape: "menu_compound"
 				sections: [
-					{type: "instruction", template: "classify/flow_set"},
+					{type: "instruction", template: "classify/explore_instruction"},
 					{type: "options"},
 					{type: "envelope"},
 				]
 				response: {
 					options: {
-						ops: #MenuOption & {
-							key: "ops"
-							description: "PRODUCE or OPERATE: author a NEW file/script from scratch, install/configure, run a tool, manage files/permissions, extract/compress, start a service, transform/count data, CTF. One fast pass; does NOT diagnose existing code and does NOT verify against a test suite."
+						run_command: #MenuOption & {
+							key:         "run_command"
+							description: "Run a shell command to see the state (ls, grep, cat, run the failing test, git status)"
+							arg: {name: "command", description: "the exact shell command"}
 						}
-						code_core: #MenuOption & {
-							key: "code_core"
-							description: "REPAIR or MODIFY code that ALREADY EXISTS (fix a bug, debug, change behavior), OR any multi-file/repo-wide change or refactor. Diagnoses the code and verifies the fix against the repo's tests. Choose this for ANY fix to existing code — even a single file."
+						read_file: #MenuOption & {
+							key:         "read_file"
+							description: "Read a file to see what is actually there"
+							arg: {name: "path", description: "workspace-relative file path"}
+						}
+						conclude: #MenuOption & {
+							key:         "conclude"
+							description: "Done scouting — decide the route (flow_set + profile + findings)"
 						}
 					}
-					publish_selection: "routed_flow_set"
+					publish_selection: "router_choice"
 				}
 				transitions: {
-					default:   "classify_profile"
-					no_answer: "no_selection"
+					options: {
+						run_command: "do_run"
+						read_file:   "do_read"
+						conclude:    "conclude_route"
+					}
+					default:   "conclude_route"
+					no_answer: "conclude_route"
 				}
 				config: temperature: "t*0.3"
 				retries: 3
 			}
 		}
 
-		// Turn 2: pick the capability profile (gates completion oracles).
-		classify_profile: #StepDefinition & {
-			action:      "inference"
-			description: "Label the task's end-state profile (gates completion oracles)"
-			context: required: ["mission"]
-			pre_compute: [
-				{formatter: "format_mission_meta", output_key: "mission_objective"
-					params: {mission: {$ref: "context.mission"}, field: "objective"}},
-			]
-			turn: #Turn & {
-				response_shape: "menu_single"
-				sections: [
-					{type: "instruction", template: "classify/profile"},
-					{type: "options"},
-					{type: "envelope"},
-				]
-				response: {
-					options: {
-						service: #MenuOption & {
-							key:         "service"
-							description: "Starts a running service/daemon/server (listens on a port, serves)."
-						}
-						data_transform: #MenuOption & {
-							key:         "data_transform"
-							description: "Reshapes data from input to output (convert, reshard, count)."
-						}
-						invertible: #MenuOption & {
-							key:         "invertible"
-							description: "A reversible transform (compress, encrypt, encode, archive)."
-						}
-						repair: #MenuOption & {
-							key:         "repair"
-							description: "Fixes or debugs EXISTING SOURCE CODE so it works (a bug fix / behavior correction). NOT installing, configuring, or fixing a config file — those are plain."
-						}
-						answer: #MenuOption & {
-							key:         "answer"
-							description: "Produces a specific answer VALUE written to a file (a count, a result)."
-						}
-						plain: #MenuOption & {
-							key:         "plain"
-							description: "None of the above (configure, install, set permissions, a CTF flag)."
-						}
-					}
-					publish_selection: "routed_profile"
-				}
-				transitions: {
-					default:   "persist_routing"
-					no_answer: "no_selection"
-				}
-				config: temperature: "t*0.3"
-				retries: 3
+		do_run: #StepDefinition & {
+			action:      "router_run"
+			description: "Run the scout command; inject exit code + output into the session"
+			context: {
+				required: ["router_session_id"]
+				optional: ["router_choice_arg", "router_turn", "router_corrections"]
 			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.exhausted == true", transition: "conclude_route"},
+					{condition: "true", transition: "check_budget"},
+				]
+			}
+			publishes: ["router_turn", "router_corrections"]
 		}
 
-		// A menu turn returned nothing (empty/exhausted). Persist anyway — the
-		// action defaults missing choices to (ops, plain).
-		no_selection: #StepDefinition & {
+		do_read: #StepDefinition & {
+			action:      "router_read"
+			description: "Read the named file; inject a bounded view into the session"
+			context: {
+				required: ["router_session_id"]
+				optional: ["router_choice_arg", "router_turn", "router_corrections"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.exhausted == true", transition: "conclude_route"},
+					{condition: "true", transition: "check_budget"},
+				]
+			}
+			publishes: ["router_turn", "router_corrections"]
+		}
+
+		// Budget: MAX_ROUTER_EXPLORE_TURNS = 5 (keep this rule, the Python
+		// constant, and the explore instruction template in agreement).
+		check_budget: #StepDefinition & {
 			action:      "noop"
-			description: "No menu answer — persist with the safe (ops, plain) default"
+			description: "Scout budget gate (5 actions)"
+			context: optional: ["router_turn"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "context.router_turn >= 5", transition: "conclude_route"},
+					{condition: "true", transition: "explore"},
+				]
+			}
+		}
+
+		// One conclude turn on the session → {flow_set, profile, findings},
+		// informed by the whole exploration. Default (ops, plain) on a
+		// parse/exhaustion miss.
+		conclude_route: #StepDefinition & {
+			action:      "conclude_route"
+			description: "Decide flow_set + profile + findings from the exploration"
+			context: required: ["router_session_id"]
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "persist_routing"}]
 			}
+			publishes: ["routed_flow_set", "routed_profile", "router_findings"]
 		}
 
 		persist_routing: #StepDefinition & {
 			action:      "persist_routing"
-			description: "Write flow_set + profile onto the mission; seed pending_directive for code_core"
+			description: "Write flow_set + profile + findings onto the mission; seed pending_directive for code_core"
 			context: {
 				required: ["mission"]
-				optional: ["routed_flow_set", "routed_profile"]
+				optional: ["routed_flow_set", "routed_profile", "router_findings"]
 			}
 			resolver: {
 				type: "rule"

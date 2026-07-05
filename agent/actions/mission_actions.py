@@ -3100,21 +3100,18 @@ async def action_persist_routing(step_input: StepInput) -> StepOutput:
     profile = picked_pr if picked_pr in _ROUTABLE_PROFILES else "plain"
     method = "llm" if picked_fs in _ROUTABLE_FLOW_SETS else "default"
 
-    # Repair floor: a repair (fixing/modifying EXISTING code) ALWAYS routes to
-    # code_core — the only path with a diagnosis session + a baseline-witnessed
-    # test loop. ops is a terminal-session grader (LLM-derived done-checks + a
-    # collect-only regression rung); it has no diagnose and no test witness, so
-    # a repair sent to ops skips the machinery that makes a fix verifiable. The
-    # flow_set prompt reasons this way too, but this is the deterministic
-    # invariant so the policy holds even if the menu picks ops (user decision
-    # 2026-07-05; the tb-swe run routed all 4 repairs to ops).
-    if profile == "repair" and flow_set != "code_core":
-        logger.info("Routing: profile=repair forces flow_set %s→code_core", flow_set)
-        flow_set = "code_core"
-        method = f"{method}+repair_floor"
+    # NO deterministic repair floor: flow_set is now decided by conclude_route
+    # AFTER the router investigated the workspace (localized single-file →
+    # ops, diffuse/multi-file → code_core). "small-local vs multi-file" is a
+    # soft attribute — an informed inference, not a blunt override. (The old
+    # profile==repair→code_core floor mis-routed langcodes, which ops solves
+    # 3/3 and code_core 1/3.) The hard gates (explicit flow_set / OURO_FLOW_SET,
+    # held_out_tests) sit earlier and are untouched.
+    findings = str(step_input.context.get("router_findings", "") or "")
 
     mission.config.flow_set = flow_set
     mission.config.task_profile = profile
+    mission.router_findings = findings  # warm start for the routed flow's prompts
     # code_core adopts the existing workspace: ingest_workspace scans + extracts
     # the architecture, then the pending directive drives replan → the sweep.
     if flow_set == "code_core":
@@ -3126,6 +3123,7 @@ async def action_persist_routing(step_input: StepInput) -> StepOutput:
             rec = {
                 "flow_set": flow_set, "profile": profile, "method": method,
                 "objective": (getattr(mission, "objective", "") or "")[:500],
+                "findings": findings[:500],
             }
             await effects.write_file(
                 ".agent/ouroboros-routing.json", json.dumps(rec, indent=2)

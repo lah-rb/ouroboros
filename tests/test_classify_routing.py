@@ -63,18 +63,21 @@ def test_yaml_config_accepts_auto():
 
 
 @pytest.mark.asyncio
-async def test_persist_routing_writes_choices_and_seeds_directive():
+async def test_persist_routing_writes_choices_findings_and_seeds_directive():
     from agent.actions.mission_actions import action_persist_routing
 
     m = _mission()
     fx = MockEffects(mission=m)
     out = await action_persist_routing(
-        _si(m, fx, routed_flow_set="code_core", routed_profile="repair")
+        _si(m, fx, routed_flow_set="code_core", routed_profile="repair",
+            router_findings="Diffuse fix across sql/compiler.py and query.py.")
     )
     assert m.config.flow_set == "code_core"
     assert m.config.task_profile == "repair"
     # code_core adopts the workspace → pending_directive seeded from objective
     assert m.pending_directive == m.objective
+    # the router's findings persist for the routed flow's prompts (warm start)
+    assert "Diffuse fix" in m.router_findings
     assert out.result["flow_set"] == "code_core"  # handoff resolver reads this
 
 
@@ -94,9 +97,10 @@ async def test_persist_routing_ops_does_not_seed_directive():
 
 
 @pytest.mark.asyncio
-async def test_repair_floor_forces_code_core_even_if_menu_picked_ops():
-    # Policy: profile=repair ALWAYS routes code_core (the only path with
-    # diagnose + witnessed-test verification), overriding an ops menu pick.
+async def test_no_repair_floor_ops_repair_stays_ops():
+    # The deterministic repair floor is REMOVED — the exploratory conclude_route
+    # already decided informed. A repair the router judged localized → ops stays
+    # ops (langcodes: ops 3/3 vs code_core 1/3). No post-hoc override.
     from agent.actions.mission_actions import action_persist_routing
 
     m = _mission()
@@ -104,24 +108,9 @@ async def test_repair_floor_forces_code_core_even_if_menu_picked_ops():
     out = await action_persist_routing(
         _si(m, fx, routed_flow_set="ops", routed_profile="repair")
     )
-    assert m.config.flow_set == "code_core"  # ops → code_core (repair floor)
+    assert m.config.flow_set == "ops"  # NOT forced to code_core
     assert m.config.task_profile == "repair"
-    assert m.pending_directive == m.objective  # code_core seeds the directive
-    assert out.result["flow_set"] == "code_core"
-    assert "repair_floor" in out.result["method"]
-
-
-@pytest.mark.asyncio
-async def test_non_repair_ops_pick_is_not_forced():
-    # The floor is repair-only — a produce/operate task the menu sent to ops stays ops.
-    from agent.actions.mission_actions import action_persist_routing
-
-    m = _mission()
-    fx = MockEffects(mission=m)
-    await action_persist_routing(
-        _si(m, fx, routed_flow_set="ops", routed_profile="data_transform")
-    )
-    assert m.config.flow_set == "ops"
+    assert "repair_floor" not in out.result["method"]
 
 
 @pytest.mark.asyncio
@@ -159,17 +148,37 @@ def _classify():
     return steps["classify"]["steps"]
 
 
-def test_classify_menu_turns_publish_the_routing_keys():
+def test_classify_is_an_exploration_loop_not_blind_menus():
+    # The blind menu turns are gone; classify now investigates first.
     s = _classify()
-    fs = s["classify_flow_set"]["turn"]
-    pr = s["classify_profile"]["turn"]
-    assert fs["response"]["publish_selection"] == "routed_flow_set"
-    assert pr["response"]["publish_selection"] == "routed_profile"
-    # option keys match the routable label sets exactly
-    assert set(fs["response"]["options"]) == {"ops", "code_core"}
-    assert set(pr["response"]["options"]) == {
-        "service", "data_transform", "invertible", "repair", "answer", "plain",
-    }
+    assert "classify_flow_set" not in s and "classify_profile" not in s
+    # explore = the read-only scout menu (run_command / read_file / conclude)
+    ex = s["explore"]["turn"]
+    assert ex["response_shape"] == "menu_compound"
+    assert set(ex["response"]["options"]) == {"run_command", "read_file", "conclude"}
+    assert ex["response"]["publish_selection"] == "router_choice"
+    opt = ex["transitions"]["options"]
+    assert opt["run_command"] == "do_run"
+    assert opt["read_file"] == "do_read"
+    assert opt["conclude"] == "conclude_route"
+    # the loop is bounded and reads real effects (no write option in the router)
+    assert s["do_run"]["action"] == "router_run"
+    assert s["do_read"]["action"] == "router_read"
+    assert "write_file" not in ex["response"]["options"]
+
+
+def test_classify_conclude_publishes_route_and_findings():
+    s = _classify()
+    cr = s["conclude_route"]
+    assert cr["action"] == "conclude_route"
+    assert set(cr["publishes"]) >= {"routed_flow_set", "routed_profile", "router_findings"}
+
+
+def test_classify_budget_gate_bounds_the_scout():
+    s = _classify()
+    rules = {r["condition"]: r["transition"] for r in s["check_budget"]["resolver"]["rules"]}
+    assert rules["context.router_turn >= 5"] == "conclude_route"
+    assert rules["true"] == "explore"
 
 
 def test_classify_handoffs_tail_call_the_right_controllers():
@@ -184,9 +193,10 @@ def test_classify_handoffs_tail_call_the_right_controllers():
     assert s["handoff_ops"]["tail_call"]["flow"] == "ops_control"
 
 
-def test_classify_no_answer_distinct_from_default():
-    # lint contract: default != no_answer for both menu turns
-    s = _classify()
-    for step in ("classify_flow_set", "classify_profile"):
-        t = s[step]["turn"]["transitions"]
-        assert t["default"] != t["no_answer"]
+def test_router_findings_threaded_into_downstream_prompts():
+    # the warm-start hand-off: replan (both decompose) + ops charter surface it
+    flows = json.load(open(os.path.join(_ROOT, "flows", "compiled.json")))
+    for flow, step in (("replan", "decompose_directive"), ("replan", "decompose_repair"),
+                       ("ops_task", "plan_charter")):
+        ck = flows[flow]["steps"][step]["prompt_template"]["context_keys"]
+        assert "router_findings" in ck, f"{flow}.{step} missing router_findings"

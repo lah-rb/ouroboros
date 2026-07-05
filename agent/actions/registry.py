@@ -439,6 +439,17 @@ def build_action_registry() -> ActionRegistry:
     registry.register("run_test_suite_gate", action_run_test_suite_gate)
     # Fix target resolution — menu assembly moved to fix_target_menu projection
     registry.register("persist_routing", action_persist_routing)
+    from agent.actions.router_actions import (
+        action_conclude_route,
+        action_open_router_session,
+        action_router_read,
+        action_router_run,
+    )
+
+    registry.register("open_router_session", action_open_router_session)
+    registry.register("router_read", action_router_read)
+    registry.register("router_run", action_router_run)
+    registry.register("conclude_route", action_conclude_route)
     registry.register("apply_fix_target", action_apply_fix_target)
     registry.register("fallback_fix_target", action_fallback_fix_target)
 

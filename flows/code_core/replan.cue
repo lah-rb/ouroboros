@@ -106,13 +106,15 @@ replan: #FlowDefinition & {
 					params: {source: {$ref: "context.mission.architecture"}}},
 				{formatter: "format_existing_goals", output_key: "existing_goals"
 					params: {source: {$ref: "context.mission.goals"}}},
+				{formatter: "format_mission_meta", output_key: "router_findings"
+					params: {mission: {$ref: "context.mission"}, field: "router_findings"}},
 			]
 			prompt_template: {
 				template: "replan/decompose_directive"
 				context_keys: [
 					"mission_objective", "pending_directive",
 					"existing_architecture", "existing_goals",
-					"repo_map_formatted",
+					"repo_map_formatted", "router_findings",
 				]
 				input_keys: []
 			}
@@ -146,13 +148,15 @@ replan: #FlowDefinition & {
 					params: {source: {$ref: "context.mission.architecture"}}},
 				{formatter: "format_existing_goals", output_key: "existing_goals"
 					params: {source: {$ref: "context.mission.goals"}}},
+				{formatter: "format_mission_meta", output_key: "router_findings"
+					params: {mission: {$ref: "context.mission"}, field: "router_findings"}},
 			]
 			prompt_template: {
 				template: "replan/decompose_directive_repair"
 				context_keys: [
 					"mission_objective", "pending_directive",
 					"existing_architecture", "existing_goals",
-					"repo_map_formatted",
+					"repo_map_formatted", "router_findings",
 				]
 				input_keys: []
 			}
