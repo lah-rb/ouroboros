@@ -110,7 +110,13 @@ class OuroborosAgent(BaseAgent):
             except Exception:
                 pass
 
-        flow_set, task_profile = self._select_flow_set(instruction, logging_dir)
+        # Routing: default to the in-graph `classify` flow (flow_set="auto") —
+        # the same 2-label decision the M3 task_judge made, now made in-graph so
+        # local and TB share one router. classify picks flow_set + profile via
+        # menu turns, seeds the directive, and hands off to the chosen
+        # controller. OURO_FLOW_SET is a hard override that SKIPS routing.
+        override = os.environ.get("OURO_FLOW_SET")
+        flow_set = override if override in ("ops", "code_core") else "auto"
 
         pm = PersistenceManager(host_tmp)
         pm.init_agent_dir()
@@ -120,23 +126,23 @@ class OuroborosAgent(BaseAgent):
             config=MissionConfig(
                 working_directory=container_cwd,
                 flow_set=flow_set,
-                task_profile=task_profile,
                 llmvp_endpoint=_LLMVP,
                 # tb runs are hermetic — no web reach (keeps cross-model
                 # comparison from being confounded by network access).
                 web_research=False,
             ),
         )
-        # code_core ADOPTS the foreign container repo: enter via ingest_workspace
-        # (scan → extract the existing architecture into mission.architecture),
-        # which hands off to mission_control where the pending directive drives
-        # replan → the functional repair sweep against the real files — no
-        # greenfield design. ops takes the objective directly via its controller.
+        # Explicit override: code_core ADOPTS the container repo via
+        # ingest_workspace (scan → extract architecture → replan → repair sweep);
+        # ops enters its controller directly. For "auto", classify does both
+        # (it seeds pending_directive for code_core and tail-calls the target).
         if flow_set == "code_core":
             mission.pending_directive = instruction
             entry_flow = "ingest_workspace"
+        elif flow_set == "ops":
+            entry_flow = get_flow_set("ops").entry_flow
         else:
-            entry_flow = get_flow_set(flow_set).entry_flow
+            entry_flow = "classify"
         pm.save_mission(mission)
 
         effects = ContainerEffects(

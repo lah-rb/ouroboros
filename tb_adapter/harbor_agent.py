@@ -121,7 +121,11 @@ class OuroborosHarborAgent(BaseAgent):
             f"mirrored_deps={mirrored}\n"
         )
 
-        flow_set, task_profile = self._select_flow_set(instruction)
+        # Default to the in-graph `classify` router (flow_set="auto"); the same
+        # 2-label decision the M3 task_judge made, now in-graph so local and TB
+        # share one router. OURO_FLOW_SET is a hard override that SKIPS routing.
+        override = os.environ.get("OURO_FLOW_SET")
+        flow_set = override if override in ("ops", "code_core") else "auto"
 
         pm = PersistenceManager(host_tmp)
         pm.init_agent_dir()
@@ -131,18 +135,21 @@ class OuroborosHarborAgent(BaseAgent):
             config=MissionConfig(
                 working_directory=container_cwd,
                 flow_set=flow_set,
-                task_profile=task_profile,
                 llmvp_endpoint=_LLMVP,
                 # tb runs are hermetic — no web reach (keeps cross-model
                 # comparison from being confounded by network access).
                 web_research=False,
             ),
         )
+        # Explicit override adopts the container repo (code_core→ingest_workspace)
+        # or enters ops directly; "auto" lets classify route + hand off itself.
         if flow_set == "code_core":
             mission.pending_directive = instruction
             entry_flow = "ingest_workspace"
+        elif flow_set == "ops":
+            entry_flow = get_flow_set("ops").entry_flow
         else:
-            entry_flow = get_flow_set(flow_set).entry_flow
+            entry_flow = "classify"
         pm.save_mission(mission)
 
         effects = ContainerEffects(
@@ -207,8 +214,10 @@ class OuroborosHarborAgent(BaseAgent):
             context.n_input_tokens = tin
             context.n_output_tokens = tout
             context.metadata = {
+                # "auto" when routed in-graph (the resolved flow_set + profile
+                # are in the preserved .agent/ouroboros-routing.json), else the
+                # explicit OURO_FLOW_SET override.
                 "flow_set": flow_set,
-                "task_profile": task_profile,
                 "container": container.name,
                 "wall_clock_s": wall_clock_s,
             }
