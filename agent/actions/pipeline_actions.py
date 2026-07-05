@@ -173,19 +173,28 @@ async def _baseline(effects, test_files: list[str]) -> tuple[str, list[str], boo
     command = "python -m pytest -q -x --no-header " + " ".join(test_files)
     failing_nodes: list[str] = []
     collect_ok = True
-    rc = 0
     try:
         # 90s: must fit inside the TB adapter's wall-clock park margin
         # (0.1 x deadline = ~100s) — a longer exec straddling the deadline gets
         # its container torn down mid-flight (the b5c 404 teardown race).
         base = await effects.run_command(["/bin/sh", "-c", command], timeout=90)
         out = (getattr(base, "stdout", "") or "") + (getattr(base, "stderr", "") or "")
-        rc = getattr(base, "return_code", 1)
         failing_nodes, collect_ok = _parse_pytest_output(out)
     except Exception as e:  # noqa: BLE001 — baseline is best-effort
         logger.warning("repair-tests: baseline run failed (%s)", e)
         return command, [], True, True  # infra miss — don't reject the pick
-    witnessed = bool(failing_nodes) or not collect_ok or rc not in (0, 5)
+    # A WITNESS is a named failing/errored test node or a broken collection —
+    # NOT a bare nonzero exit code. `_parse_pytest_output` already captures
+    # FAILED, node-level ERROR, and collection breaks, so a nonzero rc with
+    # none of those is noise (warnings-as-errors, session teardown, plugin exit
+    # codes). Treating that as a witness dispatched a deterministic verify
+    # against an effectively-green baseline — which, in SWE-bench (the failing
+    # regression test is HELD OUT, so no in-repo test indicts THIS bug),
+    # trivially "passed" and completed the goal with zero edits (pilot-3: 4
+    # empty patches from django-10554/pylint-4551/4604/sympy). Without a real
+    # witness the caller returns {} and the goal routes diagnose-first from the
+    # problem statement instead.
+    witnessed = bool(failing_nodes) or not collect_ok
     return command, failing_nodes, collect_ok, witnessed
 
 

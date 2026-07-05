@@ -61,6 +61,15 @@ class MissionConfig(BaseModel):
     # gracefully when on but unreachable — the research step's failure
     # branch proceeds without a summary.
     web_research: bool = True
+    # Whether the grader HOLDS OUT the failing test (SWE-bench: the regression
+    # test that proves the fix is applied by the harness, NOT present in the
+    # repo). When True, NO in-repo test is the bug's ground truth — a
+    # baseline-failing test is always a pre-existing red-herring — so the
+    # repair-test-loop witness and the test-suite gate's failure harvest are
+    # BOTH disabled, and repair fix-goals drive off the PROBLEM STATEMENT via
+    # diagnose-first. Default False keeps terminal-bench behaviour (the failing
+    # test lives in the repo and IS the spec). Set by the SWE-bench adapter.
+    held_out_tests: bool = False
     # Run-termination policy (mission YAML; `start` CLI flags override).
     # "completed" makes the cycle budget opt-in: the agent runs until
     # the mission reaches a terminal status, bounded by max_wall_clock_s

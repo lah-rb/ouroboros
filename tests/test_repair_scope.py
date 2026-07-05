@@ -184,7 +184,104 @@ async def test_nonrepair_fix_goal_still_verifies_via_interact():
     assert dc["flow"] == "interact"
 
 
+# ── §4: held_out_tests (SWE-bench) disables in-repo-test ground truth ──
+# The regression test is held out, so every baseline-failing test is a
+# pre-existing red-herring. The test gate must not harvest them (pilot-3:
+# astropy 1 goal → 9 phantom "fix failing test" goals) and the repair-test
+# loop must not witness them — repair goals drive off the problem statement.
+
+
+@pytest.mark.asyncio
+async def test_held_out_test_gate_passes_without_harvest():
+    from agent.actions.mission_actions import action_run_test_suite_gate
+    from agent.persistence.models import GoalRecord
+
+    m = _mission("repair")
+    m.config.held_out_tests = True
+    m.config.test_gate = "auto"
+    m.goals = [GoalRecord(description="fix the bug", type="functional", origin="directive")]
+    # SeqEffects would report failing nodes; the gate must not even run the suite
+    out = await action_run_test_suite_gate(_si(m, MockEffects(mission=m)))
+    assert out.result["tests_verified"] is True
+    assert out.result.get("harvested", 0) == 0
+    assert not [g for g in m.goals if g.origin == "test_gate"]  # no phantom goals
+
+
+@pytest.mark.asyncio
+async def test_held_out_repair_goal_skips_witness_goes_diagnose():
+    # Even if a baseline-failing test EXISTS, held_out skips the repair-test
+    # loop → the goal routes diagnose-first (not deterministic-verify).
+    from agent.actions.mission_actions import action_functional_sweep_next
+    from agent.persistence.models import GoalRecord
+
+    m = _mission("repair")
+    m.config.held_out_tests = True
+    m.pending_directive = ""
+    m.goals = [GoalRecord(description="Point.distance drops a dim", type="functional", origin="directive", capability_absent=False)]
+    fx = _SeqEffects(
+        [CommandResult(return_code=1, stdout="FAILED tests/test_point.py::test_x - E", stderr="", command="p")],
+        files={"tests/test_point.py": "def test_x(): Point()\n"},
+    )
+    out = await action_functional_sweep_next(_si(m, fx))
+    dc = out.context_updates["dispatch_config"]
+    assert dc["flow"] == "diagnose_issue"  # NOT the deterministic repair-test verify
+    # repair_tests must not have been derived (loop skipped)
+    assert not (m.goals[0].repair_tests or {}).get("command")
+
+
+def test_swe_adapter_sets_held_out_tests():
+    from swe_adapter.runner import build_mission
+    import tempfile
+    from swe_adapter.instance import SweInstance
+
+    inst = SweInstance(instance_id="a__b-1", repo="a/b", base_commit="c",
+                       problem_statement="bug", patch="P", test_patch="T")
+    with tempfile.TemporaryDirectory() as d:
+        m, _ = build_mission(inst, d)
+    assert m.config.held_out_tests is True
+
+
 # ── §3: test-selection module-name match ──────────────────────────────
+
+
+# ── §3b: nonzero-rc-with-no-failing-nodes is NOT a witness ────────────
+# In SWE-bench the regression test is held out, so a suite exits nonzero on
+# noise (warnings-as-errors, teardown) without any FAILED/ERROR node. That is
+# not a witness — derive must return {} so the goal routes diagnose-first
+# (pilot-3: spurious witness → deterministic-verify against a green baseline →
+# 4 empty patches).
+
+
+@pytest.mark.asyncio
+async def test_nonzero_rc_without_failing_nodes_is_not_witnessed():
+    from agent.actions.pipeline_actions import derive_repair_tests
+
+    # baseline: rc=1 but no FAILED/ERROR lines and collection fine → noise
+    noisy = CommandResult(
+        return_code=1,
+        stdout="1 passed, 3 warnings in 0.4s\n",
+        stderr="warnings summary: -W error triggered",
+        command="p",
+    )
+    fx = _SeqEffects(
+        [noisy, noisy],  # both candidate pairs return the same noise
+        files={"tests/test_point.py": "def test_x():\n    Point()\n"},
+    )
+    rt = await derive_repair_tests(fx, "`Point.distance` in point.py drops a dimension")
+    assert rt == {}  # no witness → caller falls to diagnose-first
+
+
+@pytest.mark.asyncio
+async def test_real_failing_node_is_still_witnessed():
+    from agent.actions.pipeline_actions import derive_repair_tests
+
+    fx = _SeqEffects(
+        [CommandResult(return_code=1, stdout="FAILED tests/test_point.py::test_d - E", stderr="", command="p")],
+        files={"tests/test_point.py": "def test_d():\n    Point()\n"},
+    )
+    rt = await derive_repair_tests(fx, "`Point.distance` in point.py drops a dimension")
+    assert rt.get("derived") is True
+    assert rt["failing_nodes"] == ["tests/test_point.py::test_d"]
 
 
 @pytest.mark.asyncio

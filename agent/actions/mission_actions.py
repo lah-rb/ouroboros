@@ -1586,8 +1586,18 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
                 is_repair_profile,
             )
 
+            # Held-out-test missions (SWE-bench) skip the repair-test loop
+            # entirely: no in-repo test indicts the bug (the regression test is
+            # held out), so a baseline-failing witness is always a red-herring
+            # that hijacks the goal into a deterministic verify against an
+            # effectively-green suite. Fall through to diagnose-first, which
+            # drives off the problem statement.
+            held_out = getattr(
+                getattr(mission, "config", None), "held_out_tests", False
+            )
             if (
                 is_repair_profile(mission)
+                and not held_out
                 and not (getattr(goal, "repair_tests", None) or {}).get("derived")
             ):
                 rt = await derive_repair_tests(effects, goal.description)
@@ -2813,6 +2823,14 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
 
     if mode == "off":
         return _pass("disabled (test_gate=off)")
+    if getattr(getattr(mission, "config", None), "held_out_tests", False):
+        # SWE-bench: the failing regression test is HELD OUT, so the repo's
+        # suite cannot verify THIS fix — every baseline-failing node is a
+        # pre-existing red-herring. Harvesting them manufactured phantom fix
+        # goals (pilot-3: astropy 1 real goal → 9, chasing test_models.py
+        # failures unrelated to the separability bug; the gate can never clear
+        # because a fix can't make an unrelated pre-existing failure pass).
+        return _pass("held-out tests — repo suite cannot verify the fix")
     if effects is None:
         return _pass("no effects — cannot run suite")
 

@@ -57,6 +57,7 @@ def build_mission(instance: SweInstance, host_tmp: str):
             task_profile="repair",
             llmvp_endpoint=_LLMVP,
             web_research=False,  # hermetic — no confounding network reach
+            held_out_tests=True,  # SWE-bench applies the regression test itself
         ),
     )
     # code_core ADOPTS the foreign repo: ingest_workspace scans + extracts the
