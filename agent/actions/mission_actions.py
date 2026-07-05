@@ -1671,6 +1671,49 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
                     ),
                     context_updates={"dispatch_config": dispatch_config},
                 )
+            # Repair-profile fix goals are ALREADY-CONFIRMED defects: the user
+            # filed the bug (the problem statement IS the report) and a hidden
+            # test pins it. In SWE-bench that test is HELD OUT, so the repo's
+            # baseline is green and the repair-test loop above finds no witness
+            # → without this branch the goal falls to the default "verify it
+            # works" interact, which trivially passes on the held-out test and
+            # completes the goal with ZERO edits (pilot-2: 5 empty patches,
+            # gold-file hit 8→2). Route straight to diagnose -> file_ops from
+            # the problem statement — the confirmed-defect polarity that forces
+            # a surgical fix AND localizes (diagnose explores to name the
+            # target). Only for non-capability_absent goals (a real fix, not a
+            # feature to build).
+            if is_repair_profile(mission) and not getattr(
+                goal, "capability_absent", False
+            ):
+                directive = (
+                    "This is a confirmed defect reported against existing code "
+                    "(a hidden test pins it). Diagnose the root cause and name "
+                    "the specific existing file and symbol to change — make the "
+                    "SMALLEST edit that fixes the reported behavior:\n"
+                    + goal.description
+                )
+                directive += _goal_repro_block(goal)
+                dispatch_config = {
+                    "goal_id": goal.id,
+                    "goal_description": goal.description,
+                    "goal_type": "functional",
+                    "goal_files": goal.associated_files or [],
+                    "flow": "diagnose_issue",
+                    "target_file_path": "",
+                    "flow_directive": directive,
+                    "what_happened": goal.description,
+                    "error_headline": goal.description[:80],
+                }
+                logger.info(
+                    "Functional sweep: diagnosing repair defect %s",
+                    goal.description[:50],
+                )
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_fix": True},
+                    observations=f"Functional sweep: diagnosing repair defect '{goal.description[:50]}'",
+                    context_updates={"dispatch_config": dispatch_config},
+                )
             # quality_gate-origin goals are ALREADY-CONFIRMED defects (the gate
             # found them). Re-reproducing one via interact mis-frames a bug
             # report as a capability to "verify works" and stochastically

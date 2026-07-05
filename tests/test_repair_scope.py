@@ -138,6 +138,52 @@ async def test_guarded_write_allows_editing_existing_scaffolding_on_repair():
     assert ok is True and err is None
 
 
+# ── §1b: repair fix-goal routes diagnose-first, not verify-interact ───
+# The capability_absent=False flip alone sent repair goals to the default
+# "verify it works" interact, which no-ops on SWE-bench's held-out test →
+# goal completes with zero edits (pilot-2: 5 empty patches). A repair fix
+# goal with no witnessed baseline test must dispatch diagnose_issue.
+
+
+@pytest.mark.asyncio
+async def test_repair_fix_goal_dispatches_diagnose_not_verify():
+    from agent.actions.mission_actions import action_functional_sweep_next
+    from agent.persistence.models import GoalRecord
+
+    m = _mission("repair")
+    m.pending_directive = ""
+    m.goals = [
+        GoalRecord(
+            description="Point.distance includes all coordinate dimensions",
+            type="functional",
+            origin="directive",
+            capability_absent=False,  # a fix, not a build
+        )
+    ]
+    # MockEffects: no test file greps a baseline-failing witness (held-out test)
+    out = await action_functional_sweep_next(_si(m, MockEffects(mission=m)))
+    dc = out.context_updates["dispatch_config"]
+    assert dc["flow"] == "diagnose_issue"  # NOT interact/verify
+    assert out.result.get("needs_fix") is True
+
+
+@pytest.mark.asyncio
+async def test_nonrepair_fix_goal_still_verifies_via_interact():
+    # The diagnose-first branch is repair-only; a plain-profile design goal
+    # keeps the reproduce/verify interact path.
+    from agent.actions.mission_actions import action_functional_sweep_next
+    from agent.persistence.models import GoalRecord
+
+    m = _mission("plain")
+    m.pending_directive = ""
+    m.goals = [
+        GoalRecord(description="the widget renders", type="functional", origin="design")
+    ]
+    out = await action_functional_sweep_next(_si(m, MockEffects(mission=m)))
+    dc = out.context_updates["dispatch_config"]
+    assert dc["flow"] == "interact"
+
+
 # ── §3: test-selection module-name match ──────────────────────────────
 
 
