@@ -48,16 +48,36 @@ def main() -> None:
         print(f"gold predictions ({len(instances)}) → {path}")
         return
 
-    from swe_adapter.runner import run_instance
+    from swe_adapter.runner import (
+        _PRUNE_MODE,
+        _docker_client,
+        _remove_image,
+        run_instance,
+    )
 
     logs_dir = os.path.join(preds_dir, "logs")
     rows = []
-    for i, inst in enumerate(instances, 1):
-        print(f"[{i}/{len(instances)}] {inst.instance_id}", flush=True)
-        row = run_instance(inst, args.model, logs_dir, wall_clock_s=args.wall)
-        rows.append(row)
-        write_predictions(rows, preds_path)  # incremental — survive a mid-run stop
-    print(f"predictions ({len(rows)}) → {preds_path}")
+    client = _docker_client()  # ONE client reused across instances (was leaked per-instance)
+    pulled: list[str] = []  # images this run freshly pulled → run_end prune target
+    try:
+        for i, inst in enumerate(instances, 1):
+            print(f"[{i}/{len(instances)}] {inst.instance_id}", flush=True)
+            row, prune_img = run_instance(
+                inst, args.model, logs_dir, wall_clock_s=args.wall, client=client
+            )
+            rows.append(row)
+            if prune_img:
+                pulled.append(prune_img)
+            write_predictions(rows, preds_path)  # incremental — survive a mid-run stop
+    finally:
+        if _PRUNE_MODE == "run_end":
+            for img in dict.fromkeys(pulled):  # dedupe, preserve order
+                _remove_image(client, img)
+        try:
+            client.close()
+        except Exception:
+            pass
+    print(f"predictions ({len(rows)}) → {preds_path} (prune={_PRUNE_MODE})")
 
 
 if __name__ == "__main__":

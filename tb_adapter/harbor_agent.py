@@ -189,11 +189,13 @@ class OuroborosHarborAgent(BaseAgent):
                     max_wall_clock_s=wall_clock_s,
                 )
             finally:
-                if hasattr(effects, "end_open_inference_sessions"):
-                    try:
-                        await effects.end_open_inference_sessions()
-                    except Exception:
-                        pass
+                for _teardown in ("end_open_inference_sessions", "mcp_disconnect_all"):
+                    _fn = getattr(effects, _teardown, None)
+                    if _fn is not None:
+                        try:
+                            await _fn()
+                        except Exception:
+                            pass
 
         def _run_mission_isolated() -> None:
             try:

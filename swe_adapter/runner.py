@@ -76,15 +76,54 @@ def _docker_client():
     return docker.from_env()
 
 
-def _start_container(client, instance: SweInstance):
-    """Pull (if needed) and start a detached container from the instance image."""
+# Image-prune policy (the 162GB / unified-memory driver): each instance uses a
+# distinct multi-GB sweb image, and nothing pruned them, so the Docker VM's
+# layer page-cache + Rosetta amd64 translation cache grew unbounded on a Mac.
+#   off          — keep every image (fastest re-runs, unbounded growth)
+#   run_end      — DEFAULT: remove only images this run freshly PULLED, at the
+#                  end. Keeps pre-cached images; a run leaves nothing new behind.
+#   per_instance — remove each image right after its instance (one image
+#                  resident at a time; re-pulls on any re-run).
+_PRUNE_MODE = os.environ.get("OURO_SWE_PRUNE_IMAGES", "run_end").strip().lower()
+if _PRUNE_MODE not in ("off", "run_end", "per_instance"):
+    _PRUNE_MODE = "run_end"
+
+
+def _container_name(instance: SweInstance) -> str:
+    return f"ouro-swe-{instance.instance_id}".replace("__", "_")[:60]
+
+
+def _remove_image(client, image: str) -> None:
+    """Best-effort image removal (frees the layer cache the VM holds resident)."""
+    try:
+        client.images.remove(image, force=True)
+        logger.info("pruned image %s", image)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("image prune failed for %s: %s", image, e)
+
+
+def _start_container(client, instance: SweInstance) -> tuple:
+    """Pull (if needed) and start a detached container. Returns
+    ``(container, was_pulled)`` — was_pulled gates run_end pruning so we only
+    remove images this run introduced, not the operator's pre-cached ones."""
     image = instance.image_key
+    was_pulled = False
     try:
         client.images.get(image)
     except Exception:
         logger.info("pulling %s (first use)…", image)
         client.images.pull(image)
-    return client.containers.run(
+        was_pulled = True
+    # Name-collision guard: a prior run killed mid-instance can leave a
+    # same-named container; containers.run would 409 BEFORE the try/finally and
+    # strand it. Force-remove any stale one first so teardown stays sound.
+    name = _container_name(instance)
+    try:
+        client.containers.get(name).remove(force=True)
+        logger.info("removed stale container %s before start", name)
+    except Exception:
+        pass  # normal: no pre-existing container
+    container = client.containers.run(
         image,
         command="sleep infinity",
         detach=True,
@@ -92,8 +131,9 @@ def _start_container(client, instance: SweInstance):
         # verifiers) — platform is honored by Docker Desktop's Rosetta setting.
         platform="linux/amd64",
         working_dir=REPO_DIR,
-        name=f"ouro-swe-{instance.instance_id}".replace("__", "_")[:60],
+        name=name,
     )
+    return container, was_pulled
 
 
 def run_instance(
@@ -102,18 +142,26 @@ def run_instance(
     logs_dir: str,
     wall_clock_s: float | None = None,
     max_cycles: int | None = None,
-) -> dict:
-    """Run one Ouroboros mission against a SWE-bench instance; return its
-    predictions row. Never raises for a mission-level failure — a crashed or
-    parked mission yields whatever patch the container holds (possibly empty)."""
+    client=None,
+) -> tuple[dict, str | None]:
+    """Run one Ouroboros mission against a SWE-bench instance; return
+    ``(predictions_row, image_to_prune_at_run_end)``. The second is the image
+    key when this run PULLED it and the mode is run_end (so run_pilot prunes it
+    after the whole run), else None. Never raises for a mission-level failure —
+    a crashed or parked mission yields whatever patch the container holds.
+
+    ``client`` — a shared docker client (run_pilot reuses ONE across instances
+    rather than leaking a per-instance ``from_env()``). None → create+close
+    locally (standalone use)."""
     from agent.loop import run_agent
     from tb_adapter.container_effects import ContainerEffects
 
     wall = wall_clock_s if wall_clock_s is not None else _WALL_CLOCK_S
     cycles = max_cycles if max_cycles is not None else _MAX_CYCLES
 
-    client = _docker_client()
-    container = _start_container(client, instance)
+    own_client = client is None
+    client = client or _docker_client()
+    container, was_pulled = _start_container(client, instance)
     host_tmp = tempfile.mkdtemp(prefix="ouro-swe-")
     pty_scratch = os.path.join(host_tmp, "pty")
     os.makedirs(pty_scratch, exist_ok=True)
@@ -142,11 +190,17 @@ def run_instance(
                     max_wall_clock_s=wall,
                 )
             finally:
-                if hasattr(effects, "end_open_inference_sessions"):
-                    try:
-                        await effects.end_open_inference_sessions()
-                    except Exception:
-                        pass
+                # Drain LLMVP sessions AND disconnect MCP (kills the terminal
+                # server tree) INSIDE the loop, before it closes — on the park
+                # exit the per-flow close never ran, so PTY/server processes
+                # would otherwise orphan.
+                for teardown in ("end_open_inference_sessions", "mcp_disconnect_all"):
+                    fn = getattr(effects, teardown, None)
+                    if fn is not None:
+                        try:
+                            await fn()
+                        except Exception:
+                            pass
 
         try:
             asyncio.run(_run_with_drain())
@@ -169,11 +223,22 @@ def run_instance(
             container.remove(force=True)
         except Exception:
             logger.warning("%s: container teardown failed", instance.instance_id)
+        # per_instance: prune the image now (tightest memory bound).
+        if _PRUNE_MODE == "per_instance":
+            _remove_image(client, instance.image_key)
+        if own_client:  # standalone call owns its client — close it (FD/socket leak)
+            try:
+                client.close()
+            except Exception:
+                pass
 
     logger.info(
         "%s: %d-char patch", instance.instance_id, len(model_patch)
     )
-    return prediction_row(instance.instance_id, model_name, model_patch)
+    # run_end: hand the freshly-pulled image up so run_pilot prunes it after the
+    # whole run (pre-cached images are left alone; was_pulled gates that).
+    prune_at_end = instance.image_key if (was_pulled and _PRUNE_MODE == "run_end") else None
+    return prediction_row(instance.instance_id, model_name, model_patch), prune_at_end
 
 
 def _preserve(host_tmp: str, logs_dir: str, instance_id: str) -> None:

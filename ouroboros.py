@@ -572,11 +572,15 @@ def cmd_start(args: argparse.Namespace) -> None:
                 max_wall_clock_s=max_wall_clock_s,
             )
         finally:
-            if hasattr(effects, "end_open_inference_sessions"):
-                try:
-                    await effects.end_open_inference_sessions()
-                except Exception:
-                    pass
+            # Release LLMVP sessions + disconnect MCP (terminal server tree)
+            # inside the loop before it closes, so neither orphans on exit.
+            for _teardown in ("end_open_inference_sessions", "mcp_disconnect_all"):
+                _fn = getattr(effects, _teardown, None)
+                if _fn is not None:
+                    try:
+                        await _fn()
+                    except Exception:
+                        pass
 
     try:
         result = asyncio.run(_run_with_drain())

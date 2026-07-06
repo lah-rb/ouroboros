@@ -1044,6 +1044,23 @@ class LocalEffects:
             )
         )
 
+    async def mcp_disconnect_all(self) -> None:
+        """Disconnect EVERY MCP connection this effects opened — the mission-
+        teardown sweep. Kills the terminal-server subprocess tree; paired with
+        the container force-remove (which kills the in-container `bash -i` the
+        `docker exec -i` PTY relay targets), this stops PTY/server processes
+        orphaning on the park/exit path (where the per-flow close never ran).
+        Best-effort; safe to call when nothing is open.
+        """
+        client = getattr(self, "_mcp_client", None)
+        if client is not None:
+            try:
+                await client.disconnect_all()
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                pass
+        if hasattr(self, "_mcp_connections"):
+            self._mcp_connections = {}
+
     async def mcp_disconnect(self, connection_id: str) -> None:
         """Disconnect from an MCP server."""
         start = time.monotonic()

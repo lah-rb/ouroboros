@@ -151,3 +151,32 @@ def test_pilot_has_small_and_large_scouts():
     assert len(PILOT_SMALL) >= 5
     assert any("django" in i or "sympy" in i or "matplotlib" in i for i in PILOT_LARGE_SCOUTS)
     assert set(PILOT_INSTANCES) == set(PILOT_SMALL) | set(PILOT_LARGE_SCOUTS)
+
+
+# ── Docker memory-hygiene knobs (image prune flag + name guard) ────────
+
+
+def test_prune_mode_default_is_run_end_and_validated(monkeypatch):
+    import importlib
+
+    import swe_adapter.runner as r
+
+    monkeypatch.delenv("OURO_SWE_PRUNE_IMAGES", raising=False)
+    importlib.reload(r)
+    assert r._PRUNE_MODE == "run_end"  # sensible default
+    for val, expect in [("off", "off"), ("per_instance", "per_instance"),
+                        ("PER_INSTANCE", "per_instance"), ("garbage", "run_end")]:
+        monkeypatch.setenv("OURO_SWE_PRUNE_IMAGES", val)
+        importlib.reload(r)
+        assert r._PRUNE_MODE == expect
+    monkeypatch.delenv("OURO_SWE_PRUNE_IMAGES", raising=False)
+    importlib.reload(r)
+
+
+def test_container_name_normalizes_and_bounds():
+    from swe_adapter.runner import _container_name
+
+    n = _container_name(_inst(instance_id="astropy__astropy-12907"))
+    assert n.startswith("ouro-swe-")
+    assert "__" not in n  # double underscore normalized
+    assert len(n) <= 60  # docker name bound
