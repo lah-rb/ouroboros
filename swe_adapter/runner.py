@@ -34,6 +34,9 @@ REPO_DIR = "/testbed"  # SWE-bench repos are always checked out here
 _LLMVP = os.environ.get("OURO_LLMVP", "http://localhost:8008/graphql")
 _MAX_CYCLES = int(os.environ.get("OURO_MAX_CYCLES", "20"))
 _WALL_CLOCK_S = float(os.environ.get("OURO_WALL_CLOCK_S", "1200") or "1200")
+# CoT/prompt capture parity with the tb adapter: OURO_TRACE=1 → capture thinking
+# + rendered prompts into the trace (for CoT-level failure analysis).
+_TRACE = bool(os.environ.get("OURO_TRACE"))
 
 
 def build_mission(instance: SweInstance, host_tmp: str):
@@ -175,6 +178,10 @@ def run_instance(
             host_pty_scratch=pty_scratch,
             llmvp_endpoint=_LLMVP,
             exec_user="",
+            # CoT/prompt capture parity with tb_adapter (OURO_TRACE=1 → traces
+            # carry thinking + rendered prompts for CoT-level failure analysis).
+            trace_thinking=_TRACE,
+            trace_prompts=_TRACE,
         )
         async def _run_with_drain():
             # Drain sessions the mission left open so it never strands one on
