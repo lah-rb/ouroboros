@@ -139,6 +139,96 @@ async def test_persist_routing_rejects_invalid_labels():
     assert m.config.task_profile == "plain"
 
 
+# ── router session open / conclude retries (transient-busy + malformed) ─
+
+
+class _SessionEffects(MockEffects):
+    """Controls start_inference_session failures + session_inference texts."""
+
+    def __init__(self, *, open_fails=0, conclude_texts=None, **kw):
+        super().__init__(**kw)
+        self._open_fails = open_fails
+        self._open_calls = 0
+        self._conclude_texts = list(conclude_texts or [])
+        self.ended: list = []
+
+    async def start_inference_session(self, *a, **k):
+        self._open_calls += 1
+        if self._open_calls <= self._open_fails:
+            raise RuntimeError(
+                "Start session failed: All inference instances are busy — "
+                "try again later (active=1, limit=1)"
+            )
+        return "router-sess-1"
+
+    async def session_inference(self, session_id, prompt, config=None, **k):
+        text = (
+            self._conclude_texts.pop(0)
+            if self._conclude_texts
+            else '```json\n{"flow_set":"ops","profile":"plain","findings":""}\n```'
+        )
+
+        class _R:
+            pass
+
+        r = _R()
+        r.text = text
+        return r
+
+    async def end_inference_session(self, *a, **k):
+        self.ended.append(a)
+
+
+@pytest.mark.asyncio
+async def test_open_router_session_retries_transient_busy(monkeypatch):
+    # The single-instance pool rejects an open when a straggler is active;
+    # retry (3×) recovers instead of defaulting.
+    import agent.actions.router_actions as ra
+
+    async def _nosleep(_):
+        return None
+
+    monkeypatch.setattr(ra.asyncio, "sleep", _nosleep)
+    m = _mission()
+    fx = _SessionEffects(open_fails=2, mission=m)  # busy twice, opens on the 3rd
+    out = await ra.action_open_router_session(_si(m, fx))
+    assert out.result["session_started"] is True
+    assert out.context_updates["router_session_id"] == "router-sess-1"
+    assert fx._open_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_open_router_session_defaults_after_exhaustion(monkeypatch):
+    import agent.actions.router_actions as ra
+
+    async def _nosleep(_):
+        return None
+
+    monkeypatch.setattr(ra.asyncio, "sleep", _nosleep)
+    m = _mission()
+    fx = _SessionEffects(open_fails=3, mission=m)  # busy for all 3 tries
+    out = await ra.action_open_router_session(_si(m, fx))
+    assert out.result["session_started"] is False  # → persist default (ops, plain)
+
+
+@pytest.mark.asyncio
+async def test_conclude_route_retries_malformed_then_parses():
+    from agent.actions.router_actions import action_conclude_route
+
+    m = _mission()
+    fx = _SessionEffects(
+        conclude_texts=[
+            "sorry, thinking out loud, no json here",  # attempt 1: unparseable
+            '```json\n{"flow_set":"code_core","profile":"repair","findings":"diffuse fix"}\n```',
+        ],
+        mission=m,
+    )
+    out = await action_conclude_route(_si(m, fx, router_session_id="s1"))
+    assert out.context_updates["routed_flow_set"] == "code_core"  # recovered on retry
+    assert out.context_updates["routed_profile"] == "repair"
+    assert out.result["method"] == "llm"
+
+
 # ── compiled classify flow wiring ─────────────────────────────────────
 
 

@@ -19,6 +19,7 @@ inference, no post-hoc override.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 
@@ -119,15 +120,31 @@ async def action_open_router_session(step_input: StepInput) -> StepOutput:
             result={"session_started": False},
             observations="No effects — cannot open router session",
         )
-    try:
-        session_id = await effects.start_inference_session(
-            {"ttl_seconds": 600}, static_prefix=SYSTEM_PROMPT, flow_key=_flow_key()
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.error("Failed to start router session: %s", e)
+    # Retry the open (3×, backoff). The single-instance LLMVP pool (limit=1)
+    # rejects an open when a straggler session from the previous mission's
+    # teardown is still active ("All inference instances are busy … active=1,
+    # limit=1") — a transient teardown/open race, since the router opens the
+    # very first session of a mission right as the prior one tears down. A short
+    # backoff lets the straggler release; only on real exhaustion do we fall to
+    # the (ops, plain) default (session_started=False).
+    session_id = None
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            session_id = await effects.start_inference_session(
+                {"ttl_seconds": 600}, static_prefix=SYSTEM_PROMPT, flow_key=_flow_key()
+            )
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            logger.warning("Router session open attempt %d/3 failed: %s", attempt + 1, e)
+            if attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))  # 1.5s, then 3s
+    if session_id is None:
+        logger.error("Failed to start router session after 3 tries: %s", last_err)
         return StepOutput(
             result={"session_started": False},
-            observations=f"Failed to start router session: {e}",
+            observations=f"Failed to start router session (3 tries): {last_err}",
         )
 
     mission = step_input.context.get("mission")
@@ -204,21 +221,30 @@ async def action_conclude_route(step_input: StepInput) -> StepOutput:
         "inference_session_id"
     )
     flow_set, profile, findings, method = "ops", "plain", "", "default"
-    try:
-        res = await effects.session_inference(
-            session_id, CONCLUDE_ROUTE_PROMPT, {"temperature": "t*0.2"}
-        )
-        text = getattr(res, "text", None) or str(res or "")
-        parsed = parse_llm_json(text)
-        if isinstance(parsed, dict):
-            fs, pr = parsed.get("flow_set"), parsed.get("profile")
-            if fs in VALID_FLOW_SETS:
-                flow_set, method = fs, "llm"
-            if pr in VALID_PROFILES:
-                profile = pr
-            findings = str(parsed.get("findings", "") or "")[:1200]
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Router conclude failed (%s) — default (ops, plain)", e)
+    # Retry the conclude (3×) — a bespoke session_inference doesn't inherit the
+    # turn primitive's retries: 3 (that only covers steps with a `turn:` block,
+    # e.g. run_session's plan_interaction). Same hand-rolled backstop as
+    # task_judge: a malformed/withheld JSON conclusion retries rather than
+    # failing loudly to the (ops, plain) default. Accept the first attempt whose
+    # flow_set is valid.
+    for attempt in range(3):
+        try:
+            res = await effects.session_inference(
+                session_id, CONCLUDE_ROUTE_PROMPT, {"temperature": "t*0.2"}
+            )
+            text = getattr(res, "text", None) or str(res or "")
+            parsed = parse_llm_json(text)
+            if isinstance(parsed, dict) and parsed.get("flow_set") in VALID_FLOW_SETS:
+                flow_set, method = parsed["flow_set"], "llm"
+                pr = parsed.get("profile")
+                profile = pr if pr in VALID_PROFILES else "plain"
+                findings = str(parsed.get("findings", "") or "")[:1200]
+                break
+            logger.warning(
+                "Router conclude attempt %d/3: no valid flow_set in response", attempt + 1
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Router conclude attempt %d/3 failed (%s)", attempt + 1, e)
 
     logger.info("Router: flow_set=%s profile=%s (%s)", flow_set, profile, method)
     return StepOutput(
