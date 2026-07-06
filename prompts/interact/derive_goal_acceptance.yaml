@@ -45,21 +45,32 @@ sections:
 
       These checks are a SCREEN layered under a separate behavioral evaluator
       that judges the session itself — you do NOT have to prove the behavior
-      correct, only pin the durable artifacts/state the goal requires. Two
+      correct, only pin the durable artifacts/state the goal requires. Three
       rules keep the screen safe (a failing check VETOES an otherwise-passing
       evaluation, so a wrong check is the only way to harm a correct result):
 
       1. ROBUST PREDICATES ONLY: `test -f path`, `test -s path`,
          `test -x path`, an exit code, a port probe, or
-         `grep -qF '<exact text>' path` ONLY when the goal STATES that
-         literal.
+         `grep -qF '<exact text>' path` ONLY to confirm content the program
+         PRODUCES (an output/data/config file the goal says it writes), and
+         only when the goal STATES that literal.
       2. NEVER RE-DERIVE THE PROGRAM'S OWN WORK inside a check and compare —
          a slightly-wrong re-derivation fails a correct result forever.
+      3. A CHECK MUST BE ABLE TO FAIL IF THE GOAL IS UNMET. Never write a
+         check that is true the moment the edit is made — it proves nothing.
+         In particular, do NOT grep a SOURCE file for code you are adding or
+         changing (e.g. `grep '.is_negative' module.py` after editing that
+         module): the string is present by construction whether or not it
+         works. If a check would still pass against a broken-but-present
+         implementation, it is vacuous — drop it. Prefer a check that
+         EXERCISES the behavior (run the code path / invoke the CLI and assert
+         an observable outcome the bug would violate) over one that inspects
+         the source.
 
       Most purely-behavioral goals (interactive flows, conversational
       output) have NO robust shell-checkable end-state — for those return
       {"checks": []}; adding nothing is correct and the evaluator judges
-      alone.
+      alone. An empty array always beats a vacuous check.
 
   - id: output_format
     content: |
