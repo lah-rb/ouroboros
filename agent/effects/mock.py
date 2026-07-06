@@ -543,6 +543,13 @@ class MockEffects:
             )
         return found
 
+    async def end_open_inference_sessions(self) -> int:
+        """Drain any still-open mock sessions (test parity with LocalEffects)."""
+        open_ids = list(getattr(self, "_mock_active_sessions", set()))
+        for sid in open_ids:
+            await self.end_inference_session(sid)
+        return len(open_ids)
+
     async def session_snapshot(self, session_id: str, key: str) -> dict:
         """Pin a mock snapshot: records the session's turn list under key.
 

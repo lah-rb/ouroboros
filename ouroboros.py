@@ -558,9 +558,11 @@ def cmd_start(args: argparse.Namespace) -> None:
     # Run the agent loop
     from agent.loop import run_agent
 
-    try:
-        result = asyncio.run(
-            run_agent(
+    async def _run_with_drain():
+        # Drain any session the mission left open (park/exit) so it doesn't
+        # strand one on the single-instance LLMVP pool for the next run.
+        try:
+            return await run_agent(
                 mission_id=mission.id,
                 effects=effects,
                 flows_dir=flows_dir,
@@ -569,7 +571,15 @@ def cmd_start(args: argparse.Namespace) -> None:
                 max_cycles=max_cycles,
                 max_wall_clock_s=max_wall_clock_s,
             )
-        )
+        finally:
+            if hasattr(effects, "end_open_inference_sessions"):
+                try:
+                    await effects.end_open_inference_sessions()
+                except Exception:
+                    pass
+
+    try:
+        result = asyncio.run(_run_with_drain())
         print()
         print(f"{'=' * 60}")
         print(f"Agent terminated: {result.status}")

@@ -428,6 +428,14 @@ class Effects(Protocol):
         """
         ...
 
+    async def end_open_inference_sessions(self) -> int:
+        """End every session this effects instance opened but never closed —
+        the mission-teardown drain, so a parked/killed mission never strands a
+        session on the single-instance pool for the next one. Best-effort;
+        returns the count closed.
+        """
+        ...
+
     async def session_snapshot(self, session_id: str, key: str) -> dict:
         """Pin the session's current context as a SEMI-PERMANENT snapshot.
 

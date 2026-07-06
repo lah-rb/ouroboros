@@ -19,7 +19,6 @@ inference, no post-hoc override.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 
@@ -120,31 +119,23 @@ async def action_open_router_session(step_input: StepInput) -> StepOutput:
             result={"session_started": False},
             observations="No effects — cannot open router session",
         )
-    # Retry the open (3×, backoff). The single-instance LLMVP pool (limit=1)
-    # rejects an open when a straggler session from the previous mission's
-    # teardown is still active ("All inference instances are busy … active=1,
-    # limit=1") — a transient teardown/open race, since the router opens the
-    # very first session of a mission right as the prior one tears down. A short
-    # backoff lets the straggler release; only on real exhaustion do we fall to
-    # the (ops, plain) default (session_started=False).
-    session_id = None
-    last_err: Exception | None = None
-    for attempt in range(3):
-        try:
-            session_id = await effects.start_inference_session(
-                {"ttl_seconds": 600}, static_prefix=SYSTEM_PROMPT, flow_key=_flow_key()
-            )
-            break
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-            logger.warning("Router session open attempt %d/3 failed: %s", attempt + 1, e)
-            if attempt < 2:
-                await asyncio.sleep(1.5 * (attempt + 1))  # 1.5s, then 3s
-    if session_id is None:
-        logger.error("Failed to start router session after 3 tries: %s", last_err)
+    # No client-side retry here: start_inference_session already WAITS
+    # backend_timeout (180s) for a free instance server-side before raising
+    # "busy", so a client retry just re-waits another 180s — actively harmful.
+    # A busy open means a leaked session from the previous mission is pinning
+    # the single-instance pool; that's fixed at the source by draining
+    # open sessions on mission exit (LocalEffects.end_open_inference_sessions,
+    # called from every run_agent call site). On the rare genuine failure we
+    # fall to the (ops, plain) default (session_started=False).
+    try:
+        session_id = await effects.start_inference_session(
+            {"ttl_seconds": 600}, static_prefix=SYSTEM_PROMPT, flow_key=_flow_key()
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("Failed to start router session: %s", e)
         return StepOutput(
             result={"session_started": False},
-            observations=f"Failed to start router session (3 tries): {last_err}",
+            observations=f"Failed to start router session: {e}",
         )
 
     mission = step_input.context.get("mission")

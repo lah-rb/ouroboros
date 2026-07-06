@@ -175,19 +175,29 @@ class OuroborosHarborAgent(BaseAgent):
         flows_dir = os.path.join(_REPO_ROOT, "flows")
         prompts_dir = os.path.join(_REPO_ROOT, "prompts")
 
+        async def _run_with_drain():
+            # Drain sessions the mission left open so it never strands one on
+            # the single-instance pool for the next task.
+            try:
+                await run_agent(
+                    mission_id=mission.id,
+                    effects=effects,
+                    flows_dir=flows_dir,
+                    prompts_dir=prompts_dir,
+                    entry_flow=entry_flow,
+                    max_cycles=_MAX_CYCLES,
+                    max_wall_clock_s=wall_clock_s,
+                )
+            finally:
+                if hasattr(effects, "end_open_inference_sessions"):
+                    try:
+                        await effects.end_open_inference_sessions()
+                    except Exception:
+                        pass
+
         def _run_mission_isolated() -> None:
             try:
-                asyncio.run(
-                    run_agent(
-                        mission_id=mission.id,
-                        effects=effects,
-                        flows_dir=flows_dir,
-                        prompts_dir=prompts_dir,
-                        entry_flow=entry_flow,
-                        max_cycles=_MAX_CYCLES,
-                        max_wall_clock_s=wall_clock_s,
-                    )
-                )
+                asyncio.run(_run_with_drain())
             except RuntimeError as e:
                 # run_agent raises after parking the mission on budget exhaustion —
                 # a clean stop, not a crash. Harbor grades the container regardless.

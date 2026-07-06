@@ -156,10 +156,11 @@ class OuroborosAgent(BaseAgent):
             trace_prompts=_TRACE,
         )
 
-        failure_mode = FailureMode.NONE
-        try:
-            asyncio.run(
-                run_agent(
+        async def _run_with_drain():
+            # Drain sessions the mission left open (park/kill) so it never
+            # strands one on the single-instance pool for the next task.
+            try:
+                await run_agent(
                     mission_id=mission.id,
                     effects=effects,
                     flows_dir=os.path.join(_REPO_ROOT, "flows"),
@@ -168,7 +169,16 @@ class OuroborosAgent(BaseAgent):
                     max_cycles=_MAX_CYCLES,
                     max_wall_clock_s=wall_clock_s,
                 )
-            )
+            finally:
+                if hasattr(effects, "end_open_inference_sessions"):
+                    try:
+                        await effects.end_open_inference_sessions()
+                    except Exception:
+                        pass
+
+        failure_mode = FailureMode.NONE
+        try:
+            asyncio.run(_run_with_drain())
         except RuntimeError as e:
             # run_agent raises on budget exhaustion (cycle/wall-clock) after
             # parking the mission — that's a clean stop, not a crash. The bench

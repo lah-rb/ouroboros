@@ -1326,6 +1326,29 @@ class LocalEffects:
             )
         return success
 
+    async def end_open_inference_sessions(self) -> int:
+        """End every inference session this effects instance opened but never
+        closed — the mission-teardown drain.
+
+        `_session_started_at` holds exactly the still-open sessions (added on
+        start, popped on end). A wall-clock park or a hard cancel can leave a
+        session pinned on the single-instance LLMVP pool; the next mission's
+        first session open then waits backend_timeout (180s) and raises "busy".
+        Called best-effort from every run_agent call site (the CLI + the tb/swe
+        adapters) so a mission never strands a session for the next one.
+        Returns the count closed.
+        """
+        closed = 0
+        for sid in list(self._session_started_at.keys()):
+            try:
+                if await self.end_inference_session(sid):
+                    closed += 1
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                self._session_started_at.pop(sid, None)  # don't strand a broken close
+        if closed:
+            logger.info("Drained %d open inference session(s) at mission teardown", closed)
+        return closed
+
     async def session_snapshot(self, session_id: str, key: str) -> dict:
         """Pin the session's context as a semi-permanent snapshot.
 

@@ -128,9 +128,11 @@ def run_instance(
             llmvp_endpoint=_LLMVP,
             exec_user="",
         )
-        try:
-            asyncio.run(
-                run_agent(
+        async def _run_with_drain():
+            # Drain sessions the mission left open so it never strands one on
+            # the single-instance pool for the next instance.
+            try:
+                await run_agent(
                     mission_id=mission.id,
                     effects=effects,
                     flows_dir=os.path.join(_REPO_ROOT, "flows"),
@@ -139,7 +141,15 @@ def run_instance(
                     max_cycles=cycles,
                     max_wall_clock_s=wall,
                 )
-            )
+            finally:
+                if hasattr(effects, "end_open_inference_sessions"):
+                    try:
+                        await effects.end_open_inference_sessions()
+                    except Exception:
+                        pass
+
+        try:
+            asyncio.run(_run_with_drain())
         except RuntimeError as e:
             if "parked as paused" in str(e):
                 logger.info("%s: budget stop (parked)", instance.instance_id)

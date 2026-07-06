@@ -180,35 +180,34 @@ class _SessionEffects(MockEffects):
 
 
 @pytest.mark.asyncio
-async def test_open_router_session_retries_transient_busy(monkeypatch):
-    # The single-instance pool rejects an open when a straggler is active;
-    # retry (3×) recovers instead of defaulting.
+async def test_open_router_session_no_client_retry_defaults_on_busy():
+    # start_inference_session already WAITS backend_timeout server-side, so a
+    # client retry just re-waits — NO client retry here. A busy open (leaked
+    # session on the pool) falls to the (ops, plain) default; the leak itself is
+    # fixed at the source by draining open sessions on mission exit.
     import agent.actions.router_actions as ra
 
-    async def _nosleep(_):
-        return None
-
-    monkeypatch.setattr(ra.asyncio, "sleep", _nosleep)
     m = _mission()
-    fx = _SessionEffects(open_fails=2, mission=m)  # busy twice, opens on the 3rd
+    fx = _SessionEffects(open_fails=1, mission=m)  # one failure, no retry
     out = await ra.action_open_router_session(_si(m, fx))
-    assert out.result["session_started"] is True
-    assert out.context_updates["router_session_id"] == "router-sess-1"
-    assert fx._open_calls == 3
+    assert out.result["session_started"] is False
+    assert fx._open_calls == 1  # single attempt — did NOT re-wait/re-try
 
 
 @pytest.mark.asyncio
-async def test_open_router_session_defaults_after_exhaustion(monkeypatch):
-    import agent.actions.router_actions as ra
+async def test_end_open_inference_sessions_drains_leaked_sessions():
+    # The teardown drain: a session opened but never closed (parked/killed
+    # mid-flow) is released so it doesn't strand the single-instance pool.
+    from agent.effects.mock import MockEffects
 
-    async def _nosleep(_):
-        return None
-
-    monkeypatch.setattr(ra.asyncio, "sleep", _nosleep)
-    m = _mission()
-    fx = _SessionEffects(open_fails=3, mission=m)  # busy for all 3 tries
-    out = await ra.action_open_router_session(_si(m, fx))
-    assert out.result["session_started"] is False  # → persist default (ops, plain)
+    fx = MockEffects()
+    s1 = await fx.start_inference_session()
+    await fx.start_inference_session()  # s2: left open (the leak)
+    await fx.end_inference_session(s1)  # one closed normally
+    # the second session is left open → drain closes it
+    closed = await fx.end_open_inference_sessions()
+    assert closed == 1
+    assert await fx.end_open_inference_sessions() == 0  # idempotent
 
 
 @pytest.mark.asyncio
