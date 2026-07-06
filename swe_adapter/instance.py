@@ -71,6 +71,24 @@ PILOT_LARGE_SCOUTS = [
 PILOT_INSTANCES = PILOT_SMALL + PILOT_LARGE_SCOUTS
 
 
+def all_instance_ids(dataset: str = DATASET) -> list[str]:
+    """Every instance_id in the dataset split, in dataset order.
+
+    Cheap — reads only the id column, no SweInstance construction — so a full
+    marathon launcher can enumerate + shuffle the 500 Verified ids without
+    materializing every row. Raises ImportError (like load_instances) if the
+    `datasets` dep is missing.
+    """
+    try:
+        from datasets import load_dataset
+    except ImportError as e:  # pragma: no cover - only without the dep
+        raise ImportError(
+            "swe_adapter.all_instance_ids needs the `datasets` package."
+        ) from e
+    ds = load_dataset(dataset, split="test")
+    return [r["instance_id"] for r in ds]
+
+
 def load_instances(
     instance_ids: list[str] | None = None, dataset: str = DATASET
 ) -> list[SweInstance]:

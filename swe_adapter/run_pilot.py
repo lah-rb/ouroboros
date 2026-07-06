@@ -24,10 +24,46 @@ from swe_adapter.evaluate import write_gold_predictions, write_predictions  # no
 from swe_adapter.instance import PILOT_INSTANCES, load_instances  # noqa: E402
 
 
+def _resume_done_ids(preds_path: str) -> tuple[list[dict], set[str]]:
+    """Rows already written for this run (incremental predictions survive a
+    mid-run stop) → (rows, done-id-set). A resumed marathon skips these instead
+    of re-running them, so an overnight run that was interrupted continues."""
+    rows: list[dict] = []
+    done: set[str] = set()
+    if not os.path.isfile(preds_path):
+        return rows, done
+    import json
+
+    with open(preds_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            iid = str(row.get("instance_id", "") or "")
+            if iid and iid not in done:
+                done.add(iid)
+                rows.append(row)
+    return rows, done
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Run the SWE-bench pilot")
+    ap = argparse.ArgumentParser(description="Run the SWE-bench pilot / full set")
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--instances", default="", help="comma-separated ids (default: pilot)")
+    ap.add_argument("--all", action="store_true",
+                    help="run the ENTIRE Verified set (overrides --instances)")
+    ap.add_argument("--shuffle", action="store_true",
+                    help="deterministically shuffle the id order (representative "
+                    "prefix for a partial run); on by default with --all")
+    ap.add_argument("--no-shuffle", action="store_true", help="keep dataset order under --all")
+    ap.add_argument("--seed", type=int, default=0, help="shuffle seed (reproducible order)")
+    ap.add_argument("--limit", type=int, default=0, help="cap to the first N instances (0=all)")
+    ap.add_argument("--resume", action="store_true",
+                    help="skip instances already present in predictions.jsonl")
     ap.add_argument("--model", default="ouroboros-gpt-oss")
     ap.add_argument("--wall", type=float, default=None, help="per-instance wall clock (s)")
     ap.add_argument("--out-dir", default=os.path.join(_REPO_ROOT, "runs", "swe"))
@@ -35,18 +71,46 @@ def main() -> None:
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    ids = [s.strip() for s in args.instances.split(",") if s.strip()] or PILOT_INSTANCES
-    instances = load_instances(ids)
-    if not instances:
-        sys.exit("No instances loaded — check the ids / dataset access.")
+    if args.all:
+        from swe_adapter.instance import all_instance_ids
+
+        ids = all_instance_ids()
+        if not args.no_shuffle:  # representative prefix for the partial overnight run
+            import random
+
+            random.Random(args.seed).shuffle(ids)
+    else:
+        ids = [s.strip() for s in args.instances.split(",") if s.strip()] or PILOT_INSTANCES
+        if args.shuffle:
+            import random
+
+            random.Random(args.seed).shuffle(ids)
+    if args.limit and args.limit > 0:
+        ids = ids[: args.limit]
 
     preds_dir = os.path.join(args.out_dir, args.run_id)
     preds_path = os.path.join(preds_dir, "predictions.jsonl")
 
     if args.gold:
+        instances = load_instances(ids)
+        if not instances:
+            sys.exit("No instances loaded — check the ids / dataset access.")
         path = write_gold_predictions(instances, preds_path)
         print(f"gold predictions ({len(instances)}) → {path}")
         return
+
+    # Resume: seed rows with what's already graded-out, skip those ids.
+    rows: list[dict] = []
+    done: set[str] = set()
+    if args.resume:
+        rows, done = _resume_done_ids(preds_path)
+        if done:
+            print(f"resume: {len(done)} instance(s) already done — skipping", flush=True)
+        ids = [i for i in ids if i not in done]
+
+    instances = load_instances(ids)
+    if not instances:
+        sys.exit("No instances loaded — check the ids / dataset access.")
 
     from swe_adapter.runner import (
         _PRUNE_MODE,
@@ -56,7 +120,8 @@ def main() -> None:
     )
 
     logs_dir = os.path.join(preds_dir, "logs")
-    rows = []
+    # rows already seeded from the resume scan above (empty otherwise) — do NOT
+    # reset, or a resumed run would drop the completed instances from the file.
     client = _docker_client()  # ONE client reused across instances (was leaked per-instance)
     pulled: list[str] = []  # images this run freshly pulled → run_end prune target
     try:
