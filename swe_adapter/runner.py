@@ -32,7 +32,13 @@ logger = logging.getLogger(__name__)
 
 REPO_DIR = "/testbed"  # SWE-bench repos are always checked out here
 _LLMVP = os.environ.get("OURO_LLMVP", "http://localhost:8008/graphql")
-_MAX_CYCLES = int(os.environ.get("OURO_MAX_CYCLES", "20"))
+# Iteration cap is a LOOSE runaway backstop, not the primary budget — wall-clock
+# governs. A 20-cap bound FIRST on 52% of parked missions (some at ~516s, wasting
+# >50% of the 1200s wall), inverting the intent; canonical SWE agents cap steps
+# high (SWE-agent 250, OpenHands 100) and let cost/time govern. At ~26-90s/cycle a
+# healthy mission does ~15-45 cycles within the wall, so 50 rarely binds yet still
+# kills a degenerate fast-loop the wall alone would let spin for 1200s.
+_MAX_CYCLES = int(os.environ.get("OURO_MAX_CYCLES", "50"))
 _WALL_CLOCK_S = float(os.environ.get("OURO_WALL_CLOCK_S", "1200") or "1200")
 # CoT/prompt capture parity with the tb adapter: OURO_TRACE=1 → capture thinking
 # + rendered prompts into the trace (for CoT-level failure analysis).
