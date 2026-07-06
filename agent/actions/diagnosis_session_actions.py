@@ -151,6 +151,13 @@ CONCLUDE_PROMPT = (
     "cross-symbol contract: what attribute name, signature, or "
     "return shape all the listed symbols will share after the "
     "change.\n\n"
+    "  expected_error — leave EMPTY in almost every case. Set it ONLY when the "
+    "fix's success is that some input the code CURRENTLY accepts must instead "
+    "be REJECTED by raising an exception (input validation, a guard clause). "
+    "Then name that exception type exactly — e.g. `ValueError`, `TypeError`. "
+    "The retest treats that exception appearing in the output as the PASS "
+    "signal instead of a crash. If the fix makes code STOP raising, or is any "
+    "other kind of change, leave this empty.\n\n"
     "  kind — one of: `fix` (existing behavior is incorrect — "
     "wrong output, crash, exception, broken contract between "
     "symbols), `enhancement` (a feature the user expected is "
@@ -188,6 +195,7 @@ CONCLUDE_PROMPT = (
     '  "related_symbols": ["src/router.py:Router.resolve", "make_envelope"],\n'
     '  "root_cause": "Dispatch reads handler.route_table by attribute but Router.resolve writes routes as a dict keyed by name.",\n'
     '  "change_spec": "Make RequestHandler.dispatch accept the dict shape Router.resolve produces, or change Router.resolve to expose a flat attribute. Pick whichever side has fewer callers.",\n'
+    '  "expected_error": "",\n'
     '  "kind": "fix",\n'
     '  "confidence": "HIGH",\n'
     '  "recommended_flow": "file_ops"\n'
@@ -1001,7 +1009,30 @@ async def action_conclude_diagnosis(
     if not isinstance(traced_symbols, list):
         traced_symbols = []
 
-    return await _conclude_diagnosis(effects, session_id, turn, traced_symbols)
+    out = await _conclude_diagnosis(effects, session_id, turn, traced_symbols)
+
+    # Persist the should-raise contract onto the goal. The deterministic retest
+    # evaluator runs in a LATER, separate dispatch (the functional sweep fires
+    # interact after file_ops returns), by which point this diagnose flow's
+    # context is gone — so the goal is the only durable carrier. Refresh on
+    # every conclude (set OR clear): a re-diagnose that's no longer should-raise
+    # must not leave a stale expected_error relaxing a normal retest.
+    goal_id = str((step_input.inputs or {}).get("goal_id", "") or "")
+    if goal_id:
+        expected_error = str((out.context_updates or {}).get("expected_error", "") or "")
+        try:
+            mission = await effects.load_mission()
+            goal = next(
+                (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id),
+                None,
+            )
+            if goal is not None and getattr(goal, "expected_error", "") != expected_error:
+                goal.expected_error = expected_error
+                await effects.save_mission(mission)
+        except Exception:
+            pass  # non-critical — evaluator falls back to blanket error scan
+
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1064,6 +1095,12 @@ async def _conclude_diagnosis(
     module_statement: str = ""
     confidence: str = ""
     root_cause: str = ""
+    # Should-raise contract (deterministic-evaluator support). Non-empty only
+    # when the fix's success is that some input must now RAISE — the exception
+    # type the retest should accept as PASS. Persisted onto the goal by
+    # action_conclude_diagnosis (the diagnose flow context is gone by retest
+    # time). See GoalRecord.expected_error + evaluate_deterministic_result.
+    expected_error: str = ""
     # Multi-symbol patching (505 round). List of co-dependent
     # symbols in the same file that must change alongside
     # target_symbol. Empty when the change is local to
@@ -1084,6 +1121,7 @@ async def _conclude_diagnosis(
             module_statement = str(parsed.get("module_statement", "") or "")
             confidence = str(parsed.get("confidence", "") or "")
             root_cause = str(parsed.get("root_cause", "") or "")
+            expected_error = str(parsed.get("expected_error", "") or "").strip()
             raw_related = parsed.get("related_symbols", [])
             if isinstance(raw_related, list):
                 related_symbols = [
@@ -1120,6 +1158,7 @@ async def _conclude_diagnosis(
         "module_statement": module_statement,
         "diagnosis_confidence": confidence,
         "root_cause": root_cause,
+        "expected_error": expected_error,
     }
     if recommended_flow is not None:
         context_updates["recommended_flow"] = recommended_flow

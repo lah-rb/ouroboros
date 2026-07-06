@@ -260,6 +260,16 @@ class GoalRecord(BaseModel):
     # indict an edit). Empty when no suite matched — falls back to the LLM
     # evaluator (pre-B.5 behavior).
     repair_tests: dict = Field(default_factory=dict)
+    # Should-raise repair contract (deterministic-evaluator support). Set by the
+    # diagnose CONCLUDE when a fix's success criterion is that some input the
+    # code CURRENTLY accepts must instead be REJECTED by raising (input
+    # validation, a guard clause) — the exception type, e.g. "ValueError". The
+    # deterministic retest evaluator then treats that exception's presence in
+    # the output as the PASS signal rather than blanket-failing on the exception
+    # token (the flask should-raise false-fail). Refreshed on every re-diagnose
+    # (cleared when the conclusion is no longer a should-raise). Empty (the
+    # default) = no raise expected; an exception in the output fails as before.
+    expected_error: str = ""
 
 
 class FailedAttempt(BaseModel):

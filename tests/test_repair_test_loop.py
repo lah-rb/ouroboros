@@ -494,6 +494,113 @@ async def test_deterministic_eval_fails_fixture_error_even_with_exit0():
     assert out.result["goal_met"] is False
 
 
+# ── Should-raise contract (GoalRecord.expected_error) ─────────────────────
+
+
+def _eval_si(terminal_output: str, all_passed: bool, *, goal=None) -> StepInput:
+    from agent.actions.pipeline_actions import action_evaluate_deterministic_result  # noqa: F401
+
+    mission = _mission(goals=[goal]) if goal else None
+    return StepInput(
+        context={"terminal_output": terminal_output, "all_passed": all_passed},
+        inputs={"goal_id": goal.id} if goal else {},
+        params={},
+        meta=FlowMeta(flow_name="interact", step_id="evaluate_deterministic"),
+        effects=MockEffects(mission=mission),
+    )
+
+
+@pytest.mark.asyncio
+async def test_deterministic_eval_should_raise_passes_on_expected_exception():
+    """The flask false-fail: a fix whose success is that bad input now RAISES.
+    The propagated exception yields a non-zero exit + traceback — but with the
+    goal's expected_error set, the named exception IS the pass signal."""
+    from agent.actions.pipeline_actions import action_evaluate_deterministic_result
+
+    goal = GoalRecord(
+        description="reject empty separator",
+        type="functional",
+        expected_error="ValueError",
+    )
+    out = await action_evaluate_deterministic_result(
+        _eval_si(
+            "Traceback (most recent call last):\n"
+            '  File "app.py", line 3, in <module>\n'
+            "ValueError: separator must not be empty\n",
+            all_passed=False,  # the propagated exception exits non-zero
+            goal=goal,
+        )
+    )
+    assert out.result["goal_met"] is True
+    assert "ValueError" in out.observations
+
+
+@pytest.mark.asyncio
+async def test_deterministic_eval_should_raise_fails_when_not_raised():
+    """A should-raise test that FAILED because nothing raised must still fail —
+    pytest's `DID NOT RAISE <class 'ValueError'>` contains 'ValueError' but not
+    'ValueError:' (the colon-anchored match), so it is not mistaken for a raise."""
+    from agent.actions.pipeline_actions import action_evaluate_deterministic_result
+
+    goal = GoalRecord(
+        description="reject empty separator",
+        type="functional",
+        expected_error="ValueError",
+    )
+    out = await action_evaluate_deterministic_result(
+        _eval_si(
+            "F\n"
+            "def test_rejects():\n"
+            ">       with pytest.raises(ValueError):\n"
+            "E       Failed: DID NOT RAISE <class 'ValueError'>\n"
+            "1 failed\n",
+            all_passed=False,
+            goal=goal,
+        )
+    )
+    assert out.result["goal_met"] is False
+
+
+@pytest.mark.asyncio
+async def test_deterministic_eval_should_raise_fails_on_other_error():
+    """expected_error relaxes ONLY the named exception — a different real error
+    alongside it (an ImportError the edit introduced) still fails the goal."""
+    from agent.actions.pipeline_actions import action_evaluate_deterministic_result
+
+    goal = GoalRecord(
+        description="reject empty separator",
+        type="functional",
+        expected_error="ValueError",
+    )
+    out = await action_evaluate_deterministic_result(
+        _eval_si(
+            "Traceback (most recent call last):\n"
+            "ImportError: cannot import name 'foo'\n"
+            "ValueError: separator must not be empty\n",
+            all_passed=False,
+            goal=goal,
+        )
+    )
+    assert out.result["goal_met"] is False
+
+
+@pytest.mark.asyncio
+async def test_deterministic_eval_normal_goal_still_fails_on_exception():
+    """Regression guard: a goal with NO expected_error keeps the blanket
+    behavior — a ValueError in the output fails, exactly as before."""
+    from agent.actions.pipeline_actions import action_evaluate_deterministic_result
+
+    goal = GoalRecord(description="do a thing", type="functional")  # no expected_error
+    out = await action_evaluate_deterministic_result(
+        _eval_si(
+            "Traceback (most recent call last):\nValueError: boom\n",
+            all_passed=False,
+            goal=goal,
+        )
+    )
+    assert out.result["goal_met"] is False
+
+
 @pytest.mark.asyncio
 async def test_gate_stale_baseline_recheck():
     # Baseline said collection was broken, but the agent fixed the blocker

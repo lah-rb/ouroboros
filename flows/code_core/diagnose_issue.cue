@@ -404,6 +404,9 @@ diagnose_issue: #FlowDefinition & {
 				// Structured module-fix declaration: the literal module-level
 				// line accompanying kind == "module_fix".
 				"module_statement",
+				// Should-raise contract: the exception the retest should accept
+				// as PASS (persisted onto the goal by conclude_diagnosis).
+				"expected_error",
 				// Multi-symbol patching (505 round)
 				"related_symbols",
 			]

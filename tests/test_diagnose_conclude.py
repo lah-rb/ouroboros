@@ -158,3 +158,71 @@ async def test_conclude_surfaces_traced_symbols_in_prompt():
     assert calls, "conclude must run a session inference"
     prompt = calls[0].args["prompt"]
     assert "You inspected these symbols" in prompt
+
+
+# ── Should-raise contract (expected_error) ────────────────────────────────
+
+
+def _step_input_with_goal(effects: MockEffects, goal_id: str, **context) -> StepInput:
+    return StepInput(
+        context=dict(context),
+        inputs={"goal_id": goal_id},
+        params={},
+        meta=FlowMeta(flow_name="diagnose_issue", step_id="conclude", attempt=1),
+        effects=effects,
+    )
+
+
+@pytest.mark.asyncio
+async def test_conclude_persists_expected_error_onto_goal():
+    """A should-raise diagnosis publishes expected_error AND writes it onto the
+    goal — the deterministic retest runs in a later dispatch with no access to
+    this flow's context, so the goal is the only durable carrier."""
+    from agent.persistence.models import GoalRecord, MissionConfig, MissionState
+
+    goal = GoalRecord(description="reject empty separator", type="functional")
+    mission = MissionState(objective="o", config=MissionConfig(working_directory="/tmp/x"), goals=[goal])
+    fenced = (
+        "```json\n"
+        "{\n"
+        '  "target_file": "flask/helpers.py",\n'
+        '  "target_symbol": "make_response",\n'
+        '  "root_cause": "empty separator is silently accepted",\n'
+        '  "change_spec": "raise when separator is empty",\n'
+        '  "expected_error": "ValueError",\n'
+        '  "kind": "fix",\n'
+        '  "confidence": "HIGH",\n'
+        '  "recommended_flow": "file_ops"\n'
+        "}\n"
+        "```"
+    )
+    effects = MockEffects(inference_responses=[fenced], mission=mission)
+    out = await action_conclude_diagnosis(
+        _step_input_with_goal(
+            effects, goal.id, diagnosis_session_id="s", investigation_turn=1
+        )
+    )
+    assert out.context_updates["expected_error"] == "ValueError"
+    saved = (await effects.load_mission()).goals[0]
+    assert saved.expected_error == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_conclude_clears_stale_expected_error_on_redigagnose():
+    """A re-diagnose that is no longer a should-raise must clear a prior
+    expected_error — otherwise a stale value would relax a normal retest."""
+    from agent.persistence.models import GoalRecord, MissionConfig, MissionState
+
+    goal = GoalRecord(
+        description="fix it", type="functional", expected_error="ValueError"
+    )
+    mission = MissionState(objective="o", config=MissionConfig(working_directory="/tmp/x"), goals=[goal])
+    fenced = '```json\n{"target_file": "x.py", "target_symbol": "f", "kind": "fix"}\n```'
+    effects = MockEffects(inference_responses=[fenced], mission=mission)
+    out = await action_conclude_diagnosis(
+        _step_input_with_goal(
+            effects, goal.id, diagnosis_session_id="s", investigation_turn=1
+        )
+    )
+    assert out.context_updates["expected_error"] == ""
+    assert (await effects.load_mission()).goals[0].expected_error == ""

@@ -1232,6 +1232,7 @@ async def action_evaluate_deterministic_result(step_input: StepInput) -> StepOut
     routing and report compilation work identically.
 
     Context required: terminal_output, all_passed
+    Inputs (optional): goal_id — used to read the goal's should-raise contract.
     Publishes: goal_met, summary, headline
     """
     terminal_output = step_input.context.get("terminal_output", "")
@@ -1260,8 +1261,55 @@ async def action_evaluate_deterministic_result(step_input: StepInput) -> StepOut
         if "pytest missing fixture" not in found_errors:
             found_errors.append("pytest missing fixture")
 
+    # Should-raise contract (opt-in — GoalRecord.expected_error, set by the
+    # diagnose CONCLUDE). When a fix's success criterion is that some input the
+    # code used to accept must now be REJECTED by raising, the named exception
+    # is the PASS signal, not a regression. Without this, a deliberately-
+    # propagated exception trips the blanket _FAILURE_PATTERNS fail — the flask
+    # should-raise false-fail. Scoped to THIS goal via goal_id: a normal goal
+    # (empty expected_error) is completely unaffected.
+    expected_error = ""
+    goal_id = str((step_input.inputs or {}).get("goal_id", "") or "")
+    effects = step_input.effects
+    if goal_id and effects is not None:
+        try:
+            mission = await effects.load_mission()
+            goal = next(
+                (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id),
+                None,
+            )
+            if goal is not None:
+                expected_error = str(getattr(goal, "expected_error", "") or "").strip()
+        except Exception:
+            expected_error = ""
+
+    # Match the exception WITH its colon (e.g. "ValueError:") — this is exactly
+    # the message-bearing form _FAILURE_PATTERNS blanket-fails on, i.e. an
+    # exception that actually fired and propagated. It deliberately does NOT
+    # match pytest's "DID NOT RAISE <class 'ValueError'>" (no colon), so a
+    # should-raise test that failed because nothing raised is still correctly
+    # graded a failure.
+    _exc = expected_error.rstrip(":")
+    raised = bool(_exc) and f"{_exc}:" in terminal_output
+    if raised:
+        # The required exception fired — drop it (and the traceback a propagated
+        # exception prints) from the failure signals so the contract isn't read
+        # as a bug. Other, unrelated errors stay and still fail the goal.
+        found_errors = [
+            e
+            for e in found_errors
+            if e != _exc and e != "Traceback (most recent call last)"
+        ]
+
     # Determine goal_met
-    if not all_passed:
+    if raised and not found_errors:
+        # Should-raise contract met: the required exception was raised and
+        # nothing ELSE went wrong. A deliberately-propagated exception yields a
+        # non-zero exit + traceback tokens — both expected here — so this
+        # supersedes the exit-code / error-scan checks below.
+        goal_met = True
+        summary = f"Should-raise contract met: {expected_error} raised as required."
+    elif not all_passed:
         goal_met = False
         summary = "Command exited with non-zero status."
         if found_errors:

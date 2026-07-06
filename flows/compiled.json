@@ -2626,6 +2626,7 @@
           "diagnosis_confidence",
           "root_cause",
           "module_statement",
+          "expected_error",
           "related_symbols"
         ],
         "effects": [],
