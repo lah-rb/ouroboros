@@ -206,7 +206,14 @@ def run_instance(
                     if fn is not None:
                         try:
                             await fn()
-                        except Exception:
+                        # CancelledError is a BaseException, NOT an Exception:
+                        # tearing down the MCP stdio_client trips anyio's
+                        # cross-task cancel-scope, raising CancelledError from a
+                        # best-effort cleanup and (uncaught) crashing the whole
+                        # marathon AFTER the instance already ran. Teardown must
+                        # never propagate — swallow it (but let KeyboardInterrupt/
+                        # SystemExit through).
+                        except (Exception, asyncio.CancelledError):
                             pass
 
         try:
@@ -216,6 +223,10 @@ def run_instance(
                 logger.info("%s: budget stop (parked)", instance.instance_id)
             else:
                 logger.warning("%s: mission RuntimeError: %s", instance.instance_id, e)
+        except asyncio.CancelledError:
+            # Defensive: a cancel that escaped the teardown guard must not crash
+            # the run — the patch is still extracted in the finally below.
+            logger.warning("%s: teardown cancelled (ignored)", instance.instance_id)
         except Exception:
             logger.exception("%s: mission crashed", instance.instance_id)
     finally:
