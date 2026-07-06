@@ -74,18 +74,31 @@ def scaffold_parse_error(
 
 # ── Repair-mission write guard ────────────────────────────────────────
 # A repair mission FIXES existing code against a failing test the grader
-# supplies. CREATING a new test file (pilot 1: django wrote its own
-# test_*.py across 7 cycles — wasted work + patch pollution) or new
-# scaffolding is never part of a fix, so on a repair mission a NEW file of
-# these classes is refused. Editing an EXISTING file is untouched — this only
-# blocks CREATION.
+# supplies. Two classes of write are not part of a code fix:
+#   TEST files       — the grader supplies the failing test; block CREATION
+#                      (pilot 1: django wrote its own test_*.py across 7 cycles).
+#   CONFIG/CI/DOCS   — build/CI/meta/docs files; block CREATE *and* EDIT (a code
+#                      repair never touches them). pytest-10081 leaked
+#                      .github/workflows/ci.yml + CONTRIBUTING.md into its patch
+#                      from the ENV-setup phase — the create-only guard missed
+#                      the edits. Editing project config is never a fix.
+# Editing an EXISTING SOURCE file is always allowed.
 _TEST_PATH_RE = re.compile(r"(^|/)(tests?)(/|$)|(^|/)(test_[^/]*|[^/]*_test)\.py$")
-_SCAFFOLD_NAMES = {
-    "readme", "readme.md", "readme.rst", "readme.txt",
-    "pyproject.toml", "setup.py", "setup.cfg", "tox.ini", "makefile",
-    ".gitignore", ".flake8", "ruff.toml", ".python-version",
-    "requirements.txt", "requirements-dev.txt", "dev-requirements.txt",
-    "gruntfile.js", "package.json",
+# config/CI/docs by path fragment (case-insensitive) — always blocked on repair.
+_CONFIG_CI_DOCS_RE = re.compile(
+    r"(^|/)\.github/"                       # workflows, ISSUE_TEMPLATE, FUNDING, …
+    r"|(^|/)(contributing|changelog|readme|authors|history)\b"
+    r"|(^|/)\.pre-commit-config\.ya?ml$"
+    r"|(^|/)\.?codecov\.ya?ml$"
+    r"|(^|/)\.readthedocs\.ya?ml$"
+    r"|(^|/)\.travis\.ya?ml$"
+    r"|(^|/)azure-pipelines\.ya?ml$"
+    r"|(^|/)tox\.ini$|(^|/)\.gitignore$|(^|/)\.flake8$|(^|/)ruff\.toml$"
+    r"|(^|/)\.python-version$|(^|/)makefile$|(^|/)gruntfile\.js$",
+    re.IGNORECASE,
+)
+_CONFIG_NAMES = {  # exact basenames — build/package config
+    "pyproject.toml", "setup.py", "setup.cfg", "package.json",
 }
 
 
@@ -101,23 +114,32 @@ async def _is_repair_mission(effects) -> bool:
         return False
 
 
-def repair_write_reason(file_path: str) -> str | None:
-    """Return a rejection reason if `file_path` is a NEW test/scaffolding file
-    a repair mission must not create, else None. (Caller checks existence —
-    this classifies the PATH only.)"""
+def repair_write_reason(file_path: str) -> tuple[str | None, bool]:
+    """Classify a write on a repair mission → ``(reason, block_edits)``.
+
+    ``reason`` is set when the path is a test/config/CI/docs file a repair
+    should not author (None → an ordinary source file, always allowed).
+    ``block_edits`` is True for config/CI/docs (never part of a code fix →
+    block CREATE and EDIT) and False for test files (block CREATE only)."""
     name = os.path.basename(file_path).lower()
+    if (
+        _CONFIG_CI_DOCS_RE.search(file_path)
+        or name in _CONFIG_NAMES
+        or (name.startswith("requirements") and name.endswith(".txt"))
+    ):
+        return (
+            f"{file_path} is project config/CI/docs — a code repair never edits "
+            "it. Fix the SOURCE that makes the failing test pass instead.",
+            True,
+        )
     if _TEST_PATH_RE.search(file_path):
         return (
             f"{file_path} is a test file — repair missions do not author tests "
             "(the grader supplies the failing test). Edit the SOURCE that the "
-            "existing test exercises instead."
+            "existing test exercises instead.",
+            False,
         )
-    if name in _SCAFFOLD_NAMES or (name.startswith("requirements") and name.endswith(".txt")):
-        return (
-            f"{file_path} is project scaffolding — a repair does not create it. "
-            "Edit existing source to make the failing test pass."
-        )
-    return None
+    return (None, False)
 
 
 # ── The guarded write (the one safe write path) ───────────────────────
@@ -141,14 +163,18 @@ async def guarded_write_file(
     rejection or a failed write, ``None`` on success.
     """
     existing_content: str | None = None
-    # Repair guard: refuse to CREATE a new test/scaffolding file (edits to an
-    # existing one still pass — only creation is blocked).
+    # Repair guard: config/CI/docs writes are blocked outright (create OR edit —
+    # never part of a code fix); a new test file is blocked (grader supplies the
+    # test). Editing existing source is untouched.
     if repair_mode:
-        reason = repair_write_reason(file_path)
+        reason, block_edits = repair_write_reason(file_path)
         if reason is not None:
+            if block_edits:
+                logger.warning("Repair write guard rejected config/CI/docs write %s", file_path)
+                return False, f"Repair write guard: {reason}"
             existing = await effects.read_file(file_path)
             if not (getattr(existing, "exists", False) and (existing.content or "")):
-                logger.warning("Repair write guard rejected NEW file %s", file_path)
+                logger.warning("Repair write guard rejected NEW test file %s", file_path)
                 return False, f"Repair write guard: {reason}"
     if min_retention_ratio > 0:
         existing = await effects.read_file(file_path)

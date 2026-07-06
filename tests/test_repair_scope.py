@@ -89,18 +89,25 @@ def test_replan_selects_repair_prompt_by_profile():
 # ── §2: repair write-guard ────────────────────────────────────────────
 
 
-def test_repair_write_reason_flags_tests_and_scaffolding():
+def test_repair_write_reason_classifies_tests_vs_config():
     from agent.actions.file_ops_actions import repair_write_reason
 
-    assert repair_write_reason("django/tests/queryset_union_ordering.py")
-    assert repair_write_reason("pkg/test_thing.py")
-    assert repair_write_reason("pkg/thing_test.py")
-    assert repair_write_reason("pyproject.toml")
-    assert repair_write_reason("requirements-dev.txt")
-    assert repair_write_reason("README.md")
-    # real source is fine
-    assert repair_write_reason("sympy/geometry/point.py") is None
-    assert repair_write_reason("django/db/models/sql/compiler.py") is None
+    # test files → reason set, block_edits=False (block CREATE only)
+    for p in ("django/tests/queryset_union_ordering.py", "pkg/test_thing.py",
+              "pkg/thing_test.py"):
+        reason, block_edits = repair_write_reason(p)
+        assert reason and block_edits is False, p
+    # config/CI/docs → reason set, block_edits=True (block CREATE and EDIT)
+    for p in ("pyproject.toml", "setup.cfg", "requirements-dev.txt", "README.md",
+              "CONTRIBUTING.rst", ".github/workflows/ci.yml", "tox.ini",
+              ".pre-commit-config.yaml", "docs/.github/FUNDING.yml"):
+        reason, block_edits = repair_write_reason(p)
+        assert reason and block_edits is True, p
+    # real source is fine (no reason)
+    for p in ("sympy/geometry/point.py", "django/db/models/sql/compiler.py",
+              "src/_pytest/unittest.py"):
+        reason, _ = repair_write_reason(p)
+        assert reason is None, p
 
 
 @pytest.mark.asyncio
@@ -127,15 +134,21 @@ async def test_guarded_write_test_file_allowed_when_not_repair():
 
 
 @pytest.mark.asyncio
-async def test_guarded_write_allows_editing_existing_scaffolding_on_repair():
-    # The guard blocks CREATION only — an existing pyproject can still be edited
-    # (the scaffold parse floor governs its content separately).
+async def test_guarded_write_blocks_editing_config_on_repair():
+    # Config/CI/docs are blocked create-OR-edit on repair (pytest-10081 leaked
+    # ci.yml/CONTRIBUTING edits from the env phase). Editing an EXISTING config
+    # is now refused, unlike a source edit.
     from agent.actions.file_ops_actions import guarded_write_file
 
     valid = '[project]\nname = "x"\nversion = "1"\n'
-    fx = MockEffects(files={"pyproject.toml": valid + '[tool.ruff]\nline-length = 88\n'})
+    fx = MockEffects(files={
+        "pyproject.toml": valid + '[tool.ruff]\nline-length = 88\n',
+        ".github/workflows/ci.yml": "on: [push]\n",
+    })
     ok, err = await guarded_write_file(fx, "pyproject.toml", valid + '[tool.mypy]\nstrict = true\n', repair_mode=True)
-    assert ok is True and err is None
+    assert ok is False and "config/CI/docs" in err  # existing config edit blocked
+    ok2, err2 = await guarded_write_file(fx, ".github/workflows/ci.yml", "on: [pull_request]\n", repair_mode=True)
+    assert ok2 is False and "config/CI/docs" in err2
 
 
 # ── §1b: repair fix-goal routes diagnose-first, not verify-interact ───
