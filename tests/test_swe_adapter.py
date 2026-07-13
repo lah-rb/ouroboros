@@ -74,6 +74,66 @@ def test_extract_model_patch_survives_exec_failure():
     assert out == ""
 
 
+class _SeqContainer:
+    """Returns queued demux outputs in order (one per exec_run); records cmds."""
+
+    def __init__(self, outputs):
+        self._outputs = list(outputs)
+        self.calls = []
+
+    def exec_run(self, cmd=None, demux=False, **kw):
+        self.calls.append(cmd)
+        out = self._outputs.pop(0) if self._outputs else b""
+
+        class _R:
+            output = (out, b"")
+
+        return _R()
+
+
+def test_patch_excludes_build_outputs_and_requirements():
+    c = _FakeContainer(stdout=b"diff --git a/x.py b/x.py\n+f\n")
+    extract_model_patch(c, "/testbed")
+    j = " ".join(c.last_cmd)
+    assert ":(exclude)out_html/**" in j  # doc-build output (sphinx-8548)
+    assert ":(exclude)_build/**" in j
+    assert ":(exclude)**/*requirements*.txt" in j  # deps never the fix (sympy-13798)
+
+
+def test_extract_model_patch_catastrophic_falls_back_to_tracked():
+    # A swept build tree (>100 files) trips the generous sanity cap; the guard
+    # retries tracked-only and returns the real fix without the build spew.
+    huge = "".join(
+        f"diff --git a/out_html/f{i}.html b/out_html/f{i}.html\n+x\n" for i in range(150)
+    )
+    tracked = "diff --git a/pkg/mod.py b/pkg/mod.py\n+realfix\n"
+    c = _SeqContainer([huge.encode(), tracked.encode()])
+    out = extract_model_patch(c, "/testbed")
+    assert out == tracked
+    assert "git add -A" in " ".join(c.calls[0])  # pass 1 staged
+    assert "git add -A" not in " ".join(c.calls[1])  # pass 2 tracked-only
+
+
+def test_extract_model_patch_catastrophic_no_tracked_ships_empty():
+    # Nothing recoverable in tracked-only → ship "" (honest unsolved), never 8MB.
+    huge = "".join(
+        f"diff --git a/out_html/f{i}.html b/out_html/f{i}.html\n+x\n" for i in range(150)
+    )
+    c = _SeqContainer([huge.encode(), b""])
+    assert extract_model_patch(c, "/testbed") == ""
+
+
+def test_generous_cap_keeps_a_legit_multifile_fix():
+    # A real ~25-file fix (gold sympy-13091 = 21) must pass through untouched —
+    # the cap is a catastrophe backstop, not a multi-file-fix limiter.
+    legit = "".join(
+        f"diff --git a/sympy/m{i}.py b/sympy/m{i}.py\n+fix\n" for i in range(25)
+    )
+    c = _SeqContainer([legit.encode()])
+    assert extract_model_patch(c, "/testbed") == legit
+    assert len(c.calls) == 1  # no fallback pass
+
+
 def test_prediction_row_schema_exact():
     row = prediction_row("inst-1", "ouroboros", "PATCH")
     assert set(row) == {"instance_id", "model_name_or_path", "model_patch"}

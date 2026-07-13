@@ -97,9 +97,13 @@ class OuroborosHarborAgent(BaseAgent):
         from agent.persistence.models import MissionConfig, MissionState
 
         from tb_adapter.container_effects import ContainerEffects
+        from tb_adapter.image_prune import note_task_image
 
         exec_user = self._exec_user(environment)
         container = await self._resolve_container(environment, exec_user)
+        # Register the task image for pruning (OURO_TB_PRUNE_IMAGES) — Harbor tears
+        # down the container but leaves the image, the unbounded sink.
+        note_task_image(container)
         container_cwd = self._probe_container_cwd(container, exec_user)
 
         task_root = self._task_root(environment)

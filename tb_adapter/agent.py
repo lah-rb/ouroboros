@@ -86,8 +86,12 @@ class OuroborosAgent(BaseAgent):
         from agent.persistence.models import MissionConfig, MissionState
 
         from tb_adapter.container_effects import ContainerEffects
+        from tb_adapter.image_prune import note_task_image
 
         container = session.container
+        # Register the task image for pruning (OURO_TB_PRUNE_IMAGES) — the harness
+        # tears down the container but leaves the image, the unbounded sink.
+        note_task_image(container)
         host_tmp = tempfile.mkdtemp(prefix="ouro-tb-")
         pty_scratch = os.path.join(host_tmp, "pty")
         os.makedirs(pty_scratch, exist_ok=True)
