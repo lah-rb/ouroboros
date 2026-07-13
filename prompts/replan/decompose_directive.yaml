@@ -145,6 +145,16 @@ sections:
     ## Existing Code Structure (AST-based)
     {context.repo_map_formatted}
 
+- id: repo_file_index
+  when: context.repo_file_index
+  content: |
+    ## Repo File Index — COMPLETE, AUTHORITATIVE list of every source file
+    A path NOT in this list does not exist. Do NOT infer a module path from prior
+    knowledge — reference only real files below (or a genuinely new file you name
+    in `new_files`). (A repo-scale tree may show a truncation note — then treat
+    the list as a strong prior.)
+    {context.repo_file_index}
+
 - id: output_reminder
   content: |
     ---

@@ -20,6 +20,7 @@ from agent.actions.escalation_actions import (
     MAX_ESCALATION_CORRECTIONS,
     MAX_ESCALATION_TURNS,
     action_conclude_escalation,
+    action_escalation_fold_search,
     action_escalation_read,
     action_escalation_run,
     action_escalation_write,
@@ -237,6 +238,7 @@ def test_escalate_flow_wiring():
         "read_file": "do_read",
         "run_command": "do_run",
         "write_file": "do_write",
+        "web_search": "do_web_search",
         "conclude": "conclude",
     }
     assert steps["work"]["turn"]["transitions"]["no_answer"] == "conclude"
@@ -253,6 +255,33 @@ def test_escalate_flow_wiring():
     assert steps["deferred"]["status"] == "deferred"
     cr = {r["condition"]: r["transition"] for r in steps["conclude"]["resolver"]["rules"]}
     assert cr["result.outcome == 'resolved'"] == "end_session_resolved"
+
+
+@pytest.mark.asyncio
+async def test_fold_search_injects_summary_and_spends_a_turn():
+    out = await action_escalation_fold_search(
+        _si(research_summary="X raises ValueError (https://docs/x).", escalation_turn=1)
+    )
+    assert out.result["action_ok"] is True
+    assert out.context_updates["escalation_turn"] == 2  # one web_search = one turn
+    assert "ValueError" in _queued(out)
+
+
+@pytest.mark.asyncio
+async def test_fold_search_empty_summary_still_spends_a_turn():
+    out = await action_escalation_fold_search(_si(research_summary="", escalation_turn=0))
+    assert out.result["action_ok"] is True
+    assert out.context_updates["escalation_turn"] == 1
+    assert "no usable findings" in _queued(out)
+
+
+def test_escalate_work_menu_has_web_search():
+    steps = _compiled()["escalate"]["steps"]
+    opts = steps["work"]["turn"]["transitions"]["options"]
+    assert opts["web_search"] == "do_web_search"
+    # web_search spends a normal escalation turn via fold_search → check_budget
+    fold_targets = {r["condition"]: r["transition"] for r in steps["fold_search"]["resolver"]["rules"]}
+    assert fold_targets["true"] == "check_budget"
 
 
 def test_file_ops_self_correct_escalates():

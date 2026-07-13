@@ -6,6 +6,8 @@ content: |
     - read a file to see what is actually there
     - run a command to verify the failure or test a fix
     - write a file to apply the smallest change that satisfies the goal
+    - research the web when you need external knowledge (library/API behavior,
+      error semantics) you cannot determine from the repo
     - conclude when the expected outcome holds — or when it genuinely cannot
       be made to hold from here
 

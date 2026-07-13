@@ -123,6 +123,17 @@ sections:
     ## Existing Code Structure (AST-based) — locate the fix here
     {context.repo_map_formatted}
 
+- id: repo_file_index
+  when: context.repo_file_index
+  content: |
+    ## Repo File Index — COMPLETE, AUTHORITATIVE list of every source file
+    A path that is NOT in this list does not exist. Do NOT infer a module path
+    from your prior knowledge of the project — the fix edits an EXISTING file from
+    this list. If the file you expect isn't here, you have mislocalized: find the
+    real one below. (A repo-scale tree may show a truncation note at the end —
+    then treat the list as a strong prior, not absolute.)
+    {context.repo_file_index}
+
 - id: output_reminder
   content: |
     ---

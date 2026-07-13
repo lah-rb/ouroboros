@@ -45,7 +45,7 @@ sections:
 
       These checks are a SCREEN layered under a separate behavioral evaluator
       that judges the session itself — you do NOT have to prove the behavior
-      correct, only pin the durable artifacts/state the goal requires. Three
+      correct, only pin the durable artifacts/state the goal requires. Five
       rules keep the screen safe (a failing check VETOES an otherwise-passing
       evaluation, so a wrong check is the only way to harm a correct result):
 
@@ -66,6 +66,42 @@ sections:
          EXERCISES the behavior (run the code path / invoke the CLI and assert
          an observable outcome the bug would violate) over one that inspects
          the source.
+      4. WHEN THE GOAL IS TO FIX A BEHAVIOR, TEST THAT SPECIFIC BEHAVIOR — not a
+         generic health signal. Reproduce the exact case the goal describes and
+         assert the corrected outcome; the check must FAIL on the unfixed code.
+         A signal that stays green regardless of the fix — "it builds", "it
+         imports", "the config validates", "an output file exists" — certifies
+         nothing, and worse can pull the work toward satisfying the SIGNAL
+         instead of fixing the bug (a `test -f out_html/index.html` check led an
+         agent to build the whole docs tree rather than fix the code; `django
+         check` passes on any valid project). This is the flip side of rule 1:
+         `test -s <file>` is right when the goal's END STATE *is* that file,
+         wrong when the goal is to change how code behaves — then run the code.
+         ✅ goal "simplify(cos(x)**I) must not raise":
+            {"command": "python -c \"from sympy import *; x=symbols('x'); simplify(cos(x)**I)\"", "description": "the reported input no longer raises (nonzero exit on the bug)"}
+         ❌ generic health, green on a non-fix (and invites side-effects):
+            {"command": "python -m sphinx -b html doc _build && test -f _build/index.html", "description": "docs build"}
+      5. EXERCISE THE CODE UNDER REPAIR HONESTLY — public API, the way the
+         bug report calls it, DEFAULT semantics, self-contained. A check that
+         sidesteps or simulates the repaired path launders a broken fix into
+         "complete". Before emitting a check, ask the counterfactual: WOULD
+         THIS CHECK FAIL IF THE FIX WERE REVERTED? If not, it is rigged —
+         drop it. Rigging patterns to never use:
+         - a flag that skips the path under test (`check=False`,
+           `verify=False`, `--no-validate` — when the bug lives in the
+           skipped validation, the check passes on broken code);
+         - monkeypatching or shadowing the code under test inside the check
+           (patching `__new__` then asserting isinstance tests the patch,
+           not the fix);
+         - swallowing the outcome (`|| true`, `; exit 0` — the check
+           literally cannot fail);
+         - reaching the network (checks run hermetically; a connectivity
+           error is indistinguishable from the bug).
+         ✅ exercises the reported call with default validation ON:
+            {"command": "python -c \"from sympy.combinatorics import DihedralGroup; from sympy.combinatorics.homomorphisms import homomorphism; D=DihedralGroup(3); homomorphism(D,D,D.generators,D.generators)\"", "description": "the reported homomorphism constructs (validation on; fails on the bug)"}
+         ❌ same call rigged with check=False — skips the validation the bug
+            lives in, so it passes whether or not the fix works:
+            {"command": "python -c \"... homomorphism(D,D,D.generators,D.generators,check=False)\"", "description": "constructs"}
 
       Most purely-behavioral goals (interactive flows, conversational
       output) have NO robust shell-checkable end-state — for those return

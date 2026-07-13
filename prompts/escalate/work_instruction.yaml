@@ -3,13 +3,18 @@ content: |
   Turn {context.escalation_turn} of 6.
 
   Each turn you pick ONE action: `read_file`, `run_command`, `write_file`,
-  or `conclude`.
+  `web_search`, or `conclude`.
 
   Response format:
       {"choice": "read_file", "path": "<workspace-relative path>"}
       {"choice": "run_command", "command": "<exact shell command>"}
       {"choice": "write_file", "path": "<workspace-relative path>"}
+      {"choice": "web_search", "question": "<specific external question>"}
       {"choice": "conclude"}
+
+  Use `web_search` only for knowledge you cannot get from the repo itself
+  (library/API behavior, an error's meaning, a spec detail) — it researches
+  the web and folds back a findings summary. Prefer reading the code first.
 
   For `write_file`, this SAME response must also contain the COMPLETE new
   file content in a fenced code block whose first line is the file marker:
