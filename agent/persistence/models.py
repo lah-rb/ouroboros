@@ -61,6 +61,23 @@ class MissionConfig(BaseModel):
     # gracefully when on but unreachable — the research step's failure
     # branch proceeds without a summary.
     web_research: bool = True
+    # Whether the mission may consult the local vision tool (vl_inspect —
+    # an isolated one-shot mlx_vlm process; LLMVP itself stays text-only by
+    # design). Set CONFIG-TIME by the overseer/adapter — deterministically
+    # for benchmarks (the GAIA adapter flips it on image attachments), by
+    # classify/design_and_plan later for auto missions. Consumed by charter/
+    # persona gates; default off keeps text-only missions unchanged.
+    vision: bool = False
+    # Whether the mission may consult the local ASR tool (audio_transcribe —
+    # parakeet/whisper one-shot; transcription only, no diarization). Same
+    # config-time doctrine as `vision`: set by the adapter/overseer.
+    audio: bool = False
+    # Modality-sidecar count gates: the workspace scan auto-digests undigested
+    # images/audio into text sidecars (objective-conditioned) UNLESS more than
+    # this many are present — a repo full of icons must not trigger a
+    # hundred-call VL pass. Skipping leaves a manifest note instead.
+    modality_sidecar_max_images: int = 6
+    modality_sidecar_max_audio: int = 2
     # Whether the grader HOLDS OUT the failing test (SWE-bench: the regression
     # test that proves the fix is applied by the harness, NOT present in the
     # repo). When True, NO in-repo test is the bug's ground truth — a

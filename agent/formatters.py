@@ -53,6 +53,9 @@ def format_architecture_listing(params: dict, namespaces: dict) -> str:
             [
                 f"Import scheme: {ex.get('import_scheme', '?')}",
                 f"Run command: {ex.get('run_command', '?')}",
+                f"Smoke command: {ex.get('smoke_command', '') or '(none)'}",
+                f"Working directory: {ex.get('working_directory', 'project root')}",
+                f"Package __init__.py files: {ex.get('init_files', False)}",
                 "",
                 "Modules (in creation order):",
             ]
@@ -69,17 +72,99 @@ def format_architecture_listing(params: dict, namespaces: dict) -> str:
                 f"{iface.get('symbol','?')}({iface.get('signature','')})"
             )
     elif hasattr(arch, "import_scheme"):
+        # Object (ArchitectureState) form — mirror the dict branch's richness so
+        # the coherence critic sees the run/smoke commands, working directory, and
+        # module file paths verbatim (the fields the src/-vs-`python -m` mismatch
+        # is invisible without). See design_gate plan §"starvation guard".
         lines.extend(
-            [f"Import scheme: {arch.import_scheme}", f"Run command: {arch.run_command}"]
+            [
+                f"Import scheme: {arch.import_scheme}",
+                f"Run command: {arch.run_command}",
+                f"Smoke command: {arch.smoke_command or '(none)'}",
+                f"Working directory: {arch.working_directory}",
+                f"Package __init__.py files: {arch.init_files}",
+                "",
+                "Modules (in creation order):",
+            ]
         )
-        if hasattr(arch, "modules"):
-            for mod in arch.modules:
-                lines.append(f"  - {mod.file}: {mod.responsibility}")
+        for mod in getattr(arch, "modules", []):
+            lines.append(f"  - {mod.file}: {mod.responsibility}")
+            if getattr(mod, "defines", None):
+                lines.append(f"    Defines: {', '.join(mod.defines)}")
+            if getattr(mod, "imports_from", None):
+                lines.append(f"    Imports from: {mod.imports_from}")
+        for iface in getattr(arch, "interfaces", []):
+            lines.append(
+                f"  - {iface.caller} → {iface.callee}: "
+                f"{iface.symbol}({iface.signature})"
+            )
     return "\n".join(lines)
 
 
 def format_existing_architecture(params: dict, namespaces: dict) -> str:
     return format_architecture_listing(params, namespaces)
+
+
+def format_tooling_convention(params: dict, namespaces: dict) -> str:
+    """Static statement of the project's run/packaging convention, so the
+    design_gate coherence critic can judge run_command/import_scheme/path
+    consistency WITHOUT any hardcoded layout rule (the judgment stays the LLM's).
+    Sourced from the same run-from-source facts the env tooling detection uses
+    (prompts/set_env/detect_tooling_rules.yaml)."""
+    return (
+        "Run/packaging convention for this project (judge the blueprint against it):\n"
+        "  - The program is run FROM SOURCE, invoked from the WORKING DIRECTORY / "
+        "project root. It is NOT installed (no pip/editable install, no build step) "
+        "unless the blueprint itself declares that setup.\n"
+        "  - So the run command and smoke command must resolve their entry point / "
+        "imports from the file layout AS IT SITS ON DISK, relative to that working "
+        "directory, with no install to bridge the paths.\n"
+        "  - Python example: `python -m pkg.mod` resolves `pkg` from the working "
+        "directory, so `pkg/` must sit directly under it — a package nested under a "
+        "prefix like `src/pkg/` is NOT importable as `pkg` this way without an "
+        "editable install or a PYTHONPATH including that prefix.\n"
+        "  - This principle is language-agnostic: the entry point the run command "
+        "names must exist at a path reachable under the declared layout + working "
+        "directory when run from source."
+    )
+
+
+def format_drift_facts(params: dict, namespaces: dict) -> str:
+    """Render the design_gate (mode:facts) drift dict as prose for the critic —
+    whether files on disk drifted from the blueprint. Absent/empty facts render
+    as a benign 'no drift' line (fresh design, nothing on disk yet)."""
+    facts = params.get("source")
+    if not isinstance(facts, dict) or not facts:
+        return "Filesystem drift: none detected (fresh design; no files on disk yet)."
+    if facts.get("drift_detected"):
+        new = facts.get("new_files") or []
+        return (
+            "Filesystem drift: files exist on disk that the blueprint does NOT "
+            "declare: " + (", ".join(new) if new else "(unspecified)")
+            + " — the blueprint may be out of sync with the workspace."
+        )
+    return "Filesystem drift: none — the blueprint matches the workspace."
+
+
+def format_prior_rejection(params: dict, namespaces: dict) -> str:
+    """On a reconcile loop-back, render the prior critique's reason + grounded
+    coherence_criteria from the architecture, so the critic (and the reconcile
+    inference that reads the same key) see what was already flagged and must fix.
+    Empty on the first pass, so the section drops."""
+    arch = params.get("source")
+    if not arch:
+        return ""
+    reason = str(getattr(arch, "coherence_reason", "") or "").strip()
+    criteria = list(getattr(arch, "coherence_criteria", []) or [])
+    if not reason and not criteria:
+        return ""
+    lines = ["## PRIOR COHERENCE REJECTION — already flagged, must be resolved"]
+    if reason:
+        lines.append(f"Reason: {reason}")
+    if criteria:
+        lines.append("Required fixes:")
+        lines.extend(f"  - {c}" for c in criteria)
+    return "\n".join(lines)
 
 
 def format_feedback_block(params: dict, namespaces: dict) -> str:
@@ -613,6 +698,9 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_architecture_summary": format_architecture_summary,
     "format_architecture_listing": format_architecture_listing,
     "format_existing_architecture": format_existing_architecture,
+    "format_tooling_convention": format_tooling_convention,
+    "format_drift_facts": format_drift_facts,
+    "format_prior_rejection": format_prior_rejection,
     "format_completion_criteria": format_completion_criteria,
     "format_feedback_block": format_feedback_block,
     "format_workspace_ledger": format_workspace_ledger,

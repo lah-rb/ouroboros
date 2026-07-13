@@ -66,6 +66,11 @@ _EXCLUDED_DIRS = (
 
 
 class ContainerEffects(LocalEffects):
+    # run_command executes INSIDE the task container — host-venv tools
+    # (vl_inspect, audio_transcribe) are unreachable. The modality-sidecar
+    # scan pass checks this and skips (container missions are hermetic).
+    supports_host_tools: bool = False
+
     def __init__(
         self,
         *,

@@ -31,6 +31,7 @@ Session uses ---ACT AS--- persona framing per PROMPTING_CONVENTIONS.md §7.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from typing import Any
@@ -312,7 +313,16 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         )
 
     try:
-        session_id = await effects.start_inference_session({"ttl_seconds": 600})
+        # Opt this session into the resident cross-session flow-fork: the diagnose
+        # SYSTEM_PROMPT persona leads every diagnose seed, so pin it once per
+        # instance and skip re-prefilling it on every later diagnose session. Key
+        # is stable (md5 of the persona) and changes iff the persona changes.
+        _diag_key = (
+            f"diagnose:start:{hashlib.md5(SYSTEM_PROMPT.encode('utf-8')).hexdigest()[:10]}"
+        )
+        session_id = await effects.start_inference_session(
+            {"ttl_seconds": 600}, static_prefix=SYSTEM_PROMPT, flow_key=_diag_key
+        )
     except Exception as e:
         logger.error("Failed to start diagnosis session: %s", e)
         return StepOutput(
@@ -1476,13 +1486,13 @@ async def action_systemic_scan(step_input: StepInput) -> StepOutput:
 
 
 async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
-    """Gate the stuck-goal web search. Fires once per goal when the goal has
-    >= 2 failed attempts and no stored findings; derives a focused query from
-    the goal description + current headline (paths/backticked literals
-    stripped — they poison web queries).
+    """Gate the stuck-goal web research. Fires once per goal when the goal has
+    >= 2 failed attempts and no stored findings; builds a research brief from
+    the goal description + current headline for the deep_search sub-flow
+    (which derives its own focused queries — no pre-stripping needed).
 
     Inputs: goal_id.  Result: should_search.
-    Publishes: mission, search_queries (when firing).
+    Publishes: mission, search_brief (when firing).
     """
     effects = step_input.effects
     goal_id = str(step_input.inputs.get("goal_id", "") or "")
@@ -1498,6 +1508,14 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
             result={"should_search": False},
             observations="goal-search: no goal — skip",
         )
+    # Hermetic runs (SWE-bench sets web_research=False) must NOT reach the web:
+    # a stuck-goal search retrieves the instance's own upstream issue/fix thread
+    # (observed: psf__requests-1724 pulled psf/requests#1723) — contamination.
+    if not bool(getattr(getattr(mission, "config", None), "web_research", True)):
+        return StepOutput(
+            result={"should_search": False},
+            observations="goal-search: skip (web_research disabled — hermetic run)",
+        )
     attempts = len(getattr(goal, "failed_attempts", None) or [])
     already = bool((getattr(goal, "search_findings", "") or "").strip())
     if attempts < 2 or already:
@@ -1505,22 +1523,23 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
             result={"should_search": False},
             observations=f"goal-search: skip (attempts={attempts}, searched={already})",
         )
-    seed = f"{goal.description} {step_input.context.get('error_headline', '') or ''}"
-    cleaned = re.sub(r"[/\\]\S+|`[^`]*`", " ", seed)
-    query = re.sub(r"\s+", " ", cleaned).strip()[:200] or goal.description[:200]
+    headline = str(step_input.context.get("error_headline", "") or "").strip()
+    brief = goal.description.strip()
+    if headline:
+        brief = f"{brief}\nObserved failure: {headline}"
     return StepOutput(
         result={"should_search": True},
-        observations=f"goal-search: searching (attempts={attempts})",
-        context_updates={"mission": mission, "search_queries": [query]},
+        observations=f"goal-search: researching (attempts={attempts})",
+        context_updates={"mission": mission, "search_brief": brief[:2000]},
     )
 
 
 async def action_store_goal_search_findings(step_input: StepInput) -> StepOutput:
-    """Format the exa hits and store them on the GOAL so every later diagnose
-    seed surfaces them. One-shot guard: sets goal.search_findings even on zero
-    hits so the gate never re-searches.
+    """Store the deep_search research summary on the GOAL so every later
+    diagnose seed surfaces it. One-shot guard: sets goal.search_findings even
+    on an empty summary (web off / no hits) so the gate never re-searches.
 
-    Context: mission, raw_search_results.  Inputs: goal_id.  Publishes: mission.
+    Context: mission, research_summary.  Inputs: goal_id.  Publishes: mission.
     """
     effects = step_input.effects
     mission = step_input.context.get("mission")
@@ -1529,21 +1548,18 @@ async def action_store_goal_search_findings(step_input: StepInput) -> StepOutput
         (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id), None
     )
     if goal is None:
-        return StepOutput(result={"n_hits": 0}, observations="goal-search: no goal")
-    hits = step_input.context.get("raw_search_results") or []
-    lines = []
-    for h in hits[:5]:
-        if not isinstance(h, dict):
-            continue
-        url = str(h.get("url", "")).strip()
-        body = re.sub(r"\s+", " ", str(h.get("content", "") or "")).strip()[:500]
-        if body:
-            lines.append(f"- {url}\n  {body}")
-    goal.search_findings = "\n".join(lines) or "(no relevant web results found)"
+        return StepOutput(result={"stored": False}, observations="goal-search: no goal")
+    summary = str(step_input.context.get("research_summary", "") or "").strip()
+    goal.search_findings = summary[:4000] or "(no relevant web results found)"
     if effects:
         await effects.save_mission(mission)
+    stored = bool(summary)
     return StepOutput(
-        result={"n_hits": len(lines)},
-        observations=f"goal-search: stored {len(lines)} finding(s)",
+        result={"stored": stored},
+        observations=(
+            f"goal-search: stored research summary ({len(goal.search_findings)} chars)"
+            if stored
+            else "goal-search: empty summary — sentinel stored"
+        ),
         context_updates={"mission": mission},
     )

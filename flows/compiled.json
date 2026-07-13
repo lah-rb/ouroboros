@@ -1508,6 +1508,351 @@
       "fallback": "reorganize"
     }
   },
+  "deep_search": {
+    "flow": "deep_search",
+    "version": 1,
+    "description": "Bounded reflect-and-refine web-research loop: name the missing fact,\nsearch it, condense the hits into the session, repeat, then synthesize a\ngrounded summary. The shared deep-search primitive.",
+    "context_tier": "session_task",
+    "returns": {
+      "research_summary": {
+        "type": "string",
+        "from": "context.research_summary",
+        "optional": true
+      },
+      "sufficient": {
+        "type": "string",
+        "from": "context.search_sufficient",
+        "optional": true
+      },
+      "queries_run": {
+        "type": "list",
+        "from": "context.queries_run",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "brief"
+      ],
+      "optional": [
+        "mission_id",
+        "working_directory"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.4"
+      }
+    },
+    "steps": {
+      "start_session": {
+        "action": "open_search_session",
+        "description": "Open the memoryful research session; seed = the brief",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.session_started == true",
+              "transition": "reflect"
+            },
+            {
+              "condition": "true",
+              "transition": "unavailable"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_session_id",
+          "search_session_id",
+          "search_round",
+          "search_corrections",
+          "search_queries_run",
+          "research_summary",
+          "search_sufficient"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "reflect": {
+        "action": "inference",
+        "description": "Name the missing fact \u2192 search it, or conclude done",
+        "context": {
+          "required": [
+            "search_session_id"
+          ],
+          "optional": [
+            "search_round"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "menu_compound",
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/deep_search",
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "deep_search/reflect_instruction",
+              "required": false
+            },
+            {
+              "type": "options",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {
+            "options": {
+              "search": {
+                "key": "search",
+                "description": "Search the web for the specific fact you are missing",
+                "arg": {
+                  "name": "query",
+                  "description": "the single specific fact to look up (not the whole brief)"
+                },
+                "terminal": false
+              },
+              "done": {
+                "key": "done",
+                "description": "Finish: the findings so far answer the brief",
+                "terminal": false
+              }
+            },
+            "publish_selection": "search_choice"
+          },
+          "transitions": {
+            "default": "synthesize",
+            "no_answer": "synthesize",
+            "options": {
+              "search": "do_search",
+              "done": "synthesize"
+            }
+          },
+          "config": {
+            "temperature": "t*0.4"
+          },
+          "retries": 3
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "do_search": {
+        "action": "search_run",
+        "description": "Run one Exa query; publish raw hits for condense",
+        "context": {
+          "required": [
+            "search_session_id"
+          ],
+          "optional": [
+            "search_choice_arg",
+            "search_round",
+            "search_corrections",
+            "search_queries_run"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_hits == true",
+              "transition": "condense"
+            },
+            {
+              "condition": "result.exhausted == true",
+              "transition": "synthesize"
+            },
+            {
+              "condition": "true",
+              "transition": "check_budget"
+            }
+          ]
+        },
+        "publishes": [
+          "raw_search_results",
+          "search_queries_run",
+          "last_query",
+          "search_corrections"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "condense": {
+        "action": "condense_results",
+        "description": "Distill raw hits to the fact; fold into the session",
+        "context": {
+          "required": [
+            "search_session_id"
+          ],
+          "optional": [
+            "raw_search_results",
+            "last_query",
+            "search_choice_arg",
+            "search_round"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_budget"
+            }
+          ]
+        },
+        "publishes": [
+          "search_round"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "check_budget": {
+        "action": "noop",
+        "description": "Round budget gate (4 search rounds)",
+        "context": {
+          "required": [],
+          "optional": [
+            "search_round"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "context.search_round >= 4",
+              "transition": "synthesize"
+            },
+            {
+              "condition": "true",
+              "transition": "reflect"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "synthesize": {
+        "action": "conclude_search",
+        "description": "One session turn \u2192 research_summary + sufficient",
+        "context": {
+          "required": [
+            "search_session_id"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "end_session"
+            }
+          ]
+        },
+        "publishes": [
+          "research_summary",
+          "search_sufficient",
+          "queries_run"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "end_session": {
+        "action": "end_inference_session",
+        "description": "Release the research session",
+        "context": {
+          "required": [],
+          "optional": [
+            "inference_session_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "done"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "done": {
+        "action": "noop",
+        "description": "Research complete \u2014 caller consumes research_summary",
+        "context": {
+          "required": [],
+          "optional": [
+            "research_summary",
+            "search_sufficient",
+            "queries_run"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "effects": [],
+        "publishes": [
+          "research_summary",
+          "search_sufficient",
+          "queries_run"
+        ],
+        "status": "success",
+        "terminal": true
+      },
+      "unavailable": {
+        "action": "noop",
+        "description": "No session (web_research off / no key / no brief) \u2014 empty summary",
+        "context": {
+          "required": [],
+          "optional": [
+            "research_summary",
+            "search_sufficient"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "effects": [],
+        "publishes": [
+          "research_summary",
+          "search_sufficient"
+        ],
+        "status": "deferred",
+        "terminal": true
+      }
+    },
+    "entry": "start_session",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "design_and_plan": {
     "flow": "design_and_plan",
     "version": 5,
@@ -2324,7 +2669,7 @@
     "steps": {
       "search_gate": {
         "action": "goal_search_gate",
-        "description": "Gate the stuck-goal web search (>= 2 failed attempts, once)",
+        "description": "Gate the stuck-goal web research (>= 2 failed attempts, once)",
         "context": {
           "required": [],
           "optional": [
@@ -2338,7 +2683,7 @@
           "rules": [
             {
               "condition": "result.should_search == true",
-              "transition": "exa_search"
+              "transition": "do_deep_search"
             },
             {
               "condition": "true",
@@ -2348,22 +2693,38 @@
         },
         "publishes": [
           "mission",
-          "search_queries"
+          "search_brief"
         ],
         "effects": [],
         "terminal": false
       },
-      "exa_search": {
-        "action": "exa_search",
-        "description": "Web-search the stuck problem via the Exa MCP",
+      "do_deep_search": {
+        "action": "flow",
+        "description": "Research the stuck problem via the deep_search sub-flow",
+        "config": {},
         "context": {
           "required": [],
           "optional": [
-            "search_queries"
+            "search_brief"
           ]
         },
+        "effects": [],
+        "flow": "deep_search",
+        "input_map": {
+          "brief": {
+            "$ref": "context.search_brief"
+          },
+          "working_directory": {
+            "$ref": "input.working_directory"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          }
+        },
         "params": {},
-        "config": {},
+        "publishes": [
+          "research_summary"
+        ],
         "resolver": {
           "type": "rule",
           "rules": [
@@ -2373,21 +2734,17 @@
             }
           ]
         },
-        "publishes": [
-          "raw_search_results"
-        ],
-        "effects": [],
         "terminal": false
       },
       "store_search_findings": {
         "action": "store_goal_search_findings",
-        "description": "Store the exa hits on the goal (one-shot sentinel)",
+        "description": "Store the research summary on the goal (one-shot sentinel)",
         "context": {
           "required": [
             "mission"
           ],
           "optional": [
-            "raw_search_results"
+            "research_summary"
           ]
         },
         "params": {},
@@ -3038,6 +3395,15 @@
                 },
                 "terminal": false
               },
+              "web_search": {
+                "key": "web_search",
+                "description": "Research external knowledge you can't determine from the repo (library/API behavior, error semantics)",
+                "arg": {
+                  "name": "question",
+                  "description": "the specific external question to research"
+                },
+                "terminal": false
+              },
               "conclude": {
                 "key": "conclude",
                 "description": "Finish: report resolved (outcome holds) or deferred (cannot hold from here)",
@@ -3053,6 +3419,7 @@
               "read_file": "do_read",
               "run_command": "do_run",
               "write_file": "do_write",
+              "web_search": "do_web_search",
               "conclude": "conclude"
             }
           },
@@ -3170,6 +3537,79 @@
           "escalation_turn",
           "escalation_corrections",
           "escalation_files"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "do_web_search": {
+        "action": "flow",
+        "description": "Research the question via the deep_search sub-flow",
+        "config": {},
+        "context": {
+          "required": [],
+          "optional": [
+            "escalation_choice_arg"
+          ]
+        },
+        "effects": [],
+        "flow": "deep_search",
+        "input_map": {
+          "brief": {
+            "$ref": "context.escalation_choice_arg"
+          },
+          "working_directory": {
+            "$ref": "input.working_directory"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          }
+        },
+        "params": {},
+        "publishes": [
+          "research_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "fold_search"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "fold_search": {
+        "action": "escalation_fold_search",
+        "description": "Inject the research summary into the session; spend one turn",
+        "context": {
+          "required": [
+            "escalation_session_id"
+          ],
+          "optional": [
+            "research_summary",
+            "escalation_turn",
+            "escalation_corrections"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.exhausted == true",
+              "transition": "conclude"
+            },
+            {
+              "condition": "true",
+              "transition": "check_budget"
+            }
+          ]
+        },
+        "publishes": [
+          "escalation_turn",
+          "escalation_corrections"
         ],
         "effects": [],
         "terminal": false
@@ -4715,7 +5155,9 @@
             "*.csv",
             "*.tsv",
             "Makefile",
-            "Dockerfile"
+            "Dockerfile",
+            "*.vltext",
+            "*.transcript.txt"
           ]
         },
         "publishes": [
@@ -7945,7 +8387,9 @@
             "*.json",
             "*.js",
             "*.ts",
-            "*.rs"
+            "*.rs",
+            "*.vltext",
+            "*.transcript.txt"
           ],
           "signature_depth": "imports_and_exports"
         },
@@ -9975,7 +10419,8 @@
           ]
         },
         "publishes": [
-          "repo_map_formatted"
+          "repo_map_formatted",
+          "repo_file_index"
         ],
         "effects": [],
         "terminal": false
@@ -10016,7 +10461,8 @@
             "mission"
           ],
           "optional": [
-            "repo_map_formatted"
+            "repo_map_formatted",
+            "repo_file_index"
           ]
         },
         "params": {},
@@ -10078,6 +10524,7 @@
             "existing_architecture",
             "existing_goals",
             "repo_map_formatted",
+            "repo_file_index",
             "router_findings"
           ],
           "input_keys": []
@@ -10112,7 +10559,8 @@
             "mission"
           ],
           "optional": [
-            "repo_map_formatted"
+            "repo_map_formatted",
+            "repo_file_index"
           ]
         },
         "params": {},
@@ -10174,6 +10622,7 @@
             "existing_architecture",
             "existing_goals",
             "repo_map_formatted",
+            "repo_file_index",
             "router_findings"
           ],
           "input_keys": []
@@ -13487,7 +13936,9 @@
             "*.csv",
             "*.tsv",
             "Makefile",
-            "Dockerfile"
+            "Dockerfile",
+            "*.vltext",
+            "*.transcript.txt"
           ],
           "signature_depth": "imports_and_exports"
         },

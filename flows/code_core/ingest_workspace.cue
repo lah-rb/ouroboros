@@ -76,6 +76,8 @@ ingest_workspace: #FlowDefinition & {
 					"*.sql", "*.yaml", "*.yml", "*.toml", "*.json", "*.cfg",
 					"*.ini", "*.conf", "*.env", "*.txt", "*.md", "*.csv",
 					"*.tsv", "Makefile", "Dockerfile",
+					// modality sidecars (auto-digested image/audio text)
+					"*.vltext", "*.transcript.txt",
 				]
 			}
 			resolver: {

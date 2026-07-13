@@ -1,0 +1,10 @@
+[project]
+name = "audio-transcribe"
+version = "0.1.0"
+description = "One-shot local ASR tool: parakeet-tdt (English SOTA-class, fast) + mlx-whisper large-v3-turbo (multilingual fallback). Crash-isolated sibling of fig_review/pdf_extract."
+requires-python = ">=3.12"
+dependencies = [
+    # parakeet-mlx has no tagged releases upstream — pin the PyPI version.
+    "parakeet-mlx==0.5.2",
+    "mlx-whisper==0.4.3",
+]

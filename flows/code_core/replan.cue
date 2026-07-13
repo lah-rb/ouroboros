@@ -70,7 +70,7 @@ replan: #FlowDefinition & {
 				type: "rule"
 				rules: [{condition: "true", transition: "choose_decompose"}]
 			}
-			publishes: ["repo_map_formatted"]
+			publishes: ["repo_map_formatted", "repo_file_index"]
 		}
 
 		// Repair-profile missions get the FIX-scoped decompose (fewest goals, no
@@ -95,7 +95,7 @@ replan: #FlowDefinition & {
 			description: "Decompose the pending directive into goals against the existing codebase"
 			context: {
 				required: ["mission"]
-				optional: ["repo_map_formatted"]
+				optional: ["repo_map_formatted", "repo_file_index"]
 			}
 			pre_compute: [
 				{formatter: "format_mission_meta", output_key: "mission_objective"
@@ -114,7 +114,7 @@ replan: #FlowDefinition & {
 				context_keys: [
 					"mission_objective", "pending_directive",
 					"existing_architecture", "existing_goals",
-					"repo_map_formatted", "router_findings",
+					"repo_map_formatted", "repo_file_index", "router_findings",
 				]
 				input_keys: []
 			}
@@ -137,7 +137,7 @@ replan: #FlowDefinition & {
 			description: "Decompose a bug-fix directive into the minimal fix goal(s)"
 			context: {
 				required: ["mission"]
-				optional: ["repo_map_formatted"]
+				optional: ["repo_map_formatted", "repo_file_index"]
 			}
 			pre_compute: [
 				{formatter: "format_mission_meta", output_key: "mission_objective"
@@ -156,7 +156,7 @@ replan: #FlowDefinition & {
 				context_keys: [
 					"mission_objective", "pending_directive",
 					"existing_architecture", "existing_goals",
-					"repo_map_formatted", "router_findings",
+					"repo_map_formatted", "repo_file_index", "router_findings",
 				]
 				input_keys: []
 			}

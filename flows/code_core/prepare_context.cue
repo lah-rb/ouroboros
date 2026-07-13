@@ -48,7 +48,9 @@ prepare_context: #FlowDefinition & {
 			description: "Walk directory tree, extract file signatures"
 			params: {
 				root:             {$ref: "input.working_directory"}
-				include_patterns: ["*.py", "*.yaml", "*.yml", "*.md", "*.toml", "*.json", "*.js", "*.ts", "*.rs"]
+				// *.vltext / *.transcript.txt = modality sidecars (image/audio
+				// digested to text at this scan) — must be listed to render.
+				include_patterns: ["*.py", "*.yaml", "*.yml", "*.md", "*.toml", "*.json", "*.js", "*.ts", "*.rs", "*.vltext", "*.transcript.txt"]
 				signature_depth:  "imports_and_exports"
 			}
 			resolver: {

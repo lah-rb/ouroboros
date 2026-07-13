@@ -63,6 +63,8 @@ ops_task: #FlowDefinition & {
 					"*.sql", "*.yaml", "*.yml", "*.toml", "*.json", "*.cfg",
 					"*.ini", "*.conf", "*.env", "*.txt", "*.md", "*.csv",
 					"*.tsv", "Makefile", "Dockerfile",
+					// modality sidecars (auto-digested image/audio text)
+					"*.vltext", "*.transcript.txt",
 				]
 				signature_depth: "imports_and_exports"
 			}

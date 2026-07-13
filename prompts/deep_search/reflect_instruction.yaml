@@ -1,0 +1,14 @@
+id: deep_search/reflect_instruction
+content: |
+  Round {context.search_round} of 4.
+
+  State briefly what you now know and name the ONE specific fact you still
+  need, then pick an action:
+
+      {"choice": "search", "query": "<the single specific fact to look up>"}
+      {"choice": "done"}
+
+  The query is the missing fact itself — a focused entity/keyword query, not
+  the whole brief restated, and not a fact you already have. Choose `done`
+  when the findings so far answer the brief (or when further searches keep
+  returning nothing new). Emit the one JSON action.

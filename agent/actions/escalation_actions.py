@@ -21,8 +21,13 @@ Design rules (dev/ESCALATION_PRIMITIVE.md):
   - Corrections (missing file, rejected write) queue guidance and do NOT eat
     the turn budget — honest mistakes recover without pressure.
 
-v1 non-goals: web search / consult menu entries, amended(restart) mode,
-adoption sites beyond file_ops.self_correct.
+web_search tool (added v1.1): when the fix needs external knowledge (library/
+API behavior, error semantics) the model dispatches the deep_search sub-flow —
+a bounded reflect-and-refine web loop — and its synthesized findings fold back
+into this session as one turn. Gated on mission web_research (+ ~/.exa_key).
+
+v1 non-goals: consult menu entry, amended(restart) mode, adoption sites beyond
+file_ops.self_correct.
 """
 
 from __future__ import annotations
@@ -51,6 +56,8 @@ check, and you have a small toolkit to fix it. Work one action at a time:
   - read a file to see what is actually there
   - run a command to verify the failure or test a fix
   - write a file to apply the smallest change that satisfies the goal
+  - research the web when you need external knowledge (library/API behavior,
+    error semantics) you cannot determine from the repo
   - conclude when the expected outcome holds — or when it genuinely cannot
     be made to hold from here
 
@@ -127,6 +134,22 @@ async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
         parts.append("## Focus")
         parts.append(f"The change under validation targets `{target}`.")
         parts.append("")
+    # web_search availability. deep_search self-gates too, but announce it so the
+    # model doesn't reach for a disabled tool in a hermetic mission (SWE).
+    web_enabled = True
+    try:
+        mission = await effects.load_mission()
+        web_enabled = bool(getattr(getattr(mission, "config", None), "web_research", True))
+    except Exception:  # noqa: BLE001 - no mission → assume enabled, rely on key backstop
+        web_enabled = True
+    if web_enabled:
+        parts.append(
+            "You may use `web_search` for external knowledge (library/API "
+            "behavior, error semantics) you cannot get from the repo."
+        )
+    else:
+        parts.append("`web_search` is unavailable in this mission — rely on the repo.")
+    parts.append("")
     parts.append(f"You have up to {MAX_ESCALATION_TURNS} tool actions.")
 
     updates: dict = {
@@ -318,4 +341,28 @@ async def action_conclude_escalation(step_input: StepInput) -> StepOutput:
             "escalation_summary": summary,
             "files_changed": files,
         },
+    )
+
+
+async def action_escalation_fold_search(step_input: StepInput) -> StepOutput:
+    """web_search fold-back: inject the deep_search research_summary into the
+    escalation session as ONE turn.
+
+    The deep_search sub-flow already ran its own bounded multi-query
+    reflect-and-refine loop; here we only fold its synthesized findings so the
+    next work turn (and the conclude turn) reason over them. Counts as one
+    escalation turn regardless of how many web queries deep_search ran.
+
+    Context: research_summary (from the sub-flow), counters.
+    """
+    summary = str(step_input.context.get("research_summary", "") or "").strip()
+    if not summary:
+        return _observe(
+            step_input,
+            "Observation (web_search): no usable findings returned — proceed from "
+            "the code, or conclude.",
+        )
+    return _observe(
+        step_input,
+        f"Observation (web_search findings):\n{_bounded(summary, 4000)}",
     )

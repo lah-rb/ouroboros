@@ -107,6 +107,14 @@ escalate: #FlowDefinition & {
 								description: "workspace-relative file path to write"
 							}
 						}
+						web_search: #MenuOption & {
+							key:         "web_search"
+							description: "Research external knowledge you can't determine from the repo (library/API behavior, error semantics)"
+							arg: {
+								name:        "question"
+								description: "the specific external question to research"
+							}
+						}
 						conclude: #MenuOption & {
 							key:         "conclude"
 							description: "Finish: report resolved (outcome holds) or deferred (cannot hold from here)"
@@ -119,6 +127,7 @@ escalate: #FlowDefinition & {
 						read_file:   "do_read"
 						run_command: "do_run"
 						write_file:  "do_write"
+						web_search:  "do_web_search"
 						conclude:    "conclude"
 					}
 					default:   "conclude"
@@ -190,6 +199,45 @@ escalate: #FlowDefinition & {
 				]
 			}
 			publishes: ["escalation_turn", "escalation_corrections", "escalation_files"]
+		}
+
+		// web_search tool: dispatch the reflect-and-refine deep_search sub-flow
+		// on the model's question. It runs its own bounded multi-query loop and
+		// returns a synthesized research_summary; fold_search injects that back
+		// into THIS session (as one escalation turn, regardless of how many web
+		// queries deep_search ran).
+		do_web_search: #StepDefinition & {
+			action:      "flow"
+			description: "Research the question via the deep_search sub-flow"
+			flow:        "deep_search"
+			context: optional: ["escalation_choice_arg"]
+			input_map: {
+				brief:             {$ref: "context.escalation_choice_arg"}
+				working_directory: {$ref: "input.working_directory"}
+				mission_id:        {$ref: "input.mission_id"}
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "fold_search"}]
+			}
+			publishes: ["research_summary"]
+		}
+
+		fold_search: #StepDefinition & {
+			action:      "escalation_fold_search"
+			description: "Inject the research summary into the session; spend one turn"
+			context: {
+				required: ["escalation_session_id"]
+				optional: ["research_summary", "escalation_turn", "escalation_corrections"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.exhausted == true", transition: "conclude"},
+					{condition: "true", transition: "check_budget"},
+				]
+			}
+			publishes: ["escalation_turn", "escalation_corrections"]
 		}
 
 		// Budget: MAX_ESCALATION_TURNS = 6 (keep this rule, the Python

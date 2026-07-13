@@ -97,42 +97,50 @@ diagnose_issue: #FlowDefinition & {
 		// ══════════════════════════════════════════════════════════
 		//
 		// When this goal has already looped through diagnose/fix twice
-		// without completing, pull in NEW information via an exa web
-		// search before investigating again — the dynamic anti-give-up
-		// arm. One-shot per goal (goal.search_findings sentinel); the
-		// seed builder surfaces stored hits on every later diagnose.
+		// without completing, pull in NEW information via the deep_search
+		// reflect-and-refine loop before investigating again — the dynamic
+		// anti-give-up arm. One-shot per goal (goal.search_findings
+		// sentinel); the seed builder surfaces the stored summary on every
+		// later diagnose. deep_search self-gates on web_research/exa-key
+		// (empty summary → sentinel), so hermetic runs stay hermetic.
 
 		search_gate: #StepDefinition & {
 			action:      "goal_search_gate"
-			description: "Gate the stuck-goal web search (>= 2 failed attempts, once)"
+			description: "Gate the stuck-goal web research (>= 2 failed attempts, once)"
 			context: optional: ["error_headline"]
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.should_search == true", transition: "exa_search"},
+					{condition: "result.should_search == true", transition: "do_deep_search"},
 					{condition: "true", transition: "start_session"},
 				]
 			}
-			publishes: ["mission", "search_queries"]
+			publishes: ["mission", "search_brief"]
 		}
 
-		exa_search: #StepDefinition & {
-			action:      "exa_search"
-			description: "Web-search the stuck problem via the Exa MCP"
-			context: optional: ["search_queries"]
+		do_deep_search: #StepDefinition & {
+			action:      "flow"
+			description: "Research the stuck problem via the deep_search sub-flow"
+			flow:        "deep_search"
+			context: optional: ["search_brief"]
+			input_map: {
+				brief:             {$ref: "context.search_brief"}
+				working_directory: {$ref: "input.working_directory"}
+				mission_id:        {$ref: "input.mission_id"}
+			}
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "store_search_findings"}]
 			}
-			publishes: ["raw_search_results"]
+			publishes: ["research_summary"]
 		}
 
 		store_search_findings: #StepDefinition & {
 			action:      "store_goal_search_findings"
-			description: "Store the exa hits on the goal (one-shot sentinel)"
+			description: "Store the research summary on the goal (one-shot sentinel)"
 			context: {
 				required: ["mission"]
-				optional: ["raw_search_results"]
+				optional: ["research_summary"]
 			}
 			resolver: {
 				type: "rule"

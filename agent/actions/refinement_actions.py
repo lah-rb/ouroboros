@@ -211,6 +211,121 @@ def _excluded(filepath: str) -> bool:
     return any(p in _EXCLUDED_DIRS or p.endswith(".egg-info") for p in parts)
 
 
+# ── Modality sidecars (deterministic digestion at the scan position) ──
+# GAIA finding: tool ADOPTION is the failure mode — 7/10 image missions never
+# called vl_inspect and 4 confabulated image reads even after an incapability
+# note. Per the core thesis, digestion happens at a FIXED flow position: the
+# scan digests every undigested image/audio into a text sidecar, conditioned
+# on the mission objective (AB-validated: conditioned extraction is
+# answer-bearing 8/10 vs ~1/10 generic, and ~2x faster). Gated on
+# MissionConfig.vision/.audio + per-modality count caps + host-tool-capable
+# effects (container missions skip — their run_command executes in-container).
+_IMAGE_SIDECAR_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+_AUDIO_SIDECAR_EXTS = (".mp3", ".wav", ".m4a", ".flac")
+_VL_SIDECAR_SUFFIX = ".vltext"
+_AUDIO_SIDECAR_SUFFIX = ".transcript.txt"
+_VL_TOOL_PY = "tools/fig_review/.venv/bin/python"
+_VL_TOOL_SCRIPT = "tools/fig_review/vl_inspect.py"
+_ASR_TOOL_PY = "tools/audio_transcribe/.venv/bin/python"
+_ASR_TOOL_SCRIPT = "tools/audio_transcribe/audio_transcribe.py"
+_VL_SIDECAR_TIMEOUT_S = 300
+_ASR_SIDECAR_TIMEOUT_S = 1800
+
+
+def _sidecar_repo_root() -> str:
+    import os
+
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _sidecar_prompt(objective: str) -> str:
+    """The AB-winning conditioned-digest prompt (dev/predigest_ab)."""
+    return (
+        f'You are pre-reading an image for this task: "{(objective or "")[:400]}"\n'
+        "Describe everything in the image relevant to answering it — transcribe "
+        "exact text/numbers where visible. Do NOT answer the task; report what you see."
+    )
+
+
+async def _digest_modality_sidecars(
+    effects, listing_entries, mission, manifest: dict[str, str]
+) -> list[str]:
+    """Digest undigested image/audio files into text sidecars; returns
+    observation notes. Mutates ``manifest`` with sidecar entries so the model
+    sees them this same scan. Never raises — a failed digestion becomes a
+    manifest note."""
+    import os
+
+    cfg = getattr(mission, "config", None)
+    notes: list[str] = []
+    root = _sidecar_repo_root()
+    all_paths = {e.path for e in listing_entries if e.is_file}
+
+    for kind, exts, suffix, enabled, cap in (
+        ("image", _IMAGE_SIDECAR_EXTS, _VL_SIDECAR_SUFFIX,
+         bool(getattr(cfg, "vision", False)),
+         int(getattr(cfg, "modality_sidecar_max_images", 6) or 6)),
+        ("audio", _AUDIO_SIDECAR_EXTS, _AUDIO_SIDECAR_SUFFIX,
+         bool(getattr(cfg, "audio", False)),
+         int(getattr(cfg, "modality_sidecar_max_audio", 2) or 2)),
+    ):
+        if not enabled:
+            continue
+        todo = [
+            p for p in sorted(all_paths)
+            if p.lower().endswith(exts)
+            and not _excluded(p)
+            and (p + suffix) not in all_paths
+        ]
+        if not todo:
+            continue
+        if len(todo) > cap:
+            note = (
+                f"({len(todo)} {kind} files present — sidecar digestion skipped "
+                f"(limit {cap}); digest specific files with the {kind} tool directly)"
+            )
+            manifest[f"[{kind} sidecars]"] = note
+            notes.append(note)
+            continue
+        for path in todo:
+            sidecar = path + suffix
+            if kind == "image":
+                cmd = [
+                    os.path.join(root, _VL_TOOL_PY),
+                    os.path.join(root, _VL_TOOL_SCRIPT),
+                    "--image", path,
+                    "--question", _sidecar_prompt(getattr(mission, "objective", "")),
+                    "--max-tokens", "600",
+                ]
+                timeout = _VL_SIDECAR_TIMEOUT_S
+            else:
+                cmd = [
+                    os.path.join(root, _ASR_TOOL_PY),
+                    os.path.join(root, _ASR_TOOL_SCRIPT),
+                    "--audio", path,
+                    "--timestamps",
+                ]
+                timeout = _ASR_SIDECAR_TIMEOUT_S
+            try:
+                result = await effects.run_command(cmd, timeout=timeout)
+                text = (result.stdout or "").strip()
+                if result.return_code == 0 and text:
+                    await effects.write_file(sidecar, text)
+                    manifest[sidecar] = (
+                        text[:_SIGNATURE_MAX_CHARS]
+                        + ("\n    # …(truncated)" if len(text) > _SIGNATURE_MAX_CHARS else "")
+                    )
+                    notes.append(f"digested {path} -> {sidecar}")
+                else:
+                    err = (result.stderr or "")[-200:] or f"exit {result.return_code}"
+                    manifest[f"[{path}]"] = f"({kind} digestion failed: {err})"
+                    notes.append(f"{kind} digestion FAILED for {path}: {err}")
+            except Exception as e:  # noqa: BLE001 — the scan must never fail on a sidecar
+                manifest[f"[{path}]"] = f"({kind} digestion error: {e})"
+                notes.append(f"{kind} digestion error for {path}: {e}")
+    return notes
+
+
 async def action_scan_project(step_input: StepInput) -> StepOutput:
     """Scan workspace and extract file signatures.
 
@@ -274,9 +389,27 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
         except Exception as e:
             manifest[filepath] = f"(error reading: {e})"
 
+    # Modality sidecars: deterministic digestion at the scan position (never
+    # model-elected). Local-effects only; gated on mission config + count caps.
+    sidecar_notes: list[str] = []
+    if getattr(effects, "supports_host_tools", False):
+        try:
+            mission = await effects.load_mission()
+        except Exception:
+            mission = None
+        if mission is not None and (
+            getattr(getattr(mission, "config", None), "vision", False)
+            or getattr(getattr(mission, "config", None), "audio", False)
+        ):
+            sidecar_notes = await _digest_modality_sidecars(
+                effects, listing.entries, mission, manifest
+            )
+
     obs = f"Scanned {len(manifest)} files in {root}"
     if scan_omitted:
         obs += f" ({scan_omitted} more matched, omitted past the {_MAX_SCAN_FILES}-file cap)"
+    if sidecar_notes:
+        obs += " | sidecars: " + "; ".join(sidecar_notes[:4])
     return StepOutput(
         result={"file_count": len(manifest), "scan_omitted": scan_omitted},
         observations=obs,

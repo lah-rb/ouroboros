@@ -112,22 +112,20 @@ def test_pending_directive_routes_to_replan_before_greenfield_planning():
 
 def test_design_and_plan_research_is_web_research_gated():
     # Proactive domain research only fires when config.web_research is on, so a
-    # hermetic run (tb adapter sets it off) stays fully offline.
+    # hermetic run (tb adapter sets it off) stays fully offline. In the design_gate
+    # topology the research fork lives on design_gate_pass (post-coherence, the old
+    # parse_architecture fork) and design_gate_route (pre-design routing) — both
+    # web_research-gated, else → derive_goals.
     c = _compiled()
     steps = c["design_and_plan"]["steps"]
-    parse_rules = steps["parse_architecture"]["resolver"]["rules"]
-    research_rule = next(
-        r for r in parse_rules if r["transition"] == "domain_research"
-    )
-    assert "config.web_research == true" in research_rule["condition"]
-    # The check_drift fallback into research is gated too (else → derive_goals).
-    drift_rules = c["design_and_plan"]["steps"]["check_drift"]["resolver"]["rules"]
-    dr_research = next(
-        (r for r in drift_rules if r["transition"] == "domain_research"), None
-    )
-    assert dr_research is not None
-    assert "config.web_research == true" in dr_research["condition"]
-    assert drift_rules[-1]["transition"] == "derive_goals"
+    for step in ("design_gate_pass", "design_gate_route"):
+        rules = steps[step]["resolver"]["rules"]
+        research_rule = next(
+            (r for r in rules if r["transition"] == "domain_research"), None
+        )
+        assert research_rule is not None, f"{step} lost its research fork"
+        assert "config.web_research == true" in research_rule["condition"]
+        assert rules[-1]["transition"] == "derive_goals"
 
 
 def test_web_research_flag_default_on_off_is_explicit():

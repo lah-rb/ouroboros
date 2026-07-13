@@ -78,16 +78,23 @@ design_and_plan: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "check_drift"}]
+				rules: [{condition: "true", transition: "design_gate_route"}]
 			}
 			publishes: ["repo_map_formatted"]
 		}
 
-		// ── Phase 1b: Deterministic drift detection ────────────────
+		// ── Phase 1b: Deterministic drift routing (design_gate, mode:route) ──
+		//
+		// The unified design_gate action, PRE-design pass: it computes drift
+		// facts and routes design-vs-reconcile-vs-derive. Its POST-parse sibling
+		// (design_gate_facts, mode:facts) republishes the same facts for the
+		// coherence critic. Routing must stay before design, so only the action
+		// name is unified — not the step's position.
 
-		check_drift: #StepDefinition & {
-			action:      "check_architecture_drift"
-			description: "Compare architecture against files on disk to detect drift"
+		design_gate_route: #StepDefinition & {
+			action:      "design_gate"
+			description: "design_gate (mode:route) — drift facts route design/reconcile/derive"
+			params: mode: "route"
 			context: {
 				required: ["mission"]
 				optional: ["project_manifest"]
@@ -178,10 +185,13 @@ design_and_plan: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					// Grounding research only when web access is allowed
-					// (config.web_research) — else proceed straight to goals.
-					{condition: "result.architecture_parsed == true and context.mission.config.web_research == true", transition: "domain_research"},
-					// Parse failed, or research disabled — derive goals from whatever we have.
+					// Parsed OK — send the blueprint through the coherence gate
+					// (design_gate_facts → critique → ground) before goals. The
+					// web_research fork now lives on design_gate_pass.
+					{condition: "result.architecture_parsed == true", transition: "design_gate_facts"},
+					// Parse failed — derive goals from whatever we have (unchanged
+					// permissive fallthrough; a malformed blueprint is out of the
+					// coherence gate's scope).
 					{condition: "true", transition: "derive_goals"},
 				]
 			}
@@ -195,11 +205,111 @@ design_and_plan: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					// After reconciliation, always derive goals (re-derive from updated arch)
+					// Re-critique the reconciled blueprint through the coherence gate.
+					{condition: "result.architecture_parsed == true", transition: "design_gate_facts"},
 					{condition: "true", transition: "derive_goals"},
 				]
 			}
 			publishes: ["mission", "architecture"]
+		}
+
+		// ── Phase 3c: design_gate — adversarial coherence critique ──────
+		//
+		// After a blueprint is parsed (fresh or reconciled), critique it for
+		// internal coherence (import_scheme vs run_command vs module paths vs the
+		// run-from-source tooling convention) BEFORE deriving goals. Loops
+		// reconcile ≤2× on a concrete incoherence, then BLOCKS the mission
+		// (→ failed) rather than build an unrunnable blueprint.
+
+		design_gate_facts: #StepDefinition & {
+			action:      "design_gate"
+			description: "design_gate (mode:facts) — publish drift facts for the critic"
+			params: mode: "facts"
+			context: {
+				required: ["mission"]
+				optional: ["project_manifest"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "design_gate_critique"}]
+			}
+			publishes: ["drift_facts"]
+		}
+
+		design_gate_critique: #StepDefinition & {
+			action:      "inference"
+			description: "Adversarially critique the blueprint for internal coherence"
+			// FRESH CONTEXT: declare ONLY mission + drift_facts — NOT
+			// inference_response or repo_map_formatted — so _build_step_input
+			// strips the design step's reasoning and the critic judges the
+			// blueprint independently. The pre_compute renders the evidence bundle
+			// from mission.architecture (the parsed object, not the design prose).
+			context: {
+				required: ["mission"]
+				optional: ["drift_facts"]
+			}
+			prompt_template: {
+				template: "design_and_plan/critique_coherence"
+				context_keys: [
+					"blueprint_summary", "mission_objective",
+					"tooling_convention", "drift_facts_rendered", "prior_rejection",
+				]
+				input_keys: []
+			}
+			pre_compute: [
+				{formatter: "format_architecture_listing", output_key: "blueprint_summary"
+					params: {source: {$ref: "context.mission.architecture"}}},
+				{formatter: "format_mission_meta", output_key: "mission_objective"
+					params: {mission: {$ref: "context.mission"}, field: "objective"}},
+				{formatter: "format_tooling_convention", output_key: "tooling_convention"
+					params: {source: {$ref: "context.mission.architecture"}}},
+				{formatter: "format_drift_facts", output_key: "drift_facts_rendered"
+					params: {source: {$ref: "context.drift_facts"}}},
+				{formatter: "format_prior_rejection", output_key: "prior_rejection"
+					params: {source: {$ref: "context.mission.architecture"}}},
+			]
+			config: temperature: "t*0.1"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "design_gate_ground"},
+					// Inference failure — fail OPEN to goals. "The critic couldn't
+					// run" (transient LLM error) must not BLOCK; only a present,
+					// concrete incoherent verdict blocks (see design_gate_ground).
+					{condition: "true", transition: "derive_goals"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		design_gate_ground: #StepDefinition & {
+			action:      "ground_design_gate_verdict"
+			description: "Parse + ground the coherence verdict; decide pass / reconcile / block"
+			context: required: ["mission", "inference_response"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.coherent == true", transition: "design_gate_pass"},
+					{condition: "result.coherent == false and meta.attempt <= 2", transition: "design_reconcile"},
+					// Budget spent, a concrete incoherence persists — BLOCK the
+					// mission rather than build an unrunnable blueprint.
+					{condition: "true", transition: "failed"},
+				]
+			}
+			publishes: ["mission", "design_gate_feedback"]
+		}
+
+		design_gate_pass: #StepDefinition & {
+			action:      "noop"
+			description: "Blueprint coherent — proceed (preserves the web_research fork)"
+			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "context.mission.config.web_research == true", transition: "domain_research"},
+					{condition: "true", transition: "derive_goals"},
+				]
+			}
 		}
 
 		// ── Phase 3b: Proactive domain research ─────────────────────

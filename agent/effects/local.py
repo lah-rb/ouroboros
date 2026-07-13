@@ -74,6 +74,12 @@ class LocalEffects:
     Every method call is automatically logged.
     """
 
+    # Host-tool capability: run_command executes on the HOST here, so actions
+    # may invoke host-venv tools (vl_inspect, audio_transcribe, pdf_extract).
+    # ContainerEffects overrides to False — its run_command executes INSIDE
+    # the task container, where those tools don't exist.
+    supports_host_tools: bool = True
+
     def __init__(
         self,
         working_directory: str,

@@ -626,6 +626,7 @@ def build_action_registry() -> ActionRegistry:
     # ── Escalation layer v1 (shared mid-flow recovery primitive) ────
     from agent.actions.escalation_actions import (
         action_conclude_escalation,
+        action_escalation_fold_search,
         action_escalation_read,
         action_escalation_run,
         action_escalation_write,
@@ -636,6 +637,20 @@ def build_action_registry() -> ActionRegistry:
     registry.register("escalation_read", action_escalation_read)
     registry.register("escalation_run", action_escalation_run)
     registry.register("escalation_write", action_escalation_write)
+    registry.register("escalation_fold_search", action_escalation_fold_search)
     registry.register("conclude_escalation", action_conclude_escalation)
+
+    # ── Deep-search loop v1 (shared reflect-and-refine web-research primitive) ──
+    from agent.actions.deep_search_actions import (
+        action_condense_results,
+        action_conclude_search,
+        action_open_search_session,
+        action_search_run,
+    )
+
+    registry.register("open_search_session", action_open_search_session)
+    registry.register("search_run", action_search_run)
+    registry.register("condense_results", action_condense_results)
+    registry.register("conclude_search", action_conclude_search)
 
     return registry

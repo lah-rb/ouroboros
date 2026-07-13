@@ -58,7 +58,11 @@ class MockEffects:
         mission: Any = None,
         http_responses: dict[str, Any] | None = None,
         http_downloads: dict[str, Any] | None = None,
+        supports_host_tools: bool = True,
     ) -> None:
+        # Host-tool capability flag (mirrors LocalEffects/ContainerEffects) —
+        # tests flip it to False to exercise the container-skip path.
+        self.supports_host_tools = supports_host_tools
         self._files: dict[str, str] = dict(files or {})
         self._commands: dict[str, CommandResult] = dict(commands or {})
         # Inference responses — popped in order; if exhausted, returns a default
