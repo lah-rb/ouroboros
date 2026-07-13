@@ -678,6 +678,11 @@ class InferenceEffect:
             cfg["flowCacheKey"] = flow_key
         if from_snapshot:
             cfg["fromSnapshot"] = from_snapshot
+        # Named persona (multi-persona pooling): the session pins a seat
+        # carrying that persona's static head (SOUL) — e.g. "user_sim",
+        # "tau_boss". Absent/None → the default persona, exactly as before.
+        if (config or {}).get("persona"):
+            cfg["persona"] = str(config["persona"])
 
         try:
             response = await client.post(
@@ -733,6 +738,12 @@ class InferenceEffect:
                 grammar = config_overrides["grammar"]
                 if grammar is not None:
                     request_vars["grammar"] = grammar
+            # Reasoning HEAD-SWAP level (low/medium/high) — server forks the level's
+            # pinned system head at turn 0 (config.model.reasoning_head_swap). Only on
+            # the SESSION path (SessionTurnRequest has the field; CompletionRequest
+            # does not). Optional server-side; None/absent → default level.
+            if config_overrides.get("reasoning"):
+                request_vars["reasoning"] = str(config_overrides["reasoning"])
 
         request_body = {
             "query": SESSION_COMPLETION_QUERY,

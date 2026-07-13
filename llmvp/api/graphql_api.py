@@ -230,6 +230,10 @@ class SessionConfig:
     # mutation): hot = ~zero prefill; cold/replay = re-prefill from the stored
     # token stream. Unknown key errors before any state is touched.
     from_snapshot: Optional[str] = strawberry.field(default=None)
+    # Multi-persona pooling: lease the pool slot carrying this persona's SOUL
+    # (e.g. "user_sim" for the simulated-user participant). Session-scoped —
+    # set at start, never per-turn. None → the default persona's slot.
+    persona: Optional[str] = strawberry.field(default=None)
 
 
 @strawberry.type
@@ -252,6 +256,10 @@ class SessionTurnRequest:
     max_tokens: Optional[int] = strawberry.field(default=None)
     temperature: Optional[float] = strawberry.field(default=None)
     grammar: Optional[str] = strawberry.field(default=None)
+    # Per-request reasoning HEAD-SWAP level (low/medium/high). At turn 0 of a
+    # non-flow session it forks the level's pinned system head onto the live seq
+    # (config.model.reasoning_head_swap). None → default level. gpt-oss/harmony.
+    reasoning: Optional[str] = strawberry.field(default=None)
 
 
 @strawberry.type
@@ -390,6 +398,7 @@ class Query:
             max_tokens=max_tokens,
             temperature=temperature,
             grammar=request.grammar,
+            reasoning=request.reasoning,
         )
         truncated = tokens >= max_tokens
         return CompletionResponse(
@@ -617,6 +626,7 @@ class Mutation:
             flow_key=config.flow_cache_key if config else None,
             static_prefix=config.static_prefix if config else None,
             from_snapshot=config.from_snapshot if config else None,
+            persona=config.persona if config else None,
         )
         return SessionInfoGQL(
             session_id=info.session_id,
@@ -726,6 +736,9 @@ class Subscription:
             max_tokens=max_tokens,
             temperature=temperature,
             grammar=request.grammar,
+            # Parity with the non-streaming session_completion query — the
+            # streaming path previously dropped the reasoning HEAD-SWAP level.
+            reasoning=request.reasoning,
         ):
             yield CompletionChunk(text=chunk, is_complete=False)
         yield CompletionChunk(text="", is_complete=True)

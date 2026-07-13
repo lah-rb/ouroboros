@@ -1,6 +1,6 @@
 # Cache State — KV reuse across the LLMVP server
 
-_Last updated: 2026-07-02. Scope: every KV-prefix/state reuse layer Ouroboros flows use against the local LLMVP server (`llama-cpp-python` fork 0.3.40 embedded). Supersedes the 2026-06-18 revision (which predated the semi-permanent snapshot tier, the resident go-LIVE on gpt-oss, and the measured architecture matrix below)._
+_Last updated: 2026-07-12. Scope: every KV-prefix/state reuse layer Ouroboros flows use against the local LLMVP server (`llama-cpp-python` fork 0.3.40 embedded). Supersedes the 2026-07-02 revision (which predated the reasoning-head band, multi-persona pooling, and the Metal residency-set fix that made multi-instance ROBUST)._
 
 ## TL;DR
 
@@ -11,6 +11,7 @@ _Last updated: 2026-07-02. Scope: every KV-prefix/state reuse layer Ouroboros fl
 - **The resident path closes the deep-session problem** the legacy path can't: no `save_state` blob → no ~2 GB overflow crash; the session seq stays live → no per-turn re-prefill (the deep-session timeout lever). Measured 2026-07-02 (compat matrix): flat 8–46-token per-turn prefill on gpt-oss / gemma-4 / Devstral / Qwen3-Next vs ~1.7k full-replay on Qwen3.6; bit-identical to legacy at temp 0.
 - **NEW (2026-07-02): the semi-permanent snapshot tier** — `sessionSnapshot(sid, key)` pins a session's context (hot seq band + cold token list), `startSession(fromSnapshot:)` forks from it (hot fork = 16–46 fresh tokens, 0.3–1.5 s), `purgeSnapshot(key)` frees. Survives session end/TTL/context-refresh (refresh demotes hot→cold; the next fork re-prefills and re-pins). Windowing is **forbidden** on snapshot-linked sessions (`SessionSnapshotOverflow`) — `seq_add` would shift cells the snapshot shares. Crash insurance: the orphan reaper age-sweeps unpurged snapshots (`session_snapshot_ttl_s`, default 2 h). Production consumer: the curator's per-paper ingest-once/branch-passes lifecycle; live stress = `dev/snapshot_stress.py` (30k-doc: fork prefill 24 vs 30,060 tokens).
 - **Hard dependency on SWA models: `swa_full: true`** (+ `kv_unified: true`) — without it any pinned/forked prefix corrupts (`llama_decode code -3` at the SWA window boundary). True for both strategies. See [SWA dependency](#swa-dependency).
+- **NEW (2026-07-12): multi-instance pooling is ROBUST** — SOUL-per-slot personas (each pool slot carries its own static head, e.g. agent + simulated user) with persona-routed acquisition. The blocker was **Metal per-buffer residency sets colliding across contexts** (a FALSE `Insufficient Memory` at ANY n_ctx, then the ggml error latch); the backend now auto-sets `GGML_METAL_NO_RESIDENCY=1` for pool>1. Validated: 2×32k 30 rounds/0 errors, 2×131k 15 rounds/0 errors. See [Multi-instance pooling & personas](#multi-instance-pooling--personas-2026-07-12).
 
 ---
 
@@ -38,14 +39,18 @@ The go-forward strategy (dormant behind `resident_seq_cache` until enabled per m
 
 ```
 SEQ_WORKING  = 0    the live generation / session stream (the ONLY seq generated on)
-SEQ_STATIC   = 1    pristine global static template (fork source; never generated on)
+SEQ_STATIC   = 1    pristine per-slot static template (fork source; never generated on)
 SEQ_FLOW_BASE= 2    per-flow prefixes occupy the band [2, 2 + flow_hot_set)
 SEQ_SNAP     = ...  session snapshots occupy [SEQ_FLOW_BASE + flow_hot_set,
                     + session_snapshot_max) — own allocator: explicitly purged
                     and capacity-rejected, never LRU-evicted
+SEQ_REASONING= ...  reasoning HEAD-SWAP band ABOVE the snapshot band: one pinned
+                    full system head per non-default reasoning level (low/high;
+                    the default level reuses SEQ_STATIC), forked onto seq 0 at
+                    turn 0 when a session requests reasoning=<level>
 ```
 
-`n_seq_max` = `2 + (flow_hot_set if flow band) + session_snapshot_max` when resident is requested, else `1`.
+`n_seq_max` = `2 + (flow_hot_set if flow band) + session_snapshot_max + (len(reasoning_pin_levels) if reasoning_head_swap)` when resident is requested, else `1`. (gpt-oss today: 2 + 8 + 2 + 2 = 14.)
 
 ### Primitives (no serialization)
 
@@ -78,6 +83,181 @@ When `pre_turn_pos + turn_tokens + max_tokens ≥ n_ctx`, `_window_resident_seq`
 | `swa_full` / `kv_unified` | **required** on SWA models for either strategy (see below). |
 | `session_full_replay` | legacy session path (default **true**); ignored when resident is active. |
 | `session_snapshot_max` / `session_snapshot_ttl_s` | snapshot band size (default 2) / reaper age-sweep for crash-orphaned snapshots (default 2 h; 0 = pin forever). Replay-mode registrations are count-capped at `max(8, 4x band)`. |
+
+---
+
+## Multi-instance pooling & personas (2026-07-12)
+
+The pool (one weight load shared by N slots, each slot its own `LlamaContext` =
+its own KV container) now supports **a different SOUL per slot** and is
+**robust** after the Metal residency-set fix. This is the τ-bench dual-LLM
+substrate: slot 0 = the agent SOUL, slot 1 = a simulated-user SOUL, two pinned
+sessions live concurrently with full identity separation.
+
+### Persona layer (SOUL-per-slot)
+
+- Config: root `personas:` map (`persona_file`/`tokens_bin`/optional `n_ctx`
+  per persona) + `resources.slot_personas: [name, ...]` (index = slot;
+  validated at load; absent = all-default, every existing config unchanged).
+  Reference config: `llmvp/configs/gpt-oss-120b-a5-duo.yaml` + `knowledge/USER_SIM.md`.
+- Each slot warms with ITS persona's static tokens (persona-keyed
+  `StaticTokensManager`, one `.tokens.bin` each), pins its own `SEQ_STATIC`,
+  and builds its reasoning heads FROM that persona. Per-instance identity:
+  `inst._persona/_static_tokens/_static_len`.
+- Acquisition routes by persona queue (`acquire_instance(persona=)`,
+  `SessionConfig.persona`); release returns to the owner queue; busy errors
+  are persona-labeled; health reports per-persona availability.
+- Snapshots bind their persona; cross-persona fork/rebuild is REFUSED (a
+  persona-B static under persona-A dyn tokens would silently corrupt).
+- Rules: eager pooling only (JIT+personas rejected); **state blobs are saved
+  on the PRIMARY only** — `save_state()` on a copy.copy'd shared instance
+  corrupts its context (observed live; resident slots never need the blob).
+
+### The Metal residency-set bug (the robustness blocker, SOLVED)
+
+With per-buffer `MTLResidencySet`s (llama.cpp PR#11427, default-on since
+2025-01), **two live contexts on one Metal device fail command buffers with a
+FALSE `Insufficient Memory` (status 5, kIOGPUCommandBufferCallbackErrorOutOfMemory)
+regardless of size**, and ggml-metal's sticky `has_error` latch then returns
+`llama_decode -3` on that context forever. Evidence (dev/duo_ctx_sweep.csv +
+dev/duo_soak.py):
+
+| shape | residency sets ON | `GGML_METAL_NO_RESIDENCY=1` |
+|---|---|---|
+| 2×8k (288 MiB KV/ctx, ~50G headroom) | dead in 5 rounds | 12 rounds clean |
+| 2×32k | 3 errors / 60 turns | **30 rounds, 0 errors** |
+| 2×131k | dead by round 3 | **15 rounds, 0 errors** (wired peak 79G) |
+
+Size-independence proves it was never memory. **Fix: the backend auto-sets
+`GGML_METAL_NO_RESIDENCY=1` whenever `max_concurrent_requests > 1`** (explicit
+operator setting respected). Cost: idle buffers become OS-evictable after ~1 s
+(~250 ms re-wire) — irrelevant next to dead slots. Upstream-repro-ready.
+
+### Robustness layer (keep regardless)
+
+- **ggml native log forwarding** (`llama_log_set` → our logger, installed at
+  backend init): `verbose=False` used to SWALLOW every Metal error line —
+  command-buffer failures, the latch notice, KV/compute buffer sizes. This is
+  what made the root cause findable. Never remove.
+- **Latch self-healing**: `llama_decode -3/-2` marks the instance; a targeted
+  context rebuild (fresh Metal backend, persona-aware re-warm) heals it at
+  release/acquire; a pinned session gets a DEFERRED teardown (inline teardown
+  stalls on the failed turn's not-yet-unwound generation guard). Health:
+  `decode_failures` + `latch_heals`.
+- Soak/acceptance harnesses: `dev/duo_soak.py` (interleaved dual-persona
+  rounds + wired sampling), `dev/duo_ctx_sweep.sh` (n_ctx robustness sweep).
+
+### Multi-context vs single-context (forward guidance)
+
+Deep-research verdict (2026-07-11): upstream's battle-tested parallelism is
+**one context + N seq ids** (llama-server slots, the official parallel
+example — which `seq_cp`s a shared prompt exactly like our resident fork).
+With the residency fix, our N-context pool is robust for small N (the duo),
+but per-context cost duplicates KV + compute buffers; for >2 slots or maximum
+efficiency, the single-context multi-seq migration remains the better long-term
+architecture (two working seqs + per-persona pinned heads in ONE container).
+
+**2026-07-12 addendum — simultaneous multi-context decode is a CLOSED DEAD
+END.** Even with NO_RESIDENCY active, truly concurrent submission still hits
+status-5 OOM (unretained-reference command buffers × unwired weights racing
+`iogpu.wired_limit` at schedule time), and ggml-metal gives every context on a
+device ONE shared MTLCommandQueue (per-backend queues = open upstream TODO),
+so overlapped decode gains nothing: measured `dev/decode_scaling.csv` — pool 1
+= 62 tok/s aggregate; the only error-free 4-way concurrent rep collapsed to
+6.3/stream, 24.8 aggregate. NEGATIVE scaling. Batched decode (below) is the
+only aggregate-throughput shape on Metal.
+
+### Batched single-context decode engine (decode_mode: "batched") — BUILT 2026-07-12
+
+`resources.decode_mode: "batched"` (default `"pool"`, production untouched):
+ONE context, `max_concurrent_requests` working seqs, one `llama_decode` per
+step carrying a token per active stream + chunked prefill for joining streams
+— llama-server's `update_slots` loop in Python (`llmvp/inference/batched_engine.py`).
+
+- **Seq map**: `[0..W)` working seats · `[W..W+P)` persona heads ·
+  `[W+P..W+P+R)` reasoning heads. Any seat serves any persona (acquire forks
+  the persona head via seq_cp) — no per-persona slot starvation, no
+  slot_personas. `n_seq_max = W+P+R`.
+- **Threading**: a dedicated decode thread owns ALL context ops; inboxes
+  (submit / control-op Futures / pause-resume) drain between steps; output
+  crosses to asyncio via per-stream bridges. Sessions pin a SEAT (seq id),
+  not a context — the SeqSlot facade duck-types the instance surface
+  (n_tokens/input_ids/_last_*), with explicit per-seq surgeries: `purge_to`
+  (degen purge), `window_seat_sync`, `install_head_sync` (reasoning swap).
+- **Preconditions** (validated at load): resident_seq_cache + swa_full +
+  kv_unified, non-hybrid, no speculative, eager slots. **`n_ctx` is the
+  SHARED unified cell pool — budget the SUM of concurrent streams**
+  (duo-batched runs one 65k context ≈ the pool duo's 2×32k total).
+- **Metal exposure**: NONE of the multi-context failure class applies — the
+  backend skips GGML_METAL_NO_RESIDENCY in batched mode (residency sets are
+  safe with one context; weights stay wired). KV pressure (`decode ret==1`)
+  is handled transactionally: seq-truncate every touched stream to its step
+  mark, halve the prefill budget, then evict the largest non-pinned stream
+  (pinned session seats are never evicted).
+- **Recovery**: a fatal decode kills ALL streams by design (single-context
+  blast radius) — bridges get RetriableEngineError, pinned seats are flagged
+  (session layer's proven deferred-teardown), the engine rebuilds the context
+  + re-pins heads IN PLACE on the decode thread and resumes
+  (`decode_failures`/`latch_heals` in health). Refresh = pause → rebuild →
+  resume, idle-gated like the pool.
+- **Deferred (pool-only fallbacks documented)**: flow band + session
+  flow-fork, session snapshots (hard error), resident_strip_reasoning,
+  speculative draft, JIT, per-persona n_ctx.
+- **Validated (devstral live)**: pool(1) ≡ batched(W=1) BYTE-IDENTICAL at
+  near-greedy; 3 concurrent identical streams ≡ each other ≡ reference
+  (isolation); 3-turn session transcripts ≡ pool; TWO concurrent pinned
+  sessions with interleaved turns ≡ single-session reference (the τ-duo
+  shape that deadlocked pool=1) — 218 engine steps for 2 sessions vs 215
+  for 1 (true batching). Harnesses: `dev/batched_parity.py`,
+  `llmvp/tests/test_batched_engine.py` (30 tests). gpt-oss acceptance:
+  `dev/decode_scaling_sweep_batched.sh` (→ dev/decode_scaling_batched.csv)
+  + `dev/duo_soak.py` on `configs/gpt-oss-120b-a5-duo-batched.yaml`.
+
+**gpt-oss acceptance results (2026-07-12, MEASURED):**
+
+| shape | streams | aggregate tok/s | errors | wired |
+|---|---|---|---|---|
+| batched 32k | 1 / 2 / 3 / 4 | 60.6 / 77.1 / 86.2 / 93.3 | 0 (×8 reps) | — |
+| **batched 131k** (`dev/decode_scaling_131k.csv`) | 1 / 2 / 4 / 8 / **16** | 60.0 / 77.1 / 92.7 / 104.0 / **131.8** | **0 at every point** | **78.2G FLAT across all W** |
+| duo soak (65k, 2 personas) | 2 pinned sessions × 30 rounds | — | 0 (60/60 turns) | 73.4→74.1G |
+
+Aggregate still climbing at W=16 (2.2× single-stream); per-stream latency is
+the real trade (8.35 tok/s each at 16). Seats are seq ids — 16 "instances"
+cost ZERO extra wired memory. n_ctx (the shared cell pool) is the capacity
+knob, not memory.
+
+**Swarm frontier (2026-07-12, W to 64 — `dev/decode_scaling_131k.csv`):**
+one 131k context scales to **64 concurrent streams at 200 tok/s aggregate,
+ZERO errors at every point 1→64, wired flat 78G throughout**: aggregate
+60→77→93→104→132→160→(146 dip @32, ubatch-width artifact)→174→200. Per-stream
+latency is the practical knob: 13 tok/s each @8, 8.3 @16, 6.7 @24, 3.15 @64.
+MoE physics: batching converts "read weights per stream" into "read the
+touched experts per step" — at large W nearly all 128 experts activate every
+step, so aggregate approaches a dense-cost ceiling (~200 tok/s here) rather
+than scaling linearly. For prefill-heavy swarm work (long-context ingest),
+"context processing" IS the bind — chunked prefill shares the same pipe.
+
+**Multi-process swarm = CLOSED, both branches (`dev/swarm_3proc_run.sh` +
+`dev/swarm_3proc_bench.py`):** (a) residency ON: macOS does NOT share Metal
+wiring of mmap'd weight pages across processes — process 2's residency set
+tried to wire the weights AGAIN over process 1's 71G, blew iogpu.wired_limit,
+and died at first decode (status-5 at warmup). Two 120B residency-ON
+processes cannot coexist. (b) NO_RESIDENCY: three processes boot and share
+pages, but 24 streams (3×W=8) crawl at <11 tok/s aggregate with client
+timeouts — unwired per-command-buffer wiring contention across processes.
+Single-process single-context W-scaling is effectively the ONLY performant
+shape on this hardware. **Scale W. There is no second axis.**
+
+**JIT contrast at 131k (pool mode, limit 3 — `dev/jit_exercise_131k.py`):**
+the JIT LIFECYCLE is healthy (spawn-on-demand to limit, LRU reap on ttl:
+3→2→1 instances, wired 99.2→88.2→78.1G — cleanest per-context measurement:
+**~10.1G per 131k context**), but the pool concurrency pathologies reproduced
+on cue: concurrent decode across 3 contexts → 1 latch death (-3) + survivors
+at 8 tok/s each (~16 aggregate vs batched's 86 at 3 streams); one slot needed
+multiple heal cycles. Pool ceiling at 131k = 3 contexts (99.2G of 116G;
+a 4th ≈ 109G + transients = OOM territory). Batched carries 16 streams in
+78.2G. The comparison closes the case: **contexts are the expensive unit,
+seats are free — scale W, not instances.**
 
 ---
 
@@ -151,6 +331,8 @@ Terse, chronological — why the current design looks the way it does. Each line
 5. **mistral.rs as a second backend** (for its in-memory PagedAttention prefix cache) — **NO-GO.** Incremental prefill over a deep cached prefix ran ~13 tok/s on Metal (~200× slower than cold batched; no chunked prefill), and macOS compressed the ~70 GB weights when the server idled (re-fault penalty; no mlock). llama.cpp remains the better Metal option (memory `mistralrs-nogo-use-llamacpp-native-cache`, [MISTRALRS_SPIKE.md](MISTRALRS_SPIKE.md)).
 6. **Resident strip on truncated turns** (during Phase 1 validation) — a turn that hit `max_tokens` mid-analysis (no final channel) replayed an **empty** `<|channel|>final<|message|>` → answerless turns that compounded. Fixed with an empty-content guard in `_maybe_strip_reasoning` (keep the raw generation when there's no clean answer to replay).
 7. **`_resident_generate` multi-seq decode loop** (planned keystone) — turned out **unnecessary**: each context runs one working stream, so the working seq is always seq 0 and the existing `Llama.generate()`/sampler/guards are reused verbatim. Eliminated the #1 sampler-fidelity risk by *not* building it.
+8. **`save_state()` on a copy.copy'd shared pool slot** (2026-07-10 duo spike) — corrupts that slot's context; the next decode dies `llama_decode -3`. Blobs are now created on the PRIMARY only (resident shared slots pin `SEQ_STATIC` from their own eval and never need one).
+9. **Multi-context "Insufficient Memory" chase** (2026-07-10→12) — two contexts failed with Metal command-buffer OOM at ANY size; days were spent on memory-margin theories (n_ctx, n_batch, wired ceilings) before an n_ctx sweep showed 2×8k dying identically to 2×131k. Real cause: **per-buffer residency sets colliding across contexts** — a false OOM. `GGML_METAL_NO_RESIDENCY=1` (auto-set for pool>1) fixes it completely. Two meta-lessons: `verbose=False` had been swallowing the diagnostic error lines all along (ggml log forwarding is now permanent), and a size-sweep is the cheapest discriminator between "memory pressure" and "mechanism bug."
 
 **Net lesson:** serialization (`save_state`, per-seq blobs, cross-backend) is the recurring failure locus for deep state; resident in-context sequences sidestep it by never leaving the context. The `can_shift` gate + `swa_full` are the two invariants that keep it correct.
 
@@ -166,6 +348,6 @@ The agent sends `prompt` (dynamic tail) + `static_prefix` + `flow_cache_key`; th
 
 ## Pointers
 
-- **Memory:** `resident-seq-cache-implemented` (the full transition record), `save-state-failure-modes-and-seq-state-path`, `flow-kv-cache-corrupts-gptoss`, `mistralrs-nogo-use-llamacpp-native-cache`, `framework-overhead-timeouts`.
+- **Memory:** `resident-seq-cache-implemented` (the full transition record), `multi-persona-pooling-and-metal-multicontext-bug` (the residency-set saga + persona layer), `save-state-failure-modes-and-seq-state-path`, `flow-kv-cache-corrupts-gptoss`, `mistralrs-nogo-use-llamacpp-native-cache`, `framework-overhead-timeouts`.
 - **Code:** [llmvp/inference/backends/llama_cpp_backend.py](../llmvp/inference/backends/llama_cpp_backend.py) (seq map, `_resident_flow`, `_window_resident_seq`, `_resident_restore_static`), [llmvp/core/session_manager.py](../llmvp/core/session_manager.py) (resident session turn, flow-fork, windowing), [llmvp/core/config.py](../llmvp/core/config.py) (flags).
 - **Dev harnesses** (in `llmvp/dev/` unless noted): `verify_resident_session.py` (sessions + windowing via `nctx=`), `verify_resident_jit.py` (JIT identity), `verify_resident_flow.py` (stateless flow BUILD/HIT), `verify_resident_session_flow.py` (session flow-fork); `dev/cache_strategy_stress.py` (seq-op stress, repo-root `dev/`).

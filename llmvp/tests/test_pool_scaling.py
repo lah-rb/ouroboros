@@ -75,13 +75,13 @@ def make_backend(
 
     backend.spawn_calls = 0
 
-    def _create_shared(primary):
+    def _create_shared(primary, n_ctx_override=None):
         backend.spawn_calls += 1
         return FakeLlama()
 
     backend._create_shared_instance = _create_shared
 
-    def _warm_up(inst, idx=0):
+    def _warm_up(inst, idx=0, persona=None):
         if backend._static_state is None:
             backend._static_state = FakeState()
 

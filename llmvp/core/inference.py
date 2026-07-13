@@ -403,8 +403,23 @@ async def run_completion(
             generated_tokens=real_gen,
             cache_hit=bool(getattr(gen_target, "_last_cache_hit", False)),
             flow_key=str(getattr(gen_target, "_last_flow_key", "") or ""),
-            prefill_ms=round((_diag.get("eval_duration", 0) or 0) * 1000, 1),
-            decode_ms=round((_diag.get("generation_duration", 0) or 0) * 1000, 1),
+            # Prefer the per-stream wall spans (batched seats stash them —
+            # concurrency-accurate); fall back to the global tracker's
+            # single-generation timing for the pool path.
+            prefill_ms=round(
+                (
+                    getattr(gen_target, "_last_prefill_s", 0)
+                    or _diag.get("eval_duration", 0)
+                    or 0
+                ) * 1000, 1,
+            ),
+            decode_ms=round(
+                (
+                    getattr(gen_target, "_last_decode_s", 0)
+                    or _diag.get("generation_duration", 0)
+                    or 0
+                ) * 1000, 1,
+            ),
         )
 
     finally:

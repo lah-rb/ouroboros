@@ -9,9 +9,9 @@ and global access patterns.
 
 import logging
 from pathlib import Path
-from typing import Optional, List
+from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # --------------------------------------------------------------------
 # 1️⃣ Configuration Models (Pydantic)
@@ -159,6 +159,16 @@ class ModelConfig(BaseModel):
     # for the curator's per-paper lifecycle (minutes) with a wide margin;
     # 0 disables for workloads that pin snapshots deliberately for days.
     session_snapshot_ttl_s: float = 7200.0
+    # Per-request reasoning HEAD-SWAP (OPT-IN, default off). When on (+ resident
+    # cache active + a thinking family), warmup builds a system head per reasoning
+    # level (low/medium/high) on a reserved seq band ABOVE the snapshot band, and a
+    # session turn carrying `reasoning=<level>` forks that level's head onto the
+    # live seq at turn 0 — so a caller (e.g. deep_search condense) can run a whole
+    # session at LOW reasoning without a server restart. seq_cp only (no
+    # save_state). The default level (`thinking_mode`) reuses SEQ_STATIC, so only
+    # the OTHER levels get a pinned head. Mid-session per-turn swap (the adaptive
+    # decision layer) is a follow-up; this ships the turn-0/session install.
+    reasoning_head_swap: bool = False
 
     @field_validator("thinking_mode")
     @classmethod
@@ -248,6 +258,23 @@ class KnowledgeConfig(BaseModel):
     token_limit: int
 
 
+class PersonaConfig(BaseModel):
+    """One named static-head persona ("SOUL") for multi-persona pooling.
+
+    A persona is a *static head*, not a config: family/stops/temperature stay
+    global per-process; what differs is the persona text compiled into the
+    static token stream (and optionally the slot's context size). The pool
+    assigns personas to slots via ``resources.slot_personas`` — e.g. slot 0 =
+    the agent SOUL, slot 1 = a simulated-user SOUL (tau-bench dual-LLM).
+    """
+
+    persona_file: Path  # the SOUL.md-equivalent source text
+    tokens_bin: Path  # compiled static tokens for THIS persona (one bin each)
+    # Per-slot context size (the memory knob): a simulated user does not need
+    # the model's full n_ctx. None => the model's n_ctx.
+    n_ctx: Optional[int] = None
+
+
 class AppConfig(BaseModel):
     """Configuration for FastAPI application."""
 
@@ -273,7 +300,28 @@ class ResourcesConfig(BaseModel):
 
     cpu_threads: int
     max_concurrent_requests: int
+    # Concurrency architecture. "pool" (default) = N independent contexts,
+    # one per slot — the proven production shape, but decode across contexts
+    # NEVER overlaps usefully on Metal (one shared MTLCommandQueue) and
+    # simultaneous submission trips the driver (see dev/CACHE_STATE.md).
+    # "batched" = ONE context, max_concurrent_requests working sequences,
+    # one llama_decode per step carrying a token per active stream — the
+    # llama-server slot pattern, the only aggregate-throughput shape on
+    # Metal. Batched requires resident_seq_cache + swa_full + kv_unified
+    # and a non-hybrid model (validated at load / at backend init).
+    decode_mode: str = "pool"
+    # Max prompt tokens fed per step while other streams decode (prefill/
+    # decode interleave). None => model.n_batch. Lower = snappier decode
+    # latency for live streams while a long prompt joins; higher = faster
+    # prompt ingestion.
+    batched_prefill_chunk: Optional[int] = None
     jit_concurrency_limit: Optional[int] = None  # null = pre-allocate all at startup
+    # Persona assignment per pool slot (index = slot). Length must equal
+    # max_concurrent_requests when set. Names must exist in the root
+    # ``personas`` map (or be "default"). Absent => every slot carries the
+    # default persona (prompt.persona_file / knowledge.tokens_bin) — exactly
+    # the pre-persona behavior.
+    slot_personas: Optional[List[str]] = None
     # Max seconds a request waits on the scaling gate (acquire + every
     # generation start) while a JIT scale-up/down runs. Distinct from
     # backend_timeout, which bounds the readiness wait, the slow-path
@@ -316,6 +364,83 @@ class Config(BaseModel):
     resources: ResourcesConfig
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     logging: LoggingConfig
+    # Named alternate static-head personas for multi-persona pooling (see
+    # PersonaConfig). "default" is implicit — prompt.persona_file /
+    # knowledge.tokens_bin — and may be omitted from (or overridden in) this
+    # map. Absent map => single-persona behavior, all existing configs valid.
+    personas: Dict[str, PersonaConfig] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_decode_mode(self) -> "Config":
+        """Batched decode preconditions (fail at load, not mid-run).
+
+        The batched engine keeps every stream's KV resident in ONE context
+        and forks persona heads via memory_seq_cp — that machinery is only
+        sound with the resident cache active, and on SWA models only with
+        swa_full + kv_unified (the same invariants resident_seq_cache
+        already documents). Speculative drafts are per-Llama-instance and
+        seq-0-coupled in the binding — incompatible by construction.
+        Hybrid/recurrent rejection happens at backend init (architecture
+        is unknowable from config).
+        """
+        mode = self.resources.decode_mode
+        if mode not in ("pool", "batched"):
+            raise ValueError(
+                f"resources.decode_mode must be 'pool' or 'batched', got {mode!r}"
+            )
+        if mode == "batched":
+            missing = [
+                flag
+                for flag in ("resident_seq_cache", "swa_full", "kv_unified")
+                if not getattr(self.model, flag)
+            ]
+            if missing:
+                raise ValueError(
+                    "decode_mode 'batched' requires model."
+                    + " + model.".join(missing)
+                    + " (resident single-context seq machinery)"
+                )
+            if self.model.speculative:
+                raise ValueError(
+                    "decode_mode 'batched' is incompatible with model.speculative "
+                    "(the binding's draft state is per-instance and seq-0-coupled)"
+                )
+            if self.resources.slot_personas is not None:
+                logging.getLogger(__name__).warning(
+                    "decode_mode 'batched' ignores resources.slot_personas — "
+                    "every persona in `personas` is warmed as a pinned head and "
+                    "any seat can serve any persona"
+                )
+        return self
+
+    def resolve_persona(self, name: Optional[str]) -> "PersonaConfig":
+        """The persona's file/bin pair, with "default"/None falling through to
+        the legacy prompt/knowledge fields."""
+        key = name or "default"
+        if key in self.personas:
+            return self.personas[key]
+        if key == "default":
+            return PersonaConfig(
+                persona_file=self.prompt.persona_file,
+                tokens_bin=self.knowledge.tokens_bin,
+            )
+        raise KeyError(f"unknown persona '{key}' (declared: {sorted(self.personas)})")
+
+    def slot_persona_names(self) -> List[str]:
+        """Persona name per pool slot, validated. Absent slot_personas =>
+        every slot is "default" (pre-persona behavior)."""
+        n = self.resources.max_concurrent_requests
+        names = self.resources.slot_personas
+        if names is None:
+            return ["default"] * n
+        if len(names) != n:
+            raise ValueError(
+                f"resources.slot_personas has {len(names)} entries but "
+                f"max_concurrent_requests={n} — they must match"
+            )
+        for name in names:
+            self.resolve_persona(name)  # raises on unknown
+        return list(names)
 
 
 # --------------------------------------------------------------------

@@ -309,6 +309,7 @@ class SessionManager:
         flow_key: Optional[str] = None,
         static_prefix: Optional[str] = None,
         from_snapshot: Optional[str] = None,
+        persona: Optional[str] = None,
     ) -> SessionInfo:
         """Acquire instance, save initial state, return session info.
 
@@ -323,13 +324,25 @@ class SessionManager:
         snapshot so the first turn renders the turn transition — the captured
         KV holds a CLOSED prior turn. Unknown key raises KeyError before any
         state is touched.
+
+        ``persona`` leases the pool slot carrying that persona's SOUL
+        (multi-persona pooling; session-scoped — the whole session speaks as
+        that persona). None → the default persona's slot.
         """
         snap_entry = None
         if from_snapshot:
             registry = getattr(self._backend, "_snap_registry", {})
             snap_entry = registry[from_snapshot]  # KeyError = unknown snapshot
 
-        instance = await self._backend.acquire_instance()
+        try:
+            instance = await self._backend.acquire_instance(persona=persona)
+        except TypeError:
+            # Backend double without persona routing (tests) — legacy path.
+            instance = await self._backend.acquire_instance()
+        if hasattr(instance, "pinned"):
+            # Batched seat: mark it session-pinned so the engine's
+            # KV-pressure ladder never evicts a live session's seq.
+            instance.pinned = True
         session_id = _generate_session_id()
 
         # Resident-live sessions keep seq 0 live across turns (acquire_instance
@@ -410,8 +423,14 @@ class SessionManager:
         temperature: float = 0.7,
         grammar: str | None = None,
         raw: bool = False,
+        reasoning: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Execute a turn within a memoryful session (streaming).
+
+        ``reasoning`` (low/medium/high) triggers the reasoning HEAD-SWAP at turn 0
+        for a non-flow session (backend.reasoning_head_swap): the level's pinned
+        system head is forked onto the live seq, so the whole session runs at that
+        reasoning effort. No-op unless enabled + a non-default level + turn 0.
 
         1. Restore the session's saved KV state.
         2. Build continuation tokens: [close previous assistant turn] +
@@ -483,6 +502,17 @@ class SessionManager:
                 ):
                     flow_turn_suffix = await self._resident_session_flow_fork(
                         instance, session, prompt
+                    )
+                elif (
+                    session.turn_count == 0
+                    and reasoning
+                    and getattr(self._backend, "_reasoning_head_swap", False)
+                ):
+                    # Reasoning HEAD-SWAP: override acquire's default-static fork with
+                    # the requested level's pinned head. Turn 0 only (whole-seq install
+                    # is sound only before any turn sits above the head).
+                    await run_in_threadpool(
+                        self._backend._install_reasoning_head, instance, reasoning
                     )
                 pre_turn_pos = int(getattr(instance, "n_tokens", 0) or 0)
             elif full_replay:
@@ -696,14 +726,19 @@ class SessionManager:
                 )
             except DegenerateGenerationError as e:
                 if resident:
-                    # Purge the degenerate span from the live seq 0: drop its KV
+                    # Purge the degenerate span from the live seq: drop its KV
                     # from pre_turn_pos to the end and rewind the position. All
                     # prior turns survive (they sit below pre_turn_pos). No blob.
-                    def _purge_resident() -> None:
-                        instance._ctx.memory_seq_rm(0, pre_turn_pos, -1)
-                        instance.n_tokens = pre_turn_pos
+                    # Batched seats expose purge_to (per-seq, routed through the
+                    # decode thread); pool instances keep the seq-0 surgery.
+                    if hasattr(instance, "purge_to"):
+                        await run_in_threadpool(instance.purge_to, pre_turn_pos)
+                    else:
+                        def _purge_resident() -> None:
+                            instance._ctx.memory_seq_rm(0, pre_turn_pos, -1)
+                            instance.n_tokens = pre_turn_pos
 
-                    await run_in_threadpool(_purge_resident)
+                        await run_in_threadpool(_purge_resident)
                     log.warning(
                         "🛑 Session %s degenerate generation (%s) — resident, "
                         "purged turn span back to pos %d",
@@ -735,6 +770,36 @@ class SessionManager:
                     session_id,
                     e.reason,
                 )
+                raise
+            except RuntimeError:
+                # Fatal decode (llama_decode -3/-2): the backend marked the
+                # instance — its Metal backend is LATCHED and cannot decode
+                # again until the context is rebuilt, which also destroys this
+                # session's live KV. A pinned session never reaches
+                # release_instance, so heal HERE: end the session (release →
+                # targeted context refresh → slot rejoins the pool healthy).
+                # The caller gets the error + a dead session; a NEW session on
+                # this slot works immediately. One turn lost, not the slot.
+                if getattr(instance, "_needs_context_refresh", False):
+                    log.error(
+                        "💥 Session %s fatal decode on a latched context — "
+                        "scheduling session teardown + slot heal",
+                        session_id,
+                    )
+                    # Deferred, NOT inline: at this point the failed turn's
+                    # generator chain has not unwound, so its generation_guard
+                    # is still counted in-flight — an inline end_session would
+                    # stall the heal's drain until the 180s timeout (observed
+                    # live). A task after a short delay runs once the stack
+                    # has unwound and the guard is released.
+                    async def _teardown(sid: str) -> None:
+                        await asyncio.sleep(0.5)
+                        try:
+                            await self.end_session(sid)
+                        except Exception:  # noqa: BLE001 — best-effort teardown
+                            log.exception("deferred session teardown failed")
+
+                    asyncio.get_running_loop().create_task(_teardown(session_id))
                 raise
 
     async def _maybe_strip_reasoning(self, instance: Any, content: str) -> None:
@@ -798,6 +863,7 @@ class SessionManager:
         max_tokens: int = 256,
         temperature: float = 0.7,
         grammar: str | None = None,
+        reasoning: str | None = None,
     ) -> tuple[str, int, dict]:
         """Non-streaming session turn — returns full response.
 
@@ -826,6 +892,7 @@ class SessionManager:
             max_tokens,
             temperature,
             grammar,
+            reasoning=reasoning,
         ):
             raw_parts.append(chunk)
 

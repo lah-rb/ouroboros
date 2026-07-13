@@ -3,12 +3,15 @@
 Static Tokens Management
 
 This module handles loading, memory-mapping, and management of
-static knowledge base tokens.
+static knowledge base tokens — keyed by PERSONA for multi-persona
+pooling (SOUL per pool slot). The "default" persona is the legacy
+prompt.persona_file/knowledge.tokens_bin pair; named personas resolve
+through the config's ``personas`` map to their own token bins.
 """
 
 import logging
 import mmap
-from typing import List
+from typing import Dict, List
 
 # Local imports
 from core.config import get_config
@@ -18,97 +21,100 @@ log = logging.getLogger("llm-mvp")
 
 class StaticTokensManager:
     """
-    Manages the static token buffer for the knowledge base.
+    Manages static token buffers, one per persona.
 
     Features:
     - Memory-mapped file access for efficiency
-    - Lazy loading on first access
+    - Lazy loading on first access, per persona
     - Clean shutdown handling
     """
 
     def __init__(self):
-        self._static_tokens_view = None
-        self._static_mmap_obj = None
-        self._static_tokens_list: List[int] = []
+        self._views: Dict[str, memoryview] = {}
+        self._mmaps: Dict[str, mmap.mmap] = {}
+        self._tokens: Dict[str, List[int]] = {}
 
-    def load_static_buffer(self) -> None:
-        """Load the static token buffer from disk.
+    def load_static_buffer(self, persona: str = "default") -> None:
+        """Load a persona's static token buffer from disk.
 
-        Auto-builds the per-model cache first if it is missing or stale
+        Auto-builds the per-persona cache first if it is missing or stale
         (persona/knowledge/active-config changed since it was written), so
-        editing SOUL.md no longer needs a manual ``--prep`` — and the model
-        never silently runs against an outdated persona.
+        editing SOUL.md — or a slot persona like USER_SIM.md — never
+        silently runs the model against an outdated persona.
         """
         config = get_config()
+        tokens_bin = config.resolve_persona(persona).tokens_bin
 
         try:
             from preprocessing.builder import build_and_write, cache_is_stale
 
-            if cache_is_stale(config):
+            if cache_is_stale(config, persona):
                 log.info(
-                    "🧩 Static token cache missing or stale — rebuilding %s",
-                    config.knowledge.tokens_bin,
+                    "🧩 Static token cache missing or stale [%s] — rebuilding %s",
+                    persona,
+                    tokens_bin,
                 )
-                build_and_write(config, emit=log.info)
+                build_and_write(config, emit=log.info, persona=persona)
         except Exception as exc:
             # Don't fail startup on a build error; fall through and try to
             # load whatever is on disk (lifecycle degrades to lightweight
             # mode if that also fails).
-            log.warning("⚠️ Static token auto-build skipped: %s", exc)
+            log.warning("⚠️ Static token auto-build skipped [%s]: %s", persona, exc)
 
         try:
-            f = open(config.knowledge.tokens_bin, "rb")
+            f = open(tokens_bin, "rb")
             mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
             view = memoryview(mm).cast("I")
 
-            self._static_tokens_view = view
-            self._static_mmap_obj = mm
-            self._static_tokens_list = list(view)
+            self._views[persona] = view
+            self._mmaps[persona] = mm
+            self._tokens[persona] = list(view)
 
             print(
-                f"✅ Loaded static token buffer ({len(view)} tokens) "
-                f"from {config.knowledge.tokens_bin}"
+                f"✅ Loaded static token buffer [{persona}] ({len(view)} tokens) "
+                f"from {tokens_bin}"
             )
 
         except Exception as exc:
-            raise RuntimeError(f"❌ Failed to load static tokens: {exc}")
+            raise RuntimeError(f"❌ Failed to load static tokens [{persona}]: {exc}")
 
-    def get_static_tokens(self) -> List[int]:
+    def get_static_tokens(self, persona: str = "default") -> List[int]:
         """
-        Get the loaded static tokens.
+        Get a persona's loaded static tokens, lazily loading on first
+        request for a named (non-default) persona.
 
         Returns an empty list if tokens were not loaded (e.g. when
         --skip-knowledge is active). Callers should handle the
         empty case gracefully — the model will operate without a
         system prompt prefix.
-
-        Returns:
-            List[int]: Static token IDs (may be empty)
         """
-        return self._static_tokens_list or []
+        if persona not in self._tokens and persona != "default":
+            # Named personas lazy-load; "default" keeps its legacy lifecycle
+            # (loaded explicitly at startup, absent under --skip-knowledge).
+            self.load_static_buffer(persona)
+        return self._tokens.get(persona) or []
 
     def cleanup(self) -> None:
-        """Clean up memory-mapped resources."""
-        if self._static_tokens_view is not None:
-            del self._static_tokens_view
-            self._static_tokens_view = None
-
-        if self._static_mmap_obj is not None:
-            self._static_mmap_obj.close()
-            self._static_mmap_obj = None
-
-        self._static_tokens_list.clear()
+        """Clean up memory-mapped resources for every persona."""
+        self._views.clear()
+        for mm in self._mmaps.values():
+            try:
+                mm.close()
+            except Exception:
+                pass
+        self._mmaps.clear()
+        self._tokens.clear()
 
 
 # Global singleton manager
 manager = StaticTokensManager()
 
 
-def get_static_tokens() -> List[int]:
+def get_static_tokens(persona: str = "default") -> List[int]:
     """
-    Get the global static tokens list.
+    Get a persona's static tokens list.
 
     Returns:
         List[int]: Static token IDs
     """
-    return manager.get_static_tokens()
+    return manager.get_static_tokens(persona)
