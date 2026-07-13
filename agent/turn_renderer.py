@@ -58,6 +58,15 @@ class TurnRenderError(Exception):
     required ref, unsupported shape, malformed template file."""
 
 
+class EmptyMenuError(TurnRenderError):
+    """A menu turn whose options resolved to nothing AT RUNTIME — the
+    ``options_from`` projection yielded an empty set — as opposed to a static
+    template/config error. A distinct subclass so the agent loop can pause the run
+    cleanly (the condition is data-dependent and recoverable) instead of crashing,
+    while genuine renderer/config errors (the other TurnRenderError raises) still
+    fail loudly."""
+
+
 # Default banner per response shape. Overridable via turn.mode_banner.
 # Kept at module scope so tests can introspect without instantiating.
 _BANNERS: dict[str, str] = {
@@ -524,7 +533,7 @@ class TurnRenderer:
         """
         options = self.resolve_options(turn, namespaces)
         if not options:
-            raise TurnRenderError(
+            raise EmptyMenuError(
                 "Menu turn has no options — options_from yielded nothing, "
                 "response.options is empty, and no stock options declared. "
                 "An empty menu has no shape the model can choose from."

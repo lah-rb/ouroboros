@@ -27,6 +27,7 @@ from agent.loader import (
 from agent.errors import FlowRuntimeError
 from agent.models import FlowDefinition, FlowResult
 from agent.runtime import execute_flow, init_prompt_renderer
+from agent.turn_renderer import EmptyMenuError
 from agent.tail_call import FlowOutcome, FlowTailCall, FlowTermination
 from agent.trace import CycleStart, CycleEnd
 
@@ -352,6 +353,42 @@ async def run_agent(
             if "goal_id" in current_inputs:
                 failed_inputs["goal_id"] = current_inputs["goal_id"]
             outcome = FlowTailCall(target_flow=entry_flow, inputs=failed_inputs)
+        except EmptyMenuError as exc:
+            # A menu turn's options resolved to nothing AT RUNTIME (the options_from
+            # projection yielded an empty set) — data-dependent, not a static config
+            # bug. Crashing loses all run progress (a high-tier mission busted at 0
+            # files this way). Pause the mission cleanly so it stays resumable —
+            # the same clean-pause contract as budget exhaustion below.
+            #
+            # FUTURE (once the in-process context refresh proves out): before pausing,
+            # attempt backend.refresh_context() + one retry — an empty menu can stem
+            # from degraded ("soured") model output — and pause only if it still fails.
+            # FUTURE: per-goal circuit breaker — pause just this goal rather than the
+            # whole run, so sibling goals keep progressing (bigger change, deferred).
+            if effects and hasattr(effects, "flush_traces"):
+                await effects.flush_traces()
+            try:
+                _m = await effects.load_mission()
+                if _m is not None and getattr(_m, "status", "") == "active":
+                    _m.status = "paused"
+                    await effects.save_mission(_m)
+            except Exception:
+                logger.exception(
+                    "Failed to park mission %s as paused on empty-menu render",
+                    mission_id,
+                )
+            logger.warning(
+                "Empty-menu render in flow %r — parked mission %s as paused "
+                "(resumable) instead of crashing the run. (%s)",
+                current_flow,
+                mission_id,
+                exc,
+            )
+            raise RuntimeError(
+                f"Menu turn could not be rendered (no options) in flow "
+                f"{current_flow!r}. Mission parked as paused — resume with "
+                f"`mission resume` or `start`."
+            )
         except Exception:
             if effects and hasattr(effects, "flush_traces"):
                 await effects.flush_traces()
