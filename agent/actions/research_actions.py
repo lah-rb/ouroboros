@@ -166,6 +166,29 @@ async def action_build_and_query_repomap(step_input: StepInput) -> StepOutput:
             f"\n\nFiles most related to {focus_files}: {', '.join(unique_related)}"
         )
 
+    # Complete source-file index (the confabulation authority anchor). Unlike the
+    # PageRank-/char-budgeted repo_map above (which DROPS lower-ranked files), this
+    # lists EVERY source file that exists, so the decompose/diagnose prompts can
+    # assert "a path not in this list does not exist" and kill invented module
+    # paths (validated: sphinx-9367 decompose confab 8/8 → 0/8, 8/8 gold). A
+    # generous char cap degrades the claim to "strong prior" (via an inline note)
+    # on repo-scale trees rather than bloating the prompt unboundedly.
+    _INDEX_CAP = 60000
+    sorted_paths = sorted(matched_paths)
+    index_str = "\n".join(sorted_paths)
+    if len(index_str) > _INDEX_CAP:
+        kept: list[str] = []
+        used = 0
+        for p in sorted_paths:
+            if used + len(p) + 1 > _INDEX_CAP:
+                break
+            kept.append(p)
+            used += len(p) + 1
+        index_str = "\n".join(kept) + (
+            f"\n… ({len(sorted_paths) - len(kept)} more files not shown — index "
+            "truncated for a repo-scale tree; treat the list as a strong prior)"
+        )
+
     return StepOutput(
         result={
             "files_mapped": len(file_contents),
@@ -175,6 +198,7 @@ async def action_build_and_query_repomap(step_input: StepInput) -> StepOutput:
         f"{total_defs} definitions, {len(unique_related)} related files",
         context_updates={
             "repo_map_formatted": formatted,
+            "repo_file_index": index_str,
             "related_files": unique_related,
             "raw_results": raw_text,
         },

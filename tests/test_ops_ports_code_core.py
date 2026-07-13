@@ -307,7 +307,7 @@ async def test_goal_search_gate_fires_when_stuck_once():
     fx = MockEffects(mission=_mission([goal]))
     out = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
     assert out.result["should_search"] is True
-    assert out.context_updates["search_queries"]
+    assert goal.description[:40] in out.context_updates["search_brief"]
     # One-shot: stored findings (even the no-results sentinel) stop re-search.
     goal.search_findings = "(no relevant web results found)"
     out2 = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
@@ -323,6 +323,19 @@ async def test_goal_search_gate_skips_fresh_goal():
 
 
 @pytest.mark.asyncio
+async def test_goal_search_gate_respects_hermetic_web_research_off():
+    # SWE-bench sets web_research=False (hermetic): a stuck-goal search would
+    # retrieve the instance's own upstream issue thread — must never fire.
+    goal = _stuck_goal(2)
+    m = _mission([goal])
+    m.config.web_research = False
+    fx = MockEffects(mission=m)
+    out = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
+    assert out.result["should_search"] is False
+    assert "web_research disabled" in out.observations
+
+
+@pytest.mark.asyncio
 async def test_store_goal_search_findings_and_sentinel():
     goal = _stuck_goal(2)
     m = _mission([goal])
@@ -331,15 +344,15 @@ async def test_store_goal_search_findings_and_sentinel():
             MockEffects(),
             inputs={"goal_id": goal.id},
             mission=m,
-            raw_search_results=[{"url": "http://x", "content": "use pty not pipes for interactive apps"}],
+            research_summary="use pty not pipes for interactive apps (source: docs.python.org/pty)",
         )
     )
-    assert out.result["n_hits"] == 1
+    assert out.result["stored"] is True
     assert "pty not pipes" in goal.search_findings
-    # Zero hits → sentinel so the gate one-shots.
+    # Empty summary (web off / no hits) → sentinel so the gate one-shots.
     g2 = _stuck_goal(2)
     await action_store_goal_search_findings(
-        _si(MockEffects(), inputs={"goal_id": g2.id}, mission=_mission([g2]), raw_search_results=[])
+        _si(MockEffects(), inputs={"goal_id": g2.id}, mission=_mission([g2]), research_summary="")
     )
     assert g2.search_findings.startswith("(no relevant")
 
@@ -349,9 +362,13 @@ def test_diagnose_wiring_search_arm():
     assert flow["entry"] == "search_gate"
     steps = flow["steps"]
     sg = {r["condition"]: r["transition"] for r in steps["search_gate"]["resolver"]["rules"]}
-    assert sg["result.should_search == true"] == "exa_search"
+    assert sg["result.should_search == true"] == "do_deep_search"
     assert sg["true"] == "start_session"
-    assert steps["exa_search"]["resolver"]["rules"][0]["transition"] == "store_search_findings"
+    # The stuck-goal arm now runs the deep_search sub-flow, not a one-shot exa.
+    ds = steps["do_deep_search"]
+    assert ds["flow"] == "deep_search"
+    assert ds["input_map"]["brief"] == {"$ref": "context.search_brief"}
+    assert ds["resolver"]["rules"][0]["transition"] == "store_search_findings"
     assert steps["store_search_findings"]["resolver"]["rules"][0]["transition"] == "start_session"
 
 
