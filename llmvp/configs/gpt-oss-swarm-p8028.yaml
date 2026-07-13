@@ -1,0 +1,85 @@
+# SWARM probe config (process 3/3): gpt-oss-120b-a5 batched W=8 on port
+# 8028. Three of these run as SEPARATE PROCESSES sharing weights via mmap
+# (the only viable multi-context form) — measures whether splitting one
+# 24-stream batch into 3x8 costs the weight-read amortization (it should:
+# each process's decode step reads the weights separately).
+# n_ctx 32768/process keeps 3x(KV+compute) memory-safe beside shared weights.
+
+app:
+  host: "0.0.0.0"
+  port: 8028
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 131072
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "gpt-oss-120b-a5"
+  family: "harmony"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
+  # 32k for BOTH duo slots — Metal wired working-set math (measured via ggml
+  # log forwarding 2026-07-10): weights ~61G + per-context swa_full KV
+  # 9.2G@131k → 2×131k peaks ~88G wired; graph transients blow the ~96G
+  # ceiling → command-buffer OOM (kIOGPUCommandBufferCallbackErrorOutOfMemory)
+  # → Metal error latch kills the context (llama_decode -3 until rebuilt).
+  # At 32k per-context KV is ~2.3G → ~66G floor, comfortable headroom.
+  # τ conversations are short; raise only alongside iogpu.wired_limit_mb.
+  # FULL context on the batched engine: ONE 131k unified cell pool shared by
+  # all working seats (seats are seq ids — no per-seat KV duplication; the
+  # static heads share cells via seq_cp). swa_full KV @131k ~= 9.2G once.
+  n_ctx: 32768
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048  # 512 was A/B'd for the duo (transient-buffer theory) and made
+                 # the shared slot FAIL DETERMINISTICALLY at its static boundary
+                 # — 2048 + n_ctx 32768 is the best-known duo shape (57/60 green)
+  thinking: true
+  thinking_mode: medium
+  swa_full: true
+  kv_unified: true
+  flow_kv_cache: false
+  session_full_replay: true
+  resident_seq_cache: true
+  reasoning_head_swap: true
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 131072
+  temperature_default: 1.0
+  top_p: 1.0
+  top_k: 0
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.05
+  session_temp_floor: 0.35
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/gpt-oss-120b-a5.tokens.bin"
+  token_limit: 32768
+
+resources:
+  decode_mode: "batched"
+  cpu_threads: 15
+  max_concurrent_requests: 8
+  jit_concurrency_limit: null
+  # slot 0 = agent (default SOUL), slot 1 = simulated user
+
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
