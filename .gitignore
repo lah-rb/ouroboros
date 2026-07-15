@@ -40,3 +40,4 @@ dev/archive/state_exp/data/
 runs/
 llmvp/logs/llmvp_server.log
 llmvp/logs/interactions.jsonl
+models/

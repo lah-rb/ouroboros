@@ -42,6 +42,7 @@ from agent.models import (
     StepOutput,
     action_type_for,
 )
+from agent.reasoning_router import resolve_reasoning
 from agent.resolvers import resolve, ResolverError
 from agent.loader import (
     resolve_params,
@@ -970,6 +971,18 @@ async def _execute_inference_action(
     # and MUST trace here — gating on session_id alone left that inference
     # invisible (soundness fix).
     actually_session = bool(session_id) and hasattr(effects, "session_inference")
+
+    # Adaptive reasoning level (dormant unless OURO_ADAPTIVE_REASONING=1).
+    # Session-path only — the head-swap field exists on SessionTurnRequest.
+    _reasoning = resolve_reasoning(
+        step_name=_step_name,
+        step_config=dict(step_input.config),
+        prompt=rendered_prompt,
+        session=actually_session,
+    )
+    if _reasoning:
+        config_overrides["reasoning"] = _reasoning
+
     infer_start = time.monotonic()
 
     if actually_session:
@@ -1206,6 +1219,17 @@ async def _execute_turn_inference(
     # Gate tracing on this, not on session_id, so a session_id-set-but-no-
     # session fallthrough is still traced (soundness fix; mirrors legacy path).
     actually_session = bool(session_id) and hasattr(effects, "session_inference")
+
+    # Adaptive reasoning level (dormant unless OURO_ADAPTIVE_REASONING=1).
+    # Session-path only — the head-swap field exists on SessionTurnRequest.
+    _reasoning = resolve_reasoning(
+        step_name=_step_name,
+        step_config=merged_config,
+        prompt=rendered_prompt,
+        session=actually_session,
+    )
+    if _reasoning:
+        config_overrides["reasoning"] = _reasoning
 
     # Retry loop: turn.retries additional attempts on empty response.
     # retries=0 means one attempt total (no retries). retries=3 (default)

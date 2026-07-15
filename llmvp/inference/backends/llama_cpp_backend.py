@@ -1167,6 +1167,9 @@ class LlamaCppBackend(BaseBackend):
             ctx.memory_seq_cp(SEQ_STATIC, SEQ_WORKING, -1, -1)
             inst.input_ids[:static_len] = np.array(static_tokens, dtype=np.intc)
         inst.n_tokens = static_len
+        # The restored head IS the default level's — reset the swap tracker so a
+        # later session's splice compares against reality.
+        inst._reasoning_current = self._reasoning_default_level
 
     def _reasoning_seq_base(self) -> int:
         """Reasoning-head band base — ABOVE the snapshot band (highest ids), so it
@@ -1260,8 +1263,72 @@ class LlamaCppBackend(BaseBackend):
             ctx.memory_seq_cp(seq, SEQ_WORKING, -1, -1)
             inst.input_ids[:hlen] = np.array(toks, dtype=np.intc)
         inst.n_tokens = hlen
+        inst._reasoning_current = level
         self._h_reasoning_swaps += 1
         log.info("🧠 reasoning head-swap → %s (seq %d, %d tok)", level, seq, hlen)
+        return True
+
+    def _reasoning_head_source(self, inst: Any, level: str):
+        """(src_seq, tokens, head_len) for ``level``'s pinned head, or None.
+
+        The default level's head IS the pristine static on SEQ_STATIC (that's
+        why only the non-default levels get hold seqs); other levels come from
+        the instance's reasoning band."""
+        if level == self._reasoning_default_level:
+            toks = getattr(inst, "_static_tokens", None)
+            if toks is None:
+                toks = self._resident_static_tokens
+            hlen = int(getattr(inst, "_static_len", self._resident_static_len) or 0)
+            return (SEQ_STATIC, toks, hlen) if hlen > 0 else None
+        seqs = getattr(inst, "_reasoning_seqs", None) or {}
+        if level not in seqs:
+            return None
+        hlen = int(inst._reasoning_head_len.get(level, 0) or 0)
+        toks = inst._reasoning_head_tokens.get(level) or []
+        return (seqs[level], toks, hlen) if hlen > 0 else None
+
+    def _splice_reasoning_head(self, inst: Any, level: str) -> bool:
+        """Mid-session reasoning HEAD-SWAP SPLICE — replace ONLY the head span
+        [0, head_len) of the working seq with ``level``'s pinned head, leaving
+        the session body above it intact. The per-turn counterpart of
+        _install_reasoning_head (whole-seq replace, turn-0-only). Mechanism
+        validated 2026-06 (alternating spike + 54-min corewars full-agent run:
+        237 swaps, 0 corruption, 0.62 ms/swap), then reverted; re-applied here
+        as the adaptive router's actuator (Phase F).
+
+        Sound iff the current and target heads have the SAME token length (the
+        level word tokenizes identically), so the body positions stay aligned —
+        verified per call; a mismatch refuses the splice (turn proceeds on the
+        current level). Returns True if the splice happened."""
+        if self._decode_mode == "batched":
+            log.debug("reasoning splice: batched mode not wired yet — skipping")
+            return False
+        cur = getattr(inst, "_reasoning_current", None) or self._reasoning_default_level
+        if level == cur:
+            return False
+        target = self._reasoning_head_source(inst, level)
+        current = self._reasoning_head_source(inst, cur)
+        if target is None or current is None:
+            return False
+        src_seq, toks, hlen = target
+        cur_hlen = current[2]
+        n_tokens = int(getattr(inst, "n_tokens", 0) or 0)
+        if hlen != cur_hlen or hlen > n_tokens:
+            log.warning(
+                "🧠 reasoning splice refused: head-len mismatch (%s:%d vs %s:%d, n=%d)",
+                cur, cur_hlen, level, hlen, n_tokens,
+            )
+            return False
+        ctx = inst._ctx
+        ctx.memory_seq_rm(SEQ_WORKING, 0, hlen)
+        ctx.memory_seq_cp(src_seq, SEQ_WORKING, -1, -1)
+        inst.input_ids[:hlen] = np.array(toks, dtype=np.intc)
+        inst._reasoning_current = level
+        self._h_reasoning_swaps += 1
+        log.info(
+            "🧠 reasoning head-splice → %s (per-turn, %d tok head, %d tok body intact)",
+            level, hlen, n_tokens - hlen,
+        )
         return True
 
     def _window_resident_seq(self, inst: Any, n_keep: int) -> int:

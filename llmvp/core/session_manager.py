@@ -503,17 +503,21 @@ class SessionManager:
                     flow_turn_suffix = await self._resident_session_flow_fork(
                         instance, session, prompt
                     )
-                elif (
-                    session.turn_count == 0
-                    and reasoning
-                    and getattr(self._backend, "_reasoning_head_swap", False)
-                ):
-                    # Reasoning HEAD-SWAP: override acquire's default-static fork with
-                    # the requested level's pinned head. Turn 0 only (whole-seq install
-                    # is sound only before any turn sits above the head).
-                    await run_in_threadpool(
-                        self._backend._install_reasoning_head, instance, reasoning
-                    )
+                elif reasoning and getattr(self._backend, "_reasoning_head_swap", False):
+                    if session.turn_count == 0:
+                        # Reasoning HEAD-SWAP: override acquire's default-static fork
+                        # with the requested level's pinned head. Whole-seq install is
+                        # sound only before any turn sits above the head.
+                        await run_in_threadpool(
+                            self._backend._install_reasoning_head, instance, reasoning
+                        )
+                    else:
+                        # Mid-session: SPLICE only the head span, body stays live —
+                        # the adaptive router's per-turn actuator (no-op when the
+                        # requested level is already installed).
+                        await run_in_threadpool(
+                            self._backend._splice_reasoning_head, instance, reasoning
+                        )
                 pre_turn_pos = int(getattr(instance, "n_tokens", 0) or 0)
             elif full_replay:
                 static = getattr(self._backend, "static_state", None)
