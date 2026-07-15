@@ -35,6 +35,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from terminal_bench.agents.base_agent import AgentResult, BaseAgent
@@ -179,23 +180,43 @@ class OuroborosAgent(BaseAgent):
                     if _fn is not None:
                         try:
                             await _fn()
-                        except Exception:
+                        except (Exception, asyncio.CancelledError):
+                            # CancelledError is a BaseException — a cancellation
+                            # landing during drain escaped the bare `except
+                            # Exception`, killed asyncio.run, and cost the whole
+                            # run its results.json (ab-adaptive-2). τ-adapter
+                            # parity: swallow it; teardown is best-effort.
                             pass
 
+        # Run the mission loop on ITS OWN thread + event loop (τ-adapter /
+        # GAIA parity): run_agent's MCP/PTY machinery uses anyio cancel scopes
+        # bound to the creating task, and the bench harness's own async
+        # context can leak a cancellation into our subprocess waits when the
+        # loops share a thread. A dedicated thread has no ambient scopes.
         failure_mode = FailureMode.NONE
-        try:
-            asyncio.run(_run_with_drain())
-        except RuntimeError as e:
+        _outcome: dict[str, BaseException] = {}
+
+        def _mission_thread() -> None:
+            try:
+                asyncio.run(_run_with_drain())
+            except BaseException as e:  # noqa: BLE001 — classified below
+                _outcome["exc"] = e
+
+        _t = threading.Thread(
+            target=_mission_thread, name="ouroboros-mission", daemon=True
+        )
+        _t.start()
+        _t.join()
+        _exc = _outcome.get("exc")
+        if _exc is not None:
             # run_agent raises on budget exhaustion (cycle/wall-clock) after
             # parking the mission — that's a clean stop, not a crash. The bench
             # grades the container's final state regardless. Anything else is a
             # real agent error.
-            if "parked as paused" in str(e):
+            if isinstance(_exc, RuntimeError) and "parked as paused" in str(_exc):
                 failure_mode = FailureMode.AGENT_TIMEOUT
             else:
                 failure_mode = FailureMode.UNKNOWN_AGENT_ERROR
-        except Exception:
-            failure_mode = FailureMode.UNKNOWN_AGENT_ERROR
 
         self._preserve(host_tmp, logging_dir)
         tin, tout = self._token_totals(host_tmp)
