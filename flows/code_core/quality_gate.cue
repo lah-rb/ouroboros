@@ -115,6 +115,8 @@ quality_gate: #FlowDefinition & {
 				params: {source: {$ref: "context.project_manifest"}}
 			}]
 			config: temperature: "t*0.0"
+			// assessment/planning steps run deliberate (head-swap; session-path)
+			config: reasoning:   "high"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -187,6 +189,8 @@ quality_gate: #FlowDefinition & {
 				input_keys: []
 			}
 			config: temperature: "t*0.2"
+			// assessment/planning steps run deliberate (head-swap; session-path)
+			config: reasoning:   "high"
 			resolver: {
 				type: "rule"
 				rules: [

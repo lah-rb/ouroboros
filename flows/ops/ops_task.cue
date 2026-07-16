@@ -195,6 +195,8 @@ ops_task: #FlowDefinition & {
 					params: {mission: {$ref: "context.mission"}, field: "router_findings"}},
 			]
 			config: temperature: "t*0.4"
+			// critical planning step: deliberate (per-request completion head-swap)
+			config: reasoning:   "high"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -264,6 +266,8 @@ ops_task: #FlowDefinition & {
 					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
 			]
 			config: temperature: "t*0.1"
+			// assessment/planning steps run deliberate (head-swap; session-path)
+			config: reasoning:   "high"
 			resolver: {
 				type: "rule"
 				rules: [
@@ -414,6 +418,8 @@ ops_task: #FlowDefinition & {
 					params: {mission: {$ref: "context.mission"}, field: "objective"}},
 			]
 			config: temperature: "t*0.1"
+			// assessment/planning steps run deliberate (head-swap; session-path)
+			config: reasoning:   "high"
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "record_sanity"}]
@@ -521,6 +527,8 @@ ops_task: #FlowDefinition & {
 					params: {source: {$ref: "context.terminal_output"}, max_chars: 2000}},
 			]
 			config: temperature: "t*0.1"
+			// assessment/planning steps run deliberate (head-swap; session-path)
+			config: reasoning:   "high"
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "reprobe_completion"}]
@@ -566,6 +574,8 @@ ops_task: #FlowDefinition & {
 					params: {mission: {$ref: "context.mission"}, field: "objective"}},
 			]
 			config: temperature: "t*0.1"
+			// assessment/planning steps run deliberate (head-swap; session-path)
+			config: reasoning:   "high"
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "record_completion_verify"}]

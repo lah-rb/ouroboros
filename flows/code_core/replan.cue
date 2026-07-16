@@ -119,6 +119,8 @@ replan: #FlowDefinition & {
 				input_keys: []
 			}
 			config: temperature: "t*0.2"
+			// critical planning step: deliberate (per-request completion head-swap)
+			config: reasoning:   "high"
 			resolver: {
 				type: "rule"
 				rules: [

@@ -149,6 +149,8 @@ design_and_plan: #FlowDefinition & {
 
 		design_initial: #StepDefinition & _design_step & {
 			description: "Design project architecture from scratch"
+			// critical planning step: deliberate (per-request completion head-swap)
+			config: reasoning: "high"
 			pre_compute: _design_base_precompute
 			resolver: {
 				type: "rule"
