@@ -1,10 +1,11 @@
 """Per-turn reasoning-level routing (adaptive_thinking, Phase F wiring).
 
-Chooses the gpt-oss reasoning effort (low/medium/high) for SESSION-path
-inference steps, so mechanical turns stop paying for long CoT. The server
-applies the level via the validated reasoning head-swap
-(``config.model.reasoning_head_swap``); the field only exists on the session
-request, so stateless steps always resolve to None here.
+Chooses the gpt-oss reasoning effort (low/medium/high) per inference step, so
+mechanical turns stop paying for long CoT. The server applies the level via
+the validated reasoning head-swap (``config.model.reasoning_head_swap``):
+sessions install at turn 0 and SPLICE mid-session; stateless completions get
+the level head installed per request. The trained TF-IDF router (rung 3) is
+session-domain only; explicit config and the high-steps list steer both paths.
 
 Resolution order (first hit wins):
 
@@ -93,17 +94,26 @@ def resolve_reasoning(
     ``session`` must reflect whether the call actually routes through a
     memoryful inference session — the head-swap only exists on that path.
     """
-    if not _enabled():
-        return None
-    if not session:
-        return None
-
+    # Explicit cue-authored ``reasoning`` is static step config — honored like
+    # temperature, NOT gated behind the adaptive flag (the flag gates the
+    # adaptive machinery below, not flow-author intent). Works on BOTH paths:
+    # sessions swap/splice the head; stateless completions carry the field too.
     explicit = (step_config or {}).get("reasoning")
     if isinstance(explicit, str) and explicit.lower() in VALID_LEVELS:
+        logger.info("reasoning_router: step=%s explicit -> %s", step_name, explicit.lower())
         return explicit.lower()
 
+    if not _enabled():
+        return None
+
     if step_name in _csv_env("OURO_REASONING_HIGH_STEPS"):
+        logger.info("reasoning_router: step=%s high-steps list -> high", step_name)
         return "high"
+
+    # The trained router below is session-domain (plan_interaction turn
+    # prompts); stateless steps stop here.
+    if not session:
+        return None
 
     if step_name in _csv_env("OURO_ROUTER_STEPS", "plan_interaction"):
         artifact = _load_artifact(os.environ.get("OURO_REASONING_ROUTER", DEFAULT_ARTIFACT))

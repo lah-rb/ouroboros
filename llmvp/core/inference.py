@@ -261,6 +261,7 @@ async def run_completion(
     grammar: Optional[str] = None,
     static_prefix: Optional[str] = None,
     flow_key: Optional[str] = None,
+    reasoning: Optional[str] = None,
 ) -> Tuple[str, int]:
     """
     Run a non-streaming completion.
@@ -345,6 +346,11 @@ async def run_completion(
         if grammar:
             gen_kwargs["grammar"] = grammar
         gen_kwargs.update(flow_kwargs)
+        # Per-request reasoning HEAD-SWAP for stateless completions. Skipped
+        # when a flow prefix is pinned this request — that KV was computed
+        # above the DEFAULT head, so swapping under it would misalign.
+        if reasoning and not flow_kwargs:
+            gen_kwargs["reasoning"] = str(reasoning)
 
         # Use backend's async generation. gen_target is where the backend
         # stashes per-request cache telemetry (_last_*) — the pooled instance,

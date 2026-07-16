@@ -1331,6 +1331,48 @@ class LlamaCppBackend(BaseBackend):
         )
         return True
 
+    def _completion_reasoning_head(
+        self, inst: Any, prompt_tokens: List[int], level: str
+    ) -> List[int]:
+        """Per-request reasoning level for STATELESS completions.
+
+        Sessions get the head via turn-0 install / mid-session splice; a
+        completion re-forks the pristine static every request, so the same
+        whole-seq install is sound here — at request start nothing sits above
+        the head. Two coordinated moves keep the continuation prefix-match
+        exact (and thus keep the zero-re-prefill property):
+
+        1. ``_install_reasoning_head`` — the working seq's cache now holds the
+           level's pinned head (and ``input_ids[:hlen]`` its tokens);
+        2. the SAME head tokens replace ``prompt_tokens[:static_len]`` — so the
+           eval path sees cache == prompt head and evals only the dynamic tail.
+
+        Returns the (possibly head-swapped) prompt tokens. Refuses (returning
+        the input unchanged) whenever any precondition fails: default level,
+        swap disabled, non-resident, flow-prefix caching in play (its pinned
+        KV assumes the default head), or length mismatches.
+        """
+        if not level or level == self._reasoning_default_level:
+            return prompt_tokens
+        if not (self._reasoning_head_swap and getattr(self, "_resident_active", False)):
+            log.debug("completion reasoning=%s ignored (swap off or non-resident)", level)
+            return prompt_tokens
+        source = self._reasoning_head_source(inst, level)
+        if source is None:
+            log.warning("completion reasoning=%s: no pinned head — ignored", level)
+            return prompt_tokens
+        _seq, head_toks, hlen = source
+        static_len = int(getattr(inst, "_static_len", self._resident_static_len) or 0)
+        if hlen != static_len or len(prompt_tokens) < static_len or static_len <= 0:
+            log.warning(
+                "completion reasoning=%s refused: head len %d vs static %d (prompt %d)",
+                level, hlen, static_len, len(prompt_tokens),
+            )
+            return prompt_tokens
+        if not self._install_reasoning_head(inst, level):
+            return prompt_tokens
+        return list(head_toks) + list(prompt_tokens[static_len:])
+
     def _window_resident_seq(self, inst: Any, n_keep: int) -> int:
         """Slide the resident session window: drop the oldest ~half of the live
         conversation — positions [n_keep, n_keep+n_discard) — and shift the recent
@@ -2609,6 +2651,18 @@ class LlamaCppBackend(BaseBackend):
 
         tracker = get_tracker()
 
+        # Per-request reasoning level for STATELESS completions. Only the
+        # completion path ever puts "reasoning" in generate kwargs (the session
+        # layer consumes it before generate — see session_manager gen_kwargs),
+        # so this cannot fire mid-session. Installs the level's pinned head AND
+        # swaps the prompt's head tokens together, keeping the continuation
+        # prefix-match exact (zero extra prefill).
+        _reasoning = kwargs.pop("reasoning", None)
+        if _reasoning:
+            prompt_tokens = self._completion_reasoning_head(
+                instance, prompt_tokens, str(_reasoning)
+            )
+
         # Split prompt into static (already in KV cache) and dynamic parts.
         #
         # COMPLETION path: prompt_tokens = [static prefix] + [dynamic], so we
@@ -3036,6 +3090,8 @@ class LlamaCppBackend(BaseBackend):
         async with self.generation_guard(nested=nested):
             self._h_requests_since_refresh += 1  # drives the periodic context refresh
             if self._decode_mode == "batched":
+                if kwargs.pop("reasoning", None):
+                    log.debug("completion reasoning ignored (batched mode not wired)")
                 parts: List[str] = []
                 async for chunk in self._batched_stream(
                     instance, prompt_tokens, max_tokens, temperature, **kwargs
@@ -3073,6 +3129,8 @@ class LlamaCppBackend(BaseBackend):
         async with self.generation_guard(nested=nested):
             self._h_requests_since_refresh += 1  # drives the periodic context refresh
             if self._decode_mode == "batched":
+                if kwargs.pop("reasoning", None):
+                    log.debug("completion reasoning ignored (batched mode not wired)")
                 async for chunk in self._batched_stream(
                     instance, prompt_tokens, max_tokens, temperature, **kwargs
                 ):

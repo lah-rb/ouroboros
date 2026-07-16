@@ -55,13 +55,25 @@ def _on(monkeypatch, artifact=None, **env):
 
 
 def test_dormant_without_flag(tiny_artifact, monkeypatch):
+    # the ADAPTIVE machinery (router + high-steps list) is flag-gated...
     monkeypatch.setenv("OURO_REASONING_ROUTER", tiny_artifact)
+    monkeypatch.setenv("OURO_REASONING_HIGH_STEPS", "judge_step")
     assert rr.resolve_reasoning("plan_interaction", {}, "omega omega", True) is None
+    assert rr.resolve_reasoning("judge_step", {}, "x", True) is None
 
 
-def test_stateless_never_routed(tiny_artifact, monkeypatch):
+def test_explicit_config_works_without_flag(monkeypatch):
+    # ...but explicit cue-authored reasoning is static config, honored always —
+    # on sessions AND stateless completions (server carries the field on both)
+    assert rr.resolve_reasoning("verify_completion", {"reasoning": "high"}, "x", True) == "high"
+    assert rr.resolve_reasoning("verify_completion", {"reasoning": "high"}, "x", False) == "high"
+
+
+def test_stateless_gating(tiny_artifact, monkeypatch):
     _on(monkeypatch, tiny_artifact, OURO_REASONING_HIGH_STEPS="design_gate")
-    assert rr.resolve_reasoning("design_gate", {}, "anything", False) is None
+    # explicit + high-steps rungs work stateless (completion head-swap)...
+    assert rr.resolve_reasoning("design_gate", {}, "anything", False) == "high"
+    # ...but the TRAINED router is session-domain only
     assert rr.resolve_reasoning("plan_interaction", {}, "omega", False) is None
 
 

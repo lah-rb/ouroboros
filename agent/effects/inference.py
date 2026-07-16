@@ -399,6 +399,11 @@ class InferenceEffect:
                 grammar = config_overrides["grammar"]
                 if grammar is not None:
                     request_vars["grammar"] = grammar
+            # Reasoning HEAD-SWAP level for stateless completions — the server
+            # installs the level's pinned head for this request only (resident
+            # path, config.model.reasoning_head_swap). None/absent → default.
+            if config_overrides.get("reasoning"):
+                request_vars["reasoning"] = str(config_overrides["reasoning"])
 
         request_body = {
             "query": COMPLETION_QUERY,
@@ -738,10 +743,10 @@ class InferenceEffect:
                 grammar = config_overrides["grammar"]
                 if grammar is not None:
                     request_vars["grammar"] = grammar
-            # Reasoning HEAD-SWAP level (low/medium/high) — server forks the level's
-            # pinned system head at turn 0 (config.model.reasoning_head_swap). Only on
-            # the SESSION path (SessionTurnRequest has the field; CompletionRequest
-            # does not). Optional server-side; None/absent → default level.
+            # Reasoning HEAD-SWAP level (low/medium/high) — the server installs the
+            # level's pinned head at turn 0 and SPLICES it mid-session
+            # (config.model.reasoning_head_swap). Stateless completions carry the
+            # same field (see the completion builder above). None/absent → default.
             if config_overrides.get("reasoning"):
                 request_vars["reasoning"] = str(config_overrides["reasoning"])
 

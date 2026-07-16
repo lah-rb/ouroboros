@@ -185,6 +185,11 @@ class CompletionRequest:
     # the invariant head that leads `prompt`; flow_cache_key keys its pinned KV.
     static_prefix: Optional[str] = strawberry.field(default=None)
     flow_cache_key: Optional[str] = strawberry.field(default=None)
+    # Per-request reasoning HEAD-SWAP level (low/medium/high) for STATELESS
+    # completions — the pinned level head replaces the static head for this
+    # request only (config.model.reasoning_head_swap; resident path).
+    # None -> default level. gpt-oss/harmony.
+    reasoning: Optional[str] = strawberry.field(default=None)
 
 
 @strawberry.type
@@ -448,6 +453,7 @@ class Query:
             else {
                 "static_prefix": request.static_prefix,
                 "flow_key": request.flow_cache_key,
+                "reasoning": request.reasoning,
             }
         )
         outcome = await run_fn(
