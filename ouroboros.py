@@ -799,19 +799,13 @@ def cmd_cue_compile(args: argparse.Namespace) -> None:
 
 
 def cmd_lint_flows(args: argparse.Namespace) -> None:
-    """Run the comprehensive flow context linter (dev/lint_flows.py)."""
-    import subprocess
+    """Run the comprehensive flow context linter (agent/flow_lint.py)."""
+    from agent.flow_lint import lint
 
     project_root = os.path.dirname(os.path.abspath(__file__))
-    lint_script = os.path.join(project_root, "dev", "lint_flows.py")
-
-    if not os.path.exists(lint_script):
-        print(f"Error: lint script not found: {lint_script}")
-        sys.exit(1)
-
     compiled_path = (
         args.compiled
-        if hasattr(args, "compiled") and args.compiled
+        if getattr(args, "compiled", None)
         else os.path.join(project_root, "flows", "compiled.json")
     )
     if not os.path.exists(compiled_path):
@@ -820,16 +814,17 @@ def cmd_lint_flows(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    cmd = [sys.executable, lint_script]
-    if args.verbose:
-        cmd.append("--verbose")
-    if hasattr(args, "compiled") and args.compiled:
-        cmd.extend(["--compiled", args.compiled])
-
-    env = os.environ.copy()
-    env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")
-    result = subprocess.run(cmd, cwd=project_root, env=env)
-    sys.exit(result.returncode)
+    results = lint(compiled_path=compiled_path, verbose=args.verbose)
+    shown = [
+        r for r in results if args.verbose or r.level in ("ERROR", "WARNING")
+    ]
+    for r in shown:
+        print(str(r))
+    errors = sum(1 for r in results if r.level == "ERROR")
+    warnings = sum(1 for r in results if r.level == "WARNING")
+    print(f"\n{errors} errors, {warnings} warnings")
+    if errors:
+        sys.exit(1)
 
 
 def cmd_smoke(args: argparse.Namespace) -> None:

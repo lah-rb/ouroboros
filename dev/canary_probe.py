@@ -43,7 +43,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 # dev/ on path for the shared classifier + trace tailer (single source of truth).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from contam_forensics import is_stub  # noqa: E402
+from agent.trace_health import is_stub  # noqa: E402
 from contam_monitor import iter_rewrites, latest_trace  # noqa: E402
 
 # ── TaskBindingProbe prompt (the original no-task-confusion canary) ────

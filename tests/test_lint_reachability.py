@@ -13,12 +13,7 @@ needing real flow fixtures to reproduce the bug shapes.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Import lint_flows from dev/ (not on sys.path by default).
-sys.path.insert(0, str(Path(__file__).parent.parent / "dev"))
-from lint_flows import (  # noqa: E402
+from agent.flow_lint import (
     _COND_FALSE,
     _COND_TRUE,
     _COND_UNKNOWN,
