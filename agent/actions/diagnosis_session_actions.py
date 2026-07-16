@@ -166,18 +166,28 @@ CONCLUDE_PROMPT = (
     "orientation text where users expect one, no handler for "
     "input that should respond, missing field on a model class), "
     "`new_file` (a whole file needs to exist that currently "
-    "doesn't), `module_fix` (the code is right but a module-level "
+    "doesn't), `module_fix` (a module-level "
     "line is missing or wrong in ``target_file`` — a missing import, "
     "a script's shebang, a `source`/`set` line; a name it uses is "
     "never imported, or the script lacks its interpreter line). "
     "Prefer `module_fix` over `fix` whenever the change is adding or "
-    "correcting a module-level line such as an import.\n\n"
+    "correcting a module-level line such as an import. A module_fix "
+    "may ALSO need a function or method body to change (e.g. an "
+    "assignment inside `__init__` that pairs with the new module "
+    "line): keep kind `module_fix`, name that symbol in "
+    "``target_symbol``, and describe the body change in "
+    "``change_spec`` — both edits are applied, module line first.\n\n"
     "  module_statement — REQUIRED when kind is `module_fix`; omit "
     "otherwise. The exact literal line(s) to insert, exactly as they "
-    "should appear in the file.\n"
+    "should appear in the file. Executable code only — never "
+    "comments, instructions, or guidance (they would be inserted "
+    "into the file verbatim). Any accompanying body change or "
+    "explanation belongs in ``change_spec``, not here.\n"
     '    ✅ "module_statement": "from commands import InventoryCommand"\n'
     '    ✅ "module_statement": "#!/usr/bin/env bash"\n'
-    '    ❌ "module_statement": "add an import for InventoryCommand at the top"\n\n'
+    '    ❌ "module_statement": "add an import for InventoryCommand at the top"\n'
+    '    ❌ "module_statement": "ITEMS = {}\\n# then assign ITEMS inside __init__"'
+    " (guidance smuggled as comments — put it in change_spec)\n\n"
     "  confidence — one of: `HIGH`, `MEDIUM`, `LOW`.\n\n"
     "  recommended_flow — `file_ops` for code or data file "
     "changes (covers create, patch, add, rewrite internally); "
