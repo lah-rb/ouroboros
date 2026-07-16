@@ -51,7 +51,7 @@ def test_overnight_benchmark_config_pins_serial():
     # the run queue independent of this feature landing.
     import yaml
 
-    with open("game_challenge_overnight.yaml") as f:
+    with open("missions/game_challenge_overnight.yaml") as f:
         raw = yaml.safe_load(f)
     assert raw["structural_mode"] == "serial"
     assert MissionYAMLConfig(**raw).structural_mode == "serial"
