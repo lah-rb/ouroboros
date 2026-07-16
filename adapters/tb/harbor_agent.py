@@ -45,6 +45,8 @@ from pathlib import Path
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+from agent.effects.teardown import drain_effects
+from adapters._common import llmvp_endpoint, preserve_agent_dir  # noqa: E402
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -67,7 +69,7 @@ try:
     _TIMEOUT_MULTIPLIER = float(os.environ.get("OURO_TIMEOUT_MULTIPLIER", "1") or "1")
 except ValueError:
     _TIMEOUT_MULTIPLIER = 1.0
-_LLMVP = os.environ.get("OURO_LLMVP", "http://localhost:8008/graphql")
+_LLMVP = llmvp_endpoint()
 _TRACE = os.environ.get("OURO_TRACE", "1") != "0"
 
 
@@ -193,13 +195,7 @@ class OuroborosHarborAgent(BaseAgent):
                     max_wall_clock_s=wall_clock_s,
                 )
             finally:
-                for _teardown in ("end_open_inference_sessions", "mcp_disconnect_all"):
-                    _fn = getattr(effects, _teardown, None)
-                    if _fn is not None:
-                        try:
-                            await _fn()
-                        except Exception:
-                            pass
+                await drain_effects(effects)
 
         def _run_mission_isolated() -> None:
             try:
@@ -384,13 +380,9 @@ class OuroborosHarborAgent(BaseAgent):
         run is inspectable after the container/host-tmp are gone. Harbor syncs
         logs_dir back to the host trial dir."""
         try:
-            src = os.path.join(host_tmp, ".agent")
-            if os.path.isdir(src):
-                shutil.copytree(
-                    src,
-                    os.path.join(str(self.logs_dir), "ouroboros-mission"),
-                    dirs_exist_ok=True,
-                )
+            preserve_agent_dir(
+                host_tmp, os.path.join(str(self.logs_dir), "ouroboros-mission")
+            )
         except Exception:
             pass
 
@@ -401,52 +393,3 @@ class OuroborosHarborAgent(BaseAgent):
         except Exception:
             pass
 
-    def _select_flow_set(self, instruction: str) -> tuple[str, str]:
-        """Flow set + capability profile (the task judge): one cold-temp LLMVP
-        classification into (ops|code_core, profile), with keyword fallbacks and
-        an OURO_FLOW_SET override. Decision logged for audit."""
-        from adapters.tb.task_judge import classify_flow_set
-
-        log_path = Path(self.logs_dir) / "ouroboros-routing.json"
-        flow_set, profile, method = classify_flow_set(
-            instruction, _LLMVP, log_path=log_path
-        )
-        print(
-            f"[ouroboros] flow_set={flow_set} profile={profile} ({method})",
-            file=sys.stderr,
-        )
-        return flow_set, profile
-
-    # ── helpers ───────────────────────────────────────────────────────
-    def _probe_container_cwd(self, container, exec_user: str) -> str:
-        """The task's 'current directory' — the container's default WORKDIR."""
-        try:
-            res = container.exec_run(cmd=["pwd"], user=exec_user)
-            out = (res.output or b"").decode("utf-8", "replace").strip()
-            first = out.splitlines()[0].strip() if out else ""
-            if first.startswith("/"):
-                return first
-        except Exception:
-            pass
-        return "/app"
-
-    def _token_totals(self, host_tmp: str) -> tuple[int, int]:
-        """Sum inference token usage from the flushed trace JSONL (reporting only —
-        never affects pass/fail). Best-effort; zeros on any issue."""
-        tin = tout = 0
-        try:
-            for path in glob.glob(os.path.join(host_tmp, ".agent", "traces", "*.jsonl")):
-                with open(path) as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            row = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        tin += int(row.get("tokens_in") or 0)
-                        tout += int(row.get("tokens_out") or 0)
-        except Exception:
-            return 0, 0
-        return tin, tout

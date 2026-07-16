@@ -21,8 +21,9 @@ Container-routed:
   ``docker exec`` and points the PTY's host-side ``working_directory`` at a
   throwaway scratch dir (the server's ``os.makedirs`` always runs on the host).
 
-The exec call and the launcher are factored into ``_exec`` / ``_pty_launcher`` so a
-future Harbor port swaps only those, not the routing.
+The exec call and the launcher are factored into ``_exec`` / ``_pty_launcher``;
+the Harbor port (harbor_agent.py) ended up reusing this class verbatim —
+the factoring holds if a future harness ever needs different plumbing.
 """
 
 from __future__ import annotations

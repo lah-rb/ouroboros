@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from agent.chat.boss import MenuBoss, MenuOption
 from agent.chat.env import ChatEnv
 from agent.chat.session import PersonaSession
+from adapters._common import llmvp_endpoint
 
 log = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ def run_tau_episode(
     domain: str = "retail",
     task_index: int = 0,
     *,
-    endpoint: str = "http://localhost:8008/graphql",
+    endpoint: str | None = None,
     max_turns: int = 10,
     boss_persona: str = "tau_boss",
 ) -> EpisodeArtifacts:
@@ -148,5 +149,6 @@ def run_tau_episode(
     for an episode-level failure — a crashed party yields whatever the
     transcript holds, graded honestly)."""
     return asyncio.run(
-        _run(domain, task_index, endpoint, max_turns, boss_persona)
+        _run(domain, task_index, endpoint or llmvp_endpoint(),
+             max_turns, boss_persona)
     )

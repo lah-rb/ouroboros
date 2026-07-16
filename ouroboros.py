@@ -22,12 +22,29 @@ import os
 import sys
 
 from agent.persistence.manager import PersistenceManager
+from agent.effects.teardown import drain_effects
 from agent.persistence.models import (
     Event,
     MissionConfig,
     MissionState,
     NoteRecord,
 )
+
+
+def _load_mission_or_exit(args: argparse.Namespace):
+    """Open the mission at --working-dir (or cwd); exit 1 when none exists.
+
+    The shared front door for every mission-management subcommand —
+    previously seven near-identical open blocks.
+    """
+    working_dir = os.path.realpath(args.working_dir or os.getcwd())
+    pm = PersistenceManager(working_dir)
+    mission = pm.load_mission()
+    if mission is None:
+        print("No active mission found.")
+        print(f"  (looked in {pm.agent_dir}/)")
+        sys.exit(1)
+    return pm, mission
 
 
 def cmd_mission_create(args: argparse.Namespace) -> None:
@@ -200,14 +217,7 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
 
 def cmd_mission_status(args: argparse.Namespace) -> None:
     """Show mission status."""
-    working_dir = os.path.realpath(args.working_dir or os.getcwd())
-    pm = PersistenceManager(working_dir)
-
-    mission = pm.load_mission()
-    if mission is None:
-        print("No active mission found.")
-        print(f"  (looked in {pm.agent_dir}/)")
-        sys.exit(1)
+    pm, mission = _load_mission_or_exit(args)
 
     print(f"Mission: {mission.id}")
     print(f"  Status: {mission.status}")
@@ -247,12 +257,7 @@ def cmd_mission_status(args: argparse.Namespace) -> None:
 
 def cmd_mission_pause(args: argparse.Namespace) -> None:
     """Pause the mission."""
-    working_dir = os.path.realpath(args.working_dir or os.getcwd())
-    pm = PersistenceManager(working_dir)
-    mission = pm.load_mission()
-    if mission is None:
-        print("No active mission found.")
-        sys.exit(1)
+    pm, mission = _load_mission_or_exit(args)
 
     if mission.status != "active":
         print(f"Mission is '{mission.status}', not active. Cannot pause.")
@@ -265,12 +270,7 @@ def cmd_mission_pause(args: argparse.Namespace) -> None:
 
 def cmd_mission_resume(args: argparse.Namespace) -> None:
     """Resume a paused mission."""
-    working_dir = os.path.realpath(args.working_dir or os.getcwd())
-    pm = PersistenceManager(working_dir)
-    mission = pm.load_mission()
-    if mission is None:
-        print("No active mission found.")
-        sys.exit(1)
+    pm, mission = _load_mission_or_exit(args)
 
     if mission.status == "paused":
         mission.status = "active"
@@ -287,12 +287,7 @@ def cmd_mission_resume(args: argparse.Namespace) -> None:
 
 def cmd_mission_abort(args: argparse.Namespace) -> None:
     """Abort the mission."""
-    working_dir = os.path.realpath(args.working_dir or os.getcwd())
-    pm = PersistenceManager(working_dir)
-    mission = pm.load_mission()
-    if mission is None:
-        print("No active mission found.")
-        sys.exit(1)
+    pm, mission = _load_mission_or_exit(args)
 
     event = Event(type="abort", payload={"reason": "User aborted via CLI"})
     pm.push_event(event)
@@ -310,13 +305,7 @@ def cmd_mission_reopen(args: argparse.Namespace) -> None:
     works those goals before re-gating. Use `mission resume` for a *paused*
     mission — this is only for terminal states.
     """
-    working_dir = os.path.realpath(args.working_dir or os.getcwd())
-    pm = PersistenceManager(working_dir)
-    mission = pm.load_mission()
-    if mission is None:
-        print("No mission found.")
-        print(f"  (looked in {pm.agent_dir}/)")
-        sys.exit(1)
+    pm, mission = _load_mission_or_exit(args)
 
     if mission.status == "active":
         print("Mission is already active — just run `start`.")
@@ -396,17 +385,15 @@ def cmd_mission_reopen(args: argparse.Namespace) -> None:
             )
         else:
             print("   All goals complete — `start` will re-run the quality gate.")
-    print("   Run: ouroboros.py start --working-dir " + working_dir)
+    print(
+        "   Run: ouroboros.py start --working-dir "
+        + os.path.dirname(pm.agent_dir)
+    )
 
 
 def cmd_mission_message(args: argparse.Namespace) -> None:
     """Send a message to the agent."""
-    working_dir = os.path.realpath(args.working_dir or os.getcwd())
-    pm = PersistenceManager(working_dir)
-    mission = pm.load_mission()
-    if mission is None:
-        print("No active mission found.")
-        sys.exit(1)
+    pm, mission = _load_mission_or_exit(args)
 
     message = args.message
     event = Event(type="user_message", payload={"message": message})
@@ -422,12 +409,7 @@ def cmd_mission_message(args: argparse.Namespace) -> None:
 
 def cmd_mission_history(args: argparse.Namespace) -> None:
     """Show mission history (flow artifacts)."""
-    working_dir = os.path.realpath(args.working_dir or os.getcwd())
-    pm = PersistenceManager(working_dir)
-    mission = pm.load_mission()
-    if mission is None:
-        print("No active mission found.")
-        sys.exit(1)
+    pm, mission = _load_mission_or_exit(args)
 
     artifacts = pm.list_artifacts()
     if not artifacts:
@@ -574,18 +556,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         finally:
             # Release LLMVP sessions + disconnect MCP (terminal server tree)
             # inside the loop before it closes, so neither orphans on exit.
-            for _teardown in ("end_open_inference_sessions", "mcp_disconnect_all"):
-                _fn = getattr(effects, _teardown, None)
-                if _fn is not None:
-                    try:
-                        await _fn()
-                    except (Exception, asyncio.CancelledError):
-                        # CancelledError is a BaseException — a cancellation
-                        # landing during drain escaped the bare `except
-                        # Exception` and crashed the CLI at teardown (seen on
-                        # the gameab adaptive arm). tb/tau-adapter parity:
-                        # teardown is best-effort.
-                        pass
+            await drain_effects(effects)
 
     # Run the mission loop on ITS OWN thread + event loop (tb/tau-adapter
     # parity): run_agent's MCP/PTY machinery uses anyio cancel scopes bound
@@ -937,7 +908,6 @@ def main() -> None:
     lint_p.add_argument(
         "--verbose", action="store_true", help="Show all checks, not just warnings"
     )
-    lint_p.set_defaults(func=cmd_lint)
 
     # ── cue-compile subcommand ────────────────────────────────────
     subparsers.add_parser(

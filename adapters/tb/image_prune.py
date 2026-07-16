@@ -31,9 +31,9 @@ import os
 
 logger = logging.getLogger(__name__)
 
-_PRUNE_MODE = os.environ.get("OURO_TB_PRUNE_IMAGES", "run_end").strip().lower()
-if _PRUNE_MODE not in ("off", "run_end", "per_instance"):
-    _PRUNE_MODE = "run_end"
+from adapters._common import prune_mode, remove_image
+
+_PRUNE_MODE = prune_mode("OURO_TB_PRUNE_IMAGES")
 
 _touched: set[str] = set()   # all task images seen (run_end sweep target)
 _prev: list[str] = []        # [prior task image] — the per_instance lag slot
@@ -50,14 +50,7 @@ def _image_ref(container) -> str:
 
 
 def _remove_image(client, image: str) -> None:
-    """Best-effort image removal (frees the layer cache the VM holds resident)."""
-    if not client or not image:
-        return
-    try:
-        client.images.remove(image, force=True)
-        logger.info("tb: pruned image %s", image)
-    except Exception as e:  # noqa: BLE001 — a missing/in-use image must not break the run
-        logger.warning("tb: image prune failed for %s: %s", image, e)
+    remove_image(client, image, label="tb")
 
 
 def _run_end_sweep() -> None:

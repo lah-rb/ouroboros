@@ -18,9 +18,13 @@ import sys
 import tempfile
 
 from adapters.gaia.loader import GaiaQuestion
+from agent.effects.teardown import drain_effects
+from adapters._common import llmvp_endpoint, preserve_agent_dir, seed_workspace_venv  # noqa: E402
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_LLMVP = os.environ.get("OURO_LLMVP", "http://localhost:8008/graphql")
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)  # sibling-adapter parity — don't rely on caller PYTHONPATH
+_LLMVP = llmvp_endpoint()
 # Same loose-backstop philosophy as SWE: wall-clock governs, cycles catch a
 # degenerate fast-loop. GAIA questions are smaller than SWE instances.
 _MAX_CYCLES = int(os.environ.get("OURO_MAX_CYCLES", "50"))
@@ -167,9 +171,7 @@ def _preserve(workspace: str, logs_dir: str, task_id: str) -> None:
     """Copy the mission .agent (mission.json + traces) + answer.txt for audit."""
     dst = os.path.join(logs_dir, task_id)
     try:
-        src = os.path.join(workspace, ".agent")
-        if os.path.isdir(src):
-            shutil.copytree(src, os.path.join(dst, "ouroboros-mission"), dirs_exist_ok=True)
+        preserve_agent_dir(workspace, os.path.join(dst, "ouroboros-mission"))
         ans = os.path.join(workspace, "answer.txt")
         if os.path.isfile(ans):
             os.makedirs(dst, exist_ok=True)
@@ -202,10 +204,7 @@ def run_question(
         # downgraded httpx 0.28→0.13 and broke the terminal MCP server for every
         # subsequent question). With workspace/.venv present, the PTY uses it and
         # installs die with the workspace.
-        subprocess.run(
-            [sys.executable, "-m", "venv", os.path.join(workspace, ".venv")],
-            check=True, capture_output=True, timeout=120,
-        )
+        seed_workspace_venv(workspace)
         if question.has_file and question.file_path:
             shutil.copy2(question.file_path, os.path.join(workspace, question.file_name))
         mission, entry_flow = build_mission(question, workspace)
@@ -231,13 +230,7 @@ def run_question(
                 # Same teardown discipline as SWE: drain sessions + MCP inside
                 # the loop; CancelledError is a BaseException and must not
                 # escape a best-effort cleanup (see adapters.swe.runner).
-                for teardown in ("end_open_inference_sessions", "mcp_disconnect_all"):
-                    fn = getattr(effects, teardown, None)
-                    if fn is not None:
-                        try:
-                            await fn()
-                        except (Exception, asyncio.CancelledError):
-                            pass
+                await drain_effects(effects)
 
         try:
             asyncio.run(_run_with_drain())

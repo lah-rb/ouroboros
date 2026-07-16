@@ -26,6 +26,8 @@ from typing import List, Optional
 
 from agent.chat.env import WorkerReport
 from adapters.tau.bridge import TAU_CLI_TEMPLATE
+from agent.effects.teardown import drain_effects
+from adapters._common import llmvp_endpoint as llmvp_endpoint_default, preserve_agent_dir, seed_workspace_venv  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -60,11 +62,13 @@ class MissionWorker:
         tools_info: List[dict],
         bridge_url: str,
         *,
-        llmvp_endpoint: str = "http://localhost:8008/graphql",
+        llmvp_endpoint: str | None = None,
         max_cycles: int = 3,
         wall_clock_s: float = 300.0,
     ):
-        self.llmvp_endpoint = llmvp_endpoint
+        # None → OURO_LLMVP env override or the default (previously a
+        # hardcoded literal that env could not repoint).
+        self.llmvp_endpoint = llmvp_endpoint or llmvp_endpoint_default()
         self.max_cycles = max_cycles
         self.wall_clock_s = wall_clock_s
         self.workspace = tempfile.mkdtemp(prefix="ouro-tau-")
@@ -75,10 +79,7 @@ class MissionWorker:
     def _seed_workspace(self, policy: str, tools_info: List[dict], bridge_url: str):
         # Own venv: mission pip installs must never mutate the repo venv
         # (the GAIA httpx-poisoning lesson).
-        subprocess.run(
-            [sys.executable, "-m", "venv", os.path.join(self.workspace, ".venv")],
-            check=True, capture_output=True, timeout=120,
-        )
+        seed_workspace_venv(self.workspace)
         self._write("policy.md", policy)
         self._write("TOOLS.md", _render_tools(tools_info))
         cli = os.path.join(self.workspace, "tau")
@@ -176,13 +177,7 @@ class MissionWorker:
                     max_wall_clock_s=self.wall_clock_s,
                 )
             finally:
-                for teardown in ("end_open_inference_sessions", "mcp_disconnect_all"):
-                    fn = getattr(effects, teardown, None)
-                    if fn is not None:
-                        try:
-                            await fn()
-                        except (Exception, asyncio.CancelledError):
-                            pass
+                await drain_effects(effects)
 
         try:
             asyncio.run(_run_with_drain())
@@ -214,12 +209,9 @@ class MissionWorker:
 
     def cleanup(self, preserve_to: Optional[str] = None) -> None:
         if preserve_to:
-            try:
-                src = os.path.join(self.workspace, ".agent")
-                if os.path.isdir(src):
-                    shutil.copytree(src, os.path.join(preserve_to, "mission-agent"),
-                                    dirs_exist_ok=True)
-            except Exception:  # noqa: BLE001
+            if not preserve_agent_dir(
+                self.workspace, os.path.join(preserve_to, "mission-agent")
+            ):
                 log.debug("mission .agent preserve failed")
         shutil.rmtree(self.workspace, ignore_errors=True)
 

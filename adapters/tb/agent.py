@@ -41,6 +41,8 @@ from pathlib import Path
 from terminal_bench.agents.base_agent import AgentResult, BaseAgent
 from terminal_bench.agents.failure_mode import FailureMode
 from terminal_bench.terminal.tmux_session import TmuxSession
+from agent.effects.teardown import drain_effects
+from adapters._common import llmvp_endpoint, preserve_agent_dir  # noqa: E402
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -64,7 +66,7 @@ try:
     _TIMEOUT_MULTIPLIER = float(os.environ.get("OURO_TIMEOUT_MULTIPLIER", "1") or "1")
 except ValueError:
     _TIMEOUT_MULTIPLIER = 1.0
-_LLMVP = os.environ.get("OURO_LLMVP", "http://localhost:8008/graphql")
+_LLMVP = llmvp_endpoint()
 # Detailed tracing on by default (capture judge CoT + full prompts/responses);
 # set OURO_TRACE=0 to disable.
 _TRACE = os.environ.get("OURO_TRACE", "1") != "0"
@@ -175,18 +177,7 @@ class OuroborosAgent(BaseAgent):
                     max_wall_clock_s=wall_clock_s,
                 )
             finally:
-                for _teardown in ("end_open_inference_sessions", "mcp_disconnect_all"):
-                    _fn = getattr(effects, _teardown, None)
-                    if _fn is not None:
-                        try:
-                            await _fn()
-                        except (Exception, asyncio.CancelledError):
-                            # CancelledError is a BaseException — a cancellation
-                            # landing during drain escaped the bare `except
-                            # Exception`, killed asyncio.run, and cost the whole
-                            # run its results.json (ab-adaptive-2). τ-adapter
-                            # parity: swallow it; teardown is best-effort.
-                            pass
+                await drain_effects(effects)
 
         # Run the mission loop on ITS OWN thread + event loop (τ-adapter /
         # GAIA parity): run_agent's MCP/PTY machinery uses anyio cancel scopes
@@ -342,71 +333,9 @@ class OuroborosAgent(BaseAgent):
         if logging_dir is None:
             return
         try:
-            src = os.path.join(host_tmp, ".agent")
-            if os.path.isdir(src):
-                shutil.copytree(
-                    src,
-                    os.path.join(str(logging_dir), "ouroboros-mission"),
-                    dirs_exist_ok=True,
-                )
+            preserve_agent_dir(
+                host_tmp, os.path.join(str(logging_dir), "ouroboros-mission")
+            )
         except Exception:
             pass
 
-    def _select_flow_set(
-        self, instruction: str, logging_dir: Path | None
-    ) -> tuple[str, str]:
-        """Flow set + capability profile for this task (the M3 task judge): one
-        cold-temp LLMVP classification into (ops|code_core, profile), with keyword
-        heuristic fallbacks and an OURO_FLOW_SET override for the flow set. The
-        profile (service|data_transform|invertible|repair|answer|plain) gates the
-        completion oracle rungs. Decision + method logged to
-        logging_dir/ouroboros-routing.json for audit."""
-        from adapters.tb.task_judge import classify_flow_set
-
-        log_path = (
-            Path(logging_dir) / "ouroboros-routing.json" if logging_dir else None
-        )
-        flow_set, profile, method = classify_flow_set(
-            instruction, _LLMVP, log_path=log_path
-        )
-        print(
-            f"[ouroboros] flow_set={flow_set} profile={profile} ({method})",
-            file=sys.stderr,
-        )
-        return flow_set, profile
-
-    # ── helpers ───────────────────────────────────────────────────────
-    def _probe_container_cwd(self, container) -> str:
-        """The task's 'current directory' — the container's default WORKDIR."""
-        try:
-            res = container.exec_run(cmd=["pwd"])
-            out = (res.output or b"").decode("utf-8", "replace").strip()
-            first = out.splitlines()[0].strip() if out else ""
-            if first.startswith("/"):
-                return first
-        except Exception:
-            pass
-        return "/app"
-
-    def _token_totals(self, host_tmp: str) -> tuple[int, int]:
-        """Sum inference token usage from the flushed trace JSONL (reporting
-        only — never affects pass/fail). Best-effort; zeros on any issue."""
-        tin = tout = 0
-        try:
-            for path in glob.glob(
-                os.path.join(host_tmp, ".agent", "traces", "*.jsonl")
-            ):
-                with open(path) as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            row = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        tin += int(row.get("tokens_in") or 0)
-                        tout += int(row.get("tokens_out") or 0)
-        except Exception:
-            return 0, 0
-        return tin, tout

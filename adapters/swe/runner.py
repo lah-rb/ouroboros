@@ -27,11 +27,13 @@ if _REPO_ROOT not in sys.path:
 
 from adapters.swe.instance import SweInstance  # noqa: E402
 from adapters.swe.patch import extract_model_patch, prediction_row  # noqa: E402
+from agent.effects.teardown import drain_effects
+from adapters._common import llmvp_endpoint, preserve_agent_dir, prune_mode, remove_image  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 REPO_DIR = "/testbed"  # SWE-bench repos are always checked out here
-_LLMVP = os.environ.get("OURO_LLMVP", "http://localhost:8008/graphql")
+_LLMVP = llmvp_endpoint()
 # Iteration cap is a LOOSE runaway backstop, not the primary budget — wall-clock
 # governs. A 20-cap bound FIRST on 52% of parked missions (some at ~516s, wasting
 # >50% of the 1200s wall), inverting the intent; canonical SWE agents cap steps
@@ -93,9 +95,7 @@ def _docker_client():
 #                  end. Keeps pre-cached images; a run leaves nothing new behind.
 #   per_instance — remove each image right after its instance (one image
 #                  resident at a time; re-pulls on any re-run).
-_PRUNE_MODE = os.environ.get("OURO_SWE_PRUNE_IMAGES", "run_end").strip().lower()
-if _PRUNE_MODE not in ("off", "run_end", "per_instance"):
-    _PRUNE_MODE = "run_end"
+_PRUNE_MODE = prune_mode("OURO_SWE_PRUNE_IMAGES")
 
 
 def _container_name(instance: SweInstance) -> str:
@@ -103,12 +103,7 @@ def _container_name(instance: SweInstance) -> str:
 
 
 def _remove_image(client, image: str) -> None:
-    """Best-effort image removal (frees the layer cache the VM holds resident)."""
-    try:
-        client.images.remove(image, force=True)
-        logger.info("pruned image %s", image)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("image prune failed for %s: %s", image, e)
+    remove_image(client, image)
 
 
 def _start_container(client, instance: SweInstance) -> tuple:
@@ -207,20 +202,7 @@ def run_instance(
                 # server tree) INSIDE the loop, before it closes — on the park
                 # exit the per-flow close never ran, so PTY/server processes
                 # would otherwise orphan.
-                for teardown in ("end_open_inference_sessions", "mcp_disconnect_all"):
-                    fn = getattr(effects, teardown, None)
-                    if fn is not None:
-                        try:
-                            await fn()
-                        # CancelledError is a BaseException, NOT an Exception:
-                        # tearing down the MCP stdio_client trips anyio's
-                        # cross-task cancel-scope, raising CancelledError from a
-                        # best-effort cleanup and (uncaught) crashing the whole
-                        # marathon AFTER the instance already ran. Teardown must
-                        # never propagate — swallow it (but let KeyboardInterrupt/
-                        # SystemExit through).
-                        except (Exception, asyncio.CancelledError):
-                            pass
+                await drain_effects(effects)
 
         try:
             asyncio.run(_run_with_drain())
@@ -267,12 +249,6 @@ def run_instance(
 
 def _preserve(host_tmp: str, logs_dir: str, instance_id: str) -> None:
     """Copy the mission .agent (mission.json + traces) for the taxonomy tool."""
-    src = os.path.join(host_tmp, ".agent")
-    if not os.path.isdir(src):
-        return
     dst = os.path.join(logs_dir, instance_id, "ouroboros-mission")
-    try:
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copytree(src, dst, dirs_exist_ok=True)
-    except Exception:
+    if not preserve_agent_dir(host_tmp, dst):
         logger.warning("%s: trace preservation failed", instance_id)
