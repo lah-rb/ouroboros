@@ -27,6 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Local imports
 from core.config import get_config
 from core.inference import (
+    resolve_max_tokens,
     run_completion,
     run_raw_completion,
     stream_completion,
@@ -395,7 +396,7 @@ class Query:
         session_turn below and with core/inference.py's fallback chain.
         """
         mgr = _get_session_manager()
-        max_tokens = request.max_tokens or config.generation.max_tokens_default or 256
+        max_tokens = resolve_max_tokens(request.max_tokens)
         temperature = request.temperature or 0.7
         text, tokens, cache = await mgr.session_turn_complete(
             session_id=request.session_id,
@@ -444,7 +445,7 @@ class Query:
         """
         run_fn = run_tool_completion if use_tools else run_completion
         effective_max = (
-            request.max_tokens or config.generation.max_tokens_default or 256
+            resolve_max_tokens(request.max_tokens)
         )
         # Flow-cache fields only apply to the plain completion path.
         extra = (
@@ -734,7 +735,7 @@ class Subscription:
         if they care).
         """
         mgr = _get_session_manager()
-        max_tokens = request.max_tokens or config.generation.max_tokens_default or 256
+        max_tokens = resolve_max_tokens(request.max_tokens)
         temperature = request.temperature or 0.7
         async for chunk in mgr.session_turn(
             session_id=request.session_id,

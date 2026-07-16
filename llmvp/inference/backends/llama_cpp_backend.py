@@ -28,6 +28,11 @@ from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from .base import BaseBackend, BackendCapabilities
 from inference.repetition import DegenerateGenerationError, RepetitionGuard
+from inference.decode_constants import (
+    BUFFER_MODE_MAX_TOKENS,
+    DETOK_TAIL,
+    STOP_TAIL_SLACK,
+)
 
 log = logging.getLogger("llm-mvp")
 
@@ -649,7 +654,12 @@ class LlamaCppBackend(BaseBackend):
                 # here on every refresh/rewarm since this is the single warm path).
                 self._pin_reasoning_heads(llm_inst)
         except Exception as exc:
+            # Do NOT let a half-warmed slot serve silently (empty/partial
+            # static head = wrong context on every request). Flag it for the
+            # self-heal path — the next acquire rebuilds the context and
+            # re-runs this warm path — instead of swallowing the failure.
             log.error(f"❌ Warm-up failed for pool slot #{idx}: {exc}")
+            llm_inst._needs_context_refresh = True
 
     def _rewarm_after_teardown(self) -> None:
         """Re-warm the primary instance after scale-down.
@@ -2805,7 +2815,7 @@ class LlamaCppBackend(BaseBackend):
         # template closer (e.g. <|im_end|>).  Buffering ensures we
         # only yield after generation is fully complete and all stop
         # sequences are cleanly stripped.
-        buffer_mode = effective_max <= 16
+        buffer_mode = effective_max <= BUFFER_MODE_MAX_TOKENS
 
         # Start tracker with full diagnostic context
         tracker.start(
@@ -2851,17 +2861,21 @@ class LlamaCppBackend(BaseBackend):
         # cumulative byte accumulator; a freshly-emitted stop is always near the
         # tail). Slack covers a stop split across the last couple of tokens.
         max_stop_len = max((len(sb) for sb in stop_bytes), default=0)
-        stop_tail = max_stop_len + 8
+        stop_tail = max_stop_len + STOP_TAIL_SLACK
 
         completion_tokens: List[int] = []
         returned_bytes = 0
         is_first_token = True
 
         # Incremental detokenization (replaces O(n²) full-list detok per token):
-        # accumulate bytes and detokenize only the new token, with all preceding
-        # tokens as context so llama.cpp emits the correct piece boundary.
+        # accumulate bytes and detokenize only the new token, with a BOUNDED
+        # tail of preceding tokens as context so llama.cpp emits the correct
+        # piece boundary. The tail is capped (mirroring the batched engine's
+        # TokenPipeline) — an unbounded prior list re-grows the O(n²) cost
+        # this block exists to remove; 16 tokens covers the widest multi-byte
+        # merge boundary by a wide margin.
         acc_bytes = b""
-        prior_tokens: List[int] = list(prompt_tokens)
+        prior_tokens: List[int] = list(prompt_tokens[-DETOK_TAIL:])
 
         # Degenerate-repetition guard (off only if explicitly disabled per-config).
         gen_cfg = self.config.generation
@@ -2991,6 +3005,8 @@ class LlamaCppBackend(BaseBackend):
                         tokens_generated=len(completion_tokens),
                     ) from e
                 prior_tokens.append(token)
+                if len(prior_tokens) > DETOK_TAIL:
+                    del prior_tokens[:-DETOK_TAIL]
                 acc_bytes += piece
 
                 # Stop-sequence detection — break the generation loop when the

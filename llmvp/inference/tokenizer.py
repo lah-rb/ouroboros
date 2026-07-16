@@ -147,8 +147,9 @@ def create_tokenizer() -> Any:
     """
     Create a tokenizer instance.
 
-    DEPRECATED: Use get_cached_tokenizer() for better performance.
-    This function is kept for backward compatibility.
+    Thin alias for get_cached_tokenizer() — the live entry point for
+    lifecycle/preprocessing callers (not deprecated; it always returns the
+    process-wide cached tokenizer).
 
     Returns:
         Tokenizer instance

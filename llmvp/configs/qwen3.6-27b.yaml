@@ -19,8 +19,6 @@ model:
   n_gpu_layers: -1   
   seed: -1
   verbose: false
-  flash_attention: true
-  batch_size: 512
   thinking: true
 
 prompt:

@@ -925,8 +925,25 @@ class SessionManager:
             ),
             "cache_hit": bool(getattr(_inst, "_last_cache_hit", False)),
             "flow_key": str(getattr(_inst, "_last_flow_key", "") or ""),
-            "prefill_ms": round((_diag.get("eval_duration", 0) or 0) * 1000, 1),
-            "decode_ms": round((_diag.get("generation_duration", 0) or 0) * 1000, 1),
+            # Prefer the per-stream wall spans (batched seats stash them —
+            # concurrency-accurate); the global tracker's single-generation
+            # timing is only correct when one stream runs at a time (pool).
+            # Mirrors run_completion; without this, batched SESSION turns
+            # reported another stream's phase timing under concurrency.
+            "prefill_ms": round(
+                (
+                    getattr(_inst, "_last_prefill_s", 0)
+                    or _diag.get("eval_duration", 0)
+                    or 0
+                ) * 1000, 1,
+            ),
+            "decode_ms": round(
+                (
+                    getattr(_inst, "_last_decode_s", 0)
+                    or _diag.get("generation_duration", 0)
+                    or 0
+                ) * 1000, 1,
+            ),
         }
 
         # Capture raw output for training before any post-processing
@@ -977,7 +994,7 @@ class SessionManager:
         log_interaction(
             prompt=prompt,
             response=text,
-            mode=f"session:{session_id}:turn{session.turn_count if (session := self._sessions.get(session_id)) else '?'}",
+            mode=f"session:{session_id}:turn{_sess.turn_count if _sess else '?'}",
             extra={
                 "raw_text": raw_text,
                 "raw_length": len(raw_text),

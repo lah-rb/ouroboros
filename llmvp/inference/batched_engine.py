@@ -40,6 +40,11 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+from inference.decode_constants import (
+    BUFFER_MODE_MAX_TOKENS,
+    DETOK_TAIL,
+    STOP_TAIL_SLACK,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +264,7 @@ class TokenPipeline:
         self._llama = llama
         self._stop_bytes = [s.encode("utf-8") for s in stop_texts]
         max_stop_len = max((len(sb) for sb in self._stop_bytes), default=0)
-        self._stop_tail = max_stop_len + 8
+        self._stop_tail = max_stop_len + STOP_TAIL_SLACK
         self._guard = guard
         self._final_stop = final_stop
         self._long_cycle_on = long_cycle_on
@@ -302,8 +307,8 @@ class TokenPipeline:
         except Exception as e:  # noqa: BLE001 — convert to controlled abort
             return Verdict(degenerate=f"detokenization failed: {e}")
         self._prior_tail.append(token)
-        if len(self._prior_tail) > 16:
-            del self._prior_tail[:-16]
+        if len(self._prior_tail) > DETOK_TAIL:
+            del self._prior_tail[:-DETOK_TAIL]
         self.acc_bytes += piece
 
         should_stop = any(
@@ -609,7 +614,7 @@ class BatchedEngine:
             )
             return
         effective_max = min(req.max_tokens, (n_ctx - total) if n_ctx else req.max_tokens)
-        buffer_mode = effective_max <= 16
+        buffer_mode = effective_max <= BUFFER_MODE_MAX_TOKENS
 
         try:
             sampling = self._sampler_factory(req)

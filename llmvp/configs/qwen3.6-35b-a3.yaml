@@ -22,11 +22,9 @@ model:
   n_gpu_layers: -1
   seed: -1
   verbose: false
-  flash_attention: true
   flow_kv_cache: true
   kv_unified: true
   swa_full: true
-  batch_size: 512
   # Qwen3.6 is an ALWAYS-ON thinking model — it emits <think>…</think> every
   # turn and cannot be suppressed. With thinking:false LLMVP tried to gate the
   # reasoning off, so the model's unseparated thinking bled into the answer

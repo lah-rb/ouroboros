@@ -25,11 +25,9 @@ model:
   n_gpu_layers: -1
   seed: -1
   verbose: false
-  flash_attention: true
   flow_kv_cache: true
   kv_unified: true
   swa_full: true
-  batch_size: 512
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

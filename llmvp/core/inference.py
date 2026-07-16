@@ -58,6 +58,26 @@ class CompletionOutcome:
     decode_ms: float = 0.0
 
 
+
+def resolve_max_tokens(requested: "int | None") -> int:
+    """Canonical request→config→256 max_tokens chain (single source of truth;
+    previously copy-pasted at every completion entry point)."""
+    return requested or config.generation.max_tokens_default or 256
+
+
+def resolve_temperature(requested: "float | None", label: str = "Completion") -> float:
+    """Canonical temperature chain + the global per-model floor (a refusal to
+    sample below the configured value for ANY request kind — see
+    GenerationConfig). Logs when the floor engages."""
+    from core.session_manager import _global_temperature_floor
+
+    temperature = requested or config.generation.temperature_default or 0.7
+    floored = _global_temperature_floor(temperature, config.generation)
+    if floored != temperature:
+        log.info("🌡️ %s: global temperature floor %.2f -> %.2f", label, temperature, floored)
+    return floored
+
+
 def _get_delimiter() -> str:
     """Get the delimiter pattern from the format schema."""
     return _get_format_renderer(config.model.family).delimiter_pattern()
@@ -68,48 +88,6 @@ def _render_dynamic_prompt(user_prompt: str) -> str:
     renderer = _get_format_renderer(config.model.family)
     return renderer.render_user(user_prompt) + renderer.render_generation_prompt()
 
-
-def _compile_delimiter_pattern(delim: str) -> "re.Pattern | None":
-    """Compile a delimiter string into a regex pattern.
-
-    Supports glob-style ``*`` wildcards so that a delimiter like
-    ``<|start|>assistant<|channel|>*<|message|>`` matches regardless
-    of what the model inserts between the fixed parts (e.g.
-    ``<|channel|>final <|constrain|>json<|message|>``).
-
-    Returns ``None`` if *delim* is empty.  The compiled pattern is
-    suitable for ``re.search()`` / ``re.finditer()`` against model
-    output.
-
-    IMPORTANT: When the output contains multiple channel transitions,
-    callers should use the **last** match (``list(pattern.finditer(text))[-1]``)
-    to find the final channel, not ``pattern.search()`` which returns
-    the first.
-    """
-    import re
-
-    if not delim:
-        return None
-    # Escape everything except our glob wildcard
-    parts = delim.split("*")
-    regex = ".*?".join(re.escape(p) for p in parts)
-    return re.compile(regex)
-
-
-def _find_delimiter(pattern: "re.Pattern", text: str) -> "re.Match | None":
-    """Find the last occurrence of a delimiter pattern in text.
-
-    Uses the last match because models with multiple channels (e.g.
-    analysis → final) emit several ``<|start|>assistant<|channel|>``
-    transitions, and the response content follows the *last* one.
-    """
-    matches = list(pattern.finditer(text))
-    return matches[-1] if matches else None
-
-
-# Note: _compile_delimiter_pattern and _find_delimiter above are still
-# used by session_manager.session_turn() for streaming delimiter detection.
-# They are NOT used by _strip_delimiter, which uses the FSM labeller.
 
 # Module-level FSM family cache — determined once from config at first use.
 _fsm_family: "str | None" = None
@@ -281,20 +259,8 @@ async def run_completion(
     if not prompt:
         raise ValueError("`prompt` must be a non-empty string")
 
-    max_tokens = max_tokens or config.generation.max_tokens_default or 256
-    temperature = temperature or config.generation.temperature_default or 0.7
-    # Global per-model temperature floor — a refusal to sample below the
-    # configured value for ANY request kind (see GenerationConfig).
-    from core.session_manager import _global_temperature_floor
-
-    _floored = _global_temperature_floor(temperature, config.generation)
-    if _floored != temperature:
-        log.info(
-            "🌡️ Completion: global temperature floor %.2f -> %.2f",
-            temperature,
-            _floored,
-        )
-        temperature = _floored
+    max_tokens = resolve_max_tokens(max_tokens)
+    temperature = resolve_temperature(temperature)
 
     static_tokens = static_tokens_manager.get_static_tokens()
 
@@ -457,20 +423,8 @@ async def run_raw_completion(
     if not prompt:
         raise ValueError("`prompt` must be a non-empty string")
 
-    max_tokens = max_tokens or config.generation.max_tokens_default or 256
-    temperature = temperature or config.generation.temperature_default or 0.7
-    # Global per-model temperature floor — a refusal to sample below the
-    # configured value for ANY request kind (see GenerationConfig).
-    from core.session_manager import _global_temperature_floor
-
-    _floored = _global_temperature_floor(temperature, config.generation)
-    if _floored != temperature:
-        log.info(
-            "🌡️ Completion: global temperature floor %.2f -> %.2f",
-            temperature,
-            _floored,
-        )
-        temperature = _floored
+    max_tokens = resolve_max_tokens(max_tokens)
+    temperature = resolve_temperature(temperature)
 
     static_tokens = static_tokens_manager.get_static_tokens()
 
@@ -540,20 +494,8 @@ async def stream_completion(
     if not prompt:
         raise ValueError("`prompt` must be a non-empty string")
 
-    max_tokens = max_tokens or config.generation.max_tokens_default or 256
-    temperature = temperature or config.generation.temperature_default or 0.7
-    # Global per-model temperature floor — a refusal to sample below the
-    # configured value for ANY request kind (see GenerationConfig).
-    from core.session_manager import _global_temperature_floor
-
-    _floored = _global_temperature_floor(temperature, config.generation)
-    if _floored != temperature:
-        log.info(
-            "🌡️ Completion: global temperature floor %.2f -> %.2f",
-            temperature,
-            _floored,
-        )
-        temperature = _floored
+    max_tokens = resolve_max_tokens(max_tokens)
+    temperature = resolve_temperature(temperature)
 
     static_tokens = static_tokens_manager.get_static_tokens()
 
@@ -709,11 +651,9 @@ async def run_chat_completion(
     if not isinstance(messages, list) or not messages:
         raise ValueError("`messages` must be a non-empty list")
 
-    max_tokens = max_tokens or config.generation.max_tokens_default or 256
+    max_tokens = resolve_max_tokens(max_tokens)
     temperature = temperature or config.generation.temperature_default or 0.7
-    from core.session_manager import _global_temperature_floor
-
-    temperature = _global_temperature_floor(temperature, config.generation)
+    temperature = resolve_temperature(temperature, label="ChatCompletion")
 
     # Build complete prompt BEFORE acquiring instance (mirror run_completion /
     # run_tool_completion: static knowledge prefix + rendered conversation).
@@ -771,7 +711,7 @@ async def run_tool_completion(
     if not tools_cfg.enabled:
         return await run_completion(prompt, max_tokens, temperature)
 
-    max_tokens = max_tokens or config.generation.max_tokens_default or 256
+    max_tokens = resolve_max_tokens(max_tokens)
     temperature = temperature or config.generation.temperature_default or 0.7
     registry = get_registry()
 
@@ -815,20 +755,20 @@ async def run_tool_completion(
             # No tool call — we're done
             log_interaction(prompt=prompt, response=answer, mode="tool")
             return CompletionOutcome(
-            text=answer,
-            tokens_generated=total_tokens,
-            generated_tokens=total_tokens,
-        )
+                text=answer,
+                tokens_generated=total_tokens,
+                generated_tokens=total_tokens,
+            )
 
         tc = parse_tool_call(answer)
         if tc is None:
             # Malformed tool call — return as-is
             log_interaction(prompt=prompt, response=answer, mode="tool")
             return CompletionOutcome(
-            text=answer,
-            tokens_generated=total_tokens,
-            generated_tokens=total_tokens,
-        )
+                text=answer,
+                tokens_generated=total_tokens,
+                generated_tokens=total_tokens,
+            )
 
         # Execute the tool
         log.info("🔧 Tool call [iter %d]: %s(%s)", iteration + 1, tc.name, tc.params)
@@ -851,7 +791,13 @@ async def run_tool_completion(
     # Exhausted iterations — return last answer
     log.warning("⚠️ Tool loop hit max iterations (%d)", tools_cfg.max_iterations)
     log_interaction(prompt=prompt, response=answer, mode="tool-max-iter")
-    return answer, total_tokens
+    # Same shape as every other exit — the GraphQL resolver reads .text, so a
+    # bare tuple here crashed completion(use_tools=true) on iteration exhaustion.
+    return CompletionOutcome(
+        text=answer,
+        tokens_generated=total_tokens,
+        generated_tokens=total_tokens,
+    )
 
 
 async def stream_tool_completion(
@@ -888,7 +834,7 @@ async def stream_tool_completion(
             yield chunk
         return
 
-    max_tokens = max_tokens or config.generation.max_tokens_default or 256
+    max_tokens = resolve_max_tokens(max_tokens)
     temperature = temperature or config.generation.temperature_default or 0.7
     registry = get_registry()
 
