@@ -13,6 +13,7 @@ import glob
 import logging
 import os
 import re
+import signal
 import sys
 import time
 from collections import deque
@@ -509,6 +510,14 @@ class LocalEffects:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=self._command_env(),
+                # Own process group: on timeout the WHOLE tree must die, not
+                # just the direct child. `/bin/sh -c` forks for heredoc
+                # commands, so killing sh alone orphans the real work with the
+                # stdout/stderr pipes still open — and the post-kill drain
+                # below then waits for a pipe EOF that never comes (the
+                # 72-minute adventure/baseline wedge: an LLM-derived
+                # acceptance check deadlocked against the game it spawned).
+                start_new_session=True,
             )
 
             try:
@@ -520,8 +529,18 @@ class LocalEffects:
                 rc_out = proc.returncode or 0
                 to_out = False
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.communicate()
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    proc.kill()
+                try:
+                    # Bounded drain: a descendant that escaped the group kill
+                    # (double-fork into a new session) can still hold the
+                    # pipes open; never let the drain block the mission.
+                    await asyncio.wait_for(proc.communicate(), timeout=5)
+                except (asyncio.TimeoutError, ProcessLookupError):
+                    if proc._transport is not None:  # abandon the pipes
+                        proc._transport.close()
                 st_out = ""
                 err_out = f"Command timed out after {timeout}s"
                 rc_out = -1
