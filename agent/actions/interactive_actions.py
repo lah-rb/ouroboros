@@ -129,11 +129,10 @@ async def action_start_interactive_session(step_input: StepInput) -> StepOutput:
     # program runs under the per-project interpreter — not whatever bare `python`
     # resolves to on the ambient PATH. The PTY merges these over its base env.
     pty_env: dict = dict(env_vars) if isinstance(env_vars, dict) else {}
-    if hasattr(effects, "venv_env_overrides"):
-        try:
-            pty_env.update(effects.venv_env_overrides() or {})
-        except Exception:  # noqa: BLE001 - activation is best-effort
-            pass
+    try:
+        pty_env.update(effects.venv_env_overrides() or {})
+    except Exception:  # noqa: BLE001 - activation is best-effort
+        pass
 
     expected_prompt = params.get("expected_prompt", "")
     try:

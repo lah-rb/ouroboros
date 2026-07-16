@@ -31,6 +31,7 @@ from agent.trace import (
     FlowReturn,
     count_tokens,
     step_context,
+    trace_enabled,
 )
 from agent.models import (
     FlowDefinition,
@@ -290,7 +291,7 @@ async def execute_flow(
     # Extract trace context from synthetic inputs (set by loop.py)
     _trace_mission_id = inputs.get("mission_id", "")
     _trace_cycle = inputs.get("_trace_cycle", 0)
-    _can_trace = effects is not None and hasattr(effects, "emit_trace")
+    _can_trace = trace_enabled(effects)
 
     # Main execution loop
     try:
@@ -780,7 +781,7 @@ async def _execute_subflow_action(
     )
 
     # ── Trace: FlowInvoke ─────────────────────────────────────
-    _can_trace = effects is not None and hasattr(effects, "emit_trace")
+    _can_trace = trace_enabled(effects)
     if _can_trace:
         await effects.emit_trace(
             FlowInvoke(
@@ -1050,7 +1051,7 @@ async def _execute_inference_action(
     # judge_step, which reuses run_session's session). We gate on
     # actually_session (not session_id) so a session_id-set-but-no-session
     # fallthrough still gets traced. Mirrors the turn-based path below.
-    _can_trace = hasattr(effects, "emit_trace") and not actually_session
+    _can_trace = trace_enabled(effects) and not actually_session
     if _can_trace:
         await effects.emit_trace(
             InferenceCall(
@@ -1292,7 +1293,7 @@ async def _execute_turn_inference(
         # own InferenceCall trace event with correct timing and context,
         # so duplicating it here would produce two rows per inference in
         # the trace (inflating cost reports). See LocalEffects.session_inference.
-        if hasattr(effects, "emit_trace") and not actually_session:
+        if trace_enabled(effects) and not actually_session:
             # One-time setup costs (render/pre_compute/injection) happen before
             # the retry loop — attribute them to the first attempt only so
             # retries don't multi-count them.

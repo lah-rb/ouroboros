@@ -647,6 +647,23 @@ class MockEffects:
         self._record("clear_events", {}, True)
         return True
 
+    async def archive_overflow(self, mission: Any) -> None:
+        """Archive mission-state overflow via the mock's persistence manager
+        (a real PersistenceManager over a temp dir), best-effort — mirrors
+        LocalEffects so archive-sweep behavior is testable."""
+        try:
+            from agent.persistence.archive import archive_mission_overflow
+
+            archive_mission_overflow(self._get_persistence().agent_dir, mission)
+        except AttributeError:
+            pass  # mock configured without a persistence dir
+        except Exception:
+            pass
+
+    def venv_env_overrides(self) -> dict[str, str]:
+        """No project venv in tests — inherited environment unchanged."""
+        return {}
+
     async def push_note(
         self,
         content: str,

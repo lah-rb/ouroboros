@@ -29,7 +29,7 @@ import time
 from typing import Any
 
 
-from agent.trace import InferenceCall, count_tokens
+from agent.trace import InferenceCall, count_tokens, trace_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +340,7 @@ async def resolve_llm_menu(
     option_names = list(options.keys())
 
     # Trace helpers
-    _can_trace = hasattr(effects, "emit_trace")
+    _can_trace = trace_enabled(effects)
     _t_mission = meta.get("mission_id", "") if meta else ""
     _t_cycle = meta.get("_trace_cycle", 0) if meta else 0
     _t_flow = meta.get("flow_name", "") if meta else ""
@@ -514,24 +514,6 @@ async def resolve_llm_menu(
         context[publish_key] = fallback
     return _resolve_option_target(fallback, resolver_def)
 
-
-def _resolve_multi_select_target(
-    selected: list[str],
-    resolver_def: dict,
-) -> str:
-    """Determine the transition target for multi-select.
-
-    Uses 'target' from resolver_def if specified, otherwise
-    'items_selected' or 'none_selected' based on selection count.
-    """
-    explicit_target = resolver_def.get("target")
-    if explicit_target:
-        return explicit_target
-
-    if selected:
-        return resolver_def.get("target_selected", "items_selected")
-    else:
-        return resolver_def.get("target_none", "none_selected")
 
 
 def _resolve_option_target(

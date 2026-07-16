@@ -16,6 +16,15 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 
 
+def trace_enabled(effects) -> bool:
+    """Whether an effects object can receive trace events.
+
+    The single guard for the emit_trace capability check that was
+    previously re-derived inline at every emission site.
+    """
+    return effects is not None and hasattr(effects, "emit_trace")
+
+
 def count_tokens(text: str) -> int:
     """Approximate token count via whitespace splitting.
 

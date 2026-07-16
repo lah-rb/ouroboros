@@ -41,6 +41,7 @@ Numeric tokenization mirrors tools/pdf_extract/extract_batch.py
 """
 
 from __future__ import annotations
+from agent.paths import repo_root as _repo_root
 
 import difflib
 import json
@@ -312,11 +313,6 @@ _FIG_TOOL_SCRIPT = "tools/fig_review/fig_review.py"
 FIG_MODEL = "mlx-community/Qwen3-VL-8B-Instruct-8bit"
 
 
-def _repo_root() -> str:
-    import os
-
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 
 def _active_text_model() -> str:
     """The LLMVP config name serving this run (per-paper provenance —
@@ -325,6 +321,8 @@ def _active_text_model() -> str:
     import os
 
     try:
+        # Sanctioned raw read: repo-level server config OUTSIDE the workspace
+        # root — the workspace-scoped effects seam cannot reach it by design.
         path = os.path.join(_repo_root(), "llmvp", "active_config.txt")
         return open(path).read().strip() or "unknown"
     except OSError:

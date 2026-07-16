@@ -561,16 +561,8 @@ async def action_attach_directive_report(step_input: StepInput) -> StepOutput:
     # sites: completed goals' reports/attempts RELOCATE to append-only
     # JSONL (never deleted), rolling notes/dispatch overflow beyond
     # their caps. Runs every cycle in every flow set's control loop.
-    if effects:
-        try:
-            from agent.persistence.archive import archive_mission_overflow
-
-            pm = effects._get_persistence()
-            archive_mission_overflow(pm.agent_dir, mission)
-        except AttributeError:
-            pass  # effects without a persistence dir (mock paths archive in-memory via save)
-        except Exception:
-            logger.exception("archive sweep failed — records stay in mission.json")
+    if effects and hasattr(effects, "archive_overflow"):
+        await effects.archive_overflow(mission)
 
     # Save updated state
     if effects:

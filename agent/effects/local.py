@@ -1485,6 +1485,19 @@ class LocalEffects:
         self._log_entry("clear_events", "", str(success), start)
         return success
 
+    async def archive_overflow(self, mission: Any) -> None:
+        """Archive mission-state overflow to sidecar files, best-effort.
+
+        Never raises: an archive failure means records stay in mission.json,
+        which is safe (just larger).
+        """
+        try:
+            from agent.persistence.archive import archive_mission_overflow
+
+            archive_mission_overflow(self._get_persistence().agent_dir, mission)
+        except Exception:
+            logger.exception("archive sweep failed — records stay in mission.json")
+
     async def push_note(
         self,
         content: str,

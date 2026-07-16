@@ -15,6 +15,7 @@ from typing import Any
 
 from agent.actions.check_result import check_result
 from agent.models import StepInput, StepOutput
+from agent.paths import repo_root as _sidecar_repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -231,11 +232,6 @@ _ASR_TOOL_SCRIPT = "tools/audio_transcribe/audio_transcribe.py"
 _VL_SIDECAR_TIMEOUT_S = 300
 _ASR_SIDECAR_TIMEOUT_S = 1800
 
-
-def _sidecar_repo_root() -> str:
-    import os
-
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _sidecar_prompt(objective: str) -> str:
@@ -905,16 +901,6 @@ def _parse_validation_strategy(raw: str, max_checks: int) -> list[dict]:
 # ── load_file_contents ────────────────────────────────────────────────
 
 
-# ── apply_plan_revision ───────────────────────────────────────────────
-
-
-def _parse_revision(raw: str) -> dict:
-    """Parse revision plan from LLM response."""
-    from agent.llm_json import parse_llm_json
-
-    data = parse_llm_json(raw)
-    return data if isinstance(data, dict) else {}
-
 
 # ── log_validation_notes ──────────────────────────────────────────────
 
@@ -1368,26 +1354,3 @@ def _normalize_repro(raw: Any) -> list[str]:
 # ── validate_created_files ────────────────────────────────────────────
 
 
-# ── filepath_to_module helper ─────────────────────────────────────────
-
-
-def _filepath_to_module(filepath: str) -> str | None:
-    """Convert a file path to a Python module name.
-
-    app/main.py → app.main
-    src/utils/helpers.py → src.utils.helpers
-    script.py → script
-    __init__.py → (None — can't import directly)
-    """
-    if not filepath.endswith(".py"):
-        return None
-    # Strip .py extension
-    module = filepath[:-3]
-    # Skip __init__ files
-    if module.endswith("__init__"):
-        return None
-    # Convert path separators to dots
-    module = module.replace("/", ".").replace("\\", ".")
-    # Strip leading dots
-    module = module.lstrip(".")
-    return module if module else None

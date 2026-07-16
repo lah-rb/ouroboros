@@ -29,7 +29,7 @@ from agent.models import FlowDefinition, FlowResult
 from agent.runtime import execute_flow, init_prompt_renderer
 from agent.turn_renderer import EmptyMenuError
 from agent.tail_call import FlowOutcome, FlowTailCall, FlowTermination
-from agent.trace import CycleStart, CycleEnd
+from agent.trace import CycleStart, CycleEnd, trace_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -279,7 +279,7 @@ async def run_agent(
 
         # ── Trace: CycleStart ────────────────────────────────────
         cycle_start_time = time.monotonic()
-        if effects and hasattr(effects, "emit_trace"):
+        if trace_enabled(effects):
             await effects.emit_trace(
                 CycleStart(
                     mission_id=mission_id,
@@ -418,7 +418,7 @@ async def run_agent(
                 )
 
         # ── Trace: CycleEnd + flush ──────────────────────────────
-        if effects and hasattr(effects, "emit_trace"):
+        if trace_enabled(effects):
             is_tail_call = isinstance(outcome, FlowTailCall)
             await effects.emit_trace(
                 CycleEnd(

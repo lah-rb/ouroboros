@@ -96,6 +96,8 @@ def _s2_key() -> str:
     key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "").strip()
     if not key:
         try:
+        # Sanctioned raw read: host-level API-key file OUTSIDE the workspace
+        # root — the workspace-scoped effects seam cannot reach it by design.
             key = open(os.path.expanduser(_S2_KEY_FILE)).read().strip()
         except OSError:
             key = ""

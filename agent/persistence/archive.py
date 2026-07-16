@@ -35,6 +35,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Iterator
+from agent.persistence.models import _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,6 @@ GOALS_SUBDIR = "goals"
 NOTES_CAP = 100
 DISPATCH_CAP = 50
 
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _archive_root(agent_dir: str) -> str:

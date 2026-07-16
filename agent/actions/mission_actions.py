@@ -599,16 +599,8 @@ async def action_finalize_mission(step_input: StepInput) -> StepOutput:
     # Terminal archive sweep: the per-cycle sweep (attach_directive_report)
     # never runs AFTER the final goal completes — this catches the last
     # goal's records before the run ends. Relocation, never deletion.
-    if effects:
-        try:
-            from agent.persistence.archive import archive_mission_overflow
-
-            pm = effects._get_persistence()
-            archive_mission_overflow(pm.agent_dir, mission)
-        except AttributeError:
-            pass  # effects without a persistence dir
-        except Exception:
-            logger.exception("terminal archive sweep failed")
+    if effects and hasattr(effects, "archive_overflow"):
+        await effects.archive_overflow(mission)
 
     if effects:
         await effects.save_mission(mission)

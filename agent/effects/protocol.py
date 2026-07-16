@@ -476,6 +476,36 @@ class Effects(Protocol):
         """
         ...
 
+    async def push_note(
+        self,
+        content: str,
+        category: str = "general",
+        tags: list[str] | None = None,
+        source_flow: str = "unknown",
+    ) -> bool:
+        """Append a note to the mission's notes list and persist.
+
+        Returns:
+            True on success.
+        """
+        ...
+
+    async def archive_overflow(self, mission: Any) -> None:
+        """Archive mission-state overflow (dispatch records, notes) beyond
+        the in-memory caps to sidecar files, best-effort.
+
+        Centralizes what two actions previously did by reaching into the
+        private persistence manager for its agent_dir.
+        """
+        ...
+
+    def venv_env_overrides(self) -> dict[str, str]:
+        """Env overrides activating the workspace's ``.venv`` when present
+        (VIRTUAL_ENV + PATH with the venv bin prepended). Empty dict when
+        there is no project venv — callers keep the inherited environment.
+        """
+        ...
+
     async def read_events(self) -> list:
         """Read pending events from the event queue.
 

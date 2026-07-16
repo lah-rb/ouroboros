@@ -117,31 +117,14 @@ async def action_read_files(step_input: StepInput) -> StepOutput:
                 context_updates={},
             )
 
-    # Fallback: direct I/O (Phase 1 compat)
-    try:
-        if os.path.exists(target):
-            with open(target, "r") as f:
-                content = f.read()
-            return StepOutput(
-                result={"file_found": True},
-                observations=f"Read {len(content)} characters from {target}",
-                context_updates={
-                    "target_file": {"path": target, "content": content},
-                    "related_files": [],
-                },
-            )
-        else:
-            return StepOutput(
-                result={"file_found": False},
-                observations=f"File not found: {target}",
-                context_updates={},
-            )
-    except Exception as e:
-        return StepOutput(
-            result={"file_found": False},
-            observations=f"Error reading {target}: {e}",
-            context_updates={},
-        )
+    # No effects: refuse rather than fall back to direct I/O — the loop
+    # always injects effects, and raw open() here is exactly the bypass the
+    # effects seam forbids (the old Phase-1 compat branch was unreachable).
+    return StepOutput(
+        result={"file_found": False},
+        observations="No effects available — file read skipped",
+        context_updates={},
+    )
 
 
 async def action_log_completion(step_input: StepInput) -> StepOutput:

@@ -20,6 +20,7 @@ import logging
 import os
 
 from agent.models import StepInput, StepOutput
+from agent.paths import repo_root as _repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +42,6 @@ _TOOL_PY = "tools/pdf_extract/.venv/bin/python"
 _TOOL_SCRIPT = "tools/pdf_extract/extract_batch.py"
 _TOOL_MODEL = "tools/pdf_extract/models/PaddleOCR-VL-1.6-MLX-8bit"
 
-
-def _repo_root() -> str:
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _extraction_pending(record: dict) -> bool:
