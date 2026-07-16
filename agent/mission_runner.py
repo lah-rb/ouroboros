@@ -34,6 +34,47 @@ from agent.paths import repo_root
 PARK_MARKER = "parked as paused"
 
 
+def build_and_save_mission(
+    agent_dir: str,
+    objective: str,
+    *,
+    working_directory: Optional[str] = None,
+    flow_set: str = "code_core",
+    status: str = "active",
+    pending_directive: Optional[str] = None,
+    **config_fields: Any,
+):
+    """Create + persist a mission — the boilerplate every adapter repeated.
+
+    ``agent_dir`` is where .agent/ lives (the PersistenceManager root);
+    ``working_directory`` is what the mission CONFIG records as the
+    workspace (defaults to agent_dir — the container adapters split the
+    two: host-side persistence, container-side working dir). Extra
+    keyword fields flow into MissionConfig verbatim (task_profile,
+    llmvp_endpoint, web_research, held_out_tests, ...). Entry-flow
+    selection stays caller-side — it is genuinely per-adapter routing.
+    Returns the saved MissionState.
+    """
+    from agent.persistence.manager import PersistenceManager
+    from agent.persistence.models import MissionConfig, MissionState
+
+    pm = PersistenceManager(agent_dir)
+    pm.init_agent_dir()
+    mission = MissionState(
+        objective=objective,
+        status=status,
+        config=MissionConfig(
+            working_directory=working_directory or agent_dir,
+            flow_set=flow_set,
+            **config_fields,
+        ),
+    )
+    if pending_directive is not None:
+        mission.pending_directive = pending_directive
+    pm.save_mission(mission)
+    return mission
+
+
 @dataclass
 class MissionRunOutcome:
     """How the mission loop ended.

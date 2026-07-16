@@ -29,10 +29,22 @@ from __future__ import annotations
 # Byte markers (UTF-8). Matching on the cumulative byte accumulator's tail keeps
 # this whitespace-insensitive and split-token safe, exactly like the backend's
 # substring stop machinery.
-_CHANNEL = b"<|channel|>"
-_MESSAGE = b"<|message|>"
-_END = b"<|end|>"
-_FINAL = b"final"
+def _harmony_markers() -> tuple[bytes, bytes, bytes, bytes]:
+    """(channel, message, end, final) sourced from the harmony format
+    schema — the single declaration (formats/harmony.yaml) all structural
+    parsers share, so a template change cannot desync this detector."""
+    from formats.registry import get_renderer
+
+    s = get_renderer("harmony").s
+    return (
+        s.thinking.channel_token.encode("utf-8"),
+        s.tokens.msg_content.encode("utf-8"),
+        s.tokens.msg_close.encode("utf-8"),
+        s.thinking.content_channel.encode("utf-8"),
+    )
+
+
+_CHANNEL, _MESSAGE, _END, _FINAL = _harmony_markers()
 
 
 class FinalChannelStop:

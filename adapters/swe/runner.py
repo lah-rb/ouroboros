@@ -14,10 +14,8 @@ a `finally` no matter how the mission ends.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-import shutil
 import sys
 import tempfile
 
@@ -28,7 +26,10 @@ if _REPO_ROOT not in sys.path:
 from adapters.swe.instance import SweInstance  # noqa: E402
 from adapters.swe.patch import extract_model_patch, prediction_row  # noqa: E402
 from adapters._common import llmvp_endpoint, preserve_agent_dir, prune_mode, remove_image  # noqa: E402
-from agent.mission_runner import run_mission_isolated  # noqa: E402
+from agent.mission_runner import (  # noqa: E402
+    build_and_save_mission,
+    run_mission_isolated,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,31 +55,23 @@ def build_mission(instance: SweInstance, host_tmp: str):
     profile — no LLM flow-set judge (SWE-bench is always code_core + repair).
     Returns (mission, entry_flow).
     """
-    from agent.persistence.manager import PersistenceManager
-    from agent.persistence.models import MissionConfig, MissionState
 
-    pm = PersistenceManager(host_tmp)
-    pm.init_agent_dir()
-    mission = MissionState(
-        objective=instance.problem_statement,
-        status="active",
-        config=MissionConfig(
-            working_directory=REPO_DIR,
-            flow_set="code_core",
-            task_profile="repair",
-            llmvp_endpoint=_LLMVP,
-            web_research=False,  # hermetic — no confounding network reach
-            held_out_tests=True,  # SWE-bench applies the regression test itself
-        ),
-    )
     # code_core ADOPTS the foreign repo: ingest_workspace scans + extracts the
     # existing architecture, then mission_control sees the pending directive →
     # replan → the functional repair sweep against the real files. No greenfield
     # design. (Exactly the head-to-head path that solved langcodes.)
-    mission.pending_directive = instance.problem_statement
-    entry_flow = "ingest_workspace"
-    pm.save_mission(mission)
-    return mission, entry_flow
+    mission = build_and_save_mission(
+        host_tmp,
+        instance.problem_statement,
+        working_directory=REPO_DIR,
+        flow_set="code_core",
+        pending_directive=instance.problem_statement,
+        task_profile="repair",
+        llmvp_endpoint=_LLMVP,
+        web_research=False,  # hermetic — no confounding network reach
+        held_out_tests=True,  # SWE-bench applies the regression test itself
+    )
+    return mission, "ingest_workspace"
 
 
 def _docker_client():

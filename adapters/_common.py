@@ -78,3 +78,43 @@ def remove_image(client, image: str, label: str = "") -> None:
         log.info("%spruned image %s", prefix, image)
     except Exception as e:  # noqa: BLE001
         log.warning("%simage prune failed for %s: %s", prefix, image, e)
+
+
+class IncrementalPredictions:
+    """Resume-able predictions JSONL: load done ids, append one row per
+    finish. The shared contract behind the SWE and GAIA runners' resume
+    (previously two hand-rolled implementations with drift — one tolerated
+    malformed lines, the other crashed on them; this one tolerates)."""
+
+    def __init__(self, path: str, id_key: str, load: bool = True):
+        import json
+        import os
+
+        self.path = path
+        self.id_key = id_key
+        self.rows: list[dict] = []
+        self.done: set[str] = set()
+        if load and os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    rid = str(row.get(id_key, "") or "")
+                    if rid and rid not in self.done:
+                        self.done.add(rid)
+                        self.rows.append(row)
+
+    def append(self, row: dict) -> None:
+        import json
+
+        self.rows.append(row)
+        rid = str(row.get(self.id_key, "") or "")
+        if rid:
+            self.done.add(rid)
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")

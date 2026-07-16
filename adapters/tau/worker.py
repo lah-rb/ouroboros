@@ -19,15 +19,16 @@ import asyncio
 import logging
 import os
 import shutil
-import subprocess
-import sys
 import tempfile
 from typing import List, Optional
 
 from agent.chat.env import WorkerReport
 from adapters.tau.bridge import TAU_CLI_TEMPLATE
 from adapters._common import llmvp_endpoint as llmvp_endpoint_default, preserve_agent_dir, seed_workspace_venv  # noqa: E402
-from agent.mission_runner import run_mission_isolated  # noqa: E402
+from agent.mission_runner import (  # noqa: E402
+    build_and_save_mission,
+    run_mission_isolated,
+)
 
 log = logging.getLogger(__name__)
 
@@ -140,24 +141,16 @@ class MissionWorker:
     def _run_mission_blocking(self, objective: str) -> bool:
         from agent.effects.local import LocalEffects
         from agent.flow_sets import get_flow_set
-        from agent.persistence.manager import PersistenceManager
-        from agent.persistence.models import MissionConfig, MissionState
 
         self.mission_runs += 1
-        pm = PersistenceManager(self.workspace)
-        pm.init_agent_dir()
-        mission = MissionState(
-            objective=objective,
-            status="active",
-            config=MissionConfig(
-                working_directory=self.workspace,
-                flow_set="ops",
-                task_profile="task",
-                llmvp_endpoint=self.llmvp_endpoint,
-                web_research=False,
-            ),
+        mission = build_and_save_mission(
+            self.workspace,
+            objective,
+            flow_set="ops",
+            task_profile="task",
+            llmvp_endpoint=self.llmvp_endpoint,
+            web_research=False,
         )
-        pm.save_mission(mission)
         effects = LocalEffects(
             working_directory=self.workspace, llmvp_endpoint=self.llmvp_endpoint
         )

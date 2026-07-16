@@ -9,6 +9,7 @@ locally with the official quasi-exact matcher as it goes).
 """
 
 from __future__ import annotations
+from adapters._common import IncrementalPredictions
 
 import argparse
 import json
@@ -57,15 +58,13 @@ def main() -> None:
     os.makedirs(logs_dir, exist_ok=True)
     preds_path = os.path.join(out_dir, "predictions.jsonl")
 
-    done: set[str] = set()
-    rows: list[dict] = []
-    if args.resume and os.path.exists(preds_path):
-        with open(preds_path) as f:
-            for line in f:
-                row = json.loads(line)
-                rows.append(row)
-                done.add(row["task_id"])
-        print(f"[resume] {len(done)} already done")
+    # Resume-able predictions: shared loader/appender (adapters._common).
+    # A fresh run starts empty (load=False) but appends to the same path.
+    preds = IncrementalPredictions(preds_path, id_key="task_id", load=args.resume)
+    if args.resume:
+        print(f"[resume] {len(preds.done)} already done")
+    done = preds.done
+    rows = preds.rows
 
     gold = {q.task_id: q.final_answer for q in questions}
     todo = [q for q in questions if q.task_id not in done]
@@ -76,9 +75,7 @@ def main() -> None:
         row = run_question(q, logs_dir, wall_clock_s=args.wall)
         if scorable:
             row["correct"] = question_scorer(row["model_answer"], gold[q.task_id])
-        rows.append(row)
-        with open(preds_path, "a") as f:
-            f.write(json.dumps(row) + "\n")
+        preds.append(row)
         if scorable:
             n_ok = sum(1 for r in rows if r.get("correct"))
             print(f"    -> {row['model_answer']!r}  "

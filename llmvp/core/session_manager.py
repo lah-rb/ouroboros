@@ -84,12 +84,19 @@ def reasoning_span(
         return (t0, "") if t0 >= 0 else None
 
     if family == "harmony":
-        chan_id = sid("<|channel|>")
+        # Markers sourced from the harmony schema (single declaration —
+        # see formats/harmony.yaml + inference/final_channel_stop.py).
+        _s = _get_format_renderer("harmony").s
+        _chan_tok = _s.thinking.channel_token
+        chan_id = sid(_chan_tok)
         if chan_id is None or sum(1 for t in gen_tokens if t == chan_id) < 2:
             return None  # no analysis/commentary channel → nothing to strip
         # Keep the gen-prompt "<|start|>assistant"; drop ALL generated channels
         # (analysis/commentary/final), then replay the canonical final channel.
-        return (gen_start_pos, "<|channel|>final<|message|>")
+        return (
+            gen_start_pos,
+            f"{_chan_tok}{_s.thinking.content_channel}{_s.tokens.msg_content}",
+        )
 
     if family == "gemma":
         if sid("<channel|>") not in gen_tokens:

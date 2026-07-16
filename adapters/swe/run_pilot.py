@@ -22,32 +22,7 @@ if _REPO_ROOT not in sys.path:
 
 from adapters.swe.evaluate import write_gold_predictions, write_predictions  # noqa: E402
 from adapters.swe.instance import PILOT_INSTANCES, load_instances  # noqa: E402
-
-
-def _resume_done_ids(preds_path: str) -> tuple[list[dict], set[str]]:
-    """Rows already written for this run (incremental predictions survive a
-    mid-run stop) → (rows, done-id-set). A resumed marathon skips these instead
-    of re-running them, so an overnight run that was interrupted continues."""
-    rows: list[dict] = []
-    done: set[str] = set()
-    if not os.path.isfile(preds_path):
-        return rows, done
-    import json
-
-    with open(preds_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except Exception:
-                continue
-            iid = str(row.get("instance_id", "") or "")
-            if iid and iid not in done:
-                done.add(iid)
-                rows.append(row)
-    return rows, done
+from adapters._common import IncrementalPredictions
 
 
 def main() -> None:
@@ -100,10 +75,11 @@ def main() -> None:
         return
 
     # Resume: seed rows with what's already graded-out, skip those ids.
-    rows: list[dict] = []
-    done: set[str] = set()
+    # Shared resume loader (adapters._common); SWE keeps its own writer
+    # (write_predictions — the official predictions format, full rewrite).
+    preds = IncrementalPredictions(preds_path, id_key="instance_id", load=args.resume)
+    rows, done = preds.rows, preds.done
     if args.resume:
-        rows, done = _resume_done_ids(preds_path)
         if done:
             print(f"resume: {len(done)} instance(s) already done — skipping", flush=True)
         ids = [i for i in ids if i not in done]

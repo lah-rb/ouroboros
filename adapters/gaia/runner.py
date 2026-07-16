@@ -9,17 +9,18 @@ final answer string to ./answer.txt in its workspace.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 
 from adapters.gaia.loader import GaiaQuestion
 from adapters._common import llmvp_endpoint, preserve_agent_dir, seed_workspace_venv  # noqa: E402
-from agent.mission_runner import run_mission_isolated  # noqa: E402
+from agent.mission_runner import (  # noqa: E402
+    build_and_save_mission,
+    run_mission_isolated,
+)
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -122,11 +123,6 @@ def build_mission(question: GaiaQuestion, workspace: str):
     (mission, entry_flow).
     """
     from agent.flow_sets import get_flow_set
-    from agent.persistence.manager import PersistenceManager
-    from agent.persistence.models import MissionConfig, MissionState
-
-    pm = PersistenceManager(workspace)
-    pm.init_agent_dir()
 
     file_note, vision, audio = "", False, False
     if question.has_file:
@@ -136,20 +132,16 @@ def build_mission(question: GaiaQuestion, workspace: str):
             " (already present in the working directory)."
             f"{tool_note}"
         )
-    mission = MissionState(
-        objective=f"{question.question}{file_note}\n\n{_ANSWER_CONTRACT}",
-        status="active",
-        config=MissionConfig(
-            working_directory=workspace,
-            flow_set="ops",
-            task_profile="task",
-            llmvp_endpoint=_LLMVP,
-            web_research=True,  # GAIA IS a web-research benchmark
-            vision=vision,
-            audio=audio,
-        ),
+    mission = build_and_save_mission(
+        workspace,
+        f"{question.question}{file_note}\n\n{_ANSWER_CONTRACT}",
+        flow_set="ops",
+        task_profile="task",
+        llmvp_endpoint=_LLMVP,
+        web_research=True,  # GAIA IS a web-research benchmark
+        vision=vision,
+        audio=audio,
     )
-    pm.save_mission(mission)
     return mission, get_flow_set("ops").entry_flow
 
 

@@ -27,12 +27,8 @@ Invoke ``tb`` from the repo root so ``agent.*`` / ``adapters.tb.*`` import.
 
 from __future__ import annotations
 
-import asyncio
 import glob
-import json
 import os
-import re
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -41,7 +37,10 @@ from terminal_bench.agents.base_agent import AgentResult, BaseAgent
 from terminal_bench.agents.failure_mode import FailureMode
 from terminal_bench.terminal.tmux_session import TmuxSession
 from adapters._common import llmvp_endpoint, preserve_agent_dir  # noqa: E402
-from agent.mission_runner import run_mission_isolated  # noqa: E402
+from agent.mission_runner import (  # noqa: E402
+    build_and_save_mission,
+    run_mission_isolated,
+)
 from adapters.tb.base import (  # noqa: E402
     extract_deps,
     mirror_test_env,
@@ -90,8 +89,6 @@ class OuroborosAgent(BaseAgent):
         logging_dir: Path | None = None,
     ) -> AgentResult:
         from agent.flow_sets import get_flow_set
-        from agent.persistence.manager import PersistenceManager
-        from agent.persistence.models import MissionConfig, MissionState
 
         from adapters.tb.container_effects import ContainerEffects
         from adapters.tb.image_prune import note_task_image
@@ -130,32 +127,27 @@ class OuroborosAgent(BaseAgent):
         override = os.environ.get("OURO_FLOW_SET")
         flow_set = override if override in ("ops", "code_core") else "auto"
 
-        pm = PersistenceManager(host_tmp)
-        pm.init_agent_dir()
-        mission = MissionState(
-            objective=instruction,
-            status="active",
-            config=MissionConfig(
-                working_directory=container_cwd,
-                flow_set=flow_set,
-                llmvp_endpoint=_LLMVP,
-                # tb runs are hermetic — no web reach (keeps cross-model
-                # comparison from being confounded by network access).
-                web_research=False,
-            ),
-        )
         # Explicit override: code_core ADOPTS the container repo via
         # ingest_workspace (scan → extract architecture → replan → repair sweep);
         # ops enters its controller directly. For "auto", classify does both
         # (it seeds pending_directive for code_core and tail-calls the target).
         if flow_set == "code_core":
-            mission.pending_directive = instruction
             entry_flow = "ingest_workspace"
         elif flow_set == "ops":
             entry_flow = get_flow_set("ops").entry_flow
         else:
             entry_flow = "classify"
-        pm.save_mission(mission)
+        mission = build_and_save_mission(
+            host_tmp,
+            instruction,
+            working_directory=container_cwd,
+            flow_set=flow_set,
+            pending_directive=instruction if flow_set == "code_core" else None,
+            llmvp_endpoint=_LLMVP,
+            # tb runs are hermetic — no web reach (keeps cross-model
+            # comparison from being confounded by network access).
+            web_research=False,
+        )
 
         effects = ContainerEffects(
             container=container,

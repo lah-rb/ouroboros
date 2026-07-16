@@ -131,7 +131,8 @@ def _mk_worker(monkeypatch, run_effect):
     objective) simulates one mission run (writes reply.txt or not)."""
     import adapters.tau.worker as w
 
-    monkeypatch.setattr(w.subprocess, "run", lambda *a, **k: None)  # skip venv
+    # venv seeding now lives in the shared helper (adapters._common)
+    monkeypatch.setattr(w, "seed_workspace_venv", lambda *a, **k: None)
 
     worker = w.MissionWorker.__new__(w.MissionWorker)
     import tempfile
