@@ -28,11 +28,8 @@ from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from .base import BaseBackend, BackendCapabilities
 from inference.repetition import DegenerateGenerationError, RepetitionGuard
-from inference.decode_constants import (
-    BUFFER_MODE_MAX_TOKENS,
-    DETOK_TAIL,
-    STOP_TAIL_SLACK,
-)
+from inference.decode_constants import BUFFER_MODE_MAX_TOKENS
+from inference.token_pipeline import TokenPipeline, build_capture_meta
 
 log = logging.getLogger("llm-mvp")
 
@@ -2571,34 +2568,6 @@ class LlamaCppBackend(BaseBackend):
     # Generation
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _stop_prefix_holdback(text: bytes, stop_bytes: List[bytes]) -> int:
-        """Return how many trailing bytes of *text* match a prefix of any
-        stop sequence.
-
-        When streaming, we must not yield bytes that could turn out to be
-        the beginning of a stop sequence.  This function tells us how many
-        bytes at the end of *text* to hold back until subsequent tokens
-        either complete the stop sequence (discard) or prove it was a false
-        alarm (release).
-
-        For example, with stop sequence ``b"<|im_end|>"``:
-            text ending with ``b"<|"``  → holdback = 2
-            text ending with ``b"<"``   → holdback = 1
-            text ending with ``b"abc"`` → holdback = 0
-        """
-        if not stop_bytes:
-            return 0
-        max_holdback = 0
-        for sb in stop_bytes:
-            # Check suffix lengths from 1..min(len(text), len(sb))
-            limit = min(len(text), len(sb))
-            for suffix_len in range(1, limit + 1):
-                if text[-suffix_len:] == sb[:suffix_len]:
-                    if suffix_len > max_holdback:
-                        max_holdback = suffix_len
-        return max_holdback
-
     def _build_generate_kwargs(self, temperature: float) -> dict:
         """Build kwargs for the low-level ``Llama.generate()`` method.
 
@@ -2841,7 +2810,6 @@ class LlamaCppBackend(BaseBackend):
         session_mode = stop_texts is not None
         if stop_texts is None:
             stop_texts = get_renderer(self.config.model.family).stop_tokens()
-        stop_bytes = [s.encode("utf-8") for s in stop_texts]
 
         # Final-channel completion detector (Harmony session mode only). Harmony
         # converts the <|return|> terminator to the history-form <|end|> once a
@@ -2857,25 +2825,8 @@ class LlamaCppBackend(BaseBackend):
             from inference.final_channel_stop import FinalChannelStop
 
             final_stop = FinalChannelStop()
-        # Scan only a bounded tail for stop sequences (incremental detok keeps a
-        # cumulative byte accumulator; a freshly-emitted stop is always near the
-        # tail). Slack covers a stop split across the last couple of tokens.
-        max_stop_len = max((len(sb) for sb in stop_bytes), default=0)
-        stop_tail = max_stop_len + STOP_TAIL_SLACK
-
         completion_tokens: List[int] = []
-        returned_bytes = 0
         is_first_token = True
-
-        # Incremental detokenization (replaces O(n²) full-list detok per token):
-        # accumulate bytes and detokenize only the new token, with a BOUNDED
-        # tail of preceding tokens as context so llama.cpp emits the correct
-        # piece boundary. The tail is capped (mirroring the batched engine's
-        # TokenPipeline) — an unbounded prior list re-grows the O(n²) cost
-        # this block exists to remove; 16 tokens covers the widest multi-byte
-        # merge boundary by a wide margin.
-        acc_bytes = b""
-        prior_tokens: List[int] = list(prompt_tokens[-DETOK_TAIL:])
 
         # Degenerate-repetition guard (off only if explicitly disabled per-config).
         gen_cfg = self.config.generation
@@ -2904,24 +2855,23 @@ class LlamaCppBackend(BaseBackend):
         long_cycle_on = gen_cfg.long_cycle_guard_enabled is not False
         capture_dir = getattr(getattr(self.config, "logging", None), "directory", None)
 
-        def _capture_meta() -> dict:
-            # The prompt is the half of the specimen the live failure never
-            # preserved (43 cancelled menu runaways, prompts unrecoverable —
-            # the archived survivor reproduced nothing at any temperature).
-            # Detok only on capture (rare), tail only (the dynamic context
-            # that varies between a clean run and a runaway sits at the end).
-            meta = {
-                "request_id": kwargs.get("request_id", ""),
-                "temperature": temperature,
-                "prompt_tokens": len(prompt_tokens),
-            }
-            try:
-                meta["prompt_tail"] = instance.detokenize(
-                    list(prompt_tokens[-768:])
-                ).decode("utf-8", errors="replace")
-            except Exception:  # noqa: BLE001 - forensics must not break capture
-                meta["prompt_tail"] = "(detokenization failed)"
-            return meta
+        # Shared per-token state machine (inference/token_pipeline.py) — the
+        # same class the batched engine binds per stream. This loop keeps
+        # only what is caller-side by contract: EOG detection, tracker
+        # marks, the max-tokens budget, and exception/telemetry policy.
+        pipeline = TokenPipeline(
+            instance,
+            stop_texts,
+            guard=guard,
+            final_stop=final_stop,
+            long_cycle_on=long_cycle_on,
+            buffer_mode=buffer_mode,
+            capture_dir=capture_dir or "./logs",
+            capture_meta=lambda: build_capture_meta(
+                instance, kwargs.get("request_id", ""), temperature, prompt_tokens
+            ),
+            initial_prior_tokens=prompt_tokens,
+        )
 
         # Set when this generation ends for a known reason (normal stop,
         # degeneracy, long-cycle). Left None across an abnormal exit —
@@ -2936,7 +2886,7 @@ class LlamaCppBackend(BaseBackend):
 
         try:
             for token in instance.generate(dynamic_tokens, **gen_kwargs):
-                # End-of-generation token check
+                # End-of-generation token check (caller-side by contract)
                 if llama_cpp.llama_token_is_eog(instance._model.vocab, token):
                     log.debug(
                         "🔧 EOG token received after %d tokens", len(completion_tokens)
@@ -2951,77 +2901,19 @@ class LlamaCppBackend(BaseBackend):
                 completion_tokens.append(token)
                 tracker.record_token()
 
-                # Degenerate-repetition guard — abort a turn that collapses into
-                # token-level repetition before it fills max_tokens (~1h hang).
-                if guard is not None:
-                    reason = guard.observe(token)
-                    if reason:
-                        gen_end_reason = f"degenerate: {reason}"
-                        self._h_runaway_captures += 1
-                        runaway_capture.dump_capture(
-                            capture_dir or "./logs",
-                            gen_end_reason,
-                            acc_bytes,
-                            len(completion_tokens),
-                            meta=_capture_meta(),
-                        )
-                        raise DegenerateGenerationError(
-                            reason, tokens_generated=len(completion_tokens)
-                        )
-
-                # Long-cycle guard — paragraph-scale loops the token guard
-                # can't see. Structural check on the text tail every
-                # CHECK_INTERVAL tokens; abort through the same clean path.
-                if (
-                    long_cycle_on
-                    and len(completion_tokens) % runaway_capture.CHECK_INTERVAL == 0
-                ):
-                    lc_reason = runaway_capture.detect_long_cycle(acc_bytes)
-                    if lc_reason:
-                        gen_end_reason = f"long-cycle: {lc_reason}"
-                        self._h_runaway_captures += 1
-                        runaway_capture.dump_capture(
-                            capture_dir or "./logs",
-                            lc_reason,
-                            acc_bytes,
-                            len(completion_tokens),
-                            meta=_capture_meta(),
-                        )
-                        raise DegenerateGenerationError(
-                            lc_reason, tokens_generated=len(completion_tokens)
-                        )
-
-                # Incremental detokenize: only the NEW token, with all prior
-                # tokens as context. A detok failure (e.g. llama_cpp "Negative
-                # size passed to PyBytes_FromStringAndSize" on a degenerate
-                # token) is converted to the same clean abort path.
-                try:
-                    piece: bytes = instance.detokenize(
-                        [token], prev_tokens=prior_tokens
-                    )
-                except Exception as e:  # noqa: BLE001 — convert to controlled abort
+                verdict = pipeline.feed(token)
+                if verdict.degenerate:
+                    # Guard/long-cycle/detok abort — capture the specimen and
+                    # raise through the clean DegenerateGenerationError path.
+                    gen_end_reason = verdict.degenerate
+                    self._h_runaway_captures += 1
+                    pipeline.dump_capture(verdict.degenerate)
                     raise DegenerateGenerationError(
-                        f"detokenization failed: {e}",
+                        verdict.degenerate,
                         tokens_generated=len(completion_tokens),
-                    ) from e
-                prior_tokens.append(token)
-                if len(prior_tokens) > DETOK_TAIL:
-                    del prior_tokens[:-DETOK_TAIL]
-                acc_bytes += piece
+                    )
 
-                # Stop-sequence detection — break the generation loop when the
-                # model emits a stop sequence as text tokens (rather than a
-                # native EOG token). Scanned over a bounded tail; the stop text
-                # is NOT stripped — it stays in the output so downstream
-                # consumers (FSM labeller, capture log) see the full output.
-                should_stop = any(sb in acc_bytes[-stop_tail:] for sb in stop_bytes)
-
-                # Harmony session terminator: stop when a non-empty final-channel
-                # message closes (the answer is complete; anything further is
-                # self-play). Stateful — see FinalChannelStop. Runs on the full
-                # accumulator (channel state spans the turn, not just the tail).
-                if final_stop is not None and final_stop.update(acc_bytes):
-                    should_stop = True
+                if verdict.end_reason == "final_channel_close":
                     gen_end_reason = "final_channel_close"
                     self._h_final_channel_stops += 1
                     log.debug(
@@ -3030,28 +2922,25 @@ class LlamaCppBackend(BaseBackend):
                         len(completion_tokens),
                     )
 
-                # Yield only the *new* bytes that form valid UTF-8. Decode the
-                # cumulative tail (never `piece` alone — a token can be a UTF-8
-                # continuation fragment). In buffer_mode, skip per-token yields.
-                if not buffer_mode:
-                    if len(acc_bytes) > returned_bytes:
-                        try:
-                            yield acc_bytes[returned_bytes:].decode("utf-8")
-                            returned_bytes = len(acc_bytes)
-                        except UnicodeDecodeError:
-                            pass  # incomplete multi-byte char — wait for next token
+                # Yield only the *new* bytes that form valid UTF-8 (pipeline
+                # holds back incomplete multi-byte chars; buffer_mode holds
+                # everything until flush).
+                text = pipeline.pop_text()
+                if text is not None:
+                    yield text
 
-                if should_stop or len(completion_tokens) >= effective_max:
+                if verdict.stop or len(completion_tokens) >= effective_max:
                     break
 
             # Flush any remaining bytes (final multi-byte char or buffered-mode
-            # content). The accumulator already holds everything. Preserve a
-            # specific in-loop reason (e.g. final_channel_close) — only the
-            # plain budget/EOG exits fall through to "completed".
+            # content). Preserve a specific in-loop reason (e.g.
+            # final_channel_close) — only plain budget/EOG exits fall through
+            # to "completed".
             if gen_end_reason is None:
                 gen_end_reason = "completed"
-            if acc_bytes and len(acc_bytes) > returned_bytes:
-                yield acc_bytes[returned_bytes:].decode("utf-8", errors="replace")
+            _tail = pipeline.flush()
+            if _tail:
+                yield _tail
 
             # Expose the generated token ids + the KV position where generation
             # began, so the session layer can locate the reasoning span for
@@ -3092,12 +2981,8 @@ class LlamaCppBackend(BaseBackend):
                 gen_end_reason is None
                 and len(completion_tokens) >= runaway_capture.CHECK_INTERVAL
             ):
-                runaway_capture.dump_capture(
-                    capture_dir or "./logs",
-                    "abandoned by consumer (watchdog cancel or disconnect)",
-                    acc_bytes,
-                    len(completion_tokens),
-                    meta=_capture_meta(),
+                pipeline.dump_capture(
+                    "abandoned by consumer (watchdog cancel or disconnect)"
                 )
             tracker.finish()
 

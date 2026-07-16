@@ -40,10 +40,11 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
-from inference.decode_constants import (
-    BUFFER_MODE_MAX_TOKENS,
-    DETOK_TAIL,
-    STOP_TAIL_SLACK,
+from inference.decode_constants import BUFFER_MODE_MAX_TOKENS
+from inference.token_pipeline import (  # noqa: F401 — Verdict re-exported
+    TokenPipeline,
+    Verdict,
+    build_capture_meta,
 )
 
 logger = logging.getLogger(__name__)
@@ -231,128 +232,6 @@ class StreamRequest:
     request_id: str = ""
     temperature: float = 0.0
     kv_base: int = 0  # KV skipped (static head / restored session occupancy)
-
-
-@dataclass
-class Verdict:
-    degenerate: Optional[str] = None  # guard/long-cycle/detok failure reason
-    stop: bool = False
-    end_reason: Optional[str] = None  # e.g. "final_channel_close"
-
-
-class TokenPipeline:
-    """Per-stream port of the pool's per-token block
-    (llama_cpp_backend.generate_stream_sync): incremental detokenization
-    with a cumulative byte accumulator, repetition + long-cycle guards,
-    bounded-tail stop scan, FinalChannelStop, buffer_mode, and
-    UTF-8-boundary text emission. Runs on the decode thread; all state is
-    per-instance so N pipelines never share anything.
-    """
-
-    def __init__(
-        self,
-        llama: Any,
-        stop_texts: List[str],
-        *,
-        guard: Any = None,  # RepetitionGuard or None
-        final_stop: Any = None,  # FinalChannelStop or None
-        long_cycle_on: bool = True,
-        buffer_mode: bool = False,
-        capture_dir: str = "./logs",
-        capture_meta: Optional[Dict[str, Any]] = None,
-    ):
-        self._llama = llama
-        self._stop_bytes = [s.encode("utf-8") for s in stop_texts]
-        max_stop_len = max((len(sb) for sb in self._stop_bytes), default=0)
-        self._stop_tail = max_stop_len + STOP_TAIL_SLACK
-        self._guard = guard
-        self._final_stop = final_stop
-        self._long_cycle_on = long_cycle_on
-        self.buffer_mode = buffer_mode
-        self._capture_dir = capture_dir
-        self._capture_meta = dict(capture_meta or {})
-
-        self.acc_bytes = b""
-        self._returned_bytes = 0
-        self._prior_tail: List[int] = []
-        self.n_tokens = 0
-
-    def feed(self, token: int) -> Verdict:
-        """Process one sampled token. Mirrors the pool loop's ordering
-        exactly (guard -> long-cycle -> detok -> stop scan -> final-stop);
-        the EOG check happens engine-side BEFORE feed, as in the pool."""
-        from inference import runaway_capture
-
-        self.n_tokens += 1
-
-        if self._guard is not None:
-            reason = self._guard.observe(token)
-            if reason:
-                return Verdict(degenerate=reason)
-
-        # Long-cycle check runs on the accumulator BEFORE this token's
-        # bytes land (pool parity: it fires between append and detok).
-        if (
-            self._long_cycle_on
-            and self.n_tokens % runaway_capture.CHECK_INTERVAL == 0
-        ):
-            lc_reason = runaway_capture.detect_long_cycle(self.acc_bytes)
-            if lc_reason:
-                return Verdict(degenerate=f"long-cycle: {lc_reason}")
-
-        try:
-            piece: bytes = self._llama.detokenize(
-                [token], prev_tokens=self._prior_tail
-            )
-        except Exception as e:  # noqa: BLE001 — convert to controlled abort
-            return Verdict(degenerate=f"detokenization failed: {e}")
-        self._prior_tail.append(token)
-        if len(self._prior_tail) > DETOK_TAIL:
-            del self._prior_tail[:-DETOK_TAIL]
-        self.acc_bytes += piece
-
-        should_stop = any(
-            sb in self.acc_bytes[-self._stop_tail:] for sb in self._stop_bytes
-        )
-        end_reason = None
-        if self._final_stop is not None and self._final_stop.update(self.acc_bytes):
-            should_stop = True
-            end_reason = "final_channel_close"
-        return Verdict(stop=should_stop, end_reason=end_reason)
-
-    def pop_text(self) -> Optional[str]:
-        """New bytes that form valid UTF-8 since the last pop; None in
-        buffer_mode or while a multi-byte char is incomplete."""
-        if self.buffer_mode or len(self.acc_bytes) <= self._returned_bytes:
-            return None
-        try:
-            text = self.acc_bytes[self._returned_bytes:].decode("utf-8")
-        except UnicodeDecodeError:
-            return None  # incomplete multi-byte char — wait for next token
-        self._returned_bytes = len(self.acc_bytes)
-        return text
-
-    def flush(self) -> Optional[str]:
-        """Remaining bytes at stream end (buffer_mode content or a final
-        partial char), decoded with errors="replace" — pool parity."""
-        if len(self.acc_bytes) > self._returned_bytes:
-            text = self.acc_bytes[self._returned_bytes:].decode(
-                "utf-8", errors="replace"
-            )
-            self._returned_bytes = len(self.acc_bytes)
-            return text
-        return None
-
-    def dump_capture(self, reason: str) -> None:
-        from inference import runaway_capture
-
-        try:
-            runaway_capture.dump_capture(
-                self._capture_dir, reason, self.acc_bytes, self.n_tokens,
-                meta=self._capture_meta,
-            )
-        except Exception:  # noqa: BLE001 — forensics must not break the loop
-            logger.exception("runaway capture failed")
 
 
 def build_sampling_params(
@@ -629,17 +508,10 @@ class BatchedEngine:
 
             final_stop = FinalChannelStop()
 
-        meta = {
-            "request_id": req.request_id,
-            "temperature": req.temperature,
-            "prompt_tokens": len(req.prompt_tokens),
-        }
-        try:
-            meta["prompt_tail"] = self._llama.detokenize(
-                list(req.prompt_tokens[-768:])
-            ).decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001 - forensics must not break admission
-            meta["prompt_tail"] = "(detokenization failed)"
+        # Lazy capture meta: the 768-token prompt-tail detok is paid at DUMP
+        # time (rare), not per admission.
+        _meta = (lambda r=req: build_capture_meta(
+            self._llama, r.request_id, r.temperature, r.prompt_tokens))
 
         pipeline = TokenPipeline(
             self._llama,
@@ -649,7 +521,8 @@ class BatchedEngine:
             long_cycle_on=self._long_cycle_on(),
             buffer_mode=buffer_mode,
             capture_dir=self._capture_dir,
-            capture_meta=meta,
+            capture_meta=_meta,
+            initial_prior_tokens=req.prompt_tokens,
         )
 
         stream_id = getattr(req, "_stream_id", None) or uuid.uuid4().hex[:12]
