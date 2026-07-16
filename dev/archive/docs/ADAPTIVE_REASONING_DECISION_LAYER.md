@@ -1,5 +1,7 @@
 # Adaptive Reasoning Decision Layer — design & build map
 
+> **STATUS: SHIPPED 2026-07-15; log ARCHIVED 2026-07-16 — see CLOSING STATUS at the end.**
+
 Spans several sessions. Goal: a per-turn policy that picks the gpt-oss reasoning
 level (low/med/high) for each `plan_interaction` turn, so we drop to low on
 turns that don't need reasoning and keep high for genuine strategy — cutting
@@ -211,6 +213,69 @@ behavioral/logit difficulty features (first-action-token entropy under low effor
 2601.18146). Deploy-time free-ness argument stands (context already prefilled at routing),
 but with no accuracy win there is nothing to deploy. Lexical union remains the router.
 
+## Phase F wiring LANDED (2026-07-15, commit ccb7a05) — router live end-to-end
+- Agent: `agent/reasoning_router.py` (dormant; OURO_ADAPTIVE_REASONING=1 +
+  OURO_ROUTER_THR/OURO_ROUTER_STEPS/OURO_REASONING_HIGH_STEPS), hooks in both
+  runtime inference paths (session-only), artifact `models/reasoning_router_v1.joblib`
+  (word+char union + LogReg, 2.2MB, 1.4ms; trainer dev/train_reasoning_router.py).
+- Server: **re-applied the per-turn HEAD-SWAP SPLICE** (`_splice_reasoning_head` —
+  head-span-only seq_rm+seq_cp, body KV live, same-length guard, default level
+  sources SEQ_STATIC; batched mode deferred). Debug lesson: the agent chain was
+  correct from the first smoke (RESOLVED→HOOK→WIRE all carried "low"); production
+  only had the turn-0 whole-head install — the validated splice had been REVERTED
+  and re-applying it was this doc's own step 1, initially skipped.
+- Live validation (hello-world smoke-5): 4/4 plan turns routed low (p .02-.38),
+  server logged `head-splice → low (per-turn, 1809 tok head, 1510 tok body intact)`,
+  no-op on repeat requests, task resolved. Tests: 9 router + 32 runtime + 209 llmvp.
+- **A/B canary launched**: 6 TB1 tasks (hello-world, simple-web-scraper,
+  fibonacci-server, sparql-university, overfull-hbox, incompatible-python-fasttext)
+  × adaptive(thr .4) vs fixed-medium, sequential, runs/ab-adaptive-1 vs
+  runs/ab-baseline-1. Compare: pass rate (must not regress), wall/task, decode
+  tokens (traces), splice counts.
+
+## Phase F first canary RESULT (2026-07-15): -42% decode/turn, pass rate held
+6 TB1 tasks × adaptive(thr .4) vs fixed-medium, sequential, runs/ab-{adaptive,baseline}-2.
+- **Pass rate: NO REGRESSION — final tally 4/6 vs 4/6, identical per task** (fibonacci +
+  fasttext fail in both arms; fasttext verdict recovered by rerun after the teardown fix).
+  The flake (CancelledError escaping _run_with_drain — CancelledError is a BaseException,
+  bare `except Exception` missed it) is FIXED: tau-parity port, drain catches CancelledError
+  + mission asyncio.run on a dedicated thread. Fibonacci forensics: adaptive built a working
+  server passing 5/6 bench tests (missed only negative-input 4xx) in 24 turns; baseline
+  never got a server listening (0/6) in 62 turns — the cheap "confident" failure was
+  STRICTLY BETTER than the expensive honest one on this pair. Edge-case enumeration lives
+  in verification/reground steps → structural-high sprinkle candidates.
+- **Decode: -42% tokens/turn on matched tasks (118 vs 203), negative on EVERY task**
+  (-8% to -55%). Task-total -55% is inflated by the degenerate both-fail task (baseline
+  burned 62 turns × 284 tok/turn failing; adaptive failed in 24 × 128). heterogeneous-dates'
+  +27% task-total was pure turn-count divergence (32 vs 23 turns); per-turn it's -8%.
+- **Router activity: 16 splices (14 → low, 2 → medium — BOTH directions mid-session);
+  baseline 0.** Adaptive also used fewer turns overall (106 vs 137) — n=1, note only.
+- Caveats: n=1 per task/arm, 5 matched pairs, temp>0 path variance, easy-task mix; wall
+  time confounded by first-run docker builds (arm 1). This is a smoke-grade gate — the
+  real Phase F validation still wants a bigger canary with pass-rate power. Observed
+  -42%/turn is consistent with Phase B's ~53% plan-turn ceiling.
+
+## Static-high flips + completion reasoning (2026-07-15, commits f1f30f6 + a54bd03)
+- **Per-request reasoning on STATELESS completions shipped**: CompletionRequest.reasoning →
+  run_completion → `_completion_reasoning_head` (installs the pinned level head AND swaps the
+  prompt's head tokens together → prefix-match exact → ZERO extra prefill; live-validated:
+  cached_prefix 1809 / fresh_prefill 46 at every level; high deliberates ~3k analysis tokens
+  where low answers immediately). Guards: completion-only by construction, no-op on default,
+  refuses under flow-prefix pinning / length mismatch / batched. Router rungs: explicit config
+  + high-steps now steer stateless too; trained TF-IDF rung stays session-domain.
+- **Nine steps flipped to cue-authored `reasoning: "high"`** (honored unconditionally, like
+  temperature): ops judge_step / verify_completion / sanity_plausibility / reground_criteria /
+  plan_charter; code_core plan_checks / probe_generate / design_initial / decompose_directive.
+- **Retest of the misses**: fibonacci-server 5/6→**6/6 PASS**. Step diff (the careful
+  comparison): reground_criteria essentially UNCHANGED at high (same checks, still no negative
+  criterion — the def-of-done didn't improve); the implementation's `if (n<0)` guard was
+  present from its FIRST write (a LOW plan turn) → the pass is partly path-luck. What the flip
+  DEMONSTRABLY changed: **judge_step 1×24-tok rubber stamp → 4 cycles led by 807-tok
+  deliberation that caught real defects** (stray '<send' token corrupting index.js; port
+  conflict on require; "export app without starting") and drove the repair loop to the 6/6
+  state; verify_completion 43→514 tok. fasttext still fails (unrelated to assessment depth).
+  n=1, temp>0: consistent-with, not proof — the powered canary remains the real gate.
+
 ## Phase F — A/B harness (design, gated on a trained model + free server)
 1. Re-apply the validated head-swap integration (recipe in
    `reasoning-injection-mechanics` memory: warmup builds low/med/high heads on hold
@@ -227,3 +292,26 @@ but with no accuracy win there is nothing to deploy. Lexical union remains the r
 - `dev/phaseA_extract.py` — pulls the long-turn sample from traces → `dev/phaseA_turns.json`.
 - `dev/phaseA_turns.json` — the gate dataset (gitignored-able; regenerate from traces).
 - Phase A panel: a Workflow fan-out (3 passes × batches), agents read the JSON + judge.
+
+---
+
+## CLOSING STATUS (2026-07-16) — PROJECT SHIPPED, LOG ARCHIVED
+
+The adaptive_thinking program is **live in production**: per-turn TF-IDF
+router (`agent/reasoning_router.py`, dormant flag `OURO_ADAPTIVE_REASONING=1`,
+kill-switch `OURO_REASONING_OFF=1` enforced at the effect choke point) +
+nine cue-authored static-high planning/assessment steps + the full actuator
+chain (turn-0 head install, mid-session splice, per-request completion
+head-swap; pool AND batched modes). Validated: first A/B canary −42%
+decode/turn at held pass rate; fibonacci retest 5/6→6/6 with the high judge
+catching real defects; greenfield game A/B (adventure/cardgame/bossgame)
+ran overnight 2026-07-15/16 — final analysis lives with those run artifacts.
+
+Durable artifacts: `models/reasoning_router_v1.joblib` (gitignored; rebuild
+via dev/train_reasoning_router.py), provenance chain dev/trusted_labels_v1.json
++ dev/label_quarantine_v1.json + dev/train_dataset_trusted_v1.jsonl,
+standard dev/JUDGE_STANDARD.md (active).
+
+Open threads (concepts, no WIP): 615-turn quarantine panel worklist under
+JUDGE_STANDARD v1.0 (K=7 highs + splits); 250-turn post-featurizer-fix
+regeneration calibration; router threshold tuning if coverage needs change.

@@ -1,5 +1,7 @@
 # SWE-bench repair scope discipline — pilot 1 → 4 (2026-07-05)
 
+> **STATUS: BANKED 2026-07 — scoping results absorbed into the pilot plan. See memory: swe-bench-verified-pilot.**
+
 Same 12 gold-verified Verified instances, same gpt-oss-120b-a5 server, same
 1200s/20-cycle budget every run. Only agent-side logic changed between pilots,
 so the deltas are clean.

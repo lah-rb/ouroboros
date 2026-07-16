@@ -1,5 +1,7 @@
 # Exploratory router — tb swe subset (2026-07-05)
 
+> **STATUS: CLOSED 2026-07-15 — bake-off concluded: TF-IDF word+char union champion SHIPPED (agent/reasoning_router.py); ModernBERT and the hidden-state probe lost. Full history: ADAPTIVE_REASONING_DECISION_LAYER.md (this dir).**
+
 The router now investigates the workspace (read-only REACT loop, terminal
 access) before deciding flow_set + profile, and hands its findings forward.
 Tested on the 4 terminal-bench-core swe-bench-* tasks, auto-routed.

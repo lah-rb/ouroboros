@@ -1,5 +1,7 @@
 # Ops quality_gate port — grounded output-format re-assessment
 
+> **STATUS: SHIPPED 2026-07 — per-goal grounded acceptance checks (gate/derive/store/run) live in the interact flow; vacuous-verification guard held. Hardened 2026-07-16 (gate output threaded into fix prompts).**
+
 ## Why
 TB2 datacollect (89 tasks, gpt-oss-120b): **2 pass, 87 fail** — and the dominant
 failure is NOT timeout. Primary verifier failure across the 87:

@@ -1,5 +1,7 @@
 # SWE-bench Verified pilot 1 — 2026-07-04
 
+> **STATUS: BANKED 2026-07 — Verified-pilot findings (1/12, wall-bound localization); next phase = issue-guided retrieval. See memory: swe-bench-verified-pilot.**
+
 First official-harness result. 12 gold-oracle-verified instances (9 small-repo
 + 3 django/sympy scouts), code_core repair, gpt-oss-120b medium, 20-min /
 40-cycle budget each, sequential. `runs/swe/swe-pilot-1/`.

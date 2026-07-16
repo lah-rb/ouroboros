@@ -1,5 +1,7 @@
 # Deep-Analysis Backends — per-language landscape
 
+> **STATUS: CLOSED 2026-07 — survey informed the batched single-context engine decision (shipped, decode_mode: batched); multi-context simultaneous decode = dead end; MLX NO-GO. See memory: multi-persona-pooling-and-metal-multicontext-bug.**
+
 > Research artifact for the `DeepAnalysisBackend` seam (`agent/analysis_backends/`).
 > Written 2026-06-18. **Only jedi (Python) is implemented this sprint** — this doc
 > evaluates the other nine languages so each can be slotted in behind the seam when a

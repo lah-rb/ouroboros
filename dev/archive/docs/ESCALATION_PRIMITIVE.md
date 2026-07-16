@@ -1,5 +1,7 @@
 # Escalation primitive — one recovery shape for every devolution branch
 
+> **STATUS: SHIPPED 2026-07 — escalation flow + prompt hardening landed (d25a166); deep_search wired into escalation + diagnose search_gate. Residual concept work: TRAP_BRIEF.md (dev/, active).**
+
 Status: design brief (2026-07-03, from the B.5 retest post-mortem discussion).
 Not scheduled; queued behind the ops write_file action and Phase C.
 

@@ -1,5 +1,7 @@
 # SWE-bench Phase A findings — 2026-07-03
 
+> **STATUS: BANKED 2026-07 — Phase A findings folded into the program plan; first solve landed (langcodes). Program continues; see memory: swe-bench-phase-a-first-solve.**
+
 Re-baseline of the TB1 SWE quartet at HEAD (clobber fix + ops pruning + the
 five code_core ports). Analysis: `dev/swe_taxonomy.py runs/hh-ops runs/hh-code_core`;
 June baselines preserved at `runs/hh-{ops,code_core}-20260623`.
