@@ -1,0 +1,3558 @@
+[
+ {
+  "id": 0,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 1,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 2,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 3,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 4,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 5,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 6,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 7,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 8,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 9,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 10,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 11,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 12,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 13,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 14,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 15,
+  "label": "high",
+  "votes": [
+   "high",
+   "high",
+   "low"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 0,
+   "high": 2
+  }
+ },
+ {
+  "id": 16,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 17,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 18,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 19,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 20,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "low"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 21,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 22,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 23,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 24,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 25,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 26,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 27,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 28,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 29,
+  "label": "high",
+  "votes": [
+   "high",
+   "high",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 1,
+   "high": 2
+  }
+ },
+ {
+  "id": 30,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 31,
+  "label": "high",
+  "votes": [
+   "high",
+   "low",
+   "high"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 0,
+   "high": 2
+  }
+ },
+ {
+  "id": 32,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 33,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 34,
+  "label": "high",
+  "votes": [
+   "high",
+   "high",
+   "high"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 0,
+   "high": 3
+  }
+ },
+ {
+  "id": 35,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 36,
+  "label": "medium",
+  "votes": [
+   "low",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 37,
+  "label": "high",
+  "votes": [
+   "high",
+   "high",
+   "high"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 0,
+   "high": 3
+  }
+ },
+ {
+  "id": 38,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 39,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 40,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 41,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 42,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 43,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 44,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 45,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 46,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 47,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 48,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 49,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 50,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 51,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 52,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 53,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 54,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 55,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 56,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 57,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 58,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 59,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 60,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 61,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 62,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 63,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 64,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 65,
+  "label": "high",
+  "votes": [
+   "high",
+   "high",
+   "high"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 0,
+   "high": 3
+  }
+ },
+ {
+  "id": 66,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 67,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 68,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 69,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 70,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 71,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 72,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 73,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 74,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "low"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 75,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 76,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 77,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 78,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 79,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 80,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 81,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 82,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 83,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 84,
+  "label": "high",
+  "votes": [
+   "high",
+   "high",
+   "high"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 0,
+   "high": 3
+  }
+ },
+ {
+  "id": 85,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 86,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 87,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 88,
+  "label": "high",
+  "votes": [
+   "low",
+   "high",
+   "high"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 0,
+   "high": 2
+  }
+ },
+ {
+  "id": 89,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 90,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 91,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 92,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 93,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "low"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 94,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 95,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 96,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 97,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 98,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 99,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 100,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 101,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 102,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 103,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 104,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 105,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 106,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 107,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 108,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 109,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 110,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 111,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 112,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 113,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 114,
+  "label": "low",
+  "votes": [
+   "low",
+   "medium",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 115,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 116,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 117,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 118,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 119,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 120,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 121,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 122,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 123,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 124,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 125,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 126,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 127,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 128,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 129,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 130,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 131,
+  "label": "low",
+  "votes": [
+   "high",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 0,
+   "high": 1
+  }
+ },
+ {
+  "id": 132,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 133,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 134,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 135,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 136,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 137,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 138,
+  "label": "high",
+  "votes": [
+   "high",
+   "high",
+   "high"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 0,
+   "high": 3
+  }
+ },
+ {
+  "id": 139,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 140,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 141,
+  "label": "high",
+  "votes": [
+   "high",
+   "high",
+   "high"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 0,
+   "high": 3
+  }
+ },
+ {
+  "id": 142,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 143,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 144,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 145,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 146,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 147,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 148,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 149,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 150,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "high"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 2,
+   "high": 1
+  }
+ },
+ {
+  "id": 151,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 152,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 153,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 154,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 155,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 156,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 157,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 158,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 159,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 160,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 161,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 162,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 163,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 164,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 165,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 166,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 167,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 168,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 169,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 170,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 171,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 172,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 173,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 174,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "high"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 0,
+   "high": 1
+  }
+ },
+ {
+  "id": 175,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 176,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 177,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 178,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 179,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 180,
+  "label": "low",
+  "votes": [
+   "low",
+   "medium",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 181,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "high"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 0,
+   "high": 1
+  }
+ },
+ {
+  "id": 182,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 183,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 184,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 185,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 186,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 187,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 188,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 189,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 190,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 191,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 192,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 193,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 194,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 195,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 196,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 197,
+  "label": "low",
+  "votes": [
+   "medium",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 198,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 199,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 200,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 201,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 202,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 203,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 204,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 205,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 206,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 207,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 208,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 209,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 210,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 211,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 212,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 213,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 214,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 215,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 216,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 217,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 218,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 219,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 220,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 221,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 222,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 223,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 224,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 225,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 226,
+  "label": "high",
+  "votes": [
+   "high",
+   "low",
+   "high"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 0,
+   "high": 2
+  }
+ },
+ {
+  "id": 227,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 228,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 229,
+  "label": "high",
+  "votes": [
+   "high",
+   "high",
+   "high"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 0,
+   "high": 3
+  }
+ },
+ {
+  "id": 230,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 231,
+  "label": "low",
+  "votes": [
+   "low",
+   "medium",
+   "low"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 232,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 233,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 234,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 235,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 236,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 237,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 238,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 239,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 240,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 241,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 242,
+  "label": "high",
+  "votes": [
+   "high",
+   "high",
+   "high"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 0,
+   "high": 3
+  }
+ },
+ {
+  "id": 243,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 244,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 245,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 246,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 247,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 248,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 2,
+   "medium": 1,
+   "high": 0
+  }
+ },
+ {
+  "id": 249,
+  "label": "high",
+  "votes": [
+   "low",
+   "high",
+   "high"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 0,
+   "high": 2
+  }
+ },
+ {
+  "id": 250,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "low",
+   "medium"
+  ],
+  "tally": {
+   "low": 1,
+   "medium": 2,
+   "high": 0
+  }
+ },
+ {
+  "id": 251,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ },
+ {
+  "id": 252,
+  "label": "medium",
+  "votes": [
+   "medium",
+   "medium",
+   "medium"
+  ],
+  "tally": {
+   "low": 0,
+   "medium": 3,
+   "high": 0
+  }
+ },
+ {
+  "id": 253,
+  "label": "low",
+  "votes": [
+   "low",
+   "low",
+   "low"
+  ],
+  "tally": {
+   "low": 3,
+   "medium": 0,
+   "high": 0
+  }
+ }
+]

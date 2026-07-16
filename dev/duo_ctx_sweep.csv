@@ -1,2 +1,0 @@
-n_ctx,rounds,turns,errors,exit,kv_mib_per_cache,wired_min_gb,wired_max_gb,ts
-8192,25,10,3,1,288.00 MiB,70.0,70.0,09:25
