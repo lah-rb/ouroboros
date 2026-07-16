@@ -147,6 +147,11 @@ file_ops: #FlowDefinition & {
 				file_content:     {$ref: "context.target_file.content", default: ""}
 				diagnosis_kind:   {$ref: "input.diagnosis_kind", default: ""}
 				module_statement: {$ref: "input.module_statement", default: ""}
+				// Multi-part detection: a diagnosis that names a symbol
+				// alongside the module line needs BOTH edits — the flag
+				// routes the pass onward to symbol routing after the
+				// module-frame edit succeeds.
+				target_symbol: {$ref: "input.target_symbol", default: ""}
 			}
 			resolver: {
 				type: "rule"
@@ -155,7 +160,7 @@ file_ops: #FlowDefinition & {
 					{condition: "true", transition:                          "extract_symbols"},
 				]
 			}
-			publishes: ["module_statement", "module_directive"]
+			publishes: ["module_statement", "module_directive", "module_fix_symbol_continue"]
 		}
 
 		run_module_frame_edit: #StepDefinition & {
@@ -173,6 +178,11 @@ file_ops: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
+					// Multi-part fix: the diagnosis also named a symbol to
+					// change — continue the SAME pass into symbol routing so
+					// the second half of the fix lands via patch instead of
+					// being dropped (module splice alone can't touch bodies).
+					{condition: "result.status == 'success' and context.module_fix_symbol_continue == true", transition: "extract_symbols"},
 					{condition: "result.status == 'success'", transition: "lookup_env"},
 					// Splice mismatch / frame not applicable → safe full-rewrite fallback.
 					{condition: "result.status == 'full_rewrite_requested'", transition: "run_rewrite"},
@@ -240,7 +250,11 @@ file_ops: #FlowDefinition & {
 				mode:              {$ref: "input.mode", default: "fix"}
 				file_context:      {$ref: "input.file_context"}
 				working_directory: {$ref: "input.working_directory"}
-				validation_errors: {$ref: "context.validation_results", default: ""}
+				// Fresh dispatches (structural sweep, functional fix) have no
+				// in-pass validation_results yet — fall back to the dispatch's
+				// error_output so the fix prompt sees the actual gate output
+				// (import traceback / lint finding) instead of an empty section.
+				validation_errors: {$ref: "context.validation_results", fallback: [{$ref: "input.error_output"}, ""]}
 			}
 			resolver: {
 				type: "rule"
@@ -275,7 +289,11 @@ file_ops: #FlowDefinition & {
 				mode:            {$ref: "input.mode", default: "fix"}
 				file_context:    {$ref: "input.file_context"}
 				working_directory: {$ref: "input.working_directory"}
-				validation_errors: {$ref: "context.validation_results", default: ""}
+				// Fresh dispatches (structural sweep, functional fix) have no
+				// in-pass validation_results yet — fall back to the dispatch's
+				// error_output so the fix prompt sees the actual gate output
+				// (import traceback / lint finding) instead of an empty section.
+				validation_errors: {$ref: "context.validation_results", fallback: [{$ref: "input.error_output"}, ""]}
 			}
 			resolver: {
 				type: "rule"
@@ -329,7 +347,11 @@ file_ops: #FlowDefinition & {
 				working_directory: {$ref: "input.working_directory"}
 				target_file_path:  {$ref: "input.target_file_path"}
 				file_context:      {$ref: "input.file_context"}
-				validation_errors: {$ref: "context.validation_results", default: ""}
+				// Fresh dispatches (structural sweep, functional fix) have no
+				// in-pass validation_results yet — fall back to the dispatch's
+				// error_output so the fix prompt sees the actual gate output
+				// (import traceback / lint finding) instead of an empty section.
+				validation_errors: {$ref: "context.validation_results", fallback: [{$ref: "input.error_output"}, ""]}
 			}
 			resolver: {
 				type: "rule"

@@ -386,3 +386,44 @@ def test_compiled_build_structure_wiring():
     assert "inference_response" in steps["slice_and_write"]["context"]["required"]
     assert "mission" in steps["slice_and_write"]["context"]["required"]
     assert "inference_truncated" in steps["slice_and_write"]["context"]["optional"]
+
+
+@pytest.mark.asyncio
+async def test_serial_fix_dispatch_threads_gate_output(tmp_path):
+    # The fix dispatch must carry the actual gate output (traceback /
+    # file:line finding), scanned back past later edit-failure reports that
+    # have no terminal_output — without it the fix flow's "Validation errors
+    # to fix" prompt section is empty (2026-07-16 bossgame rewrite loop).
+    (tmp_path / "models.py").write_text("def broken(:\n")
+    goals = [
+        GoalRecord(
+            description="models",
+            type="structural",
+            associated_files=["models.py"],
+            reports=[
+                DirectiveReport(
+                    flow="build_structure",
+                    status="failed",
+                    summary="gate failures",
+                    checks_failed=["import: models.py"],
+                    terminal_output=(
+                        "[FAIL] import: models.py\nImportError: cannot import "
+                        "name 'ITEMS' from partially initialized module "
+                        "'engine' (circular import)"
+                    ),
+                ),
+                DirectiveReport(
+                    flow="file_ops",
+                    status="failed",
+                    summary="rewrite failed: KV cell pool exhausted",
+                    checks_failed=["syntax: models.py"],
+                ),
+            ],
+        ),
+    ]
+    mission = _mission(tmp_path, "serial", goals=goals)
+    out = await action_structural_sweep_next(_si(mission))
+    assert out.result.get("needs_fix") is True
+    cfg = out.context_updates["dispatch_config"]
+    assert cfg["flow"] == "file_ops"
+    assert "circular import" in cfg["error_output"]

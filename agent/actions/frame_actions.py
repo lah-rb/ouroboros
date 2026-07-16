@@ -190,7 +190,11 @@ def _not_module_fix(observation: str) -> StepOutput:
     return StepOutput(
         result={"is_module_fix": False},
         observations=observation,
-        context_updates={"module_statement": "", "module_directive": ""},
+        context_updates={
+            "module_statement": "",
+            "module_directive": "",
+            "module_fix_symbol_continue": False,
+        },
     )
 
 
@@ -202,9 +206,14 @@ async def action_check_module_fix(step_input: StepInput) -> StepOutput:
     languages are validated by the splice parse-gate downstream) plus an
     idempotency check, then routes to the module-frame editor for any file type —
     a Python/Go/JS-TS import, a shell shebang/``source``/``set`` line.
-    Degenerate declarations (missing/unparseable statement, line already present)
-    fall through to normal symbol routing. Pure routing — no file is written
-    here. Publishes is_module_fix + module_statement/directive.
+    Degenerate declarations (missing/unparseable statement, comments-only
+    statement, line already present) fall through to normal symbol routing.
+    Comment lines inside the statement are guidance smuggled in by the
+    diagnosis, not code: they are stripped from the splice and appended to
+    module_directive instead. When the diagnosis also names a target_symbol,
+    module_fix_symbol_continue routes the pass onward to symbol routing after
+    the frame edit (multi-part fixes). Pure routing — no file is written
+    here. Publishes is_module_fix + module_statement/directive/continue-flag.
 
     NOTE: this action is on file_ops' hot path — read_target routes EVERY
     existing-file edit through it — so the ``kind != "module_fix"`` early-return
@@ -218,37 +227,76 @@ async def action_check_module_fix(step_input: StepInput) -> StepOutput:
     file_content = _ctx(step_input, "file_content")
     stmt = _ctx(step_input, "module_statement").strip()
 
-    ok = bool(stmt) and bool(file_content)
+    # Diagnoses smuggle multi-part instructions into module_statement as
+    # comment lines ("# Inside GameEngine.__init__: ..."). Comments parse
+    # fine, so without this split the splice writes instructions-as-comments
+    # into the file while the real second half of the fix is silently
+    # dropped (2026-07-16 bossgame circular-import loop). Splice ONLY the
+    # executable lines; carry the guidance into the editor directive.
+    # Python-only: in shell files a leading-# line can be the fix itself
+    # (shebang), and other languages don't use # comments.
+    if target.endswith(".py"):
+        lines = stmt.splitlines()
+        guidance_lines = [ln for ln in lines if ln.lstrip().startswith("#")]
+        code_stmt = "\n".join(
+            ln for ln in lines if ln.strip() and not ln.lstrip().startswith("#")
+        ).strip()
+    else:
+        guidance_lines = []
+        code_stmt = stmt
+
+    ok = bool(code_stmt) and bool(file_content)
     if ok and target.endswith(".py"):
         # Python precision: it must at least parse as module-level code (any
         # number of statements — a multi-import is fine). Other languages skip
         # fragment-parsing here; the splice tree-sitter gate validates the result.
         try:
-            stdlib_ast.parse(stmt)
+            parsed = stdlib_ast.parse(code_stmt)
+            ok = bool(parsed.body)  # comments-only → no executable statements
         except SyntaxError:
             ok = False
     if not ok:
         logger.warning(
             "check_module_fix: kind=module_fix but module_statement %r "
-            "missing/unparseable for %s — falling through to symbol routing",
+            "has no usable executable statement for %s — falling through "
+            "to symbol routing",
             stmt,
             target,
         )
         return _not_module_fix(
             f"module_fix declared but statement unusable ({stmt!r}) — symbol routing"
         )
-    if _statement_present(target, file_content, stmt):
-        return _not_module_fix(f"module-level line already present: {stmt}")
+    if _statement_present(target, file_content, code_stmt):
+        return _not_module_fix(f"module-level line already present: {code_stmt}")
 
     placement = languages.module_fix_placement_for_path(target)
-    directive = f"Add the missing module-level line `{stmt}` to this file."
+    directive = f"Add the missing module-level line `{code_stmt}` to this file."
     if placement:
         directive += f" Place it {placement}."
-    logger.info("check_module_fix: module-class fix for %s → %s", target, stmt)
+    if guidance_lines:
+        directive += "\nDiagnosis guidance (context, not code to insert):\n" + "\n".join(
+            guidance_lines
+        )
+    # Multi-part fixes: when the diagnosis ALSO names a concrete symbol to
+    # change, the module line is only half the fix — after a successful
+    # module-frame edit, file_ops routes onward to symbol routing (patch)
+    # instead of finishing the pass. Symbol-less remainders can't do this
+    # (patch structurally requires a target symbol).
+    symbol_continue = bool(_ctx(step_input, "target_symbol").strip())
+    logger.info(
+        "check_module_fix: module-class fix for %s → %s%s",
+        target,
+        code_stmt,
+        " (+ symbol continuation)" if symbol_continue else "",
+    )
     return StepOutput(
         result={"is_module_fix": True},
-        observations=f"module-class fix: {stmt}",
-        context_updates={"module_statement": stmt, "module_directive": directive},
+        observations=f"module-class fix: {code_stmt}",
+        context_updates={
+            "module_statement": code_stmt,
+            "module_directive": directive,
+            "module_fix_symbol_continue": symbol_continue,
+        },
     )
 
 

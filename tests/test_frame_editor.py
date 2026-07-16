@@ -252,3 +252,66 @@ def test_action_splice_frame_failure_falls_back():
     assert out.result.get("splice_failed") is True
     assert out.result["status"] == "full_rewrite_requested"
     assert fx.written == {}  # nothing written on failure
+
+
+def test_check_guidance_comments_stripped_from_splice():
+    # Diagnoses smuggle multi-part instructions into module_statement as
+    # comments (2026-07-16 bossgame circular-import loop wrote them into the
+    # file verbatim). Only executable lines reach the splice; the guidance
+    # rides the directive instead.
+    stmt = (
+        "ITEMS = {}\n"
+        "# Inside GameEngine.__init__, after self._static_items is set:\n"
+        "#   global ITEMS\n"
+        "#   ITEMS = self._static_items"
+    )
+    out = _check(kind="module_fix", module_statement=stmt)
+    assert out.result["is_module_fix"] is True
+    assert out.context_updates["module_statement"] == "ITEMS = {}"
+    directive = out.context_updates["module_directive"]
+    assert "Diagnosis guidance" in directive
+    assert "global ITEMS" in directive
+
+
+def test_check_comments_only_statement_falls_through():
+    out = _check(
+        kind="module_fix",
+        module_statement="# add ITEMS here, then mutate it inside __init__",
+    )
+    assert out.result["is_module_fix"] is False
+    assert "unusable" in out.observations
+
+
+def test_check_symbol_continue_flag_set_and_cleared():
+    # No symbol named → no continuation.
+    out = _check(kind="module_fix", module_statement="import os")
+    assert out.context_updates["module_fix_symbol_continue"] is False
+    # Symbol named alongside the module line → multi-part continuation.
+    si = StepInput(
+        context={
+            "target_file_path": "main.py",
+            "file_content": SRC,
+            "diagnosis_kind": "module_fix",
+            "module_statement": "import os",
+            "target_symbol": "GameEngine.__init__",
+        }
+    )
+    out2 = asyncio.run(action_check_module_fix(si))
+    assert out2.result["is_module_fix"] is True
+    assert out2.context_updates["module_fix_symbol_continue"] is True
+    # Fall-through paths clear the flag.
+    out3 = _check(kind="fix", module_statement="import os")
+    assert out3.context_updates["module_fix_symbol_continue"] is False
+
+
+def test_check_shell_shebang_not_treated_as_guidance():
+    # Comment-stripping is Python-only: in shell files a leading-# line can
+    # BE the fix (shebang).
+    out = _check(
+        kind="module_fix",
+        module_statement="#!/usr/bin/env bash",
+        file_content="echo hi\n",
+        target="run.sh",
+    )
+    assert out.result["is_module_fix"] is True
+    assert out.context_updates["module_statement"] == "#!/usr/bin/env bash"

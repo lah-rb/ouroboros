@@ -1476,6 +1476,21 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             elif getattr(last, "summary", ""):
                 fix_directive = f"Fix {file_path}: {last.summary[:200]}"
 
+        # Thread the actual gate output (import traceback, lint finding with
+        # file:line) into the dispatch. Scan back to the NEWEST report that
+        # carries both checks_failed and terminal_output — later failed edit
+        # attempts bury the validation report under inference-error noise,
+        # and without this the fix flow's "Validation errors to fix" prompt
+        # section is empty (the 2026-07-16 bossgame loop rewrote engine.py
+        # 360× knowing only "syntax, import, lint").
+        gate_output = ""
+        for rep in reversed(goal.reports or []):
+            if getattr(rep, "checks_failed", None) and getattr(
+                rep, "terminal_output", ""
+            ):
+                gate_output = str(rep.terminal_output)[:800]
+                break
+
         dispatch_config = {
             "goal_id": goal.id,
             "goal_description": goal.description,
@@ -1484,6 +1499,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             "flow": "file_ops",
             "target_file_path": file_path,
             "flow_directive": fix_directive,
+            "error_output": gate_output,
             "recent_reports": [],
         }
         logger.info("Structural sweep: fixing %s", file_path)
