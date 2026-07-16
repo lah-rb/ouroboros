@@ -37,9 +37,12 @@ log = logging.getLogger("llm-mvp")
 # Each pool context handles ONE working stream, so generation stays on seq 0 (where the
 # high-level Llama.generate()/eval() operate) — we reuse the existing generation machinery
 # verbatim. SEQ_STATIC holds the pristine static prefix, forked onto SEQ_WORKING per request.
-SEQ_WORKING = 0  # the live generation / session seq
-SEQ_STATIC = 1   # pristine static-prefix template (fork source); never generated on
-SEQ_FLOW_BASE = 2  # Phase 2: per-flow resident prefixes occupy seqs [2, 2+flow_hot_set)
+from inference.seq_layout import (  # single source of the pool band layout
+    SEQ_FLOW_BASE,
+    SEQ_STATIC,
+    SEQ_WORKING,
+    plan_pool_seq_map,
+)
 # Generation headroom a snapshot capture must leave free in the shared
 # n_ctx cell pool (capacity check in snapshot_working_seq).
 SNAP_GEN_RESERVE = 8192
@@ -398,12 +401,7 @@ class LlamaCppBackend(BaseBackend):
             n_seq_max=(
                 self._batched_seq_map().n_seq_max
                 if self._decode_mode == "batched"
-                else (
-                    2
-                    + (self._flow_hot_set if self._flow_band else 0)
-                    + self._snapshot_max
-                    + (len(self._reasoning_pin_levels) if self._reasoning_head_swap else 0)
-                )
+                else self._pool_seq_map().n_seq_max
                 if self._resident_requested
                 else 1
             ),
@@ -1181,7 +1179,7 @@ class LlamaCppBackend(BaseBackend):
     def _reasoning_seq_base(self) -> int:
         """Reasoning-head band base — ABOVE the snapshot band (highest ids), so it
         never collides with the flow LRU or the snapshot allocator."""
-        return self._snap_seq_base() + self._snapshot_max
+        return self._pool_seq_map().reasoning_base
 
     def _pin_reasoning_heads(self, inst: Any) -> None:
         """Build + pin a system head per non-default reasoning level on the reasoning
@@ -1497,8 +1495,20 @@ class LlamaCppBackend(BaseBackend):
     # Semi-permanent session snapshots (hot seq band + cold token list)
     # ------------------------------------------------------------------
 
+    def _pool_seq_map(self):
+        """The pool band layout for the CURRENT flags (see seq_layout.py) —
+        the one place _snap_seq_base/_reasoning_seq_base/n_seq_max derive
+        from, so a band resize cannot desync them."""
+        return plan_pool_seq_map(
+            flow_hot_set=self._flow_hot_set if self._flow_band else 0,
+            snapshot_max=self._snapshot_max,
+            reasoning_levels=(
+                self._reasoning_pin_levels if self._reasoning_head_swap else []
+            ),
+        )
+
     def _snap_seq_base(self) -> int:
-        return SEQ_FLOW_BASE + (self._flow_hot_set if self._flow_band else 0)
+        return self._pool_seq_map().snap_base
 
     def _alloc_snap_seq(self, inst: Any, key: str) -> int:
         """Reserve a snapshot seq id. NO eviction: capacity errors are the
