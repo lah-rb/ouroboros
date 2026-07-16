@@ -11,6 +11,7 @@ parsed and resolved against a configured model default temperature.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any
 
@@ -19,6 +20,17 @@ import httpx
 from agent.effects.protocol import InferenceResult
 
 logger = logging.getLogger(__name__)
+
+
+def _reasoning_off() -> bool:
+    """Global reasoning kill-switch, enforced at the effect choke point.
+
+    OURO_REASONING_OFF=1 must restore pre-feature behavior EXACTLY. The
+    router honors it, but action-level config dicts (e.g. deep_search's
+    _CONDENSE_CFG) reach here without passing through resolve_reasoning —
+    without this guard they leak reasoning levels into baseline A/B arms.
+    """
+    return os.environ.get("OURO_REASONING_OFF", "") == "1"
 
 # GraphQL query for non-streaming completion
 COMPLETION_QUERY = """
@@ -402,7 +414,7 @@ class InferenceEffect:
             # Reasoning HEAD-SWAP level for stateless completions — the server
             # installs the level's pinned head for this request only (resident
             # path, config.model.reasoning_head_swap). None/absent → default.
-            if config_overrides.get("reasoning"):
+            if config_overrides.get("reasoning") and not _reasoning_off():
                 request_vars["reasoning"] = str(config_overrides["reasoning"])
 
         request_body = {
@@ -747,7 +759,7 @@ class InferenceEffect:
             # level's pinned head at turn 0 and SPLICES it mid-session
             # (config.model.reasoning_head_swap). Stateless completions carry the
             # same field (see the completion builder above). None/absent → default.
-            if config_overrides.get("reasoning"):
+            if config_overrides.get("reasoning") and not _reasoning_off():
                 request_vars["reasoning"] = str(config_overrides["reasoning"])
 
         request_body = {
