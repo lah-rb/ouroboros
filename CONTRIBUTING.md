@@ -14,10 +14,14 @@ overview, see `IMPLEMENTATION.md`. For operational guidance, see `AGENT.md`.*
    - `flow`, `version`, `description`, `input`, `entry` fields.
    - At least one terminal step with `terminal: true` and `status`.
    - A tail-call back to `mission_control` on terminal steps.
+   - Optional per-step `config`: `temperature` (`t*` specifier) and `reasoning`
+     (`"low" | "medium" | "high"` — cue-authored reasoning is honored like
+     temperature on both session and completion paths; see
+     `agent/reasoning_router.py` for the resolution ladder).
 4. Create prompt templates in `prompts/<flow_name>/<step>.yaml` for inference steps.
 5. Rebuild: `uv run ouroboros.py cue-compile` (validates CUE and exports `flows/compiled.json`).
-7. Ensure `design_and_plan`'s planning prompt knows about the new flow (it selects flows by name).
-8. Add tests in `tests/` covering the flow's key paths.
+6. Ensure `design_and_plan`'s planning prompt knows about the new flow (it selects flows by name).
+7. Add tests in `tests/` covering the flow's key paths.
 
 **Template:** Copy an existing task flow that's similar in structure. `diagnose_issue.cue`
 is a good starting point for investigation flows. `file_ops.cue` shows the full
@@ -68,7 +72,8 @@ effects interface. It returns the name of the next step (transition target).
 1. **Extend** `agent/effects/protocol.py` with the new method signature.
 2. **Implement** in `agent/effects/local.py` (production behavior).
 3. **Implement** in `agent/effects/mock.py` (test behavior — canned responses + recording).
-4. Update any other effects implementations (`DryRunEffects`, etc.) if they exist.
+4. Check the benchmark adapters (`adapters/`) — some wrap or subclass the
+   effects for container/bridged execution and may need the new method.
 5. Add tests verifying both real and mock behavior.
 
 ---
@@ -80,10 +85,11 @@ effects interface. It returns the name of the next step (transition target).
 Key rules:
 - Follow the three-section pattern: Role + Context → Task + Materials → Output Format.
 - Output format section must appear last with ✅ CORRECT and ❌ WRONG examples.
-- Use `t*` temperature specifiers: `t*0.5` for deterministic, `t*1` for balanced,
-  `t*1.2` for creative.
-- Test prompt changes with live inference (`--mission_config test_config`), not just
-  unit tests.
+- Use `t*` temperature specifiers (multipliers on the step's base temperature):
+  `t*0.1`–`t*0.2` for near-deterministic extraction/conclusions, `t*0.5` for
+  focused edits, `t*1` for balanced generation.
+- Test prompt changes with live inference (`--mission_config ops_demo` — mission
+  configs live in `missions/`), not just unit tests.
 
 ---
 
@@ -111,7 +117,7 @@ values always win. See `agent/loader.py` for merge logic.
 **See `AGENT.md` for the full development cycle.** In summary: code → format with
 `black` → lint with `ruff check` (auto-fix with `--fix`) → test where tests exist →
 `cue-compile` on CUE changes → `ouroboros.py smoke` → `ouroboros.py lint-flows` →
-live verification via `mission create --mission_config <test_config>`.
+live verification via `mission create --mission_config <config>` (configs in `missions/`).
 
 Live verification is the only real test for feature work touching flows, actions, or
 prompts — smoke tests load flows and begin execution without inference, which catches
@@ -139,6 +145,21 @@ If you encounter existing truncation in a code path that parses the result, **re
 
 ---
 
+## Repository Layout Conventions
+
+- `agent/`, `llmvp/`, `flows/`, `prompts/`, `mcp_servers/`, `schemas/` — the framework.
+- `adapters/` — external benchmark/harness adapters (`adapters.tb`, `adapters.tau`,
+  `adapters.swe`, `adapters.gaia`). New benchmark = new subpackage here that wraps the
+  harness; the mission loop stays benchmark-agnostic.
+- `missions/` — mission config YAMLs. `mission create --mission_config <bare-name>`
+  resolves here automatically.
+- `dev/` — curated operator tools + shipped-artifact provenance ONLY (indexed in
+  `dev/README.md`). One-shot experiment scripts get deleted once their conclusions are
+  banked (memories / `dev/archive/docs/`); do not let it re-rot.
+- `dev/archive/docs/` — finalized design docs, each stamped with closing status.
+
+---
+
 ## Naming Conventions
 
 | Entity | Convention | Example |
@@ -157,3 +178,7 @@ If you encounter existing truncation in a code path that parses the result, **re
 
 **This project uses `uv` exclusively.** Never call `python`, `pip`, or `pip install`
 directly. See `AGENT.md` for the full `uv` command reference.
+
+**Never run bare `uv sync`.** It prunes out-of-band packages (terminal_bench, torch,
+transformers, mlx, the editable tau-bench install). Use `uv pip install <pkg>` or
+`uv sync --inexact`.

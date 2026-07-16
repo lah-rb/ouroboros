@@ -480,9 +480,11 @@ The `flows/` directory is organized as component sets:
   referencing a set-local symbol fails the build (the cross-set guard).
 - **`flows/<set>/`** — one directory per mission type: its controller flow
   plus the flows specific to that pipeline. Current sets: `flows/code_core/`
-  (the code pipeline, controller `mission_control`) and `flows/scraper/`
-  (research-paper harvesting, controller `research_control`: plan →
-  discovery → catalog → gate over a workspace paper databank).
+  (the code pipeline, controller `mission_control`), `flows/ops/` (operations/
+  task-execution missions — the benchmark workhorse), `flows/scraper/`
+  (research-paper harvesting, controller `research_control`), and the
+  curation pipeline pair `flows/curator/` + `flows/extractor/` (paper
+  review/pack + HEA data extraction).
 
 All files share `package ouroboros`; each set compiles as a file-list instance
 of shared + its own files (CUE hidden fields like `_templates` cannot be
@@ -532,6 +534,12 @@ awareness, not as commitments.
 
 ### 4.1 Escalation Integration
 
+> **Update 2026-07:** the local escalation PRIMITIVE shipped (escalation flow +
+> hardened prompts + the deep_search loop wired into escalation and diagnose;
+> design doc archived at dev/archive/docs/ESCALATION_PRIMITIVE.md). The
+> *external senior-model consultation* below remains future work; the trap
+> evidence that motivates it lives in dev/TRAP_BRIEF.md.
+
 The escalation protocol — how the local agent consults an external, more capable model —
 is the largest open design question. Several interaction models are under consideration:
 
@@ -550,6 +558,13 @@ The escalation bundle format and response model from the original design (see Ap
 remain a reasonable starting point but should be reassessed against real trace data.
 
 ### 4.2 Parallel Execution
+
+> **Update 2026-07:** two slices landed — `structural_mode: parallel` (batch
+> structural creation) and multi-MISSION parallelism on the LLMVP batched
+> single-context engine (`decode_mode: batched`, W seats; independent agent
+> processes share the server). Intra-mission parallel dispatch below remains
+> future work; capacity note: the shared KV pool budgets the SUM of streams
+> (see the 2026-07-16 bossgame eviction lockstep incident).
 
 When `mission_control` identifies multiple independent tasks and pool capacity is available,
 it could dispatch them simultaneously. The architecture supports this without redesign — each
@@ -609,6 +624,10 @@ handling rather than a separate flow to invoke.
 
 ### 4.7 Step-Context Plumbing for Effects
 
+> **Update 2026-07: SHIPPED** — contextvars-based `step_context` (see
+> `get_step_context` in `agent/effects/local.py`) gives effects ambient
+> flow/step/cycle identity; trace emission and session inference use it.
+
 Most effects methods are called with just their data arguments — the effect has no
 knowledge of which flow, step, or goal the call originates from. `push_note` was the
 first case where that missing context became interesting: a `source_flow` string is
@@ -651,6 +670,11 @@ timelines) creates a concrete requirement. Until then, per-call arguments remain
 simpler choice.
 
 ### 4.8 Self-Hosted Search Stack
+
+> **Update 2026-07:** the reusable web deep-search LOOP shipped
+> (`flows/shared/deep_search.cue`: reflect-and-refine ReAct core +
+> evidence-ledger sufficiency stop); it still rides Exa. Self-hosting the
+> search backend below remains future work.
 
 The `research` flow currently consumes Exa via the hosted `exa-mcp-server` (see
 AGENT.md §"External Services"). Exa is inexpensive at expected volume and its
@@ -735,6 +759,23 @@ formatting for inclusion in prompts.
 
 **Mission management.** YAML-configured missions with pre/post-create lifecycle commands.
 CLI for create, start, pause, resume, abort, status, history, and interactive messaging.
+
+**Adaptive reasoning (2026-07).** Per-turn reasoning-effort routing for gpt-oss:
+trained TF-IDF router + cue-authored static-high steps (`agent/reasoning_router.py`,
+dormant flags), actuated server-side via reasoning head-swap/splice on sessions and
+per-request head-swap on completions. Kill-switch `OURO_REASONING_OFF=1` enforced at
+the effect choke point.
+
+**Grounded acceptance checks.** Per-goal shell acceptance checks derived from live
+session evidence (ops DoD port), stored tighten-only and re-run every verification
+pass; a required failure vetoes a credulous goal_met.
+
+**Benchmark adapters.** `adapters/` wraps terminal-bench (TB1 + TB2/Harbor),
+SWE-bench, GAIA, and tau-bench (including the control-inversion chat layer in
+`agent/chat/`) so the mission loop stays benchmark-agnostic.
+
+**Modality sidecars.** Objective-conditioned VL/ASR digestion at workspace scan
+(vision + audio_transcribe under `tools/`), all flow sets.
 
 ### Active Work
 

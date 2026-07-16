@@ -168,7 +168,9 @@ def resolve_config_path(name_or_path: str) -> Path:
 
     Rules:
     - If name_or_path ends in .yaml or .yml, treat as a direct path.
-    - Otherwise, search for {name_or_path}.yaml in the current directory.
+    - Otherwise, search for {name_or_path}.yaml in the current directory,
+      then in missions/ (both relative to cwd and to the repo root) — the
+      canonical home of mission configs since the 2026-07-16 root cleanup.
 
     Args:
         name_or_path: Either a filename/path or a bare name.
@@ -180,15 +182,22 @@ def resolve_config_path(name_or_path: str) -> Path:
         FileNotFoundError: If the resolved path does not exist.
     """
     if name_or_path.endswith(".yaml") or name_or_path.endswith(".yml"):
-        path = Path(name_or_path)
+        candidates = [Path(name_or_path)]
     else:
-        path = Path(f"{name_or_path}.yaml")
+        repo_root = Path(__file__).resolve().parents[1]
+        candidates = [
+            Path(f"{name_or_path}.yaml"),
+            Path("missions") / f"{name_or_path}.yaml",
+            repo_root / "missions" / f"{name_or_path}.yaml",
+        ]
 
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Mission config not found: {path}\n  Searched: {path.resolve()}"
-        )
-    return path
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        f"Mission config not found: {name_or_path}\n  Searched: "
+        + ", ".join(str(c.resolve()) for c in candidates)
+    )
 
 
 def load_mission_config(name_or_path: str) -> MissionYAMLConfig:

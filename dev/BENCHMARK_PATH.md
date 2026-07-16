@@ -1,5 +1,13 @@
 # Benchmark Path — Ouroboros → Mainstream Comparison
 
+> **STATUS (2026-07-16): largely EXECUTED — kept in dev/ as the program map.**
+> All four adapters shipped under adapters/: tb (TB1 + TB2/Harbor, verified
+> 18.7% baseline era), swe (Verified pilot 1/12 — next: issue-guided
+> retrieval), gaia (COMPLETE: 50/165 = 30.3%, first public gpt-oss GAIA
+> datapoint), tau (all 4 pieces incl. control inversion; gold replay 6/6).
+> Official SWE reports archived at dev/archive/swe_reports/. Residual work
+> is score-improvement programs, not harness gaps.
+
 > Gap analysis: what Ouroboros needs to run terminal-bench, SWE-bench
 > Verified, GAIA, and tau²-bench. Written 2026-06-10, against the
 > post-hardening framework (state contracts, transient-file flush,
