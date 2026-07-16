@@ -284,6 +284,22 @@ class LlamaCppBackend(BaseBackend):
         self._refresh_seconds = int(
             getattr(getattr(config, "model", None), "context_refresh_seconds", 1800) or 1800
         )
+        # Drain window for refreshing under load (0 = legacy defer-while-busy,
+        # which starves forever under continuous multi-mission load). When set,
+        # the admission gate below closes, in-flight work gets drain_s to
+        # finish, stragglers are force-cleared (sessions expire via their
+        # normal listener path; streams retire retriable), then the context
+        # rebuilds. See core/config.ModelConfig.context_refresh_drain_s.
+        self._refresh_drain_s = float(
+            getattr(getattr(config, "model", None), "context_refresh_drain_s", 0.0) or 0.0
+        )
+        # Admission gate — cleared while a drain-refresh is in progress so
+        # acquire_instance() waiters queue instead of keeping the pool busy.
+        self._refresh_admission_gate: asyncio.Event = asyncio.Event()
+        self._refresh_admission_gate.set()
+        # Set by SessionManager at construction (soft DI): force-expires all
+        # live sessions through the normal expiry path at the drain deadline.
+        self._session_expirer = None
         self._last_refresh_monotonic: Optional[float] = None
         # Readiness gate — blocks acquire_instance() until initialize() completes
         self._ready_event: asyncio.Event = asyncio.Event()
@@ -987,6 +1003,59 @@ class LlamaCppBackend(BaseBackend):
             time.perf_counter() - started,
         )
 
+    async def _drain_for_refresh(self, reason: str) -> bool:
+        """Close admissions and drain the batched pool for a refresh.
+
+        Phase 1 (finish period): new acquires queue on the admission gate;
+        in-flight work gets ``_refresh_drain_s`` to finish naturally.
+        Phase 2 (force-clear): remaining sessions are expired through the
+        SessionManager's normal expiry path (listener event + clean seat
+        release), then any still-live streams are retired with a retriable
+        error — the agent-side flow retry recovers on the fresh context.
+        Returns True when the pool is clear (caller refreshes); the gate is
+        REOPENED BY THE CALLER's finally, not here.
+        """
+        self._refresh_admission_gate.clear()
+        log.info(
+            "🧼 refresh drain (%s): admissions gated; %d seat(s) out, "
+            "%d generation(s) live; window %.0fs",
+            reason, self._checked_out, self._active_generations,
+            self._refresh_drain_s,
+        )
+        deadline = time.monotonic() + self._refresh_drain_s
+        while time.monotonic() < deadline:
+            if self._checked_out == 0 and self._active_generations == 0:
+                return True
+            await asyncio.sleep(1.0)
+
+        # Force-clear stragglers.
+        if self._session_expirer is not None and self._checked_out > 0:
+            try:
+                n = await self._session_expirer(f"context refresh drain deadline ({reason})")
+                log.warning("🧼 refresh drain: force-expired %d session(s)", n)
+            except Exception:  # noqa: BLE001 — drain must not die on expiry
+                log.exception("refresh drain: session expiry failed")
+        if self._engine is not None and self._active_generations > 0:
+            try:
+                n = await run_in_threadpool(
+                    self._engine.evict_all_streams,
+                    "context refresh — stream retired; retry lands on the fresh context",
+                )
+                log.warning("🧼 refresh drain: evicted %d stream(s)", n)
+            except Exception:  # noqa: BLE001
+                log.exception("refresh drain: stream eviction failed")
+        # Short settle for the releases to land.
+        settle = time.monotonic() + 30
+        while time.monotonic() < settle:
+            if self._checked_out == 0 and self._active_generations == 0:
+                return True
+            await asyncio.sleep(1.0)
+        log.error(
+            "⚠️ refresh drain failed to clear the pool (%d out, %d live)",
+            self._checked_out, self._active_generations,
+        )
+        return False
+
     async def refresh_context(self, reason: str = "manual") -> dict:
         """Drop + rebuild every instance's ``llama_context`` in-process to clear the
         LLMVP-process-level output rot WITHOUT a process restart or reboot.
@@ -1002,23 +1071,45 @@ class LlamaCppBackend(BaseBackend):
         if self._decode_mode == "batched":
             # Batched refresh: park the decode thread at a step boundary,
             # rebuild the shared context + re-pin heads, resume. Only sound
-            # with no pinned seats and no live streams — _refresh_decision
-            # gates on exactly that; a manual call mid-session is refused.
+            # with no pinned seats and no live streams. When busy:
+            # - drain disabled (legacy): defer — the caller retries later.
+            # - drain enabled: close the admission gate, give in-flight work
+            #   the drain window to finish, then force-clear stragglers
+            #   (sessions expire through their normal listener path; streams
+            #   retire RETRIABLE — the same client recovery as KV eviction)
+            #   and refresh. This is what makes the timed cap actually land
+            #   under continuous multi-mission load (2026-07-16 souring:
+            #   two arms kept the pool busy for 8.5h and every refresh
+            #   deferred while both wedged on stub rewrites).
             if self._checked_out > 0 or self._active_generations > 0:
-                self._h_refresh_deferred += 1
-                return {
-                    "refreshed": 0, "reason": reason,
-                    "status": "deferred_busy",
-                }
+                if self._refresh_drain_s <= 0:
+                    self._h_refresh_deferred += 1
+                    return {
+                        "refreshed": 0, "reason": reason,
+                        "status": "deferred_busy",
+                    }
+                drained = await self._drain_for_refresh(reason)
+                if not drained:
+                    self._h_refresh_deferred += 1
+                    self._refresh_admission_gate.set()
+                    return {
+                        "refreshed": 0, "reason": reason,
+                        "status": "drain_timeout",
+                    }
             engine = self._engine
-            await run_in_threadpool(engine.pause)
             try:
-                await run_in_threadpool(self._rebuild_batched_context)
-                engine._batch = None  # re-allocate against the fresh context
-                self._h_requests_since_refresh = 0
-                self._last_refresh_monotonic = time.monotonic()
+                await run_in_threadpool(engine.pause)
+                try:
+                    await run_in_threadpool(self._rebuild_batched_context)
+                    engine._batch = None  # re-allocate against the fresh context
+                    self._h_requests_since_refresh = 0
+                    self._last_refresh_monotonic = time.monotonic()
+                finally:
+                    engine.resume()
             finally:
-                engine.resume()
+                # Reopen admissions whatever happened — queued acquirers
+                # must never starve behind a failed refresh.
+                self._refresh_admission_gate.set()
             elapsed = time.perf_counter() - started
             log.info(
                 "✅ Batched context refresh #%d in %.2fs (reason=%s)",
@@ -1105,11 +1196,17 @@ class LlamaCppBackend(BaseBackend):
         if idle and since >= self._refresh_interval:
             return "proactive-interval"
         if since > 0 and elapsed >= self._refresh_seconds:
-            if self._checked_out > 0:
+            if self._checked_out > 0 or self._active_generations > 0:
+                if self._refresh_drain_s > 0 and self._decode_mode == "batched":
+                    # Drain enabled: fire anyway — refresh_context gates
+                    # admissions, drains the finish window, force-clears
+                    # stragglers. This is the fix for continuous
+                    # multi-mission load, where the busy check above
+                    # deferred forever while the process soured.
+                    return "proactive-timed-drain"
                 self._h_refresh_deferred += 1
                 return None
-            if self._active_generations == 0:
-                return "proactive-timed"
+            return "proactive-timed"
         return None
 
     def _mark_decode_failure(self, inst: Any, exc: Exception) -> None:
@@ -1853,6 +1950,18 @@ class LlamaCppBackend(BaseBackend):
                 raise RuntimeError(
                     f"Scaling operation did not complete within {timeout}s "
                     "(scale_wait_timeout)"
+                )
+        if not self._refresh_admission_gate.is_set():
+            # A drain-refresh is in progress: queue here (a slow request, not
+            # a failed step). Budget = the drain window + rebuild + margin.
+            try:
+                await asyncio.wait_for(
+                    self._refresh_admission_gate.wait(),
+                    timeout=self._refresh_drain_s + 120,
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    "Context refresh did not complete within its drain window"
                 )
 
     @contextlib.asynccontextmanager

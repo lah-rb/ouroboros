@@ -60,6 +60,11 @@ model:
   # Per-request reasoning HEAD-SWAP: pin low/high system heads (medium=SEQ_STATIC)
   # and fork the requested level onto the live seq at turn 0. Lets deep_search
   # condense run at LOW reasoning without a restart. Gated on resident + harmony.
+  # Timed context auto-refresh WITH drain: the 30-min cap now lands under
+  # continuous load (admissions gate + 5-min finish window + force-clear;
+  # sessions expire cleanly, streams retire retriable). Fix for the
+  # 2026-07-16 stub-souring wedge (8.5h load, every refresh deferred_busy).
+  context_refresh_drain_s: 300
   reasoning_head_swap: true
 
 prompt:

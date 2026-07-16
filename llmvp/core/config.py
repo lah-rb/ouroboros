@@ -159,6 +159,25 @@ class ModelConfig(BaseModel):
     # for the curator's per-paper lifecycle (minutes) with a wide margin;
     # 0 disables for workloads that pin snapshots deliberately for days.
     session_snapshot_ttl_s: float = 7200.0
+    # Proactive in-process context refresh (see backend._refresh_loop): the
+    # LLMVP process sours under sustained inference volume (output degrades
+    # to agentic action-stubs; memory staleness-is-llmvp-process-level —
+    # ~3h intensive single-mission, ~8.5h two-mission batched). These two
+    # knobs previously existed only as getattr-ghosts the schema rejected;
+    # now declared. interval = requests between OPPORTUNISTIC refreshes
+    # (fires only when idle); seconds = wall-clock CAP that fires even
+    # under load.
+    context_refresh_interval: int = 75
+    context_refresh_seconds: int = 1800
+    # Drain window for refreshing UNDER LOAD (0 = legacy: defer while
+    # busy — which starves forever under continuous multi-mission load,
+    # the 2026-07-16 bossgame souring). When > 0: admission gate closes,
+    # in-flight work gets drain_s to finish; stragglers are then
+    # force-cleared — sessions expire through their normal listener path,
+    # streams retire RETRIABLE (same client recovery as KV eviction) —
+    # and the context rebuilds in-process (~7s; weights stay loaded).
+    context_refresh_drain_s: float = 0.0
+
     # Per-request reasoning HEAD-SWAP (OPT-IN, default off). When on (+ resident
     # cache active + a thinking family), warmup builds a system head per reasoning
     # level (low/medium/high) on a reserved seq band ABOVE the snapshot band, and a

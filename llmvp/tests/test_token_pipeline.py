@@ -155,3 +155,34 @@ def test_build_capture_meta_prompt_tail():
     assert meta["request_id"] == "req9"
     assert meta["prompt_tokens"] == 900
     assert len(meta["prompt_tail"]) == 768  # tail-only detok
+
+
+# ── refresh-drain seams (session expiry hook) ──────────────────────────
+
+
+def test_session_manager_registers_expirer_and_expires_all():
+    import asyncio
+
+    from core.session_manager import SessionManager, SessionState
+
+    class FakeBackend:
+        pass
+
+    be = FakeBackend()
+    sm = SessionManager(be)
+    # construction registers the straggler hook on the backend
+    assert be._session_expirer == sm.expire_all_sessions
+
+    ended = []
+
+    async def fake_end(sid):
+        ended.append(sid)
+        sm._sessions.pop(sid, None)
+        return True
+
+    sm.end_session = fake_end
+    sm._sessions["s1"] = SessionState(instance=object(), current_state=None)
+    sm._sessions["s2"] = SessionState(instance=object(), current_state=None)
+    n = asyncio.run(sm.expire_all_sessions("drain deadline test"))
+    assert n == 2 and sorted(ended) == ["s1", "s2"]
+    assert sm._sessions == {}

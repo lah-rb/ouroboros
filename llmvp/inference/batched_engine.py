@@ -405,6 +405,22 @@ class BatchedEngine:
             self._wake.notify_all()
         return fut
 
+    def evict_all_streams(self, reason: str) -> int:
+        """Retire EVERY live stream with a retriable error (context-refresh
+        drain deadline). Runs on the decode thread via the control inbox —
+        the same retire path as KV-pressure eviction, so clients recover
+        through their existing retry logic. Returns the victim count."""
+        def _do() -> int:
+            victims = [
+                s for s in list(self._streams.values())
+                if s.phase is not StreamPhase.DONE
+            ]
+            for s in victims:
+                self._retire(s, error=RetriableEngineError(reason))
+            return len(victims)
+
+        return self.control(_do).result(timeout=30.0)
+
     def pause(self, timeout: float = 60.0) -> None:
         """Park the decode thread at the next step boundary."""
         self._drained.clear()

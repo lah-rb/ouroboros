@@ -216,6 +216,10 @@ class SessionManager:
 
     def __init__(self, backend: Any):
         self._backend = backend
+        # Context auto-refresh straggler hook: the backend force-expires
+        # sessions that outlive the refresh drain window through the normal
+        # expiry path (listener event + end_session), not by yanking seats.
+        setattr(backend, "_session_expirer", self.expire_all_sessions)
         self._sessions: dict[str, SessionState] = {}
         self._expiry_tasks: dict[str, asyncio.Task] = {}
         self._turn_transition_cache: str | None = None
@@ -1057,6 +1061,31 @@ class SessionManager:
 
     def list_snapshots(self) -> list:
         return self._backend.list_snapshots()
+
+    async def expire_all_sessions(self, reason: str) -> int:
+        """Force-expire every live session through the normal expiry path.
+
+        Used by the context auto-refresh when sessions outlive the drain
+        window: listeners get an "expired" event (so agent-side session
+        machinery sees a clean expiry, not a vanished seat) and the seat is
+        released via end_session. Returns the number expired.
+        """
+        ids = list(self._sessions.keys())
+        for sid in ids:
+            session = self._sessions.get(sid)
+            if session is None:
+                continue
+            log.warning("⏰ Session %s force-expired (%s)", sid, reason)
+            if session.listener is not None:
+                await session.listener.put(
+                    SessionEvent(
+                        session_id=sid,
+                        event_type="expired",
+                        message=f"Session expired: {reason}",
+                    )
+                )
+            await self.end_session(sid)
+        return len(ids)
 
     async def end_session(self, session_id: str) -> bool:
         """Release the pinned instance and clean up."""
