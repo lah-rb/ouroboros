@@ -579,11 +579,40 @@ def cmd_start(args: argparse.Namespace) -> None:
                 if _fn is not None:
                     try:
                         await _fn()
-                    except Exception:
+                    except (Exception, asyncio.CancelledError):
+                        # CancelledError is a BaseException — a cancellation
+                        # landing during drain escaped the bare `except
+                        # Exception` and crashed the CLI at teardown (seen on
+                        # the gameab adaptive arm). tb/tau-adapter parity:
+                        # teardown is best-effort.
                         pass
 
+    # Run the mission loop on ITS OWN thread + event loop (tb/tau-adapter
+    # parity): run_agent's MCP/PTY machinery uses anyio cancel scopes bound
+    # to the creating task; sharing the CLI's thread lets ambient
+    # cancellation reach subprocess waits at teardown.
+    _outcome: dict = {}
+
+    def _mission_thread() -> None:
+        try:
+            _outcome["result"] = asyncio.run(_run_with_drain())
+        except BaseException as e:  # noqa: BLE001 — classified below
+            _outcome["exc"] = e
+
     try:
-        result = asyncio.run(_run_with_drain())
+        import threading
+
+        _t = threading.Thread(
+            target=_mission_thread, name="ouroboros-mission", daemon=True
+        )
+        _t.start()
+        _t.join()
+        if "exc" in _outcome:
+            _exc = _outcome["exc"]
+            if isinstance(_exc, KeyboardInterrupt):
+                raise KeyboardInterrupt
+            raise _exc
+        result = _outcome["result"]
         print()
         print(f"{'=' * 60}")
         print(f"Agent terminated: {result.status}")
