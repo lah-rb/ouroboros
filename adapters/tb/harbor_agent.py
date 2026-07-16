@@ -47,6 +47,13 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from agent.effects.teardown import drain_effects
 from adapters._common import llmvp_endpoint, preserve_agent_dir  # noqa: E402
+from adapters.tb.base import (  # noqa: E402
+    extract_deps,
+    mirror_test_env,
+    per_task_cap,
+    probe_container_cwd,
+    token_totals,
+)
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -106,7 +113,7 @@ class OuroborosHarborAgent(BaseAgent):
         # Register the task image for pruning (OURO_TB_PRUNE_IMAGES) — Harbor tears
         # down the container but leaves the image, the unbounded sink.
         note_task_image(container)
-        container_cwd = self._probe_container_cwd(container, exec_user)
+        container_cwd = probe_container_cwd(container, exec_user=exec_user)
 
         task_root = self._task_root(environment)
         wall_clock_s = (
@@ -222,7 +229,7 @@ class OuroborosHarborAgent(BaseAgent):
             # The CancelledError re-propagates after this, so Harbor still records
             # the timeout and grades the container.
             self._preserve(host_tmp)
-            tin, tout = self._token_totals(host_tmp)
+            tin, tout = token_totals(host_tmp)
             context.n_input_tokens = tin
             context.n_output_tokens = tout
             context.metadata = {
@@ -292,88 +299,37 @@ class OuroborosHarborAgent(BaseAgent):
             return None
 
     def _per_task_cap(self, task_root: Path | None) -> float:
-        """Self-cap at ~0.9× Harbor's wait_for budget so we park before it fires.
-        Mirrors Harbor's own computation: a global override wins, else the task's
-        ``[agent].timeout_sec`` scaled by the global multiplier."""
-        if _GLOBAL_AGENT_TIMEOUT:
-            try:
-                return max(60.0, float(_GLOBAL_AGENT_TIMEOUT) * _CAP_FRACTION)
-            except ValueError:
-                pass
+        """Read the task's [agent].timeout_sec (task.toml) and delegate the
+        cap math to the shared helper (adapters.tb.base.per_task_cap)."""
+        t: float | None = None
         if task_root is not None:
             try:
                 import tomllib
 
                 d = tomllib.loads((task_root / "task.toml").read_text())
                 t = float((d.get("agent") or {}).get("timeout_sec") or 0)
-                if t > 0:
-                    return max(60.0, t * _TIMEOUT_MULTIPLIER * _CAP_FRACTION)
             except Exception:
-                pass
-        return max(60.0, _CAP_FALLBACK * _TIMEOUT_MULTIPLIER)
+                t = None
+        return per_task_cap(
+            t,
+            fraction=_CAP_FRACTION,
+            fallback=_CAP_FALLBACK,
+            multiplier=_TIMEOUT_MULTIPLIER,
+            global_override=_GLOBAL_AGENT_TIMEOUT,
+        )
 
     def _mirror_test_env(
         self, container, task_root: Path | None, cwd: str, exec_user: str
     ) -> list[str]:
-        """Install the deps the task's tests install, into the container, so the
-        agent's ``python3 x.py`` and our checks see the env the bench grades in.
-        Best-effort. TB2 test scripts live in ``tests/`` (test.sh + *.py)."""
+        """TB2 test scripts live in tests/ (test.sh + *.sh); the install
+        machinery is shared (adapters.tb.base.mirror_test_env), executed as
+        the task-declared user."""
         if task_root is None:
             return []
-        pkgs = self._extract_deps(task_root)
-        if not pkgs:
-            return []
-        try:
-            has_pip = (
-                container.exec_run(
-                    cmd=["python3", "-m", "pip", "--version"], user=exec_user
-                ).exit_code
-                == 0
-            )
-            if not has_pip:
-                container.exec_run(
-                    cmd=["apt-get", "update", "-q"], workdir=cwd, user=exec_user
-                )
-                container.exec_run(
-                    cmd=["apt-get", "install", "-y", "-q", "python3-pip"],
-                    workdir=cwd,
-                    user=exec_user,
-                )
-            container.exec_run(
-                cmd=[
-                    "python3", "-m", "pip", "install", "--quiet",
-                    "--break-system-packages", *pkgs,
-                ],
-                workdir=cwd,
-                user=exec_user,
-            )
-        except Exception:
-            pass
-        return pkgs
-
-    @staticmethod
-    def _extract_deps(task_root: Path) -> list[str]:
-        """Package names from ``uv add`` / ``pip install`` lines in the task's
-        test scripts (tests/test.sh + tests/*.sh)."""
-        import re
-
-        pkgs: set[str] = set()
         files = list((task_root / "tests").glob("*.sh"))
-        pat = re.compile(r"(?:uv\s+add|uv\s+pip\s+install|pip3?\s+install)\s+([^\n;&|]+)")
-        for p in files:
-            try:
-                text = p.read_text(errors="replace")
-            except Exception:
-                continue
-            for m in pat.finditer(text):
-                for tok in m.group(1).split():
-                    tok = tok.strip().strip("\"'")
-                    if not tok or tok.startswith("-"):
-                        continue
-                    if any(c in tok for c in "$/.=") or tok in ("install", "add"):
-                        continue
-                    pkgs.add(tok)
-        return sorted(pkgs)
+        return mirror_test_env(
+            container, extract_deps(files), cwd, exec_user=exec_user
+        )
 
     def _preserve(self, host_tmp: str) -> None:
         """Copy the mission's .agent (mission.json + traces) into logs_dir so the

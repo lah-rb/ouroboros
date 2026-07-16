@@ -43,6 +43,13 @@ from terminal_bench.agents.failure_mode import FailureMode
 from terminal_bench.terminal.tmux_session import TmuxSession
 from agent.effects.teardown import drain_effects
 from adapters._common import llmvp_endpoint, preserve_agent_dir  # noqa: E402
+from adapters.tb.base import (  # noqa: E402
+    extract_deps,
+    mirror_test_env,
+    per_task_cap,
+    probe_container_cwd,
+    token_totals,
+)
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -98,7 +105,7 @@ class OuroborosAgent(BaseAgent):
         host_tmp = tempfile.mkdtemp(prefix="ouro-tb-")
         pty_scratch = os.path.join(host_tmp, "pty")
         os.makedirs(pty_scratch, exist_ok=True)
-        container_cwd = self._probe_container_cwd(container)
+        container_cwd = probe_container_cwd(container)
 
         task_dir = self._task_dir(logging_dir)
         wall_clock_s = (
@@ -210,7 +217,7 @@ class OuroborosAgent(BaseAgent):
                 failure_mode = FailureMode.UNKNOWN_AGENT_ERROR
 
         self._preserve(host_tmp, logging_dir)
-        tin, tout = self._token_totals(host_tmp)
+        tin, tout = token_totals(host_tmp)
         return AgentResult(
             total_input_tokens=tin,
             total_output_tokens=tout,
@@ -240,92 +247,32 @@ class OuroborosAgent(BaseAgent):
         return None
 
     def _per_task_cap(self, task_dir: Path | None) -> float:
-        """Self-cap at ~0.9× the harness's wait_for budget so we park before it
-        fires (and don't self-handicap). Mirrors the harness's own computation:
-        a global override wins; otherwise the task's max_agent_timeout_sec scaled
-        by the global multiplier."""
-        # --global-agent-timeout-sec overrides the task value entirely.
-        if _GLOBAL_AGENT_TIMEOUT:
-            try:
-                return max(60.0, float(_GLOBAL_AGENT_TIMEOUT) * _CAP_FRACTION)
-            except ValueError:
-                pass
+        """Read the task's max_agent_timeout_sec (task.yaml) and delegate the
+        cap math to the shared helper (adapters.tb.base.per_task_cap)."""
+        t: float | None = None
         if task_dir is not None:
             try:
                 import yaml
 
                 d = yaml.safe_load((task_dir / "task.yaml").read_text()) or {}
                 t = float(d.get("max_agent_timeout_sec") or 0)
-                if t > 0:
-                    return max(60.0, t * _TIMEOUT_MULTIPLIER * _CAP_FRACTION)
             except Exception:
-                pass
-        return max(60.0, _CAP_FALLBACK * _TIMEOUT_MULTIPLIER)
+                t = None
+        return per_task_cap(
+            t,
+            fraction=_CAP_FRACTION,
+            fallback=_CAP_FALLBACK,
+            multiplier=_TIMEOUT_MULTIPLIER,
+            global_override=_GLOBAL_AGENT_TIMEOUT,
+        )
 
     def _mirror_test_env(self, container, task_dir: Path | None, cwd: str) -> list[str]:
-        """Install the deps the task's grading scripts install, into the
-        container's system python, so the agent's `python3 x.py` (and our checks)
-        see the same env the bench grades in. Best-effort.
-
-        The t-bench ubuntu-24-04 images ship NO pip and NO ensurepip (the graders
-        use `uv`), so a bare `python3 -m pip install` is a silent no-op — which is
-        exactly why csv-class tasks thrashed forever on install. So: ensure pip
-        first (`apt-get install python3-pip`, ~15s), THEN install with
-        --break-system-packages (PEP-668). Returns the deps it attempted."""
+        """TB1 grading scripts live at run-tests.sh + tests/*.sh; the install
+        machinery is shared (adapters.tb.base.mirror_test_env)."""
         if task_dir is None:
             return []
-        pkgs = self._extract_deps(task_dir)
-        if not pkgs:
-            return []
-        try:
-            has_pip = (
-                container.exec_run(cmd=["python3", "-m", "pip", "--version"]).exit_code
-                == 0
-            )
-            if not has_pip:
-                container.exec_run(cmd=["apt-get", "update", "-q"], workdir=cwd)
-                container.exec_run(
-                    cmd=["apt-get", "install", "-y", "-q", "python3-pip"], workdir=cwd
-                )
-            container.exec_run(
-                cmd=[
-                    "python3",
-                    "-m",
-                    "pip",
-                    "install",
-                    "--quiet",
-                    "--break-system-packages",
-                    *pkgs,
-                ],
-                workdir=cwd,
-            )
-        except Exception:
-            pass
-        return pkgs
-
-    @staticmethod
-    def _extract_deps(task_dir: Path) -> list[str]:
-        """Package names from `uv add` / `pip install` lines in the task's
-        grading scripts (run-tests.sh + tests/*.sh)."""
-        pkgs: set[str] = set()
         files = [task_dir / "run-tests.sh", *((task_dir / "tests").glob("*.sh"))]
-        pat = re.compile(
-            r"(?:uv\s+add|uv\s+pip\s+install|pip3?\s+install)\s+([^\n;&|]+)"
-        )
-        for p in files:
-            try:
-                text = p.read_text(errors="replace")
-            except Exception:
-                continue
-            for m in pat.finditer(text):
-                for tok in m.group(1).split():
-                    tok = tok.strip().strip("\"'")
-                    if not tok or tok.startswith("-"):
-                        continue
-                    if any(c in tok for c in "$/.=") or tok in ("install", "add"):
-                        continue
-                    pkgs.add(tok)
-        return sorted(pkgs)
+        return mirror_test_env(container, extract_deps(files), cwd)
 
     def _preserve(self, host_tmp: str, logging_dir: Path | None) -> None:
         """Copy the mission's .agent (mission.json + traces) into logging_dir so
