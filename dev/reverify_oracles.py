@@ -4,7 +4,7 @@
 Models tools/pdf_extract/reverify.py: re-apply an oracle to on-disk artifacts and
 re-derive the verdict, so an oracle fix never costs an 80-task re-sweep. The
 container's answer file is NOT preserved (only mission.json + traces, per
-tb_adapter/agent.py:_preserve), so this is a TRACE rescorer: it re-applies the
+adapters/tb/agent.py:_preserve), so this is a TRACE rescorer: it re-applies the
 deterministic non-degeneracy FLOOR (oracle_actions._degenerate_reason) to the
 produced-artifact content AS PRINTED in the trace (mcp_tool_call result_previews
 + judge inference prompt/response), and cross-references whether the mission was

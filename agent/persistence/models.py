@@ -40,7 +40,7 @@ class MissionConfig(BaseModel):
     # Selects the controller flow and phase derivation; additive default
     # keeps pre-flow-set mission.json files loading unchanged.
     flow_set: str = "code_core"
-    # Capability profile (tb_adapter/task_judge): service | data_transform |
+    # Capability profile (adapters/tb/task_judge): service | data_transform |
     # invertible | repair | answer | plain. Gates which completion oracle rung
     # fires (agent/actions/oracle_actions). "" disables profile-gated rungs.
     task_profile: str = ""

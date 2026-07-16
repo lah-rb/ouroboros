@@ -94,6 +94,12 @@ def resolve_reasoning(
     ``session`` must reflect whether the call actually routes through a
     memoryful inference session — the head-swap only exists on that path.
     """
+    # Global kill-switch: OURO_REASONING_OFF=1 restores pre-feature behavior
+    # exactly (every rung, including cue-authored highs) — the baseline arm of
+    # A/B runs, and the operational escape hatch.
+    if os.environ.get("OURO_REASONING_OFF", "") == "1":
+        return None
+
     # Explicit cue-authored ``reasoning`` is static step config — honored like
     # temperature, NOT gated behind the adaptive flag (the flag gates the
     # adaptive machinery below, not flow-author intent). Works on BOTH paths:

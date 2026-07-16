@@ -1,6 +1,6 @@
 """Run one Ouroboros mission per GAIA question.
 
-Shape mirrors swe_adapter.runner with the container swapped for a host scratch
+Shape mirrors adapters.swe.runner with the container swapped for a host scratch
 workspace (LocalEffects): GAIA needs web + files + reasoning, not a repo
 sandbox. web_research is ON — this is the deep_search loop's production
 arena. The answer channel is deterministic: the mission must write the bare
@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 
-from gaia_adapter.loader import GaiaQuestion
+from adapters.gaia.loader import GaiaQuestion
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LLMVP = os.environ.get("OURO_LLMVP", "http://localhost:8008/graphql")
@@ -230,7 +230,7 @@ def run_question(
             finally:
                 # Same teardown discipline as SWE: drain sessions + MCP inside
                 # the loop; CancelledError is a BaseException and must not
-                # escape a best-effort cleanup (see swe_adapter.runner).
+                # escape a best-effort cleanup (see adapters.swe.runner).
                 for teardown in ("end_open_inference_sessions", "mcp_disconnect_all"):
                     fn = getattr(effects, teardown, None)
                     if fn is not None:

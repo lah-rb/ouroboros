@@ -15,7 +15,7 @@ masking correct fixes.
 
 ## Two distinct problem classes
 
-**1. Patch hygiene (FIXED — swe_adapter/patch.py).** `git add -A` swept
+**1. Patch hygiene (FIXED — adapters/swe/patch.py).** `git add -A` swept
 non-solution paths into every model_patch: `.agent/env.json` (set_env writes it
 RELATIVE → ContainerEffects routes it into the container /testbed) leaked into
 ALL 12; requests-1142 additionally captured 66 `build/lib/**` artifacts

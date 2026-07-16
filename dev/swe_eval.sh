@@ -18,7 +18,7 @@ if [ "${1:-}" = "--gold" ]; then
   RUNID=${2:-swe-gold}; IDS=${3:-}
   OUT="$ROOT/runs/swe/$RUNID"; PREDS="$OUT/predictions.jsonl"
   echo "[gold-oracle] writing gold predictions -> $PREDS"
-  uv run python -m swe_adapter.run_pilot --run-id "$RUNID" --gold \
+  uv run python -m adapters.swe.run_pilot --run-id "$RUNID" --gold \
     ${IDS:+--instances "$IDS"} || exit 1
 else
   RUNID=${1:?usage: swe_eval.sh RUNID <preds.jsonl>}; PREDS=${2:?predictions path}

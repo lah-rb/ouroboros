@@ -3083,8 +3083,8 @@ async def action_fallback_fix_target(step_input: StepInput) -> StepOutput:
 # (routed_flow_set / routed_profile); this action writes them onto the mission
 # so the chosen controller derives the right phases, then the handoff tail-calls
 # the set's entry flow. Full-local autonomy: reached when flow_set=="auto";
-# explicit config skips the whole flow. Label sets mirror tb_adapter.task_judge
-# (the router this generalizes) — kept inline to avoid an agent→tb_adapter dep.
+# explicit config skips the whole flow. Label sets mirror adapters.tb.task_judge
+# (the router this generalizes) — kept inline to avoid an agent→adapters.tb dep.
 _ROUTABLE_FLOW_SETS = ("ops", "code_core")
 _ROUTABLE_PROFILES = (
     "service", "data_transform", "invertible", "repair", "answer", "plain",

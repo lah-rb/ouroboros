@@ -75,10 +75,10 @@ class _RespondChannel:
 
 async def _run(domain: str, task_index: int, endpoint: str,
                max_turns: int, boss_persona: str) -> EpisodeArtifacts:
-    from tau_adapter.bridge import ToolBridge
-    from tau_adapter.env import make_env
-    from tau_adapter.runner import EpisodeHandle
-    from tau_adapter.worker import MissionWorker
+    from adapters.tau.bridge import ToolBridge
+    from adapters.tau.env import make_env
+    from adapters.tau.runner import EpisodeHandle
+    from adapters.tau.worker import MissionWorker
 
     env = make_env(domain, task_index=task_index, user="session")
     handle = EpisodeHandle(env)

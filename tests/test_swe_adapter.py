@@ -1,4 +1,4 @@
-"""swe_adapter — the official SWE-bench harness adapter.
+"""adapters.swe — the official SWE-bench harness adapter.
 
 Pins the parts that don't need Docker/LLM/dataset: the git-diff artifact
 contract (extraction + predictions schema), the forced code_core+repair
@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 import tempfile
 
-from swe_adapter.instance import SweInstance
-from swe_adapter.patch import extract_model_patch, prediction_row
+from adapters.swe.instance import SweInstance
+from adapters.swe.patch import extract_model_patch, prediction_row
 
 
 class _FakeContainer:
@@ -147,7 +147,7 @@ def test_prediction_row_schema_exact():
 
 
 def test_predictions_jsonl_one_object_per_line():
-    from swe_adapter.evaluate import write_predictions
+    from adapters.swe.evaluate import write_predictions
 
     rows = [prediction_row("a", "m", "PA"), prediction_row("b", "m", "PB")]
     with tempfile.TemporaryDirectory() as d:
@@ -170,7 +170,7 @@ def test_image_key_normalizes_instance_id():
 
 
 def test_build_mission_forces_code_core_repair_brownfield():
-    from swe_adapter.runner import REPO_DIR, build_mission
+    from adapters.swe.runner import REPO_DIR, build_mission
 
     inst = _inst()
     with tempfile.TemporaryDirectory() as host_tmp:
@@ -188,7 +188,7 @@ def test_build_mission_forces_code_core_repair_brownfield():
 
 
 def test_gold_predictions_use_gold_patch():
-    from swe_adapter.evaluate import GOLD_MODEL, write_gold_predictions
+    from adapters.swe.evaluate import GOLD_MODEL, write_gold_predictions
 
     insts = [_inst(), _inst(instance_id="django__django-11099", patch="GOLD2")]
     with tempfile.TemporaryDirectory() as d:
@@ -202,7 +202,7 @@ def test_gold_predictions_use_gold_patch():
 
 
 def test_pilot_has_small_and_large_scouts():
-    from swe_adapter.instance import (
+    from adapters.swe.instance import (
         PILOT_INSTANCES,
         PILOT_LARGE_SCOUTS,
         PILOT_SMALL,
@@ -219,7 +219,7 @@ def test_pilot_has_small_and_large_scouts():
 def test_prune_mode_default_is_run_end_and_validated(monkeypatch):
     import importlib
 
-    import swe_adapter.runner as r
+    import adapters.swe.runner as r
 
     monkeypatch.delenv("OURO_SWE_PRUNE_IMAGES", raising=False)
     importlib.reload(r)
@@ -234,7 +234,7 @@ def test_prune_mode_default_is_run_end_and_validated(monkeypatch):
 
 
 def test_container_name_normalizes_and_bounds():
-    from swe_adapter.runner import _container_name
+    from adapters.swe.runner import _container_name
 
     n = _container_name(_inst(instance_id="astropy__astropy-12907"))
     assert n.startswith("ouro-swe-")

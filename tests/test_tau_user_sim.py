@@ -132,7 +132,7 @@ def test_persona_session_close_is_idempotent_and_never_raises():
 
 
 def test_session_user_sim_reset_injects_scenario_and_stop_rule(monkeypatch):
-    from tau_adapter import user_sim as us
+    from adapters.tau import user_sim as us
 
     prompts = []
 
@@ -167,7 +167,7 @@ def test_session_user_sim_reset_injects_scenario_and_stop_rule(monkeypatch):
 def test_make_env_session_mode_swaps_user_without_llm(monkeypatch):
     """user='session' must construct with the no-LLM human strategy and
     install SessionUserSim — zero network at construction."""
-    from tau_adapter import env as tau_env
+    from adapters.tau import env as tau_env
 
     class FakeSim:
         pass
@@ -178,7 +178,7 @@ def test_make_env_session_mode_swaps_user_without_llm(monkeypatch):
         created["yes"] = True
         return FakeSim()
 
-    import tau_adapter.user_sim as us
+    import adapters.tau.user_sim as us
 
     monkeypatch.setattr(us, "SessionUserSim", fake_session_user_sim)
     env = tau_env.make_env("retail", task_index=0, user="session")

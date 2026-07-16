@@ -83,7 +83,7 @@ def all_instance_ids(dataset: str = DATASET) -> list[str]:
         from datasets import load_dataset
     except ImportError as e:  # pragma: no cover - only without the dep
         raise ImportError(
-            "swe_adapter.all_instance_ids needs the `datasets` package."
+            "adapters.swe.all_instance_ids needs the `datasets` package."
         ) from e
     ds = load_dataset(dataset, split="test")
     return [r["instance_id"] for r in ds]
@@ -102,7 +102,7 @@ def load_instances(
         from datasets import load_dataset
     except ImportError as e:  # pragma: no cover - exercised only without the dep
         raise ImportError(
-            "swe_adapter.load_instances needs the `datasets` package "
+            "adapters.swe.load_instances needs the `datasets` package "
             "(added as a project dep; run `uv sync`)."
         ) from e
 

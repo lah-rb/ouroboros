@@ -30,7 +30,7 @@ class StubHandle:
 
 
 def _write_cli(tmp_path, bridge_url):
-    from tau_adapter.bridge import TAU_CLI_TEMPLATE
+    from adapters.tau.bridge import TAU_CLI_TEMPLATE
 
     cli = tmp_path / "tau"
     cli.write_text(TAU_CLI_TEMPLATE.format(bridge_url=bridge_url))
@@ -45,7 +45,7 @@ def _run_cli(cli, *args):
 
 
 def test_bridge_roundtrip_via_cli_json(tmp_path):
-    from tau_adapter.bridge import ToolBridge
+    from adapters.tau.bridge import ToolBridge
 
     handle = StubHandle()
     bridge = ToolBridge(handle)
@@ -60,7 +60,7 @@ def test_bridge_roundtrip_via_cli_json(tmp_path):
 
 
 def test_bridge_roundtrip_via_cli_kv_flags(tmp_path):
-    from tau_adapter.bridge import ToolBridge
+    from adapters.tau.bridge import ToolBridge
 
     handle = StubHandle()
     bridge = ToolBridge(handle)
@@ -76,7 +76,7 @@ def test_bridge_roundtrip_via_cli_kv_flags(tmp_path):
 
 
 def test_bridge_refuses_respond(tmp_path):
-    from tau_adapter.bridge import ToolBridge
+    from adapters.tau.bridge import ToolBridge
 
     handle = StubHandle()
     bridge = ToolBridge(handle)
@@ -91,7 +91,7 @@ def test_bridge_refuses_respond(tmp_path):
 
 
 def test_bridge_refuses_when_done_and_near_step_cap(tmp_path):
-    from tau_adapter.bridge import ToolBridge
+    from adapters.tau.bridge import ToolBridge
 
     handle = StubHandle(max_steps=10)
     bridge = ToolBridge(handle, reserve_steps=6)
@@ -110,7 +110,7 @@ def test_bridge_refuses_when_done_and_near_step_cap(tmp_path):
 
 
 def test_bridge_tool_error_is_returned_not_raised(tmp_path):
-    from tau_adapter.bridge import ToolBridge
+    from adapters.tau.bridge import ToolBridge
 
     handle = StubHandle()
     bridge = ToolBridge(handle)
@@ -129,7 +129,7 @@ def test_bridge_tool_error_is_returned_not_raised(tmp_path):
 def _mk_worker(monkeypatch, run_effect):
     """Build a MissionWorker without a real venv/mission; run_effect(worker,
     objective) simulates one mission run (writes reply.txt or not)."""
-    import tau_adapter.worker as w
+    import adapters.tau.worker as w
 
     monkeypatch.setattr(w.subprocess, "run", lambda *a, **k: None)  # skip venv
 

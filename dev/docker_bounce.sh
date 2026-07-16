@@ -22,7 +22,7 @@ say() { echo "$TS $*" | tee -a "$LOG"; }
 
 # ---- gate 1: never bounce under a live benchmark run ----
 if [ "${1:-}" != "--force" ]; then
-  BUSY="$(pgrep -f 'swe_adapter.run_pilot|terminal_bench|tb_adapter|harbor' | head -1 || true)"
+  BUSY="$(pgrep -f 'adapters.swe.run_pilot|terminal_bench|tb_adapter|harbor' | head -1 || true)"
   if [ -n "$BUSY" ]; then
     say "SKIP: benchmark harness active (pid $BUSY) — no bounce mid-run"
     exit 0

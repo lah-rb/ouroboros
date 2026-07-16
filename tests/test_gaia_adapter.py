@@ -1,12 +1,12 @@
-"""gaia_adapter: official scorer semantics, mission construction, answer channel."""
+"""adapters.gaia: official scorer semantics, mission construction, answer channel."""
 
 from __future__ import annotations
 
 
 
-from gaia_adapter.loader import GaiaQuestion
-from gaia_adapter.runner import _ANSWER_CONTRACT, build_mission, extract_answer
-from gaia_adapter.scorer import question_scorer
+from adapters.gaia.loader import GaiaQuestion
+from adapters.gaia.runner import _ANSWER_CONTRACT, build_mission, extract_answer
+from adapters.gaia.scorer import question_scorer
 
 
 # ── scorer: the official quasi-exact-match semantics ────────────────────────

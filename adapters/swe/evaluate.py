@@ -17,8 +17,8 @@ import logging
 import os
 import subprocess
 
-from swe_adapter.instance import DATASET, SweInstance
-from swe_adapter.patch import prediction_row
+from adapters.swe.instance import DATASET, SweInstance
+from adapters.swe.patch import prediction_row
 
 logger = logging.getLogger(__name__)
 

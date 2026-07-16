@@ -1,4 +1,4 @@
-"""tau_adapter: offline coverage (no LLM, no server).
+"""adapters.tau: offline coverage (no LLM, no server).
 
 The official Env constructor fires a user-sim LLM call, so these tests
 exercise the layers BELOW it directly: domain data + tools, DB reset
@@ -110,7 +110,7 @@ class _FakeEnv:
 
 
 def test_episode_handle_moves_and_termination():
-    from tau_adapter.runner import EpisodeHandle
+    from adapters.tau.runner import EpisodeHandle
 
     h = EpisodeHandle(_FakeEnv())
     opening = h.reset(0)
@@ -130,7 +130,7 @@ def test_episode_handle_moves_and_termination():
 
 
 def test_export_policy_writes_domain_wiki(tmp_path):
-    from tau_adapter.env import export_policy
+    from adapters.tau.env import export_policy
 
     out = export_policy("retail", out_path=tmp_path / "TAU_RETAIL.md")
     text = out.read_text()
@@ -143,7 +143,7 @@ def test_export_policy_writes_domain_wiki(tmp_path):
 def test_respond_channel_ends_gracefully_when_handle_already_done():
     """A mission's tool calls can trip the episode step cap mid-turn; the
     channel must end the episode, not let respond() raise."""
-    from tau_adapter.episode import _RespondChannel
+    from adapters.tau.episode import _RespondChannel
 
     class DoneHandle:
         done = True

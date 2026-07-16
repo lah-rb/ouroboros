@@ -243,9 +243,9 @@ async def test_held_out_repair_goal_skips_witness_goes_diagnose():
 
 
 def test_swe_adapter_sets_held_out_tests():
-    from swe_adapter.runner import build_mission
+    from adapters.swe.runner import build_mission
     import tempfile
-    from swe_adapter.instance import SweInstance
+    from adapters.swe.instance import SweInstance
 
     inst = SweInstance(instance_id="a__b-1", repo="a/b", base_commit="c",
                        problem_statement="bug", patch="P", test_patch="T")

@@ -2,7 +2,7 @@
 
 Reuses the Ouroboros core verbatim (ContainerEffects, run_agent, the code_core
 brownfield entry via ingest_workspace + pending_directive). The terminal-bench
-harness couplings tb_adapter carries (BaseAgent/AgentResult/TmuxSession, the
+harness couplings adapters.tb carries (BaseAgent/AgentResult/TmuxSession, the
 ~/.cache/terminal-bench task.yaml wall-clock derivation, the run-tests.sh dep
 mirror) are dropped — SWE-bench images ship deps in the conda `testbed` env and
 the repo is always at /testbed, so no probing is needed.
@@ -25,8 +25,8 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from swe_adapter.instance import SweInstance  # noqa: E402
-from swe_adapter.patch import extract_model_patch, prediction_row  # noqa: E402
+from adapters.swe.instance import SweInstance  # noqa: E402
+from adapters.swe.patch import extract_model_patch, prediction_row  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ def run_instance(
     rather than leaking a per-instance ``from_env()``). None → create+close
     locally (standalone use)."""
     from agent.loop import run_agent
-    from tb_adapter.container_effects import ContainerEffects
+    from adapters.tb.container_effects import ContainerEffects
 
     wall = wall_clock_s if wall_clock_s is not None else _WALL_CLOCK_S
     cycles = max_cycles if max_cycles is not None else _MAX_CYCLES
@@ -184,7 +184,7 @@ def run_instance(
             host_pty_scratch=pty_scratch,
             llmvp_endpoint=_LLMVP,
             exec_user="",
-            # CoT/prompt capture parity with tb_adapter (OURO_TRACE=1 → traces
+            # CoT/prompt capture parity with adapters.tb (OURO_TRACE=1 → traces
             # carry thinking + rendered prompts for CoT-level failure analysis).
             trace_thinking=_TRACE,
             trace_prompts=_TRACE,

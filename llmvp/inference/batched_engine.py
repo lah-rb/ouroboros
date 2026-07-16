@@ -1013,8 +1013,35 @@ class BatchedEngine:
             slot.n_tokens = head.n_tokens
             slot.static_len = head.n_tokens
             slot.input_ids = list(head.tokens)
+            # Whole-seq install = the head IS whatever we just put there; the
+            # backend re-stamps the level right after a reasoning install.
+            slot._reasoning_current = None
 
         self.control(_do).result(timeout=30)
+
+    def splice_head_sync(self, slot: SeqSlot, head: PersonaHead) -> bool:
+        """Mid-session head SPLICE: replace ONLY the head span [0, head_len)
+        of a seat's seq with a pinned head, leaving the conversation above it
+        intact — the per-seat port of the pool path's _splice_reasoning_head
+        (2026-06-validated mechanism: 237 swaps, 0 corruption). Sound iff the
+        target head's length equals the seat's current static head length, so
+        body positions stay aligned. Blocking (control op)."""
+
+        def _do() -> bool:
+            ctx = self._llama._ctx
+            hlen = head.n_tokens
+            if hlen <= 0 or hlen != int(slot.static_len) or hlen > int(slot.n_tokens):
+                logger.warning(
+                    "🧠 seat head-splice refused: head %d vs static %d (n=%d, seq %d)",
+                    hlen, slot.static_len, slot.n_tokens, slot.seq,
+                )
+                return False
+            ctx.memory_seq_rm(slot.seq, 0, hlen)
+            ctx.memory_seq_cp(head.seq, slot.seq, -1, -1)
+            slot.input_ids[:hlen] = list(head.tokens)
+            return True
+
+        return self.control(_do).result(timeout=30)
 
     # -- helpers ---------------------------------------------------------------
 

@@ -31,11 +31,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Bench-facing harness deps (swe_adapter). Heavy (datasets → pyarrow) and only
+# Bench-facing harness deps (adapters.swe). Heavy (datasets → pyarrow) and only
 # needed to load SWE-bench instances + run the official evaluator, so kept out
-# of the core install — the swe_adapter tests import-guard them. Install with
+# of the core install — the adapters.swe tests import-guard them. Install with
 # `uv sync --extra swe`. (terminal_bench follows the same in-venv-not-core
-# pattern for tb_adapter.)
+# pattern for adapters.tb.)
 swe = [
     "swebench>=3.0.0",
     "datasets>=2.0.0",

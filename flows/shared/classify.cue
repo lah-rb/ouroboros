@@ -8,7 +8,7 @@
 //   flow_set — ops (single-pass) vs code_core (multi-file diagnose/patch)
 //   profile  — the capability profile that gates the completion oracles
 //
-// It generalizes the terminal-bench router (tb_adapter/task_judge.py, which
+// It generalizes the terminal-bench router (adapters/tb/task_judge.py, which
 // emitted the same two labels in one pre-loop Python call) into the flow graph
 // so EVERY entry point can route, not just TB. `persist_routing` rewrites
 // mission.config.flow_set to the concrete choice, then the handoff tail-calls
@@ -18,7 +18,7 @@
 // Reached only when mission.config.flow_set == "auto" (the FLOW_SETS registry
 // maps auto → this flow's entry). Explicit config (CLI/YAML/adapter/env) names
 // a concrete set and SKIPS this flow entirely — the override path for human /
-// API-managed runs (e.g. swe_adapter forces code_core+repair). held_out_tests
+// API-managed runs (e.g. adapters.swe forces code_core+repair). held_out_tests
 // is never routed here: it's a grader property, config-only.
 
 package ouroboros

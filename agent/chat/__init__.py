@@ -8,7 +8,7 @@ dedicated next step.
 
 Parties are duck-typed protocols (see env.py): a Controller decides, a
 Worker executes, a UserChannel carries the conversation. τ binds them in
-tau_adapter/episode.py.
+adapters/tau/episode.py.
 """
 
 from agent.chat.boss import Decision, MenuBoss, MenuOption

@@ -1245,6 +1245,7 @@ class LlamaCppBackend(BaseBackend):
             if head is None:
                 return False
             self._engine.install_head_sync(inst, head)
+            inst._reasoning_current = level
             self._h_reasoning_swaps += 1
             log.info(
                 "🧠 reasoning head-swap → %s (seat seq %d, %d tok, batched)",
@@ -1301,8 +1302,26 @@ class LlamaCppBackend(BaseBackend):
         verified per call; a mismatch refuses the splice (turn proceeds on the
         current level). Returns True if the splice happened."""
         if self._decode_mode == "batched":
-            log.debug("reasoning splice: batched mode not wired yet — skipping")
-            return False
+            cur = getattr(inst, "_reasoning_current", None) or self._reasoning_default_level
+            if level == cur:
+                return False
+            if level == self._reasoning_default_level:
+                head = self._engine._persona_heads.get(
+                    getattr(inst, "persona", "default")
+                )
+            else:
+                head = self._engine._reasoning_heads.get(level)
+            if head is None:
+                return False
+            if not self._engine.splice_head_sync(inst, head):
+                return False
+            inst._reasoning_current = level
+            self._h_reasoning_swaps += 1
+            log.info(
+                "🧠 reasoning head-splice → %s (seat seq %d, batched, body intact)",
+                level, inst.seq,
+            )
+            return True
         cur = getattr(inst, "_reasoning_current", None) or self._reasoning_default_level
         if level == cur:
             return False
@@ -3090,8 +3109,6 @@ class LlamaCppBackend(BaseBackend):
         async with self.generation_guard(nested=nested):
             self._h_requests_since_refresh += 1  # drives the periodic context refresh
             if self._decode_mode == "batched":
-                if kwargs.pop("reasoning", None):
-                    log.debug("completion reasoning ignored (batched mode not wired)")
                 parts: List[str] = []
                 async for chunk in self._batched_stream(
                     instance, prompt_tokens, max_tokens, temperature, **kwargs
@@ -3129,8 +3146,6 @@ class LlamaCppBackend(BaseBackend):
         async with self.generation_guard(nested=nested):
             self._h_requests_since_refresh += 1  # drives the periodic context refresh
             if self._decode_mode == "batched":
-                if kwargs.pop("reasoning", None):
-                    log.debug("completion reasoning ignored (batched mode not wired)")
                 async for chunk in self._batched_stream(
                     instance, prompt_tokens, max_tokens, temperature, **kwargs
                 ):
@@ -3170,6 +3185,43 @@ class LlamaCppBackend(BaseBackend):
         kwargs.pop("flow_prefix_len", None)
         if flow_key:
             log.debug("flow_kv_cache is pool-only — ignoring flow_key %r", flow_key)
+
+        # Per-request reasoning level for STATELESS completions (batched
+        # parity with generate_stream_sync). Session turns never carry the
+        # kwarg. Preconditions: fresh seat (only its head in KV — the same
+        # contract the static split below already assumes), pinned level head
+        # of equal length. Install head + swap prompt head tokens together so
+        # the split stays exact; restore the persona head afterward so the
+        # next request on this seat sees its contract intact.
+        _reasoning = kwargs.pop("reasoning", None)
+        _restore_head = None
+        if _reasoning and str(_reasoning) != self._reasoning_default_level:
+            _level = str(_reasoning)
+            _persona_head = self._engine._persona_heads.get(
+                getattr(seat, "persona", "default")
+            )
+            _level_head = self._engine._reasoning_heads.get(_level)
+            if (
+                self._reasoning_head_swap
+                and static_in_prompt
+                and _level_head is not None
+                and _persona_head is not None
+                and _level_head.n_tokens == seat.static_len
+                and int(seat.n_tokens or 0) == int(seat.static_len)
+                and len(prompt_tokens) >= seat.static_len
+            ):
+                self._engine.install_head_sync(seat, _level_head)
+                prompt_tokens = list(_level_head.tokens) + list(
+                    prompt_tokens[_level_head.n_tokens:]
+                )
+                _restore_head = _persona_head
+                self._h_reasoning_swaps += 1
+                log.info(
+                    "🧠 completion head-swap → %s (seat seq %d, batched)",
+                    _level, seat.seq,
+                )
+            else:
+                log.debug("completion reasoning=%s refused (batched preconditions)", _level)
 
         n_static = seat.static_len if static_in_prompt else 0
         if n_static > len(prompt_tokens):
@@ -3220,6 +3272,13 @@ class LlamaCppBackend(BaseBackend):
                 # engine retires the stream and captures the partial text.
                 bridge.closed = True
                 self._engine.cancel(stream_id)
+            if _restore_head is not None:
+                # Put the persona head back so the seat honors its fresh-seat
+                # contract for the next request.
+                try:
+                    self._engine.install_head_sync(seat, _restore_head)
+                except Exception:  # noqa: BLE001 — restore is best-effort
+                    log.warning("persona head restore failed (seat seq %d)", seat.seq)
             tracker.finish()
 
     # ------------------------------------------------------------------

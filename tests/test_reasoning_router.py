@@ -39,7 +39,8 @@ def tiny_artifact(tmp_path):
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     for var in ("OURO_ADAPTIVE_REASONING", "OURO_REASONING_ROUTER",
-                "OURO_ROUTER_THR", "OURO_ROUTER_STEPS", "OURO_REASONING_HIGH_STEPS"):
+                "OURO_ROUTER_THR", "OURO_ROUTER_STEPS", "OURO_REASONING_HIGH_STEPS",
+                "OURO_REASONING_OFF"):
         monkeypatch.delenv(var, raising=False)
     rr._artifact_cache.clear()
     yield
@@ -60,6 +61,14 @@ def test_dormant_without_flag(tiny_artifact, monkeypatch):
     monkeypatch.setenv("OURO_REASONING_HIGH_STEPS", "judge_step")
     assert rr.resolve_reasoning("plan_interaction", {}, "omega omega", True) is None
     assert rr.resolve_reasoning("judge_step", {}, "x", True) is None
+
+
+def test_kill_switch_overrides_everything(tiny_artifact, monkeypatch):
+    _on(monkeypatch, tiny_artifact, OURO_REASONING_HIGH_STEPS="judge_step")
+    monkeypatch.setenv("OURO_REASONING_OFF", "1")
+    assert rr.resolve_reasoning("verify_completion", {"reasoning": "high"}, "x", True) is None
+    assert rr.resolve_reasoning("judge_step", {}, "x", True) is None
+    assert rr.resolve_reasoning("plan_interaction", {}, "omega omega", True) is None
 
 
 def test_explicit_config_works_without_flag(monkeypatch):

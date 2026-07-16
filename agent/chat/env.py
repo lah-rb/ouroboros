@@ -3,7 +3,7 @@
 Control inversion in one loop: a Controller (the boss) decides, a Worker
 executes the directive, a UserChannel carries the reply to the other party
 and returns their response. Generic and duck-typed — τ binds the three
-protocols in tau_adapter/episode.py; the same loop is the seam for the
+protocols in adapters/tau/episode.py; the same loop is the seam for the
 future human-chat surface.
 
 Termination is layered and always reached: the user closes (user_stop),

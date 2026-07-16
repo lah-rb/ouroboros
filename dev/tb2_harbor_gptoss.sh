@@ -3,12 +3,12 @@
 # pre-warmed flow cache. The 1:1 yardstick: gpt-oss-120b has a published verified
 # TB2 score of 18.7% under the neutral Terminus-2 agent — this measures OUROBOROS
 # (our scaffold) on the same model + same tasks. Mirrors dev/tb_resident_gptoss.sh
-# (the legacy tb harness) but drives Harbor with tb_adapter.harbor_agent.
+# (the legacy tb harness) but drives Harbor with adapters.tb.harbor_agent.
 #
 # Requires: Docker on Apple Virtualization Framework + Rosetta (the alexgshaw/*
 # images are linux/amd64; QEMU segfaults the pytest/selenium verifiers — Rosetta
 # runs them clean). harbor + ouroboros share .venv; PYTHONPATH lets Harbor's
-# multiprocess workers import tb_adapter/agent.
+# multiprocess workers import adapters/tb/agent.
 #
 # Usage: nohup bash dev/tb2_harbor_gptoss.sh > /tmp/tb2_harbor.out 2>&1 &
 set -u
@@ -61,7 +61,7 @@ c3=$(tail -n +$((mark+1)) "$SRVLOG" | grep -ci "code -3"); log "  warm code-3 er
 log "  running TB2 89-set -> $RUNID (n-concurrent 1; per-task caps from task.toml)"
 rm -rf "$OUT" "/tmp/$RUNID.log" 2>/dev/null
 .venv/bin/harbor run -d terminal-bench@2.0 \
-  --agent-import-path tb_adapter.harbor_agent:OuroborosHarborAgent \
+  --agent-import-path adapters.tb.harbor_agent:OuroborosHarborAgent \
   -m "openai/$MODEL" -n 1 -o "$OUT" > "/tmp/$RUNID.log" 2>&1
 log "  harbor run finished"
 

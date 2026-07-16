@@ -1,4 +1,4 @@
-"""Unified SWE report (swe_adapter/report.py): the agent's self-verdict beside
+"""Unified SWE report (adapters/swe/report.py): the agent's self-verdict beside
 the official grade, with the UNDERCLAIM / OVERCLAIM divergences surfaced.
 
 Ouroboros parks conservatively — a run can grade ✅ while its mission is still
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 
-from swe_adapter.report import build_rows, format_report
+from adapters.swe.report import build_rows, format_report
 
 
 def _write_mission(logs_dir: str, iid: str, status: str, done: int, total: int) -> None:

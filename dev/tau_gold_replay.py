@@ -22,8 +22,8 @@ def main() -> int:
     domain = sys.argv[1] if len(sys.argv) > 1 else "retail"
     n_tasks = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 
-    from tau_adapter.env import make_env
-    from tau_adapter.runner import replay_gold
+    from adapters.tau.env import make_env
+    from adapters.tau.runner import replay_gold
 
     results = []
     for idx in range(n_tasks):

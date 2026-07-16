@@ -59,7 +59,7 @@ def make_env(
     from tau_bench.envs import get_env
 
     if user == "session":
-        from tau_adapter.user_sim import SessionUserSim
+        from adapters.tau.user_sim import SessionUserSim
 
         env = get_env(
             domain,

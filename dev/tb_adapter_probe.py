@@ -16,7 +16,7 @@ import types
 
 import docker
 
-from tb_adapter.agent import OuroborosAgent
+from adapters.tb.agent import OuroborosAgent
 
 INSTRUCTION = (
     "Create a file called hello.txt in the current directory. Write "

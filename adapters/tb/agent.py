@@ -21,8 +21,8 @@ the same environment the bench grades in, not a barer one that fails on a
 missing import), and **trace preservation** (the mission's traces are copied
 into ``logging_dir`` so runs are inspectable after the container is gone).
 
-Register with: ``tb run --agent-import-path tb_adapter.agent:OuroborosAgent``.
-Invoke ``tb`` from the repo root so ``agent.*`` / ``tb_adapter.*`` import.
+Register with: ``tb run --agent-import-path adapters.tb.agent:OuroborosAgent``.
+Invoke ``tb`` from the repo root so ``agent.*`` / ``adapters.tb.*`` import.
 """
 
 from __future__ import annotations
@@ -86,8 +86,8 @@ class OuroborosAgent(BaseAgent):
         from agent.persistence.manager import PersistenceManager
         from agent.persistence.models import MissionConfig, MissionState
 
-        from tb_adapter.container_effects import ContainerEffects
-        from tb_adapter.image_prune import note_task_image
+        from adapters.tb.container_effects import ContainerEffects
+        from adapters.tb.image_prune import note_task_image
 
         container = session.container
         # Register the task image for pruning (OURO_TB_PRUNE_IMAGES) — the harness
@@ -361,7 +361,7 @@ class OuroborosAgent(BaseAgent):
         profile (service|data_transform|invertible|repair|answer|plain) gates the
         completion oracle rungs. Decision + method logged to
         logging_dir/ouroboros-routing.json for audit."""
-        from tb_adapter.task_judge import classify_flow_set
+        from adapters.tb.task_judge import classify_flow_set
 
         log_path = (
             Path(logging_dir) / "ouroboros-routing.json" if logging_dir else None

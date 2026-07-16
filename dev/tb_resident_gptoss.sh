@@ -41,7 +41,7 @@ c3=$(tail -n +$((mark+1)) "$SRVLOG" | grep -ci "code -3"); log "  warm code-3 er
 log "  running tb 8-set -> $RUNID"
 rm -rf "runs/$RUNID" "/tmp/$RUNID.log" 2>/dev/null
 OURO_TRACE=1 .venv/bin/tb run -d terminal-bench-core==0.1.1 \
-  --agent-import-path tb_adapter.agent:OuroborosAgent $TASKS \
+  --agent-import-path adapters.tb.agent:OuroborosAgent $TASKS \
   --n-concurrent 1 --run-id "$RUNID" --output-path runs > "/tmp/$RUNID.log" 2>&1
 acc=$(grep -iE "Accuracy" "/tmp/$RUNID.log" | tail -1)
 builds=$(grep -cE "resident flow BUILD|flow_kv_cache BUILD" "$SRVLOG")

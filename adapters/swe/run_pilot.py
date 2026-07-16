@@ -1,6 +1,6 @@
 """Run Ouroboros over a SWE-bench pilot subset → a predictions JSONL.
 
-    python -m swe_adapter.run_pilot --run-id swe-pilot-1 [--instances a,b,c]
+    python -m adapters.swe.run_pilot --run-id swe-pilot-1 [--instances a,b,c]
                                     [--model ouroboros-gpt-oss] [--wall 1200]
 
 Sequential (single LLMVP instance — no concurrency). The LLMVP server must be
@@ -20,8 +20,8 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from swe_adapter.evaluate import write_gold_predictions, write_predictions  # noqa: E402
-from swe_adapter.instance import PILOT_INSTANCES, load_instances  # noqa: E402
+from adapters.swe.evaluate import write_gold_predictions, write_predictions  # noqa: E402
+from adapters.swe.instance import PILOT_INSTANCES, load_instances  # noqa: E402
 
 
 def _resume_done_ids(preds_path: str) -> tuple[list[dict], set[str]]:
@@ -72,7 +72,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.all:
-        from swe_adapter.instance import all_instance_ids
+        from adapters.swe.instance import all_instance_ids
 
         ids = all_instance_ids()
         if not args.no_shuffle:  # representative prefix for the partial overnight run
@@ -112,7 +112,7 @@ def main() -> None:
     if not instances:
         sys.exit("No instances loaded — check the ids / dataset access.")
 
-    from swe_adapter.runner import (
+    from adapters.swe.runner import (
         _PRUNE_MODE,
         _docker_client,
         _remove_image,

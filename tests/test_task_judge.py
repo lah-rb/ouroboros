@@ -3,7 +3,7 @@
 import os
 from unittest import mock
 
-from tb_adapter.task_judge import _parse_judgment, classify_flow_set
+from adapters.tb.task_judge import _parse_judgment, classify_flow_set
 
 
 def test_parse_judgment_json_only():
@@ -19,7 +19,7 @@ def test_parse_judgment_json_only():
 
 def test_override_wins_flow_set_llm_still_supplies_profile():
     with mock.patch.dict(os.environ, {"OURO_FLOW_SET": "code_core"}):
-        with mock.patch("tb_adapter.task_judge._ask_llm", return_value=("ops", "repair")) as ask:
+        with mock.patch("adapters.tb.task_judge._ask_llm", return_value=("ops", "repair")) as ask:
             fs, profile, method = classify_flow_set("anything", "http://x")
             assert (fs, method) == ("code_core", "override")  # override forces the flow set
             assert profile == "repair"                         # LLM still supplies the profile
@@ -28,7 +28,7 @@ def test_override_wins_flow_set_llm_still_supplies_profile():
 
 def test_invalid_override_ignored_uses_llm():
     with mock.patch.dict(os.environ, {"OURO_FLOW_SET": "bogus"}):
-        with mock.patch("tb_adapter.task_judge._ask_llm", return_value=("code_core", "repair")):
+        with mock.patch("adapters.tb.task_judge._ask_llm", return_value=("code_core", "repair")):
             fs, profile, method = classify_flow_set("write a parser", "http://x")
             assert (fs, profile, method) == ("code_core", "repair", "llm")
 
@@ -37,7 +37,7 @@ def test_retry_then_success():
     # First two attempts fail (None), the third parses -> uses the LLM answer.
     with mock.patch.dict(os.environ, {}, clear=False):
         os.environ.pop("OURO_FLOW_SET", None)
-        with mock.patch("tb_adapter.task_judge._ask_llm",
+        with mock.patch("adapters.tb.task_judge._ask_llm",
                         side_effect=[None, None, ("code_core", "repair")]) as ask:
             fs, profile, method = classify_flow_set("x", "http://x")
             assert (fs, profile, method) == ("code_core", "repair", "llm")
@@ -48,7 +48,7 @@ def test_retry_exhausted_defaults_to_ops_plain():
     # No keyword heuristic: an unreachable LLM, retried to the limit, defaults to (ops, plain).
     with mock.patch.dict(os.environ, {}, clear=False):
         os.environ.pop("OURO_FLOW_SET", None)
-        with mock.patch("tb_adapter.task_judge._ask_llm", return_value=None) as ask:
+        with mock.patch("adapters.tb.task_judge._ask_llm", return_value=None) as ask:
             fs, profile, method = classify_flow_set(
                 "Fix the failing tests across the repo", "http://x")
             assert (fs, profile, method) == ("ops", "plain", "default")

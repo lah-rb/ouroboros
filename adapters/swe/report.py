@@ -15,7 +15,7 @@ divergences are visible instead of being hidden behind the agent's own
     solved the task; the held-out test disagrees. The higher-signal failure.
 
 Usage:
-    python -m swe_adapter.report --run-id swe-loc-1 [--out-dir runs/swe]
+    python -m adapters.swe.report --run-id swe-loc-1 [--out-dir runs/swe]
                                  [--report PATH] [--json]
 """
 
@@ -198,7 +198,7 @@ def main() -> None:
         with open(args.report, encoding="utf-8") as f:
             report = json.load(f)
     else:
-        from swe_adapter.evaluate import _load_report
+        from adapters.swe.evaluate import _load_report
 
         report = _load_report(os.path.join(run_dir, "predictions.jsonl"), args.run_id)
     if not report:

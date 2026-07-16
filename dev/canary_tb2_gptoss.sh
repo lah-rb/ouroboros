@@ -6,7 +6,7 @@
 # move directly against the prior canary (runs/canary-tb2/2026-06-19__10-50-20:
 # 456 plan_interaction turns over the 5 traced tasks).
 #
-# The §8 change is agent-side — Harbor fresh-imports tb_adapter each run, so no
+# The §8 change is agent-side — Harbor fresh-imports adapters.tb each run, so no
 # server restart is needed to pick it up; the server only needs the prefill/decode
 # telemetry (already live). Resident + warm are reset here to match the prior run.
 #
@@ -66,7 +66,7 @@ INC=(); for t in "${TASKS[@]}"; do INC+=(-i "$t"); done
 log "  running ${#TASKS[@]}-task canary -> $RUNID (n-concurrent 1; per-task caps from task.toml)"
 rm -rf "$OUT" "/tmp/$RUNID.log" 2>/dev/null
 .venv/bin/harbor run -d terminal-bench@2.0 \
-  --agent-import-path tb_adapter.harbor_agent:OuroborosHarborAgent \
+  --agent-import-path adapters.tb.harbor_agent:OuroborosHarborAgent \
   -m "openai/$MODEL" -n 1 "${INC[@]}" -o "$OUT" > "/tmp/$RUNID.log" 2>&1
 log "  harbor run finished"
 

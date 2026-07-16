@@ -25,7 +25,7 @@ import tempfile
 from typing import List, Optional
 
 from agent.chat.env import WorkerReport
-from tau_adapter.bridge import TAU_CLI_TEMPLATE
+from adapters.tau.bridge import TAU_CLI_TEMPLATE
 
 log = logging.getLogger(__name__)
 

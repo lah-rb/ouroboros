@@ -39,7 +39,7 @@ def container():
 
 @pytest.fixture
 def fx(container, tmp_path):
-    from tb_adapter.container_effects import ContainerEffects
+    from adapters.tb.container_effects import ContainerEffects
 
     pty = tmp_path / "pty"
     pty.mkdir()
@@ -128,7 +128,7 @@ def test_interactive_routes_shell_c_through_bash_i():
     non-shell argv (test/find/grep parity) must pass through untouched. Pure
     function — no docker needed.
     """
-    from tb_adapter.container_effects import ContainerEffects
+    from adapters.tb.container_effects import ContainerEffects
 
     f = ContainerEffects._interactive
     assert f(["/bin/sh", "-c", "aws s3 ls"]) == ["/bin/bash", "-i", "-c", "aws s3 ls"]

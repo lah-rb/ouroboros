@@ -1,6 +1,6 @@
 """Harbor agent adapter: run an Ouroboros mission per Terminal-Bench 2.0 task.
 
-The twin of :mod:`tb_adapter.agent` (the legacy ``terminal_bench`` adapter) for
+The twin of :mod:`adapters.tb.agent` (the legacy ``terminal_bench`` adapter) for
 the **Harbor** harness that Terminal-Bench 2.0 runs on. Harbor's contract is
 
   ``async setup(environment)`` then ``async run(instruction, environment, context)``
@@ -25,9 +25,9 @@ Per task we:
 
 Register with:
   ``harbor run -d terminal-bench@2.0 \
-     --agent-import-path tb_adapter.harbor_agent:OuroborosHarborAgent``
+     --agent-import-path adapters.tb.harbor_agent:OuroborosHarborAgent``
 Invoke ``harbor`` from the repo root (and from our ``.venv``, which has both
-Harbor and the Ouroboros deps) so ``agent.*`` / ``tb_adapter.*`` import.
+Harbor and the Ouroboros deps) so ``agent.*`` / ``adapters.tb.*`` import.
 """
 
 from __future__ import annotations
@@ -96,8 +96,8 @@ class OuroborosHarborAgent(BaseAgent):
         from agent.persistence.manager import PersistenceManager
         from agent.persistence.models import MissionConfig, MissionState
 
-        from tb_adapter.container_effects import ContainerEffects
-        from tb_adapter.image_prune import note_task_image
+        from adapters.tb.container_effects import ContainerEffects
+        from adapters.tb.image_prune import note_task_image
 
         exec_user = self._exec_user(environment)
         container = await self._resolve_container(environment, exec_user)
@@ -405,7 +405,7 @@ class OuroborosHarborAgent(BaseAgent):
         """Flow set + capability profile (the task judge): one cold-temp LLMVP
         classification into (ops|code_core, profile), with keyword fallbacks and
         an OURO_FLOW_SET override. Decision logged for audit."""
-        from tb_adapter.task_judge import classify_flow_set
+        from adapters.tb.task_judge import classify_flow_set
 
         log_path = Path(self.logs_dir) / "ouroboros-routing.json"
         flow_set, profile, method = classify_flow_set(

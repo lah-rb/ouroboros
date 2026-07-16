@@ -1,5 +1,5 @@
 """Image-prune policy for the terminal-bench adapters — mirrors
-``swe_adapter.runner``'s ``OURO_SWE_PRUNE_IMAGES``, adapted to the harness-owned
+``adapters.swe.runner``'s ``OURO_SWE_PRUNE_IMAGES``, adapted to the harness-owned
 container lifecycle.
 
 The tb / Harbor harness CREATES and TEARS DOWN the task container; our agent only

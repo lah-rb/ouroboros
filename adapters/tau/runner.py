@@ -30,7 +30,7 @@ class EpisodeResult:
 
 
 class EpisodeHandle:
-    """One live episode. Construct via tau_adapter.env.make_env (the env
+    """One live episode. Construct via adapters.tau.env.make_env (the env
     already holds task_index and the user's opening message is produced by
     reset)."""
 

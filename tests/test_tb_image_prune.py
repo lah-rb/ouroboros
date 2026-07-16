@@ -1,4 +1,4 @@
-"""tb_adapter image-prune policy (OURO_TB_PRUNE_IMAGES) — the durable patch for
+"""adapters.tb image-prune policy (OURO_TB_PRUNE_IMAGES) — the durable patch for
 the never-pruned TB2 task-image sink that drove the host-memory creep.
 
 The tb/Harbor harness owns the container; we prune the IMAGE that persists after
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import types
 
-import tb_adapter.image_prune as ip
+import adapters.tb.image_prune as ip
 
 
 class _FakeImage:

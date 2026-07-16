@@ -24,11 +24,11 @@ async def main() -> int:
     from agent.chat.boss import MenuBoss
     from agent.chat.env import ChatEnv
     from agent.chat.session import PersonaSession
-    from tau_adapter.bridge import ToolBridge
-    from tau_adapter.env import make_env
-    from tau_adapter.episode import _BOSS_MENU, _RespondChannel, _boss_briefing
-    from tau_adapter.runner import EpisodeHandle
-    from tau_adapter.worker import MissionWorker
+    from adapters.tau.bridge import ToolBridge
+    from adapters.tau.env import make_env
+    from adapters.tau.episode import _BOSS_MENU, _RespondChannel, _boss_briefing
+    from adapters.tau.runner import EpisodeHandle
+    from adapters.tau.worker import MissionWorker
 
     dump: dict = {"task": task, "events": []}
     env = make_env("retail", task_index=task, user="session")

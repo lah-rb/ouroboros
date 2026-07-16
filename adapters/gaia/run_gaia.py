@@ -1,7 +1,7 @@
-"""GAIA campaign CLI — mirrors swe_adapter.run_pilot's marathon ergonomics.
+"""GAIA campaign CLI — mirrors adapters.swe.run_pilot's marathon ergonomics.
 
-  uv run python -m gaia_adapter.run_gaia --run-id gaia-l1-1 --levels 1
-  uv run python -m gaia_adapter.run_gaia --run-id gaia-full-1 --resume
+  uv run python -m adapters.gaia.run_gaia --run-id gaia-l1-1 --levels 1
+  uv run python -m adapters.gaia.run_gaia --run-id gaia-full-1 --resume
 
 Writes runs/gaia/<run-id>/predictions.jsonl (one row per question, appended as
 each finishes — resume-safe) and score_report.json (validation split is scored
@@ -38,9 +38,9 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-5s %(message)s")
 
-    from gaia_adapter.loader import load_questions
-    from gaia_adapter.runner import run_question
-    from gaia_adapter.scorer import question_scorer
+    from adapters.gaia.loader import load_questions
+    from adapters.gaia.runner import run_question
+    from adapters.gaia.scorer import question_scorer
 
     levels = tuple(int(x) for x in args.levels.split(",") if x.strip()) or None
     questions = load_questions(split=args.split, levels=levels)
