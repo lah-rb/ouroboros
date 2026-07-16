@@ -27,8 +27,8 @@ if _REPO_ROOT not in sys.path:
 
 from adapters.swe.instance import SweInstance  # noqa: E402
 from adapters.swe.patch import extract_model_patch, prediction_row  # noqa: E402
-from agent.effects.teardown import drain_effects
 from adapters._common import llmvp_endpoint, preserve_agent_dir, prune_mode, remove_image  # noqa: E402
+from agent.mission_runner import run_mission_isolated  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,6 @@ def run_instance(
     ``client`` — a shared docker client (run_pilot reuses ONE across instances
     rather than leaking a per-instance ``from_env()``). None → create+close
     locally (standalone use)."""
-    from agent.loop import run_agent
     from adapters.tb.container_effects import ContainerEffects
 
     wall = wall_clock_s if wall_clock_s is not None else _WALL_CLOCK_S
@@ -184,39 +183,24 @@ def run_instance(
             trace_thinking=_TRACE,
             trace_prompts=_TRACE,
         )
-        async def _run_with_drain():
-            # Drain sessions the mission left open so it never strands one on
-            # the single-instance pool for the next instance.
-            try:
-                await run_agent(
-                    mission_id=mission.id,
-                    effects=effects,
-                    flows_dir=os.path.join(_REPO_ROOT, "flows"),
-                    prompts_dir=os.path.join(_REPO_ROOT, "prompts"),
-                    entry_flow=entry_flow,
-                    max_cycles=cycles,
-                    max_wall_clock_s=wall,
-                )
-            finally:
-                # Drain LLMVP sessions AND disconnect MCP (kills the terminal
-                # server tree) INSIDE the loop, before it closes — on the park
-                # exit the per-flow close never ran, so PTY/server processes
-                # would otherwise orphan.
-                await drain_effects(effects)
-
-        try:
-            asyncio.run(_run_with_drain())
-        except RuntimeError as e:
-            if "parked as paused" in str(e):
-                logger.info("%s: budget stop (parked)", instance.instance_id)
-            else:
-                logger.warning("%s: mission RuntimeError: %s", instance.instance_id, e)
-        except asyncio.CancelledError:
-            # Defensive: a cancel that escaped the teardown guard must not crash
-            # the run — the patch is still extracted in the finally below.
-            logger.warning("%s: teardown cancelled (ignored)", instance.instance_id)
-        except Exception:
-            logger.exception("%s: mission crashed", instance.instance_id)
+        # Shared isolated harness (agent/mission_runner.py): dedicated
+        # thread + loop + drain + park classification.
+        outcome = run_mission_isolated(
+            effects,
+            mission_id=mission.id,
+            entry_flow=entry_flow,
+            max_cycles=cycles,
+            max_wall_clock_s=wall,
+        )
+        if outcome.parked:
+            logger.info("%s: budget stop (parked)", instance.instance_id)
+        elif outcome.error is not None:
+            logger.warning(
+                "%s: mission failed: %s: %s",
+                instance.instance_id,
+                type(outcome.error).__name__,
+                outcome.error,
+            )
     finally:
         # The container's final state is what the grader sees — extract the
         # patch no matter how the mission ended.

@@ -47,6 +47,7 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from agent.effects.teardown import drain_effects
 from adapters._common import llmvp_endpoint, preserve_agent_dir  # noqa: E402
+from agent.mission_runner import run_mission_isolated  # noqa: E402
 from adapters.tb.base import (  # noqa: E402
     extract_deps,
     mirror_test_env,
@@ -188,35 +189,27 @@ class OuroborosHarborAgent(BaseAgent):
         flows_dir = os.path.join(_REPO_ROOT, "flows")
         prompts_dir = os.path.join(_REPO_ROOT, "prompts")
 
-        async def _run_with_drain():
-            # Drain sessions the mission left open so it never strands one on
-            # the single-instance pool for the next task.
-            try:
-                await run_agent(
-                    mission_id=mission.id,
-                    effects=effects,
-                    flows_dir=flows_dir,
-                    prompts_dir=prompts_dir,
-                    entry_flow=entry_flow,
-                    max_cycles=_MAX_CYCLES,
-                    max_wall_clock_s=wall_clock_s,
-                )
-            finally:
-                await drain_effects(effects)
-
-        def _run_mission_isolated() -> None:
-            try:
-                asyncio.run(_run_with_drain())
-            except RuntimeError as e:
-                # run_agent raises after parking the mission on budget exhaustion —
-                # a clean stop, not a crash. Harbor grades the container regardless.
-                if "parked as paused" not in str(e):
-                    self._note(f"run_agent error: {e}\n")
-            except Exception as e:  # real agent error (not budget)
+        def _run_mission() -> None:
+            # Shared isolated harness (agent/mission_runner.py). Runs on its
+            # own thread already; the to_thread below keeps Harbor's async
+            # run() responsive to its own cancellation.
+            outcome = run_mission_isolated(
+                effects,
+                mission_id=mission.id,
+                entry_flow=entry_flow,
+                max_cycles=_MAX_CYCLES,
+                max_wall_clock_s=wall_clock_s,
+                flows_dir=flows_dir,
+                prompts_dir=prompts_dir,
+            )
+            if outcome.parked:
+                pass  # budget stop — Harbor grades the container regardless
+            elif outcome.error is not None:
+                e = outcome.error
                 self._note(f"run_agent exception: {type(e).__name__}: {e}\n")
 
         try:
-            await asyncio.to_thread(_run_mission_isolated)
+            await asyncio.to_thread(_run_mission)
         finally:
             # Preserve traces + metrics even when Harbor HARD-CANCELS run() (a
             # CancelledError raised on the await above) because the mission didn't

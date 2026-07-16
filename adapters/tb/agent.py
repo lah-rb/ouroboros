@@ -35,14 +35,13 @@ import re
 import shutil
 import sys
 import tempfile
-import threading
 from pathlib import Path
 
 from terminal_bench.agents.base_agent import AgentResult, BaseAgent
 from terminal_bench.agents.failure_mode import FailureMode
 from terminal_bench.terminal.tmux_session import TmuxSession
-from agent.effects.teardown import drain_effects
 from adapters._common import llmvp_endpoint, preserve_agent_dir  # noqa: E402
+from agent.mission_runner import run_mission_isolated  # noqa: E402
 from adapters.tb.base import (  # noqa: E402
     extract_deps,
     mirror_test_env,
@@ -91,7 +90,6 @@ class OuroborosAgent(BaseAgent):
         logging_dir: Path | None = None,
     ) -> AgentResult:
         from agent.flow_sets import get_flow_set
-        from agent.loop import run_agent
         from agent.persistence.manager import PersistenceManager
         from agent.persistence.models import MissionConfig, MissionState
 
@@ -170,51 +168,23 @@ class OuroborosAgent(BaseAgent):
             trace_prompts=_TRACE,
         )
 
-        async def _run_with_drain():
-            # Drain sessions the mission left open (park/kill) so it never
-            # strands one on the single-instance pool for the next task.
-            try:
-                await run_agent(
-                    mission_id=mission.id,
-                    effects=effects,
-                    flows_dir=os.path.join(_REPO_ROOT, "flows"),
-                    prompts_dir=os.path.join(_REPO_ROOT, "prompts"),
-                    entry_flow=entry_flow,
-                    max_cycles=_MAX_CYCLES,
-                    max_wall_clock_s=wall_clock_s,
-                )
-            finally:
-                await drain_effects(effects)
-
-        # Run the mission loop on ITS OWN thread + event loop (τ-adapter /
-        # GAIA parity): run_agent's MCP/PTY machinery uses anyio cancel scopes
-        # bound to the creating task, and the bench harness's own async
-        # context can leak a cancellation into our subprocess waits when the
-        # loops share a thread. A dedicated thread has no ambient scopes.
-        failure_mode = FailureMode.NONE
-        _outcome: dict[str, BaseException] = {}
-
-        def _mission_thread() -> None:
-            try:
-                asyncio.run(_run_with_drain())
-            except BaseException as e:  # noqa: BLE001 — classified below
-                _outcome["exc"] = e
-
-        _t = threading.Thread(
-            target=_mission_thread, name="ouroboros-mission", daemon=True
+        # Shared isolated harness (agent/mission_runner.py): dedicated
+        # thread + event loop + drain + park classification.
+        outcome = run_mission_isolated(
+            effects,
+            mission_id=mission.id,
+            entry_flow=entry_flow,
+            max_cycles=_MAX_CYCLES,
+            max_wall_clock_s=wall_clock_s,
         )
-        _t.start()
-        _t.join()
-        _exc = _outcome.get("exc")
-        if _exc is not None:
-            # run_agent raises on budget exhaustion (cycle/wall-clock) after
-            # parking the mission — that's a clean stop, not a crash. The bench
-            # grades the container's final state regardless. Anything else is a
-            # real agent error.
-            if isinstance(_exc, RuntimeError) and "parked as paused" in str(_exc):
-                failure_mode = FailureMode.AGENT_TIMEOUT
-            else:
-                failure_mode = FailureMode.UNKNOWN_AGENT_ERROR
+        if outcome.parked:
+            # Budget stop after parking — the bench grades the container's
+            # final state regardless.
+            failure_mode = FailureMode.AGENT_TIMEOUT
+        elif outcome.error is not None:
+            failure_mode = FailureMode.UNKNOWN_AGENT_ERROR
+        else:
+            failure_mode = FailureMode.NONE
 
         self._preserve(host_tmp, logging_dir)
         tin, tout = token_totals(host_tmp)

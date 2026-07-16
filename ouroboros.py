@@ -22,7 +22,6 @@ import os
 import sys
 
 from agent.persistence.manager import PersistenceManager
-from agent.effects.teardown import drain_effects
 from agent.persistence.models import (
     Event,
     MissionConfig,
@@ -537,53 +536,28 @@ def cmd_start(args: argparse.Namespace) -> None:
         policy += f", ≤{max_wall_clock_s / 3600:.1f}h wall clock"
     print(f"   Run: {policy}")
 
-    # Run the agent loop
-    from agent.loop import run_agent
-
-    async def _run_with_drain():
-        # Drain any session the mission left open (park/exit) so it doesn't
-        # strand one on the single-instance LLMVP pool for the next run.
-        try:
-            return await run_agent(
-                mission_id=mission.id,
-                effects=effects,
-                flows_dir=flows_dir,
-                prompts_dir=prompts_dir,
-                entry_flow=flow_set.entry_flow,
-                max_cycles=max_cycles,
-                max_wall_clock_s=max_wall_clock_s,
-            )
-        finally:
-            # Release LLMVP sessions + disconnect MCP (terminal server tree)
-            # inside the loop before it closes, so neither orphans on exit.
-            await drain_effects(effects)
-
-    # Run the mission loop on ITS OWN thread + event loop (tb/tau-adapter
-    # parity): run_agent's MCP/PTY machinery uses anyio cancel scopes bound
-    # to the creating task; sharing the CLI's thread lets ambient
-    # cancellation reach subprocess waits at teardown.
-    _outcome: dict = {}
-
-    def _mission_thread() -> None:
-        try:
-            _outcome["result"] = asyncio.run(_run_with_drain())
-        except BaseException as e:  # noqa: BLE001 — classified below
-            _outcome["exc"] = e
+    # Run the agent loop on the shared isolated harness (dedicated thread +
+    # event loop + drain; see agent/mission_runner.py).
+    from agent.mission_runner import run_mission_isolated
 
     try:
-        import threading
-
-        _t = threading.Thread(
-            target=_mission_thread, name="ouroboros-mission", daemon=True
+        outcome = run_mission_isolated(
+            effects,
+            mission_id=mission.id,
+            entry_flow=flow_set.entry_flow,
+            max_cycles=max_cycles,
+            max_wall_clock_s=max_wall_clock_s,
+            flows_dir=flows_dir,
+            prompts_dir=prompts_dir,
         )
-        _t.start()
-        _t.join()
-        if "exc" in _outcome:
-            _exc = _outcome["exc"]
-            if isinstance(_exc, KeyboardInterrupt):
-                raise KeyboardInterrupt
-            raise _exc
-        result = _outcome["result"]
+        if outcome.parked:
+            # Budget stop, not a crash — the mission is parked as paused and
+            # `mission resume` / `start` continues it.
+            print(f"\n⏸  {outcome.park_message}")
+            return
+        if outcome.error is not None:
+            raise outcome.error
+        result = outcome.result
         print()
         print(f"{'=' * 60}")
         print(f"Agent terminated: {result.status}")

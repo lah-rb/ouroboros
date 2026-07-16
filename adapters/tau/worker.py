@@ -26,8 +26,8 @@ from typing import List, Optional
 
 from agent.chat.env import WorkerReport
 from adapters.tau.bridge import TAU_CLI_TEMPLATE
-from agent.effects.teardown import drain_effects
 from adapters._common import llmvp_endpoint as llmvp_endpoint_default, preserve_agent_dir, seed_workspace_venv  # noqa: E402
+from agent.mission_runner import run_mission_isolated  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -140,7 +140,6 @@ class MissionWorker:
     def _run_mission_blocking(self, objective: str) -> bool:
         from agent.effects.local import LocalEffects
         from agent.flow_sets import get_flow_set
-        from agent.loop import run_agent
         from agent.persistence.manager import PersistenceManager
         from agent.persistence.models import MissionConfig, MissionState
 
@@ -165,30 +164,22 @@ class MissionWorker:
         entry_flow = get_flow_set("ops").entry_flow
         ok = True
 
-        async def _run_with_drain():
-            try:
-                await run_agent(
-                    mission_id=mission.id,
-                    effects=effects,
-                    flows_dir=os.path.join(_REPO_ROOT, "flows"),
-                    prompts_dir=os.path.join(_REPO_ROOT, "prompts"),
-                    entry_flow=entry_flow,
-                    max_cycles=self.max_cycles,
-                    max_wall_clock_s=self.wall_clock_s,
-                )
-            finally:
-                await drain_effects(effects)
-
-        try:
-            asyncio.run(_run_with_drain())
-        except RuntimeError as e:
-            if "parked as paused" in str(e):
-                log.info("tau mission budget stop (parked)")
-            else:
-                log.warning("tau mission RuntimeError: %s", e)
-                ok = False
-        except Exception:
-            log.exception("tau mission crashed")
+        # Shared isolated harness (agent/mission_runner.py).
+        outcome = run_mission_isolated(
+            effects,
+            mission_id=mission.id,
+            entry_flow=entry_flow,
+            max_cycles=self.max_cycles,
+            max_wall_clock_s=self.wall_clock_s,
+        )
+        if outcome.parked:
+            log.info("tau mission budget stop (parked)")
+        elif outcome.error is not None:
+            log.warning(
+                "tau mission failed: %s: %s",
+                type(outcome.error).__name__,
+                outcome.error,
+            )
             ok = False
         return ok
 

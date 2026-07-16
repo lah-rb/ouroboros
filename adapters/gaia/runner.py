@@ -18,8 +18,8 @@ import sys
 import tempfile
 
 from adapters.gaia.loader import GaiaQuestion
-from agent.effects.teardown import drain_effects
 from adapters._common import llmvp_endpoint, preserve_agent_dir, seed_workspace_venv  # noqa: E402
+from agent.mission_runner import run_mission_isolated  # noqa: E402
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -190,7 +190,6 @@ def run_question(
     mission-level failure — a parked/crashed mission yields whatever
     answer.txt holds (usually empty → scored wrong, honestly)."""
     from agent.effects.local import LocalEffects
-    from agent.loop import run_agent
 
     wall = wall_clock_s if wall_clock_s is not None else _WALL_CLOCK_S
     cycles = max_cycles if max_cycles is not None else _MAX_CYCLES
@@ -215,34 +214,23 @@ def run_question(
             trace_prompts=_TRACE,
         )
 
-        async def _run_with_drain():
-            try:
-                await run_agent(
-                    mission_id=mission.id,
-                    effects=effects,
-                    flows_dir=os.path.join(_REPO_ROOT, "flows"),
-                    prompts_dir=os.path.join(_REPO_ROOT, "prompts"),
-                    entry_flow=entry_flow,
-                    max_cycles=cycles,
-                    max_wall_clock_s=wall,
-                )
-            finally:
-                # Same teardown discipline as SWE: drain sessions + MCP inside
-                # the loop; CancelledError is a BaseException and must not
-                # escape a best-effort cleanup (see adapters.swe.runner).
-                await drain_effects(effects)
-
-        try:
-            asyncio.run(_run_with_drain())
-        except RuntimeError as e:
-            if "parked as paused" in str(e):
-                logger.info("%s: budget stop (parked)", question.task_id)
-            else:
-                logger.warning("%s: mission RuntimeError: %s", question.task_id, e)
-        except asyncio.CancelledError:
-            logger.warning("%s: teardown cancelled (ignored)", question.task_id)
-        except Exception:
-            logger.exception("%s: mission crashed", question.task_id)
+        # Shared isolated harness (agent/mission_runner.py).
+        outcome = run_mission_isolated(
+            effects,
+            mission_id=mission.id,
+            entry_flow=entry_flow,
+            max_cycles=cycles,
+            max_wall_clock_s=wall,
+        )
+        if outcome.parked:
+            logger.info("%s: budget stop (parked)", question.task_id)
+        elif outcome.error is not None:
+            logger.warning(
+                "%s: mission failed: %s: %s",
+                question.task_id,
+                type(outcome.error).__name__,
+                outcome.error,
+            )
     finally:
         answer = extract_answer(workspace)
         _preserve(workspace, logs_dir, question.task_id)
