@@ -1070,6 +1070,7 @@ async def _execute_inference_action(
                 truncated=getattr(result, "truncated", False),
                 prompt_render_ms=prompt_render_ms,
                 pre_compute_ms=pre_compute_ms,
+                reasoning=str(config_overrides.get("reasoning", "") or ""),
                 **_cache_fields(result),
             )
         )
@@ -1317,6 +1318,7 @@ async def _execute_turn_inference(
                     prompt_render_ms=prompt_render_ms if _setup else 0.0,
                     pre_compute_ms=pre_compute_ms if _setup else 0.0,
                     injection_ms=injection_ms if _setup else 0.0,
+                    reasoning=str(config_overrides.get("reasoning", "") or ""),
                     **_cache_fields(result),
                 )
             )

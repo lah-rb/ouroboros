@@ -1325,6 +1325,7 @@ class LocalEffects:
                     flow_key=str(getattr(result, "flow_key", "") or ""),
                     prefill_ms=float(getattr(result, "prefill_ms", 0.0) or 0.0),
                     decode_ms=float(getattr(result, "decode_ms", 0.0) or 0.0),
+                    reasoning=str(cfg.get("reasoning", "") or ""),
                 )
             )
 

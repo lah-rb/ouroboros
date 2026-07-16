@@ -230,6 +230,10 @@ class InferenceCall(TraceEvent):
     # (generation). The remainder (wall_ms − prefill − decode) is queue/network.
     prefill_ms: float = 0.0
     decode_ms: float = 0.0
+    # Resolved reasoning level for this call ("" = server default). Set from
+    # config_overrides["reasoning"] (cue-authored or adaptive router) so token
+    # breakdowns can attribute decode cost to reasoning effort per step.
+    reasoning: str = ""
 
 
 # ── Sub-flow Events ──────────────────────────────────────────────────
