@@ -2,7 +2,9 @@
 # LLMVP — Reference Configuration
 # =============================================================================
 # This file documents all available configuration options with their types,
-# mandatory/optional status, and default values.
+# mandatory/optional status, and default values. Regenerated 2026-07-16
+# against core/config.py (the pydantic schema is the source of truth; per
+# README.LLM.md, config.py changes MUST be mirrored here).
 #
 # Usage:
 #   - Copy this file and modify values for your deployment
@@ -19,184 +21,275 @@
 # APP CONFIGURATION - FastAPI application settings
 # -----------------------------------------------------------------------------
 app:
-  # [M] Type: str
-  # Network interface to bind to (e.g., "0.0.0.0" for all interfaces)
+  # [M] Type: str — network interface to bind to
   host: "0.0.0.0"
-
-  # [M] Type: int
-  # Port number for the HTTP server
+  # [M] Type: int — HTTP server port
   port: 8000
-
-  # [M] Type: str
-  # Logging level: "debug", "info", "warning", "error", "critical"
+  # [M] Type: str — uvicorn log level (debug/info/warning/error)
   log_level: "info"
-
-  # [O] Type: list[str] | Default: ["*"]
-  # CORS allowed origins
+  # [O] Type: list[str] — CORS allowed origins. Default: ["*"]
   cors_origins: ["*"]
-
-  # [O] Type: bool | Default: false
-  # Enable OpenAI-compatible API shim
+  # [O] Type: bool — expose the OpenAI-compatible REST shim (/v1/...) alongside
+  # GraphQL. Needed by external harnesses (Terminus, tau-bench user sim).
+  # Default: false
   openai_shim: false
-
-  # [O] Type: int | Default: 120
-  # Timeout in seconds for waiting for backend pool to be ready
+  # [O] Type: int — seconds `--backend` waits for the pool to be ready.
+  # Default: 120
   backend_timeout: 120
 
-
 # -----------------------------------------------------------------------------
-# GRAPHQL CONFIGURATION - Security and query limits
+# GRAPHQL SECURITY - query limits (all [O])
 # -----------------------------------------------------------------------------
-# [O] All fields optional - uses defaults if section omitted
 graphql:
-  max_query_depth: 10
-  max_tokens: 2000
-  max_aliases: 50
-  introspection_enabled: true
-
+  max_query_depth: 10          # [O] int, default 10
+  max_tokens: 2000             # [O] int — parser token limit, default 2000
+  max_aliases: 50              # [O] int, default 50
+  introspection_enabled: true  # [O] bool, default true
 
 # -----------------------------------------------------------------------------
-# MODEL CONFIGURATION - LLM architecture and inference settings
+# MODEL - architecture, KV-cache strategy, reasoning machinery
 # -----------------------------------------------------------------------------
 model:
-  # [M] Type: str
-  # Model identifier name (used for logging and identification)
-  name: "your-model-name"
-
-  # [M] Type: str
-  # Format schema family. Determines all prompt formatting: tokens, roles,
-  # thinking style, system block, turn transitions, stop tokens, and
-  # delimiter patterns.
-  #
-  # Available families (see llmvp/formats/*.yaml):
-  #   "harmony"  — GPT-OSS models (channel-based thinking, developer role)
-  #   "chatml"   — Qwen, DeepSeek, Mistral (inline <think> tags)
-  #
-  # This single field replaces the old prompt.delimiter_token,
-  # prompt.chat_template_file, prompt.use_jinja_templates,
-  # prompt.bos_token, and model.stop_tokens.
-  family: "chatml"
-
-  # [M] Type: path
-  # Absolute or relative path to the GGUF model file
+  # [M] Type: str — display name
+  name: "gpt-oss-120b"
+  # [M] Type: str — format schema family: "harmony" | "chatml" | "tekken"
+  family: "harmony"
+  # [M] Type: path — GGUF path
   path: "/path/to/model.gguf"
-
-  # [M] Type: int
-  # Context window size (maximum tokens in context)
-  n_ctx: 4096
-
-  # [M] Type: int
-  # Number of layers to offload to GPU (-1 = all layers, 0 = CPU only)
+  # [M] Type: int — context size. NOTE: in batched decode_mode this is the
+  # UNIFIED cell pool SHARED by all working seats — budget the SUM of
+  # concurrent streams (e.g. two concurrent 26k-token rewrites + pinned
+  # heads must fit; exhaustion evicts streams with "KV cell pool exhausted").
+  n_ctx: 131072
+  # [M] Type: int — layers on GPU (-1 = all)
   n_gpu_layers: -1
-
-  # [M] Type: int
-  # Random seed for reproducible generation (-1 = random)
+  # [M] Type: int — sampling seed (-1 = random)
   seed: -1
-
-  # [M] Type: bool
-  # Enable verbose logging from the inference backend
+  # [M] Type: bool — llama.cpp verbose logging
   verbose: false
 
-  # [O] Type: bool | Default: false
-  # Enable Flash Attention for faster inference and lower memory usage
-  flash_attention: false
+  # ── KV / attention knobs ────────────────────────────────────────────────
+  # [O] Type: bool — keep FULL KV for sliding-window-attention layers.
+  # REQUIRED for any pinned/forked prefix reuse (resident_seq_cache,
+  # flow_kv_cache, save_state) on SWA models like gpt-oss: without it a
+  # restored prefix is inconsistent at the SWA window boundary and decode
+  # fails with code -3. Costs extra SWA-layer KV (pair with kv_unified).
+  # Default: false
+  swa_full: true
+  # [O] Type: bool — single unified KV cell allocation (vs per-sequence);
+  # pairs with swa_full to bound memory on unified-memory (Metal) hardware.
+  # Required for decode_mode: batched. Default: false
+  kv_unified: true
+  # [O] Type: str — flash attention: "auto" | "on" | "off". Default: "auto"
+  flash_attn_type: "auto"
+  # [O] Type: int — logical prefill batch. Default: 2048 (the known-good
+  # multi-seat shape; 512 made a shared slot fail deterministically at its
+  # static boundary — see dev/archive/docs/CACHE_STATE.md)
+  n_batch: 2048
+  # [O] DEAD no-ops kept for config compatibility — silently ignored by the
+  # binding (wrong kwarg names). Use flash_attn_type / n_batch above.
+  # flash_attention: false
+  # batch_size: 64
 
-  # [O] Type: int | Default: 64
-  # Batch size for prompt processing
-  batch_size: 64
+  # ── Speculative decoding ────────────────────────────────────────────────
+  # [O] Type: bool — n-gram-map draft speculative decoding (lossless,
+  # zero extra model). Forces logits_all=True (extra prefill cost) —
+  # BENCHMARK before trusting on MoE/Metal. Default: false
+  speculative: false
+  speculative_ngram_size: 3   # [O] int, default 3
+  speculative_num_pred: 10    # [O] int, default 10
 
+  # ── Thinking / reasoning ────────────────────────────────────────────────
+  # [O] Type: bool — master gate for the thinking-mode opening. Default: true
+  thinking: true
+  # [O] Type: Optional[str] — reasoning effort rendered into the system
+  # block: "none" | "low" | "medium" | "high" | null (family default).
+  # Inert for binary families (tekken). Default: null
+  thinking_mode: "medium"
+  # [O] Type: bool — per-request reasoning HEAD-SWAP (requires resident
+  # cache active + a thinking family). Warmup pins a system head per level
+  # on a reserved seq band; sessions install at turn 0 and SPLICE
+  # mid-session; stateless completions swap the prompt head per request
+  # (zero re-prefill). The default level reuses SEQ_STATIC. Actuator for
+  # the adaptive-reasoning router (agent/reasoning_router.py).
+  # Default: false
+  reasoning_head_swap: true
+
+  # ── Session-state strategy ──────────────────────────────────────────────
+  # [O] Type: bool — sessions keep token history and FULLY RE-PREFILL each
+  # turn from the pristine static snapshot (safe default: save_state is
+  # unsound for hybrid/recurrent models and its blob overflows on deep
+  # sessions of large models). false = opt-in save_state splice fast path.
+  # Default: true
+  session_full_replay: true
+  # [O] Type: bool — RESIDENT in-context sequence cache: the static prefix
+  # lives on its own seq, requests/sessions fork it via memory_seq_cp — KV
+  # stays live, never serialized. Sidesteps save_state entirely; memoryful
+  # sessions append instead of re-prefilling. REQUIRES memory_can_shift()
+  # (swa_full on SWA models); the warm-up gate falls back to the legacy
+  # path when unavailable. The production path. Default: false
+  resident_seq_cache: true
+  # [O] Type: bool — strip prior-turn CoT from resident sessions in-place
+  # (truncate-and-replay the clean answer): harmony-compliant multi-turn
+  # form + large context savings on deep thinking sessions. Validated on
+  # gpt-oss/harmony; validate chatml before enabling there. Default: false
+  resident_strip_reasoning: false
+  # [O] Type: bool — turn-0 fork of [global static + flow head] for
+  # sessions passing flow_key + static_prefix (reclaims cross-session
+  # persona re-prefill, ~15% of wall on session-heavy runs). Pure no-op
+  # unless the caller opts a session in. Default: true
+  resident_session_flow_fork: true
+
+  # ── Per-flow static-prefix KV cache (save_state based) ──────────────────
+  # [O] Type: bool — pin per-flow static prefixes via save_state/load_state.
+  # CAUTION: the 2026-06 re-enable regressed gpt-oss over long runs (subtle
+  # KV corruption caught by a game_challenge stability test) — kept FALSE
+  # in production; resident_seq_cache is the safe path. Default: false
+  flow_kv_cache: false
+  flow_kv_cache_max: 8   # [O] int — LRU bound, default 8
+
+  # ── Session snapshots (ingest-once tier) ────────────────────────────────
+  # [O] Type: int — reserved seq band for semi-permanent session snapshots
+  # (sessionSnapshot mutation; later sessions fork at ~zero prefill until
+  # purgeSnapshot). 0 disables the band. Snapshots share the n_ctx cell
+  # budget; capture is capacity-checked and rejected loudly; windowing is
+  # FORBIDDEN on snapshot-linked sessions. On models where resident is
+  # inactive the snapshot degrades to token-history storage (same API).
+  # Default: 2
+  session_snapshot_max: 2
+  # [O] Type: float — orphan-reaper sweep for crash-orphaned snapshots;
+  # 0 disables (deliberate multi-day pins). Default: 7200.0
+  session_snapshot_ttl_s: 7200.0
 
 # -----------------------------------------------------------------------------
-# PROMPT CONFIGURATION - Persona and tools for the developer block
+# PROMPT - persona / developer instructions
 # -----------------------------------------------------------------------------
-# The format schema (determined by model.family) handles all structural
-# prompt formatting.  This section only configures content files that
-# are injected into the format's developer/system block.
 prompt:
-  # [O] Type: Optional[path] | Default: null
-  # Path to persona file (e.g., SOUL.md).
-  # For Harmony: injected as developer block content.
-  # For ChatML: appended to system block.
-  persona_file: "./knowledge/SOUL.md"
-
-  # [O] Type: Optional[path] | Default: null
-  # Path to tool definitions file.
-  # For Harmony: appended to developer block after persona.
-  # For ChatML: appended to system block.
+  # [O] Type: Optional[path] — SOUL.md-equivalent persona source.
+  # Default: null
+  persona_file: "knowledge/SOUL.md"
+  # [O] Type: Optional[path] — tools definition file. Default: null
   tools_file: null
 
-
 # -----------------------------------------------------------------------------
-# GENERATION CONFIGURATION - Text generation parameters
+# GENERATION - sampling defaults + degeneration guards
 # -----------------------------------------------------------------------------
-# [O] All fields optional - uses defaults if section omitted
-# These values can be overridden per-request via API.
-# The format schema also declares recommended defaults per family.
 generation:
+  # All sampling fields [O] Type: Optional — null defers to server defaults.
   max_tokens_default: null
-  temperature_default: null
+  temperature_default: 0.7
   top_p: null
-  streaming_default: null
   top_k: null
   min_p: null
   presence_penalty: null
   repeat_penalty: null
+  streaming_default: null
 
+  # ── Degenerate-repetition guard (inference/repetition.py) ───────────────
+  # [O] Type: Optional[bool] — abort turns that collapse into token-level
+  # repetition instead of filling max_tokens (~1h hang class). null =>
+  # ENABLED (set false per-config to disable).
+  repetition_guard_enabled: null
+  repetition_max_run: null           # [O] null => 48
+  repetition_max_cycle_period: null  # [O] null => 8
+  repetition_min_cycle_reps: null    # [O] null => 12
+  # [O] Type: Optional[bool] — long-cycle guard (runaway_capture.py):
+  # structural distinct-chunk check every ~2k tokens for paragraph-scale
+  # loops the 8-token-cycle guard can't see; aborts via the same
+  # DegenerateGenerationError path and dumps partials to
+  # logs/runaway_captures/. null => ENABLED.
+  long_cycle_guard_enabled: null
+
+  # ── Temperature floors (repetition-attractor mitigation) ────────────────
+  # [O] Type: Optional[float] — session turns at depth >=
+  # session_temp_floor_after_turn sample at no less than this floor (deep
+  # multi-turn sessions are repetition attractors; sparse MoEs earliest).
+  # null => disabled.
+  session_temp_floor: 0.35
+  session_temp_floor_after_turn: null  # [O] null => 2 (third turn onward)
+  # [O] Type: Optional[float] — global per-model floor for ANY request
+  # (observed live runaways sat at effective temps 0.24-0.32; flow
+  # multipliers drive temps as low as t*0.1). null => disabled.
+  temperature_floor: null
 
 # -----------------------------------------------------------------------------
-# KNOWLEDGE CONFIGURATION - Static token prefix
+# KNOWLEDGE - compiled static token stream
 # -----------------------------------------------------------------------------
 knowledge:
-  # [M] Type: path
-  # Path to pre-tokenized binary file for fast loading.
-  # Generated by `uv run llmvp.py --prep` using the format renderer.
-  tokens_bin: "./data/model.tokens.bin"
-
-  # [M] Type: int
-  # Maximum token budget for the static prefix.
-  # Should be << n_ctx to leave room for dynamic prompts and generation.
-  token_limit: 40000
-
+  # [M] Type: path — compiled static tokens for the default persona
+  # (auto-built from prompt.persona_file when missing/stale)
+  tokens_bin: "data/model-name.tokens.bin"
+  # [M] Type: int — token budget for the static stream
+  token_limit: 4096
 
 # -----------------------------------------------------------------------------
-# RESOURCES CONFIGURATION - System resource allocation
+# RESOURCES - concurrency architecture
 # -----------------------------------------------------------------------------
 resources:
-  # [M] Type: int
-  # Number of CPU threads for inference (recommend: number of physical cores)
-  cpu_threads: 4
-
-  # [M] Type: int
-  # Maximum number of concurrent inference requests (= pool size).
-  #
-  # The backend uses a shared-model pool:
-  #   Model weights loaded ONCE, each pool slot is a lightweight KV-cache.
-  #   Memory: 1 × weights + N × kv_cache
-  max_concurrent_requests: 1
-
-  # [O] Type: Optional[int] | Default: null
-  # JIT concurrency limit. When set, pool starts with 1 instance and
-  # scales up on demand to this limit. null = pre-allocate all at startup.
+  # [M] Type: int — CPU threads for llama.cpp
+  cpu_threads: 16
+  # [M] Type: int — pool slots (decode_mode: pool) or working SEATS sharing
+  # one context (decode_mode: batched)
+  max_concurrent_requests: 3
+  # [O] Type: str — "pool" (default; N independent contexts — decode across
+  # contexts never overlaps usefully on Metal: one shared MTLCommandQueue)
+  # | "batched" (ONE context, one llama_decode per step carrying a token
+  # per active stream — the llama-server slot pattern and the only
+  # aggregate-throughput shape on Metal; gpt-oss-120b measured 60.6→93.3
+  # tok/s aggregate at 1→4 streams). Batched REQUIRES resident_seq_cache +
+  # swa_full + kv_unified and a non-hybrid model (validated at load).
+  decode_mode: "batched"
+  # [O] Type: Optional[int] — max prompt tokens fed per step while other
+  # streams decode (prefill/decode interleave). Lower = snappier live-decode
+  # latency while a long prompt joins; higher = faster prompt ingestion.
+  # null => model.n_batch.
+  batched_prefill_chunk: null
+  # [O] Type: Optional[int] — JIT pool scaling limit. null = pre-allocate
+  # all slots at startup.
   jit_concurrency_limit: null
-
+  # [O] Type: Optional[list[str]] — persona per slot (index = slot; length
+  # must equal max_concurrent_requests). Names must exist in the root
+  # `personas` map or be "default". null => every slot carries the default
+  # persona.
+  slot_personas: null
+  # [O] Type: int — max seconds a request waits on the scaling gate
+  # (acquire + generation start) during a JIT scale-up/down. Deliberately
+  # larger than backend_timeout (a waiter must outlive drain + N warm-ups).
+  # Default: 600
+  scale_wait_timeout: 600
+  # [O] Type: int — min idle seconds before the scaler may reap a JIT
+  # instance (one per tick, LRU first). Default: 600
+  instance_idle_ttl: 600
+  # [O] Type: int — min seconds after a batch scale-up before any reap
+  # (belt-and-braces on top of instance_idle_ttl). Default: 300
+  scale_down_cooldown: 300
 
 # -----------------------------------------------------------------------------
-# TOOLS CONFIGURATION - Tool-augmented inference
+# PERSONAS - named alternate static heads (multi-persona pooling)
 # -----------------------------------------------------------------------------
-# [O] All fields optional
+# [O] Type: map[str, PersonaConfig] — "default" is implicit
+# (prompt.persona_file / knowledge.tokens_bin). A persona is a STATIC HEAD,
+# not a config: family/stops/temperature stay global per-process; what
+# differs is the persona text compiled into the static token stream. Assign
+# to slots via resources.slot_personas (pool) — in batched mode any seat
+# serves any persona and sessions pin seats. Absent map => single-persona
+# behavior (all pre-persona configs remain valid).
+personas: {}
+#  user_sim:
+#    persona_file: "knowledge/USER_SIM.md"          # [M] path — SOUL source
+#    tokens_bin: "data/model-user_sim.tokens.bin"   # [M] path (auto-built)
+#    n_ctx: null   # [O] per-slot context size (pool only); null => model.n_ctx
+
+# -----------------------------------------------------------------------------
+# TOOLS - tool-augmented inference (all [O])
+# -----------------------------------------------------------------------------
 tools:
-  enabled: false
-  max_iterations: 3
-
+  enabled: false      # [O] bool, default false
+  max_iterations: 3   # [O] int, default 3
 
 # -----------------------------------------------------------------------------
-# LOGGING CONFIGURATION - Interaction logging
+# LOGGING - interaction logging (all [O])
 # -----------------------------------------------------------------------------
 logging:
-  # [O] Type: bool | Default: false
-  # Enable interaction logging (prompts, responses, timings)
-  enabled: false
-
-  # [O] Type: path | Default: "./logs"
-  # Directory for log files (interactions.jsonl, captured_raw.json, etc.)
-  directory: "./logs"
+  enabled: true            # [O] bool, default false
+  directory: "./logs"      # [O] path — interactions.jsonl etc., default ./logs

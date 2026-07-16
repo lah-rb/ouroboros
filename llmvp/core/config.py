@@ -303,7 +303,7 @@ class ResourcesConfig(BaseModel):
     # Concurrency architecture. "pool" (default) = N independent contexts,
     # one per slot — the proven production shape, but decode across contexts
     # NEVER overlaps usefully on Metal (one shared MTLCommandQueue) and
-    # simultaneous submission trips the driver (see dev/CACHE_STATE.md).
+    # simultaneous submission trips the driver (see dev/archive/docs/CACHE_STATE.md).
     # "batched" = ONE context, max_concurrent_requests working sequences,
     # one llama_decode per step carrying a token per active stream — the
     # llama-server slot pattern, the only aggregate-throughput shape on
