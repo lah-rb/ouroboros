@@ -11,7 +11,7 @@ Python is the only language with a real deep backend today (tree-sitter now; jed
 added behind the same facade). Every other language gets the null backend (empty),
 exactly as before — non-Python deep analysis was always empty. A future LSP backend
 (gopls / tsserver / …) slots in as one new module + one ``get_backend`` branch,
-touching no consumer. See ``dev/DEEP_ANALYSIS_BACKENDS.md`` for the landscape.
+touching no consumer. See ``dev/archive/docs/DEEP_ANALYSIS_BACKENDS.md`` for the landscape.
 
 Import discipline: this package imports only the leaf modules (``analysis_types``,
 ``languages``) at load time; the tree-sitter backend reaches repomap's machinery via

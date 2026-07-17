@@ -2127,7 +2127,7 @@ class LlamaCppBackend(BaseBackend):
         # Batched mode preconditions that need the loaded model: the whole
         # engine is built on resident seq forking + per-seq positions, which
         # recurrent/hybrid state does not support (per-turn state surgery
-        # corrupts it — see dev/CACHE_STATE.md architecture matrix).
+        # corrupts it — see dev/archive/docs/CACHE_STATE.md architecture matrix).
         if self._decode_mode == "batched":
             if self._is_hybrid:
                 raise RuntimeError(
@@ -2275,7 +2275,7 @@ class LlamaCppBackend(BaseBackend):
         # Signal that the backend is fully ready for inference.
         self._ready_event.set()
 
-        # Start the proactive context-refresh loop (interval-gated, idle-only).
+        # Start the proactive context-refresh loop (interval-gated when idle; the wall-clock cap fires under load via the drain when context_refresh_drain_s > 0).
         self._refresh_loop_task = asyncio.create_task(self._refresh_loop())
 
     async def shutdown(self) -> None:
@@ -2415,7 +2415,7 @@ class LlamaCppBackend(BaseBackend):
         # Belt over the release-side heal: a flagged instance must never
         # serve (its Metal latch fails every decode) — heal before handout.
         # (Batched seats carry the flag too, but their heal is the engine
-        # rebuild — Stage 3 — not the per-context refresh.)
+        # rebuild, not the per-context refresh.)
         if self._decode_mode != "batched" and getattr(
             inst, "_needs_context_refresh", False
         ):
@@ -2477,7 +2477,7 @@ class LlamaCppBackend(BaseBackend):
         if self._decode_mode == "batched":
             # Seat return: clear its seq (control op) and requeue. A dead
             # seat (engine fatal) still requeues — the next prepare_seat
-            # re-forks onto a rebuilt context (Stage 3) or errors loudly.
+            # re-forks onto a rebuilt context or errors loudly.
             seat, engine = inst, self._engine
             try:
                 await asyncio.wrap_future(
@@ -2807,11 +2807,12 @@ class LlamaCppBackend(BaseBackend):
                 multi-turn rambling.
 
         Uses the low-level ``Llama.generate()`` method with
-        ``reset=False`` so the static-context state loaded by
+        ``reset=False`` so the static-context state established by
         ``acquire_instance()`` is preserved.  Only the *dynamic*
         portion of the prompt (user message, chat template) is
         evaluated — the static knowledge tokens are already in the
-        KV cache from ``load_state()``.
+        KV cache from the static fork (resident/batched) or
+        ``load_state()`` (legacy).
 
         For short responses (max_tokens <= 16, e.g. grammar-constrained
         menu picks), the entire response is buffered before yielding.

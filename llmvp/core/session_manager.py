@@ -1,9 +1,11 @@
-"""Session Manager — memoryful inference sessions with KV cache persistence.
+"""Session Manager — memoryful inference sessions.
 
-Each session pins a pool instance and maintains per-turn KV cache state
-snapshots. Between turns, the snapshot is saved after generation completes
-and restored before the next turn begins — giving the model natural
-conversational memory without re-processing the full history.
+Each session pins a pool instance (or batched seat) for its lifetime. Three
+turn-state mechanisms exist, selected by config: session_full_replay (the
+safe default — re-prefill the token history from the pristine static
+snapshot each turn), resident_seq_cache (the production path — the session
+appends to a live resident sequence, no re-prefill), and the legacy
+save_state/load_state per-turn snapshot splice.
 
 Sessions have a TTL. Expiry behavior:
 - If an active subscription listener exists: push a SessionEvent.

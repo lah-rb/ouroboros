@@ -2,8 +2,8 @@
 // #Turn primitives across all response shapes to confirm the schema
 // admits every shape we intend to support and rejects what it should.
 //
-// Delete this file after Step C migration lands; Step B per-site
-// records are authoritative from that point forward.
+// Kept as a permanent compile-time self-test: cue-compile fails loudly
+// here if a #Turn schema change breaks an intended shape.
 
 package ouroboros
 

@@ -1,12 +1,12 @@
 #!/bin/bash
 # CANARY — 8-task TB2 subset vs gpt-oss-120b, for fast before/after comparison of
-# scaffold changes (here: §8 Observation framing for run_session + fresh-tail
+# scaffold changes (here: prompt Observation framing for run_session + fresh-tail
 # de-dup, commit 3644df6). Same setup as dev/tb2_harbor_gptoss.sh (resident-seq
 # cache + warm flows) but scoped to the 8 tasks via `-i`, so turn-count / prefill
 # move directly against the prior canary (runs/canary-tb2/2026-06-19__10-50-20:
 # 456 plan_interaction turns over the 5 traced tasks).
 #
-# The §8 change is agent-side — Harbor fresh-imports adapters.tb each run, so no
+# The framing change is agent-side — Harbor fresh-imports adapters.tb each run, so no
 # server restart is needed to pick it up; the server only needs the prefill/decode
 # telemetry (already live). Resident + warm are reset here to match the prior run.
 #
@@ -44,7 +44,7 @@ restart_server(){
   log "  SERVER LOAD TIMEOUT"; return 1
 }
 
-log "==== CANARY v2 (8-task TB2 subset): $MODEL  — §8 framing + fresh-tail de-dup ===="
+log "==== CANARY v2 (8-task TB2 subset): $MODEL  — framing + fresh-tail de-dup ===="
 
 ROS=$(grep -c '"UseVirtualizationFrameworkRosetta": true' \
   "$HOME/Library/Group Containers/group.com.docker/settings-store.json" 2>/dev/null)

@@ -971,7 +971,7 @@ async def action_derive_directive_goals(step_input: StepInput) -> StepOutput:
     # not an absent capability to explore-and-build. capability_absent stays
     # False so the goal routes diagnose-first (bounded CONCLUDE schema) instead
     # of the explore-and-build path that exploded pilot-1's scope. (Semantic
-    # correction, not a bypass — see dev/SWE_PILOT_1_FINDINGS.md.)
+    # correction, not a bypass — see dev/archive/docs/SWE_PILOT_1_FINDINGS.md.)
     repair = is_repair_profile(mission)
 
     parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))

@@ -14,7 +14,7 @@ outputs. Validation is an optional post-parse concern that a consuming
 site can apply using any JSON Schema library it prefers; the registry's
 job is just to load and serve the schema documents.
 
-See dev/proposals/turn_schema_primitives.md for the design rationale.
+Design rationale lived in the turn-schema proposal docs (2026-06, retired).
 """
 
 from __future__ import annotations

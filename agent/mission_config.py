@@ -9,11 +9,11 @@ Lifecycle:
     3. post_create — runs after mission creation (start agent, setup scripts)
 
 Usage:
-    uv run ouroboros.py mission create --mission_config test
-    # Loads test.yaml from current directory
+    uv run ouroboros.py mission create --mission_config game_challenge
+    # Bare names resolve in cwd, then missions/ (missions/game_challenge.yaml)
 
-    uv run ouroboros.py mission create --mission_config ./configs/test.yaml
-    # Loads from explicit path
+    uv run ouroboros.py mission create --mission_config ./missions/ops_demo.yaml
+    # Or an explicit path
 """
 
 from __future__ import annotations
@@ -204,7 +204,7 @@ def load_mission_config(name_or_path: str) -> MissionYAMLConfig:
     """Load and validate a mission config from a YAML file.
 
     Args:
-        name_or_path: Config name (searches for {name}.yaml in cwd)
+        name_or_path: Config name (searches {name}.yaml in cwd, then missions/)
                       or explicit path to a .yaml/.yml file.
 
     Returns:

@@ -13,7 +13,7 @@ Detection only: strictly read-only over .agent/traces/*.jsonl. The agent still
 writes the stub to disk, so the contamination "shape" stays visible (by design
 — it's the indicator we want surfaced, not hidden).
 
-Reuses the canonical classifier `is_stub` from dev/contam_forensics.py.
+Reuses the canonical classifier `is_stub` from agent/trace_health.py.
 
 Usage:
   python dev/contam_monitor.py --working-dir /tmp/run_xyz --interval 30
@@ -87,7 +87,7 @@ def _alert(reason: str, win_rate: float, cum_rate: float, last_stub_head: str) -
 
 def replay(working_dir: str) -> tuple[int, int]:
     """One-shot: process the whole latest trace and report the stub-rate
-    (verification mode — must match dev/contam_forensics.py's generate_rewrite line)."""
+    (verification mode — same generate_rewrite event selection as the trace forensics)."""
     T = latest_trace(working_dir)
     if not T:
         print(f"{os.path.basename(working_dir)}: NO TRACE")

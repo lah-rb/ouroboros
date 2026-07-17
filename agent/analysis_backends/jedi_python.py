@@ -1,6 +1,6 @@
 """jedi-backed Python references — scope/import-aware, in-memory.
 
-jedi is the preferred Python reference engine (see dev/DEEP_ANALYSIS_BACKENDS.md):
+jedi is the preferred Python reference engine (see dev/archive/docs/DEEP_ANALYSIS_BACKENDS.md):
 it is scope-aware, so it excludes *definition* occurrences that the syntactic
 tree-sitter walk wrongly reports as references (e.g. a function's own name at its
 `def` site), and it follows imports/scoping rather than matching bare identifiers.

@@ -1,4 +1,4 @@
-"""M1 integration test: run the FULL OuroborosAgent.perform_task against a
+"""Full-stack integration test: run the FULL OuroborosAgent.perform_task against a
 controlled container (ouro-probe), bypassing the tb harness for fast iteration.
 
 Mirrors the hello-world task. Verifies the whole adapter stack — run_agent +

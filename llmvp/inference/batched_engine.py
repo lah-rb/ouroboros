@@ -7,7 +7,7 @@ only shape that raises aggregate decode throughput on Metal: all contexts
 on a device share a single MTLCommandQueue, so the pool's N-context
 "simultaneous" decode serializes on the GPU anyway (and concurrent
 submission trips the driver's command-buffer accounting — see
-dev/CACHE_STATE.md). Batching reads the weights once per step for every
+dev/archive/docs/CACHE_STATE.md). Batching reads the weights once per step for every
 stream instead of once per stream.
 
 Threading contract: the dedicated decode thread owns ALL context
@@ -711,7 +711,7 @@ class BatchedEngine:
             )
         else:
             # Only pinned sessions remain — nothing safe to evict here.
-            # (Stage 2/3: force-window the largest session instead.)
+            # (future: force-window the largest session instead.)
             logger.error(
                 "⚠️ KV pressure with only pinned sessions resident — "
                 "decode cannot proceed until a session ends or windows"

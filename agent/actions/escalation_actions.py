@@ -12,7 +12,7 @@ rejoins the invoker's normal progression:
                had succeeded
     deferred → the invoker takes its existing failure path (never a dead end)
 
-Design rules (dev/ESCALATION_PRIMITIVE.md):
+Design rules (dev/archive/docs/ESCALATION_PRIMITIVE.md):
   - Block verdicts, not attempts: deferring honestly is a valid outcome;
     burning the budget appeasing an unfixable check is not.
   - Tools are the existing guarded primitives: writes go through

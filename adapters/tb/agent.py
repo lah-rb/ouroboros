@@ -120,7 +120,7 @@ class OuroborosAgent(BaseAgent):
                 pass
 
         # Routing: default to the in-graph `classify` flow (flow_set="auto") —
-        # the same 2-label decision the M3 task_judge made, now made in-graph so
+        # the same 2-label decision the retired LLM task_judge made, now made in-graph so
         # local and TB share one router. classify picks flow_set + profile via
         # menu turns, seeds the directive, and hands off to the chosen
         # controller. OURO_FLOW_SET is a hard override that SKIPS routing.

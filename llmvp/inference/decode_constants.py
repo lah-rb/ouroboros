@@ -2,7 +2,7 @@
 
 One source of truth for magic numbers that previously appeared as literals
 in BOTH token loops (pool: llama_cpp_backend.generate_stream_sync; batched:
-batched_engine.TokenPipeline) and had already started to drift.
+batched_engine via inference/token_pipeline.TokenPipeline) and had already started to drift.
 """
 
 # Requests at or below this many max_tokens buffer their whole output instead

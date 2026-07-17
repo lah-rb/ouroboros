@@ -35,8 +35,8 @@ Phase 3 scope — what this module currently implements:
 
 Deferred to later phases:
   - menu_single / menu_compound envelope and options rendering (Phase with first menu site)
-  - code envelope (Phase with Site #1)
-  - prose envelope (Phase with Site #8 or earlier; may be empty)
+  - code envelope
+  - prose envelope (optional; may be empty)
 """
 
 from __future__ import annotations

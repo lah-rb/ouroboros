@@ -15,7 +15,7 @@ Checks (ported from blueprint/lint.py):
   7. Resolver conventions: rule conditions using string-match anti-patterns
 
 Usage:
-    python lint_flows.py [--verbose] [--compiled PATH]
+    python -m agent.flow_lint [--verbose] [--compiled PATH]
 """
 
 from __future__ import annotations

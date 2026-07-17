@@ -236,9 +236,9 @@ import "list"
 	// Required when action == "inference" and `turn` is not set.
 	prompt_template?: #PromptTemplate
 
-	// Turn declaration — the new inference-step format introduced by
-	// Step C migration. When present, replaces prompt_template + config
-	// + resolver for inference steps. See turn.cue for #Turn.
+	// Turn declaration — the turn-based inference-step format (rendered
+	// by agent/turn_renderer.py). When present, replaces prompt_template
+	// + config + resolver for inference steps. See turn.cue for #Turn.
 	//
 	// Inference steps must have exactly one of `prompt_template` or
 	// `turn`. Non-inference steps must have neither.
@@ -289,7 +289,7 @@ import "list"
 
 	// Inference steps need either a legacy prompt_template OR a turn.
 	// Exactly one of these carries the render spec; the other is absent.
-	// The turn-based form arrives via Step C migration (see turn.cue).
+	// The turn-based form is the migration target (see turn.cue).
 	if action == "inference" {
 		if turn == _|_ {
 			prompt_template: #PromptTemplate

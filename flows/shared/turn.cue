@@ -24,14 +24,13 @@
 //     failure mode is structurally impossible
 //
 // Related documents:
-//   - dev/proposals/turn_schema_primitives.md — full design rationale
-//   - dev/proposals/turn_schema_site_inventory.md — empirical grounding
-//   - dev/proposals/observations_system.md — parked follow-up for
+//   Design lineage: the turn-schema proposal docs (2026-06, retired with
+//   the dev cleanup — the schema below is now the authority).
 //     effect-sourced read views (future fourth sourcing pattern)
 //
 // Pipeline:
 //   .cue → `cue export --out json` → Python loader → renderer
-//   Renderer: agent/turn_renderer.py (to be created in Step C)
+//   Renderer: agent/turn_renderer.py
 
 package ouroboros
 
@@ -78,7 +77,7 @@ package ouroboros
 
 // A custom banner for pilot shapes. Must match the triple-equals
 // convention so parsing and priming work consistently. Non-standard
-// banners are lint-flagged (see dev/lint_flows.py in Step C).
+// banners are lint-flagged (see agent/flow_lint.py in Step C).
 #CustomBanner: =~"^=== [A-Z][A-Z0-9 +]*[A-Z0-9] ===$"
 
 #ModeBanner: #StandardBanner | #CustomBanner

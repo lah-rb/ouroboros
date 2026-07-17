@@ -132,7 +132,7 @@ class OuroborosHarborAgent(BaseAgent):
         )
 
         # Default to the in-graph `classify` router (flow_set="auto"); the same
-        # 2-label decision the M3 task_judge made, now in-graph so local and TB
+        # 2-label decision the retired LLM task_judge made, now in-graph so local and TB
         # share one router. OURO_FLOW_SET is a hard override that SKIPS routing.
         override = os.environ.get("OURO_FLOW_SET")
         flow_set = override if override in ("ops", "code_core") else "auto"

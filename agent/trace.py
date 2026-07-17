@@ -1,6 +1,6 @@
 """Runtime trace event dataclasses and token counting.
 
-Phase 2 of the Blueprint Design — lightweight, always-on trace instrumentation.
+Lightweight, always-on trace instrumentation.
 All events share a common base with event_type, timestamps, and flow context.
 Events are emitted via effects.emit_trace() and flushed to JSONL at cycle boundaries.
 

@@ -2,7 +2,7 @@
 """Ouroboros CLI — mission management and agent execution.
 
 Usage:
-    uv run ouroboros.py mission create --mission_config test        # from test.yaml
+    uv run ouroboros.py mission create --mission_config game_challenge  # missions/game_challenge.yaml
     uv run ouroboros.py mission create --objective "..." [options]   # from CLI flags
     uv run ouroboros.py mission status [--working-dir /path]
     uv run ouroboros.py mission pause [--working-dir /path]
@@ -760,7 +760,7 @@ def main() -> None:
     create_p = mission_sub.add_parser("create", help="Create a new mission")
     create_p.add_argument(
         "--mission_config",
-        help="Load mission from YAML config (name or path, e.g. 'test' loads test.yaml)",
+        help="Load mission from YAML config (name or path; bare names resolve in cwd then missions/)",
     )
     create_p.add_argument(
         "--objective",

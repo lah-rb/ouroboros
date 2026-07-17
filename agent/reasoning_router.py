@@ -1,4 +1,4 @@
-"""Per-turn reasoning-level routing (adaptive_thinking, Phase F wiring).
+"""Per-turn reasoning-level routing (adaptive_thinking).
 
 Chooses the gpt-oss reasoning effort (low/medium/high) per inference step, so
 mechanical turns stop paying for long CoT. The server applies the level via
@@ -17,7 +17,7 @@ Resolution order (first hit wins):
    the trained low/medium router: word+char TF-IDF union + logistic regression
    over the rendered turn prompt. Champion of the 2026-07 bake-off on
    task-held-out data (macro-F1 .622; route-low precision .976 at 38% coverage
-   at the default threshold; see dev/ADAPTIVE_REASONING_DECISION_LAYER.md).
+   at the default threshold; see dev/archive/docs/ADAPTIVE_REASONING_DECISION_LAYER.md).
    ``P(medium) >= OURO_ROUTER_THR`` (default 0.4) -> medium, else low.
 4. Otherwise None -> the server's default level (medium) applies.
 
