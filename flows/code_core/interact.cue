@@ -412,24 +412,16 @@ interact: #FlowDefinition & {
 		}
 
 		// Release the memoryful inference session now that evaluation is done.
-		end_eval_session_success: #StepDefinition & {
-			action:      "end_inference_session"
+		end_eval_session_success: #StepDefinition & _templates.close_session & {
+			_next:       "flush_transient_success"
 			description: "Release inference session after successful evaluation"
 			context: optional: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "flush_transient_success"}]
-			}
 		}
 
-		end_eval_session_failure: #StepDefinition & {
-			action:      "end_inference_session"
+		end_eval_session_failure: #StepDefinition & _templates.close_session & {
+			_next:       "flush_transient_failure"
 			description: "Release inference session after failed evaluation"
 			context: optional: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "flush_transient_failure"}]
-			}
 		}
 
 		// ── Test isolation: flush program-generated transient files ──
@@ -440,22 +432,14 @@ interact: #FlowDefinition & {
 		// ended"). Deterministically delete the architecture-declared
 		// transient_files after every behavioral session.
 
-		flush_transient_success: #StepDefinition & {
-			action:      "flush_transient_files"
+		flush_transient_success: #StepDefinition & _templates.flush_transient & {
+			_next:       "compile_report_success"
 			description: "Delete architecture-declared transient files (test isolation)"
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "compile_report_success"}]
-			}
 		}
 
-		flush_transient_failure: #StepDefinition & {
-			action:      "flush_transient_files"
+		flush_transient_failure: #StepDefinition & _templates.flush_transient & {
+			_next:       "compile_report_failure"
 			description: "Delete architecture-declared transient files (test isolation)"
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "compile_report_failure"}]
-			}
 		}
 
 		// ── Compile directive reports before tail-call ─────────────

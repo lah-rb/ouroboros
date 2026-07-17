@@ -273,24 +273,16 @@ escalate: #FlowDefinition & {
 			publishes: ["escalation_summary", "files_changed"]
 		}
 
-		end_session_resolved: #StepDefinition & {
-			action:      "end_inference_session"
+		end_session_resolved: #StepDefinition & _templates.close_session & {
+			_next:       "resolved"
 			description: "Release the escalation session (resolved)"
 			context: optional: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "resolved"}]
-			}
 		}
 
-		end_session_deferred: #StepDefinition & {
-			action:      "end_inference_session"
+		end_session_deferred: #StepDefinition & _templates.close_session & {
+			_next:       "deferred"
 			description: "Release the escalation session (deferred)"
 			context: optional: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "deferred"}]
-			}
 		}
 
 		// ── Terminals: the invoker branches on result.status ────────

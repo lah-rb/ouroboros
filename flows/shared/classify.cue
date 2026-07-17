@@ -192,14 +192,10 @@ classify: #FlowDefinition & {
 		// missions can't open one (their open_router_session fails → they default
 		// to ops/plain without exploring). Same discipline as escalate's
 		// end_session steps.
-		end_router_session: #StepDefinition & {
-			action:      "end_inference_session"
+		end_router_session: #StepDefinition & _templates.close_session & {
+			_next:       "persist_routing"
 			description: "Release the router exploration session"
 			context: optional: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "persist_routing"}]
-			}
 		}
 
 		persist_routing: #StepDefinition & {

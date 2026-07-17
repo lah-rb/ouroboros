@@ -456,24 +456,16 @@ diagnose_issue: #FlowDefinition & {
 		// End session + compile diagnosis + tail-call (all unchanged)
 		// ══════════════════════════════════════════════════════════
 
-		end_session: #StepDefinition & {
-			action:      "end_inference_session"
+		end_session: #StepDefinition & _templates.close_session & {
+			_next:       "compile_diagnosis"
 			description: "Close the diagnosis session after conclude"
 			context: required: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "compile_diagnosis"}]
-			}
 		}
 
-		end_session_failure: #StepDefinition & {
-			action:      "end_inference_session"
+		end_session_failure: #StepDefinition & _templates.close_session & {
+			_next:       "compile_report_failure"
 			description: "Close session on failure path"
 			context: required: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "compile_report_failure"}]
-			}
 		}
 
 		compile_diagnosis: #StepDefinition & {

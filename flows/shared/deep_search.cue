@@ -185,14 +185,10 @@ deep_search: #FlowDefinition & {
 			publishes: ["research_summary", "search_sufficient", "queries_run"]
 		}
 
-		end_session: #StepDefinition & {
-			action:      "end_inference_session"
+		end_session: #StepDefinition & _templates.close_session & {
+			_next:       "done"
 			description: "Release the research session"
 			context: optional: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "done"}]
-			}
 		}
 
 		// ── Terminals ───────────────────────────────────────────────

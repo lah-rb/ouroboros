@@ -431,26 +431,18 @@ quality_gate: #FlowDefinition & {
 		}
 
 		// Release the inference session now that assessment is captured.
-		end_ux_session: #StepDefinition & {
-			action:      "end_inference_session"
+		end_ux_session: #StepDefinition & _templates.close_session & {
+			_next:       "flush_transient_ux"
 			description: "Release run_session inference session"
 			context: optional: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "flush_transient_ux"}]
-			}
 		}
 
 		// Test isolation: delete architecture-declared transient files the
 		// UX session's program run may have written (see interact.cue's
 		// flush_transient_* steps for the rationale).
-		flush_transient_ux: #StepDefinition & {
-			action:      "flush_transient_files"
+		flush_transient_ux: #StepDefinition & _templates.flush_transient & {
+			_next:       "summarize"
 			description: "Delete architecture-declared transient files (test isolation)"
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "summarize"}]
-			}
 		}
 
 		// ── Phase 3: Summary and verdict ───────────────────────────
@@ -704,22 +696,14 @@ quality_gate: #FlowDefinition & {
 
 		// Test isolation between probes (same action as flush_transient_ux:
 		// a probe's save files must not leak into the next probe's run).
-		flush_transient_probe: #StepDefinition & {
-			action:      "flush_transient_files"
+		flush_transient_probe: #StepDefinition & _templates.flush_transient & {
+			_next:       "run_probe"
 			description: "Delete architecture-declared transient files between probes"
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "run_probe"}]
-			}
 		}
 
-		flush_transient_final: #StepDefinition & {
-			action:      "flush_transient_files"
+		flush_transient_final: #StepDefinition & _templates.flush_transient & {
+			_next:       "apply_verification_results"
 			description: "Flush transients after the last probe"
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "apply_verification_results"}]
-			}
 		}
 
 		apply_verification_results: #StepDefinition & {

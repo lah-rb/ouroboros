@@ -72,22 +72,7 @@ research_control: #FlowDefinition & {
 			publishes: ["mission"]
 		}
 
-		process_events: #StepDefinition & {
-			action:      "handle_events"
-			description: "Process user messages, abort/pause signals"
-			context: {
-				required: ["mission", "events"]
-			}
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.abort_requested == true", transition: "aborted"},
-					{condition: "result.pause_requested == true", transition: "idle"},
-					{condition: "true", transition: "check_phase"},
-				]
-			}
-			publishes: ["mission"]
-		}
+		process_events: #StepDefinition & _templates.process_events & {_next: "check_phase"}
 
 		// Phase names are the contract with SCRAPER_PHASES in
 		// agent/flow_sets.py — they must stay in sync.
@@ -237,26 +222,9 @@ research_control: #FlowDefinition & {
 			status:   "completed"
 		}
 
-		idle: #StepDefinition & {
-			action:      "enter_idle"
-			description: "Wait for events"
-			tail_call: {
-				flow: "research_control"
-				input_map: {
-					mission_id: {$ref: "input.mission_id"}
-				}
-				delay: 5
-			}
-		}
+		idle: #StepDefinition & _templates.controller_idle & {_self: "research_control"}
 
-		aborted: #StepDefinition & {
-			action:      "finalize_mission"
-			description: "Mission aborted"
-			context: optional: ["mission"]
-			params: abort: true
-			terminal: true
-			status:   "aborted"
-		}
+		aborted: #StepDefinition & _templates.mission_aborted
 	}
 
 	entry: "load_state"

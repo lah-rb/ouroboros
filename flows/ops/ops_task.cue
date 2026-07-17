@@ -621,24 +621,16 @@ ops_task: #FlowDefinition & {
 		// judge_step reused) BEFORE returning — otherwise every ops cycle leaks
 		// an LLMVP pool instance (the other run_session callers — quality_gate,
 		// interact, diagnose_issue — all end their sessions here too).
-		end_session_success: #StepDefinition & {
-			action:      "end_inference_session"
+		end_session_success: #StepDefinition & _templates.close_session & {
+			_next:       "return_success"
 			description: "Release the inference session (task done)"
 			context: optional: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "return_success"}]
-			}
 		}
 
-		end_session_loop: #StepDefinition & {
-			action:      "end_inference_session"
+		end_session_loop: #StepDefinition & _templates.close_session & {
+			_next:       "return_loop"
 			description: "Release the inference session (looping)"
 			context: optional: ["inference_session_id"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "return_loop"}]
-			}
 		}
 
 		return_success: #StepDefinition & {

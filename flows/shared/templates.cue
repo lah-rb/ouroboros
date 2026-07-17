@@ -153,6 +153,78 @@ _templates: {
 		...
 	}
 
+	// ── Controller lifecycle ──────────────────────────────────
+	//
+	// The five *_control flows shared these verbatim (found by the
+	// 2026-07-16 flow DRY pass — structural clustering over
+	// compiled.json). `_next` / `_self` are HIDDEN parameters: set them
+	// at the use site; hidden fields never export to JSON.
+
+	process_events: {
+		_next:       string
+		action:      "handle_events"
+		description: "Process user messages, abort/pause signals"
+		context: required: ["mission", "events"]
+		resolver: {
+			type: "rule"
+			rules: [
+				{condition: "result.abort_requested == true", transition: "aborted"},
+				{condition: "result.pause_requested == true", transition: "idle"},
+				{condition: "true", transition: _next},
+			]
+		}
+		publishes: ["mission"]
+		...
+	}
+
+	controller_idle: {
+		_self:       string
+		action:      "enter_idle"
+		description: "Wait for events"
+		tail_call: {
+			flow: _self
+			input_map: {
+				mission_id: {$ref: "input.mission_id"}
+			}
+			delay: 5
+		}
+		...
+	}
+
+	mission_aborted: {
+		action:      "finalize_mission"
+		description: "Mission aborted"
+		context: optional: ["mission"]
+		params: abort: true
+		terminal: true
+		status:   "aborted"
+		...
+	}
+
+	// ── Session close + transient flush ───────────────────────
+	// One-liner steps repeated across flows; only the onward
+	// transition (and sometimes description/context) varies.
+
+	close_session: {
+		_next:  string
+		action: "end_inference_session"
+		resolver: {
+			type: "rule"
+			rules: [{condition: "true", transition: _next}]
+		}
+		...
+	}
+
+	flush_transient: {
+		_next:  string
+		action: "flush_transient_files"
+		resolver: {
+			type: "rule"
+			rules: [{condition: "true", transition: _next}]
+		}
+		...
+	}
+
 	// ── Return to Mission Control ─────────────────────────────
 
 	return_success: {
