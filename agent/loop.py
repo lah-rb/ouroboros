@@ -149,6 +149,39 @@ def _load_flows(flows_dir: str) -> dict[str, FlowDefinition]:
     return flows
 
 
+async def _route_director_return(
+    outcome: "FlowTailCall", effects: Any
+) -> "FlowTailCall":
+    """Route a director-targeted tail call to the mission's own controller.
+
+    The shared return templates hardcode ``flow: "mission_control"``, so
+    sub-flows shared across flow sets always "return" there by name. A
+    flow set with its own controller (contract_swarm) must regain
+    control instead: when the target is ANY registered director flow,
+    re-resolve it to the entry flow of the mission's CURRENT flow set
+    (read live — classify rewrites flow_set mid-run for the auto set).
+    Identity for same-controller returns and on any read failure.
+    """
+    from agent.flow_sets import FLOW_SETS, get_flow_set
+
+    director_flows = {spec.entry_flow for spec in FLOW_SETS.values()}
+    if outcome.target_flow not in director_flows:
+        return outcome
+    try:
+        mission = await effects.load_mission()
+        entry = get_flow_set(getattr(mission.config, "flow_set", "")).entry_flow
+    except Exception:  # noqa: BLE001 — routing must never kill the loop
+        return outcome
+    if entry != outcome.target_flow and entry in director_flows:
+        logger.info(
+            "Director return %r routed to %r (mission flow set)",
+            outcome.target_flow,
+            entry,
+        )
+        outcome.target_flow = entry
+    return outcome
+
+
 def _resolve_tail_call(
     flow_result: FlowResult,
     flow_def: FlowDefinition,
@@ -393,6 +426,21 @@ async def run_agent(
             if effects and hasattr(effects, "flush_traces"):
                 await effects.flush_traces()
             raise
+
+        # ── Director-return routing ──────────────────────────────
+        # The shared return templates name mission_control LITERALLY, so
+        # every code_core sub-flow "returns" there by name. Route a
+        # director-targeted tail call to the MISSION'S OWN controller
+        # (the entry flow of its CURRENT flow set) so alternative
+        # controllers — contract_swarm's mission_control_swarm — keep
+        # control after their sub-flows return. The auto→code_core
+        # handoff is unaffected: once classify rewrites flow_set, the
+        # current set's entry IS mission_control. (Found by the swarm
+        # toy smoke: one sub-flow return silently handed the mission
+        # back to plain mission_control, which dispatched
+        # build_structure — the wrong structural path.)
+        if isinstance(outcome, FlowTailCall):
+            outcome = await _route_director_return(outcome, effects)
 
         # ── Context Tier Enforcement (belt-and-suspenders) ───────
         # CUE validates at compile time; this catches dynamic violations.

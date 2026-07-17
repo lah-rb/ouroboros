@@ -246,6 +246,14 @@ FLOW_SETS: dict[str, FlowSetSpec] = {
         entry_flow="mission_control",
         phases=CODE_CORE_PHASES,
     ),
+    # Contract-swarm A/B variant: identical phase contract, controller
+    # retargets the parallel structural batch to build_contracts (the
+    # contract → review → concurrent symbol workers → splice pipeline).
+    "contract_swarm": FlowSetSpec(
+        name="contract_swarm",
+        entry_flow="mission_control_swarm",
+        phases=CODE_CORE_PHASES,
+    ),
     "scraper": FlowSetSpec(
         name="scraper",
         entry_flow="research_control",

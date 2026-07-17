@@ -1,0 +1,24 @@
+# Prompt template: build_contracts/worker_instruction
+#
+# Output contract for a symbol worker. Loaded directly by the fan-out
+# action (swarm_generate_symbols) — flat content, composed in Python
+# with the persona, module skeleton, contract set, and assignment.
+
+id: build_contracts/worker_instruction
+content: |
+  ## Output rules
+
+  Output the COMPLETE implementation of your assigned symbol and
+  nothing else, in one fenced code block:
+
+  - EXACTLY ONE top-level symbol, starting at column 0, whose name and
+    signature match the contract character-for-character.
+  - Reproduce the contract docstring VERBATIM (including its doctests)
+    as the implementation's docstring.
+  - NO import statements — the module skeleton already carries the
+    final imports; use them by name.
+  - NO new module-level names: call sibling symbols and imported
+    symbols strictly through their contracted signatures shown above.
+  - Fully implement the contracted behavior, including every documented
+    Raises condition; the doctests will be executed against your code
+    exactly as written.

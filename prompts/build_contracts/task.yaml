@@ -1,0 +1,21 @@
+# Prompt template: build_contracts/task
+#
+# Problem section for the contract-authoring turn: the mission
+# objective plus the framing that this response produces CONTRACTS,
+# not implementations — independent workers implement one symbol each
+# from the contracts alone. The full blueprint follows as a
+# context_files section rendered by render_batch_blueprint.
+
+id: build_contracts/task
+content: |
+  ## Task
+  {context.mission.objective}
+
+  You are writing the INTERFACE CONTRACTS for this entire project — not
+  the implementations. Independent implementers will each build exactly
+  one symbol from its contract, in isolation, in parallel. They never
+  see each other's code; your contracts are their only coordination.
+  Every cross-symbol agreement — argument and return types, data
+  shapes, invariants, error behavior, which symbol owns what — must be
+  written down explicitly, because anything left implicit WILL diverge
+  between implementers.

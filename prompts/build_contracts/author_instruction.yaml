@@ -1,0 +1,69 @@
+# Prompt template: build_contracts/author_instruction
+#
+# Instruction section for the contract-authoring turn. Defines the
+# stub-module output format (one fenced block per CODE file, FILE
+# marker first line, typed stubs with DbC docstrings + doctests and
+# `...` bodies). The worked example teaches FORM in a different domain
+# (flashcard/quiz CLI — sanitation doctrine: examples never share the
+# benchmark domain).
+
+id: build_contracts/author_instruction
+content: |
+  Produce one CONTRACT STUB MODULE for EVERY code file in the blueprint
+  (skip data files like .yaml/.json — those are built separately). For
+  each file, output one fenced code block whose FIRST line is a FILE
+  marker naming the exact path from the blueprint. Each block must be a
+  syntactically valid Python module in which:
+
+  - The module docstring states the module's responsibility in 1-2 lines.
+  - The import block is COMPLETE and FINAL — implementers may not add
+    imports, so include everything any symbol in the file will need.
+  - Every top-level symbol the file must define appears as a typed stub
+    in its final order: exact signature with type annotations, a
+    docstring contract, and a `...` body. A class is ONE stub containing
+    its attributes and method stubs (one implementer builds the whole
+    class).
+  - Every helper shared between symbols is declared as its own stub —
+    implementers may not invent new module-level names.
+  - Module-level WIRING that is not a def/class — the
+    `if __name__ == "__main__": main()` guard, module-level constants,
+    logger setup — must appear COMPLETE (not stubbed) in the module
+    itself. Implementers each write ONE symbol body and never touch
+    module scope, so anything you leave out of the module here will be
+    absent from the finished file. An entry-point module without its
+    `__main__` guard produces a program that does nothing.
+
+  Each docstring is a CONTRACT with this shape: one purpose line;
+  Args/Returns with meaning, not just types; Raises with the exact
+  conditions; and 1-3 doctest examples showing real input → output.
+  Doctests must be SELF-CONTAINED (construct their own inputs, no file
+  or network access) — they are executed verbatim against the assembled
+  module as its acceptance test.
+
+  ```python
+  # === FILE: study_engine.py ===
+  """Session engine: deals cards and scores answers."""
+
+  from models import Card, Deck
+
+
+  def score_answer(card: Card, answer: str) -> bool:
+      """Return True when `answer` matches the card's back, ignoring case
+      and surrounding whitespace.
+
+      Args:
+          card: The card being answered.
+          answer: Raw user input.
+
+      Returns:
+          True on a match; False otherwise. Never raises on empty input.
+
+      >>> score_answer(Card(front="2 + 2", back="4"), " 4 ")
+      True
+      >>> score_answer(Card(front="2 + 2", back="4"), "five")
+      False
+      """
+      ...
+  ```
+
+  Output ONLY the fenced contract blocks — no prose between them.

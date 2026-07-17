@@ -624,6 +624,21 @@ def build_action_registry() -> ActionRegistry:
     registry.register("escalation_fold_consult", action_escalation_fold_consult)
     registry.register("conclude_escalation", action_conclude_escalation)
 
+    # ── Contract swarm (contract → review → parallel workers → splice) ──
+    from agent.actions.contract_swarm_actions import (
+        action_apply_contract_review,
+        action_assemble_contract_files,
+        action_parse_contracts,
+        action_run_contract_doctests,
+        action_swarm_generate_symbols,
+    )
+
+    registry.register("parse_contracts", action_parse_contracts)
+    registry.register("apply_contract_review", action_apply_contract_review)
+    registry.register("swarm_generate_symbols", action_swarm_generate_symbols)
+    registry.register("assemble_contract_files", action_assemble_contract_files)
+    registry.register("run_contract_doctests", action_run_contract_doctests)
+
     # ── Deep-search loop v1 (shared reflect-and-refine web-research primitive) ──
     from agent.actions.deep_search_actions import (
         action_condense_results,

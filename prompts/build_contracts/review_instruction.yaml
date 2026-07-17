@@ -1,0 +1,41 @@
+# Prompt template: build_contracts/review_instruction
+#
+# Instruction section for the contract-review turn: the cohesion
+# rubric and the JSON verdict shape. The contract set being reviewed
+# arrives as the preceding context_files section (render_contract_digest).
+
+id: build_contracts/review_instruction
+content: |
+  Review the contract set above for COHESION — will independent
+  implementers, each building one symbol from its contract alone,
+  produce a program that works when assembled? Check specifically:
+
+  1. Cross-boundary type agreement: every call implied by the contracts
+     (docstrings, doctests, signatures) type-checks against the callee's
+     contracted signature.
+  2. Data-shape agreement: any structure passed between symbols is
+     defined identically everywhere it is mentioned.
+  3. Referential completeness: every symbol a signature, docstring, or
+     doctest mentions actually has a contract (or is an import).
+  4. Invariant consistency: no two contracts state contradictory
+     behavior (e.g. one returns None on missing, another documents a
+     raise for the same condition).
+  5. Doctest sanity: doctests are self-contained and their expected
+     outputs are consistent with the contracted behavior.
+
+  Do NOT flag style, naming taste, or implementation choices — only
+  problems that would make two faithful implementations disagree.
+
+  Return ONLY a fenced JSON object:
+
+      {"passed": true, "issues": []}
+
+  or, when problems exist:
+
+      {"passed": false,
+       "issues": [{"file": "study_engine.py", "symbol": "score_answer",
+                   "instruction": "Returns bool here but deck.py's doctest
+                    expects an int score — pick one and state it in both."}]}
+
+  Each instruction must be actionable by the contract author in one
+  edit. List at most the 8 most important issues.

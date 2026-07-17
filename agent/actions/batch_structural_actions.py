@@ -307,6 +307,8 @@ async def action_apply_batch_results(step_input: StepInput) -> StepOutput:
     manifest = ctx.get("batch_manifest") or {}
     per_file = ctx.get("batch_check_results") or {}
     tokens = int(ctx.get("inference_tokens_generated") or 0)
+    # Which batch flow is booking (contract_swarm reuses this action).
+    flow_label = str(step_input.params.get("flow_label") or "build_structure")
 
     if not mission:
         return StepOutput(
@@ -341,7 +343,7 @@ async def action_apply_batch_results(step_input: StepInput) -> StepOutput:
         passed = bool(checks.get("passed"))
         checks_failed = list(checks.get("checks_failed") or [])
         report = DirectiveReport(
-            flow="build_structure",
+            flow=flow_label,
             status="success" if passed else "failed",
             summary=(
                 f"Created {file_path} in the batch generation; "
@@ -379,14 +381,14 @@ async def action_apply_batch_results(step_input: StepInput) -> StepOutput:
             + (f" Missing: {', '.join(missing)}." if missing else ""),
             category="codebase_observation",
             tags=["batch_structural"],
-            source_flow="build_structure",
+            source_flow=flow_label,
         )
     )
     if effects:
         await effects.save_mission(mission)
 
     directive_report = {
-        "flow": "build_structure",
+        "flow": flow_label,
         "status": "success" if written else "failed",
         "summary": summary,
         "headline": f"Batch built {len(written)} files, {completed} goals complete",

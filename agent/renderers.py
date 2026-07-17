@@ -738,6 +738,31 @@ def render_batch_blueprint(params: dict, namespaces: dict) -> str:
 # Registry
 # ══════════════════════════════════════════════════════════════════════
 
+
+def render_contract_digest(params: dict, namespaces: dict) -> str:
+    """Render a contract_set back to reviewable stub text.
+
+    Input: the parsed contract_set (params.source).
+    Output key: contract_digest
+
+    The reviewer sees exactly what the workers will implement — every
+    module's stub text in order — plus any parse issues the deterministic
+    gate let through on the exhausted-revisions path.
+    """
+    cs = params.get("source") or {}
+    files = cs.get("files") or {}
+    parts = []
+    for path, entry in files.items():
+        parts.append(f"# === FILE: {path} ===\n{entry.get('stub_text', '')}".rstrip())
+    issues = cs.get("issues") or []
+    if issues:
+        parts.append(
+            "## Known unresolved contract issues\n"
+            + "\n".join(f"- {i.get('file')}: {i.get('problem')}" for i in issues)
+        )
+    return "\n\n".join(parts)
+
+
 RENDERER_REGISTRY: dict[str, Any] = {
     "render_file_context": render_file_context,
     "render_dependency_excerpts": render_dependency_excerpts,
@@ -747,4 +772,5 @@ RENDERER_REGISTRY: dict[str, Any] = {
     "render_interaction_context": render_interaction_context,
     "render_project_setup_context": render_project_setup_context,
     "render_batch_blueprint": render_batch_blueprint,
+    "render_contract_digest": render_contract_digest,
 }

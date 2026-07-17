@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract_review",
+  "description": "Cohesion verdict from the contract-swarm reviewer: pass, or a bounded list of actionable per-symbol fix instructions for the contract author.",
+  "type": "object",
+  "required": ["passed", "issues"],
+  "properties": {
+    "passed": {
+      "type": "boolean",
+      "description": "True when independent implementers building one symbol each from these contracts would produce a coherent program."
+    },
+    "issues": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "required": ["file", "instruction"],
+        "properties": {
+          "file": {"type": "string"},
+          "symbol": {"type": "string"},
+          "instruction": {
+            "type": "string",
+            "description": "One actionable edit for the contract author."
+          }
+        }
+      }
+    }
+  },
+  "x-example": {
+    "passed": false,
+    "issues": [
+      {
+        "file": "study_engine.py",
+        "symbol": "score_answer",
+        "instruction": "Returns bool here but deck.py's doctest expects an int score — pick one and state it in both."
+      }
+    ]
+  }
+}

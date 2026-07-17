@@ -1,0 +1,82 @@
+# CONTRACT-SWARM config (BATCHED): gpt-oss-120b-a5 for the contract-swarm
+# structural A/B — up to SIX concurrent short-context worker completions
+# (swarm_generate_symbols fans out one stateless completion per symbol)
+# plus the mission's own session traffic. Clone of the gameab shape with
+# the seat/context budget rebalanced for many small streams instead of
+# few huge ones.
+#
+# Budget math (kv_unified: n_ctx is the SHARED cell pool across ALL
+# working seats — budget the SUM of concurrent streams): worker prompts
+# are contract slices (~2-6k tokens) with max_tokens 4096, so W=6 ×
+# ~16k = 98304 is comfortable; per-context swa_full KV at 98k ≈ 6.9G —
+# well inside the ~96G wired ceiling documented in the gameab config.
+# The solo contract-author turn draws from the same shared pool and can
+# use far more than 16k while workers are idle.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 98304
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "gpt-oss-120b-a5"
+  family: "harmony"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
+  n_ctx: 98304
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: true
+  thinking_mode: medium
+  swa_full: true
+  kv_unified: true
+  flow_kv_cache: false
+  session_full_replay: true
+  resident_seq_cache: true
+  context_refresh_drain_s: 300
+  reasoning_head_swap: true
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  # Bounded per-request: swarm workers are short; the contract author and
+  # the mission's normal turns request their own budgets explicitly.
+  max_tokens_default: 8192
+  temperature_default: 1.0
+  top_p: 1.0
+  top_k: 0
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.05
+  session_temp_floor: 0.35
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/gpt-oss-120b-a5.tokens.bin"
+  token_limit: 32768
+
+resources:
+  decode_mode: "batched"
+  cpu_threads: 15
+  max_concurrent_requests: 6  # W: six working seats, ONE shared context
+  jit_concurrency_limit: null
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
