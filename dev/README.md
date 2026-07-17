@@ -9,6 +9,7 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
 - `JUDGE_STANDARD.md` — frozen judging standard v1.0 for Opus ground-truth panels (governs the pending 615-turn quarantine worklist).
 - `TRAP_BRIEF.md` — deterministic-startup-fail blind-diagnose trap: evidence + fix options (open).
 - `ORACLE_IMPROVEMENTS_PLAN.md` — TB2 oracle retry-differently / self-check backlog (open).
+- `MULTI_MODEL_PLAN.md` — model-config hotswap + multi-model + provider gateway design (approved direction; phases pending; gates the LLM boss layer).
 
 ## Benchmarks & A/B harnesses
 - `ab_reasoning_games.sh` / `ab_boss_game.sh` — adaptive-reasoning vs baseline game_challenge A/Bs (parallel arms on the batched server).
