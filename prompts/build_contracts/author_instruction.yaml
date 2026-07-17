@@ -55,6 +55,15 @@ content: |
     declare an `attack` field. Do not reference a field on a type whose
     stub does not define it — that contradiction ships as a runtime
     crash the isolated workers cannot detect.
+  - DATA SHAPE ACROSS MODULES: data passed between modules must have ONE
+    declared shape. If a loader returns parsed OBJECTS (e.g.
+    `list[Room]`), annotate that exactly and do not let a consumer treat
+    it as raw dicts; if it returns raw dicts, annotate `dict`/`list[dict]`
+    and the consumer must use `d["key"]`, not `d.attr`. Do NOT return a
+    bare `dict` that a consumer then treats as an object with attributes
+    — prefer a typed model (dataclass) for any structure that crosses a
+    module boundary and is accessed by attribute. (Round-1 crash:
+    `load_world` returned dicts while the engine did `room.id`.)
 
   Each docstring is a CONTRACT with this shape: one purpose line;
   Args/Returns with meaning, not just types; Raises with the exact

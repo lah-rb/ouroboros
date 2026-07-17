@@ -142,6 +142,14 @@ def test_build_contracts_graph():
         steps["run_batch_checks"]["resolver"]["rules"][0]["transition"]
         == "run_doctests"
     )
+    # Round-2 gate: doctests -> cross-module type check -> apply_results.
+    assert (
+        steps["run_doctests"]["resolver"]["rules"][0]["transition"] == "run_type_check"
+    )
+    assert steps["run_type_check"]["action"] == "run_contract_typecheck"
+    assert (
+        steps["run_type_check"]["resolver"]["rules"][0]["transition"] == "apply_results"
+    )
 
     # Boss-swappable turns expose config.model (default local).
     assert steps["author_contracts"]["turn"]["config"]["model"] == ""

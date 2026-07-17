@@ -12339,6 +12339,7 @@
           },
           "config": {
             "temperature": "t*0.3",
+            "max_tokens": 16384,
             "model": ""
           },
           "retries": 2
@@ -12706,6 +12707,35 @@
           "required": [
             "files_changed",
             "contract_set"
+          ],
+          "optional": [
+            "batch_check_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "run_type_check"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_check_results",
+          "validation_output"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_type_check": {
+        "action": "run_contract_typecheck",
+        "description": "Cross-module interface consistency over assembled files",
+        "context": {
+          "required": [
+            "files_changed"
           ],
           "optional": [
             "batch_check_results"

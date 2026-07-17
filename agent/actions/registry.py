@@ -630,6 +630,7 @@ def build_action_registry() -> ActionRegistry:
         action_assemble_contract_files,
         action_parse_contracts,
         action_run_contract_doctests,
+        action_run_contract_typecheck,
         action_swarm_generate_symbols,
     )
 
@@ -638,6 +639,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("swarm_generate_symbols", action_swarm_generate_symbols)
     registry.register("assemble_contract_files", action_assemble_contract_files)
     registry.register("run_contract_doctests", action_run_contract_doctests)
+    registry.register("run_contract_typecheck", action_run_contract_typecheck)
 
     # ── Deep-search loop v1 (shared reflect-and-refine web-research primitive) ──
     from agent.actions.deep_search_actions import (

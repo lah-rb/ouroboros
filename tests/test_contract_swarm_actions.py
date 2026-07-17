@@ -22,6 +22,7 @@ from agent.actions.contract_swarm_actions import (
     action_assemble_contract_files,
     action_parse_contracts,
     action_run_contract_doctests,
+    action_run_contract_typecheck,
     action_swarm_generate_symbols,
 )
 from agent.models import FlowMeta, StepInput
@@ -627,3 +628,103 @@ async def test_parse_clean_when_imports_complete(tmp_path):
     )
     probs = [i["problem"] for i in out.context_updates["contract_set"]["issues"]]
     assert not any("architecture-declared imports" in p for p in probs)
+
+
+# ── Round 2: cross-module type-consistency gate ──────────────────────
+
+
+class _ReadEffects:
+    """Serves assembled file contents to action_run_contract_typecheck."""
+
+    def __init__(self, files: dict):
+        self._files = files
+
+    async def read_file(self, path):
+        content = self._files.get(path)
+        return SimpleNamespace(exists=content is not None, content=content or "")
+
+
+_COMBAT_ASM = (
+    "class CombatEngine:\n"
+    '    """C."""\n'
+    "    def __init__(self, player, monster):\n"
+    "        self.player = player\n"
+    "        self.monster = monster\n"
+    "    def resolve(self) -> str:\n"
+    '        """r."""\n'
+    "        return ''\n"
+)
+_PARSER_ASM = (
+    "from dataclasses import dataclass\n\n\n"
+    "@dataclass\nclass Command:\n    verb: str\n    arg: str\n"
+)
+_ENGINE_BAD = (
+    "from combat import CombatEngine\nfrom parser import Command\n\n\n"
+    "class GameEngine:\n"
+    '    """E."""\n'
+    "    def __init__(self, world):\n        self._w = world\n"
+    "    def handle(self, cmd: Command) -> str:\n"
+    '        """h."""\n'
+    "        name = cmd.name\n"  # Command has verb, not name
+    "        ce = CombatEngine()\n"  # missing player, monster
+    "        return ce.fight()\n"  # CombatEngine has resolve, not fight
+)
+_ENGINE_GOOD = (
+    "from combat import CombatEngine\nfrom parser import Command\n\n\n"
+    "class GameEngine:\n"
+    '    """E."""\n'
+    "    def __init__(self, world):\n        self._w = world\n"
+    "    def handle(self, cmd: Command) -> str:\n"
+    '        """h."""\n'
+    "        ce = CombatEngine(self._w, None)\n"
+    "        return ce.resolve() + cmd.verb\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_typecheck_flags_cross_module_drift():
+    eff = _ReadEffects(
+        {"combat.py": _COMBAT_ASM, "parser.py": _PARSER_ASM, "engine.py": _ENGINE_BAD}
+    )
+    out = await action_run_contract_typecheck(
+        _si({"files_changed": ["combat.py", "parser.py", "engine.py"]}, effects=eff)
+    )
+    assert out.result["typecheck_failed"] == 1
+    eng = out.context_updates["batch_check_results"]["engine.py"]
+    assert eng["passed"] is False
+    assert "typecheck: engine.py" in eng["checks_failed"]
+    blob = eng["output"]
+    assert "no attribute/method 'name'" in blob  # Command.name
+    assert "missing required argument" in blob  # CombatEngine()
+    assert "'fight'" in blob  # CombatEngine.fight
+
+
+@pytest.mark.asyncio
+async def test_typecheck_clean_on_consistent_code():
+    eff = _ReadEffects(
+        {"combat.py": _COMBAT_ASM, "parser.py": _PARSER_ASM, "engine.py": _ENGINE_GOOD}
+    )
+    out = await action_run_contract_typecheck(
+        _si({"files_changed": ["combat.py", "parser.py", "engine.py"]}, effects=eff)
+    )
+    assert out.result["typecheck_failed"] == 0
+    assert (
+        out.context_updates["batch_check_results"]
+        .get("engine.py", {})
+        .get("passed", True)
+    )
+
+
+@pytest.mark.asyncio
+async def test_typecheck_skips_dynamic_and_untyped():
+    dyn = 'class Bag:\n    """B."""\n    def __init__(self, **kw):\n        self.kw = kw\n'
+    consumer = (
+        "from bag import Bag\n\n\n"
+        "def f():\n    b = Bag(anything=1)\n    return b.whatever\n"  # **kwargs → skip
+        "def g(items):\n    for x in items:\n        return x.foo\n"  # untyped → skip
+    )
+    eff = _ReadEffects({"bag.py": dyn, "consumer.py": consumer})
+    out = await action_run_contract_typecheck(
+        _si({"files_changed": ["bag.py", "consumer.py"]}, effects=eff)
+    )
+    assert out.result["typecheck_failed"] == 0

@@ -819,3 +819,357 @@ async def action_run_contract_doctests(step_input: StepInput) -> StepOutput:
             "validation_output": "\n".join(lines),
         },
     )
+
+
+# ── Cross-module type-consistency check (round-2 lever) ──────────────
+#
+# Round 1 fixed the placeholder main + invented constructors, but the
+# assembled program still crashed on cross-module interface drift the
+# workers can't see and the fail-open reviewer misses: a call to a method
+# a class doesn't define, a constructor invoked with the wrong arity, an
+# attribute read that the type never declares. No type checker is in the
+# stack, so this is a conservative hand-rolled resolver over the ASSEMBLED
+# package — it flags ONLY high-confidence mismatches (receiver type known
+# from a direct constructor assignment, a parameter annotation, or self;
+# callee an imported/local class or free function). Everything uncertain
+# (untyped locals, dynamic classes, **kwargs, unresolved bases) is SKIPPED
+# — a false flag would send a correct file into a needless repair loop, so
+# the check errs toward misses.
+
+
+def _stem(path: str) -> str:
+    return path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+
+class _ClassIface:
+    __slots__ = ("members", "init_params", "dynamic")
+
+    def __init__(self, members: set, init_params: Any, dynamic: bool):
+        self.members = members  # methods + fields (annotations + self.X=)
+        self.init_params = init_params  # ast.arguments of __init__, or None
+        self.dynamic = dynamic  # __getattr__/**kwargs/unknown base → skip attr checks
+
+
+def _collect_self_sets(cls: stdlib_ast.ClassDef) -> set:
+    names: set = set()
+    for n in stdlib_ast.walk(cls):
+        if isinstance(n, stdlib_ast.Attribute) and isinstance(n.value, stdlib_ast.Name):
+            if n.value.id == "self" and isinstance(n.ctx, stdlib_ast.Store):
+                names.add(n.attr)
+    return names
+
+
+def _class_iface(cls: stdlib_ast.ClassDef) -> _ClassIface:
+    members: set = set()
+    init_params = None
+    dynamic = False
+    # Non-trivial base classes (anything other than object) → we can't see
+    # inherited members, so skip attribute checks for this class.
+    for base in cls.bases:
+        if not (isinstance(base, stdlib_ast.Name) and base.id == "object"):
+            dynamic = True
+    for item in cls.body:
+        if isinstance(item, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)):
+            members.add(item.name)
+            if item.name in ("__getattr__", "__getattribute__"):
+                dynamic = True
+            if item.name == "__init__":
+                init_params = item.args
+                if item.args.kwarg is not None:  # **kwargs → any kwarg valid
+                    dynamic = True
+        elif isinstance(item, stdlib_ast.AnnAssign) and isinstance(
+            item.target, stdlib_ast.Name
+        ):
+            members.add(item.target.id)
+        elif isinstance(item, stdlib_ast.Assign):
+            for t in item.targets:
+                if isinstance(t, stdlib_ast.Name):
+                    members.add(t.id)
+    members |= _collect_self_sets(cls)
+    return _ClassIface(members, init_params, dynamic)
+
+
+def _module_interfaces(files: dict[str, str]) -> dict[str, dict[str, Any]]:
+    """Per-stem interface: {stem: {"classes": {C: _ClassIface}, "funcs": {f:
+    ast.arguments}}}. Built from ASSEMBLED source (self-consistent)."""
+    out: dict[str, dict[str, Any]] = {}
+    for path, src in files.items():
+        try:
+            tree = stdlib_ast.parse(src)
+        except SyntaxError:
+            continue
+        classes: dict[str, _ClassIface] = {}
+        funcs: dict[str, Any] = {}
+        for node in tree.body:
+            if isinstance(node, stdlib_ast.ClassDef):
+                classes[node.name] = _class_iface(node)
+            elif isinstance(
+                node, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)
+            ):
+                funcs[node.name] = node.args
+        out[_stem(path)] = {"classes": classes, "funcs": funcs}
+    return out
+
+
+def _arity_error(name: str, args: Any, call: stdlib_ast.Call) -> str | None:
+    """None if the call's positional/keyword count is compatible with the
+    declared signature; else a message. Skips *args/**kwargs sigs."""
+    if args is None:
+        return None
+    if getattr(args, "vararg", None) or getattr(args, "kwarg", None):
+        return None  # variadic — anything goes
+    if any(isinstance(a, stdlib_ast.Starred) for a in call.args) or any(
+        k.arg is None for k in call.keywords
+    ):
+        return None  # caller splats — can't count
+    posonly = list(getattr(args, "posonlyargs", []) or [])
+    pos = posonly + list(args.args)
+    names = [a.arg for a in pos]
+    is_method = names[:1] == ["self"] or names[:1] == ["cls"]
+    if is_method:
+        names = names[1:]
+        pos = pos[1:]
+    n_defaults = len(args.defaults)
+    required = len(pos) - n_defaults
+    kwonly = {a.arg for a in getattr(args, "kwonlyargs", [])}
+    valid_names = set(names) | kwonly
+    given_pos = len(call.args)
+    given_kw = {k.arg for k in call.keywords}
+    if given_pos > len(names):
+        return (
+            f"{name}() called with {given_pos} positional args but takes {len(names)}"
+        )
+    # required positionals not covered by given positionals or keywords
+    covered = set(names[:given_pos]) | given_kw
+    missing = [nm for nm in names[:required] if nm not in covered]
+    if missing:
+        return f"{name}() missing required argument(s): {', '.join(missing)}"
+    bad_kw = [k for k in given_kw if k and k not in valid_names]
+    if bad_kw:
+        return (
+            f"{name}() got unexpected keyword argument(s): {', '.join(sorted(bad_kw))}"
+        )
+    return None
+
+
+def _check_module(
+    path: str, src: str, ifaces: dict[str, dict[str, Any]], import_map: dict[str, str]
+) -> list[str]:
+    """High-confidence cross-module usage mismatches in one module.
+
+    import_map: local name -> stem of a KNOWN module (from this module's
+    imports). ifaces: the full interface map. Only flags when the callee/
+    receiver resolves to a known class/function with confidence.
+    """
+    try:
+        tree = stdlib_ast.parse(src)
+    except SyntaxError:
+        return []
+
+    # local name -> ("class", stem, ClassName) | ("func", stem, funcname)
+    bound: dict[str, tuple] = {}
+    for local, stem_mod in import_map.items():
+        mod = ifaces.get(stem_mod)
+        if not mod:
+            continue
+        if local in mod["classes"]:
+            bound[local] = ("class", stem_mod, local)
+        elif local in mod["funcs"]:
+            bound[local] = ("func", stem_mod, local)
+    # same-module top-level classes/funcs are also directly callable
+    self_stem = _stem(path)
+    self_mod = ifaces.get(self_stem, {"classes": {}, "funcs": {}})
+    for c in self_mod["classes"]:
+        bound.setdefault(c, ("class", self_stem, c))
+    for fn in self_mod["funcs"]:
+        bound.setdefault(fn, ("func", self_stem, fn))
+
+    def _iface_of(stem_mod: str, cname: str) -> _ClassIface | None:
+        return ifaces.get(stem_mod, {}).get("classes", {}).get(cname)
+
+    problems: list[str] = []
+
+    def _resolve_type(node: Any, local_env: dict) -> tuple | None:
+        # returns ("class", stem, ClassName) for a value known to be an instance
+        if isinstance(node, stdlib_ast.Name):
+            return local_env.get(node.id)
+        return None
+
+    def _annotation_type(ann: Any) -> tuple | None:
+        # a bare Name annotation matching a known class in any module
+        if isinstance(ann, stdlib_ast.Name):
+            for stem_mod, mod in ifaces.items():
+                if ann.id in mod["classes"]:
+                    return ("class", stem_mod, ann.id)
+        return None
+
+    def _walk_func(fn: Any, enclosing: tuple | None) -> None:
+        local_env: dict[str, tuple] = {}
+        if enclosing is not None:
+            local_env["self"] = enclosing
+        for a in list(getattr(fn.args, "posonlyargs", []) or []) + list(fn.args.args):
+            if a.annotation is not None:
+                t = _annotation_type(a.annotation)
+                if t:
+                    local_env[a.arg] = t
+        for node in stdlib_ast.walk(fn):
+            # x = SomeClass(...) → x is an instance of SomeClass
+            if isinstance(node, stdlib_ast.Assign) and isinstance(
+                node.value, stdlib_ast.Call
+            ):
+                callee = node.value.func
+                if isinstance(callee, stdlib_ast.Name) and callee.id in bound:
+                    b = bound[callee.id]
+                    if (
+                        b[0] == "class"
+                        and len(node.targets) == 1
+                        and isinstance(node.targets[0], stdlib_ast.Name)
+                    ):
+                        local_env[node.targets[0].id] = b
+            # constructor / free-function call arity
+            if isinstance(node, stdlib_ast.Call) and isinstance(
+                node.func, stdlib_ast.Name
+            ):
+                b = bound.get(node.func.id)
+                if b:
+                    if b[0] == "class":
+                        ci = _iface_of(b[1], b[2])
+                        if ci is not None and not ci.dynamic:
+                            err = _arity_error(b[2], ci.init_params, node)
+                            if err:
+                                problems.append(err)
+                    else:  # free function
+                        fargs = ifaces.get(b[1], {}).get("funcs", {}).get(b[2])
+                        err = _arity_error(b[2], fargs, node)
+                        if err:
+                            problems.append(err)
+            # typed_receiver.member
+            if isinstance(node, stdlib_ast.Attribute) and isinstance(
+                node.value, stdlib_ast.Name
+            ):
+                t = local_env.get(node.value.id)
+                if t and t[0] == "class":
+                    ci = _iface_of(t[1], t[2])
+                    if (
+                        ci is not None
+                        and not ci.dynamic
+                        and node.attr not in ci.members
+                    ):
+                        problems.append(
+                            f"{t[2]}.{node.attr} — '{t[2]}' has no attribute/method "
+                            f"'{node.attr}' (declared: "
+                            f"{', '.join(sorted(ci.members)) or 'none'})"
+                        )
+
+    for node in tree.body:
+        if isinstance(node, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)):
+            _walk_func(node, None)
+        elif isinstance(node, stdlib_ast.ClassDef):
+            enclosing = ("class", self_stem, node.name)
+            for item in node.body:
+                if isinstance(
+                    item, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)
+                ):
+                    _walk_func(item, enclosing)
+
+    # de-dup while preserving order
+    seen: set = set()
+    uniq = []
+    for p in problems:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return uniq
+
+
+def _import_map_for(src: str, known_stems: set) -> dict[str, str]:
+    """local name -> module stem, for imports that resolve to a known
+    module (basename-stem match, package-path tolerant)."""
+    try:
+        tree = stdlib_ast.parse(src)
+    except SyntaxError:
+        return {}
+    out: dict[str, str] = {}
+    for node in stdlib_ast.walk(tree):
+        if isinstance(node, stdlib_ast.ImportFrom):
+            mod_stem = (node.module or "").rsplit(".", 1)[-1]
+            if node.level and not node.module:
+                continue
+            if mod_stem in known_stems:
+                for alias in node.names:
+                    out[alias.asname or alias.name] = mod_stem
+        elif isinstance(node, stdlib_ast.Import):
+            for alias in node.names:
+                stem = alias.name.rsplit(".", 1)[-1]
+                if stem in known_stems:
+                    out[alias.asname or stem] = stem
+    return out
+
+
+async def action_run_contract_typecheck(step_input: StepInput) -> StepOutput:
+    """Deterministic cross-module interface check over the assembled files.
+
+    Context required: files_changed
+    Context optional: batch_check_results
+    Publishes: batch_check_results, validation_output
+
+    Flags high-confidence cross-module drift (undefined method/attribute on
+    a typed receiver, constructor/function arity, unknown kwargs) that
+    per-symbol doctests can't see and the fail-open reviewer misses. A
+    flagged file's check fails → apply_batch_results leaves its goal
+    incomplete → repair. Conservative by design (see the section header).
+    """
+    effects = step_input.effects
+    ctx = step_input.context
+    files = [f for f in (ctx.get("files_changed") or []) if str(f).endswith(".py")]
+    per_file = dict(ctx.get("batch_check_results") or {})
+    if not effects or not files:
+        return StepOutput(
+            result={"typecheck_failed": 0},
+            observations="Type check: nothing to check",
+            context_updates={"batch_check_results": per_file},
+        )
+
+    sources: dict[str, str] = {}
+    for f in files:
+        try:
+            fc = await effects.read_file(f)
+            if getattr(fc, "exists", False):
+                sources[f] = getattr(fc, "content", "") or ""
+        except Exception:  # noqa: BLE001 — unreadable file simply isn't checked
+            continue
+
+    ifaces = _module_interfaces(sources)
+    known_stems = set(ifaces)
+    lines: list[str] = []
+    failed = 0
+    for f, src in sources.items():
+        import_map = _import_map_for(src, known_stems)
+        probs = _check_module(f, src, ifaces, import_map)
+        if probs:
+            failed += 1
+            entry = per_file.setdefault(
+                f, {"passed": True, "checks_failed": [], "output": ""}
+            )
+            entry["passed"] = False
+            entry["checks_failed"] = list(entry.get("checks_failed") or []) + [
+                f"typecheck: {f}"
+            ]
+            detail = "\n".join(f"  - {p}" for p in probs[:12])
+            entry["output"] = (
+                entry.get("output") or ""
+            ) + f"\n[FAIL] typecheck: {f}\n{detail}"
+            lines.append(f"[FAIL] typecheck: {f}\n{detail}")
+        else:
+            lines.append(f"[PASS] typecheck: {f}")
+
+    obs = f"Cross-module type check: {len(sources) - failed}/{len(sources)} files clean"
+    logger.info(obs)
+    return StepOutput(
+        result={"typecheck_failed": failed},
+        observations=obs,
+        context_updates={
+            "batch_check_results": per_file,
+            "validation_output": "\n".join(lines),
+        },
+    )

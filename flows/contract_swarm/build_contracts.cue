@@ -93,8 +93,12 @@ build_contracts: #FlowDefinition & {
 					no_answer: "parse_contracts"
 				}
 				// Contract authoring is a precision task; boss-swappable.
+				// Explicit max_tokens so the multi-file stub set is never
+				// starved by a low server default (the design step's empty-
+				// response failure mode — reasoning eats the whole budget).
 				config: {
 					temperature: "t*0.3"
+					max_tokens:  16384
 					model:       string | *""
 				}
 				retries: 2
@@ -303,6 +307,30 @@ build_contracts: #FlowDefinition & {
 			description: "Run contract doctests against the assembled modules"
 			context: {
 				required: ["files_changed", "contract_set"]
+				optional: ["batch_check_results"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "run_type_check"},
+				]
+			}
+			publishes: ["batch_check_results", "validation_output"]
+		}
+
+		// Deterministic cross-module interface check (round-2 lever): the
+		// per-symbol doctests can't see integration drift — a call to a
+		// method a class doesn't define, a constructor invoked with the
+		// wrong arity, an attribute the type never declares. A static
+		// resolver over the ASSEMBLED package flags high-confidence
+		// mismatches; a flagged file's check fails → its goal stays
+		// incomplete → repair. Static, so it runs at structural time
+		// (no deps / no program run needed).
+		run_type_check: #StepDefinition & {
+			action:      "run_contract_typecheck"
+			description: "Cross-module interface consistency over assembled files"
+			context: {
+				required: ["files_changed"]
 				optional: ["batch_check_results"]
 			}
 			resolver: {
