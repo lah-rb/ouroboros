@@ -28,9 +28,9 @@ from __future__ import annotations
 import atexit
 import logging
 
-logger = logging.getLogger(__name__)
-
 from adapters._common import prune_mode, remove_image
+
+logger = logging.getLogger(__name__)
 
 _PRUNE_MODE = prune_mode("OURO_TB_PRUNE_IMAGES")
 

@@ -117,7 +117,6 @@ async def test_save_full_output_skips_small_and_no_effects():
 
 # ── G4: compact session display (older turns → ledger) ─────────────────────
 
-from agent.formatters import _RECENT_TURNS_FULL  # noqa: E402
 
 
 def test_old_turns_collapse_to_ledger_recent_stay_full():

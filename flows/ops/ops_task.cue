@@ -298,7 +298,7 @@ ops_task: #FlowDefinition & {
 			// the deterministic gate silently bypassed (the judge alone deciding).
 			context: {
 				required: ["mission"]
-				optional: ["validation_strategy"]
+				optional: ["validation_strategy", "inference_response"]
 			}
 			pre_compute: [{
 				formatter:  "format_completion_criteria"
@@ -454,7 +454,7 @@ ops_task: #FlowDefinition & {
 			description: "Gate the asym-probe to function+examples tasks"
 			context: {
 				required: ["mission"]
-				optional: ["validation_results"]
+				optional: ["validation_results", "mission_objective"]
 			}
 			resolver: {
 				type: "rule"

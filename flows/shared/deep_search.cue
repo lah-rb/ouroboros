@@ -177,7 +177,10 @@ deep_search: #FlowDefinition & {
 		synthesize: #StepDefinition & {
 			action:      "conclude_search"
 			description: "One session turn → research_summary + sufficient"
-			context: required: ["search_session_id"]
+			context: {
+				required: ["search_session_id"]
+				optional: ["search_queries_run"]
+			}
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "end_session"}]

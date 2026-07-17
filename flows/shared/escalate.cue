@@ -49,7 +49,10 @@ escalate: #FlowDefinition & {
 		start_session: #StepDefinition & {
 			action:      "open_escalation_session"
 			description: "Open the memoryful session; seed = failure evidence + expected outcome"
-			context: required: []
+			context: {
+				required: []
+				optional: ["escalation_corrections", "escalation_turn"]
+			}
 			resolver: {
 				type: "rule"
 				rules: [

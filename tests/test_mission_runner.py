@@ -5,7 +5,6 @@ from unittest import mock
 
 import pytest
 
-import agent.mission_runner as mr
 from agent.mission_runner import MissionRunOutcome, run_mission_isolated
 
 

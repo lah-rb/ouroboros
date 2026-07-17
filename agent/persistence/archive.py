@@ -33,7 +33,6 @@ import fcntl
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any, Iterator
 from agent.persistence.models import _now_iso
 

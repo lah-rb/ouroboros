@@ -6,7 +6,6 @@ The registry maps action names (referenced in flow YAML) to their implementation
 
 from __future__ import annotations
 
-import os
 from typing import Awaitable, Callable
 
 from agent.models import StepInput, StepOutput

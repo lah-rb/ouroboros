@@ -37,7 +37,7 @@ log = logging.getLogger("llm-mvp")
 # Each pool context handles ONE working stream, so generation stays on seq 0 (where the
 # high-level Llama.generate()/eval() operate) — we reuse the existing generation machinery
 # verbatim. SEQ_STATIC holds the pristine static prefix, forked onto SEQ_WORKING per request.
-from inference.seq_layout import (  # single source of the pool band layout
+from inference.seq_layout import (  # noqa: E402 — single source of the pool band layout; sits below the llama_cpp import guard by design
     SEQ_FLOW_BASE,
     SEQ_STATIC,
     SEQ_WORKING,

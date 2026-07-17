@@ -1759,7 +1759,9 @@
           "required": [
             "search_session_id"
           ],
-          "optional": []
+          "optional": [
+            "search_queries_run"
+          ]
         },
         "params": {},
         "config": {},
@@ -3306,7 +3308,10 @@
         "description": "Open the memoryful session; seed = failure evidence + expected outcome",
         "context": {
           "required": [],
-          "optional": []
+          "optional": [
+            "escalation_corrections",
+            "escalation_turn"
+          ]
         },
         "params": {},
         "config": {},
@@ -6036,7 +6041,8 @@
           "required": [],
           "optional": [
             "goal_acceptance_checks",
-            "validation_strategy"
+            "validation_strategy",
+            "inference_response"
           ]
         },
         "params": {
@@ -9335,7 +9341,8 @@
           "required": [],
           "optional": [
             "validation_results",
-            "mission"
+            "mission",
+            "mission_objective"
           ]
         },
         "params": {},
@@ -14456,7 +14463,8 @@
             "mission"
           ],
           "optional": [
-            "validation_strategy"
+            "validation_strategy",
+            "inference_response"
           ]
         },
         "params": {
@@ -14751,7 +14759,8 @@
             "mission"
           ],
           "optional": [
-            "validation_results"
+            "validation_results",
+            "mission_objective"
           ]
         },
         "params": {},

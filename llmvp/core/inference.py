@@ -9,7 +9,6 @@ Now uses the pluggable backend system for backend-agnostic inference.
 """
 
 import logging
-import re
 from dataclasses import dataclass
 from typing import AsyncGenerator, List, Optional, Tuple
 

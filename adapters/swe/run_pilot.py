@@ -22,7 +22,7 @@ if _REPO_ROOT not in sys.path:
 
 from adapters.swe.evaluate import write_gold_predictions, write_predictions  # noqa: E402
 from adapters.swe.instance import PILOT_INSTANCES, load_instances  # noqa: E402
-from adapters._common import IncrementalPredictions
+from adapters._common import IncrementalPredictions  # noqa: E402
 
 
 def main() -> None:

@@ -526,8 +526,10 @@ class BatchedEngine:
 
         # Lazy capture meta: the 768-token prompt-tail detok is paid at DUMP
         # time (rare), not per admission.
-        _meta = (lambda r=req: build_capture_meta(
-            self._llama, r.request_id, r.temperature, r.prompt_tokens))
+        def _meta(r=req):
+            return build_capture_meta(
+                self._llama, r.request_id, r.temperature, r.prompt_tokens
+            )
 
         pipeline = TokenPipeline(
             self._llama,

@@ -154,6 +154,20 @@ FLOW_INPUTS = {
         "flow_directive": "Rewrite main.py to add save/load methods to the Todo class.",
         "working_directory": "/tmp/test-project",
     },
+    "patch_module": {
+        "target_file_path": "main.py",
+        "file_content": "import os\n\n\nclass Todo:\n    def save(self):\n        pass\n",
+        "flow_directive": "Add the missing module-level line `import json` to this file.",
+        "module_directive": "Add the missing module-level line `import json` to this file.",
+    },
+    "data_patch": {
+        "target_file_path": "config.yaml",
+        "file_content": "name: app\nversion: 1\n",
+        "flow_directive": "Set version to 2 in config.yaml.",
+    },
+    "deep_search": {
+        "brief": "What is the standard library way to parse TOML in Python 3.11+?",
+    },
     "patch": {
         "file_path": "main.py",
         "file_content": "class Todo:\n    def save(self):\n        pass\n",

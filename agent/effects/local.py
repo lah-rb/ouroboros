@@ -19,7 +19,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agent.effects.inference import InferenceEffect
 from agent.trace import (

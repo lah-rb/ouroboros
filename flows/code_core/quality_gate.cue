@@ -168,7 +168,7 @@ quality_gate: #FlowDefinition & {
 		probe_gate: #StepDefinition & {
 			action:      "detect_solver_task"
 			description: "Gate the asym-probe to function+examples objectives (completion mode)"
-			context: optional: ["validation_results", "mission"]
+			context: optional: ["validation_results", "mission", "mission_objective"]
 			resolver: {
 				type: "rule"
 				rules: [

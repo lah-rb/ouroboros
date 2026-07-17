@@ -366,6 +366,14 @@ def check_publish_consume_chains(flows: dict) -> list[LintResult]:
             for key in step_def.get("publishes", []):
                 all_published.setdefault(key, []).append(step_name)
 
+            # Runtime machinery publishes these after EVERY inference/turn
+            # step regardless of the publishes declaration (runtime.py
+            # context_updates) — without modelling this, any consumer of the
+            # raw turn text lints as an unpublished-key error.
+            if step_def.get("action") == "inference":
+                for key in ("inference_response", "inference_error"):
+                    all_published.setdefault(key, []).append(step_name)
+
             # Turn-based menu steps use publish_selection as their
             # authoritative publisher for the chosen option key.
             turn = step_def.get("turn")
@@ -617,6 +625,10 @@ def check_path_reachability(flows: dict) -> list[LintResult]:
         def publishes_of(step_name: str) -> set[str]:
             step = steps.get(step_name, {})
             out = set(step.get("publishes", []) or [])
+            # Implicit runtime publications after any inference/turn step
+            # (see check_publish_consume_chains).
+            if step.get("action") == "inference":
+                out |= {"inference_response", "inference_error"}
             turn = step.get("turn")
             if turn:
                 sel = (turn.get("response") or {}).get("publish_selection")

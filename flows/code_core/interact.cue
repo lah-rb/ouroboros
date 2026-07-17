@@ -312,7 +312,10 @@ interact: #FlowDefinition & {
 			action:      "run_validation_checks"
 			description: "Run the goal's stored acceptance checks against live state"
 			context: {
-				optional: ["goal_acceptance_checks", "validation_strategy"]
+				optional: [
+					"goal_acceptance_checks", "validation_strategy",
+					"inference_response",
+				]
 			}
 			pre_compute: [{
 				formatter:  "format_completion_criteria"
