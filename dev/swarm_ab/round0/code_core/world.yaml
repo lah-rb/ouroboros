@@ -1,0 +1,175 @@
+rooms:
+  - id: entrance
+    name: Entrance Hall
+    description: |
+      A dimly lit stone hall. Dust drifts in the shafts of light from above.
+    connections:
+      north: corridor
+    items: [rusty_key]
+    npcs: []
+    monsters: []
+
+  - id: corridor
+    name: Long Corridor
+    description: |
+      The corridor stretches east and west, lined with faded tapestries.
+    connections:
+      south: entrance
+      east: armory
+      west: library
+      north: throne_room
+    items: []
+    npcs: []
+    monsters: [goblin]
+
+  - id: armory
+    name: Armory
+    description: |
+      Racks of old weapons and armor. Some still gleam with a faint magic.
+    connections:
+      west: corridor
+    items: [iron_sword, leather_armor]
+    npcs: []
+    monsters: []
+
+  - id: library
+    name: Ancient Library
+    description: |
+      Shelves of cracked tomes. A quiet scholar sits at a table.
+    connections:
+      east: corridor
+      north: treasury
+    items: [healing_potion]
+    npcs: [scholar]
+    monsters: []
+
+  - id: treasury
+    name: Treasury
+    description: |
+      Gold and jewels glitter, but a heavy aura warns of danger.
+    connections:
+      south: library
+    items: [silver_key]
+    npcs: []
+    monsters: [orc]
+
+  - id: throne_room
+    name: Throne Room
+    description: |
+      An imposing throne dominates the room. Shadows swirl around it.
+    connections:
+      south: corridor
+      north: dark_lair
+    items: []
+    npcs: [guard]
+    monsters: []
+
+  - id: dark_lair
+    name: Dark Lair
+    description: |
+      The air is thick with malice. The final boss awaits.
+    connections:
+      south: throne_room
+    items: []
+    npcs: []
+    monsters: [final_boss]
+
+  - id: cavern
+    name: Hidden Cavern
+    description: |
+      A secret cavern filled with strange crystals.
+    connections:
+      east: dark_lair
+    items: [ancient_scroll]
+    nppcs: []
+    monsters: []
+
+items:
+  - id: rusty_key
+    name: Rusty Key
+    type: key
+    description: An old, corroded key. It might open something.
+    attack: 0
+    defense: 0
+    healing: 0
+
+  - id: iron_sword
+    name: Iron Sword
+    type: weapon
+    description: A sturdy iron sword. Increases your attack.
+    attack: 4
+    defense: 0
+    healing: 0
+
+  - id: leather_armor
+    name: Leather Armor
+    type: armor
+    description: Simple leather armor. Improves your defense.
+    attack: 0
+    defense: 3
+    healing: 0
+
+  - id: healing_potion
+    name: Healing Potion
+    type: healing
+    description: A bubbling red liquid that restores health.
+    attack: 0
+    defense: 0
+    healing: 15
+
+  - id: silver_key
+    name: Silver Key
+    type: key
+    description: A gleaming silver key. Legends say it can pierce darkness.
+    attack: 0
+    defense: 0
+    healing: 0
+
+  - id: ancient_scroll
+    name: Ancient Scroll
+    type: key
+    description: An old scroll that mentions the Dark Lord's weakness.
+    attack: 0
+    defense: 0
+    healing: 0
+
+npcs:
+  - id: scholar
+    name: Scholar
+    dialogues:
+      - text: "The ancient texts speak of a silver key that can harm the darkness."
+        next: null
+
+  - id: guard
+    name: Guard
+    dialogues:
+      - text: "Only a weapon forged with the silver key can defeat the Dark Lord."
+        next: null
+
+monsters:
+  - id: goblin
+    name: Goblin
+    description: A small, green creature snarls at you.
+    health: 12
+    max_health: 12
+    attack: 3
+    defense: 0
+    behavior: aggressive
+
+  - id: orc
+    name: Orc Warrior
+    description: A hulking orc blocks your path.
+    health: 20
+    max_health: 20
+    attack: 5
+    defense: 2
+    behavior: aggressive
+
+  - id: final_boss
+    name: Dark Lord
+    description: The embodiment of shadow. Its power seems endless.
+    health: 40
+    max_health: 40
+    attack: 6
+    defense: 4
+    behavior: aggressive

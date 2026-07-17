@@ -33,6 +33,29 @@ content: |
     absent from the finished file. An entry-point module without its
     `__main__` guard produces a program that does nothing.
 
+  CRITICAL — the implementers are ISOLATED. Each one sees only its own
+  symbol's contract, its module's stubs, and the SIGNATURES of imported
+  modules. It never sees the objective, sibling implementations, or the
+  wider design. So the contract must encode every cross-symbol decision:
+
+  - ENTRY-POINT / DISPATCH symbols (a command loop, a request router,
+    any function that routes input to handlers): the docstring must
+    ENUMERATE the dispatch EXPLICITLY — each command/verb/route mapped to
+    the exact callee symbol and its argument shape (e.g. `"go <dir>" ->
+    move_player(state, dir)`). Prose like "dispatch to the appropriate
+    handler" is NOT enough — the isolated worker cannot recover the
+    command set from it and will stub the loop. You have the objective;
+    the worker does not, so the full command vocabulary lives HERE.
+  - The entry module's import block must be COMPLETE for the dispatch —
+    if `main` calls combat/save/parser symbols, those modules MUST be
+    imported in `main`'s stub (the worker cannot add the import).
+  - ATTRIBUTE/METHOD DISCIPLINE: a symbol may access only attributes and
+    methods that the target type's OWN contract declares. If `combat`
+    reads `monster.attack`, then the `Monster`/`MonsterState` stub must
+    declare an `attack` field. Do not reference a field on a type whose
+    stub does not define it — that contradiction ships as a runtime
+    crash the isolated workers cannot detect.
+
   Each docstring is a CONTRACT with this shape: one purpose line;
   Args/Returns with meaning, not just types; Raises with the exact
   conditions; and 1-3 doctest examples showing real input → output.

@@ -76,6 +76,40 @@ def _stub_signature_index(path: str, stub_text: str) -> list[dict]:
     ]
 
 
+def _mod_field(mod: Any, key: str, default: Any) -> Any:
+    """Read a ModuleSpec field whether it's a pydantic object or a dict."""
+    if isinstance(mod, dict):
+        return mod.get(key, default)
+    return getattr(mod, key, default)
+
+
+def _arch_import_map(
+    mission: Any, declared_code: list[str], declared_set: set[str]
+) -> dict[str, set[str]]:
+    """{module file → set of declared-code files it MUST import} from the
+    architecture's per-module ``imports_from``. Module-name keys
+    (``combat``, ``pkg.combat``) resolve to declared files by stem."""
+    arch = getattr(mission, "architecture", None)
+    modules = getattr(arch, "modules", None) or (
+        arch.get("modules") if isinstance(arch, dict) else None
+    )
+    if not modules:
+        return {}
+    stem_to_file = {f.rsplit("/", 1)[-1].rsplit(".", 1)[0]: f for f in declared_code}
+    out: dict[str, set[str]] = {}
+    for mod in modules:
+        mfile = _normalize_path(str(_mod_field(mod, "file", "") or ""))
+        if mfile not in declared_set:
+            continue
+        deps: set[str] = set()
+        for dep_mod in _mod_field(mod, "imports_from", None) or {}:
+            dep_file = stem_to_file.get(str(dep_mod).rsplit(".", 1)[-1])
+            if dep_file and dep_file != mfile:
+                deps.add(dep_file)
+        out[mfile] = deps
+    return out
+
+
 async def action_parse_contracts(step_input: StepInput) -> StepOutput:
     """Parse the contract completion into skeletons + per-symbol slices.
 
@@ -125,6 +159,7 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
         )
 
     declared_set = set(declared_code)
+    arch_imports = _arch_import_map(mission, declared_code, declared_set)
     files: dict[str, dict] = {}
     issues: list[dict] = []
 
@@ -194,6 +229,25 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
                 )
             }
         )
+        # Import-completeness: the contract must carry every import the
+        # ARCHITECTURE declared for this module. Round-0 main's stub
+        # omitted combat/save_load, so the worker (forbidden to add
+        # imports) was structurally unable to call them and stubbed the
+        # loop. A missing arch import is a revision-worthy contract defect.
+        missing_imports = arch_imports.get(norm, set()) - set(imports)
+        if missing_imports:
+            issues.append(
+                {
+                    "file": norm,
+                    "problem": (
+                        "contract omits architecture-declared imports "
+                        f"({', '.join(sorted(missing_imports))}); this module "
+                        "must import and call their symbols — add the import(s) "
+                        "to the stub"
+                    ),
+                }
+            )
+
         files[norm] = {
             "stub_text": stub_text,
             "skeleton": skeleton,
@@ -302,17 +356,68 @@ async def action_apply_contract_review(step_input: StepInput) -> StepOutput:
 # ── Worker fan-out ───────────────────────────────────────────────────
 
 
+def _pyi_view(stub_text: str) -> str:
+    """A signature-level .pyi view of a contract stub module.
+
+    Renders each top-level class with its ANNOTATED FIELDS (a dataclass's
+    fields ARE its constructor) and its method signatures, and each
+    top-level function with its signature — docstrings and bodies elided.
+    Round-0 starved consuming workers with a bare ``class GameState:``
+    (no fields, no ctor), so three workers invented three different
+    constructors; this hands them the real shape. Falls back to the raw
+    stub on a parse failure (never worse than round 0)."""
+    try:
+        tree = stdlib_ast.parse(stub_text)
+    except SyntaxError:
+        return stub_text.strip()
+
+    def _sig(node: Any) -> str:
+        # def-header via unparse of a body-stripped clone (keeps annotations
+        # + defaults + return type; drops the body).
+        clone = type(node)(
+            **{
+                **{f: getattr(node, f) for f in node._fields},
+                "body": [stdlib_ast.Expr(value=stdlib_ast.Constant(value=...))],
+                "decorator_list": [],
+            }
+        )
+        stdlib_ast.fix_missing_locations(clone)
+        return stdlib_ast.unparse(clone)
+
+    out: list[str] = []
+    for node in tree.body:
+        if isinstance(node, stdlib_ast.ClassDef):
+            decos = "".join(f"@{stdlib_ast.unparse(d)}\n" for d in node.decorator_list)
+            out.append(f"{decos}class {node.name}:")
+            members: list[str] = []
+            for child in node.body:
+                if isinstance(child, stdlib_ast.AnnAssign) and isinstance(
+                    child.target, stdlib_ast.Name
+                ):
+                    members.append(f"    {stdlib_ast.unparse(child)}")
+                elif isinstance(
+                    child, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)
+                ):
+                    members.append(f"    {_sig(child)}")
+            out.extend(members or ["    ..."])
+        elif isinstance(node, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)):
+            out.append(_sig(node))
+    return "\n".join(out).strip()
+
+
 def _dep_digest(contract_set: dict, path: str) -> str:
-    """Signature-only digest of the contract modules ``path`` imports."""
+    """Full-shape digest of the contract modules ``path`` imports — class
+    fields/constructors + method signatures + free-function signatures,
+    so a worker never has to invent an imported type's API."""
     files = _code_files(contract_set)
     lines: list[str] = []
     for dep in files.get(path, {}).get("imports") or []:
         dep_entry = files.get(dep)
         if not dep_entry:
             continue
-        lines.append(f"### {dep}")
-        for name, meta in dep_entry["symbols"].items():
-            lines.append(f"- {meta['kind']} {meta.get('signature') or name}")
+        view = _pyi_view(dep_entry.get("stub_text", ""))
+        if view:
+            lines.append(f"### {dep}\n```python\n{view}\n```")
     return "\n".join(lines)
 
 
@@ -329,7 +434,10 @@ def _worker_prompt(
         f"## This module's full contract\n```python\n{entry['stub_text']}\n```",
     ]
     if deps:
-        parts.append(f"## Imported contract modules (signatures only)\n{deps}")
+        parts.append(
+            "## Imported contract modules (their public API — call through "
+            f"these exactly)\n{deps}"
+        )
     parts.append(
         f"## Your assignment: implement `{name}` ({meta['kind']})\n"
         f"```python\n{meta['stub']}\n```"
@@ -354,11 +462,16 @@ def _validate_worker_body(body: str, name: str, meta: dict) -> str | None:
         return (
             "output must contain EXACTLY ONE top-level symbol (no extras, no imports)"
         )
+    # ast.walk, not tree.body: catch imports NESTED in a function/method
+    # body too (round-0's `from .player import Player` was buried in an
+    # invented __init__, invisible to a top-level-only scan).
     if any(
-        isinstance(n, (stdlib_ast.Import, stdlib_ast.ImportFrom)) for n in tree.body
+        isinstance(n, (stdlib_ast.Import, stdlib_ast.ImportFrom))
+        for n in stdlib_ast.walk(tree)
     ):
         return (
-            "no imports allowed — the module skeleton already carries the final imports"
+            "no imports allowed anywhere (including inside a method) — the module "
+            "skeleton already carries the final imports; use them by name"
         )
     node = next(
         (
@@ -381,7 +494,42 @@ def _validate_worker_body(body: str, name: str, meta: dict) -> str | None:
         return f"symbol must be a {meta['kind']} to match the contract"
     if not stdlib_ast.get_docstring(node):
         return "reproduce the contract docstring verbatim (including doctests)"
+    # A class worker may not add methods/dunders the contract stub didn't
+    # declare (round-0 bolted a hand __init__ onto a dataclass, shadowing
+    # its fields and diverging from every consumer's assumption).
+    if isinstance(node, stdlib_ast.ClassDef):
+        allowed = _contract_method_names(meta.get("stub", ""))
+        if allowed is not None:
+            extra = [
+                c.name
+                for c in node.body
+                if isinstance(c, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef))
+                and c.name not in allowed
+            ]
+            if extra:
+                return (
+                    f"class {name} defines method(s) not in its contract: "
+                    f"{', '.join(sorted(extra))} — implement only the contracted "
+                    "methods (a dataclass needs no hand-written __init__)"
+                )
     return None
+
+
+def _contract_method_names(stub: str) -> set[str] | None:
+    """Method/dunder names declared in a class stub; None if unparseable
+    or not a class (skip the check rather than false-reject)."""
+    try:
+        tree = stdlib_ast.parse(stub)
+    except SyntaxError:
+        return None
+    cls = next((n for n in tree.body if isinstance(n, stdlib_ast.ClassDef)), None)
+    if cls is None:
+        return None
+    return {
+        c.name
+        for c in cls.body
+        if isinstance(c, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef))
+    }
 
 
 async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:

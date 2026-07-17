@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "text-adventure-game"
+version = "0.1.0"
+description = "A turn‑based text adventure game with YAML‑driven world, combat, NPCs and save/load."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "you@example.com"}
+]
+
+# Runtime dependencies
+dependencies = [
+    "PyYAML>=6.0",
+    "rich>=13.0.0"
+]
+
+[project.scripts]
+text-adventure = "main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]

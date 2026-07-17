@@ -15,6 +15,9 @@ from types import SimpleNamespace
 import pytest
 
 from agent.actions.contract_swarm_actions import (
+    _dep_digest,
+    _pyi_view,
+    _validate_worker_body,
     action_apply_contract_review,
     action_assemble_contract_files,
     action_parse_contracts,
@@ -457,3 +460,170 @@ async def test_doctests_skip_files_without_doctests():
     )
     assert eff.commands == []
     assert "none declared" in out.observations
+
+
+# ── Round 1: dep-digest carries full type shapes ─────────────────────
+
+_MODELS_RICH = '''"""Models."""
+
+from dataclasses import dataclass
+
+
+@dataclass
+class GameState:
+    player: "Player"
+    rooms_state: dict
+    monsters_state: dict
+
+    def apply(self, cmd: "Command") -> str:
+        """Apply a command."""
+        ...
+
+
+def load_world(path: str = "world.yaml") -> GameState:
+    """Load."""
+    ...
+'''
+
+
+def test_pyi_view_renders_fields_methods_and_functions():
+    view = _pyi_view(_MODELS_RICH)
+    # dataclass fields (the constructor) are present — the round-0 gap
+    assert "player:" in view and "rooms_state: dict" in view
+    # method + free-function signatures present, bodies/docstrings elided
+    assert "def apply(self, cmd:" in view
+    assert "def load_world(path: str=" in view
+    assert '"""' not in view  # docstrings stripped
+    # NOT the bare round-0 rendering
+    assert view.strip() != "class GameState:"
+
+
+def test_dep_digest_gives_consuming_worker_the_type_shape():
+    cs = {
+        "files": {
+            "models.py": {"stub_text": _MODELS_RICH, "symbols": {}, "imports": []},
+            "engine.py": {"stub_text": "", "symbols": {}, "imports": ["models.py"]},
+        }
+    }
+    digest = _dep_digest(cs, "engine.py")
+    assert "### models.py" in digest
+    assert "rooms_state: dict" in digest  # fields reach the consumer
+    assert "def apply(self" in digest
+
+
+def test_pyi_view_falls_back_on_unparseable():
+    assert _pyi_view("def broken(:\n  ...") == "def broken(:\n  ..."
+
+
+# ── Round 1: worker validation closes the two holes ──────────────────
+
+
+def _meta(kind, stub):
+    return {"kind": kind, "stub": stub, "signature": "", "has_doctest": False}
+
+
+def test_validate_rejects_nested_import():
+    body = (
+        "def run() -> int:\n"
+        '    """Doc."""\n'
+        "    from os import getcwd\n"  # nested import — round-0 blind spot
+        "    return 0\n"
+    )
+    reason = _validate_worker_body(body, "run", _meta("function", "def run(): ..."))
+    assert reason and "no imports" in reason
+
+
+def test_validate_rejects_off_contract_method():
+    stub = 'class GameState:\n    """Doc."""\n    def apply(self) -> str: ...\n'
+    body = (
+        "class GameState:\n"
+        '    """Doc."""\n'
+        "    def apply(self) -> str:\n"
+        '        return ""\n'
+        "    def __init__(self, world_data=None):\n"  # not in the contract
+        "        self._x = world_data\n"
+    )
+    reason = _validate_worker_body(body, "GameState", _meta("class", stub))
+    assert reason and "__init__" in reason
+
+
+def test_validate_passes_compliant_class():
+    stub = 'class GameState:\n    """Doc."""\n    def apply(self) -> str: ...\n'
+    body = (
+        "class GameState:\n"
+        '    """Doc."""\n'
+        "    def apply(self) -> str:\n"
+        '        return "ok"\n'
+    )
+    assert _validate_worker_body(body, "GameState", _meta("class", stub)) is None
+
+
+# ── Round 1: import-completeness vs architecture imports_from ─────────
+
+
+@pytest.mark.asyncio
+async def test_parse_flags_missing_architecture_import(tmp_path):
+    # Architecture says engine imports models; the engine stub omits it.
+    mission = MissionState(
+        objective="t",
+        status="active",
+        config=MissionConfig(working_directory=str(tmp_path)),
+        architecture=ArchitectureState(
+            run_command="python engine.py",
+            creation_order=["models.py", "engine.py"],
+            modules=[
+                ModuleSpec(file="models.py", responsibility="r"),
+                ModuleSpec(
+                    file="engine.py",
+                    responsibility="r",
+                    imports_from={"models": ["make_card"]},
+                ),
+            ],
+        ),
+    )
+    engine_no_import = (
+        "```python\n# === FILE: engine.py ===\n"
+        '"""Engine."""\n\n\ndef run() -> int:\n    """Doc.\n\n    >>> run()\n    0\n    """\n    ...\n```'
+    )
+    out = await action_parse_contracts(
+        _si(
+            {
+                "inference_response": _MODELS_STUB + "\n" + engine_no_import,
+                "mission": mission,
+            }
+        )
+    )
+    probs = [i["problem"] for i in out.context_updates["contract_set"]["issues"]]
+    assert any("architecture-declared imports" in p and "models.py" in p for p in probs)
+
+
+@pytest.mark.asyncio
+async def test_parse_clean_when_imports_complete(tmp_path):
+    mission = MissionState(
+        objective="t",
+        status="active",
+        config=MissionConfig(working_directory=str(tmp_path)),
+        architecture=ArchitectureState(
+            run_command="python engine.py",
+            creation_order=["models.py", "engine.py"],
+            modules=[
+                ModuleSpec(file="models.py", responsibility="r"),
+                ModuleSpec(
+                    file="engine.py",
+                    responsibility="r",
+                    imports_from={"models": ["make_card"]},
+                ),
+            ],
+        ),
+    )
+    # _ENGINE_STUB imports models — completeness satisfied.
+    out = await action_parse_contracts(
+        _si(
+            {
+                "inference_response": _MODELS_STUB + "\n" + _ENGINE_STUB,
+                "mission": mission,
+            }
+        )
+    )
+    probs = [i["problem"] for i in out.context_updates["contract_set"]["issues"]]
+    assert not any("architecture-declared imports" in p for p in probs)

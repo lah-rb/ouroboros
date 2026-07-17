@@ -1,0 +1,113 @@
+rooms:
+  entrance:
+    name: Entrance Hall
+    description: A dimly lit hall with doors to the north and east.
+    exits:
+      north: library
+      east: armory
+    items: []
+    npcs: []
+    monsters: []
+  library:
+    name: Library
+    description: Rows of ancient books line the walls.
+    exits:
+      south: entrance
+    items: [ancient_book]
+    npcs: [wise_old_man]
+    monsters: []
+  armory:
+    name: Armory
+    description: Racks of weapons and armor.
+    exits:
+      west: entrance
+      north: throne_room
+    items: [rusty_sword, leather_armor]
+    npcs: []
+    monsters: [goblin]
+  throne_room:
+    name: Throne Room
+    description: An ominous throne sits at the far end.
+    exits:
+      south: armory
+    items: [silver_key]
+    npcs: []
+    monsters: [dragon]
+
+items:
+  rusty_sword:
+    name: Rusty Sword
+    description: A worn sword, better than nothing.
+    type: weapon
+    attack_bonus: 2
+    defense_bonus: 0
+    heal_amount: 0
+    usable: false
+  leather_armor:
+    name: Leather Armor
+    description: Provides minimal protection.
+    type: armor
+    attack_bonus: 0
+    defense_bonus: 1
+    heal_amount: 0
+    usable: false
+  healing_potion:
+    name: Healing Potion
+    description: Restores health when used.
+    type: healing
+    attack_bonus: 0
+    defense_bonus: 0
+    heal_amount: 10
+    usable: true
+  silver_key:
+    name: Silver Key
+    description: Opens the final boss's lock.
+    type: key
+    attack_bonus: 0
+    defense_bonus: 0
+    heal_amount: 0
+    usable: false
+  ancient_book:
+    name: Ancient Book
+    description: Contains forgotten lore.
+    type: quest
+    attack_bonus: 0
+    defense_bonus: 0
+    heal_amount: 0
+    usable: false
+
+npcs:
+  wise_old_man:
+    name: Wise Old Man
+    description: A frail old man with a long beard.
+    dialogue:
+      - The key to defeat the darkness lies in the silver key.
+      - Beware the final guardian, it has two phases.
+  merchant:
+    name: Traveling Merchant
+    description: Offers useful items for a price.
+    dialogue:
+      - I have some potions if you need them.
+
+monsters:
+  goblin:
+    name: Goblin
+    description: A small, green creature.
+    health: 5
+    attack: 1
+    defense: 0
+    loot: [healing_potion]
+  orc:
+    name: Orc
+    description: A hulking brute.
+    health: 10
+    attack: 2
+    defense: 1
+    loot: [leather_armor]
+  dragon:
+    name: Dragon
+    description: The final boss.
+    attack: 4
+    defense: 2
+    loot: []
+    health: 20
