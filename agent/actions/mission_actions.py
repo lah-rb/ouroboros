@@ -1511,6 +1511,872 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
     )
 
 
+async def _sweep_first_test(
+    goal: Any,
+    mission: Any,
+    effects: Any,
+    goal_mode: str,
+    run_command: str,
+    interactive_prompt: str,
+) -> StepOutput:
+    """First dispatch for a goal with no reports yet: repair-test-loop
+    derivation, capability_absent explore, confirmed-defect diagnose
+    (repair / quality_gate origin), or the default verify-interact."""
+    # Repair test loop (Phase B.5): on a repair-profile mission, the
+    # repo's OWN failing tests are the goal's ground truth. Derive them
+    # once and dispatch a DETERMINISTIC pytest verification (zero
+    # inference) — its pytest output (failing node ids) flows into the
+    # diagnose seed as error_output, so the fix loop sees exactly how
+    # the code is called. Falls through to the normal dispatch when no
+    # suite matches or the profile isn't repair.
+    #
+    # capability_absent goals are NOT excluded here: on a repair
+    # mission the "absent capability" has a failing test naming it —
+    # the test IS the build spec (fsspec: `test_open_async` calls the
+    # missing method with the exact signature). The first retest
+    # excluded them and BOTH repo-scale tasks silently skipped the
+    # whole loop, falling back to exploratory interact + static-grep
+    # acceptance checks (the signature-blind trap this loop replaces).
+    # The explore-charter path remains for non-repair missions.
+    from agent.actions.pipeline_actions import (
+        derive_repair_tests,
+        is_repair_profile,
+    )
+
+    # Held-out-test missions (SWE-bench) skip the repair-test loop
+    # entirely: no in-repo test indicts the bug (the regression test is
+    # held out), so a baseline-failing witness is always a red-herring
+    # that hijacks the goal into a deterministic verify against an
+    # effectively-green suite. Fall through to diagnose-first, which
+    # drives off the problem statement.
+    held_out = getattr(
+        getattr(mission, "config", None), "held_out_tests", False
+    )
+    if (
+        is_repair_profile(mission)
+        and not held_out
+        and not (getattr(goal, "repair_tests", None) or {}).get("derived")
+    ):
+        rt = await derive_repair_tests(effects, goal.description)
+        goal.repair_tests = rt or {"derived": True}
+        if rt.get("command"):
+            cmds = {c.get("command") for c in (goal.acceptance_checks or [])}
+            if rt["command"] not in cmds:
+                goal.acceptance_checks = list(goal.acceptance_checks or []) + [
+                    {"command": rt["command"], "name": "repair suite",
+                     "required": True}
+                ]
+            if effects:
+                await effects.save_mission(mission)
+            dispatch_config = {
+                "goal_id": goal.id,
+                "goal_description": goal.description,
+                "goal_type": "functional",
+                "goal_files": goal.associated_files or [],
+                "flow": "interact",
+                "target_file_path": "",
+                "flow_directive": (
+                    "Verify this repair against the repo's own tests:\n"
+                    + goal.description
+                ),
+                "interaction_mode": "deterministic",
+                "run_command": rt["command"],
+                "interactive_prompt": "",
+            }
+            logger.info(
+                "Functional sweep: repair test-loop for %s → %s",
+                goal.description[:50],
+                rt["test_files"],
+            )
+            return StepOutput(
+                result={"sweep_complete": False, "needs_test": True},
+                observations=(
+                    f"Functional sweep: repair suite {rt['test_files']} "
+                    f"for '{goal.description[:50]}'"
+                ),
+                context_updates={"dispatch_config": dispatch_config},
+            )
+        if effects:
+            await effects.save_mission(mission)
+        # No matching suite — fall through to the normal dispatch.
+    # capability_absent goals (brownfield directive) name a feature that
+    # does NOT exist yet — a thing to BUILD, not verify. Default interact
+    # would charter "prove this works" and immediately fail on absence.
+    # Instead run an absence-aware explore session (charter_mode=explore)
+    # that reads player-view placement, then diagnose explores the code
+    # and patch builds it. Subsequent reports ride the normal report-walk
+    # below (interact success completes; a diagnose->file_ops cycle
+    # re-tests), so only the FIRST dispatch differs.
+    if getattr(goal, "capability_absent", False):
+        directive = (
+            "This capability does not exist yet — it is a feature to "
+            "BUILD, not a bug to reproduce. Explore the running program "
+            "and the code to find where it fits, then describe what to "
+            "build:\n" + goal.description
+        )
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": goal.associated_files or [],
+            "flow": "interact",
+            "target_file_path": "",
+            "flow_directive": directive,
+            "interaction_mode": "exploratory",
+            "charter_mode": "explore",
+            "run_command": "",
+            "interactive_prompt": interactive_prompt,
+        }
+        logger.info(
+            "Functional sweep: exploring to build %s", goal.description[:50]
+        )
+        return StepOutput(
+            result={"sweep_complete": False, "needs_test": True},
+            observations=(
+                f"Functional sweep: exploring to build "
+                f"'{goal.description[:50]}'"
+            ),
+            context_updates={"dispatch_config": dispatch_config},
+        )
+    # Repair-profile fix goals are ALREADY-CONFIRMED defects: the user
+    # filed the bug (the problem statement IS the report) and a hidden
+    # test pins it. In SWE-bench that test is HELD OUT, so the repo's
+    # baseline is green and the repair-test loop above finds no witness
+    # → without this branch the goal falls to the default "verify it
+    # works" interact, which trivially passes on the held-out test and
+    # completes the goal with ZERO edits (pilot-2: 5 empty patches,
+    # gold-file hit 8→2). Route straight to diagnose -> file_ops from
+    # the problem statement — the confirmed-defect polarity that forces
+    # a surgical fix AND localizes (diagnose explores to name the
+    # target). Only for non-capability_absent goals (a real fix, not a
+    # feature to build).
+    if is_repair_profile(mission) and not getattr(
+        goal, "capability_absent", False
+    ):
+        directive = (
+            "This is a confirmed defect reported against existing code "
+            "(a hidden test pins it). Diagnose the root cause and name "
+            "the specific existing file and symbol to change — make the "
+            "SMALLEST edit that fixes the reported behavior:\n"
+            + goal.description
+        )
+        directive += _goal_repro_block(goal)
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": goal.associated_files or [],
+            "flow": "diagnose_issue",
+            "target_file_path": "",
+            "flow_directive": directive,
+            "what_happened": goal.description,
+            "error_headline": goal.description[:80],
+        }
+        logger.info(
+            "Functional sweep: diagnosing repair defect %s",
+            goal.description[:50],
+        )
+        return StepOutput(
+            result={"sweep_complete": False, "needs_fix": True},
+            observations=f"Functional sweep: diagnosing repair defect '{goal.description[:50]}'",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+    # quality_gate-origin goals are ALREADY-CONFIRMED defects (the gate
+    # found them). Re-reproducing one via interact mis-frames a bug
+    # report as a capability to "verify works" and stochastically
+    # false-passes (the goal-driven validation thrashed a startup crash
+    # through ~10 false-pass/re-gate rounds before a diagnose finally
+    # ran). Go straight to diagnose -> file_ops; the post-fix interact
+    # re-test (defect-resolution polarity) is the real verification.
+    if getattr(goal, "origin", "design") == "quality_gate":
+        directive = (
+            "A quality-gate review reported this defect. Diagnose the "
+            "root cause and identify the specific file and symbol to "
+            "change:\n" + goal.description
+        )
+        directive += _goal_repro_block(goal)
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": goal.associated_files or [],
+            "flow": "diagnose_issue",
+            "target_file_path": "",
+            "flow_directive": directive,
+            "what_happened": goal.description,
+            "error_headline": goal.description[:80],
+        }
+        logger.info(
+            "Functional sweep: diagnosing reported defect %s",
+            goal.description[:50],
+        )
+        return StepOutput(
+            result={"sweep_complete": False, "needs_fix": True},
+            observations=f"Functional sweep: diagnosing reported defect '{goal.description[:50]}'",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+    # design-origin: reproduce/verify the capability via interact
+    dispatch_config = {
+        "goal_id": goal.id,
+        "goal_description": goal.description,
+        "goal_type": "functional",
+        "goal_files": goal.associated_files or [],
+        "flow": "interact",
+        "target_file_path": "",
+        "flow_directive": (
+            f"Test this capability: {goal.description}\n"
+            f"Run the program and verify the described behavior works correctly."
+        ),
+        "interaction_mode": goal_mode,
+        "run_command": run_command if goal_mode == "deterministic" else "",
+        "interactive_prompt": interactive_prompt,
+    }
+    logger.info("Functional sweep: testing %s", goal.description[:50])
+    return StepOutput(
+        result={"sweep_complete": False, "needs_test": True},
+        observations=f"Functional sweep: testing '{goal.description[:50]}'",
+        context_updates={"dispatch_config": dispatch_config},
+    )
+
+
+async def _sweep_capability_build(goal: Any, last_report: Any) -> StepOutput:
+    """Route an explored capability_absent goal to diagnose -> file_ops
+    so the scouted feature actually gets built."""
+    directive = (
+        "Build this capability from the exploration and placement notes "
+        "above. Diagnose what file and symbol to create or extend, and "
+        "how it connects to the existing structure:\n" + goal.description
+    )
+    dispatch_config = {
+        "goal_id": goal.id,
+        "goal_description": goal.description,
+        "goal_type": "functional",
+        "goal_files": goal.associated_files or [],
+        "flow": "diagnose_issue",
+        "target_file_path": "",
+        "flow_directive": directive,
+        "what_happened": getattr(last_report, "summary", ""),
+        "error_headline": getattr(last_report, "headline", "")
+        or goal.description[:80],
+    }
+    logger.info(
+        "Functional sweep: building explored capability %s",
+        goal.description[:50],
+    )
+    return StepOutput(
+        result={"sweep_complete": False, "needs_fix": True},
+        observations=(
+            f"Functional sweep: building explored capability "
+            f"'{goal.description[:50]}'"
+        ),
+        context_updates={"dispatch_config": dispatch_config},
+    )
+
+
+async def _sweep_after_file_ops(
+    goal: Any,
+    mission: Any,
+    effects: Any,
+    last_report: Any,
+    report_status: str,
+    goal_mode: str,
+    run_command: str,
+    interactive_prompt: str,
+) -> StepOutput:
+    """After a file_ops fix attempt: record the attempt, then re-test on
+    success (repair suite with collection floor when applicable) or
+    re-diagnose on bail/error."""
+    from agent.persistence.models import FailedAttempt
+
+    # Record every file_ops completion as an attempt, regardless
+    # of status.  A "successful" fix that doesn't resolve the
+    # test failure is just as important a signal as a bail —
+    # both indicate the diagnosis targeted the wrong file or
+    # the wrong aspect of the problem.
+    fops_summary = getattr(last_report, "summary", "no details")
+    fops_files = getattr(last_report, "files_affected", [])
+    fops_target = fops_files[0] if fops_files else ""
+    # Prefer the structured target_symbol on the report
+    # (populated by Phase A from the flat diagnosis schema).
+    # If absent — older cycles pre-redesign — leave blank; the
+    # diagnose seed's target-repeat detection then just matches
+    # on target_file alone, still useful.
+    fops_target_symbol = getattr(last_report, "target_symbol", "") or ""
+
+    # Find the diagnosis that led to this attempt, and the
+    # interact that triggered that diagnosis — we capture its
+    # headline as "pre_headline" so the next diagnose cycle
+    # can render before/after regression comparisons.
+    prior_diag_summary = ""
+    prior_interact_headline = ""
+    saw_diag = False
+    for prev_report in reversed(goal.reports[:-1]):
+        flow = getattr(prev_report, "flow", "")
+        if flow == "diagnose_issue" and not prior_diag_summary:
+            prior_diag_summary = getattr(prev_report, "summary", "")
+            saw_diag = True
+        elif saw_diag and flow == "interact":
+            prior_interact_headline = getattr(prev_report, "headline", "")
+            break
+
+    goal.failed_attempts.append(
+        FailedAttempt(
+            target_file=fops_target,
+            target_symbol=fops_target_symbol,
+            flow="file_ops",
+            reason=fops_summary,
+            diagnosis_summary=prior_diag_summary,
+            pre_headline=prior_interact_headline,
+        )
+    )
+
+    if report_status == "success":
+        # Repair goal: re-test against the repo's OWN suite, and run a
+        # cheap COLLECTION FLOOR first. An edit that breaks imports (the
+        # astropy `str | None` on py3.9) fails the WHOLE suite at
+        # collection — pytest returns INTERNALERROR / parser_results
+        # null, which reads as an unparseable grade. Catch it with a
+        # `--collect-only` and route straight back to diagnose with the
+        # import error, UNLESS the baseline already couldn't collect
+        # (unbuilt checkout → stand down, never blame the edit).
+        rt = getattr(goal, "repair_tests", None) or {}
+        if rt.get("command") and effects is not None:
+            if rt.get("collect_ok", True) and rt.get("test_files"):
+                from agent.actions.pipeline_actions import _parse_pytest_output
+
+                collect_cmd = "python -m pytest --collect-only -q " + " ".join(
+                    rt["test_files"]
+                )
+                collect_ok_now = True
+                cout = ""
+                try:
+                    cres = await effects.run_command(
+                        ["/bin/sh", "-c", collect_cmd], timeout=60
+                    )
+                    cout = (getattr(cres, "stdout", "") or "") + (
+                        getattr(cres, "stderr", "") or ""
+                    )
+                    _n, collect_ok_now = _parse_pytest_output(cout)
+                except Exception:
+                    collect_ok_now = True  # infra miss → don't block
+                if not collect_ok_now:
+                    logger.info(
+                        "Functional sweep: fix broke test collection for "
+                        "%s — re-diagnosing",
+                        goal.description[:50],
+                    )
+                    dispatch_config = {
+                        "goal_id": goal.id,
+                        "goal_description": goal.description,
+                        "goal_type": "functional",
+                        "goal_files": goal.associated_files or [],
+                        "flow": "diagnose_issue",
+                        "target_file_path": "",
+                        "flow_directive": (
+                            "The last edit broke test COLLECTION — the "
+                            "suite no longer imports. Fix the import/"
+                            "syntax breakage (this is collateral damage, "
+                            "not the original bug):\n" + goal.description
+                        ),
+                        "error_output": cout[:4000],
+                        "what_happened": "the fix broke test collection",
+                        "error_headline": "test collection failed after edit",
+                        "failed_attempts_context": [
+                            {
+                                "target_file": a.target_file,
+                                "target_symbol": getattr(a, "target_symbol", ""),
+                                "flow": a.flow,
+                                "reason": a.reason,
+                                "diagnosis_summary": a.diagnosis_summary,
+                                "pre_headline": getattr(a, "pre_headline", ""),
+                            }
+                            for a in goal.failed_attempts
+                        ],
+                    }
+                    if effects:
+                        await effects.save_mission(mission)
+                    return StepOutput(
+                        result={"sweep_complete": False, "needs_fix": True},
+                        observations=(
+                            f"Functional sweep: fix broke collection for "
+                            f"'{goal.description[:50]}' — re-diagnosing"
+                        ),
+                        context_updates={"dispatch_config": dispatch_config},
+                    )
+            # Collection clean (or baseline stood down) — re-test on the
+            # repo's own suite, deterministically.
+            dispatch_config = {
+                "goal_id": goal.id,
+                "goal_description": goal.description,
+                "goal_type": "functional",
+                "goal_files": goal.associated_files or [],
+                "flow": "interact",
+                "target_file_path": "",
+                "flow_directive": _functional_retest_directive(
+                    goal, after="fix"
+                ),
+                "interaction_mode": "deterministic",
+                "run_command": rt["command"],
+                "interactive_prompt": "",
+            }
+            logger.info(
+                "Functional sweep: re-testing %s after fix (repair suite)",
+                goal.description[:50],
+            )
+            if effects:
+                await effects.save_mission(mission)
+            return StepOutput(
+                result={"sweep_complete": False, "needs_test": True},
+                observations=(
+                    f"Functional sweep: re-testing '{goal.description[:50]}' "
+                    "after fix (repair suite)"
+                ),
+                context_updates={"dispatch_config": dispatch_config},
+            )
+        # Fix applied — re-test to see if it actually resolved
+        # the functional failure
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": goal.associated_files or [],
+            "flow": "interact",
+            "target_file_path": "",
+            "flow_directive": _functional_retest_directive(goal, after="fix"),
+            "interaction_mode": goal_mode,
+            "run_command": run_command if goal_mode == "deterministic" else "",
+            "interactive_prompt": interactive_prompt,
+        }
+        logger.info(
+            "Functional sweep: re-testing %s after fix", goal.description[:50]
+        )
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": False, "needs_test": True},
+            observations=f"Functional sweep: re-testing '{goal.description[:50]}' after fix",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+    else:
+        # Fix failed (bail or error) — re-diagnose with
+        # accumulated attempt context
+
+        # Serialize all attempts for the renderer
+        failed_attempts_data = [
+            {
+                "target_file": a.target_file,
+                "target_symbol": getattr(a, "target_symbol", ""),
+                "flow": a.flow,
+                "reason": a.reason,
+                "diagnosis_summary": a.diagnosis_summary,
+                "pre_headline": getattr(a, "pre_headline", ""),
+            }
+            for a in goal.failed_attempts
+        ]
+
+        terminal_output = getattr(last_report, "terminal_output", "")
+        # This path triggers after a file_ops that bailed or
+        # errored without ever running a functional test — so
+        # the last report is file_ops, not interact. No fresh
+        # headline to compare against; the new seed will show
+        # Prior attempts without a Before/After pair.
+        error_description = (
+            f"Previous fix attempts failed for: {goal.description}\n\n"
+            f"The editor rejected these targets — re-diagnose with a "
+            f"different approach or different file.\n"
+        )
+
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": [],
+            "flow": "diagnose_issue",
+            "target_file_path": "",
+            "flow_directive": error_description,
+            "error_output": terminal_output,
+            "what_happened": getattr(last_report, "summary", ""),
+            "error_headline": getattr(last_report, "headline", ""),
+            "failed_attempts_context": failed_attempts_data,
+        }
+        logger.info(
+            "Functional sweep: re-diagnosing '%s' after %d failed attempt(s)",
+            goal.description[:50],
+            len(goal.failed_attempts),
+        )
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": False, "needs_fix": True},
+            observations=f"Functional sweep: re-diagnosing '{goal.description[:50]}' after bail ({len(goal.failed_attempts)} failed attempts)",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+
+
+async def _sweep_after_project_ops(
+    goal: Any,
+    last_report: Any,
+    report_status: str,
+    goal_mode: str,
+    run_command: str,
+    interactive_prompt: str,
+) -> StepOutput:
+    """After a project_ops env/dep fix: re-test on success, re-diagnose
+    on failure."""
+    if report_status == "success":
+        # Environment fix applied — re-test the goal
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": goal.associated_files or [],
+            "flow": "interact",
+            "target_file_path": "",
+            "flow_directive": _functional_retest_directive(
+                goal, after="environment fix"
+            ),
+            "interaction_mode": goal_mode,
+            "run_command": run_command if goal_mode == "deterministic" else "",
+            "interactive_prompt": interactive_prompt,
+        }
+        logger.info(
+            "Functional sweep: re-testing %s after project_ops fix",
+            goal.description[:50],
+        )
+        return StepOutput(
+            result={"sweep_complete": False, "needs_test": True},
+            observations=f"Functional sweep: re-testing '{goal.description[:50]}' after project_ops",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+    else:
+        # project_ops failed — re-diagnose to find a different approach
+        error_description = (
+            f"Environment fix failed for: {goal.description}\n\n"
+            f"project_ops reported: {getattr(last_report, 'summary', 'no details')[:500]}\n"
+        )
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": [],
+            "flow": "diagnose_issue",
+            "target_file_path": "",
+            "flow_directive": error_description,
+            "what_happened": getattr(last_report, "summary", ""),
+            "error_headline": getattr(last_report, "headline", ""),
+        }
+        logger.info(
+            "Functional sweep: re-diagnosing %s after project_ops failure",
+            goal.description[:50],
+        )
+        return StepOutput(
+            result={"sweep_complete": False, "needs_fix": True},
+            observations=f"Functional sweep: re-diagnosing '{goal.description[:50]}' after project_ops failure",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+
+
+async def _sweep_after_diagnose(
+    goal: Any,
+    mission: Any,
+    effects: Any,
+    last_report: Any,
+) -> StepOutput:
+    """After a diagnose_issue report: extract the structured fix target
+    (Phase A operation spec) and dispatch file_ops/project_ops, with the
+    junk-target and evasion-loop guards."""
+    diag_summary = getattr(last_report, "summary", "")
+    diag_files = getattr(last_report, "files_affected", [])
+    recommended_flow = (
+        getattr(last_report, "recommended_flow", "") or "file_ops"
+    )
+
+    # Phase A (patch redesign) — read structured operation spec
+    # from the report. Diagnose's flat schema gives us the
+    # target_file + optional target_symbol + change_spec
+    # directly; we prefer these over the legacy files_affected
+    # derivation. file_ops routes internally: path doesn't
+    # exist → create; path exists + symbol in AST → patch;
+    # path exists + symbol absent → add_symbol (Phase D);
+    # otherwise → rewrite.
+    struct_target_file = getattr(last_report, "target_file", "") or ""
+    struct_target_symbol = getattr(last_report, "target_symbol", "") or ""
+    struct_change_spec = getattr(last_report, "change_spec", "") or ""
+    struct_kind = getattr(last_report, "diagnosis_kind", "") or ""
+    # Structured module-fix declaration — the literal module-level line
+    # accompanying kind == "module_fix"; file_ops's
+    # check_module_fix routes on it.
+    struct_module_statement = getattr(last_report, "module_statement", "") or ""
+    # Multi-symbol patching (505 round). When diagnose
+    # emits a list of co-dependent symbols, we thread them
+    # through to file_ops → patch so the rewrite_queue
+    # picks them up alongside target_symbol. Empty list
+    # means the change is local to target_symbol, which is
+    # the majority of cases.
+    struct_related_symbols = list(
+        getattr(last_report, "related_symbols", []) or []
+    )
+
+    # b75 regression guard — the model sometimes emits
+    # placeholder markers from the CONCLUDE_PROMPT example
+    # ('path/to/file.py', '<file>') or hedging tokens
+    # ('UNKNOWN', 'N/A', '?') when it can't identify a target.
+    # Treat these as empty so downstream sees the absence
+    # rather than a bogus path.
+    _junk_target_tokens = {
+        "",
+        "unknown",
+        "n/a",
+        "?",
+        "path/to/file.py",
+        "path/to/file",
+        "<file>",
+        "<path>",
+        "<real_path_in_this_project>",
+        "<classname.method_or_function_name>",
+    }
+    if struct_target_file.strip().lower() in _junk_target_tokens:
+        logger.warning(
+            "Functional sweep: diagnose returned junk target_file %r "
+            "(kind=%r, recommended_flow=%r); treating as empty",
+            struct_target_file,
+            struct_kind,
+            recommended_flow,
+        )
+        struct_target_file = ""
+    if struct_target_symbol.strip().lower() in _junk_target_tokens:
+        struct_target_symbol = ""
+
+    # Evasion-loop guard — b75 showed 5 cycles thrashing when
+    # diagnose couldn't identify a target and fell through to
+    # recommended_flow=project_ops with a generic "gather more
+    # evidence" change_spec. project_ops then edits README /
+    # pyproject.toml cosmetically, interact still fails, next
+    # diagnose produces the same evasion. If diagnose couldn't
+    # name a target AND the change_spec is meta-advice rather
+    # than a real project_ops directive, fail the goal's
+    # current attempt cleanly so the mission moves on.
+    _evasion_spec_markers = (
+        "obtain",
+        "gather",
+        "provide concrete",
+        "collect additional",
+        "more diagnostic",
+        "additional evidence",
+    )
+    change_spec_lower = struct_change_spec.strip().lower()
+    looks_like_evasion = (
+        not struct_target_file
+        and recommended_flow == "project_ops"
+        and any(
+            change_spec_lower.startswith(marker)
+            for marker in _evasion_spec_markers
+        )
+    )
+    if looks_like_evasion:
+        logger.warning(
+            "Functional sweep: diagnose evaded with empty target + "
+            "generic 'gather evidence' change_spec (%r); skipping "
+            "project_ops dispatch for '%s'",
+            struct_change_spec[:80],
+            goal.description[:50],
+        )
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": False, "skip_goal": True},
+            observations=(
+                f"Functional sweep: diagnose produced no actionable "
+                f"target for '{goal.description[:50]}'; skipping "
+                f"this cycle to avoid thrash"
+            ),
+            context_updates={},
+        )
+
+    # If diagnosis recommends project_ops (dependency/env fix),
+    # dispatch directly — no file target needed.
+    if recommended_flow == "project_ops":
+        fix_directive = (
+            f"Fix the environment/dependency issue that prevents: {goal.description}\n"
+            f"Diagnosis: {diag_summary[:500]}"
+        )
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": [],
+            "flow": "project_ops",
+            "target_file_path": "",
+            "flow_directive": fix_directive,
+        }
+        logger.info(
+            "Functional sweep: dispatching project_ops from diagnosis for '%s'",
+            goal.description[:50],
+        )
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": False, "needs_fix": True},
+            observations=f"Functional sweep: project_ops fix for '{goal.description[:50]}'",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+
+    # file_ops path. Prefer structured target_file from the
+    # flat diagnosis; fall back to legacy files_affected[0]
+    # only when the diagnose session ran under an older path
+    # that didn't populate the structured field.
+    fix_target = struct_target_file or (diag_files[0] if diag_files else "")
+
+    if fix_target:
+        # Diagnosis explicitly named a file — use it directly
+        for sg in mission.goals:
+            if sg.type == "structural" and fix_target in (
+                sg.associated_files or []
+            ):
+                if sg.status == "complete":
+                    sg.status = "incomplete"
+                    logger.info(
+                        "Functional sweep: regressed structural goal for %s",
+                        fix_target,
+                    )
+                break
+
+        # Editing a file can break (or fix) the program's startup —
+        # re-open the startup goal so the startup check re-runs.
+        _regress_startup_goal(mission)
+
+        fix_directive = (
+            f"Fix the issue in {fix_target} that prevents: {goal.description}\n"
+            f"Diagnosis: {diag_summary[:500]}"
+        )
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": [fix_target],
+            "flow": "file_ops",
+            "target_file_path": fix_target,
+            "flow_directive": fix_directive,
+            # Phase A / D — structured fields for file_ops
+            # routing. target_symbol lets file_ops choose
+            # patch (symbol exists in AST) vs add_symbol
+            # (symbol missing from AST). change_spec feeds
+            # each sub-flow's authoring prompt.
+            "target_symbol": struct_target_symbol,
+            "change_spec": struct_change_spec,
+            "diagnosis_kind": struct_kind,
+            "module_statement": struct_module_statement,
+            # Multi-symbol patching (505 round). Passed
+            # through file_ops input_map → patch input_map
+            # → prepare_next_rewrite, which seeds the
+            # rewrite queue with the primary target plus
+            # these related symbols so they're all
+            # rewritten in one atomic batch with shared
+            # context.
+            "related_symbols": struct_related_symbols,
+        }
+        logger.info(
+            "Functional sweep: applying fix to %s from diagnosis", fix_target
+        )
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": False, "needs_fix": True},
+            observations=f"Functional sweep: applying diagnosis fix to {fix_target}",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+    else:
+        # No explicit file target — let LLM select from project files
+        logger.info(
+            "Functional sweep: diagnosis for '%s' needs target resolution via LLM menu",
+            goal.description[:50],
+        )
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": [],
+            "flow": "file_ops",
+            "target_file_path": "",
+            "flow_directive": (
+                f"Fix the issue that prevents: {goal.description}\n"
+                f"Diagnosis: {diag_summary[:500]}"
+            ),
+            "diagnosis_summary": diag_summary,
+        }
+        return StepOutput(
+            result={"sweep_complete": False, "needs_target_resolution": True},
+            observations=f"Functional sweep: needs LLM to select fix target for '{goal.description[:50]}'",
+            context_updates={"dispatch_config": dispatch_config},
+        )
+
+
+async def _sweep_interact_failure(
+    goal: Any,
+    mission: Any,
+    effects: Any,
+    last_report: Any,
+) -> StepOutput:
+    """Fallback: interact failed — dispatch diagnose_issue with the
+    accumulated attempt history."""
+    # interact failed — dispatch diagnose_issue to identify root cause
+    # and the correct file to fix. Diagnosis uses LLM analysis of the
+    # error context rather than fragile regex on tracebacks.
+    terminal_output = getattr(last_report, "terminal_output", "")
+    summary = getattr(last_report, "summary", "")
+    headline = getattr(last_report, "headline", "")
+
+    error_description = (
+        f"Functional test failed for: {goal.description}\n\n"
+        f"Test summary: {summary}\n"
+    )
+
+    dispatch_config = {
+        "goal_id": goal.id,
+        "goal_description": goal.description,
+        "goal_type": "functional",
+        "goal_files": [],
+        "flow": "diagnose_issue",
+        "target_file_path": "",
+        "flow_directive": error_description,
+        "error_output": terminal_output,
+        # Structured fields for the new diagnose seed (Goal /
+        # What happened / Prior attempts). The seed-building
+        # action reads these directly instead of re-parsing
+        # error_description.
+        "what_happened": summary,
+        "error_headline": headline,
+    }
+
+    # Pass accumulated attempt history so the diagnosis model
+    # knows what has already been tried (even if those attempts
+    # reported "success" but didn't resolve the test failure).
+    if goal.failed_attempts:
+        dispatch_config["failed_attempts_context"] = [
+            {
+                "target_file": a.target_file,
+                "target_symbol": getattr(a, "target_symbol", ""),
+                "flow": a.flow,
+                "reason": a.reason,
+                "diagnosis_summary": a.diagnosis_summary,
+                "pre_headline": getattr(a, "pre_headline", ""),
+            }
+            for a in goal.failed_attempts
+        ]
+
+    logger.info(
+        "Functional sweep: diagnosing '%s' after interact failure",
+        goal.description[:50],
+    )
+    if effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"sweep_complete": False, "needs_fix": True},
+        observations=f"Functional sweep: diagnosing '{goal.description[:50]}'",
+        context_updates={"dispatch_config": dispatch_config},
+    )
+
+
 async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
     """Find the next incomplete functional goal and determine what it needs.
 
@@ -1573,220 +2439,8 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
 
         # Check the latest report to determine what this goal needs
         if not goal.reports:
-            # Repair test loop (Phase B.5): on a repair-profile mission, the
-            # repo's OWN failing tests are the goal's ground truth. Derive them
-            # once and dispatch a DETERMINISTIC pytest verification (zero
-            # inference) — its pytest output (failing node ids) flows into the
-            # diagnose seed as error_output, so the fix loop sees exactly how
-            # the code is called. Falls through to the normal dispatch when no
-            # suite matches or the profile isn't repair.
-            #
-            # capability_absent goals are NOT excluded here: on a repair
-            # mission the "absent capability" has a failing test naming it —
-            # the test IS the build spec (fsspec: `test_open_async` calls the
-            # missing method with the exact signature). The first retest
-            # excluded them and BOTH repo-scale tasks silently skipped the
-            # whole loop, falling back to exploratory interact + static-grep
-            # acceptance checks (the signature-blind trap this loop replaces).
-            # The explore-charter path remains for non-repair missions.
-            from agent.actions.pipeline_actions import (
-                derive_repair_tests,
-                is_repair_profile,
-            )
-
-            # Held-out-test missions (SWE-bench) skip the repair-test loop
-            # entirely: no in-repo test indicts the bug (the regression test is
-            # held out), so a baseline-failing witness is always a red-herring
-            # that hijacks the goal into a deterministic verify against an
-            # effectively-green suite. Fall through to diagnose-first, which
-            # drives off the problem statement.
-            held_out = getattr(
-                getattr(mission, "config", None), "held_out_tests", False
-            )
-            if (
-                is_repair_profile(mission)
-                and not held_out
-                and not (getattr(goal, "repair_tests", None) or {}).get("derived")
-            ):
-                rt = await derive_repair_tests(effects, goal.description)
-                goal.repair_tests = rt or {"derived": True}
-                if rt.get("command"):
-                    cmds = {c.get("command") for c in (goal.acceptance_checks or [])}
-                    if rt["command"] not in cmds:
-                        goal.acceptance_checks = list(goal.acceptance_checks or []) + [
-                            {"command": rt["command"], "name": "repair suite",
-                             "required": True}
-                        ]
-                    if effects:
-                        await effects.save_mission(mission)
-                    dispatch_config = {
-                        "goal_id": goal.id,
-                        "goal_description": goal.description,
-                        "goal_type": "functional",
-                        "goal_files": goal.associated_files or [],
-                        "flow": "interact",
-                        "target_file_path": "",
-                        "flow_directive": (
-                            "Verify this repair against the repo's own tests:\n"
-                            + goal.description
-                        ),
-                        "interaction_mode": "deterministic",
-                        "run_command": rt["command"],
-                        "interactive_prompt": "",
-                    }
-                    logger.info(
-                        "Functional sweep: repair test-loop for %s → %s",
-                        goal.description[:50],
-                        rt["test_files"],
-                    )
-                    return StepOutput(
-                        result={"sweep_complete": False, "needs_test": True},
-                        observations=(
-                            f"Functional sweep: repair suite {rt['test_files']} "
-                            f"for '{goal.description[:50]}'"
-                        ),
-                        context_updates={"dispatch_config": dispatch_config},
-                    )
-                if effects:
-                    await effects.save_mission(mission)
-                # No matching suite — fall through to the normal dispatch.
-            # capability_absent goals (brownfield directive) name a feature that
-            # does NOT exist yet — a thing to BUILD, not verify. Default interact
-            # would charter "prove this works" and immediately fail on absence.
-            # Instead run an absence-aware explore session (charter_mode=explore)
-            # that reads player-view placement, then diagnose explores the code
-            # and patch builds it. Subsequent reports ride the normal report-walk
-            # below (interact success completes; a diagnose->file_ops cycle
-            # re-tests), so only the FIRST dispatch differs.
-            if getattr(goal, "capability_absent", False):
-                directive = (
-                    "This capability does not exist yet — it is a feature to "
-                    "BUILD, not a bug to reproduce. Explore the running program "
-                    "and the code to find where it fits, then describe what to "
-                    "build:\n" + goal.description
-                )
-                dispatch_config = {
-                    "goal_id": goal.id,
-                    "goal_description": goal.description,
-                    "goal_type": "functional",
-                    "goal_files": goal.associated_files or [],
-                    "flow": "interact",
-                    "target_file_path": "",
-                    "flow_directive": directive,
-                    "interaction_mode": "exploratory",
-                    "charter_mode": "explore",
-                    "run_command": "",
-                    "interactive_prompt": interactive_prompt,
-                }
-                logger.info(
-                    "Functional sweep: exploring to build %s", goal.description[:50]
-                )
-                return StepOutput(
-                    result={"sweep_complete": False, "needs_test": True},
-                    observations=(
-                        f"Functional sweep: exploring to build "
-                        f"'{goal.description[:50]}'"
-                    ),
-                    context_updates={"dispatch_config": dispatch_config},
-                )
-            # Repair-profile fix goals are ALREADY-CONFIRMED defects: the user
-            # filed the bug (the problem statement IS the report) and a hidden
-            # test pins it. In SWE-bench that test is HELD OUT, so the repo's
-            # baseline is green and the repair-test loop above finds no witness
-            # → without this branch the goal falls to the default "verify it
-            # works" interact, which trivially passes on the held-out test and
-            # completes the goal with ZERO edits (pilot-2: 5 empty patches,
-            # gold-file hit 8→2). Route straight to diagnose -> file_ops from
-            # the problem statement — the confirmed-defect polarity that forces
-            # a surgical fix AND localizes (diagnose explores to name the
-            # target). Only for non-capability_absent goals (a real fix, not a
-            # feature to build).
-            if is_repair_profile(mission) and not getattr(
-                goal, "capability_absent", False
-            ):
-                directive = (
-                    "This is a confirmed defect reported against existing code "
-                    "(a hidden test pins it). Diagnose the root cause and name "
-                    "the specific existing file and symbol to change — make the "
-                    "SMALLEST edit that fixes the reported behavior:\n"
-                    + goal.description
-                )
-                directive += _goal_repro_block(goal)
-                dispatch_config = {
-                    "goal_id": goal.id,
-                    "goal_description": goal.description,
-                    "goal_type": "functional",
-                    "goal_files": goal.associated_files or [],
-                    "flow": "diagnose_issue",
-                    "target_file_path": "",
-                    "flow_directive": directive,
-                    "what_happened": goal.description,
-                    "error_headline": goal.description[:80],
-                }
-                logger.info(
-                    "Functional sweep: diagnosing repair defect %s",
-                    goal.description[:50],
-                )
-                return StepOutput(
-                    result={"sweep_complete": False, "needs_fix": True},
-                    observations=f"Functional sweep: diagnosing repair defect '{goal.description[:50]}'",
-                    context_updates={"dispatch_config": dispatch_config},
-                )
-            # quality_gate-origin goals are ALREADY-CONFIRMED defects (the gate
-            # found them). Re-reproducing one via interact mis-frames a bug
-            # report as a capability to "verify works" and stochastically
-            # false-passes (the goal-driven validation thrashed a startup crash
-            # through ~10 false-pass/re-gate rounds before a diagnose finally
-            # ran). Go straight to diagnose -> file_ops; the post-fix interact
-            # re-test (defect-resolution polarity) is the real verification.
-            if getattr(goal, "origin", "design") == "quality_gate":
-                directive = (
-                    "A quality-gate review reported this defect. Diagnose the "
-                    "root cause and identify the specific file and symbol to "
-                    "change:\n" + goal.description
-                )
-                directive += _goal_repro_block(goal)
-                dispatch_config = {
-                    "goal_id": goal.id,
-                    "goal_description": goal.description,
-                    "goal_type": "functional",
-                    "goal_files": goal.associated_files or [],
-                    "flow": "diagnose_issue",
-                    "target_file_path": "",
-                    "flow_directive": directive,
-                    "what_happened": goal.description,
-                    "error_headline": goal.description[:80],
-                }
-                logger.info(
-                    "Functional sweep: diagnosing reported defect %s",
-                    goal.description[:50],
-                )
-                return StepOutput(
-                    result={"sweep_complete": False, "needs_fix": True},
-                    observations=f"Functional sweep: diagnosing reported defect '{goal.description[:50]}'",
-                    context_updates={"dispatch_config": dispatch_config},
-                )
-            # design-origin: reproduce/verify the capability via interact
-            dispatch_config = {
-                "goal_id": goal.id,
-                "goal_description": goal.description,
-                "goal_type": "functional",
-                "goal_files": goal.associated_files or [],
-                "flow": "interact",
-                "target_file_path": "",
-                "flow_directive": (
-                    f"Test this capability: {goal.description}\n"
-                    f"Run the program and verify the described behavior works correctly."
-                ),
-                "interaction_mode": goal_mode,
-                "run_command": run_command if goal_mode == "deterministic" else "",
-                "interactive_prompt": interactive_prompt,
-            }
-            logger.info("Functional sweep: testing %s", goal.description[:50])
-            return StepOutput(
-                result={"sweep_complete": False, "needs_test": True},
-                observations=f"Functional sweep: testing '{goal.description[:50]}'",
-                context_updates={"dispatch_config": dispatch_config},
+            return await _sweep_first_test(
+                goal, mission, effects, goal_mode, run_command, interactive_prompt
             )
 
         last_report = goal.reports[-1]
@@ -1804,35 +2458,7 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
             and report_flow == "interact"
             and not any(getattr(r, "flow", "") == "file_ops" for r in goal.reports)
         ):
-            directive = (
-                "Build this capability from the exploration and placement notes "
-                "above. Diagnose what file and symbol to create or extend, and "
-                "how it connects to the existing structure:\n" + goal.description
-            )
-            dispatch_config = {
-                "goal_id": goal.id,
-                "goal_description": goal.description,
-                "goal_type": "functional",
-                "goal_files": goal.associated_files or [],
-                "flow": "diagnose_issue",
-                "target_file_path": "",
-                "flow_directive": directive,
-                "what_happened": getattr(last_report, "summary", ""),
-                "error_headline": getattr(last_report, "headline", "")
-                or goal.description[:80],
-            }
-            logger.info(
-                "Functional sweep: building explored capability %s",
-                goal.description[:50],
-            )
-            return StepOutput(
-                result={"sweep_complete": False, "needs_fix": True},
-                observations=(
-                    f"Functional sweep: building explored capability "
-                    f"'{goal.description[:50]}'"
-                ),
-                context_updates={"dispatch_config": dispatch_config},
-            )
+            return await _sweep_capability_build(goal, last_report)
 
         # interact success means goal_met was true (the flow routes on this)
         if report_flow == "interact" and report_status == "success":
@@ -1847,569 +2473,29 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
 
         # Last report was file_ops — check if it succeeded or failed
         if report_flow == "file_ops":
-            from agent.persistence.models import FailedAttempt
-
-            # Record every file_ops completion as an attempt, regardless
-            # of status.  A "successful" fix that doesn't resolve the
-            # test failure is just as important a signal as a bail —
-            # both indicate the diagnosis targeted the wrong file or
-            # the wrong aspect of the problem.
-            fops_summary = getattr(last_report, "summary", "no details")
-            fops_files = getattr(last_report, "files_affected", [])
-            fops_target = fops_files[0] if fops_files else ""
-            # Prefer the structured target_symbol on the report
-            # (populated by Phase A from the flat diagnosis schema).
-            # If absent — older cycles pre-redesign — leave blank; the
-            # diagnose seed's target-repeat detection then just matches
-            # on target_file alone, still useful.
-            fops_target_symbol = getattr(last_report, "target_symbol", "") or ""
-
-            # Find the diagnosis that led to this attempt, and the
-            # interact that triggered that diagnosis — we capture its
-            # headline as "pre_headline" so the next diagnose cycle
-            # can render before/after regression comparisons.
-            prior_diag_summary = ""
-            prior_interact_headline = ""
-            saw_diag = False
-            for prev_report in reversed(goal.reports[:-1]):
-                flow = getattr(prev_report, "flow", "")
-                if flow == "diagnose_issue" and not prior_diag_summary:
-                    prior_diag_summary = getattr(prev_report, "summary", "")
-                    saw_diag = True
-                elif saw_diag and flow == "interact":
-                    prior_interact_headline = getattr(prev_report, "headline", "")
-                    break
-
-            goal.failed_attempts.append(
-                FailedAttempt(
-                    target_file=fops_target,
-                    target_symbol=fops_target_symbol,
-                    flow="file_ops",
-                    reason=fops_summary,
-                    diagnosis_summary=prior_diag_summary,
-                    pre_headline=prior_interact_headline,
-                )
+            return await _sweep_after_file_ops(
+                goal,
+                mission,
+                effects,
+                last_report,
+                report_status,
+                goal_mode,
+                run_command,
+                interactive_prompt,
             )
-
-            if report_status == "success":
-                # Repair goal: re-test against the repo's OWN suite, and run a
-                # cheap COLLECTION FLOOR first. An edit that breaks imports (the
-                # astropy `str | None` on py3.9) fails the WHOLE suite at
-                # collection — pytest returns INTERNALERROR / parser_results
-                # null, which reads as an unparseable grade. Catch it with a
-                # `--collect-only` and route straight back to diagnose with the
-                # import error, UNLESS the baseline already couldn't collect
-                # (unbuilt checkout → stand down, never blame the edit).
-                rt = getattr(goal, "repair_tests", None) or {}
-                if rt.get("command") and effects is not None:
-                    if rt.get("collect_ok", True) and rt.get("test_files"):
-                        from agent.actions.pipeline_actions import _parse_pytest_output
-
-                        collect_cmd = "python -m pytest --collect-only -q " + " ".join(
-                            rt["test_files"]
-                        )
-                        collect_ok_now = True
-                        cout = ""
-                        try:
-                            cres = await effects.run_command(
-                                ["/bin/sh", "-c", collect_cmd], timeout=60
-                            )
-                            cout = (getattr(cres, "stdout", "") or "") + (
-                                getattr(cres, "stderr", "") or ""
-                            )
-                            _n, collect_ok_now = _parse_pytest_output(cout)
-                        except Exception:
-                            collect_ok_now = True  # infra miss → don't block
-                        if not collect_ok_now:
-                            logger.info(
-                                "Functional sweep: fix broke test collection for "
-                                "%s — re-diagnosing",
-                                goal.description[:50],
-                            )
-                            dispatch_config = {
-                                "goal_id": goal.id,
-                                "goal_description": goal.description,
-                                "goal_type": "functional",
-                                "goal_files": goal.associated_files or [],
-                                "flow": "diagnose_issue",
-                                "target_file_path": "",
-                                "flow_directive": (
-                                    "The last edit broke test COLLECTION — the "
-                                    "suite no longer imports. Fix the import/"
-                                    "syntax breakage (this is collateral damage, "
-                                    "not the original bug):\n" + goal.description
-                                ),
-                                "error_output": cout[:4000],
-                                "what_happened": "the fix broke test collection",
-                                "error_headline": "test collection failed after edit",
-                                "failed_attempts_context": [
-                                    {
-                                        "target_file": a.target_file,
-                                        "target_symbol": getattr(a, "target_symbol", ""),
-                                        "flow": a.flow,
-                                        "reason": a.reason,
-                                        "diagnosis_summary": a.diagnosis_summary,
-                                        "pre_headline": getattr(a, "pre_headline", ""),
-                                    }
-                                    for a in goal.failed_attempts
-                                ],
-                            }
-                            if effects:
-                                await effects.save_mission(mission)
-                            return StepOutput(
-                                result={"sweep_complete": False, "needs_fix": True},
-                                observations=(
-                                    f"Functional sweep: fix broke collection for "
-                                    f"'{goal.description[:50]}' — re-diagnosing"
-                                ),
-                                context_updates={"dispatch_config": dispatch_config},
-                            )
-                    # Collection clean (or baseline stood down) — re-test on the
-                    # repo's own suite, deterministically.
-                    dispatch_config = {
-                        "goal_id": goal.id,
-                        "goal_description": goal.description,
-                        "goal_type": "functional",
-                        "goal_files": goal.associated_files or [],
-                        "flow": "interact",
-                        "target_file_path": "",
-                        "flow_directive": _functional_retest_directive(
-                            goal, after="fix"
-                        ),
-                        "interaction_mode": "deterministic",
-                        "run_command": rt["command"],
-                        "interactive_prompt": "",
-                    }
-                    logger.info(
-                        "Functional sweep: re-testing %s after fix (repair suite)",
-                        goal.description[:50],
-                    )
-                    if effects:
-                        await effects.save_mission(mission)
-                    return StepOutput(
-                        result={"sweep_complete": False, "needs_test": True},
-                        observations=(
-                            f"Functional sweep: re-testing '{goal.description[:50]}' "
-                            "after fix (repair suite)"
-                        ),
-                        context_updates={"dispatch_config": dispatch_config},
-                    )
-                # Fix applied — re-test to see if it actually resolved
-                # the functional failure
-                dispatch_config = {
-                    "goal_id": goal.id,
-                    "goal_description": goal.description,
-                    "goal_type": "functional",
-                    "goal_files": goal.associated_files or [],
-                    "flow": "interact",
-                    "target_file_path": "",
-                    "flow_directive": _functional_retest_directive(goal, after="fix"),
-                    "interaction_mode": goal_mode,
-                    "run_command": run_command if goal_mode == "deterministic" else "",
-                    "interactive_prompt": interactive_prompt,
-                }
-                logger.info(
-                    "Functional sweep: re-testing %s after fix", goal.description[:50]
-                )
-                if effects:
-                    await effects.save_mission(mission)
-                return StepOutput(
-                    result={"sweep_complete": False, "needs_test": True},
-                    observations=f"Functional sweep: re-testing '{goal.description[:50]}' after fix",
-                    context_updates={"dispatch_config": dispatch_config},
-                )
-            else:
-                # Fix failed (bail or error) — re-diagnose with
-                # accumulated attempt context
-
-                # Serialize all attempts for the renderer
-                failed_attempts_data = [
-                    {
-                        "target_file": a.target_file,
-                        "target_symbol": getattr(a, "target_symbol", ""),
-                        "flow": a.flow,
-                        "reason": a.reason,
-                        "diagnosis_summary": a.diagnosis_summary,
-                        "pre_headline": getattr(a, "pre_headline", ""),
-                    }
-                    for a in goal.failed_attempts
-                ]
-
-                terminal_output = getattr(last_report, "terminal_output", "")
-                # This path triggers after a file_ops that bailed or
-                # errored without ever running a functional test — so
-                # the last report is file_ops, not interact. No fresh
-                # headline to compare against; the new seed will show
-                # Prior attempts without a Before/After pair.
-                error_description = (
-                    f"Previous fix attempts failed for: {goal.description}\n\n"
-                    f"The editor rejected these targets — re-diagnose with a "
-                    f"different approach or different file.\n"
-                )
-
-                dispatch_config = {
-                    "goal_id": goal.id,
-                    "goal_description": goal.description,
-                    "goal_type": "functional",
-                    "goal_files": [],
-                    "flow": "diagnose_issue",
-                    "target_file_path": "",
-                    "flow_directive": error_description,
-                    "error_output": terminal_output,
-                    "what_happened": getattr(last_report, "summary", ""),
-                    "error_headline": getattr(last_report, "headline", ""),
-                    "failed_attempts_context": failed_attempts_data,
-                }
-                logger.info(
-                    "Functional sweep: re-diagnosing '%s' after %d failed attempt(s)",
-                    goal.description[:50],
-                    len(goal.failed_attempts),
-                )
-                if effects:
-                    await effects.save_mission(mission)
-                return StepOutput(
-                    result={"sweep_complete": False, "needs_fix": True},
-                    observations=f"Functional sweep: re-diagnosing '{goal.description[:50]}' after bail ({len(goal.failed_attempts)} failed attempts)",
-                    context_updates={"dispatch_config": dispatch_config},
-                )
 
         # Last report was project_ops — env/dep fix applied, re-test
         if report_flow == "project_ops":
-            if report_status == "success":
-                # Environment fix applied — re-test the goal
-                dispatch_config = {
-                    "goal_id": goal.id,
-                    "goal_description": goal.description,
-                    "goal_type": "functional",
-                    "goal_files": goal.associated_files or [],
-                    "flow": "interact",
-                    "target_file_path": "",
-                    "flow_directive": _functional_retest_directive(
-                        goal, after="environment fix"
-                    ),
-                    "interaction_mode": goal_mode,
-                    "run_command": run_command if goal_mode == "deterministic" else "",
-                    "interactive_prompt": interactive_prompt,
-                }
-                logger.info(
-                    "Functional sweep: re-testing %s after project_ops fix",
-                    goal.description[:50],
-                )
-                return StepOutput(
-                    result={"sweep_complete": False, "needs_test": True},
-                    observations=f"Functional sweep: re-testing '{goal.description[:50]}' after project_ops",
-                    context_updates={"dispatch_config": dispatch_config},
-                )
-            else:
-                # project_ops failed — re-diagnose to find a different approach
-                error_description = (
-                    f"Environment fix failed for: {goal.description}\n\n"
-                    f"project_ops reported: {getattr(last_report, 'summary', 'no details')[:500]}\n"
-                )
-                dispatch_config = {
-                    "goal_id": goal.id,
-                    "goal_description": goal.description,
-                    "goal_type": "functional",
-                    "goal_files": [],
-                    "flow": "diagnose_issue",
-                    "target_file_path": "",
-                    "flow_directive": error_description,
-                    "what_happened": getattr(last_report, "summary", ""),
-                    "error_headline": getattr(last_report, "headline", ""),
-                }
-                logger.info(
-                    "Functional sweep: re-diagnosing %s after project_ops failure",
-                    goal.description[:50],
-                )
-                return StepOutput(
-                    result={"sweep_complete": False, "needs_fix": True},
-                    observations=f"Functional sweep: re-diagnosing '{goal.description[:50]}' after project_ops failure",
-                    context_updates={"dispatch_config": dispatch_config},
-                )
+            return await _sweep_after_project_ops(
+                goal, last_report, report_status, goal_mode, run_command,
+                interactive_prompt
+            )
 
         # Last report was diagnose_issue — extract fix target and dispatch
         if report_flow == "diagnose_issue":
-            diag_summary = getattr(last_report, "summary", "")
-            diag_files = getattr(last_report, "files_affected", [])
-            recommended_flow = (
-                getattr(last_report, "recommended_flow", "") or "file_ops"
-            )
+            return await _sweep_after_diagnose(goal, mission, effects, last_report)
 
-            # Phase A (patch redesign) — read structured operation spec
-            # from the report. Diagnose's flat schema gives us the
-            # target_file + optional target_symbol + change_spec
-            # directly; we prefer these over the legacy files_affected
-            # derivation. file_ops routes internally: path doesn't
-            # exist → create; path exists + symbol in AST → patch;
-            # path exists + symbol absent → add_symbol (Phase D);
-            # otherwise → rewrite.
-            struct_target_file = getattr(last_report, "target_file", "") or ""
-            struct_target_symbol = getattr(last_report, "target_symbol", "") or ""
-            struct_change_spec = getattr(last_report, "change_spec", "") or ""
-            struct_kind = getattr(last_report, "diagnosis_kind", "") or ""
-            # Structured module-fix declaration — the literal module-level line
-            # accompanying kind == "module_fix"; file_ops's
-            # check_module_fix routes on it.
-            struct_module_statement = getattr(last_report, "module_statement", "") or ""
-            # Multi-symbol patching (505 round). When diagnose
-            # emits a list of co-dependent symbols, we thread them
-            # through to file_ops → patch so the rewrite_queue
-            # picks them up alongside target_symbol. Empty list
-            # means the change is local to target_symbol, which is
-            # the majority of cases.
-            struct_related_symbols = list(
-                getattr(last_report, "related_symbols", []) or []
-            )
-
-            # b75 regression guard — the model sometimes emits
-            # placeholder markers from the CONCLUDE_PROMPT example
-            # ('path/to/file.py', '<file>') or hedging tokens
-            # ('UNKNOWN', 'N/A', '?') when it can't identify a target.
-            # Treat these as empty so downstream sees the absence
-            # rather than a bogus path.
-            _junk_target_tokens = {
-                "",
-                "unknown",
-                "n/a",
-                "?",
-                "path/to/file.py",
-                "path/to/file",
-                "<file>",
-                "<path>",
-                "<real_path_in_this_project>",
-                "<classname.method_or_function_name>",
-            }
-            if struct_target_file.strip().lower() in _junk_target_tokens:
-                logger.warning(
-                    "Functional sweep: diagnose returned junk target_file %r "
-                    "(kind=%r, recommended_flow=%r); treating as empty",
-                    struct_target_file,
-                    struct_kind,
-                    recommended_flow,
-                )
-                struct_target_file = ""
-            if struct_target_symbol.strip().lower() in _junk_target_tokens:
-                struct_target_symbol = ""
-
-            # Evasion-loop guard — b75 showed 5 cycles thrashing when
-            # diagnose couldn't identify a target and fell through to
-            # recommended_flow=project_ops with a generic "gather more
-            # evidence" change_spec. project_ops then edits README /
-            # pyproject.toml cosmetically, interact still fails, next
-            # diagnose produces the same evasion. If diagnose couldn't
-            # name a target AND the change_spec is meta-advice rather
-            # than a real project_ops directive, fail the goal's
-            # current attempt cleanly so the mission moves on.
-            _evasion_spec_markers = (
-                "obtain",
-                "gather",
-                "provide concrete",
-                "collect additional",
-                "more diagnostic",
-                "additional evidence",
-            )
-            change_spec_lower = struct_change_spec.strip().lower()
-            looks_like_evasion = (
-                not struct_target_file
-                and recommended_flow == "project_ops"
-                and any(
-                    change_spec_lower.startswith(marker)
-                    for marker in _evasion_spec_markers
-                )
-            )
-            if looks_like_evasion:
-                logger.warning(
-                    "Functional sweep: diagnose evaded with empty target + "
-                    "generic 'gather evidence' change_spec (%r); skipping "
-                    "project_ops dispatch for '%s'",
-                    struct_change_spec[:80],
-                    goal.description[:50],
-                )
-                if effects:
-                    await effects.save_mission(mission)
-                return StepOutput(
-                    result={"sweep_complete": False, "skip_goal": True},
-                    observations=(
-                        f"Functional sweep: diagnose produced no actionable "
-                        f"target for '{goal.description[:50]}'; skipping "
-                        f"this cycle to avoid thrash"
-                    ),
-                    context_updates={},
-                )
-
-            # If diagnosis recommends project_ops (dependency/env fix),
-            # dispatch directly — no file target needed.
-            if recommended_flow == "project_ops":
-                fix_directive = (
-                    f"Fix the environment/dependency issue that prevents: {goal.description}\n"
-                    f"Diagnosis: {diag_summary[:500]}"
-                )
-                dispatch_config = {
-                    "goal_id": goal.id,
-                    "goal_description": goal.description,
-                    "goal_type": "functional",
-                    "goal_files": [],
-                    "flow": "project_ops",
-                    "target_file_path": "",
-                    "flow_directive": fix_directive,
-                }
-                logger.info(
-                    "Functional sweep: dispatching project_ops from diagnosis for '%s'",
-                    goal.description[:50],
-                )
-                if effects:
-                    await effects.save_mission(mission)
-                return StepOutput(
-                    result={"sweep_complete": False, "needs_fix": True},
-                    observations=f"Functional sweep: project_ops fix for '{goal.description[:50]}'",
-                    context_updates={"dispatch_config": dispatch_config},
-                )
-
-            # file_ops path. Prefer structured target_file from the
-            # flat diagnosis; fall back to legacy files_affected[0]
-            # only when the diagnose session ran under an older path
-            # that didn't populate the structured field.
-            fix_target = struct_target_file or (diag_files[0] if diag_files else "")
-
-            if fix_target:
-                # Diagnosis explicitly named a file — use it directly
-                for sg in mission.goals:
-                    if sg.type == "structural" and fix_target in (
-                        sg.associated_files or []
-                    ):
-                        if sg.status == "complete":
-                            sg.status = "incomplete"
-                            logger.info(
-                                "Functional sweep: regressed structural goal for %s",
-                                fix_target,
-                            )
-                        break
-
-                # Editing a file can break (or fix) the program's startup —
-                # re-open the startup goal so the startup check re-runs.
-                _regress_startup_goal(mission)
-
-                fix_directive = (
-                    f"Fix the issue in {fix_target} that prevents: {goal.description}\n"
-                    f"Diagnosis: {diag_summary[:500]}"
-                )
-                dispatch_config = {
-                    "goal_id": goal.id,
-                    "goal_description": goal.description,
-                    "goal_type": "functional",
-                    "goal_files": [fix_target],
-                    "flow": "file_ops",
-                    "target_file_path": fix_target,
-                    "flow_directive": fix_directive,
-                    # Phase A / D — structured fields for file_ops
-                    # routing. target_symbol lets file_ops choose
-                    # patch (symbol exists in AST) vs add_symbol
-                    # (symbol missing from AST). change_spec feeds
-                    # each sub-flow's authoring prompt.
-                    "target_symbol": struct_target_symbol,
-                    "change_spec": struct_change_spec,
-                    "diagnosis_kind": struct_kind,
-                    "module_statement": struct_module_statement,
-                    # Multi-symbol patching (505 round). Passed
-                    # through file_ops input_map → patch input_map
-                    # → prepare_next_rewrite, which seeds the
-                    # rewrite queue with the primary target plus
-                    # these related symbols so they're all
-                    # rewritten in one atomic batch with shared
-                    # context.
-                    "related_symbols": struct_related_symbols,
-                }
-                logger.info(
-                    "Functional sweep: applying fix to %s from diagnosis", fix_target
-                )
-                if effects:
-                    await effects.save_mission(mission)
-                return StepOutput(
-                    result={"sweep_complete": False, "needs_fix": True},
-                    observations=f"Functional sweep: applying diagnosis fix to {fix_target}",
-                    context_updates={"dispatch_config": dispatch_config},
-                )
-            else:
-                # No explicit file target — let LLM select from project files
-                logger.info(
-                    "Functional sweep: diagnosis for '%s' needs target resolution via LLM menu",
-                    goal.description[:50],
-                )
-                dispatch_config = {
-                    "goal_id": goal.id,
-                    "goal_description": goal.description,
-                    "goal_type": "functional",
-                    "goal_files": [],
-                    "flow": "file_ops",
-                    "target_file_path": "",
-                    "flow_directive": (
-                        f"Fix the issue that prevents: {goal.description}\n"
-                        f"Diagnosis: {diag_summary[:500]}"
-                    ),
-                    "diagnosis_summary": diag_summary,
-                }
-                return StepOutput(
-                    result={"sweep_complete": False, "needs_target_resolution": True},
-                    observations=f"Functional sweep: needs LLM to select fix target for '{goal.description[:50]}'",
-                    context_updates={"dispatch_config": dispatch_config},
-                )
-
-        # interact failed — dispatch diagnose_issue to identify root cause
-        # and the correct file to fix. Diagnosis uses LLM analysis of the
-        # error context rather than fragile regex on tracebacks.
-        terminal_output = getattr(last_report, "terminal_output", "")
-        summary = getattr(last_report, "summary", "")
-        headline = getattr(last_report, "headline", "")
-
-        error_description = (
-            f"Functional test failed for: {goal.description}\n\n"
-            f"Test summary: {summary}\n"
-        )
-
-        dispatch_config = {
-            "goal_id": goal.id,
-            "goal_description": goal.description,
-            "goal_type": "functional",
-            "goal_files": [],
-            "flow": "diagnose_issue",
-            "target_file_path": "",
-            "flow_directive": error_description,
-            "error_output": terminal_output,
-            # Structured fields for the new diagnose seed (Goal /
-            # What happened / Prior attempts). The seed-building
-            # action reads these directly instead of re-parsing
-            # error_description.
-            "what_happened": summary,
-            "error_headline": headline,
-        }
-
-        # Pass accumulated attempt history so the diagnosis model
-        # knows what has already been tried (even if those attempts
-        # reported "success" but didn't resolve the test failure).
-        if goal.failed_attempts:
-            dispatch_config["failed_attempts_context"] = [
-                {
-                    "target_file": a.target_file,
-                    "target_symbol": getattr(a, "target_symbol", ""),
-                    "flow": a.flow,
-                    "reason": a.reason,
-                    "diagnosis_summary": a.diagnosis_summary,
-                    "pre_headline": getattr(a, "pre_headline", ""),
-                }
-                for a in goal.failed_attempts
-            ]
-
-        logger.info(
-            "Functional sweep: diagnosing '%s' after interact failure",
-            goal.description[:50],
-        )
-        if effects:
-            await effects.save_mission(mission)
-        return StepOutput(
-            result={"sweep_complete": False, "needs_fix": True},
-            observations=f"Functional sweep: diagnosing '{goal.description[:50]}'",
-            context_updates={"dispatch_config": dispatch_config},
-        )
+        return await _sweep_interact_failure(goal, mission, effects, last_report)
 
     # All functional goals visited — did we make progress?
     if effects:
