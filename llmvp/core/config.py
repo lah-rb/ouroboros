@@ -487,6 +487,25 @@ def set_config(config: Config):
     get_config._config = config
 
 
+class ActiveConfigView:
+    """Live, read-only view of the active configuration.
+
+    Attribute access resolves against ``get_config()`` AT CALL TIME, so a
+    module can keep a convenient module-level ``config`` name without
+    freezing the config at import — a frozen snapshot silently outlives a
+    model swap (``swapModel`` replaces the global Config in-process).
+
+    Never pass this object where a concrete Config is expected to be
+    RETAINED (e.g. backend construction pins its config for its lifetime) —
+    pass ``get_config()`` there instead.
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, item: str):
+        return getattr(get_config(), item)
+
+
 # --------------------------------------------------------------------
 # 3️⃣ Configuration Discovery
 # --------------------------------------------------------------------

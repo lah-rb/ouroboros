@@ -659,6 +659,85 @@ def cmd_cli_smoke(args: argparse.Namespace) -> None:
     sys.exit(result.returncode)
 
 
+def _llmvp_graphql(endpoint: str, query: str, variables: dict | None = None) -> dict:
+    """POST one GraphQL request to LLMVP; exits with the error on failure.
+
+    No client timeout — a model swap legitimately holds the request open
+    for minutes while weights load."""
+    import httpx
+
+    try:
+        resp = httpx.post(
+            endpoint,
+            json={"query": query, "variables": variables or {}},
+            timeout=None,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: cannot reach LLMVP at {endpoint}: {exc}")
+        sys.exit(1)
+    if data.get("errors"):
+        msgs = "; ".join(e.get("message", str(e)) for e in data["errors"])
+        print(f"Error from LLMVP: {msgs}")
+        sys.exit(1)
+    return data["data"]
+
+
+def cmd_llmvp_models(args: argparse.Namespace) -> None:
+    """List the server's swappable model configs."""
+    data = _llmvp_graphql(
+        args.endpoint,
+        "{ models { name family ggufSizeGb weightsPresent active error } }",
+    )
+    for m in data["models"]:
+        marker = "→" if m["active"] else " "
+        note = (
+            "MISSING WEIGHTS"
+            if not m["weightsPresent"] and not m["error"]
+            else (m["error"] or "")
+        )
+        print(
+            f"{marker} {m['name']:32s} {m['family']:8s} "
+            f"{m['ggufSizeGb']:7.1f} GB  {note}"
+        )
+
+
+def cmd_llmvp_swap(args: argparse.Namespace) -> None:
+    """Hotswap the served model to a named config (waits for completion)."""
+    print(f"Swapping LLMVP to {args.name!r} (drain {args.drain_s:.0f}s) …")
+    data = _llmvp_graphql(
+        args.endpoint,
+        """
+        mutation($name: String!, $drainS: Float!) {
+          swapModel(name: $name, drainS: $drainS) {
+            ok name previous noop rolledBack drainForced
+            expiredSessions evictedStreams teardownMs loadMs totalMs error
+          }
+        }
+        """,
+        {"name": args.name, "drainS": args.drain_s},
+    )
+    r = data["swapModel"]
+    if r["noop"]:
+        print(f"Already serving {r['name']} — nothing to do.")
+        return
+    if r["ok"]:
+        print(
+            f"✅ {r['previous']} → {r['name']} in {r['totalMs'] / 1000:.1f}s "
+            f"(teardown {r['teardownMs'] / 1000:.1f}s, load {r['loadMs'] / 1000:.1f}s)"
+        )
+        if r["drainForced"]:
+            print(
+                f"   drain forced: {r['expiredSessions']} sessions expired, "
+                f"{r['evictedStreams']} streams evicted"
+            )
+    else:
+        state = "rolled back to previous model" if r["rolledBack"] else "MODELLESS"
+        print(f"❌ swap failed ({state}): {r['error']}")
+        sys.exit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="ouroboros",
@@ -823,6 +902,28 @@ def main() -> None:
     hist_p = mission_sub.add_parser("history", help="Show flow execution history")
     hist_p.add_argument("--working-dir", help="Working directory (default: cwd)")
 
+    # ── llmvp subcommand ──────────────────────────────────────────
+    llmvp_parser = subparsers.add_parser(
+        "llmvp", help="LLMVP server operations (model catalog, hotswap)"
+    )
+    llmvp_sub = llmvp_parser.add_subparsers(dest="llmvp_command")
+    _default_endpoint = "http://localhost:8008/graphql"
+
+    models_p = llmvp_sub.add_parser("models", help="List swappable model configs")
+    models_p.add_argument("--endpoint", default=_default_endpoint)
+
+    swap_p = llmvp_sub.add_parser(
+        "swap", help="Hotswap the served model to a named config"
+    )
+    swap_p.add_argument("name", help="Config name (llmvp/configs/{name}.yaml)")
+    swap_p.add_argument("--endpoint", default=_default_endpoint)
+    swap_p.add_argument(
+        "--drain-s",
+        type=float,
+        default=60.0,
+        help="Finish window for in-flight work before force-clear (default 60)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "start":
@@ -861,6 +962,16 @@ def main() -> None:
             handler(args)
         else:
             mission_parser.print_help()
+    elif args.command == "llmvp":
+        dispatch = {
+            "models": cmd_llmvp_models,
+            "swap": cmd_llmvp_swap,
+        }
+        handler = dispatch.get(args.llmvp_command)
+        if handler:
+            handler(args)
+        else:
+            llmvp_parser.print_help()
     else:
         parser.print_help()
 

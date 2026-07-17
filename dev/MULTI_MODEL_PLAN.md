@@ -117,7 +117,25 @@ First boss-candidate config landed: `llmvp/configs/olmo-3.1-32b-think.yaml`
 n_ctx 65536 = train max). At ~28GB wired it fits alongside gpt-oss
 (~107GB total) — a Phase 2 co-resident boss under the decode lock.
 
-## Phase 1 — `swapModel`: single-resident hotswap (the config-swap win)
+## Phase 1 — `swapModel`: single-resident hotswap — **SHIPPED 2026-07-16**
+
+Live smoke on the production server (boss arms SIGSTOPped for the
+foreign-model window): `gameab → olmo-3.1-32b-think` in **16.1s**
+(teardown 0.3s, load 12.8s incl. first-ever static-token auto-build for
+the chatml persona), Olmo answered through the full production path with
+`<think>` correctly FSM-stripped (proves tokenizer/metadata/fsm-family/
+renderer all followed the swap), then `olmo → gameab` in **11.0s** — the
+65GB gpt-oss reloaded page-cache-warm in 10.8s. Pointer file tracked both
+swaps; arms resumed on gpt-oss afterwards. Crossed decode modes both ways
+(batched ↔ pool). CLI: `ouroboros.py llmvp models` / `llmvp swap <name>`.
+16 unit tests pin the lifecycle (raise-vs-report contract, gate on every
+exit path, rollback, drain force-clear, stale-capture regressions).
+Implementation notes vs the sketch below: the swap re-runs
+`initialize_server_async` wholesale (swap ≡ restart, no drift), and two
+MORE stale globals were found and fixed beyond the two predicted
+(fsm-family cache, GGUF metadata singleton; `ActiveConfigView` in
+core/config.py now gives modules a live config name). Original design
+sketch follows.
 
 Semantics: exactly one model resident, swap = drain + teardown + reinit
 of the SAME singletons. No registry-of-live-backends yet — the registry

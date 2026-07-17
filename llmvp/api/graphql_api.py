@@ -281,6 +281,37 @@ class SessionEventGQL:
 _session_manager: Optional[SessionManager] = None
 
 
+@strawberry.type
+class ModelInfoGQL:
+    """One swappable model config from the registry catalog."""
+
+    name: str
+    family: str
+    model_path: str
+    gguf_size_gb: float
+    weights_present: bool
+    active: bool
+    error: Optional[str] = None
+
+
+@strawberry.type
+class SwapModelResult:
+    """Outcome of a swapModel mutation (see core/model_swap.py)."""
+
+    ok: bool
+    name: str
+    previous: str
+    noop: bool = False
+    rolled_back: bool = False
+    drain_forced: bool = False
+    expired_sessions: int = 0
+    evicted_streams: int = 0
+    teardown_ms: float = 0.0
+    load_ms: float = 0.0
+    total_ms: float = 0.0
+    error: Optional[str] = None
+
+
 def _get_session_manager() -> SessionManager:
     if _session_manager is None:
         raise RuntimeError("Session manager not initialized")
@@ -576,6 +607,25 @@ class Query:
             )
         return ToolResult(tool_name=name, result=result)
 
+    @strawberry.field
+    def models(self) -> List[ModelInfoGQL]:
+        """Swappable model configs (the registry catalog) with the active
+        one flagged. Targets for the swapModel mutation."""
+        from core import model_registry
+
+        return [
+            ModelInfoGQL(
+                name=e.name,
+                family=e.family,
+                model_path=e.model_path,
+                gguf_size_gb=e.gguf_size_gb,
+                weights_present=e.weights_present,
+                active=e.active,
+                error=e.error,
+            )
+            for e in model_registry.list_models()
+        ]
+
 
 @strawberry.type
 class RefreshContextResult:
@@ -628,6 +678,15 @@ class Mutation:
         self, config: Optional[SessionConfig] = None
     ) -> SessionInfoGQL:
         """Acquire a pool instance and pin it for memoryful inference."""
+        from core.model_swap import ModelSwapInProgress, swap_in_progress
+
+        state = swap_in_progress()
+        if state is not None:
+            # New sessions mid-swap would prolong the drain window forever;
+            # reject retriably (existing sessions get the finish window).
+            raise ModelSwapInProgress(
+                f"model swap in progress ({state}) — retry shortly"
+            )
         mgr = _get_session_manager()
         ttl = config.ttl_seconds if config and config.ttl_seconds else 300
         info = await mgr.start_session(
@@ -685,6 +744,52 @@ class Mutation:
             reason=r.get("reason", reason),
             elapsed_s=r.get("elapsed_s"),
             total_refreshes=r.get("total_refreshes", 0),
+        )
+
+    @strawberry.mutation
+    async def swap_model(self, name: str, drain_s: float = 60.0) -> SwapModelResult:
+        """Hotswap the served model to the named registry config, in-process.
+
+        Drains in-flight work, tears down the backend + session manager,
+        and re-runs the canonical startup path against the new config.
+        Requests arriving mid-swap get a retriable error. See
+        core/model_swap.py for the full lifecycle contract.
+        """
+        global _session_manager
+        from core import model_swap as _swap
+        from inference.backends.factory import get_backend
+
+        mgr = _session_manager
+        _session_manager = None  # detached; swap_model drains + shuts it down
+        try:
+            r = await _swap.swap_model(name, drain_s=drain_s, session_manager=mgr)
+        except Exception:
+            # Raised = nothing was torn down (bad name/config, concurrent
+            # swap) — the detached manager is still fully valid.
+            _session_manager = mgr
+            raise
+
+        if r.get("noop"):
+            _session_manager = mgr
+        else:
+            backend = get_backend()
+            if backend is not None:
+                _session_manager = SessionManager(backend)
+                log.info("📌 Session manager rebuilt after model swap")
+
+        return SwapModelResult(
+            ok=r.get("ok", False),
+            name=r.get("name", name),
+            previous=r.get("previous", ""),
+            noop=r.get("noop", False),
+            rolled_back=r.get("rolled_back", False),
+            drain_forced=r.get("forced", False),
+            expired_sessions=r.get("expired_sessions", 0),
+            evicted_streams=r.get("evicted_streams", 0),
+            teardown_ms=r.get("teardown_ms", 0.0),
+            load_ms=r.get("load_ms", 0.0),
+            total_ms=r.get("total_ms", 0.0),
+            error=r.get("error"),
         )
 
 

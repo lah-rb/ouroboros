@@ -29,6 +29,7 @@ TOP_LEVEL_SUBCOMMANDS = [
     "lint-flows",
     "smoke",
     "mission",
+    "llmvp",
 ]
 
 MISSION_SUBCOMMANDS = [
@@ -39,6 +40,11 @@ MISSION_SUBCOMMANDS = [
     "abort",
     "message",
     "history",
+]
+
+LLMVP_SUBCOMMANDS = [
+    "models",
+    "swap",
 ]
 
 
@@ -86,6 +92,12 @@ def main() -> int:
         rc, out = _run([python, str(entry), "mission", sub, "--help"])
         if rc != 0:
             failures.append((f"mission {sub}", rc, out))
+
+    for sub in LLMVP_SUBCOMMANDS:
+        checks += 1
+        rc, out = _run([python, str(entry), "llmvp", sub, "--help"])
+        if rc != 0:
+            failures.append((f"llmvp {sub}", rc, out))
 
     print(f"CLI smoke: {checks - len(failures)}/{checks} passed")
     if failures:

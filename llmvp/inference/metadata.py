@@ -117,7 +117,8 @@ def read_metadata(llm_instance) -> ModelMetadata:
 
 # ── Module-level accessor ────────────────────────────────────────────
 #
-# Populated once at startup, read-only thereafter.
+# Populated once at startup (and again after a model swap), read-only
+# in between.
 
 _model_metadata: ModelMetadata | None = None
 
@@ -126,6 +127,17 @@ def set_model_metadata(metadata: ModelMetadata) -> None:
     """Store metadata for global access. Called once at startup."""
     global _model_metadata
     _model_metadata = metadata
+
+
+def reset_model_metadata() -> None:
+    """Clear stored metadata so server re-init re-reads it.
+
+    Model-swap hook: lifecycle's startup path only reads GGUF metadata
+    when none is stored, so without this reset a swapped-in model would
+    inherit the previous model's BOS/EOS behavior.
+    """
+    global _model_metadata
+    _model_metadata = None
 
 
 def get_model_metadata() -> ModelMetadata | None:

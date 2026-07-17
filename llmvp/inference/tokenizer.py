@@ -78,6 +78,18 @@ def _create_mlc_tokenizer(config):
         ) from exc
 
 
+def reset_tokenizer_cache() -> None:
+    """Drop the cached tokenizer so the next call rebuilds it.
+
+    The cache is model-bound (it wraps the active backend or the active
+    config's GGUF); a model swap MUST reset it or every post-swap
+    tokenization runs through the previous model's vocabulary.
+    """
+    global _tokenizer_cache
+    with _tokenizer_lock:
+        _tokenizer_cache = None
+
+
 def get_cached_tokenizer() -> Any:
     """
     Get a cached tokenizer instance.

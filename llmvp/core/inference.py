@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import AsyncGenerator, List, Optional, Tuple
 
 # Local imports
-from core.config import get_config
+from core.config import ActiveConfigView, get_config
 from inference.backends.factory import get_backend, initialize_backend_async
 from preprocessing.static_tokens import manager as static_tokens_manager
 from inference.tokenizer import (
@@ -25,8 +25,8 @@ from inference.tokenizer import (
 from core.interaction_logger import log_interaction
 from formats.registry import get_renderer as _get_format_renderer
 
-# Set up logging
-config = get_config()
+# Live view, not a snapshot — a snapshot here outlives a model swap.
+config = ActiveConfigView()
 log = logging.getLogger("llm-mvp")
 
 
@@ -89,22 +89,15 @@ def _render_dynamic_prompt(user_prompt: str) -> str:
     return renderer.render_user(user_prompt) + renderer.render_generation_prompt()
 
 
-# Module-level FSM family cache — determined once from config at first use.
-_fsm_family: "str | None" = None
-
-
 def _get_fsm_family() -> str:
     """Return the model family name to drive FSM phase transitions.
 
-    Reads from ``config.model.family`` once on first call. The family
-    determines the FSM's initial phase (Harmony/ChatML start in DELIM
-    and transition on channel markers; Tekken/Mistral start directly in
-    CONTENT since their generation stream has no thinking markers).
+    The family determines the FSM's initial phase (Harmony/ChatML start
+    in DELIM and transition on channel markers; Tekken/Mistral start
+    directly in CONTENT since their generation stream has no thinking
+    markers). Read live, never cached — a model swap can change it.
     """
-    global _fsm_family
-    if _fsm_family is None:
-        _fsm_family = config.model.family
-    return _fsm_family
+    return config.model.family
 
 
 def _strip_delimiter(text: str) -> str:
@@ -221,6 +214,15 @@ async def _get_backend():
     Raises:
         RuntimeError: If initialization fails
     """
+    from core.model_swap import ModelSwapInProgress, swap_in_progress
+
+    state = swap_in_progress()
+    if state is not None:
+        # Reject retriably: agent-side dispatch retries failed inferences
+        # unchanged (proven through the KV-eviction and restart windows),
+        # so the request succeeds once the swap gate reopens.
+        raise ModelSwapInProgress(f"model swap in progress ({state}) — retry shortly")
+
     backend = get_backend()
     if backend is None:
         log.warning(
@@ -228,7 +230,7 @@ async def _get_backend():
             "initialization from inference layer (should only happen "
             "in tests or unusual startup sequences)"
         )
-        backend = await initialize_backend_async(config)
+        backend = await initialize_backend_async(get_config())
     return backend
 
 
