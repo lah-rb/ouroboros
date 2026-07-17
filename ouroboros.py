@@ -491,6 +491,32 @@ def cmd_start(args: argparse.Namespace) -> None:
     print(f"   Objective: {mission.objective}")
     print(f"   Working dir: {working_dir}")
     print(f"   LLMVP: {mission.config.llmvp_endpoint}")
+    # Code-liveness stamp: a long-running agent process keeps the code it
+    # started with. Recording the SHA here makes "were the fixes actually
+    # in that run?" answerable from the log instead of from memory (the
+    # 2026-07-16 bossgame A/B ran 32h on pre-fix code, undetected).
+    try:
+        import subprocess as _sp
+
+        repo = os.path.dirname(os.path.abspath(__file__))
+        sha = _sp.run(
+            ["git", "-C", repo, "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+        dirty = bool(
+            _sp.run(
+                ["git", "-C", repo, "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout.strip()
+        )
+        if sha:
+            print(f"   Agent code: {sha}{' (dirty)' if dirty else ''}")
+    except Exception:
+        pass
     print()
 
     # Build effects

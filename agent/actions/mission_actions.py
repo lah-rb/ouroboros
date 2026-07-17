@@ -1201,6 +1201,45 @@ async def _note_repair_econ(
             logger.warning("repair_econ note save failed", exc_info=True)
 
 
+def _related_goal_context(mission: Any, goal: Any, files: list[str]) -> str:
+    """Sibling-goal context for a fix dispatch: every OTHER goal bound to
+    the same file(s), open or complete.
+
+    A shared file is a shared constraint surface. The 2026-07-16 bossgame
+    baseline oscillated 17↔19 goals for eight hours because each
+    world.yaml exit-defect goal was dispatched alone: the model patched
+    the named exit, silently broke its reciprocal, and regression
+    detection reopened the goals it had just completed — with no prompt
+    ever showing the sibling constraints. Rendering them here lets one
+    edit satisfy the full constraint set instead of trading defects.
+    """
+    file_set = set(files or [])
+    if not file_set or mission is None:
+        return ""
+    open_sibs, done_sibs = [], []
+    for g in mission.goals:
+        if g.id == goal.id or not (set(g.associated_files or []) & file_set):
+            continue
+        desc = " ".join(str(g.description).split())[:220]
+        (done_sibs if g.status == "complete" else open_sibs).append(desc)
+    if not open_sibs and not done_sibs:
+        return ""
+    parts = []
+    if open_sibs:
+        parts.append(
+            "Other OPEN goals on this file — one edit should satisfy ALL of "
+            "these together, they are one constraint set:\n"
+            + "\n".join(f"  - {d}" for d in open_sibs[:8])
+        )
+    if done_sibs:
+        parts.append(
+            "COMPLETED goals on this file — do NOT regress these; an edit "
+            "that breaks one reopens it:\n"
+            + "\n".join(f"  - {d}" for d in done_sibs[:8])
+        )
+    return "\n\n".join(parts)
+
+
 async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
     """Find the next incomplete structural goal and determine what it needs.
 
@@ -1401,6 +1440,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                     f"{file_path} was just created but fails its validation "
                     f"gate ({failed_checks or 'see output'})."
                 )
+                diag_siblings = _related_goal_context(mission, goal, [file_path])
                 dispatch_config = {
                     "goal_id": goal.id,
                     "goal_description": goal.description,
@@ -1417,6 +1457,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                             if error_output
                             else ""
                         )
+                        + (f"\n\n{diag_siblings}" if diag_siblings else "")
                     ),
                     "what_happened": issue,
                     "error_headline": issue[:80],
@@ -1480,6 +1521,13 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             ):
                 gate_output = str(rep.terminal_output)[:800]
                 break
+
+        # Sibling constraints ride the directive itself — the one carrier
+        # every fix sub-flow (module fix, add-symbol, data edit, rewrite)
+        # already renders, so the data path gets it without new plumbing.
+        siblings = _related_goal_context(mission, goal, [file_path])
+        if siblings:
+            fix_directive = f"{fix_directive}\n\n{siblings}"
 
         dispatch_config = {
             "goal_id": goal.id,

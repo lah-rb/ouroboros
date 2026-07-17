@@ -381,6 +381,62 @@ def _maybe_complete_goal(goal: Any) -> None:
             )
 
 
+def _backfill_untracked_file_goals(mission: Any, report: Any) -> int:
+    """Close the create loophole: a file the agent wrote with no goal
+    association was invisible to every gate (the 2026-07-16 bossgame run
+    left a stub-content `inventory.py:equip_item` on disk that nothing
+    ever checked). Any file a flow reports as affected that no goal
+    covers gets a generic structural goal, so the standard gates force
+    the agent to bring its own creation to standard — or remove it.
+
+    Scoped to file_ops reports: that is the code-authoring flow. Other
+    flows report artifacts that are outputs, not code — downloaded PDFs
+    (acquire_catalog), runtime save files (interact) — and must not
+    accrete structural goals.
+
+    Returns the number of goals added.
+    """
+    from agent.persistence.models import GoalRecord
+
+    if getattr(report, "flow", "") != "file_ops":
+        return 0
+    files = [str(f).strip() for f in (getattr(report, "files_affected", None) or [])]
+    if not files:
+        return 0
+
+    covered = {f for g in mission.goals for f in (g.associated_files or [])}
+    existing_sigs = {
+        getattr(g, "finding_signature", "")
+        for g in mission.goals
+        if getattr(g, "finding_signature", "")
+    }
+
+    added = 0
+    for path in files:
+        sig = f"create-backfill:{path}"
+        if not path or path in covered or sig in existing_sigs:
+            continue
+        mission.goals.append(
+            GoalRecord(
+                description=(
+                    f"{path} was written without a planned goal (no structural "
+                    f"goal covers it). Review it against the mission "
+                    f"architecture: bring it to gate standard if it belongs, "
+                    f"or remove it if it should not exist."
+                ),
+                type="structural",
+                associated_files=[path],
+                origin="create_backfill",
+                finding_signature=sig,
+            )
+        )
+        covered.add(path)
+        existing_sigs.add(sig)
+        added += 1
+        logger.info("Create-loophole backfill: goal added for untracked %s", path)
+    return added
+
+
 async def action_attach_directive_report(step_input: StepInput) -> StepOutput:
     """Attach a DirectiveReport to the goal that was being advanced.
 
@@ -480,6 +536,8 @@ async def action_attach_directive_report(step_input: StepInput) -> StepOutput:
                     break
             else:
                 logger.warning("Goal %s not found — report not attached", last_goal_id)
+
+            _backfill_untracked_file_goals(mission, report)
     elif last_goal_id and not report_data:
         logger.info(
             "No directive_report in last_result for goal %s (status=%s)",
