@@ -26,21 +26,27 @@ items last. Update this file as items land or close.*
   is burning hours (SIGSTOP mission processes → SIGTERM server →
   relaunch → SIGCONT; the agent retry loops ride through).
 
-## 1. Boss-game A/B analysis (SKIP if already banked)
+## 1. Boss-game A/B analysis — ROUND 1 CALLED 2026-07-17, ROUND 2 RUNNING
 
-The `game_challenge_boss` adaptive-vs-baseline pair (workspaces
-`/tmp/gameab/bossgame_{adaptive,baseline}`, run-to-completion, launched
-2026-07-15 ~22:49). Deliverable: prototype quality (does each game run,
-fight, boss-win?), token totals by arm/step/reasoning level (traces carry
-a `reasoning` field per InferenceCall), cycles head-to-head, wall clock.
-MUST subtract the two symmetric outage windows: the KV-eviction lockstep
-(~00:53–08:20, identifiable by `KV cell pool exhausted` errors) and the
-stub-souring wedge (~13:15–17:00, `Anti-gut guard rejected` loops). Also
-fold in the cardgame pair (40-cycle capped, `/tmp/gameab/cardgame_*`).
-Afterwards: restore production a5 config; commit the gameab yaml +
-`dev/ab_boss_game.sh` if not already committed; update the
-adaptive-reasoning memory. Consider merging this branch to main — its
-original purpose closes with this analysis.
+Round 1 (`/tmp/gameab/bossgame_{adaptive,baseline}`, 32.4h each, PARKED
+and preserved) is NOT a clean adaptive-thinking A/B: postmortem (see
+commit 73084a6) found both arms ran the entire time on pre-fix code
+(process start predates 351092e/3f2686f; 854/854 fix prompts had empty
+error slots) and each wedged in a structural trap — adaptive on the
+lint-E402 vs fossil-import two-gate conflict on engine.py (433 reports),
+baseline on world.yaml exit-reciprocity whack-a-mole (one defect visible
+per prompt). Round-1 data remains useful for TOKEN accounting only
+(adaptive 1.63M gen / 3,071 cycles vs baseline 1.33M / 3,528 — same
+outage-window caveats as before).
+
+Round 2 launched 2026-07-17 ~08:20 in `/tmp/gameab/bossgame2_*` on code
+73084a6 (gate-output threading, sibling-goal context, create-loophole
+backfill all live; cmd_start now logs the code SHA). Deliverable when it
+finishes: prototype quality head-to-head, tokens by arm/step/reasoning
+level, cycles, wall; plus the round-1 vs round-2 wedge comparison (did
+sibling context kill the oscillation; did threaded gate output break the
+two-gate loops). Afterwards: restore production a5 config; update the
+adaptive-reasoning memory; consider merging this branch.
 
 ## 2. Drain-refresh follow-through
 
