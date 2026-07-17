@@ -1179,9 +1179,9 @@ class LlamaCppBackend(BaseBackend):
         refresh_context closes the scaling gate + drains, so nothing sneaks in
         mid-rebuild either way.
         """
-        try:
-            self._last_refresh_monotonic = time.monotonic()
-            while True:
+        self._last_refresh_monotonic = time.monotonic()
+        while True:
+            try:
                 await asyncio.sleep(15)
                 if self._primary_instance is None:
                     continue
@@ -1196,8 +1196,18 @@ class LlamaCppBackend(BaseBackend):
                         self._refresh_seconds,
                     )
                     await self.refresh_context(reason=reason)
-        except asyncio.CancelledError:
-            return
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                # A refresh failure must NEVER kill this loop: the task
+                # object is held forever, so a dead loop is SILENT (asyncio
+                # only reports unretrieved exceptions at GC) and every future
+                # auto-refresh is lost — the 2026-07-16 18:12 drain fired,
+                # threw somewhere after its first phase, and the server ran
+                # the evening with no anti-souring protection and no
+                # traceback. Log loudly, back off, keep looping.
+                log.exception("💥 proactive refresh attempt failed — loop continues")
+                await asyncio.sleep(60)
 
     def _refresh_decision(self) -> Optional[str]:
         """Should the proactive refresh fire now? None = no.
