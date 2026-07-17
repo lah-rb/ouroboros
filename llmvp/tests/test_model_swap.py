@@ -290,6 +290,17 @@ def test_config_view_follows_swap(catalog, active_alpha):
     assert _get_fsm_family() == "tekken"
 
 
+def test_explicit_zero_temperature_survives(catalog, active_alpha):
+    """temperature=0.0 means greedy and must NOT fall through to the
+    default (`requested or default` swallowed it — found when the
+    cross-process probe's local leg couldn't produce a deterministic
+    baseline). None still resolves to the config default."""
+    from core.inference import resolve_temperature
+
+    assert resolve_temperature(0.0) == 0.0
+    assert resolve_temperature(None) > 0.0
+
+
 def test_tokenizer_cache_reset():
     import inference.tokenizer as tok
 

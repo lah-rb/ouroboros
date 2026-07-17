@@ -66,10 +66,18 @@ def resolve_max_tokens(requested: "int | None") -> int:
 def resolve_temperature(requested: "float | None", label: str = "Completion") -> float:
     """Canonical temperature chain + the global per-model floor (a refusal to
     sample below the configured value for ANY request kind — see
-    GenerationConfig). Logs when the floor engages."""
+    GenerationConfig). Logs when the floor engages.
+
+    None-checked, not truthiness-checked: an explicit 0.0 means greedy
+    and must survive (``requested or default`` silently swallowed it —
+    found by the cross-process decode probe, whose local leg could never
+    produce a deterministic baseline)."""
     from core.session_manager import _global_temperature_floor
 
-    temperature = requested or config.generation.temperature_default or 0.7
+    if requested is None:
+        temperature = config.generation.temperature_default or 0.7
+    else:
+        temperature = requested
     floored = _global_temperature_floor(temperature, config.generation)
     if floored != temperature:
         log.info(
@@ -661,7 +669,7 @@ async def run_chat_completion(
         raise ValueError("`messages` must be a non-empty list")
 
     max_tokens = resolve_max_tokens(max_tokens)
-    temperature = temperature or config.generation.temperature_default or 0.7
+    temperature = resolve_temperature(temperature)
     temperature = resolve_temperature(temperature, label="ChatCompletion")
 
     # Build complete prompt BEFORE acquiring instance (mirror run_completion /
@@ -721,7 +729,7 @@ async def run_tool_completion(
         return await run_completion(prompt, max_tokens, temperature)
 
     max_tokens = resolve_max_tokens(max_tokens)
-    temperature = temperature or config.generation.temperature_default or 0.7
+    temperature = resolve_temperature(temperature)
     registry = get_registry()
 
     # Start with the user's original prompt
@@ -844,7 +852,7 @@ async def stream_tool_completion(
         return
 
     max_tokens = resolve_max_tokens(max_tokens)
-    temperature = temperature or config.generation.temperature_default or 0.7
+    temperature = resolve_temperature(temperature)
     registry = get_registry()
 
     # Conversation turns for multi-round tool use

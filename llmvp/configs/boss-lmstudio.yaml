@@ -1,0 +1,10 @@
+# Remote provider entry: LMStudio-hosted local boss (MULTI_MODEL_PLAN
+# Phase 3). Cross-process — decodes concurrently with LLMVP's own model
+# in the separate-process regime (the P0.b escape hatch). Requires the
+# LMStudio server running on :1234 with the model loaded.
+provider: openai_compat
+model: olmo-3.1-32b-think
+base_url: http://localhost:1234/v1
+temperature_default: 0.6
+max_tokens_default: 2048
+timeout_s: 300

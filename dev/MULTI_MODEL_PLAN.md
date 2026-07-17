@@ -294,6 +294,22 @@ fallback, both pinned by tests. Remote entries are never swap targets;
 `start_session` remains local-only by construction (sessions route
 through the session manager, which has no remote path).
 
+**Cross-process concurrency probe (2026-07-17, P0.b's counterpart):
+CLEAN — the separation is durable, not luck.**
+`llmvp/dev/probe_cross_process_decode.py` ran gpt-oss (in-process) ×
+Olmo-32B (LMStudio :1234 via the boss-lmstudio openai_compat entry,
+through the production router) with the P0.b protocol. Both legs greedy
+self-consistent, both legs BYTE-IDENTICAL under concurrent decode across
+all 6 rounds, zero errors — and concurrent wall == the slower leg alone
+(ideal overlap), where in-process showed concurrent ≈ SUM. This is the
+empirical basis for 2b staying parked: cross-process co-residency works
+correctly AND actually parallelizes. Bonus find: the probe's first run
+couldn't build a deterministic local baseline because
+`resolve_temperature` used `requested or default` — an explicit
+temperature=0.0 was silently swallowed (greedy unreachable through the
+API since forever). Fixed None-checked + routed the three inline chat/
+tool-path chains through the resolver; pinned by test.
+
 ### Original Phase 3 sketch
 
 The registry entry grows a `provider` discriminator:
