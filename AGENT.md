@@ -63,6 +63,7 @@ These norms apply to AI-directed changes as much as to human ones. If a change a
 | Smoke testing | `dev/smoke_test.py` | `uv run ouroboros.py smoke` |
 | CLI import-rot gate | `dev/cli_smoke.py` | `uv run ouroboros.py cli-smoke` |
 | Test philosophy / structure rules | `TESTING.md` | |
+| Deferred-work delegation brief | `OPEN_TASKS.md` | |
 
 ---
 
