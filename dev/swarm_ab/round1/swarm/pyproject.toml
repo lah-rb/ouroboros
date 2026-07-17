@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "text-adventure"
+version = "0.1.0"
+description = "A turn‑based text adventure game with combat, NPCs, and a multi‑phase boss."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "you@example.com"}
+]
+
+# Core runtime dependencies
+dependencies = [
+    "PyYAML>=6.0",
+    "rich>=13.0"
+]
+
+# Optional development dependencies
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.0",
+    "pytest>=7.0"
+]
+
+# Entry point for running the game from the command line
+[project.scripts]
+text-adventure = "main:run"
+
+# Include package data (YAML world file)
+[tool.setuptools.package-data]
+"" = ["data/*.yaml"]

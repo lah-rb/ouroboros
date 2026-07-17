@@ -1,0 +1,178 @@
+rooms:
+  - id: village
+    name: Dusty Village
+    description: "A small, dusty village with weathered cottages and a bustling market."
+    connections:
+      north: forest_clearing
+      east: chapel
+    items: [healing_herb]
+    monsters: []
+    npcs: [herbalist]
+
+  - id: forest_clearing
+    name: Misty Forest Clearing
+    description: "A mist‑shrouded clearing in the forest, trees whispering around you."
+    connections:
+      south: village
+      north: crumbling_tower
+      east: hidden_library
+    items: []
+    monsters: [wolf]
+    npcs: []
+
+  - id: crumbling_tower
+    name: Crumbling Tower
+    description: "An ancient tower, its stones worn and a sense of decay in the air."
+    connections:
+      south: forest_clearing
+      down: flooded_cellar
+    items: [rusty_sword]
+    monsters: [skeletal_guardian]
+    npcs: []
+
+  - id: flooded_cellar
+    name: Flooded Cellar
+    description: "A damp cellar filled with stagnant water and the smell of mold."
+    connections:
+      up: crumbling_tower
+      west: secret_sanctuary
+    items: []
+    monsters: [swamp_hag]
+    npcs: []
+
+  - id: hidden_library
+    name: Hidden Library
+    description: "A concealed library lined with dusty tomes and a faint magical glow."
+    connections:
+      west: forest_clearing
+      east: boss_lair
+    items: [glowing_amulet]
+    monsters: []
+    npcs: []
+
+  - id: secret_sanctuary
+    name: Secret Sanctuary
+    description: "A quiet sanctuary hidden behind the cellar, holding ancient knowledge."
+    connections:
+      east: flooded_cellar
+      north: boss_lair
+    items: [ancient_tome]
+    monsters: []
+    npcs: []
+
+  - id: chapel
+    name: Abandoned Chapel
+    description: "An old chapel, its altar cracked and stained glass shattered."
+    connections:
+      west: hidden_library
+      south: village
+    items: [battered_shield]
+    monsters: []
+    npcs: [knight]
+
+  - id: boss_lair
+    name: Boss's Lair
+    description: "A dark cavern where the two‑hearted beast awaits."
+    connections:
+      west: hidden_library
+      south: secret_sanctuary
+    items: []
+    monsters: []
+    npcs: []
+
+items:
+  - id: rusty_sword
+    name: Rusty Sword
+    description: "A battered sword, still sharp enough to wound."
+    type: weapon
+    attack_bonus: 2
+
+  - id: battered_shield
+    name: Battered Shield
+    description: "A dented shield offering modest protection."
+    type: armor
+    defense_bonus: 1
+
+  - id: healing_herb
+    name: Healing Herb
+    description: "A herb that restores health when used."
+    type: healing
+    heal_amount: 10
+
+  - id: glowing_amulet
+    name: Glowing Amulet
+    description: "An amulet that reveals the final boss's vulnerable phase."
+    type: key
+    special_effect: boss_weakness
+
+  - id: ancient_tome
+    name: Ancient Tome
+    description: "An old tome containing forgotten lore."
+    type: misc
+
+npcs:
+  - id: herbalist
+    name: Nervous Herbalist
+    description: "A jittery herbalist tending to her stall in the village."
+    dialogue:
+      - state: start
+        text: "The amulet you seek is said to rest beneath the old library. Legends whisper of its power."
+        next_state: hint
+      - state: hint
+        text: "If you venture east from the forest clearing, you may find the hidden library."
+        next_state: end
+
+  - id: knight
+    name: Grizzled Knight
+    description: "A seasoned knight in battered armor, guarding the chapel."
+    dialogue:
+      - state: start
+        text: "The beast you face has two hearts. Equip both weapon and armor before confronting it."
+        next_state: end
+
+monsters:
+  - id: wolf
+    name: Snarling Wolf
+    description: "A fierce wolf with glowing eyes."
+    health: 5
+    attack: 2
+    defense: 0
+    behavior: aggressive
+    loot: []
+
+  - id: skeletal_guardian
+    name: Skeletal Guardian
+    description: "A reanimated skeleton wielding a rusted blade."
+    health: 8
+    attack: 2
+    defense: 1
+    behavior: defensive
+    loot: []
+
+  - id: swamp_hag
+    name: Swamp Hag
+    description: "A twisted hag lurking in the murky water."
+    health: 6
+    attack: 3
+    defense: 0
+    behavior: aggressive
+    loot: []
+
+boss:
+  id: two_hearted_beast
+  name: Two‑Hearted Beast
+  description: "A massive creature with two throats, its power shifts between physical and ethereal."
+  phases:
+    - health_threshold: 10
+      health: 15
+      attack: 4
+      defense: 2
+      special_weakness_item_id: null
+    - health_threshold: 0
+      health: 8
+      attack: 6
+      defense: 1
+      special_weakness_item_id: glowing_amulet
+
+start_room: village
+boss_room: boss_lair

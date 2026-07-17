@@ -1,0 +1,1080 @@
+{
+  "id": "ab53cd664518",
+  "status": "paused",
+  "objective": "Build a text adventure game in Python that is genuinely fun to play. The engine loads world data from YAML files defining rooms, items, NPCs, monsters, and connections. Implement a command parser handling movement (go north/south/east/west), inventory management (take, drop, use, examine), NPC interaction (talk to), combat commands (attack, flee), and look/status/help/quit. Add a turn-based combat system: the player has health and attack power, weapons and armor found in the world change combat stats when equipped, healing items can be used mid-fight, and monsters guard specific rooms and fight back with simple distinct behaviors. Include a final boss with two phases and a weakness to a special item hidden in the world — beating the boss wins the game, and dying ends the run with an honest defeat screen and the option to restart. Manage game state including player location, stats, equipment, inventory, room state changes, NPC dialogue progression, and defeated monsters. Support save and load of full game state to JSON. Create a playable demo world with at least 8 rooms, 5 items (including at least one weapon, one armor piece, one healing item, and the boss-weakness item), 2 NPCs with branching dialogue that hints at the boss weakness, 3 regular monsters, and the final boss. The game must be runnable from the command line, produce engaging descriptive text with clear combat narration, and be winnable in a reasonable playthrough by following the NPC hints.\n",
+  "principles": [],
+  "goals": [
+    {
+      "id": "46ebc51baccc",
+      "description": "Define core data classes for game entities: Player, NPC, Monster, Item, Room, and supporting enums/types.",
+      "reports_archived": 4,
+      "attempts_archived": 0,
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "adventure/models/entities.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": true,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "9071396fadcf",
+      "description": "Load world definition from YAML and save/load full game state to JSON.",
+      "reports_archived": 5,
+      "attempts_archived": 0,
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "adventure/utils/io.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "3dcae52c4a2c",
+      "description": "Parse raw player input into structured Command objects.",
+      "reports_archived": 3,
+      "attempts_archived": 0,
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "adventure/core/parser.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "79f4e50262a2",
+      "description": "Implement turn‑based combat mechanics, including damage calculation, boss phases, and item effects.",
+      "reports_archived": 3,
+      "attempts_archived": 0,
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "adventure/core/combat.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "26867d0024e0",
+      "description": "Main game loop, state management, command dispatch, room navigation, inventory handling, NPC interaction, and integration with save/load.",
+      "reports_archived": 3,
+      "attempts_archived": 0,
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "adventure/core/engine.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "b94d5c2e7811",
+      "description": "Entry point script; loads world data, creates GameEngine instance, and starts the game.",
+      "reports_archived": 3,
+      "attempts_archived": 0,
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "main.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "89203ab8094b",
+      "description": "Create data/world.yaml with content: Create an eight‑room adventure spanning a dusty village, a misty forest clearing, an abandoned chapel, a hidden library, a crumbling tower, a flooded cellar, the boss’s lair, and a secret sanctuary. Populate with at least five distinct items: a rusty Sword (weapon, +2 attack), a battered Shield (armor, +1 defense), a Healing Herb (restores health), a Glowing Amulet (the boss‑weakness item that reveals the final boss’s vulnerable phase), and an Ancient Tome (provides lore and can be examined). Add two NPCs: a nervous herbalist in the village who offers branching dialogue about the amulet’s legend and hints it lies beneath the library, and a grizzled knight in the chapel who warns of a “two‑hearted beast” and suggests equipping both weapon and armor before confronting it. Include three regular monsters: a snarling Wolf in the forest, a skeletal Guardian in the tower, and a swamp Hag in the cellar, each with simple attack patterns. Define the final boss in the lair with two phases—Phase 1 vulnerable to physical attacks, Phase 2 becomes ethereal and can only be damaged while the Glowing Amulet is equipped. Set start_room to the village and boss_room to the lair. Ensure room connections allow a logical path that lets players discover items and NPC hints before facing the boss.",
+      "reports_archived": 1,
+      "attempts_archived": 0,
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "data/world.yaml"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "36e355ca849a",
+      "description": "Program starts cleanly and exits without errors",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": "deterministic",
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "7918dfef5e57",
+      "description": "Game starts and displays the description of the start room",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "95be197236cb",
+      "description": "Player can move between connected rooms using go commands and see the new room description",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "681a5353cfe6",
+      "description": "Player can take an item from a room, adding it to their inventory, and inventory command lists the acquired items",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "45854d34b443",
+      "description": "Player can examine an item in their inventory and receive its detailed description",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "b68bca4f2556",
+      "description": "Player can engage a monster with the attack command, causing damage and receiving combat narration with updated monster health",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "3622223c7560",
+      "description": "Player can use a healing item during combat to restore health and see the updated health status",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "d8c587e16d8c",
+      "description": "Defeating the final boss (with required conditions) triggers a victory screen indicating the game is won",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    }
+  ],
+  "notes": [
+    {
+      "id": "bf7f45e6",
+      "content": "Import scheme: package. Run: python main.py. Smoke: echo quit | python main.py. Files: adventure/models/entities.py, adventure/utils/io.py, adventure/core/parser.py, adventure/core/combat.py, adventure/core/engine.py, main.py.\nData shapes:\n  data/world.yaml → adventure.utils.io.load_world: Mapping with keys: rooms (list of room objects), items (list of item objects), npcs (list of npc objects), monsters (list of monster objects), boss (boss object), start_room (str), boss_room (str). Each room has id, name, description, connections (mapping direction->room_id), items (list of item ids), monsters (list of monster ids), npcs (list of npc ids). Each item has id, name, description, type (weapon|armor|healing|key|misc), optional attack_bonus, defense_bonus, heal_amount, special_effect. Each npc has id, name, description, dialogue (list of nodes with state, text, next_state). Each monster has id, name, description, health, attack, defense, behavior, loot (list of item ids). Boss has id, name, description, phases (list of phase objects with health_threshold, health, attack, defense, special_weakness_item_id).\nState contracts:\n  player_state (owner adventure.models.entities.Player, consumers adventure.core.engine.GameEngine): Mapping with keys: location (str room_id), health (int), max_health (int), attack (int), defense (int), inventory (list of item ids), equipped_weapon (item id or null), equipped_armor (item id or null)\n  room_state (owner adventure.core.engine.GameEngine, consumers adventure.core.engine.GameEngine): Mapping room_id -> {items: list of item ids, monsters: list of monster ids, npcs: list of npc ids, visited: bool}\n  npc_dialogue_state (owner adventure.core.engine.GameEngine, consumers adventure.core.engine.GameEngine): Mapping npc_id -> current dialogue state string\n  monster_state (owner adventure.core.engine.GameEngine, consumers adventure.core.engine.GameEngine, adventure.core.combat.CombatEngine): Mapping monster_id -> {alive: bool, health: int}\n  persisted_save_state (owner adventure.utils.io.save_state, consumers adventure.utils.io.load_state): JSON object with keys: player (as player_state), rooms (as room_state), npcs (as npc_dialogue_state), monsters (as monster_state)",
+      "category": "architecture_blueprint",
+      "tags": [],
+      "source_flow": "design_and_plan",
+      "timestamp": "2026-07-17T21:52:01.710500+00:00"
+    },
+    {
+      "id": "0114b910",
+      "content": "Use a lightweight data‑driven architecture: load the world definition from one or more YAML files at startup and map each top‑level key (rooms, items, npcs, monsters) to a Python dataclass or plain dict that captures its attributes (description, connections, inventory, dialogue nodes, combat stats). Keep the loader isolated in a `loader.py` module that validates required fields and resolves references (e.g., room “north” points to an existing room ID, an item’s “equip_slot” matches a player slot). After loading, build a lookup table (`self.rooms[id]`, `self.items[id]`, etc.) so the engine can fetch objects by ID without repeated file I/O. This pattern lets designers edit the YAML without touching code and makes it easy to add new rooms or monsters.\n\nImplement the command parser as a simple dispatch table: split user input, normalize verbs (`go`, `move`, `walk` → `move`; `take`, `grab` → `take`; `talk`, `speak` → `talk`) and look up the verb in a dict of handler functions. Each handler receives the parsed arguments and the shared `GameState` object, which holds player location, health, equipped gear, inventory, and mutable room state (e.g., opened doors, cleared monsters). For combat, use a turn‑based loop where the player’s action resolves first, then each monster in the current room executes its behavior method (`attack`, `flee`, or custom AI). Store combat stats (base attack/defense) on the creature and apply equipment modifiers dynamically; update the player’s `attack` and `defense` properties whenever gear changes. The final boss can be modeled as a subclass with a `phase` attribute that switches after its health drops below a threshold, altering its attack pattern and exposing its weakness.\n\nPersist the entire `GameState` to JSON with a single `save()` method that serializes primitive fields (player stats, inventory IDs, current room ID, monster alive flags, NPC dialogue progress) and writes atomically (`os.replace`) to avoid corruption. Loading reconstructs the state by reading the JSON, re‑instantiating objects from the original YAML definitions, and re‑applying saved mutable flags. Guard against version mismatches by embedding a `save_version` key and providing default values for missing fields. Common pitfalls: tightly coupling parsers to concrete class names (breaks when you rename a room), mutating loaded YAML objects directly (causes side effects across saves), and forgetting to reset monster “alive” flags after a combat victory (leads to duplicate encounters). Avoid these by keeping immutable world definitions separate from mutable runtime state, using pure functions for command handling, and writing unit tests for the loader, combat loop, and save/load round‑trip. This structure yields a modular, extensible engine that satisfies the required features while remaining easy to extend or debug.",
+      "category": "codebase_observation",
+      "tags": [
+        "proactive",
+        "domain_knowledge"
+      ],
+      "source_flow": "design_and_plan",
+      "timestamp": "2026-07-17T21:52:30.867737+00:00"
+    },
+    {
+      "id": "dde42b1e",
+      "content": "Batch structural creation: 6 files written, 0 goals completed, 6 failed gates, 1 missing (serial fallback). Generation cost: 31760 tokens. Failed: adventure/models/entities.py, adventure/utils/io.py, adventure/core/parser.py, adventure/core/combat.py, adventure/core/engine.py, main.py. Missing: data/world.yaml.",
+      "category": "codebase_observation",
+      "tags": [
+        "batch_structural"
+      ],
+      "source_flow": "build_contracts",
+      "timestamp": "2026-07-17T22:01:14.562505+00:00"
+    },
+    {
+      "id": "4d68b87a",
+      "content": "repair_econ stage=diagnose file=adventure/models/entities.py class=other size_bytes=4192",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/models/entities.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:01:14.566068+00:00"
+    },
+    {
+      "id": "21e5c5d8",
+      "content": "Root cause: Player.inventory default is None, violating the player_state contract which expects a list of item ids.\nRecommended fix: Change the Player dataclass to use a default_factory that creates an empty list for inventory, ensuring the attribute is always a list as required by the contract.\nTarget: adventure/models/entities.py",
+      "category": "failure_analysis",
+      "tags": [
+        "adventure/models/entities.py"
+      ],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-17T22:02:02.852406+00:00"
+    },
+    {
+      "id": "90eabc2b",
+      "content": "repair_econ stage=patch file=adventure/models/entities.py class=other size_bytes=4192",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/models/entities.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:02:04.932270+00:00"
+    },
+    {
+      "id": "ea932e5d",
+      "content": "Validation issues (non-blocking):\n  - import: adventure/models/entities.py: Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"/private/tmp/swarm\n  - lint: adventure/models/entities.py: ",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-17T22:02:27.529772+00:00"
+    },
+    {
+      "id": "76220cff",
+      "content": "repair_econ stage=diagnose file=adventure/utils/io.py class=other size_bytes=2992",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/utils/io.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:02:56.181963+00:00"
+    },
+    {
+      "id": "6aa3a022",
+      "content": "Root cause: The doctest in load_world's docstring is malformed, causing the temporary file path to be misinterpreted and resulting in a FileNotFoundError for a bogus path 'p'.\nRecommended fix: Rewrite the loadworld doctest to use proper line breaks without backslashes and ensure the temporary YAML file is correctly written and closed before calling loadworld. The doctest should create a temporary file, write valid YAML content, close it, then assert that load_world returns a dict.\nTarget: adventure/utils/io.py",
+      "category": "failure_analysis",
+      "tags": [
+        "adventure/utils/io.py"
+      ],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-17T22:03:57.308971+00:00"
+    },
+    {
+      "id": "5f79396b",
+      "content": "repair_econ stage=patch file=adventure/utils/io.py class=other size_bytes=2992",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/utils/io.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:03:59.495730+00:00"
+    },
+    {
+      "id": "1e37d329",
+      "content": "repair_econ stage=diagnose file=adventure/utils/io.py class=other size_bytes=2992",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/utils/io.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:04:14.788493+00:00"
+    },
+    {
+      "id": "3a492bf6",
+      "content": "Root cause: The module lacks required imports (json, Path, Dict, Any), causing NameError when loadstate or savestate are executed, so validation fails.\nRecommended fix: Add the missing imports at the top of adventure/utils/io.py so that both loadstate and savestate can reference json, Path, Dict, and Any without error.\nTarget: adventure/utils/io.py",
+      "category": "failure_analysis",
+      "tags": [
+        "adventure/utils/io.py"
+      ],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-17T22:04:32.292883+00:00"
+    },
+    {
+      "id": "687426e1",
+      "content": "repair_econ stage=patch file=adventure/utils/io.py class=other size_bytes=2992",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/utils/io.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:04:34.482915+00:00"
+    },
+    {
+      "id": "a8eaa0f6",
+      "content": "repair_econ stage=diagnose file=adventure/core/parser.py class=other size_bytes=2415",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/core/parser.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:04:46.730107+00:00"
+    },
+    {
+      "id": "18fea559",
+      "content": "Root cause: The module docstring contains a non‑ASCII hyphen (U+2011) which the doctest runner misinterprets, leading it to attempt to open a file named 'p' and causing a FileNotFoundError.\nRecommended fix: Replace the Unicode hyphen in the first line of the module docstring with a plain ASCII hyphen so the docstring reads: \"Command-parsing utilities turning raw input into structured commands.\"\nTarget: adventure/core/parser.py",
+      "category": "failure_analysis",
+      "tags": [
+        "adventure/core/parser.py"
+      ],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-17T22:05:44.362289+00:00"
+    },
+    {
+      "id": "a8f3507c",
+      "content": "repair_econ stage=patch file=adventure/core/parser.py class=other size_bytes=2415",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/core/parser.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:05:46.895523+00:00"
+    },
+    {
+      "id": "ffa5f5d3",
+      "content": "repair_econ stage=diagnose file=adventure/core/combat.py class=other size_bytes=7466",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/core/combat.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:06:02.409959+00:00"
+    },
+    {
+      "id": "84ffed2c",
+      "content": "Root cause: A typo in the 'use' branch caused an incomplete attribute reference `self.pl` leading to a syntax error and import failure.\nRecommended fix: Replace `getattr(self.pl` with `getattr(self.player` so the inventory lookup works and the file parses correctly.\nTarget: adventure/core/combat.py",
+      "category": "failure_analysis",
+      "tags": [
+        "adventure/core/combat.py"
+      ],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-17T22:06:42.733827+00:00"
+    },
+    {
+      "id": "b4e2b8df",
+      "content": "repair_econ stage=patch file=adventure/core/combat.py class=other size_bytes=7466",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/core/combat.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:06:45.310088+00:00"
+    },
+    {
+      "id": "e7078d6e",
+      "content": "repair_econ stage=diagnose file=adventure/core/engine.py class=other size_bytes=14431",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/core/engine.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:07:28.145549+00:00"
+    },
+    {
+      "id": "72a5f292",
+      "content": "Root cause: The doctest for load_state attempts to open a non‑existent file 'p' without expecting the FileNotFoundError, causing the doctest runner to raise [Errno 2] No such file or directory: 'p'.\nRecommended fix: Update the load_state docstring example to correctly anticipate the FileNotFoundError, e.g., using a traceback ellipsis or a try/except block, so the doctest passes without raising an uncaught exception.\nTarget: adventure/core/engine.py",
+      "category": "failure_analysis",
+      "tags": [
+        "adventure/core/engine.py"
+      ],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-17T22:08:24.421052+00:00"
+    },
+    {
+      "id": "8ee09dc1",
+      "content": "repair_econ stage=patch file=adventure/core/engine.py class=other size_bytes=14431",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "adventure/core/engine.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:08:28.534332+00:00"
+    },
+    {
+      "id": "98c88e85",
+      "content": "repair_econ stage=diagnose file=main.py class=other size_bytes=1368",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "main.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:08:41.093793+00:00"
+    },
+    {
+      "id": "1c64302c",
+      "content": "Root cause: The doctest creates a temporary 'world.yaml' in the current working directory, but main() always loads 'data/world.yaml', causing a FileNotFoundError during the test.\nRecommended fix: Modify main() to first check for the existence of the default path (data/world.yaml). If it does not exist, fall back to loading 'world.yaml' from the current directory. Use Path objects and keep the original behavior when the data folder is present.\nTarget: main.py",
+      "category": "failure_analysis",
+      "tags": [
+        "main.py"
+      ],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-17T22:09:34.493817+00:00"
+    },
+    {
+      "id": "44670a76",
+      "content": "repair_econ stage=patch file=main.py class=other size_bytes=1368",
+      "category": "failure_analysis",
+      "tags": [
+        "repair_econ",
+        "main.py",
+        "other"
+      ],
+      "source_flow": "structural_sweep_next",
+      "timestamp": "2026-07-17T22:09:36.660820+00:00"
+    }
+  ],
+  "architecture": {
+    "import_scheme": "package",
+    "run_command": "python main.py",
+    "smoke_command": "echo quit | python main.py",
+    "working_directory": "project root",
+    "init_files": true,
+    "modules": [
+      {
+        "file": "adventure/models/entities.py",
+        "responsibility": "Define core data classes for game entities: Player, NPC, Monster, Item, Room, and supporting enums/types.",
+        "defines": [
+          "Player",
+          "NPC",
+          "Monster",
+          "Item",
+          "Room",
+          "ItemType",
+          "DialogueNode"
+        ],
+        "imports_from": {}
+      },
+      {
+        "file": "adventure/utils/io.py",
+        "responsibility": "Load world definition from YAML and save/load full game state to JSON.",
+        "defines": [
+          "load_world",
+          "save_state",
+          "load_state"
+        ],
+        "imports_from": {
+          "adventure.models.entities": [
+            "Room",
+            "Item",
+            "NPC",
+            "Monster",
+            "Player"
+          ]
+        }
+      },
+      {
+        "file": "adventure/core/parser.py",
+        "responsibility": "Parse raw player input into structured Command objects.",
+        "defines": [
+          "Command",
+          "parse_command"
+        ],
+        "imports_from": {}
+      },
+      {
+        "file": "adventure/core/combat.py",
+        "responsibility": "Implement turn‑based combat mechanics, including damage calculation, boss phases, and item effects.",
+        "defines": [
+          "CombatEngine",
+          "CombatResult"
+        ],
+        "imports_from": {
+          "adventure.models.entities": [
+            "Player",
+            "Monster",
+            "Item"
+          ]
+        }
+      },
+      {
+        "file": "adventure/core/engine.py",
+        "responsibility": "Main game loop, state management, command dispatch, room navigation, inventory handling, NPC interaction, and integration with save/load.",
+        "defines": [
+          "GameEngine"
+        ],
+        "imports_from": {
+          "adventure.models.entities": [
+            "Player",
+            "Room",
+            "Item",
+            "NPC",
+            "Monster"
+          ],
+          "adventure.core.parser": [
+            "parse_command",
+            "Command"
+          ],
+          "adventure.core.combat": [
+            "CombatEngine"
+          ],
+          "adventure.utils.io": [
+            "load_world",
+            "save_state",
+            "load_state"
+          ]
+        }
+      },
+      {
+        "file": "main.py",
+        "responsibility": "Entry point script; loads world data, creates GameEngine instance, and starts the game.",
+        "defines": [],
+        "imports_from": {
+          "adventure.core.engine": [
+            "GameEngine"
+          ]
+        }
+      }
+    ],
+    "creation_order": [
+      "adventure/models/entities.py",
+      "adventure/utils/io.py",
+      "adventure/core/parser.py",
+      "adventure/core/combat.py",
+      "adventure/core/engine.py",
+      "main.py"
+    ],
+    "interfaces": [
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "Player",
+        "signature": "class Player(name: str, health: int = 100, attack: int = 5, defense: int = 2)"
+      },
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "Room",
+        "signature": "class Room(id: str, name: str, description: str, connections: dict, items: list, monsters: list, npcs: list)"
+      },
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "Item",
+        "signature": "class Item(id: str, name: str, description: str, type: ItemType, attack_bonus: int = 0, defense_bonus: int = 0, heal_amount: int = 0, special_effect: str = None)"
+      },
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "NPC",
+        "signature": "class NPC(id: str, name: str, description: str, dialogue: list[DialogueNode])"
+      },
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "Monster",
+        "signature": "class Monster(id: str, name: str, description: str, health: int, attack: int, defense: int, behavior: str, loot: list[str])"
+      },
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/core/parser.py",
+        "symbol": "parse_command",
+        "signature": "parse_command(raw_input: str) -> Command"
+      },
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/core/parser.py",
+        "symbol": "Command",
+        "signature": "class Command(name: str, args: list[str])"
+      },
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/core/combat.py",
+        "symbol": "CombatEngine",
+        "signature": "CombatEngine(player: Player, monster: Monster) -> CombatResult"
+      },
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/utils/io.py",
+        "symbol": "load_world",
+        "signature": "load_world(path: str) -> dict"
+      },
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/utils/io.py",
+        "symbol": "save_state",
+        "signature": "save_state(state: dict, path: str) -> None"
+      },
+      {
+        "caller": "adventure/core/engine.py",
+        "callee": "adventure/utils/io.py",
+        "symbol": "load_state",
+        "signature": "load_state(path: str) -> dict"
+      },
+      {
+        "caller": "adventure/core/combat.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "Player",
+        "signature": "class Player(name: str, health: int = 100, attack: int = 5, defense: int = 2)"
+      },
+      {
+        "caller": "adventure/core/combat.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "Monster",
+        "signature": "class Monster(id: str, name: str, description: str, health: int, attack: int, defense: int, behavior: str, loot: list[str])"
+      },
+      {
+        "caller": "adventure/core/combat.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "Item",
+        "signature": "class Item(id: str, name: str, description: str, type: ItemType, attack_bonus: int = 0, defense_bonus: int = 0, heal_amount: int = 0, special_effect: str = None)"
+      },
+      {
+        "caller": "adventure/utils/io.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "Room",
+        "signature": "class Room(id: str, name: str, description: str, connections: dict, items: list, monsters: list, npcs: list)"
+      },
+      {
+        "caller": "adventure/utils/io.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "Item",
+        "signature": "class Item(id: str, name: str, description: str, type: ItemType, attack_bonus: int = 0, defense_bonus: int = 0, heal_amount: int = 0, special_effect: str = None)"
+      },
+      {
+        "caller": "adventure/utils/io.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "NPC",
+        "signature": "class NPC(id: str, name: str, description: str, dialogue: list[DialogueNode])"
+      },
+      {
+        "caller": "adventure/utils/io.py",
+        "callee": "adventure/models/entities.py",
+        "symbol": "Monster",
+        "signature": "class Monster(id: str, name: str, description: str, health: int, attack: int, defense: int, behavior: str, loot: list[str])"
+      }
+    ],
+    "data_shapes": [
+      {
+        "file": "data/world.yaml",
+        "consumed_by": "adventure.utils.io.load_world",
+        "structure": "Mapping with keys: rooms (list of room objects), items (list of item objects), npcs (list of npc objects), monsters (list of monster objects), boss (boss object), start_room (str), boss_room (str). Each room has id, name, description, connections (mapping direction->room_id), items (list of item ids), monsters (list of monster ids), npcs (list of npc ids). Each item has id, name, description, type (weapon|armor|healing|key|misc), optional attack_bonus, defense_bonus, heal_amount, special_effect. Each npc has id, name, description, dialogue (list of nodes with state, text, next_state). Each monster has id, name, description, health, attack, defense, behavior, loot (list of item ids). Boss has id, name, description, phases (list of phase objects with health_threshold, health, attack, defense, special_weakness_item_id).",
+        "example": "rooms:\n  - id: entrance\n    name: Entrance Hall\n    description: A dimly lit entrance hall with stone walls.\n    connections:\n      north: corridor\n    items: [rusty_key]\n    monsters: []\n    npcs: []\n  - id: corridor\n    name: Long Corridor\n    description: A narrow corridor stretching east and west.\n    connections:\n      south: entrance\n      east: armory\n      west: library\n    items: []\n    monsters: [goblin]\n    npcs: [old_man]\n  - id: throne_room\n    name: Throne Room\n    description: A grand hall where the Dark Lord awaits.\n    connections:\n      east: corridor\n    items: []\n    monsters: [dark_lord]\n    npcs: []\nitems:\n  - id: rusty_key\n    name: Rusty Key\n    description: An old key, perhaps it opens something.\n    type: key\n  - id: iron_sword\n    name: Iron Sword\n    description: A sturdy iron sword.\n    type: weapon\n    attack_bonus: 2\n  - id: leather_armor\n    name: Leather Armor\n    description: Provides basic protection.\n    type: armor\n    defense_bonus: 1\n  - id: healing_potion\n    name: Healing Potion\n    description: Restores health when used.\n    type: healing\n    heal_amount: 10\n  - id: silver_amulet\n    name: Silver Amulet\n    description: A shimmering amulet that weakens the final boss.\n    type: key\n    special_effect: boss_weakness\nnpcs:\n  - id: old_man\n    name: Old Man\n    description: A frail old man with a long beard.\n    dialogue:\n      - state: start\n        text: Beware the darkness ahead. The silver amulet may help you.\n        next_state: end\nmonsters:\n  - id: goblin\n    name: Goblin\n    description: A small, green creature with sharp teeth.\n    health: 5\n    attack: 1\n    defense: 0\n    behavior: aggressive\n    loot: [healing_potion]\nboss:\n  id: dark_lord\n  name: Dark Lord\n  description: The final guardian of the realm.\n  phases:\n    - health_threshold: 10\n      health: 15\n      attack: 3\n      defense: 2\n      special_weakness_item_id: null\n    - health_threshold: 0\n      health: 8\n      attack: 5\n      defense: 1\n      special_weakness_item_id: silver_amulet\nstart_room: entrance\nboss_room: throne_room"
+      }
+    ],
+    "state_shapes": [
+      {
+        "name": "player_state",
+        "owner": "adventure.models.entities.Player",
+        "consumed_by": "adventure.core.engine.GameEngine",
+        "structure": "Mapping with keys: location (str room_id), health (int), max_health (int), attack (int), defense (int), inventory (list of item ids), equipped_weapon (item id or null), equipped_armor (item id or null)"
+      },
+      {
+        "name": "room_state",
+        "owner": "adventure.core.engine.GameEngine",
+        "consumed_by": "adventure.core.engine.GameEngine",
+        "structure": "Mapping room_id -> {items: list of item ids, monsters: list of monster ids, npcs: list of npc ids, visited: bool}"
+      },
+      {
+        "name": "npc_dialogue_state",
+        "owner": "adventure.core.engine.GameEngine",
+        "consumed_by": "adventure.core.engine.GameEngine",
+        "structure": "Mapping npc_id -> current dialogue state string"
+      },
+      {
+        "name": "monster_state",
+        "owner": "adventure.core.engine.GameEngine",
+        "consumed_by": "adventure.core.engine.GameEngine, adventure.core.combat.CombatEngine",
+        "structure": "Mapping monster_id -> {alive: bool, health: int}"
+      },
+      {
+        "name": "persisted_save_state",
+        "owner": "adventure.utils.io.save_state",
+        "consumed_by": "adventure.utils.io.load_state",
+        "structure": "JSON object with keys: player (as player_state), rooms (as room_state), npcs (as npc_dialogue_state), monsters (as monster_state)"
+      }
+    ],
+    "transient_files": [
+      "saves/*.json"
+    ],
+    "notes": "Package‑style import scheme with __init__.py files generated automatically. World data lives in data/world.yaml; saves are written under saves/.",
+    "coherence_criteria": [],
+    "coherence_grounded": true,
+    "coherence_reason": "",
+    "coherence_attempts": 1
+  },
+  "research_plan": null,
+  "task_definition": null,
+  "dispatch_history": [
+    {
+      "cycle": 3,
+      "flow": "diagnose_issue",
+      "goal_id": "46ebc51baccc",
+      "target_file_path": "adventure/models/entities.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-17T22:02:04.931630+00:00"
+    },
+    {
+      "cycle": 4,
+      "flow": "file_ops",
+      "goal_id": "46ebc51baccc",
+      "target_file_path": "adventure/models/entities.py",
+      "result_status": "success",
+      "timestamp": "2026-07-17T22:02:29.401160+00:00"
+    },
+    {
+      "cycle": 5,
+      "flow": "file_ops",
+      "goal_id": "46ebc51baccc",
+      "target_file_path": "adventure/models/entities.py",
+      "result_status": "success",
+      "timestamp": "2026-07-17T22:02:56.180800+00:00"
+    },
+    {
+      "cycle": 6,
+      "flow": "diagnose_issue",
+      "goal_id": "9071396fadcf",
+      "target_file_path": "adventure/utils/io.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-17T22:03:59.495084+00:00"
+    },
+    {
+      "cycle": 7,
+      "flow": "file_ops",
+      "goal_id": "9071396fadcf",
+      "target_file_path": "adventure/utils/io.py",
+      "result_status": "failed",
+      "timestamp": "2026-07-17T22:04:14.787835+00:00"
+    },
+    {
+      "cycle": 8,
+      "flow": "diagnose_issue",
+      "goal_id": "9071396fadcf",
+      "target_file_path": "adventure/utils/io.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-17T22:04:34.482248+00:00"
+    },
+    {
+      "cycle": 9,
+      "flow": "file_ops",
+      "goal_id": "9071396fadcf",
+      "target_file_path": "adventure/utils/io.py",
+      "result_status": "success",
+      "timestamp": "2026-07-17T22:04:46.729081+00:00"
+    },
+    {
+      "cycle": 10,
+      "flow": "diagnose_issue",
+      "goal_id": "3dcae52c4a2c",
+      "target_file_path": "adventure/core/parser.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-17T22:05:46.894854+00:00"
+    },
+    {
+      "cycle": 11,
+      "flow": "file_ops",
+      "goal_id": "3dcae52c4a2c",
+      "target_file_path": "adventure/core/parser.py",
+      "result_status": "success",
+      "timestamp": "2026-07-17T22:06:02.408965+00:00"
+    },
+    {
+      "cycle": 12,
+      "flow": "diagnose_issue",
+      "goal_id": "79f4e50262a2",
+      "target_file_path": "adventure/core/combat.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-17T22:06:45.309423+00:00"
+    },
+    {
+      "cycle": 13,
+      "flow": "file_ops",
+      "goal_id": "79f4e50262a2",
+      "target_file_path": "adventure/core/combat.py",
+      "result_status": "success",
+      "timestamp": "2026-07-17T22:07:28.144533+00:00"
+    },
+    {
+      "cycle": 14,
+      "flow": "diagnose_issue",
+      "goal_id": "26867d0024e0",
+      "target_file_path": "adventure/utils/io.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-17T22:08:28.533644+00:00"
+    },
+    {
+      "cycle": 15,
+      "flow": "file_ops",
+      "goal_id": "26867d0024e0",
+      "target_file_path": "adventure/utils/io.py",
+      "result_status": "success",
+      "timestamp": "2026-07-17T22:08:41.092724+00:00"
+    },
+    {
+      "cycle": 16,
+      "flow": "diagnose_issue",
+      "goal_id": "b94d5c2e7811",
+      "target_file_path": "main.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-17T22:09:36.660138+00:00"
+    },
+    {
+      "cycle": 17,
+      "flow": "file_ops",
+      "goal_id": "b94d5c2e7811",
+      "target_file_path": "main.py",
+      "result_status": "success",
+      "timestamp": "2026-07-17T22:09:50.273294+00:00"
+    },
+    {
+      "cycle": 18,
+      "flow": "file_ops",
+      "goal_id": "89203ab8094b",
+      "target_file_path": "data/world.yaml",
+      "result_status": "success",
+      "timestamp": "2026-07-17T22:11:04.684779+00:00"
+    }
+  ],
+  "notes_archived": 0,
+  "dispatch_archived": 0,
+  "workspace_ledger": [],
+  "environment_verified": false,
+  "smoke_baseline_ok": null,
+  "tests_verified": false,
+  "reopen_count": 0,
+  "pending_directive": "",
+  "router_findings": "",
+  "created_at": "2026-07-17T21:46:01.747771+00:00",
+  "updated_at": "2026-07-17T22:11:39.838813+00:00",
+  "config": {
+    "working_directory": "/private/tmp/swarmab/arm_swarm",
+    "effects_profile": "local",
+    "escalation_budget_usd": null,
+    "escalation_tokens_used": 0,
+    "llmvp_endpoint": "http://localhost:8008/graphql",
+    "flow_set": "contract_swarm",
+    "task_profile": "",
+    "structural_mode": "parallel",
+    "web_research": true,
+    "vision": false,
+    "audio": false,
+    "modality_sidecar_max_images": 6,
+    "modality_sidecar_max_audio": 2,
+    "held_out_tests": false,
+    "run_until": "completed",
+    "max_cycles": null,
+    "max_wall_clock_s": null,
+    "test_gate": "auto"
+  },
+  "schema_version": 7
+}
