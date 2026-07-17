@@ -1,5 +1,56 @@
 # Contract-swarm A/B — iteration reference
 
+## VERDICT (after 3 rounds, 2026-07-17): batch wins decisively; paused
+
+Three rounds of prevention/detection levers; the batch build won the
+blind judge 3/3, and it also costs ~4× fewer tokens and ~2.5× less wall
+time. The swarm's PER-SYMBOL quality is consistently fine (code_quality
+2–4 — clean, typed, documented); it is INTEGRATION that fails every
+time, and each round a DIFFERENT cross-module seam crashed the boot:
+
+| round | lever | judge (swarm runs/cov/coh/qual/play) | boot-crash cause |
+|---|---|---|---|
+| 0 | baseline | 1 / 1 / 1 / 2 / 1 | placeholder main; broken import; divergent GameState ctors |
+| 1 | .pyi digest, worker validation, import-completeness, author dispatch/attr rules | 1 / 1 / 1 / 2 / 1 | data-shape drift (load_world dict vs .id objects) + broad seam mismatch |
+| 2 | + deterministic cross-module AST gate + dict-shape rule | 1 / 1 / 1 / 3 / 1 | run_engine arity — worker-FAILED engine.py went to off-contract serial fallback, AFTER the gate ran (coverage hole) |
+
+Batch baseline stayed ~2–3 / 3 / 4 / 4 / 3 throughout (a coherent,
+mostly-playable game with real bugs — unwinnable boss, atomic combat —
+vs the swarm's non-running skeleton).
+
+**Conclusion:** for a SMALL, TIGHTLY-COUPLED multi-module program (fits
+one generation context), contract-mediated coordination of isolated
+workers cannot match single-context batch coherence. Each lever closes
+one integration-failure class; the combinatorial space of cross-module
+inconsistencies produces another. Two structural signals reinforce it:
+the contract author failed to resolve its flagged issues within the
+2-revision budget in ALL THREE rounds (4/4/5 persistent), and workers
+keep failing outright (each failure punches an off-contract hole via
+serial fallback). This is the shared-context coherence the batch gets
+for free and the swarm keeps paying — at 4× cost — to partially recover.
+
+**Where the paradigm might still win (untested, the real next target):**
+NOT here. Its premise (parallel decomposition + contracts) only pays off
+where batch CAN'T apply — a project too LARGE for one generation context
+(decomposition mandatory, not optional) or genuinely LOOSELY-COUPLED
+work (independent leaf functions/transformations with no cross-module
+integration to cohere). Re-test there if/when we have such a target.
+
+**Round-3 lever exists but NOT pursued:** run the cross-module gate over
+the COMPLETE structural deliverable (after serial fallback), not just the
+swarm's assembly — closes the round-2 coverage hole. Deferred: the
+pattern says another seam class would surface; three rounds is decisive
+enough to pause rather than continue whack-a-mole on this benchmark.
+
+Infra kept (committed, tested, code_core untouched): the flow set, the
+`.pyi` digest, worker validation, and the cross-module AST gate
+(`_check_module` / `action_run_contract_typecheck`) — the gate is
+independently reusable and could help code_core catch integration drift,
+though code_core rarely needs it.
+
+---
+
+
 Comparing the `contract_swarm` flow set (contract → review → parallel
 symbol workers → splice) against `code_core`'s single-completion batch
 build, same objective (missions/game_challenge_swarm.yaml), both stopped

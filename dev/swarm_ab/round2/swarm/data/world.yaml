@@ -1,0 +1,192 @@
+rooms:
+  - id: entrance_hall
+    name: Entrance Hall
+    description: "A dimly lit stone foyer with a cracked wooden door leading north."
+    connections:
+      north: forgotten_library
+      east: guardians_chamber
+    items: []
+    npcs: []
+    monsters: []
+
+  - id: forgotten_library
+    name: Forgotten Library
+    description: "Dusty shelves line the walls; a hidden lever reveals a secret passage east."
+    connections:
+      south: entrance_hall
+      east: armory_annex
+    items: []
+    npcs:
+      - elder_librarian
+    monsters: []
+
+  - id: armory_annex
+    name: Armory Annex
+    description: "Racks of rusted weapons and a sturdy breastplate."
+    connections:
+      west: forgotten_library
+      east: alchemists_lab
+    items:
+      - silver_sword
+      - bronze_breastplate
+    npcs:
+      - wary_guard
+    monsters: []
+
+  - id: alchemists_lab
+    name: Alchemist's Lab
+    description: "Cluttered tables with vials and strange concoctions."
+    connections:
+      west: armory_annex
+    items:
+      - elixir_of_vitality
+    npcs: []
+    monsters: []
+
+  - id: guardians_chamber
+    name: Guardian's Chamber
+    description: "A small room guarded by a goblin scout; contains a clue scroll."
+    connections:
+      west: entrance_hall
+    items:
+      - ancient_scroll
+    npcs: []
+    monsters:
+      - goblin_scout
+
+  - id: echoing_hall
+    name: Echoing Hall
+    description: "A long corridor with echoing whispers."
+    connections:
+      south: entrance_hall
+      north: final_boss_lair
+      east: mystic_shrine
+    items: []
+    npcs: []
+    monsters:
+      - stone_golem
+
+  - id: mystic_shrine
+    name: Mystic Shrine
+    description: "An altar glowing with faint light."
+    connections:
+      west: echoing_hall
+    items:
+      - sunstone_amulet
+    npcs: []
+    monsters:
+      - cave_bat_swarm
+
+  - id: final_boss_lair
+    name: Final Boss Lair
+    description: "A vast cavern split into two phases: Phase 1 (the Shadow Dragon) and Phase 2 (the Dragon reborn)."
+    connections:
+      south: echoing_hall
+    items: []
+    npcs: []
+    monsters:
+      - shadow_dragon
+
+items:
+  - id: silver_sword
+    name: Silver Sword
+    type: weapon
+    description: "A gleaming sword that boosts attack."
+    stats:
+      attack_bonus: 5
+    location: armory_annex
+
+  - id: bronze_breastplate
+    name: Bronze Breastplate
+    type: armor
+    description: "A sturdy breastplate that raises defense."
+    stats:
+      defense_bonus: 3
+    location: armory_annex
+
+  - id: elixir_of_vitality
+    name: Elixir of Vitality
+    type: healing
+    description: "A potent potion that restores health."
+    stats:
+      heal_amount: 30
+    location: alchemists_lab
+
+  - id: ancient_scroll
+    name: Ancient Scroll
+    type: key
+    description: "A scroll mentioning the Sunstone Amulet, used as a clue."
+    stats: {}
+    location: guardians_chamber
+
+  - id: sunstone_amulet
+    name: Sunstone Amulet
+    type: key
+    description: "The relic that weakens the Shadow Dragon; its light pierces the dragon's scales."
+    stats: {}
+    location: mystic_shrine
+
+npcs:
+  - id: elder_librarian
+    name: Elder Librarian
+    description: "A frail scholar tending the forgotten books."
+    dialogue:
+      - "The legends speak of a Sunstone Amulet hidden within a shrine."
+      - "Only light can pierce the scales of the dragon, seek it."
+    hints:
+      - "Sunstone Amulet lies in the Mystic Shrine."
+      - "Light is the dragon's weakness."
+
+  - id: wary_guard
+    name: Wary Guard
+    description: "A vigilant guard watching over the armory."
+    dialogue:
+      - "Beware the beast that dwells in the deepest cavern."
+      - "A sun‑kissed relic can turn the tide of battle."
+      - "The Sunstone Amulet is that relic."
+    hints:
+      - "Find the Sunstone Amulet to defeat the dragon."
+
+monsters:
+  - id: goblin_scout
+    name: Goblin Scout
+    description: "A small goblin scout, quick and aggressive."
+    health: 12
+    attack: 3
+    behavior: aggressive
+    location: guardians_chamber
+    is_boss: false
+
+  - id: stone_golem
+    name: Stone Golem
+    description: "A massive stone golem, slow but heavily defended."
+    health: 40
+    attack: 5
+    behavior: defensive
+    location: echoing_hall
+    is_boss: false
+
+  - id: cave_bat_swarm
+    name: Cave Bat Swarm
+    description: "A swarm of bats that dart around, delivering multiple low‑damage attacks."
+    health: 15
+    attack: 2
+    behavior: swarm
+    location: mystic_shrine
+    is_boss: false
+
+  - id: shadow_dragon
+    name: Shadow Dragon
+    description: "A terrifying dragon shrouded in darkness."
+    health: 120
+    attack: 15
+    behavior: aggressive
+    location: final_boss_lair
+    is_boss: true
+    phases:
+      - phase: 1
+        health_threshold: 60
+        weakness: none
+      - phase: 2
+        health_threshold: 0
+        weakness: sunstone_amulet
