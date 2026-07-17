@@ -300,6 +300,8 @@ class LlamaCppBackend(BaseBackend):
         # Set by SessionManager at construction (soft DI): force-expires all
         # live sessions through the normal expiry path at the drain deadline.
         self._session_expirer = None
+        # Post-force-clear settle window (tests shrink it).
+        self._refresh_settle_s = 30.0
         self._last_refresh_monotonic: Optional[float] = None
         # Readiness gate — blocks acquire_instance() until initialize() completes
         self._ready_event: asyncio.Event = asyncio.Event()
@@ -1045,7 +1047,7 @@ class LlamaCppBackend(BaseBackend):
             except Exception:  # noqa: BLE001
                 log.exception("refresh drain: stream eviction failed")
         # Short settle for the releases to land.
-        settle = time.monotonic() + 30
+        settle = time.monotonic() + self._refresh_settle_s
         while time.monotonic() < settle:
             if self._checked_out == 0 and self._active_generations == 0:
                 return True
