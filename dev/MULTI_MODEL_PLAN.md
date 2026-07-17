@@ -31,6 +31,7 @@ Singletons that assume ONE model per process:
 | 3 | **Module-level capture** | `core/inference.py:29` (`config = get_config()` at import) | STALE after swap — `resolve_max_tokens`/`resolve_temperature` would use the old config forever. Pre-req fix. |
 | 4 | **Tokenizer cache** | `inference/tokenizer.py:17` (`_tokenizer_cache` global) | Model-bound; stale after swap. Pre-req fix (invalidate on swap or key by model path). |
 | 5 | Session manager | `api/graphql_api.py:281` | Built per-backend (`SessionManager(backend)` at :860); init/shutdown helpers already exist (:855, :889). Reusable as-is for Phase 1. |
+| 6 | Static-tokens manager | `preprocessing/static_tokens.py:110` (`manager` singleton) | Keyed by PERSONA, not model — two models sharing a persona name would collide, and the builder path reads global config + the global tokenizer cache. Phase 1: reset on swap. Phase 2: key by (model, persona). |
 
 Clean by audit: `llama_cpp_backend.py` and `batched_engine.py` contain
 ZERO `get_config()` calls — config is injected at construction. **Phase 1
@@ -73,35 +74,48 @@ model. Two big models hot is impossible; big-boss = swap or remote.
   burned assuming. Probe P0.b settles it empirically before Phase 2
   commits to a policy.
 
-## Phase 0 — Probes (de-risk before building)
+## Phase 0 — Probes (RUN 2026-07-16; scripts are keepers in `llmvp/dev/`)
 
-All probes run on SMALL models against a dev server instance; the
-production server is untouched. Scripts live in `llmvp/dev/`, conclusions
-banked here, one-shots deleted per cleanup convention.
-
-- **P0.a — mid-process teardown/reinit**: load small model → decode →
-  `shutdown_backend_async()` → assert wired memory actually drops
-  (sample via `dev/mem_ledger.sh` accounting: app/anon + wired) → init a
-  DIFFERENT config → decode green. Then once at gpt-oss scale (off-hours,
-  server restart pre-approved) to measure real swap-back latency with
-  warm page cache. **Risk being tested**: Metal not releasing wired
-  memory on `close()` mid-process (only ever proven at process exit).
-  Fallback if it fails: swap-by-respawn (supervisor re-execs the server
-  with the new pointer — still GraphQL-triggered, worse latency, keeps
-  the feature).
-- **P0.b — in-process dual-model concurrent decode** (the formal
-  double-check): one process, two small GGUFs (e.g. the curator-tier
-  gemma + a small qwen), each its own backend instance, decode
-  simultaneously from two threads for N rounds. Measure: error rate,
-  per-stream correctness (byte-compare vs solo run), aggregate
-  throughput vs strict alternation. Control arm: same pair, two
-  processes. **Verdict drives Phase 2**: clean → per-config
-  `concurrent_decode_ok` allowlist for small models; dirty → global
-  cross-backend decode lock (alternation), full stop.
-- **P0.c — drain soak** (already in flight): ≥2 clean
+- **P0.a — mid-process teardown/reinit: PASS**
+  (`llmvp/dev/probe_p0a_swap_teardown.py`; Olmo-32B-Q6 cold → Devstral-24B
+  cold → Olmo warm, one process, wired sampled via vm_stat).
+  Teardown released wired EXACTLY every cycle (79.1 → 107.2 → 79.0 GB);
+  all decodes coherent; greedy output byte-identical cold vs warm.
+  Load times: **10.7s cold, 3.9s page-cache-warm** (25GB GGUF) — weight
+  load is NOT the swap bottleneck; swap latency will be dominated by
+  static-prefix prefill + warm-up, not I/O. Phase 1's foundation holds;
+  swap-by-respawn fallback not needed.
+  **Bonus findings**: (a) gpt-oss (idle, 79GB wired) + Olmo (28GB)
+  co-resided at 107GB and decoded fine — co-residency is real;
+  (b) CORRECTION to the idle-eviction assumption: gpt-oss did NOT
+  idle-unwire in 15+ quiet minutes. The bimodal "idle = ~3GB wired"
+  state is longer-timescale/pressure-driven — the Phase 2 memory
+  governor must count a hot model as fully wired until explicitly
+  unloaded, never assume idle shrinkage.
+- **P0.b — in-process dual-model concurrent decode: DIRTY → LOCK**
+  (`llmvp/dev/probe_p0b_dual_decode.py`; Olmo + Devstral, greedy, 6
+  questions × solo-consistency/concurrent/alternated, byte-compared).
+  No crashes, no Metal errors — but ONE greedy divergence (q2, Olmo
+  concurrent vs its self-consistent solo output). And the throughput
+  case for concurrency is EMPTY: concurrent wall ≈ solo-SUM on 5/6
+  questions (Metal serializes the two models' kernels; only q0 showed
+  ~22% gain). **Phase 2 policy settled: global cross-backend decode
+  lock (strict alternation) — costs ~nothing, removes the hazard.**
+  The `concurrent_decode_ok` allowlist idea is dead. True parallelism
+  = cross-process (the proven LMStudio regime), reachable via the
+  Phase 3 `openai_compat` adapter when needed.
+  Loose end: final wired read 17GB immediately after both teardowns
+  (P0.b samples without P0.a's 2s Metal-settle sleep) — presumed
+  sampling timing, worth a settle-and-resample if it recurs.
+- **P0.c — drain soak** (still in flight): ≥2 clean
   `proactive-timed-drain` cycles on the production server, traceback
   from the 18:12 death diagnosed (OPEN_TASKS item 2a). Gate for Phase 1
   merge, not for Phase 1 development.
+
+First boss-candidate config landed: `llmvp/configs/olmo-3.1-32b-think.yaml`
+(chatml + thinking, template verified against the GGUF's embedded one,
+n_ctx 65536 = train max). At ~28GB wired it fits alongside gpt-oss
+(~107GB total) — a Phase 2 co-resident boss under the decode lock.
 
 ## Phase 1 — `swapModel`: single-resident hotswap (the config-swap win)
 
