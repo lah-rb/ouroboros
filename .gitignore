@@ -41,3 +41,4 @@ runs/
 llmvp/logs/llmvp_server.log
 llmvp/logs/interactions.jsonl
 models/
+logs/
