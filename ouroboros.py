@@ -714,7 +714,7 @@ def cmd_llmvp_models(args: argparse.Namespace) -> None:
     """List the server's swappable model configs."""
     data = _llmvp_graphql(
         args.endpoint,
-        "{ models { name family ggufSizeGb weightsPresent active error } }",
+        "{ models { name family ggufSizeGb weightsPresent active provider error } }",
     )
     for m in data["models"]:
         marker = "→" if m["active"] else " "
@@ -723,10 +723,12 @@ def cmd_llmvp_models(args: argparse.Namespace) -> None:
             if not m["weightsPresent"] and not m["error"]
             else (m["error"] or "")
         )
-        print(
-            f"{marker} {m['name']:32s} {m['family']:8s} "
-            f"{m['ggufSizeGb']:7.1f} GB  {note}"
+        size = (
+            f"{m['ggufSizeGb']:7.1f} GB"
+            if m["provider"] == "local_llama"
+            else f"{'remote':>10s}"
         )
+        print(f"{marker} {m['name']:32s} {m['family']:9s} {size}  {note}")
 
 
 def cmd_llmvp_swap(args: argparse.Namespace) -> None:

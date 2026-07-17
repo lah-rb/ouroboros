@@ -144,6 +144,11 @@ async def swap_model(
     async with _lock:
         t_start = time.perf_counter()
         target_path = model_registry.resolve(name)
+        if model_registry.remote_config(name) is not None:
+            raise KeyError(
+                f"{name!r} is a remote provider entry — always available, "
+                "nothing to swap; address it per-request via the model field"
+            )
         previous = model_registry.active_name() or "(unknown)"
         if name == previous:
             return {

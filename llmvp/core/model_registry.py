@@ -26,15 +26,22 @@ _EXCLUDED_NAMES = {"reference"}
 
 @dataclass
 class ModelEntry:
-    """One swappable config: identity + enough metadata to choose by."""
+    """One registry config: identity + enough metadata to choose by.
 
-    name: str  # yaml stem == the swapModel target string
+    provider == "local_llama": swappable weights served in-process.
+    Anything else (claude_cli, openai_compat): a REMOTE entry — always
+    available, addressed per-request via CompletionRequest.model, never
+    a swap target.
+    """
+
+    name: str  # yaml stem == the swapModel / request-routing target string
     config_path: str
     family: str
-    model_path: str
-    gguf_size_gb: float  # 0.0 when the weights file is missing
+    model_path: str  # local: GGUF path; remote: provider model id
+    gguf_size_gb: float  # 0.0 when the weights file is missing / remote
     weights_present: bool
     active: bool
+    provider: str = "local_llama"
     error: Optional[str] = None  # unparseable/incomplete yaml
 
 
@@ -64,6 +71,20 @@ def resolve(name: str) -> Path:
     return path
 
 
+def remote_config(name: str):
+    """Load+validate a REMOTE entry by name; None when the name is not a
+    remote entry (missing file or a local config)."""
+    from core.config import RemoteModelConfig
+
+    path = CONFIGS_DIR / f"{name}.yaml"
+    if name in _EXCLUDED_NAMES or not path.is_file():
+        return None
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or "provider" not in raw:
+        return None
+    return RemoteModelConfig(**raw)
+
+
 def list_models() -> List[ModelEntry]:
     """Enumerate swappable configs (top-level configs/*.yaml, excluding
     reference.yaml; archive/ is a subdirectory and never scanned)."""
@@ -74,15 +95,25 @@ def list_models() -> List[ModelEntry]:
         if name in _EXCLUDED_NAMES:
             continue
         family, model_path, size_gb, present, error = "", "", 0.0, False, None
+        provider = "local_llama"
         try:
             raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-            model = raw["model"]
-            family = str(model.get("family", ""))
-            model_path = str(model.get("path", ""))
-            weights = Path(model_path).expanduser()
-            present = weights.is_file()
-            if present:
-                size_gb = weights.stat().st_size / 1e9
+            if isinstance(raw, dict) and "provider" in raw:
+                from core.config import RemoteModelConfig
+
+                rc = RemoteModelConfig(**raw)
+                provider = rc.provider
+                family = "(remote)"
+                model_path = rc.model
+                present = True  # remote entries are always addressable
+            else:
+                model = raw["model"]
+                family = str(model.get("family", ""))
+                model_path = str(model.get("path", ""))
+                weights = Path(model_path).expanduser()
+                present = weights.is_file()
+                if present:
+                    size_gb = weights.stat().st_size / 1e9
         except Exception as exc:  # noqa: BLE001 — a bad yaml must not hide the rest
             error = f"{type(exc).__name__}: {exc}"
         entries.append(
@@ -94,6 +125,7 @@ def list_models() -> List[ModelEntry]:
                 gguf_size_gb=round(size_gb, 2),
                 weights_present=present,
                 active=(name == current),
+                provider=provider,
                 error=error,
             )
         )

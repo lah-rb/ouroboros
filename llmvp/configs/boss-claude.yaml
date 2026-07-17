@@ -1,0 +1,11 @@
+# Remote provider entry: the frontier boss brain (MULTI_MODEL_PLAN Phase 3).
+# Always available — never a swap target; address per-request via the
+# completion `model` field. Auth lives in the claude CLI's own login.
+# system_file intentionally unset: the boss persona arrives with the τ
+# growth step and rides the request, not the entry, until then.
+provider: claude_cli
+model: claude-opus-4-8
+claude_bin: /Users/lah-rb/.local/bin/claude
+temperature_default: 0.4
+max_tokens_default: 2048
+timeout_s: 300

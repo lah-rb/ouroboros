@@ -9,7 +9,7 @@ and global access patterns.
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -485,6 +485,38 @@ def get_config() -> Config:
 def set_config(config: Config):
     """Set the global configuration instance."""
     get_config._config = config
+
+
+class RemoteModelConfig(BaseModel):
+    """A REMOTE model registry entry (MULTI_MODEL_PLAN Phase 3).
+
+    Remote entries live in configs/*.yaml alongside local configs and are
+    recognized by a top-level ``provider`` key. They are always available
+    (never swapped in/out) and support chat/completion ONLY — no KV
+    sessions, no tokens_bin personas, no reasoning head-swap. The persona
+    equivalent is ``system_file``: raw text sent as the system prompt.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    provider: Literal["claude_cli", "openai_compat"]
+    model: str  # provider-side model id (e.g. "claude-opus-4-8")
+    system_file: Optional[Path] = None
+    temperature_default: float = 0.7
+    max_tokens_default: int = 1024
+    timeout_s: float = 300.0
+    # claude_cli: binary override (tests point this at a fake).
+    claude_bin: str = "claude"
+    # openai_compat: base URL including /v1 (e.g. http://localhost:1234/v1)
+    # and an optional ENV VAR NAME holding the API key (never the key).
+    base_url: Optional[str] = None
+    api_key_env: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_provider_fields(self) -> "RemoteModelConfig":
+        if self.provider == "openai_compat" and not self.base_url:
+            raise ValueError("openai_compat entries require base_url")
+        return self
 
 
 class ActiveConfigView:

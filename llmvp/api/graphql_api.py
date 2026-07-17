@@ -191,6 +191,10 @@ class CompletionRequest:
     # request only (config.model.reasoning_head_swap; resident path).
     # None -> default level. gpt-oss/harmony.
     reasoning: Optional[str] = strawberry.field(default=None)
+    # Registry model name to serve this request. None/active-local -> the
+    # resident model as always. A REMOTE entry (provider yaml) -> its
+    # adapter. An inactive local config -> error (swapModel first).
+    model: Optional[str] = strawberry.field(default=None)
 
 
 @strawberry.type
@@ -283,7 +287,7 @@ _session_manager: Optional[SessionManager] = None
 
 @strawberry.type
 class ModelInfoGQL:
-    """One swappable model config from the registry catalog."""
+    """One registry entry: local (swappable) or remote (always available)."""
 
     name: str
     family: str
@@ -291,6 +295,7 @@ class ModelInfoGQL:
     gguf_size_gb: float
     weights_present: bool
     active: bool
+    provider: str = "local_llama"
     error: Optional[str] = None
 
 
@@ -316,6 +321,32 @@ def _get_session_manager() -> SessionManager:
     if _session_manager is None:
         raise RuntimeError("Session manager not initialized")
     return _session_manager
+
+
+async def _serve_remote_if_routed(
+    request: CompletionRequest,
+) -> Optional[CompletionResponse]:
+    """Serve via a remote provider when request.model names a remote
+    registry entry; None means "serve locally as always". Raises on an
+    inactive local config or an unknown name (see core/remote_router)."""
+    from core.remote_router import remote_completion, resolve_route
+
+    if resolve_route(request.model) is None:
+        return None
+    r = await remote_completion(
+        request.model,
+        request.prompt,
+        max_tokens=request.max_tokens,
+        temperature=request.temperature,
+    )
+    return CompletionResponse(
+        text=r.text,
+        tokens_generated=r.output_tokens,
+        finished=True,
+        prompt_tokens=r.input_tokens,
+        fresh_prefill_tokens=r.input_tokens,
+        generated_tokens=r.output_tokens,
+    )
 
 
 # --------------------------------------------------------------------
@@ -478,6 +509,9 @@ class Query:
             We recompute the effective value here to derive the flag —
             ``run_completion`` itself stays free of API-shape concerns.
         """
+        remote = await _serve_remote_if_routed(request)
+        if remote is not None:
+            return remote
         run_fn = run_tool_completion if use_tools else run_completion
         effective_max = resolve_max_tokens(request.max_tokens)
         # Flow-cache fields only apply to the plain completion path.
@@ -621,6 +655,7 @@ class Query:
                 gguf_size_gb=e.gguf_size_gb,
                 weights_present=e.weights_present,
                 active=e.active,
+                provider=e.provider,
                 error=e.error,
             )
             for e in model_registry.list_models()
@@ -653,6 +688,9 @@ class Mutation:
         Returns:
             CompletionResponse with generated text
         """
+        remote = await _serve_remote_if_routed(request)
+        if remote is not None:
+            return remote
         outcome = await run_completion(
             prompt=request.prompt,
             max_tokens=request.max_tokens,
