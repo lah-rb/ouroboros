@@ -41,7 +41,7 @@ CASES = [
     ),
     (
         "multi_file_mixed_languages",
-        "```toml\n# === FILE: pyproject.toml ===\n[project]\nname = \"app\"\n```\n\n"
+        '```toml\n# === FILE: pyproject.toml ===\n[project]\nname = "app"\n```\n\n'
         "```python\n# === FILE: src/main.py ===\ndef main():\n    pass\n```\n\n"
         "```markdown\n# === FILE: README.md ===\n# App\nA thing.\n```\n",
         None,

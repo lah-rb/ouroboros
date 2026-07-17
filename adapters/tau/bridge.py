@@ -77,13 +77,17 @@ class ToolBridge:
 
     def _invoke(self, name: str, kwargs: dict) -> tuple[bool, str]:
         if name == self._handle.RESPOND or name == "respond":
-            return False, ("Error: the customer is reached by writing your "
-                           "final message to ./reply.txt, not via a tool call.")
+            return False, (
+                "Error: the customer is reached by writing your "
+                "final message to ./reply.txt, not via a tool call."
+            )
         if self._handle.done:
             return False, "Error: the conversation has ended; no more tool calls."
         if self._handle.steps >= self._handle._max_steps - self._reserve:
-            return False, ("Error: tool-call budget for this conversation is "
-                           "exhausted; write your reply to ./reply.txt.")
+            return False, (
+                "Error: tool-call budget for this conversation is "
+                "exhausted; write your reply to ./reply.txt."
+            )
         self.calls += 1
         try:
             observation = self._handle.call_tool(name, **kwargs)

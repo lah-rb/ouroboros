@@ -36,7 +36,8 @@ def _mission(criteria=None, objective="write the token count to /app/answer.txt"
         config=MissionConfig(working_directory="/app", flow_set="ops"),
     )
     m.task_definition = TaskState(
-        task_spec=objective, completion_criteria=criteria if criteria is not None else []
+        task_spec=objective,
+        completion_criteria=criteria if criteria is not None else [],
     )
     return m
 
@@ -75,7 +76,9 @@ async def test_sanity_passes_good_answer_and_requests_plausibility():
 
 @pytest.mark.asyncio
 async def test_sanity_defers_on_zero_the_criteria_names():
-    crit = [{"command": "grep -qx 0 /app/answer.txt", "name": "is-zero", "required": True}]
+    crit = [
+        {"command": "grep -qx 0 /app/answer.txt", "name": "is-zero", "required": True}
+    ]
     out = await action_check_output_sanity(
         _si(_mission(crit), MockEffects(files={"/app/answer.txt": "0"}))
     )
@@ -101,7 +104,9 @@ async def test_sanity_failsafe_on_absent_artifact():
 async def test_record_sanity_implausible_appends_fail():
     si = _si(
         _mission(),
-        inference_response=json.dumps({"plausible": False, "reason": "3 for a huge dataset"}),
+        inference_response=json.dumps(
+            {"plausible": False, "reason": "3 for a huge dataset"}
+        ),
         sanity_artifact_excerpt="/app/answer.txt:\n3",
     )
     out = await action_record_output_sanity(si)
@@ -111,7 +116,9 @@ async def test_record_sanity_implausible_appends_fail():
 
 @pytest.mark.asyncio
 async def test_record_sanity_inconclusive_failsafe():
-    out = await action_record_output_sanity(_si(_mission(), inference_response="not json"))
+    out = await action_record_output_sanity(
+        _si(_mission(), inference_response="not json")
+    )
     assert out.context_updates == {}  # nothing appended on an unparseable verdict
 
 
@@ -129,13 +136,19 @@ async def test_reprobe_skips_when_judge_not_done():
 async def test_reprobe_builds_transcript_and_saves_judge():
     eff = MockEffects(
         files={"/app/answer.txt": "10994372"},
-        commands={"/bin/sh": CommandResult(return_code=0, stdout="", stderr="", command="x")},
+        commands={
+            "/bin/sh": CommandResult(return_code=0, stdout="", stderr="", command="x")
+        },
     )
-    si = _si(_mission(CRIT), eff, inference_response=json.dumps({"task_complete": True}))
+    si = _si(
+        _mission(CRIT), eff, inference_response=json.dumps({"task_complete": True})
+    )
     out = await action_reprobe_completion(si)
     assert out.result["do_verify"] is True
     assert "10994372" in out.context_updates["vbh_transcript"]
-    assert "task_complete" in out.context_updates["judge_response"]  # judge verdict saved
+    assert (
+        "task_complete" in out.context_updates["judge_response"]
+    )  # judge verdict saved
 
 
 @pytest.mark.asyncio
@@ -167,7 +180,9 @@ async def test_record_verify_inconclusive_failsafe():
     out = await action_record_completion_verify(
         _si(_mission(), inference_response="garbage")
     )
-    assert out.context_updates.get("validation_results", []) == []  # no fail manufactured
+    assert (
+        out.context_updates.get("validation_results", []) == []
+    )  # no fail manufactured
 
 
 # ── Profile-gated rungs (Phase 2): liveness / conservation / round-trip ────
@@ -181,9 +196,19 @@ def _mission_p(profile, criteria=None, objective="do the thing"):
 
 @pytest.mark.asyncio
 async def test_liveness_fails_on_dead_service():
-    crit = [{"command": "curl -sf localhost:8080/health", "name": "up", "required": True}]
-    eff = MockEffects(commands={"/bin/sh": CommandResult(
-        return_code=7, stdout="", stderr="curl: (7) Connection refused", command="x")})
+    crit = [
+        {"command": "curl -sf localhost:8080/health", "name": "up", "required": True}
+    ]
+    eff = MockEffects(
+        commands={
+            "/bin/sh": CommandResult(
+                return_code=7,
+                stdout="",
+                stderr="curl: (7) Connection refused",
+                command="x",
+            )
+        }
+    )
     out = await action_check_profile_oracle(_si(_mission_p("service", crit), eff))
     vr = out.context_updates["validation_results"]
     assert len(vr) == 1 and not vr[0]["passed"] and vr[0]["name"] == "service_oracle"
@@ -191,9 +216,14 @@ async def test_liveness_fails_on_dead_service():
 
 @pytest.mark.asyncio
 async def test_liveness_passes_on_live_service():
-    crit = [{"command": "curl -sf localhost:8080/health", "name": "up", "required": True}]
-    eff = MockEffects(commands={"/bin/sh": CommandResult(
-        return_code=0, stdout="OK", stderr="", command="x")})
+    crit = [
+        {"command": "curl -sf localhost:8080/health", "name": "up", "required": True}
+    ]
+    eff = MockEffects(
+        commands={
+            "/bin/sh": CommandResult(return_code=0, stdout="OK", stderr="", command="x")
+        }
+    )
     out = await action_check_profile_oracle(_si(_mission_p("service", crit), eff))
     assert out.context_updates.get("validation_results", []) == []
 
@@ -203,7 +233,9 @@ async def test_conservation_flags_empty_and_zero_row_output():
     crit = [{"command": "test -s /app/out.csv", "name": "out", "required": True}]
     for content in ("", "col1,col2\n"):  # empty, header-only
         eff = MockEffects(files={"/app/out.csv": content})
-        out = await action_check_profile_oracle(_si(_mission_p("data_transform", crit), eff))
+        out = await action_check_profile_oracle(
+            _si(_mission_p("data_transform", crit), eff)
+        )
         vr = out.context_updates["validation_results"]
         assert len(vr) == 1 and vr[0]["name"] == "data_transform_oracle"
 
@@ -212,7 +244,9 @@ async def test_conservation_flags_empty_and_zero_row_output():
 async def test_conservation_passes_with_data_rows():
     crit = [{"command": "test -s /app/out.csv", "name": "out", "required": True}]
     eff = MockEffects(files={"/app/out.csv": "col1,col2\n1,2\n3,4\n"})
-    out = await action_check_profile_oracle(_si(_mission_p("data_transform", crit), eff))
+    out = await action_check_profile_oracle(
+        _si(_mission_p("data_transform", crit), eff)
+    )
     assert out.context_updates.get("validation_results", []) == []
 
 
@@ -221,10 +255,15 @@ async def test_roundtrip_flags_corrupt_archive():
     crit = [{"command": "test -s /app/logs.tar.gz", "name": "arc", "required": True}]
     eff = MockEffects(
         files={"/app/logs.tar.gz": "corrupt"},
-        commands={"/bin/sh": CommandResult(return_code=1, stdout="", stderr="gzip: invalid", command="x")},
+        commands={
+            "/bin/sh": CommandResult(
+                return_code=1, stdout="", stderr="gzip: invalid", command="x"
+            )
+        },
     )
     out = await action_check_profile_oracle(
-        _si(_mission_p("invertible", crit, "compress logs to /app/logs.tar.gz"), eff))
+        _si(_mission_p("invertible", crit, "compress logs to /app/logs.tar.gz"), eff)
+    )
     vr = out.context_updates["validation_results"]
     assert len(vr) == 1 and vr[0]["name"] == "invertible_oracle"
 
@@ -238,10 +277,16 @@ async def test_profile_oracle_skips_other_profiles():
 
 @pytest.mark.asyncio
 async def test_regression_flags_broken_collection():
-    eff = MockEffects(commands={"/bin/sh": CommandResult(
-        return_code=2, stdout="",
-        stderr="ImportError: cannot import name 'foo'\nerrors during collection",
-        command="x")})
+    eff = MockEffects(
+        commands={
+            "/bin/sh": CommandResult(
+                return_code=2,
+                stdout="",
+                stderr="ImportError: cannot import name 'foo'\nerrors during collection",
+                command="x",
+            )
+        }
+    )
     out = await action_check_profile_oracle(_si(_mission_p("repair"), eff))
     vr = out.context_updates["validation_results"]
     assert len(vr) == 1 and vr[0]["name"] == "repair_oracle"
@@ -249,8 +294,13 @@ async def test_regression_flags_broken_collection():
 
 @pytest.mark.asyncio
 async def test_regression_passes_clean_collection():
-    eff = MockEffects(commands={"/bin/sh": CommandResult(
-        return_code=0, stdout="collected 42 items", stderr="", command="x")})
+    eff = MockEffects(
+        commands={
+            "/bin/sh": CommandResult(
+                return_code=0, stdout="collected 42 items", stderr="", command="x"
+            )
+        }
+    )
     out = await action_check_profile_oracle(_si(_mission_p("repair"), eff))
     assert out.context_updates.get("validation_results", []) == []
 
@@ -258,8 +308,13 @@ async def test_regression_passes_clean_collection():
 @pytest.mark.asyncio
 async def test_regression_skips_when_pytest_absent():
     # A pre-existing absence (no pytest) is NOT a fix-induced break — must skip.
-    eff = MockEffects(commands={"/bin/sh": CommandResult(
-        return_code=1, stdout="", stderr="No module named pytest", command="x")})
+    eff = MockEffects(
+        commands={
+            "/bin/sh": CommandResult(
+                return_code=1, stdout="", stderr="No module named pytest", command="x"
+            )
+        }
+    )
     out = await action_check_profile_oracle(_si(_mission_p("repair"), eff))
     assert out.context_updates.get("validation_results", []) == []
 
@@ -284,15 +339,21 @@ async def test_artifact_oracle_runs_all_rungs_over_one_read():
     # even though sanity + format + (conservation-eligible) profile all want it.
     m = _mission_p("data_transform", CRIT)
     m.task_definition.output_format_spec = {
-        "output_file": "/app/answer.txt", "checks": [{"type": "line_count", "value": 1}]}
-    eff = _CountingEffects(files={"/app/answer.txt": ""})  # empty → degenerate + 0 lines
+        "output_file": "/app/answer.txt",
+        "checks": [{"type": "line_count", "value": 1}],
+    }
+    eff = _CountingEffects(
+        files={"/app/answer.txt": ""}
+    )  # empty → degenerate + 0 lines
     out = await action_check_artifact_oracles(_si(m, eff))
     names = [r["name"] for r in out.context_updates["validation_results"]]
     assert any(n.startswith("output_sanity") for n in names)
     assert any(n.startswith("output_format") for n in names)
     assert any(n == "data_transform_oracle" for n in names)
     assert eff.read_calls == 1  # the whole point: one read, all rungs
-    assert out.result["check_plausibility"] is False  # degenerate → no plausibility turn
+    assert (
+        out.result["check_plausibility"] is False
+    )  # degenerate → no plausibility turn
 
 
 @pytest.mark.asyncio

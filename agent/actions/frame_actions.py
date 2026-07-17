@@ -274,8 +274,9 @@ async def action_check_module_fix(step_input: StepInput) -> StepOutput:
     if placement:
         directive += f" Place it {placement}."
     if guidance_lines:
-        directive += "\nDiagnosis guidance (context, not code to insert):\n" + "\n".join(
-            guidance_lines
+        directive += (
+            "\nDiagnosis guidance (context, not code to insert):\n"
+            + "\n".join(guidance_lines)
         )
     # Multi-part fixes: when the diagnosis ALSO names a concrete symbol to
     # change, the module line is only half the fix — after a successful

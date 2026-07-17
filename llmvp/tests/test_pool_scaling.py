@@ -22,7 +22,6 @@ import pytest
 from inference.backends.llama_cpp_backend import LlamaCppBackend
 from inference.repetition import DegenerateGenerationError
 
-
 # ── fakes ─────────────────────────────────────────────────────────────
 
 

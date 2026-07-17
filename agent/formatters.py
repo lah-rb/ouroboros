@@ -140,7 +140,8 @@ def format_drift_facts(params: dict, namespaces: dict) -> str:
         new = facts.get("new_files") or []
         return (
             "Filesystem drift: files exist on disk that the blueprint does NOT "
-            "declare: " + (", ".join(new) if new else "(unspecified)")
+            "declare: "
+            + (", ".join(new) if new else "(unspecified)")
             + " — the blueprint may be out of sync with the workspace."
         )
     return "Filesystem drift: none — the blueprint matches the workspace."
@@ -469,7 +470,9 @@ def format_session_history(params: dict, namespaces: dict) -> str:
         lines.append(f"[Turn {entry.get('turn','?')}] $ {cmd}")
         if entry.get("output"):
             lines.append(
-                _bound_output(entry["output"], _HISTORY_TURN_MAX, entry.get("output_file"))
+                _bound_output(
+                    entry["output"], _HISTORY_TURN_MAX, entry.get("output_file")
+                )
             )
         if entry.get("return_code", 0) != 0:
             lines.append(f"(exit code: {entry['return_code']})")

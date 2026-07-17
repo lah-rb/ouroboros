@@ -106,7 +106,9 @@ async def test_functional_sweep_dispatches_repair_suite_deterministically():
     m = _mission(goals=[goal])
     fx = MockEffects(
         mission=m,
-        files={"tests/test_dirfs.py": "def test_open_async():\n    fs.open_async('x')\n"},
+        files={
+            "tests/test_dirfs.py": "def test_open_async():\n    fs.open_async('x')\n"
+        },
         commands={
             "/bin/sh": CommandResult(
                 return_code=1,
@@ -201,7 +203,9 @@ async def test_gate_harvests_fix_goals_on_failure():
     # idempotent: a second run reopens (already complete? no — still incomplete) → skip, no dup
     out2 = await action_run_test_suite_gate(_gate_si(m, fx))
     assert len([g for g in m.goals if g.origin == "test_gate"]) == 1
-    assert out2.result["tests_verified"] is True  # all failing already in flight → finalize
+    assert (
+        out2.result["tests_verified"] is True
+    )  # all failing already in flight → finalize
 
 
 @pytest.mark.asyncio
@@ -212,7 +216,11 @@ async def test_gate_certifies_on_clean_suite():
         description="fix it",
         type="functional",
         status="complete",
-        repair_tests={"test_files": ["tests/test_x.py"], "collect_ok": True, "derived": True},
+        repair_tests={
+            "test_files": ["tests/test_x.py"],
+            "collect_ok": True,
+            "derived": True,
+        },
     )
     m = _mission(goals=[goal])
     fx = MockEffects(
@@ -238,7 +246,11 @@ async def test_gate_stands_down_only_when_collection_STILL_broken():
         description="fix it",
         type="functional",
         status="complete",
-        repair_tests={"test_files": ["tests/test_x.py"], "collect_ok": False, "derived": True},
+        repair_tests={
+            "test_files": ["tests/test_x.py"],
+            "collect_ok": False,
+            "derived": True,
+        },
     )
     m = _mission(goals=[goal])
     fx = MockEffects(
@@ -324,7 +336,10 @@ async def test_smoke_check_stands_down_when_baseline_failing():
     out = await action_run_validation_checks_from_env(si)
     # smoke stood down → not counted as a failure → no whole-file self-correct
     assert out.result["smoke_failed"] is False
-    assert any("BASELINE" in line for line in out.context_updates["validation_output"].splitlines())
+    assert any(
+        "BASELINE" in line
+        for line in out.context_updates["validation_output"].splitlines()
+    )
 
 
 # ── Retest regressions: capability_absent + recursive search ──────────
@@ -346,7 +361,9 @@ async def test_repair_loop_engages_for_capability_absent_goals():
     m = _mission(goals=[goal])
     fx = MockEffects(
         mission=m,
-        files={"tests/test_dirfs.py": "def test_open_async():\n    fs.open_async('x', 'rb', 5)\n"},
+        files={
+            "tests/test_dirfs.py": "def test_open_async():\n    fs.open_async('x', 'rb', 5)\n"
+        },
         commands={
             "/bin/sh": CommandResult(
                 return_code=1,
@@ -382,7 +399,8 @@ async def test_derive_repair_tests_finds_nested_test_dirs_local_glob():
             "/bin/sh": CommandResult(
                 return_code=1,
                 stdout="FAILED pkg/sub/tests/test_deep.py::test_thing - AssertionError",
-                stderr="", command="pytest",
+                stderr="",
+                command="pytest",
             )
         },
     )
@@ -424,7 +442,8 @@ async def test_witness_rule_rejects_green_suite_tries_next():
             CommandResult(
                 return_code=1,
                 stdout="FAILED tests/test_dirfs.py::test_open_async - TypeError",
-                stderr="", command="p",
+                stderr="",
+                command="p",
             ),
         ],
         files=files,
@@ -440,7 +459,10 @@ async def test_witness_rule_rejects_green_suite_tries_next():
 async def test_witness_rule_all_green_falls_back_to_evaluator():
     fx = _SeqEffects(
         [CommandResult(return_code=0, stdout="12 passed", stderr="", command="p")] * 2,
-        files={"tests/test_a.py": "DirFileSystem\n", "tests/test_b.py": "DirFileSystem\n"},
+        files={
+            "tests/test_a.py": "DirFileSystem\n",
+            "tests/test_b.py": "DirFileSystem\n",
+        },
     )
     rt = await derive_repair_tests(fx, "DirFileSystem supports open_async")
     assert rt == {}  # no witness anywhere → LLM-evaluator fallback
@@ -456,10 +478,19 @@ async def test_strong_terms_exclude_prose_only_hits():
         "tests/test_qdp.py": "def test_lowercase():\n    QDP().read('read serr 1 2')\n",
     }
     fx = _SeqEffects(
-        [CommandResult(return_code=1, stdout="FAILED tests/test_qdp.py::test_lowercase - ValueError", stderr="", command="p")],
+        [
+            CommandResult(
+                return_code=1,
+                stdout="FAILED tests/test_qdp.py::test_lowercase - ValueError",
+                stderr="",
+                command="p",
+            )
+        ],
         files=files,
     )
-    rt = await derive_repair_tests(fx, "The QDP reader accepts command lines in any letter case")
+    rt = await derive_repair_tests(
+        fx, "The QDP reader accepts command lines in any letter case"
+    )
     assert rt["test_files"] == ["tests/test_qdp.py"]
 
 
@@ -486,7 +517,8 @@ async def test_deterministic_eval_fails_fixture_error_even_with_exit0():
             ),
             "all_passed": True,  # the mis-captured exit code
         },
-        inputs={}, params={},
+        inputs={},
+        params={},
         meta=FlowMeta(flow_name="interact", step_id="evaluate_deterministic"),
         effects=MockEffects(),
     )
@@ -498,7 +530,6 @@ async def test_deterministic_eval_fails_fixture_error_even_with_exit0():
 
 
 def _eval_si(terminal_output: str, all_passed: bool, *, goal=None) -> StepInput:
-    from agent.actions.pipeline_actions import action_evaluate_deterministic_result  # noqa: F401
 
     mission = _mission(goals=[goal]) if goal else None
     return StepInput(
@@ -612,7 +643,11 @@ async def test_gate_stale_baseline_recheck():
         description="fix it",
         type="functional",
         status="complete",
-        repair_tests={"test_files": ["tests/test_x.py"], "collect_ok": False, "derived": True},
+        repair_tests={
+            "test_files": ["tests/test_x.py"],
+            "collect_ok": False,
+            "derived": True,
+        },
     )
     m = _mission(goals=[goal])
 
@@ -629,13 +664,22 @@ async def test_gate_stale_baseline_recheck():
     # collect-only now CLEAN, then the suite run FAILS a node → harvest.
     fx = _Seq(
         [
-            CommandResult(return_code=0, stdout="3 tests collected", stderr="", command="c"),
-            CommandResult(return_code=1, stdout="FAILED tests/test_x.py::test_y - Boom", stderr="", command="p"),
+            CommandResult(
+                return_code=0, stdout="3 tests collected", stderr="", command="c"
+            ),
+            CommandResult(
+                return_code=1,
+                stdout="FAILED tests/test_x.py::test_y - Boom",
+                stderr="",
+                command="p",
+            ),
         ],
         mission=m,
     )
     si = StepInput(
-        context={"mission": m}, inputs={}, params={},
+        context={"mission": m},
+        inputs={},
+        params={},
         meta=FlowMeta(flow_name="mission_control", step_id="dispatch_test_gate"),
         effects=fx,
     )
@@ -654,10 +698,18 @@ def test_project_ops_wires_test_install_leg():
     root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     with open(_os.path.join(root, "flows", "compiled.json")) as f:
         steps = _json.load(f)["project_ops"]["steps"]
-    ci = {r["condition"]: r["transition"] for r in steps["collect_installs"]["resolver"]["rules"]}
+    ci = {
+        r["condition"]: r["transition"]
+        for r in steps["collect_installs"]["resolver"]["rules"]
+    }
     assert ci["result.commands_found == true"] == "run_installs"
-    assert ci["true"] == "collect_test_installs"  # no main installs → still check test deps
-    ri = {r["condition"]: r["transition"] for r in steps["run_installs"]["resolver"]["rules"]}
+    assert (
+        ci["true"] == "collect_test_installs"
+    )  # no main installs → still check test deps
+    ri = {
+        r["condition"]: r["transition"]
+        for r in steps["run_installs"]["resolver"]["rules"]
+    }
     assert ri["context.get('all_passed') == true"] == "collect_test_installs"
     cti = steps["collect_test_installs"]
     assert cti["params"]["field"] == "test_install_command"
@@ -679,7 +731,8 @@ async def test_collect_env_field_picks_up_test_install_command():
         }
     )
     si = StepInput(
-        context={}, inputs={},
+        context={},
+        inputs={},
         params={"field": "test_install_command", "output_key": "test_install_commands"},
         meta=FlowMeta(flow_name="project_ops", step_id="collect_test_installs"),
         effects=fx,

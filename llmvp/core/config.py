@@ -40,13 +40,13 @@ class ModelConfig(BaseModel):
     # swa_full to bound the memory cost on unified-memory (Metal) hardware.
     kv_unified: bool = False
     flash_attention: bool = False  # DEAD no-op (wrong kwarg name); see flash_attn_type
-    batch_size: int = 64           # DEAD no-op (wrong kwarg name); see n_batch
+    batch_size: int = 64  # DEAD no-op (wrong kwarg name); see n_batch
     # The two fields above were silently swallowed by Llama()'s **kwargs (the binding
     # has no `flash_attn`/`batch_size` params). These are the REAL llama.cpp knobs.
     # Defaults preserve the prior EFFECTIVE behavior — flash_attn was AUTO, batch was
     # the n_batch=2048 default — so wiring them changes nothing until explicitly tuned.
     flash_attn_type: str = "auto"  # auto (-1, llama.cpp decides) | on (1) | off (0)
-    n_batch: int = 2048            # logical prefill batch (the prior silent default)
+    n_batch: int = 2048  # logical prefill batch (the prior silent default)
     # Speculative decoding via the binding's native n-gram-map draft
     # (LlamaNGramMapDecoding): O(1) incremental n-gram lookup over the live context,
     # LOSSLESS (the target verifies every drafted token), zero extra model. Well-suited

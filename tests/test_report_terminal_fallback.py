@@ -33,10 +33,20 @@ IMPORT_ERR = (
     "ImportError: cannot import name 'GameState' from 'src'"
 )
 VALIDATION_RESULTS_FAILED = [
-    {"name": "syntax: src/engine.py", "passed": True, "tier": "syntax",
-     "stdout": "", "stderr": ""},
-    {"name": "import: src/engine.py", "passed": False, "tier": "import",
-     "stdout": "", "stderr": IMPORT_ERR},
+    {
+        "name": "syntax: src/engine.py",
+        "passed": True,
+        "tier": "syntax",
+        "stdout": "",
+        "stderr": "",
+    },
+    {
+        "name": "import: src/engine.py",
+        "passed": False,
+        "tier": "import",
+        "stdout": "",
+        "stderr": IMPORT_ERR,
+    },
 ]
 
 
@@ -55,7 +65,9 @@ async def test_gate_output_reaches_report_terminal_output():
     live error from validation_results so the re-diagnose can render it."""
     effects = MockEffects()
     si = _step_input(
-        effects, "file_ops", "failed",
+        effects,
+        "file_ops",
+        "failed",
         validation_results=VALIDATION_RESULTS_FAILED,
     )
     out = await action_compile_directive_report(si)
@@ -74,7 +86,9 @@ async def test_explicit_terminal_output_not_clobbered_by_validation():
     effects = MockEffects()
     program_output = "You are in a dark room.\nTypeError: real runtime crash"
     si = _step_input(
-        effects, "interact", "failed",
+        effects,
+        "interact",
+        "failed",
         terminal_output=program_output,
         validation_results=VALIDATION_RESULTS_FAILED,
     )

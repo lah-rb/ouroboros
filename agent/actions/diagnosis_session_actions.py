@@ -286,9 +286,11 @@ async def _failing_test_block(effects, error_output: str) -> str:
         try:
             if path not in file_cache:
                 fc = await effects.read_file(path)
-                file_cache[path] = getattr(fc, "content", "") or "" if getattr(
-                    fc, "exists", False
-                ) else ""
+                file_cache[path] = (
+                    getattr(fc, "content", "") or ""
+                    if getattr(fc, "exists", False)
+                    else ""
+                )
             content = file_cache[path]
             if not content:
                 continue
@@ -327,9 +329,7 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         # SYSTEM_PROMPT persona leads every diagnose seed, so pin it once per
         # instance and skip re-prefilling it on every later diagnose session. Key
         # is stable (md5 of the persona) and changes iff the persona changes.
-        _diag_key = (
-            f"diagnose:start:{hashlib.md5(SYSTEM_PROMPT.encode('utf-8')).hexdigest()[:10]}"
-        )
+        _diag_key = f"diagnose:start:{hashlib.md5(SYSTEM_PROMPT.encode('utf-8')).hexdigest()[:10]}"
         session_id = await effects.start_inference_session(
             {"ttl_seconds": 600}, static_prefix=SYSTEM_PROMPT, flow_key=_diag_key
         )
@@ -1039,14 +1039,19 @@ async def action_conclude_diagnosis(
     # must not leave a stale expected_error relaxing a normal retest.
     goal_id = str((step_input.inputs or {}).get("goal_id", "") or "")
     if goal_id:
-        expected_error = str((out.context_updates or {}).get("expected_error", "") or "")
+        expected_error = str(
+            (out.context_updates or {}).get("expected_error", "") or ""
+        )
         try:
             mission = await effects.load_mission()
             goal = next(
                 (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id),
                 None,
             )
-            if goal is not None and getattr(goal, "expected_error", "") != expected_error:
+            if (
+                goal is not None
+                and getattr(goal, "expected_error", "") != expected_error
+            ):
                 goal.expected_error = expected_error
                 await effects.save_mission(mission)
         except Exception:

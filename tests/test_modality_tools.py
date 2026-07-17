@@ -19,10 +19,12 @@ _PDF_VENV_PY = os.path.join(_PDF_TOOL, ".venv", "bin", "python")
 
 # ── vl_inspect: payload builder (stdlib-only module import) ─────────────────
 
+
 def _import_vl_inspect():
     sys.path.insert(0, _FIG_TOOL)
     try:
         import vl_inspect
+
         return vl_inspect
     finally:
         sys.path.remove(_FIG_TOOL)
@@ -31,7 +33,9 @@ def _import_vl_inspect():
 def test_vl_payload_shape_and_question_placement():
     vi = _import_vl_inspect()
     b64 = base64.b64encode(b"fakeimg").decode()
-    p = vi.build_payload("m", b64, "image/jpeg", "What does the sign say?", max_tokens=123)
+    p = vi.build_payload(
+        "m", b64, "image/jpeg", "What does the sign say?", max_tokens=123
+    )
     assert p["model"] == "m" and p["max_tokens"] == 123
     parts = p["messages"][0]["content"]
     text = next(x for x in parts if x["type"] == "text")
@@ -42,14 +46,20 @@ def test_vl_payload_shape_and_question_placement():
 
 def test_vl_mime_inference_covers_gaia_image_exts():
     vi = _import_vl_inspect()
-    for ext, mime in ((".png", "image/png"), (".jpg", "image/jpeg"), (".jpeg", "image/jpeg")):
+    for ext, mime in (
+        (".png", "image/png"),
+        (".jpg", "image/jpeg"),
+        (".jpeg", "image/jpeg"),
+    ):
         assert vi._MIME[ext] == mime
 
 
 # ── pdf_extract_one: pymupdf engine round-trip (gated on the tool venv) ─────
 
-@pytest.mark.skipif(not os.path.exists(_PDF_VENV_PY),
-                    reason="tools/pdf_extract/.venv not provisioned")
+
+@pytest.mark.skipif(
+    not os.path.exists(_PDF_VENV_PY), reason="tools/pdf_extract/.venv not provisioned"
+)
 def test_pdf_extract_one_pymupdf_roundtrip(tmp_path):
     pdf = tmp_path / "fixture.pdf"
     # Build a 1-page fixture with the SAME venv's pymupdf, then extract it.
@@ -60,22 +70,39 @@ def test_pdf_extract_one_pymupdf_roundtrip(tmp_path):
     )
     subprocess.run([_PDF_VENV_PY, "-c", mk], check=True, cwd=_PDF_TOOL)
     out = subprocess.run(
-        [_PDF_VENV_PY, os.path.join(_PDF_TOOL, "pdf_extract_one.py"),
-         "--pdf", str(pdf), "--engine", "pymupdf"],
-        capture_output=True, text=True, cwd=_PDF_TOOL,
+        [
+            _PDF_VENV_PY,
+            os.path.join(_PDF_TOOL, "pdf_extract_one.py"),
+            "--pdf",
+            str(pdf),
+            "--engine",
+            "pymupdf",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=_PDF_TOOL,
     )
     assert out.returncode == 0, out.stderr
     assert "=== page 1 ===" in out.stdout
     assert "GAIA fixture 12345" in out.stdout
 
 
-@pytest.mark.skipif(not os.path.exists(_PDF_VENV_PY),
-                    reason="tools/pdf_extract/.venv not provisioned")
+@pytest.mark.skipif(
+    not os.path.exists(_PDF_VENV_PY), reason="tools/pdf_extract/.venv not provisioned"
+)
 def test_pdf_extract_one_missing_pdf_fails_cleanly():
     out = subprocess.run(
-        [_PDF_VENV_PY, os.path.join(_PDF_TOOL, "pdf_extract_one.py"),
-         "--pdf", "/nonexistent.pdf", "--engine", "pymupdf"],
-        capture_output=True, text=True, cwd=_PDF_TOOL,
+        [
+            _PDF_VENV_PY,
+            os.path.join(_PDF_TOOL, "pdf_extract_one.py"),
+            "--pdf",
+            "/nonexistent.pdf",
+            "--engine",
+            "pymupdf",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=_PDF_TOOL,
     )
     assert out.returncode == 2
     assert "no such pdf" in out.stderr
@@ -83,14 +110,18 @@ def test_pdf_extract_one_missing_pdf_fails_cleanly():
 
 # ── MissionConfig.vision: additive, defaults off ─────────────────────────────
 
+
 def test_mission_config_vision_defaults_false_and_loads_old_configs():
     from agent.persistence.models import MissionConfig
 
     cfg = MissionConfig(working_directory="/tmp/x")
     assert cfg.vision is False
     # Old mission.json (no vision key) must load unchanged.
-    old = MissionConfig.model_validate({"working_directory": "/tmp/x", "web_research": False})
+    old = MissionConfig.model_validate(
+        {"working_directory": "/tmp/x", "web_research": False}
+    )
     assert old.vision is False and old.web_research is False
+
 
 # ── audio_transcribe: structure + rendering (stdlib-safe imports) ────────────
 
@@ -101,6 +132,7 @@ def _import_audio_transcribe():
     sys.path.insert(0, _AT_TOOL)
     try:
         import audio_transcribe
+
         return audio_transcribe
     finally:
         sys.path.remove(_AT_TOOL)

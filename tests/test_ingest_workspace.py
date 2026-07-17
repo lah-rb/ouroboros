@@ -70,9 +70,7 @@ def test_ingest_workspace_hands_off_to_mission_control():
     assert handoff["tail_call"]["input_map"]["last_status"] == "success"
     # No greenfield goal derivation in this flow.
     assert "derive_goals" not in steps
-    assert all(
-        s.get("action") != "derive_project_goals" for s in steps.values()
-    )
+    assert all(s.get("action") != "derive_project_goals" for s in steps.values())
 
 
 def test_research_branch_returns_to_handoff():
@@ -84,9 +82,7 @@ def test_research_branch_returns_to_handoff():
     }
     assert dr["result.status == 'success'"] == "save_research"
     assert dr["true"] == "handoff"
-    assert (
-        steps["save_research"]["resolver"]["rules"][0]["transition"] == "handoff"
-    )
+    assert steps["save_research"]["resolver"]["rules"][0]["transition"] == "handoff"
 
 
 def test_pending_directive_routes_to_replan_before_greenfield_planning():
@@ -98,15 +94,11 @@ def test_pending_directive_routes_to_replan_before_greenfield_planning():
     rules = c["mission_control"]["steps"]["apply_last_result"]["resolver"]["rules"]
     conds = [r["condition"] for r in rules]
     # The pending_directive guard exists and routes to check_phase...
-    pend = next(
-        (r for r in rules if "pending_directive" in r["condition"]), None
-    )
+    pend = next((r for r in rules if "pending_directive" in r["condition"]), None)
     assert pend is not None and pend["transition"] == "check_phase"
     # ...and it precedes the needs_plan → dispatch_planning (greenfield) rule.
     pend_i = conds.index(pend["condition"])
-    needs_i = next(
-        i for i, ct in enumerate(conds) if "needs_plan" in ct
-    )
+    needs_i = next(i for i, ct in enumerate(conds) if "needs_plan" in ct)
     assert pend_i < needs_i
 
 

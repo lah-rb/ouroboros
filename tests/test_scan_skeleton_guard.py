@@ -121,29 +121,44 @@ _ASR_KEY = os.path.join(_sidecar_repo_root(), _ASR_TOOL_PY)
 def _vision_mission(**cfg):
     base = dict(working_directory="/w", vision=True)
     base.update(cfg)
-    return MissionState(objective="Count the red squares in the chart.",
-                        status="active", config=MissionConfig(**base))
+    return MissionState(
+        objective="Count the red squares in the chart.",
+        status="active",
+        config=MissionConfig(**base),
+    )
 
 
 def _run(si):
     return asyncio.run(action_scan_project(si))
 
 
-def _si_m(files, mission, commands=None, patterns=("*.py", "*.vltext", "*.transcript.txt"),
-          host_tools=True):
+def _si_m(
+    files,
+    mission,
+    commands=None,
+    patterns=("*.py", "*.vltext", "*.transcript.txt"),
+    host_tools=True,
+):
     return StepInput(
         context={},
         params={"root": ".", "include_patterns": list(patterns)},
         meta=FlowMeta(flow_name="x", step_id="y"),
-        effects=MockEffects(files=files, mission=mission, commands=commands or {},
-                            supports_host_tools=host_tools),
+        effects=MockEffects(
+            files=files,
+            mission=mission,
+            commands=commands or {},
+            supports_host_tools=host_tools,
+        ),
     )
 
 
 def test_image_digested_with_conditioned_prompt_and_sidecar_written():
     files = {"src/main.py": "print(1)", "chart.png": "\x89PNG"}
-    cmds = {_VL_KEY: CommandResult(return_code=0, stdout="Red squares: 4, blue: 2",
-                                   stderr="", command="vl")}
+    cmds = {
+        _VL_KEY: CommandResult(
+            return_code=0, stdout="Red squares: 4, blue: 2", stderr="", command="vl"
+        )
+    }
     si = _si_m(files, _vision_mission(), cmds)
     out = _run(si)
     fx = si.effects
@@ -151,10 +166,18 @@ def test_image_digested_with_conditioned_prompt_and_sidecar_written():
     assert "chart.png.vltext" in fx.written_files
     assert "Red squares" in out.context_updates["project_manifest"]["chart.png.vltext"]
     # the invocation used the OBJECTIVE-CONDITIONED prompt (the AB winner)
-    vl_calls = [c for c in fx.calls if c.method == "run_command"
-                and c.args and _VL_KEY in " ".join(map(str, c.args))]
-    joined = " ".join(map(str, vl_calls[0].args)) if vl_calls else str(
-        [(c.method, c.args) for c in fx.calls])
+    vl_calls = [
+        c
+        for c in fx.calls
+        if c.method == "run_command"
+        and c.args
+        and _VL_KEY in " ".join(map(str, c.args))
+    ]
+    joined = (
+        " ".join(map(str, vl_calls[0].args))
+        if vl_calls
+        else str([(c.method, c.args) for c in fx.calls])
+    )
     assert "pre-reading an image" in joined and "red squares" in joined.lower()
 
 
@@ -189,20 +212,31 @@ def test_vision_off_and_container_effects_skip():
 def test_audio_transcript_sidecar():
     files = {"talk.mp3": "x"}
     m = _vision_mission(vision=False, audio=True)
-    cmds = {_ASR_KEY: CommandResult(return_code=0, stdout="[0:00] hello world",
-                                    stderr="", command="asr")}
+    cmds = {
+        _ASR_KEY: CommandResult(
+            return_code=0, stdout="[0:00] hello world", stderr="", command="asr"
+        )
+    }
     si = _si_m(files, m, cmds)
     out = _run(si)
     assert "talk.mp3.transcript.txt" in si.effects.written_files
-    assert "hello world" in out.context_updates["project_manifest"]["talk.mp3.transcript.txt"]
+    assert (
+        "hello world"
+        in out.context_updates["project_manifest"]["talk.mp3.transcript.txt"]
+    )
 
 
 def test_tool_failure_never_fails_the_scan():
     files = {"chart.png": "x", "src/a.py": "pass"}
-    cmds = {_VL_KEY: CommandResult(return_code=1, stdout="", stderr="mlx exploded",
-                                   command="vl")}
+    cmds = {
+        _VL_KEY: CommandResult(
+            return_code=1, stdout="", stderr="mlx exploded", command="vl"
+        )
+    }
     si = _si_m(files, _vision_mission(), cmds)
     out = _run(si)
     assert out.result["file_count"] >= 1  # scan succeeded
     assert "chart.png.vltext" not in si.effects.written_files
-    assert "digestion failed" in out.context_updates["project_manifest"].get("[chart.png]", "")
+    assert "digestion failed" in out.context_updates["project_manifest"].get(
+        "[chart.png]", ""
+    )

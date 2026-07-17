@@ -55,6 +55,7 @@ def _record_workspace_ledger(
             dedupe=False,  # per-cycle narrative — every attempt is a data point
         )
 
+
 logger = logging.getLogger(__name__)
 
 TASK_GOAL_SIGNATURE = "ops-task"
@@ -160,7 +161,9 @@ async def action_run_property_probe(step_input: StepInput) -> StepOutput:
         await effects.write_file(test_name, test_src)
         # Run from the working dir so the script's own directory is the import
         # root (`import grid_transform` resolves to the candidate).
-        res = await effects.run_command(["python3", test_name], working_dir=wd, timeout=30)
+        res = await effects.run_command(
+            ["python3", test_name], working_dir=wd, timeout=30
+        )
         passed = res.return_code == 0
         detail = ((res.stdout or "") + (res.stderr or "")).strip()
         # Clean up so the probe artifact never pollutes the graded workspace.
@@ -172,14 +175,16 @@ async def action_run_property_probe(step_input: StepInput) -> StepOutput:
             context_updates=updates,
         )
 
-    results.append(check_result(
-        "asym_property_probe",
-        f"python3 {test_name}",
-        passed,
-        stdout=res.stdout or "",
-        stderr=res.stderr or "",
-        return_code=res.return_code,
-    ))
+    results.append(
+        check_result(
+            "asym_property_probe",
+            f"python3 {test_name}",
+            passed,
+            stdout=res.stdout or "",
+            stderr=res.stderr or "",
+            return_code=res.return_code,
+        )
+    )
     updates["validation_results"] = results
     return StepOutput(
         result={"probe_passed": passed, "probe_ran": True},
@@ -247,7 +252,11 @@ def _parse_completion_criteria(text: str) -> list[dict]:
     Accepts {"checks":[...]}, a bare list, or a lone {command} dict."""
     parsed = parse_llm_json(str(text or ""))
     # Derive-guard: an action/command emitted in place of checks is not a criterion.
-    if isinstance(parsed, dict) and "action" in parsed and not (parsed.get("checks") or parsed.get("command")):
+    if (
+        isinstance(parsed, dict)
+        and "action" in parsed
+        and not (parsed.get("checks") or parsed.get("command"))
+    ):
         return []
     if isinstance(parsed, dict):
         items = parsed.get("checks") or ([parsed] if parsed.get("command") else [])
@@ -258,11 +267,13 @@ def _parse_completion_criteria(text: str) -> list[dict]:
     out = []
     for item in items if isinstance(items, list) else []:
         if isinstance(item, dict) and str(item.get("command") or "").strip():
-            out.append({
-                "command": str(item["command"]).strip(),
-                "name": str(item.get("description") or item["command"])[:80],
-                "required": True,
-            })
+            out.append(
+                {
+                    "command": str(item["command"]).strip(),
+                    "name": str(item.get("description") or item["command"])[:80],
+                    "required": True,
+                }
+            )
     return out
 
 
@@ -279,9 +290,13 @@ async def action_store_reground_criteria(step_input: StepInput) -> StepOutput:
     effects = step_input.effects
     mission = step_input.context.get("mission")
     if not mission or getattr(mission, "task_definition", None) is None:
-        return StepOutput(result={"criteria_count": 0}, observations="No task_definition")
+        return StepOutput(
+            result={"criteria_count": 0}, observations="No task_definition"
+        )
     td = mission.task_definition
-    new = _parse_completion_criteria(str(step_input.context.get("inference_response", "")))
+    new = _parse_completion_criteria(
+        str(step_input.context.get("inference_response", ""))
+    )
     merged = list(td.completion_criteria or [])
     seen = {c.get("command") for c in merged}
     added = 0
@@ -294,7 +309,9 @@ async def action_store_reground_criteria(step_input: StepInput) -> StepOutput:
     if merged:
         td.completion_criteria_grounded = True
     else:
-        logger.warning("Definition-of-done parsed to 0 checks — will re-derive next cycle")
+        logger.warning(
+            "Definition-of-done parsed to 0 checks — will re-derive next cycle"
+        )
     if effects:
         await effects.save_mission(mission)
     return StepOutput(
@@ -304,7 +321,14 @@ async def action_store_reground_criteria(step_input: StepInput) -> StepOutput:
     )
 
 
-_FORMAT_CHECK_TYPES = {"exists", "line_count", "regex", "no_wrapping", "required_keys", "columns"}
+_FORMAT_CHECK_TYPES = {
+    "exists",
+    "line_count",
+    "regex",
+    "no_wrapping",
+    "required_keys",
+    "columns",
+}
 
 
 def _parse_output_format_spec(text: str) -> dict | None:
@@ -320,7 +344,8 @@ def _parse_output_format_spec(text: str) -> dict | None:
         return None
     raw = parsed.get("checks")
     checks = [
-        c for c in (raw if isinstance(raw, list) else [])
+        c
+        for c in (raw if isinstance(raw, list) else [])
         if isinstance(c, dict) and str(c.get("type", "")).lower() in _FORMAT_CHECK_TYPES
     ]
     if not checks:
@@ -349,9 +374,13 @@ async def action_store_reground_output_format(step_input: StepInput) -> StepOutp
     effects = step_input.effects
     mission = step_input.context.get("mission")
     if not mission or getattr(mission, "task_definition", None) is None:
-        return StepOutput(result={"format_check_count": 0}, observations="No task_definition")
+        return StepOutput(
+            result={"format_check_count": 0}, observations="No task_definition"
+        )
 
-    spec = _parse_output_format_spec(str(step_input.context.get("inference_response", "")))
+    spec = _parse_output_format_spec(
+        str(step_input.context.get("inference_response", ""))
+    )
     td = mission.task_definition
     if spec is not None:
         td.output_format_spec = spec
@@ -363,7 +392,8 @@ async def action_store_reground_output_format(step_input: StepInput) -> StepOutp
         result={"format_check_count": n},
         observations=(
             f"Regrounded output-format: {n} shape check(s) on "
-            f"{spec.get('output_file') or 'artifact'}" if spec
+            f"{spec.get('output_file') or 'artifact'}"
+            if spec
             else "Regrounded output-format: no concrete artifact identified (no gate)"
         ),
         context_updates={"mission": mission},
@@ -381,10 +411,14 @@ async def action_exa_probe_gate(step_input: StepInput) -> StepOutput:
     Context: mission (required).  Result: should_search.  Publishes: search_queries.
     """
     import re as _re
+
     mission = step_input.context.get("mission")
     td = getattr(mission, "task_definition", None) if mission else None
     if td is None:
-        return StepOutput(result={"should_search": False}, observations="exa-probe: no task_definition")
+        return StepOutput(
+            result={"should_search": False},
+            observations="exa-probe: no task_definition",
+        )
     attempts = int(getattr(td, "attempts", 0) or 0)
     already = bool((getattr(td, "search_findings", "") or "").strip())
     if attempts < 2 or already:
@@ -393,7 +427,9 @@ async def action_exa_probe_gate(step_input: StepInput) -> StepOutput:
             observations=f"exa-probe: skip (attempts={attempts}, searched={already})",
         )
     objective = str(getattr(mission, "objective", "") or "")
-    cleaned = _re.sub(r"[/\\]\S+|`[^`]*`", " ", objective)   # strip paths + backticked literals
+    cleaned = _re.sub(
+        r"[/\\]\S+|`[^`]*`", " ", objective
+    )  # strip paths + backticked literals
     query = _re.sub(r"\s+", " ", cleaned).strip()[:200] or objective[:200]
     return StepOutput(
         result={"should_search": True},
@@ -410,6 +446,7 @@ async def action_store_search_findings(step_input: StepInput) -> StepOutput:
     Context: mission, raw_search_results.  Publishes: mission.
     """
     import re as _re
+
     effects = step_input.effects
     mission = step_input.context.get("mission")
     if not mission or getattr(mission, "task_definition", None) is None:

@@ -56,11 +56,15 @@ def test_boot_liveness_routes_clean_to_ux_dirty_to_summarize():
     )
     resolver = compiled["quality_gate"]["steps"]["check_boot_liveness"]["resolver"]
     assert (
-        resolve_rule(resolver, step_output=_Out({"boot_clean": True}), context={}, meta={})
+        resolve_rule(
+            resolver, step_output=_Out({"boot_clean": True}), context={}, meta={}
+        )
         == "plan_ux_charter"
     )
     assert (
-        resolve_rule(resolver, step_output=_Out({"boot_clean": False}), context={}, meta={})
+        resolve_rule(
+            resolver, step_output=_Out({"boot_clean": False}), context={}, meta={}
+        )
         == "summarize"
     )
 

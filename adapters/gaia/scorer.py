@@ -64,8 +64,10 @@ def question_scorer(model_answer: str, ground_truth: str) -> bool:
                 ok.append(normalize_number_str(ma) == float(gt))
             else:
                 # official scorer keeps punctuation inside list elements
-                ok.append(normalize_str(ma, remove_punct=False)
-                          == normalize_str(gt, remove_punct=False))
+                ok.append(
+                    normalize_str(ma, remove_punct=False)
+                    == normalize_str(gt, remove_punct=False)
+                )
         return all(ok)
 
     return normalize_str(model_answer) == normalize_str(ground_truth)

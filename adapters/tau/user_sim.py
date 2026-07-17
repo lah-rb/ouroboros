@@ -58,9 +58,7 @@ class SessionUserSim(BaseUserSimulationEnv):
         self._thread.start()
 
     def _run(self, coro):
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(
-            timeout=600
-        )
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=600)
 
     # -- BaseUserSimulationEnv contract ---------------------------------
     def reset(self, instruction: Optional[str] = None) -> str:

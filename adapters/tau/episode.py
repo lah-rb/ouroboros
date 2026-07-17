@@ -23,11 +23,18 @@ from adapters._common import llmvp_endpoint
 log = logging.getLogger(__name__)
 
 _BOSS_MENU = [
-    MenuOption("instruct", "give your operator ONE concrete work order for "
-               "this step (what to look up / change / confirm, per policy)",
-               arg="directive"),
-    MenuOption("end_episode", "the customer's needs are handled or clearly "
-               "refused and nothing actionable remains", arg="reason"),
+    MenuOption(
+        "instruct",
+        "give your operator ONE concrete work order for "
+        "this step (what to look up / change / confirm, per policy)",
+        arg="directive",
+    ),
+    MenuOption(
+        "end_episode",
+        "the customer's needs are handled or clearly "
+        "refused and nothing actionable remains",
+        arg="reason",
+    ),
 ]
 
 
@@ -74,8 +81,9 @@ class _RespondChannel:
         return user_reply, self._handle.done
 
 
-async def _run(domain: str, task_index: int, endpoint: str,
-               max_turns: int, boss_persona: str) -> EpisodeArtifacts:
+async def _run(
+    domain: str, task_index: int, endpoint: str, max_turns: int, boss_persona: str
+) -> EpisodeArtifacts:
     from adapters.tau.bridge import ToolBridge
     from adapters.tau.env import make_env
     from adapters.tau.runner import EpisodeHandle
@@ -87,8 +95,9 @@ async def _run(domain: str, task_index: int, endpoint: str,
 
     bridge = ToolBridge(handle)
     bridge.start()
-    boss_session = PersonaSession(endpoint, boss_persona,
-                                  temperature=0.35, max_tokens=400)
+    boss_session = PersonaSession(
+        endpoint, boss_persona, temperature=0.35, max_tokens=400
+    )
     worker: Optional[MissionWorker] = None
     try:
         worker = MissionWorker(
@@ -98,11 +107,12 @@ async def _run(domain: str, task_index: int, endpoint: str,
             llmvp_endpoint=endpoint,
         )
         boss = MenuBoss(
-            boss_session, _BOSS_MENU,
+            boss_session,
+            _BOSS_MENU,
             briefing=_boss_briefing(domain, handle.tools_info),
             default_choice="instruct",
             default_arg="Address the customer's latest message per policy; "
-                        "do any needed lookups, then write the reply.",
+            "do any needed lookups, then write the reply.",
         )
         env_loop = ChatEnv(boss, worker, _RespondChannel(handle), max_turns=max_turns)
         rec = await env_loop.run_episode(opening)
@@ -114,14 +124,21 @@ async def _run(domain: str, task_index: int, endpoint: str,
             reward = float(env.calculate_reward().reward)
 
         return EpisodeArtifacts(
-            domain=domain, task_index=task_index, reward=reward,
-            termination=rec.termination, turns=rec.turns,
+            domain=domain,
+            task_index=task_index,
+            reward=reward,
+            termination=rec.termination,
+            turns=rec.turns,
             boss_fallbacks=rec.boss_fallbacks,
             worker_failures=rec.worker_failures,
             tool_calls=bridge.calls,
             boss_decisions=[
-                {"choice": d.choice, "arg": d.arg, "attempts": d.attempts,
-                 "fallback": d.fallback}
+                {
+                    "choice": d.choice,
+                    "arg": d.arg,
+                    "attempts": d.attempts,
+                    "fallback": d.fallback,
+                }
                 for d in boss.decisions
             ],
             transcript=handle.transcript,
@@ -149,6 +166,5 @@ def run_tau_episode(
     for an episode-level failure — a crashed party yields whatever the
     transcript holds, graded honestly)."""
     return asyncio.run(
-        _run(domain, task_index, endpoint or llmvp_endpoint(),
-             max_turns, boss_persona)
+        _run(domain, task_index, endpoint or llmvp_endpoint(), max_turns, boss_persona)
     )

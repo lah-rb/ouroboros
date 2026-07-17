@@ -152,8 +152,10 @@ async def _grep_test_files(effects, terms: list[str]) -> list[str]:
 
     def _module_match(fp: str) -> int:
         stem = os.path.basename(fp)[:-3]  # strip .py
-        base = stem[5:] if stem.startswith("test_") else (
-            stem[:-5] if stem.endswith("_test") else stem
+        base = (
+            stem[5:]
+            if stem.startswith("test_")
+            else (stem[:-5] if stem.endswith("_test") else stem)
         )
         return 1 if base in stems else 0
 
@@ -166,7 +168,9 @@ async def _grep_test_files(effects, terms: list[str]) -> list[str]:
     ]
 
 
-async def _baseline(effects, test_files: list[str]) -> tuple[str, list[str], bool, bool]:
+async def _baseline(
+    effects, test_files: list[str]
+) -> tuple[str, list[str], bool, bool]:
     """Run the candidate suite once. Returns (command, failing_nodes,
     collect_ok, witnessed) — witnessed = the suite FAILS at baseline, i.e. it
     actually exhibits the defect this goal exists to fix."""
@@ -246,9 +250,7 @@ async def derive_repair_tests(effects, goal_description: str) -> dict:
 
 
 def is_repair_profile(mission) -> bool:
-    return (
-        getattr(getattr(mission, "config", None), "task_profile", "") == "repair"
-    )
+    return getattr(getattr(mission, "config", None), "task_profile", "") == "repair"
 
 
 async def action_derive_repair_tests(step_input: StepInput) -> StepOutput:
@@ -312,8 +314,9 @@ def _cap_diagnostic(text: str, limit: int = 1200) -> str:
         return text
     if "Traceback (most recent call last):" in text:
         head = limit // 3
-        return text[:head] + "\n…[frames truncated]…\n" + text[-(limit - head):]
+        return text[:head] + "\n…[frames truncated]…\n" + text[-(limit - head) :]
     return text[:limit]
+
 
 # Extensions that skip validation (non-code files)
 _SKIP_EXTENSIONS = {
@@ -595,8 +598,12 @@ async def action_run_validation_checks_from_env(
                 "passed": passed,
                 "tier": tier,
                 "required": tier == "syntax",
-                "stdout": _cap_diagnostic(result.stdout) if hasattr(result, "stdout") else "",
-                "stderr": _cap_diagnostic(result.stderr) if hasattr(result, "stderr") else "",
+                "stdout": (
+                    _cap_diagnostic(result.stdout) if hasattr(result, "stdout") else ""
+                ),
+                "stderr": (
+                    _cap_diagnostic(result.stderr) if hasattr(result, "stderr") else ""
+                ),
             }
             results.append(check)
 

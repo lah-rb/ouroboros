@@ -72,17 +72,29 @@ def _compiled():
 
 def test_add_ledger_entry_dedupes_and_caps():
     m = _mission()
-    assert m.add_ledger_entry(cycle=0, kind="provision", description="pip install x", status="success")
+    assert m.add_ledger_entry(
+        cycle=0, kind="provision", description="pip install x", status="success"
+    )
     # Re-reporting the same successful provision: deduped.
-    assert not m.add_ledger_entry(cycle=1, kind="provision", description="pip install x", status="success")
+    assert not m.add_ledger_entry(
+        cycle=1, kind="provision", description="pip install x", status="success"
+    )
     # A FAILED retry of a known entry still records.
-    assert m.add_ledger_entry(cycle=2, kind="provision", description="pip install x", status="failed")
+    assert m.add_ledger_entry(
+        cycle=2, kind="provision", description="pip install x", status="failed"
+    )
     # dedupe=False (per-cycle narrative) always appends.
-    assert m.add_ledger_entry(cycle=3, kind="session", description="n", status="attempt", dedupe=False)
-    assert m.add_ledger_entry(cycle=4, kind="session", description="n", status="attempt", dedupe=False)
+    assert m.add_ledger_entry(
+        cycle=3, kind="session", description="n", status="attempt", dedupe=False
+    )
+    assert m.add_ledger_entry(
+        cycle=4, kind="session", description="n", status="attempt", dedupe=False
+    )
     # Cap at 60, most recent kept.
     for i in range(70):
-        m.add_ledger_entry(cycle=i, kind="provision", description=f"e{i}", status="success")
+        m.add_ledger_entry(
+            cycle=i, kind="provision", description=f"e{i}", status="success"
+        )
     assert len(m.workspace_ledger) == 60
 
 
@@ -122,7 +134,9 @@ def test_setup_projection_renders_ledger_block():
     from agent.projections import MATERIALIZER_REGISTRY
 
     m = _mission()
-    m.add_ledger_entry(cycle=0, kind="provision", description="pip install rich", status="success")
+    m.add_ledger_entry(
+        cycle=0, kind="provision", description="pip install rich", status="success"
+    )
     ctx = MATERIALIZER_REGISTRY["project_setup_context"](m, {})
     assert "pip install rich" in ctx["workspace_ledger_block"]
     assert "ALREADY DONE THIS MISSION" in ctx["workspace_ledger_block"]
@@ -141,16 +155,22 @@ def test_setup_projection_renders_ledger_block():
 @pytest.mark.asyncio
 async def test_boot_liveness_flags_exit0_traceback():
     out = await action_check_boot_liveness(
-        _si(terminal_output="starting...\nTraceback (most recent call last):\n  ...\nKeyError: 'x'")
+        _si(
+            terminal_output="starting...\nTraceback (most recent call last):\n  ...\nKeyError: 'x'"
+        )
     )
     assert out.result["boot_clean"] is False
     vr = out.context_updates["validation_results"]
-    assert vr[0]["name"] == "boot_liveness" and vr[0]["required"] and not vr[0]["passed"]
+    assert (
+        vr[0]["name"] == "boot_liveness" and vr[0]["required"] and not vr[0]["passed"]
+    )
 
 
 @pytest.mark.asyncio
 async def test_boot_liveness_clean_and_empty_are_safe():
-    clean = await action_check_boot_liveness(_si(terminal_output="app started on :8080"))
+    clean = await action_check_boot_liveness(
+        _si(terminal_output="app started on :8080")
+    )
     assert clean.result["boot_clean"] is True
     assert clean.context_updates == {}
     empty = await action_check_boot_liveness(_si())
@@ -160,13 +180,22 @@ async def test_boot_liveness_clean_and_empty_are_safe():
 def test_quality_gate_wiring_boot_and_probe():
     steps = _compiled()["quality_gate"]["steps"]
     # startup success → boot floor → UX; dirty boot → summarize.
-    assert steps["run_startup_check"]["resolver"]["rules"][0]["transition"] == "check_boot_liveness"
-    bl = {r["condition"]: r["transition"] for r in steps["check_boot_liveness"]["resolver"]["rules"]}
+    assert (
+        steps["run_startup_check"]["resolver"]["rules"][0]["transition"]
+        == "check_boot_liveness"
+    )
+    bl = {
+        r["condition"]: r["transition"]
+        for r in steps["check_boot_liveness"]["resolver"]["rules"]
+    }
     assert bl["result.boot_clean == true"] == "plan_ux_charter"
     assert bl["true"] == "summarize"
     # profile oracle → asym-probe gate → dep coverage.
     assert steps["profile_oracle"]["resolver"]["rules"][0]["transition"] == "probe_gate"
-    pg = {r["condition"]: r["transition"] for r in steps["probe_gate"]["resolver"]["rules"]}
+    pg = {
+        r["condition"]: r["transition"]
+        for r in steps["probe_gate"]["resolver"]["rules"]
+    }
     assert pg["result.run_probe == true"] == "probe_generate"
     assert pg["true"] == "gather_dep_info"
     assert steps["probe_run"]["resolver"]["rules"][0]["transition"] == "gather_dep_info"
@@ -222,7 +251,9 @@ async def test_gate_acceptance_fires_once_per_eligible_goal():
     out = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": goal.id}))
     assert out.result["needs_derive"] is True
     goal.acceptance_grounded = True
-    goal.acceptance_checks = [{"command": "test -s save.json", "name": "s", "required": True}]
+    goal.acceptance_checks = [
+        {"command": "test -s save.json", "name": "s", "required": True}
+    ]
     out2 = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": goal.id}))
     assert out2.result["needs_derive"] is False
     assert out2.context_updates["goal_acceptance_checks"] == goal.acceptance_checks
@@ -243,11 +274,18 @@ async def test_store_acceptance_merges_tighten_only_and_one_shots():
     goal = _functional_goal()
     goal.acceptance_checks = [{"command": "test -f a", "name": "a", "required": True}]
     m = _mission([goal])
-    resp = ('```json\n{"checks": ['
-            '{"command": "test -s save.json", "description": "save exists"}, '
-            '{"command": "test -f a", "description": "dup"}]}\n```')
+    resp = (
+        '```json\n{"checks": ['
+        '{"command": "test -s save.json", "description": "save exists"}, '
+        '{"command": "test -f a", "description": "dup"}]}\n```'
+    )
     out = await action_store_goal_acceptance(
-        _si(MockEffects(), inputs={"goal_id": goal.id}, mission=m, inference_response=resp)
+        _si(
+            MockEffects(),
+            inputs={"goal_id": goal.id},
+            mission=m,
+            inference_response=resp,
+        )
     )
     cmds = [c["command"] for c in goal.acceptance_checks]
     assert cmds == ["test -f a", "test -s save.json"]  # prior kept, dup dropped
@@ -256,7 +294,12 @@ async def test_store_acceptance_merges_tighten_only_and_one_shots():
     # One-shot even on an empty parse (optional tightener, unlike ops' DoD).
     g2 = _functional_goal()
     await action_store_goal_acceptance(
-        _si(MockEffects(), inputs={"goal_id": g2.id}, mission=_mission([g2]), inference_response="junk")
+        _si(
+            MockEffects(),
+            inputs={"goal_id": g2.id},
+            mission=_mission([g2]),
+            inference_response="junk",
+        )
     )
     assert g2.acceptance_grounded is True and g2.acceptance_checks == []
 
@@ -277,13 +320,24 @@ async def test_acceptance_verdict_never_vacuous_and_vetoes():
 
 def test_interact_wiring_acceptance_rung():
     steps = _compiled()["interact"]["steps"]
-    assert steps["run_session"]["resolver"]["rules"][0]["transition"] == "gate_acceptance"
-    ga = {r["condition"]: r["transition"] for r in steps["gate_acceptance"]["resolver"]["rules"]}
+    assert (
+        steps["run_session"]["resolver"]["rules"][0]["transition"] == "gate_acceptance"
+    )
+    ga = {
+        r["condition"]: r["transition"]
+        for r in steps["gate_acceptance"]["resolver"]["rules"]
+    }
     assert ga["result.needs_derive == true"] == "derive_acceptance"
     assert ga["true"] == "run_acceptance_checks"
-    assert steps["store_acceptance"]["resolver"]["rules"][0]["transition"] == "run_acceptance_checks"
+    assert (
+        steps["store_acceptance"]["resolver"]["rules"][0]["transition"]
+        == "run_acceptance_checks"
+    )
     assert steps["run_acceptance_checks"]["action"] == "run_validation_checks"
-    assert steps["acceptance_verdict"]["resolver"]["rules"][0]["transition"] == "evaluate_outcome"
+    assert (
+        steps["acceptance_verdict"]["resolver"]["rules"][0]["transition"]
+        == "evaluate_outcome"
+    )
     # The deterministic veto: goal_met AND acceptance_ok.
     cond = steps["parse_evaluation"]["resolver"]["rules"][0]["condition"]
     assert "acceptance_ok" in cond and "goal_met" in cond
@@ -296,7 +350,12 @@ def _stuck_goal(n_attempts=2) -> GoalRecord:
     g = _functional_goal()
     for i in range(n_attempts):
         g.failed_attempts.append(
-            FailedAttempt(target_file="a.py", flow="file_ops", reason=f"r{i}", diagnosis_summary="d")
+            FailedAttempt(
+                target_file="a.py",
+                flow="file_ops",
+                reason=f"r{i}",
+                diagnosis_summary="d",
+            )
         )
     return g
 
@@ -352,7 +411,12 @@ async def test_store_goal_search_findings_and_sentinel():
     # Empty summary (web off / no hits) → sentinel so the gate one-shots.
     g2 = _stuck_goal(2)
     await action_store_goal_search_findings(
-        _si(MockEffects(), inputs={"goal_id": g2.id}, mission=_mission([g2]), research_summary="")
+        _si(
+            MockEffects(),
+            inputs={"goal_id": g2.id},
+            mission=_mission([g2]),
+            research_summary="",
+        )
     )
     assert g2.search_findings.startswith("(no relevant")
 
@@ -361,7 +425,10 @@ def test_diagnose_wiring_search_arm():
     flow = _compiled()["diagnose_issue"]
     assert flow["entry"] == "search_gate"
     steps = flow["steps"]
-    sg = {r["condition"]: r["transition"] for r in steps["search_gate"]["resolver"]["rules"]}
+    sg = {
+        r["condition"]: r["transition"]
+        for r in steps["search_gate"]["resolver"]["rules"]
+    }
     assert sg["result.should_search == true"] == "do_deep_search"
     assert sg["true"] == "start_session"
     # The stuck-goal arm now runs the deep_search sub-flow, not a one-shot exa.
@@ -369,7 +436,10 @@ def test_diagnose_wiring_search_arm():
     assert ds["flow"] == "deep_search"
     assert ds["input_map"]["brief"] == {"$ref": "context.search_brief"}
     assert ds["resolver"]["rules"][0]["transition"] == "store_search_findings"
-    assert steps["store_search_findings"]["resolver"]["rules"][0]["transition"] == "start_session"
+    assert (
+        steps["store_search_findings"]["resolver"]["rules"][0]["transition"]
+        == "start_session"
+    )
 
 
 @pytest.mark.asyncio
@@ -379,10 +449,16 @@ async def test_diagnose_seed_surfaces_ledger_and_findings():
     goal = _stuck_goal(2)
     goal.search_findings = "- http://x\n  use pty not pipes for interactive apps"
     m = _mission([goal])
-    m.add_ledger_entry(cycle=0, kind="provision", description="pip install rich", status="success")
+    m.add_ledger_entry(
+        cycle=0, kind="provision", description="pip install rich", status="success"
+    )
     fx = MockEffects(mission=m)
     out = await action_start_diagnosis_session(
-        _si(fx, inputs={"mission_id": m.id, "goal_id": goal.id}, goal_description="saving works")
+        _si(
+            fx,
+            inputs={"mission_id": m.id, "goal_id": goal.id},
+            goal_description="saving works",
+        )
     )
     assert out.result["session_started"] is True
     # The seed is queued as a session injection in context_updates.

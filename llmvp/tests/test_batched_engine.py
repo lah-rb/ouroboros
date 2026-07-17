@@ -19,7 +19,6 @@ from inference.batched_engine import (
     plan_seq_map,
 )
 
-
 # ── config preconditions ──────────────────────────────────────────────
 
 
@@ -27,8 +26,13 @@ def _cfg(decode_mode="pool", model_extra=None, resources_extra=None) -> dict:
     return {
         "app": {"host": "0.0.0.0", "port": 1, "log_level": "info"},
         "model": {
-            "name": "m", "family": "harmony", "path": "/nonexistent.gguf",
-            "n_ctx": 4096, "n_gpu_layers": 0, "seed": -1, "verbose": False,
+            "name": "m",
+            "family": "harmony",
+            "path": "/nonexistent.gguf",
+            "n_ctx": 4096,
+            "n_gpu_layers": 0,
+            "seed": -1,
+            "verbose": False,
             **(model_extra or {}),
         },
         "prompt": {"persona_file": "./knowledge/SOUL.md"},
@@ -45,7 +49,9 @@ def _cfg(decode_mode="pool", model_extra=None, resources_extra=None) -> dict:
 
 
 _BATCHED_MODEL_FLAGS = {
-    "resident_seq_cache": True, "swa_full": True, "kv_unified": True,
+    "resident_seq_cache": True,
+    "swa_full": True,
+    "kv_unified": True,
 }
 
 
@@ -83,12 +89,14 @@ def test_batched_warns_and_keeps_slot_personas(caplog):
 
     with caplog.at_level(_logging.WARNING):
         c = Config.model_validate(
-            _cfg("batched", _BATCHED_MODEL_FLAGS,
-                 {"slot_personas": ["default", "default"]})
+            _cfg(
+                "batched",
+                _BATCHED_MODEL_FLAGS,
+                {"slot_personas": ["default", "default"]},
+            )
         )
     assert c.resources.decode_mode == "batched"
-    assert any("ignores resources.slot_personas" in r.message
-               for r in caplog.records)
+    assert any("ignores resources.slot_personas" in r.message for r in caplog.records)
 
 
 def test_unknown_decode_mode_raises():
@@ -120,9 +128,7 @@ def test_seq_map_default_dedup_and_minimums():
 
 
 def _mk_engine() -> BatchedEngine:
-    return BatchedEngine(
-        llama=None, seq_map=plan_seq_map(2, [], []), n_batch=8
-    )
+    return BatchedEngine(llama=None, seq_map=plan_seq_map(2, [], []), n_batch=8)
 
 
 def test_control_ops_run_on_decode_thread_and_return_futures():
@@ -167,8 +173,13 @@ def test_health_shape():
     h = eng.health()
     assert h["decode_mode"] == "batched"
     assert h["active_streams"] == 0
-    for key in ("engine_steps", "prefill_budget", "kv_pressure_events",
-                "kv_evictions", "engine_fatal"):
+    for key in (
+        "engine_steps",
+        "prefill_budget",
+        "kv_pressure_events",
+        "kv_evictions",
+        "engine_fatal",
+    ):
         assert key in h
 
 
@@ -180,9 +191,16 @@ def test_seqslot_duck_types_instance_telemetry_surface():
     after a generate call — the SeqSlot facade must carry every one."""
     slot = SeqSlot(seq=0)
     for attr in (
-        "n_tokens", "_n_ctx", "input_ids", "_needs_context_refresh",
-        "_last_completion_tokens", "_last_gen_start_pos", "_last_kv_base",
-        "_last_dynamic_len", "_last_flow_hit", "_last_flow_key",
+        "n_tokens",
+        "_n_ctx",
+        "input_ids",
+        "_needs_context_refresh",
+        "_last_completion_tokens",
+        "_last_gen_start_pos",
+        "_last_kv_base",
+        "_last_dynamic_len",
+        "_last_flow_hit",
+        "_last_flow_key",
         "_last_cache_hit",
     ):
         assert hasattr(slot, attr), attr
@@ -283,8 +301,15 @@ class FakeBridge:
 EOG = 7777
 
 
-def _engine_with(ctx, *, samplers, n_batch=64, prefill_chunk=None, seats=2,
-                 capture_dir="/tmp/llmvp-test-captures"):
+def _engine_with(
+    ctx,
+    *,
+    samplers,
+    n_batch=64,
+    prefill_chunk=None,
+    seats=2,
+    capture_dir="/tmp/llmvp-test-captures",
+):
     from inference.batched_engine import BatchedEngine, PersonaHead
 
     heads = {"default": PersonaHead(name="default", seq=seats, tokens=[1, 2])}
@@ -336,7 +361,9 @@ def test_single_stream_prefill_decode_eog_and_telemetry():
 
     eng._step()  # prefill all 3 tokens (positions 2,3,4), logits on last
     assert ctx.decoded_batches[0] == [
-        (100, 2, (0,), False), (101, 3, (0,), False), (102, 4, (0,), True),
+        (100, 2, (0,), False),
+        (101, 3, (0,), False),
+        (102, 4, (0,), True),
     ]
     assert sampler.sampled_at == [2]  # last prompt row
 
@@ -460,13 +487,16 @@ def test_degenerate_detok_aborts_stream_cleanly(tmp_path):
     ctx = FakeCtx()
     s_a = FakeSampler([999, 999, 999])  # invalid UTF-8 bytes, valid detok
     eng = _engine_with(ctx, samplers={"a": s_a}, capture_dir=str(tmp_path))
+
     # Wire a guard that trips on the 3rd repeat.
     class TripGuard:
         def __init__(self):
             self.n = 0
+
         def observe(self, tok):
             self.n += 1
             return "run" if self.n >= 3 else None
+
     eng._repetition_guard_factory = TripGuard
     req = _req("a", [100])
     req._stream_id = "a"
@@ -495,7 +525,9 @@ def test_closed_bridge_swept_before_step():
 
 
 def test_fatal_decode_fails_all_streams_and_parks_engine():
-    boom = RuntimeError("llama_decode failed (code -3): Graph computation failed internally")
+    boom = RuntimeError(
+        "llama_decode failed (code -3): Graph computation failed internally"
+    )
     ctx = FakeCtx(decode_script=[boom])
     s_a, s_b = FakeSampler([10]), FakeSampler([20])
     eng = _engine_with(ctx, samplers={"a": s_a, "b": s_b})
@@ -516,7 +548,9 @@ def test_fatal_decode_fails_all_streams_and_parks_engine():
 
 
 def test_fatal_with_rebuild_heals_and_flags_pinned_seats():
-    boom = RuntimeError("llama_decode failed (code -3): Graph computation failed internally")
+    boom = RuntimeError(
+        "llama_decode failed (code -3): Graph computation failed internally"
+    )
     ctx = FakeCtx(decode_script=[boom])
     s_a, s_b = FakeSampler([10]), FakeSampler([20])
     eng = _engine_with(ctx, samplers={"a": s_a, "b": s_b})

@@ -86,8 +86,12 @@ class EpisodeHandle:
         res = self._env.step(Action(name=action_name, kwargs=kwargs))
         self.steps += 1
         self.transcript.append(
-            {"source": res.info.source, "action": action_name,
-             "kwargs": kwargs, "text": res.observation}
+            {
+                "source": res.info.source,
+                "action": action_name,
+                "kwargs": kwargs,
+                "text": res.observation,
+            }
         )
         if res.done or self.steps >= self._max_steps:
             self.done = True
@@ -102,8 +106,12 @@ class EpisodeHandle:
 
     def result(self, task_index: int) -> EpisodeResult:
         return EpisodeResult(
-            task_index=task_index, reward=self.reward, steps=self.steps,
-            done=self.done, info=self.info, transcript=self.transcript,
+            task_index=task_index,
+            reward=self.reward,
+            steps=self.steps,
+            done=self.done,
+            info=self.info,
+            transcript=self.transcript,
         )
 
 
@@ -125,17 +133,21 @@ def replay_gold(env: Any, task_index: int) -> EpisodeResult:
     if task.outputs:
         # The output check scans agent messages for required substrings —
         # synthesize the "final answer" message a real agent would send.
-        env.step(Action(
-            name=RESPOND_ACTION_NAME,
-            kwargs={"content": " ".join(str(o) for o in task.outputs)},
-        ))
+        env.step(
+            Action(
+                name=RESPOND_ACTION_NAME,
+                kwargs={"content": " ".join(str(o) for o in task.outputs)},
+            )
+        )
     rr = env.calculate_reward()
     return EpisodeResult(
         task_index=task_index,
         reward=float(rr.reward),
         steps=handle.steps,
         done=True,
-        info={"gold_replay": True,
-              "r_info": rr.info.model_dump() if hasattr(rr.info, "model_dump") else {}},
+        info={
+            "gold_replay": True,
+            "r_info": rr.info.model_dump() if hasattr(rr.info, "model_dump") else {},
+        },
         transcript=handle.transcript,
     )

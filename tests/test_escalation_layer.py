@@ -253,7 +253,9 @@ def test_escalate_flow_wiring():
     # typed terminals
     assert steps["resolved"]["status"] == "resolved"
     assert steps["deferred"]["status"] == "deferred"
-    cr = {r["condition"]: r["transition"] for r in steps["conclude"]["resolver"]["rules"]}
+    cr = {
+        r["condition"]: r["transition"] for r in steps["conclude"]["resolver"]["rules"]
+    }
     assert cr["result.outcome == 'resolved'"] == "end_session_resolved"
 
 
@@ -269,7 +271,9 @@ async def test_fold_search_injects_summary_and_spends_a_turn():
 
 @pytest.mark.asyncio
 async def test_fold_search_empty_summary_still_spends_a_turn():
-    out = await action_escalation_fold_search(_si(research_summary="", escalation_turn=0))
+    out = await action_escalation_fold_search(
+        _si(research_summary="", escalation_turn=0)
+    )
     assert out.result["action_ok"] is True
     assert out.context_updates["escalation_turn"] == 1
     assert "no usable findings" in _queued(out)
@@ -280,7 +284,10 @@ def test_escalate_work_menu_has_web_search():
     opts = steps["work"]["turn"]["transitions"]["options"]
     assert opts["web_search"] == "do_web_search"
     # web_search spends a normal escalation turn via fold_search → check_budget
-    fold_targets = {r["condition"]: r["transition"] for r in steps["fold_search"]["resolver"]["rules"]}
+    fold_targets = {
+        r["condition"]: r["transition"]
+        for r in steps["fold_search"]["resolver"]["rules"]
+    }
     assert fold_targets["true"] == "check_budget"
 
 
@@ -293,7 +300,16 @@ def test_file_ops_self_correct_escalates():
     assert rules["result.status == 'resolved'"] == "lookup_env"  # re-validate
     assert rules["true"] == "check_diagnose_budget"  # never a dead end
     # the retry budget + oversized-symbol diagnose routing are intact
-    cr = {r["condition"]: r["transition"] for r in steps["check_retry"]["resolver"]["rules"]}
+    cr = {
+        r["condition"]: r["transition"]
+        for r in steps["check_retry"]["resolver"]["rules"]
+    }
     assert cr["meta.attempt <= 2"] == "self_correct"
-    rc = {r["condition"]: r["transition"] for r in steps["run_checks"]["resolver"]["rules"]}
-    assert rc["result.syntax_failed == true and result.oversized_symbol_fix == true"] == "check_diagnose_budget"
+    rc = {
+        r["condition"]: r["transition"]
+        for r in steps["run_checks"]["resolver"]["rules"]
+    }
+    assert (
+        rc["result.syntax_failed == true and result.oversized_symbol_fix == true"]
+        == "check_diagnose_budget"
+    )

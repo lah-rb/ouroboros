@@ -102,15 +102,15 @@ class MenuBoss:
                     data = parse_llm_json(raw)
                     if isinstance(data, dict) and data.get(opt.arg) is not None:
                         arg = str(data[opt.arg])
-                decision = Decision(
-                    choice=choice, arg=arg, raw=raw, attempts=attempt
-                )
+                decision = Decision(choice=choice, arg=arg, raw=raw, attempts=attempt)
                 self.decisions.append(decision)
                 return decision
             prompt = _RETRY_NUDGE
             log.warning(
                 "boss menu parse failed (attempt %d/%d): %r",
-                attempt, self.retries + 1, raw[:120],
+                attempt,
+                self.retries + 1,
+                raw[:120],
             )
 
         decision = Decision(
@@ -123,7 +123,8 @@ class MenuBoss:
         self.decisions.append(decision)
         log.error(
             "boss menu degenerated after %d attempts — safe default %r",
-            self.retries + 1, self.default_choice,
+            self.retries + 1,
+            self.default_choice,
         )
         return decision
 

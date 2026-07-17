@@ -382,10 +382,7 @@ def cmd_mission_reopen(args: argparse.Namespace) -> None:
             )
         else:
             print("   All goals complete — `start` will re-run the quality gate.")
-    print(
-        "   Run: ouroboros.py start --working-dir "
-        + os.path.dirname(pm.agent_dir)
-    )
+    print("   Run: ouroboros.py start --working-dir " + os.path.dirname(pm.agent_dir))
 
 
 def cmd_mission_message(args: argparse.Namespace) -> None:
@@ -611,9 +608,7 @@ def cmd_lint_flows(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     results = lint(compiled_path=compiled_path, verbose=args.verbose)
-    shown = [
-        r for r in results if args.verbose or r.level in ("ERROR", "WARNING")
-    ]
+    shown = [r for r in results if args.verbose or r.level in ("ERROR", "WARNING")]
     for r in shown:
         print(str(r))
     errors = sum(1 for r in results if r.level == "ERROR")

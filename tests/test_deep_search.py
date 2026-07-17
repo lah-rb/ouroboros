@@ -54,7 +54,9 @@ def _mission(web_research=True) -> MissionState:
 @pytest.mark.asyncio
 async def test_open_session_declines_when_web_research_off():
     fx = MockEffects(mission=_mission(web_research=False))
-    out = await action_open_search_session(_si(fx, inputs={"brief": "how does X work?"}))
+    out = await action_open_search_session(
+        _si(fx, inputs={"brief": "how does X work?"})
+    )
     assert out.result["session_started"] is False
     assert out.context_updates["research_summary"] == ""
     assert out.context_updates["search_sufficient"] is False
@@ -89,7 +91,11 @@ async def test_search_run_returns_hits():
     fx._state["mcp_tool_responses"] = {
         "web_search_exa": {
             "results": [
-                {"url": "https://docs/x", "title": "X docs", "content": "X raises ValueError."}
+                {
+                    "url": "https://docs/x",
+                    "title": "X docs",
+                    "content": "X raises ValueError.",
+                }
             ]
         }
     }
@@ -116,7 +122,9 @@ async def test_search_run_no_hits_is_correction_and_records_query():
     out = await action_search_run(
         _si(fx, search_choice_arg="obscure query", search_session_id="s")
     )
-    assert out.result["action_ok"] is False  # no hits → refine (correction, not a round)
+    assert (
+        out.result["action_ok"] is False
+    )  # no hits → refine (correction, not a round)
     assert out.context_updates["search_queries_run"] == ["obscure query"]
     assert out.context_updates["raw_search_results"] == []
 
@@ -126,14 +134,24 @@ async def test_search_run_no_hits_is_correction_and_records_query():
 
 @pytest.mark.asyncio
 async def test_condense_folds_only_the_fact_not_raw_docs():
-    fx = MockEffects(inference_responses=["X raises ValueError on empty input (https://docs/x)."])
-    raw = [{"url": "https://docs/x", "title": "X", "content": "RAW_DOC_BODY_should_not_leak " * 20}]
+    fx = MockEffects(
+        inference_responses=["X raises ValueError on empty input (https://docs/x)."]
+    )
+    raw = [
+        {
+            "url": "https://docs/x",
+            "title": "X",
+            "content": "RAW_DOC_BODY_should_not_leak " * 20,
+        }
+    ]
     out = await action_condense_results(
         _si(fx, raw_search_results=raw, last_query="what does X raise", search_round=0)
     )
     folded = _queued(out)
     assert "ValueError on empty input" in folded  # the distilled fact IS folded
-    assert "RAW_DOC_BODY_should_not_leak" not in folded  # raw pages do NOT enter the session
+    assert (
+        "RAW_DOC_BODY_should_not_leak" not in folded
+    )  # raw pages do NOT enter the session
     assert out.context_updates["search_round"] == 1  # spends one round
     # Distilled in an ephemeral session steered LOW via the reasoning head-swap.
     calls = fx.calls_to("session_inference")
@@ -143,7 +161,9 @@ async def test_condense_folds_only_the_fact_not_raw_docs():
 
 @pytest.mark.asyncio
 async def test_condense_no_hits_still_advances_round():
-    out = await action_condense_results(_si(raw_search_results=[], last_query="q", search_round=1))
+    out = await action_condense_results(
+        _si(raw_search_results=[], last_query="q", search_round=1)
+    )
     assert out.context_updates["search_round"] == 2
 
 
@@ -169,7 +189,9 @@ async def test_conclude_search_parses_summary_and_sufficient():
 @pytest.mark.asyncio
 async def test_conclude_search_failsafe_on_unparseable():
     fx = MockEffects(inference_responses=["not json at all"])
-    out = await action_conclude_search(_si(fx, search_session_id="s", search_queries_run=[]))
+    out = await action_conclude_search(
+        _si(fx, search_session_id="s", search_queries_run=[])
+    )
     assert out.result["sufficient"] is False
     assert out.context_updates["research_summary"] == ""
 
@@ -202,7 +224,9 @@ def test_deep_search_flow_wiring():
 
 def test_escalate_web_search_dispatches_deep_search():
     steps = _compiled()["escalate"]["steps"]
-    assert steps["work"]["turn"]["transitions"]["options"]["web_search"] == "do_web_search"
+    assert (
+        steps["work"]["turn"]["transitions"]["options"]["web_search"] == "do_web_search"
+    )
     assert steps["do_web_search"]["action"] == "flow"
     assert steps["do_web_search"]["flow"] == "deep_search"
     assert steps["fold_search"]["action"] == "escalation_fold_search"

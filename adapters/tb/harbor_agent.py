@@ -311,9 +311,7 @@ class OuroborosHarborAgent(BaseAgent):
         if task_root is None:
             return []
         files = list((task_root / "tests").glob("*.sh"))
-        return mirror_test_env(
-            container, extract_deps(files), cwd, exec_user=exec_user
-        )
+        return mirror_test_env(container, extract_deps(files), cwd, exec_user=exec_user)
 
     def _preserve(self, host_tmp: str) -> None:
         """Copy the mission's .agent (mission.json + traces) into logs_dir so the
@@ -332,4 +330,3 @@ class OuroborosHarborAgent(BaseAgent):
                 f.write(text)
         except Exception:
             pass
-

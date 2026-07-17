@@ -38,12 +38,14 @@ from dataclasses import dataclass, field
 class LanguageSpec:
     """Per-language structural facts (consistent across the language's extensions)."""
 
-    name: str                                    # canonical: "python", "javascript"
-    extensions: tuple[str, ...]                  # ext-NO-dot variants: ("js","mjs","cjs","jsx")
-    grammar: str | None = None                   # EXACT tree-sitter-language-pack name; None = none
-    def_node_kinds: dict[str, str] = field(default_factory=dict)  # {ts_node_type: SymbolDef.kind}
-    label: str = ""                              # frame-editor display label ("shell script")
-    frame_fence: str = ""                        # frame-editor code fence ("bash")
+    name: str  # canonical: "python", "javascript"
+    extensions: tuple[str, ...]  # ext-NO-dot variants: ("js","mjs","cjs","jsx")
+    grammar: str | None = None  # EXACT tree-sitter-language-pack name; None = none
+    def_node_kinds: dict[str, str] = field(
+        default_factory=dict
+    )  # {ts_node_type: SymbolDef.kind}
+    label: str = ""  # frame-editor display label ("shell script")
+    frame_fence: str = ""  # frame-editor code fence ("bash")
     # ── forward-looking: the per-file-type "module-level fix" patterns fill these
     #    per spec (a comment prefix, a placement rule). Intentionally unpopulated. ──
     comment_prefix: str | None = None
@@ -56,9 +58,12 @@ class LanguageSpec:
 #    grammars are added. Values copied verbatim from the retired maps. ──
 LANGUAGES: tuple[LanguageSpec, ...] = (
     LanguageSpec(
-        name="python", extensions=("py",), grammar="python",
+        name="python",
+        extensions=("py",),
+        grammar="python",
         def_node_kinds={},  # Python is dispatched by repomap's dedicated extractor, never via these
-        label="Python file", frame_fence="python",
+        label="Python file",
+        frame_fence="python",
         comment_prefix="#",
         module_fix_placement=(
             "with the other imports, after any `from __future__` imports and the "
@@ -66,28 +71,36 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
         ),
     ),
     LanguageSpec(
-        name="bash", extensions=("sh", "bash", "zsh"), grammar="bash",
+        name="bash",
+        extensions=("sh", "bash", "zsh"),
+        grammar="bash",
         def_node_kinds={"function_definition": "function"},
-        label="shell script", frame_fence="bash",
+        label="shell script",
+        frame_fence="bash",
         comment_prefix="#",
         module_fix_placement=(
             "right after the shebang line, or as line 1 if there is no shebang"
         ),
     ),
     LanguageSpec(
-        name="javascript", extensions=("js", "mjs", "cjs", "jsx"), grammar="javascript",
+        name="javascript",
+        extensions=("js", "mjs", "cjs", "jsx"),
+        grammar="javascript",
         def_node_kinds={
             "function_declaration": "function",
             "generator_function_declaration": "function",
             "class_declaration": "class",
             "method_definition": "method",
         },
-        label="JavaScript file", frame_fence="javascript",
+        label="JavaScript file",
+        frame_fence="javascript",
         comment_prefix="//",
         module_fix_placement="at the top of the file, after any existing imports",
     ),
     LanguageSpec(
-        name="typescript", extensions=("ts",), grammar="typescript",
+        name="typescript",
+        extensions=("ts",),
+        grammar="typescript",
         def_node_kinds={
             "function_declaration": "function",
             "generator_function_declaration": "function",
@@ -96,30 +109,37 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
             "method_definition": "method",
             "method_signature": "method",
         },
-        label="TypeScript file", frame_fence="typescript",
+        label="TypeScript file",
+        frame_fence="typescript",
         comment_prefix="//",
         module_fix_placement="at the top of the file, after any existing imports",
     ),
     LanguageSpec(
-        name="tsx", extensions=("tsx",), grammar="tsx",
+        name="tsx",
+        extensions=("tsx",),
+        grammar="tsx",
         def_node_kinds={
             "function_declaration": "function",
             "class_declaration": "class",
             "interface_declaration": "class",
             "method_definition": "method",
         },
-        label="TypeScript file", frame_fence="tsx",
+        label="TypeScript file",
+        frame_fence="tsx",
         comment_prefix="//",
         module_fix_placement="at the top of the file, after any existing imports",
     ),
     LanguageSpec(
-        name="go", extensions=("go",), grammar="go",
+        name="go",
+        extensions=("go",),
+        grammar="go",
         def_node_kinds={
             "function_declaration": "function",
             "method_declaration": "method",
             "type_declaration": "class",
         },
-        label="Go file", frame_fence="go",
+        label="Go file",
+        frame_fence="go",
         comment_prefix="//",
         module_fix_placement=(
             "inside the existing `import ( … )` block, or a new block right after "
@@ -127,36 +147,45 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
         ),
     ),
     LanguageSpec(
-        name="ruby", extensions=("rb",), grammar="ruby",
+        name="ruby",
+        extensions=("rb",),
+        grammar="ruby",
         def_node_kinds={
             "method": "method",
             "singleton_method": "method",
             "class": "class",
             "module": "module",
         },
-        label="Ruby file", frame_fence="ruby",
+        label="Ruby file",
+        frame_fence="ruby",
         comment_prefix="#",  # module_fix_placement: out of first-cut scope
     ),
     LanguageSpec(
-        name="rust", extensions=("rs",), grammar="rust",
+        name="rust",
+        extensions=("rs",),
+        grammar="rust",
         def_node_kinds={
             "function_item": "function",
             "struct_item": "class",
             "enum_item": "class",
             "trait_item": "class",
         },
-        label="Rust file", frame_fence="rust",
+        label="Rust file",
+        frame_fence="rust",
         comment_prefix="//",  # module_fix_placement: out of first-cut scope
     ),
     LanguageSpec(
-        name="java", extensions=("java",), grammar="java",
+        name="java",
+        extensions=("java",),
+        grammar="java",
         def_node_kinds={
             "method_declaration": "method",
             "constructor_declaration": "method",
             "class_declaration": "class",
             "interface_declaration": "class",
         },
-        label="Java file", frame_fence="java",
+        label="Java file",
+        frame_fence="java",
         comment_prefix="//",  # module_fix_placement: out of first-cut scope
     ),
 )
@@ -206,10 +235,26 @@ _NAME_TO_EXT: dict[str, str] = {
 # "Is this a source-code file we should scan for imports?" (was
 # pipeline_actions._SOURCE_EXTENSIONS). NOTE: irregular — includes grammar-less
 # php/swift/kt/kts/dart/ex/exs but EXCLUDES sh/scala/mjs/cjs.
-SOURCE_EXTENSIONS: frozenset[str] = frozenset({
-    "py", "js", "ts", "jsx", "tsx", "rs", "go", "rb", "java",
-    "kt", "kts", "swift", "dart", "ex", "exs", "php",
-})
+SOURCE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        "py",
+        "js",
+        "ts",
+        "jsx",
+        "tsx",
+        "rs",
+        "go",
+        "rb",
+        "java",
+        "kt",
+        "kts",
+        "swift",
+        "dart",
+        "ex",
+        "exs",
+        "php",
+    }
+)
 
 # "Is this a structured-data file?" (was pipeline_actions._DATA_EXTENSIONS).
 DATA_EXTENSIONS: frozenset[str] = frozenset({"yaml", "yml", "json", "toml"})
@@ -231,6 +276,7 @@ _BY_GRAMMAR: dict[str, LanguageSpec] = {s.grammar: s for s in LANGUAGES if s.gra
 
 
 # ── Helpers (the consumer-facing API; each replaces one retired map access) ──
+
 
 def _norm_ext(ext: str) -> str:
     """Lowercase, strip a single leading dot. '.PY' -> 'py', 'py' -> 'py', '' -> ''."""

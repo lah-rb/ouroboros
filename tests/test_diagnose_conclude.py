@@ -181,7 +181,9 @@ async def test_conclude_persists_expected_error_onto_goal():
     from agent.persistence.models import GoalRecord, MissionConfig, MissionState
 
     goal = GoalRecord(description="reject empty separator", type="functional")
-    mission = MissionState(objective="o", config=MissionConfig(working_directory="/tmp/x"), goals=[goal])
+    mission = MissionState(
+        objective="o", config=MissionConfig(working_directory="/tmp/x"), goals=[goal]
+    )
     fenced = (
         "```json\n"
         "{\n"
@@ -216,8 +218,12 @@ async def test_conclude_clears_stale_expected_error_on_redigagnose():
     goal = GoalRecord(
         description="fix it", type="functional", expected_error="ValueError"
     )
-    mission = MissionState(objective="o", config=MissionConfig(working_directory="/tmp/x"), goals=[goal])
-    fenced = '```json\n{"target_file": "x.py", "target_symbol": "f", "kind": "fix"}\n```'
+    mission = MissionState(
+        objective="o", config=MissionConfig(working_directory="/tmp/x"), goals=[goal]
+    )
+    fenced = (
+        '```json\n{"target_file": "x.py", "target_symbol": "f", "kind": "fix"}\n```'
+    )
     effects = MockEffects(inference_responses=[fenced], mission=mission)
     out = await action_conclude_diagnosis(
         _step_input_with_goal(

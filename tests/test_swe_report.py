@@ -40,16 +40,23 @@ def _report() -> dict:
 
 def test_rows_restricted_to_attempted_and_divergences_flagged(tmp_path):
     logs = str(tmp_path / "logs")
-    _write_mission(logs, "flask-1", "paused", 0, 1)      # underclaim: parked but resolved
-    _write_mission(logs, "flask-2", "completed", 1, 1)   # aligned resolved
-    _write_mission(logs, "flask-3", "completed", 1, 1)   # overclaim: self-complete, unresolved
-    _write_mission(logs, "flask-4", "paused", 0, 1)      # aligned unresolved
+    _write_mission(logs, "flask-1", "paused", 0, 1)  # underclaim: parked but resolved
+    _write_mission(logs, "flask-2", "completed", 1, 1)  # aligned resolved
+    _write_mission(
+        logs, "flask-3", "completed", 1, 1
+    )  # overclaim: self-complete, unresolved
+    _write_mission(logs, "flask-4", "paused", 0, 1)  # aligned unresolved
 
     rows = build_rows(_report(), logs)
 
     # Only the 4 attempted instances — NOT the 100 dataset incomplete_ids.
     assert len(rows) == 4
-    assert {r["instance_id"] for r in rows} == {"flask-1", "flask-2", "flask-3", "flask-4"}
+    assert {r["instance_id"] for r in rows} == {
+        "flask-1",
+        "flask-2",
+        "flask-3",
+        "flask-4",
+    }
 
     by_id = {r["instance_id"]: r for r in rows}
     assert by_id["flask-1"]["divergence"] == "UNDERCLAIM"

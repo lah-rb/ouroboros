@@ -98,7 +98,9 @@ def test_rambling_model_keeps_first_final_only():
     assert "analysis" not in result
     assert "hmm more" not in result
     # Multi-turn transcript labelling (training/analysis path) is unchanged.
-    assert fsm_extract_content(raw, single_turn=False) == '{"choice": "a"}{"choice": "b"}'
+    assert (
+        fsm_extract_content(raw, single_turn=False) == '{"choice": "a"}{"choice": "b"}'
+    )
 
 
 def test_rambling_post_answer_analysis_is_D_not_T():

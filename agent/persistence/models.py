@@ -915,9 +915,13 @@ class MissionState(BaseModel):
         description = (description or "").strip()[:200]
         if not description:
             return False
-        if dedupe and status != "failed" and any(
-            e.kind == kind and e.description == description
-            for e in self.workspace_ledger
+        if (
+            dedupe
+            and status != "failed"
+            and any(
+                e.kind == kind and e.description == description
+                for e in self.workspace_ledger
+            )
         ):
             return False
         self.workspace_ledger.append(

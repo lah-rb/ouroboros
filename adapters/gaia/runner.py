@@ -16,7 +16,11 @@ import sys
 import tempfile
 
 from adapters.gaia.loader import GaiaQuestion
-from adapters._common import llmvp_endpoint, preserve_agent_dir, seed_workspace_venv  # noqa: E402
+from adapters._common import (
+    llmvp_endpoint,
+    preserve_agent_dir,
+    seed_workspace_venv,
+)  # noqa: E402
 from agent.mission_runner import (  # noqa: E402
     build_and_save_mission,
     run_mission_isolated,
@@ -24,7 +28,9 @@ from agent.mission_runner import (  # noqa: E402
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)  # sibling-adapter parity — don't rely on caller PYTHONPATH
+    sys.path.insert(
+        0, _REPO_ROOT
+    )  # sibling-adapter parity — don't rely on caller PYTHONPATH
 _LLMVP = llmvp_endpoint()
 # Same loose-backstop philosophy as SWE: wall-clock governs, cycles catch a
 # degenerate fast-loop. GAIA questions are smaller than SWE instances.
@@ -89,7 +95,7 @@ def _tool_note(file_name: str) -> tuple[str, bool, bool]:
             f" to ./{file_name}.vltext — read it. For focused follow-up"
             " questions about the image, run:\n"
             f"  {_VL_TOOL}/.venv/bin/python {_VL_TOOL}/vl_inspect.py"
-            f" --image ./{file_name} --question \"<what you need to know>\"\n"
+            f' --image ./{file_name} --question "<what you need to know>"\n'
             "(each call takes a minute or two).",
             True,
             False,
@@ -197,7 +203,9 @@ def run_question(
         # installs die with the workspace.
         seed_workspace_venv(workspace)
         if question.has_file and question.file_path:
-            shutil.copy2(question.file_path, os.path.join(workspace, question.file_name))
+            shutil.copy2(
+                question.file_path, os.path.join(workspace, question.file_name)
+            )
         mission, entry_flow = build_mission(question, workspace)
         effects = LocalEffects(
             working_directory=workspace,

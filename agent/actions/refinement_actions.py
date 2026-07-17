@@ -194,17 +194,42 @@ async def action_push_note(step_input: StepInput) -> StepOutput:
 # Guard G2 — vendor/cache/build dirs that aren't project source. A single
 # dataset or cache tree can hold 100k files; scanning into one produced the
 # 29M-token prompt that the server rejected. Matched as a path COMPONENT.
-_EXCLUDED_DIRS = frozenset({
-    ".git", ".hg", ".svn", ".venv", "venv", "env", "node_modules", "__pycache__",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".cache", "site-packages",
-    "dist", "build", ".next", ".nuxt", "target", ".idea", ".gradle", "vendor",
-    "datasets", ".agent", ".ouro_out",
-})
-_MAX_FILE_SIZE = 256 * 1024   # skip files larger than this (data/binary, not source)
-_MAX_SCAN_FILES = 300         # cap the manifest; the rest is reachable via trace/grep
-_SIGNATURE_MAX_CHARS = 1500   # byte-cap a per-file snippet (defeats minified one-liners).
-                              # 1500 keeps a full docstring+imports+~20 defs for AST
-                              # files while trimming the plan_charter projection (was 2000)
+_EXCLUDED_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "venv",
+        "env",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".cache",
+        "site-packages",
+        "dist",
+        "build",
+        ".next",
+        ".nuxt",
+        "target",
+        ".idea",
+        ".gradle",
+        "vendor",
+        "datasets",
+        ".agent",
+        ".ouro_out",
+    }
+)
+_MAX_FILE_SIZE = 256 * 1024  # skip files larger than this (data/binary, not source)
+_MAX_SCAN_FILES = 300  # cap the manifest; the rest is reachable via trace/grep
+_SIGNATURE_MAX_CHARS = (
+    1500  # byte-cap a per-file snippet (defeats minified one-liners).
+)
+# 1500 keeps a full docstring+imports+~20 defs for AST
+# files while trimming the plan_charter projection (was 2000)
 
 
 def _excluded(filepath: str) -> bool:
@@ -233,7 +258,6 @@ _VL_SIDECAR_TIMEOUT_S = 300
 _ASR_SIDECAR_TIMEOUT_S = 1800
 
 
-
 def _sidecar_prompt(objective: str) -> str:
     """The AB-winning conditioned-digest prompt (dev/predigest_ab)."""
     return (
@@ -258,17 +282,26 @@ async def _digest_modality_sidecars(
     all_paths = {e.path for e in listing_entries if e.is_file}
 
     for kind, exts, suffix, enabled, cap in (
-        ("image", _IMAGE_SIDECAR_EXTS, _VL_SIDECAR_SUFFIX,
-         bool(getattr(cfg, "vision", False)),
-         int(getattr(cfg, "modality_sidecar_max_images", 6) or 6)),
-        ("audio", _AUDIO_SIDECAR_EXTS, _AUDIO_SIDECAR_SUFFIX,
-         bool(getattr(cfg, "audio", False)),
-         int(getattr(cfg, "modality_sidecar_max_audio", 2) or 2)),
+        (
+            "image",
+            _IMAGE_SIDECAR_EXTS,
+            _VL_SIDECAR_SUFFIX,
+            bool(getattr(cfg, "vision", False)),
+            int(getattr(cfg, "modality_sidecar_max_images", 6) or 6),
+        ),
+        (
+            "audio",
+            _AUDIO_SIDECAR_EXTS,
+            _AUDIO_SIDECAR_SUFFIX,
+            bool(getattr(cfg, "audio", False)),
+            int(getattr(cfg, "modality_sidecar_max_audio", 2) or 2),
+        ),
     ):
         if not enabled:
             continue
         todo = [
-            p for p in sorted(all_paths)
+            p
+            for p in sorted(all_paths)
             if p.lower().endswith(exts)
             and not _excluded(p)
             and (p + suffix) not in all_paths
@@ -289,16 +322,20 @@ async def _digest_modality_sidecars(
                 cmd = [
                     os.path.join(root, _VL_TOOL_PY),
                     os.path.join(root, _VL_TOOL_SCRIPT),
-                    "--image", path,
-                    "--question", _sidecar_prompt(getattr(mission, "objective", "")),
-                    "--max-tokens", "600",
+                    "--image",
+                    path,
+                    "--question",
+                    _sidecar_prompt(getattr(mission, "objective", "")),
+                    "--max-tokens",
+                    "600",
                 ]
                 timeout = _VL_SIDECAR_TIMEOUT_S
             else:
                 cmd = [
                     os.path.join(root, _ASR_TOOL_PY),
                     os.path.join(root, _ASR_TOOL_SCRIPT),
-                    "--audio", path,
+                    "--audio",
+                    path,
                     "--timestamps",
                 ]
                 timeout = _ASR_SIDECAR_TIMEOUT_S
@@ -307,16 +344,19 @@ async def _digest_modality_sidecars(
                 text = (result.stdout or "").strip()
                 if result.return_code == 0 and text:
                     await effects.write_file(sidecar, text)
-                    manifest[sidecar] = (
-                        text[:_SIGNATURE_MAX_CHARS]
-                        + ("\n    # …(truncated)" if len(text) > _SIGNATURE_MAX_CHARS else "")
+                    manifest[sidecar] = text[:_SIGNATURE_MAX_CHARS] + (
+                        "\n    # …(truncated)"
+                        if len(text) > _SIGNATURE_MAX_CHARS
+                        else ""
                     )
                     notes.append(f"digested {path} -> {sidecar}")
                 else:
                     err = (result.stderr or "")[-200:] or f"exit {result.return_code}"
                     manifest[f"[{path}]"] = f"({kind} digestion failed: {err})"
                     notes.append(f"{kind} digestion FAILED for {path}: {err}")
-            except Exception as e:  # noqa: BLE001 — the scan must never fail on a sidecar
+            except (
+                Exception
+            ) as e:  # noqa: BLE001 — the scan must never fail on a sidecar
                 manifest[f"[{path}]"] = f"({kind} digestion error: {e})"
                 notes.append(f"{kind} digestion error for {path}: {e}")
     return notes
@@ -377,7 +417,8 @@ async def action_scan_project(step_input: StepInput) -> StepOutput:
                 )
                 if len(signature) > _SIGNATURE_MAX_CHARS:
                     signature = (
-                        signature[:_SIGNATURE_MAX_CHARS] + "\n    # …(signature truncated)"
+                        signature[:_SIGNATURE_MAX_CHARS]
+                        + "\n    # …(signature truncated)"
                     )
                 manifest[filepath] = signature
             else:
@@ -855,15 +896,17 @@ async def action_run_validation_checks(step_input: StepInput) -> StepOutput:
         cmd_result = await effects.run_command(cmd, timeout=check_timeout)
         passed = cmd_result.return_code == 0
 
-        results.append(check_result(
-            check.get("name", "unnamed check"),
-            check.get("command", ""),
-            passed,
-            required=check.get("required", True),
-            stdout=cmd_result.stdout,
-            stderr=cmd_result.stderr,
-            return_code=cmd_result.return_code,
-        ))
+        results.append(
+            check_result(
+                check.get("name", "unnamed check"),
+                check.get("command", ""),
+                passed,
+                required=check.get("required", True),
+                stdout=cmd_result.stdout,
+                stderr=cmd_result.stderr,
+                return_code=cmd_result.return_code,
+            )
+        )
 
         if not passed and check.get("required", True):
             all_required_passing = False
@@ -899,7 +942,6 @@ def _parse_validation_strategy(raw: str, max_checks: int) -> list[dict]:
 
 
 # ── load_file_contents ────────────────────────────────────────────────
-
 
 
 # ── log_validation_notes ──────────────────────────────────────────────
@@ -1352,5 +1394,3 @@ def _normalize_repro(raw: Any) -> list[str]:
 
 
 # ── validate_created_files ────────────────────────────────────────────
-
-

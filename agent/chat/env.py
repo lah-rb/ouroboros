@@ -86,8 +86,12 @@ class ChatEnv:
             rec.turns = turn
             decision = await self.controller.decide(update)
             rec.transcript.append(
-                {"role": "boss", "choice": decision.choice, "arg": decision.arg,
-                 "fallback": getattr(decision, "fallback", False)}
+                {
+                    "role": "boss",
+                    "choice": decision.choice,
+                    "arg": decision.arg,
+                    "fallback": getattr(decision, "fallback", False),
+                }
             )
             if getattr(decision, "fallback", False):
                 rec.boss_fallbacks += 1
@@ -95,9 +99,7 @@ class ChatEnv:
             if decision.choice == END_EPISODE:
                 # One courtesy closing message — gives the user sim its
                 # ###STOP### chance and closes the conversation gracefully.
-                report = await self.worker.execute(
-                    _CLOSING_DIRECTIVE, rec.transcript
-                )
+                report = await self.worker.execute(_CLOSING_DIRECTIVE, rec.transcript)
                 rec.transcript.append(
                     {"role": "agent", "text": report.reply, "closing": True}
                 )
@@ -110,8 +112,14 @@ class ChatEnv:
 
             # INSTRUCT (and any unknown choice defaults to worker execution).
             report = await self.worker.execute(decision.arg, rec.transcript)
-            rec.transcript.append({"role": "agent", "text": report.reply,
-                                   "notes": report.notes, "ok": report.ok})
+            rec.transcript.append(
+                {
+                    "role": "agent",
+                    "text": report.reply,
+                    "notes": report.notes,
+                    "ok": report.ok,
+                }
+            )
             if not report.ok:
                 rec.worker_failures += 1
 

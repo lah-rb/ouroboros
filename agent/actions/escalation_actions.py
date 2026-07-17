@@ -72,18 +72,20 @@ CONCLUDE_PROMPT = (
     "Conclude the escalation. Based on everything above, return a JSON object "
     "inside a fenced code block with these fields:\n\n"
     '  outcome — "resolved" if the expected outcome now holds (you verified '
-    "it, or your applied change directly satisfies it); \"deferred\" if it "
+    'it, or your applied change directly satisfies it); "deferred" if it '
     "does not hold and cannot be made to hold from here.\n"
     "  summary — one or two sentences: what was wrong and what you did (or "
     "why it must be deferred).\n"
-    "  key_change — the single most important file:change you made, or \"\" "
+    '  key_change — the single most important file:change you made, or "" '
     "if none.\n\n"
     "Return ONLY the fenced JSON object."
 )
 
 
 def _flow_key() -> str:
-    return f"escalate:start:{hashlib.md5(SYSTEM_PROMPT.encode('utf-8')).hexdigest()[:10]}"
+    return (
+        f"escalate:start:{hashlib.md5(SYSTEM_PROMPT.encode('utf-8')).hexdigest()[:10]}"
+    )
 
 
 def _bounded(s: str, n: int) -> str:
@@ -123,11 +125,17 @@ async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
     parts.append("## What failed")
     parts.append(f"The `{invoking}` step hit a deterministic failure:")
     parts.append("```")
-    parts.append(_bounded(str(inputs.get("failure_evidence", "") or "(no evidence provided)"), 4000))
+    parts.append(
+        _bounded(
+            str(inputs.get("failure_evidence", "") or "(no evidence provided)"), 4000
+        )
+    )
     parts.append("```")
     parts.append("")
     parts.append("## Expected outcome (conclude 'resolved' only when this holds)")
-    parts.append(str(inputs.get("expected_outcome", "") or "The failure above no longer occurs."))
+    parts.append(
+        str(inputs.get("expected_outcome", "") or "The failure above no longer occurs.")
+    )
     parts.append("")
     target = str(inputs.get("target_file_path", "") or "")
     if target:
@@ -139,8 +147,12 @@ async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
     web_enabled = True
     try:
         mission = await effects.load_mission()
-        web_enabled = bool(getattr(getattr(mission, "config", None), "web_research", True))
-    except Exception:  # noqa: BLE001 - no mission → assume enabled, rely on key backstop
+        web_enabled = bool(
+            getattr(getattr(mission, "config", None), "web_research", True)
+        )
+    except (
+        Exception
+    ):  # noqa: BLE001 - no mission → assume enabled, rely on key backstop
         web_enabled = True
     if web_enabled:
         parts.append(
@@ -183,7 +195,9 @@ def _correction(step_input: StepInput, msg: str) -> StepOutput:
     )
 
 
-def _observe(step_input: StepInput, message: str, extra: dict | None = None) -> StepOutput:
+def _observe(
+    step_input: StepInput, message: str, extra: dict | None = None
+) -> StepOutput:
     """Queue an observation and bump the turn budget."""
     turn = int(step_input.context.get("escalation_turn", 0) or 0) + 1
     updates: dict = {"escalation_turn": turn}
@@ -307,9 +321,9 @@ async def action_conclude_escalation(step_input: StepInput) -> StepOutput:
     Publishes: escalation_summary, files_changed.
     """
     effects = step_input.effects
-    session_id = step_input.context.get("escalation_session_id") or step_input.context.get(
-        "inference_session_id"
-    )
+    session_id = step_input.context.get(
+        "escalation_session_id"
+    ) or step_input.context.get("inference_session_id")
     files = list(step_input.context.get("escalation_files", []) or [])
     outcome = "deferred"
     summary = ""
@@ -319,7 +333,10 @@ async def action_conclude_escalation(step_input: StepInput) -> StepOutput:
         )
         text = getattr(res, "text", None) or str(res or "")
         parsed = parse_llm_json(text)
-        if isinstance(parsed, dict) and parsed.get("outcome") in ("resolved", "deferred"):
+        if isinstance(parsed, dict) and parsed.get("outcome") in (
+            "resolved",
+            "deferred",
+        ):
             outcome = parsed["outcome"]
             summary = str(parsed.get("summary", "") or "")[:400]
         else:

@@ -22,7 +22,9 @@ class _FakeImage:
 class _FakeClient:
     def __init__(self):
         self.images = types.SimpleNamespace(removed=[])
-        self.images.remove = lambda image, force=False: self.images.removed.append(image)
+        self.images.remove = lambda image, force=False: self.images.removed.append(
+            image
+        )
         self.closed = False
 
     def close(self):
@@ -41,8 +43,14 @@ def _reset(mode):
 
 
 def test_image_ref_prefers_tag_then_id():
-    assert ip._image_ref(types.SimpleNamespace(image=_FakeImage("alexgshaw/x:1"))) == "alexgshaw/x:1"
-    assert ip._image_ref(types.SimpleNamespace(image=_FakeImage(None, "sha256:abc"))) == "sha256:abc"
+    assert (
+        ip._image_ref(types.SimpleNamespace(image=_FakeImage("alexgshaw/x:1")))
+        == "alexgshaw/x:1"
+    )
+    assert (
+        ip._image_ref(types.SimpleNamespace(image=_FakeImage(None, "sha256:abc")))
+        == "sha256:abc"
+    )
     assert ip._image_ref(types.SimpleNamespace(image=None)) == ""
 
 
@@ -50,10 +58,10 @@ def test_per_instance_lag_removes_prior_task_image():
     _reset("per_instance")
     c = _FakeClient()
     ip.note_task_image(_container("alexgshaw/taskA:1", c))
-    assert c.images.removed == []          # first task: nothing to remove yet
+    assert c.images.removed == []  # first task: nothing to remove yet
     ip.note_task_image(_container("alexgshaw/taskB:1", c))
-    assert c.images.removed == ["alexgshaw/taskA:1"]   # prior task's image pruned
-    assert ip._prev == ["alexgshaw/taskB:1"]           # last image awaits atexit
+    assert c.images.removed == ["alexgshaw/taskA:1"]  # prior task's image pruned
+    assert ip._prev == ["alexgshaw/taskB:1"]  # last image awaits atexit
 
 
 def test_run_end_records_but_defers_to_atexit(monkeypatch):
@@ -61,15 +69,26 @@ def test_run_end_records_but_defers_to_atexit(monkeypatch):
     c = _FakeClient()
     ip.note_task_image(_container("alexgshaw/taskA:1", c))
     ip.note_task_image(_container("alexgshaw/taskB:1", c))
-    assert c.images.removed == []          # run_end defers all removal to exit
+    assert c.images.removed == []  # run_end defers all removal to exit
     assert ip._touched == {"alexgshaw/taskA:1", "alexgshaw/taskB:1"}
     # the atexit sweep prunes every touched image via a fresh client
     sweep_client = _FakeClient()
-    monkeypatch.setattr(ip, "docker", types.SimpleNamespace(from_env=lambda: sweep_client), raising=False)
+    monkeypatch.setattr(
+        ip,
+        "docker",
+        types.SimpleNamespace(from_env=lambda: sweep_client),
+        raising=False,
+    )
     import sys
-    monkeypatch.setitem(sys.modules, "docker", types.SimpleNamespace(from_env=lambda: sweep_client))
+
+    monkeypatch.setitem(
+        sys.modules, "docker", types.SimpleNamespace(from_env=lambda: sweep_client)
+    )
     ip._run_end_sweep()
-    assert set(sweep_client.images.removed) == {"alexgshaw/taskA:1", "alexgshaw/taskB:1"}
+    assert set(sweep_client.images.removed) == {
+        "alexgshaw/taskA:1",
+        "alexgshaw/taskB:1",
+    }
     assert sweep_client.closed is True
 
 
@@ -82,5 +101,5 @@ def test_off_is_a_noop():
 
 def test_note_never_raises_on_bad_container():
     _reset("run_end")
-    ip.note_task_image(types.SimpleNamespace(image=None))     # no image → no-op, no raise
-    ip.note_task_image(object())                              # missing attrs → swallowed
+    ip.note_task_image(types.SimpleNamespace(image=None))  # no image → no-op, no raise
+    ip.note_task_image(object())  # missing attrs → swallowed

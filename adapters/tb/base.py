@@ -118,8 +118,13 @@ def mirror_test_env(
             )
         container.exec_run(
             cmd=[
-                "python3", "-m", "pip", "install", "--quiet",
-                "--break-system-packages", *pkgs,
+                "python3",
+                "-m",
+                "pip",
+                "install",
+                "--quiet",
+                "--break-system-packages",
+                *pkgs,
             ],
             workdir=cwd,
             **eu,

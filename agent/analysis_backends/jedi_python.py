@@ -33,13 +33,42 @@ except ImportError:  # optional dependency — fall back to tree-sitter
 
 # Mirror agent.repomap._extract_references' builtin filter so the ref SET differs
 # from tree-sitter only by jedi's scoping, not by a different skip-list.
-_BUILTIN_NAMES = frozenset({
-    "self", "cls", "None", "True", "False", "print", "len", "range", "str", "int",
-    "float", "bool", "list", "dict", "set", "tuple", "type", "isinstance",
-    "issubclass", "super", "property", "staticmethod", "classmethod",
-    "abstractmethod", "dataclass", "field", "Any", "Optional", "Union", "Literal",
-    "Protocol", "TypeVar",
-})
+_BUILTIN_NAMES = frozenset(
+    {
+        "self",
+        "cls",
+        "None",
+        "True",
+        "False",
+        "print",
+        "len",
+        "range",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "list",
+        "dict",
+        "set",
+        "tuple",
+        "type",
+        "isinstance",
+        "issubclass",
+        "super",
+        "property",
+        "staticmethod",
+        "classmethod",
+        "abstractmethod",
+        "dataclass",
+        "field",
+        "Any",
+        "Optional",
+        "Union",
+        "Literal",
+        "Protocol",
+        "TypeVar",
+    }
+)
 
 
 def jedi_available() -> bool:

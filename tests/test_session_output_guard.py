@@ -35,7 +35,11 @@ def test_history_bounds_a_flooding_turn_but_keeps_error_tail():
     # (the LAST turn now collapses to a ledger line — its body is carried by
     # format_last_turn's Observation block, which is always paired).
     hist = [
-        {"turn": 1, "command": "make", "output": "BUILD_HEAD\n" + "y" * 50_000 + "\nERROR_AT_END"},
+        {
+            "turn": 1,
+            "command": "make",
+            "output": "BUILD_HEAD\n" + "y" * 50_000 + "\nERROR_AT_END",
+        },
         {"turn": 2, "command": "echo done", "output": "done"},
     ]
     out = format_session_history({"source": hist}, {})
@@ -44,7 +48,14 @@ def test_history_bounds_a_flooding_turn_but_keeps_error_tail():
 
 
 def test_last_turn_bounds_current_flood_keeps_final():
-    last = [{"turn": 1, "action": "shell_command", "command": "make", "output": "z" * 100_000 + "FINAL"}]
+    last = [
+        {
+            "turn": 1,
+            "action": "shell_command",
+            "command": "make",
+            "output": "z" * 100_000 + "FINAL",
+        }
+    ]
     out = format_last_turn({"source": last}, {})
     assert len(out) < _LAST_TURN_MAX + 400
     assert "FINAL" in out  # the just-produced result's tail is preserved
@@ -57,22 +68,34 @@ def test_last_turn_names_command_without_finality():
     # early without verifying, so the framing is DELIBERATELY softened: neutral
     # "Output of your command" + a plain "(end of output)" boundary, no
     # "Observation"/"ran"/"(End of observation.)" done-signal.
-    last = [{"turn": 4, "action": "shell_command", "command": "ls -R .", "output": "a.txt"}]
+    last = [
+        {"turn": 4, "action": "shell_command", "command": "ls -R .", "output": "a.txt"}
+    ]
     out = format_last_turn({"source": last}, {})
     assert "your command `ls -R .`" in out  # acceptance signal retained
     assert "(end of output)" in out  # light boundary
-    assert "Observation" not in out and "(End of observation.)" not in out  # finality removed
+    assert (
+        "Observation" not in out and "(End of observation.)" not in out
+    )  # finality removed
     assert "ran" not in out.split("\n")[0]  # no completion verb in the header
     # send_input and read_output get their own neutral phrasing
-    si = format_last_turn({"source": [{"turn": 5, "action": "send_input", "input": "north"}]}, {})
+    si = format_last_turn(
+        {"source": [{"turn": 5, "action": "send_input", "input": "north"}]}, {}
+    )
     assert "after sending `north`" in si and "Observation" not in si
     ro = format_last_turn({"source": [{"turn": 6, "action": "read_output"}]}, {})
     assert "Latest output read from the program" in ro and "Observation" not in ro
 
 
 def test_multiline_command_label_is_bounded_to_first_line():
-    last = [{"turn": 1, "action": "shell_command",
-             "command": "cat > f.py <<'EOF'\nprint(1)\nEOF", "output": "ok"}]
+    last = [
+        {
+            "turn": 1,
+            "action": "shell_command",
+            "command": "cat > f.py <<'EOF'\nprint(1)\nEOF",
+            "output": "ok",
+        }
+    ]
     out = format_last_turn({"source": last}, {})
     assert "cat > f.py <<'EOF' …" in out  # only the first line + ellipsis, not the body
 
@@ -91,7 +114,9 @@ def test_last_turn_collapses_to_ledger_in_history_nonlast_full():
 
 
 def test_bound_output_points_at_saved_file():
-    b = _bound_output("A" + "x" * 100_000 + "Z", _LAST_TURN_MAX, saved_path="/tmp/.ouro_out/t3.log")
+    b = _bound_output(
+        "A" + "x" * 100_000 + "Z", _LAST_TURN_MAX, saved_path="/tmp/.ouro_out/t3.log"
+    )
     assert "/tmp/.ouro_out/t3.log" in b and "grep PATTERN" in b
 
 
@@ -118,11 +143,14 @@ async def test_save_full_output_skips_small_and_no_effects():
 # ── G4: compact session display (older turns → ledger) ─────────────────────
 
 
-
 def test_old_turns_collapse_to_ledger_recent_stay_full():
     hist = [
-        {"turn": i, "command": f"cmd{i}", "output": ("z" * 60000 if i == 2 else f"out{i}"),
-         "return_code": (1 if i == 5 else 0)}
+        {
+            "turn": i,
+            "command": f"cmd{i}",
+            "output": ("z" * 60000 if i == 2 else f"out{i}"),
+            "return_code": (1 if i == 5 else 0),
+        }
         for i in range(20)
     ]
     out = format_session_history({"source": hist}, {})
@@ -138,7 +166,9 @@ def test_short_session_nonlast_full_last_is_ledger():
     short = [{"turn": i, "command": f"c{i}", "output": f"o{i}"} for i in range(4)]
     out = format_session_history({"source": short}, {})
     assert "o2" in out  # under the cutoff — non-last turns render full
-    assert "[Turn 3] $ c3  →" in out  # the last turn always collapses (body in last_turn)
+    assert (
+        "[Turn 3] $ c3  →" in out
+    )  # the last turn always collapses (body in last_turn)
 
 
 # ── Ordering guard: format_last_turn MUST run before format_session_history ──
@@ -156,14 +186,17 @@ from agent.loader import run_pre_compute  # noqa: E402
 
 
 def _plan_interaction_pre_compute() -> list:
-    c = _json.load(open(_os.path.join(_os.path.dirname(__file__), "..", "flows", "compiled.json")))
+    c = _json.load(
+        open(_os.path.join(_os.path.dirname(__file__), "..", "flows", "compiled.json"))
+    )
     found = []
 
     def walk(o):
         if isinstance(o, dict):
             pc = o.get("pre_compute")
             if isinstance(pc, list) and any(
-                isinstance(s, dict) and s.get("formatter") == "format_last_turn" for s in pc
+                isinstance(s, dict) and s.get("formatter") == "format_last_turn"
+                for s in pc
             ):
                 found.append(pc)
             for v in o.values():
@@ -181,9 +214,9 @@ def test_compiled_runs_last_turn_before_session_history():
     assert blocks, "no pre_compute block with format_last_turn found in compiled.json"
     for pc in blocks:
         names = [s["formatter"] for s in pc]
-        assert names.index("format_last_turn") < names.index("format_session_history"), (
-            f"format_last_turn must precede format_session_history (got {names})"
-        )
+        assert names.index("format_last_turn") < names.index(
+            "format_session_history"
+        ), f"format_last_turn must precede format_session_history (got {names})"
 
 
 def test_last_turn_populates_through_real_pre_compute_chain():

@@ -91,8 +91,7 @@ class FakeFx:
 def _mk_session(fake) -> "object":
     from agent.chat.session import PersonaSession
 
-    s = PersonaSession("http://x/graphql", "tau_boss",
-                       temperature=0.35, max_tokens=400)
+    s = PersonaSession("http://x/graphql", "tau_boss", temperature=0.35, max_tokens=400)
     s._fx = fake
     return s
 

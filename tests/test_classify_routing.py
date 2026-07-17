@@ -69,8 +69,13 @@ async def test_persist_routing_writes_choices_findings_and_seeds_directive():
     m = _mission()
     fx = MockEffects(mission=m)
     out = await action_persist_routing(
-        _si(m, fx, routed_flow_set="code_core", routed_profile="repair",
-            router_findings="Diffuse fix across sql/compiler.py and query.py.")
+        _si(
+            m,
+            fx,
+            routed_flow_set="code_core",
+            routed_profile="repair",
+            router_findings="Diffuse fix across sql/compiler.py and query.py.",
+        )
     )
     assert m.config.flow_set == "code_core"
     assert m.config.task_profile == "repair"
@@ -260,21 +265,33 @@ def test_classify_conclude_publishes_route_and_findings():
     s = _classify()
     cr = s["conclude_route"]
     assert cr["action"] == "conclude_route"
-    assert set(cr["publishes"]) >= {"routed_flow_set", "routed_profile", "router_findings"}
+    assert set(cr["publishes"]) >= {
+        "routed_flow_set",
+        "routed_profile",
+        "router_findings",
+    }
 
 
 def test_classify_releases_the_router_session_before_handoff():
     # The router MUST free its memoryful session or the single-instance LLMVP
     # pool leaks and later missions default without exploring (swe-tb-router-3).
     s = _classify()
-    assert s["conclude_route"]["resolver"]["rules"][0]["transition"] == "end_router_session"
+    assert (
+        s["conclude_route"]["resolver"]["rules"][0]["transition"]
+        == "end_router_session"
+    )
     assert s["end_router_session"]["action"] == "end_inference_session"
-    assert s["end_router_session"]["resolver"]["rules"][0]["transition"] == "persist_routing"
+    assert (
+        s["end_router_session"]["resolver"]["rules"][0]["transition"]
+        == "persist_routing"
+    )
 
 
 def test_classify_budget_gate_bounds_the_scout():
     s = _classify()
-    rules = {r["condition"]: r["transition"] for r in s["check_budget"]["resolver"]["rules"]}
+    rules = {
+        r["condition"]: r["transition"] for r in s["check_budget"]["resolver"]["rules"]
+    }
     assert rules["context.router_turn >= 5"] == "conclude_route"
     assert rules["true"] == "explore"
 
@@ -294,7 +311,10 @@ def test_classify_handoffs_tail_call_the_right_controllers():
 def test_router_findings_threaded_into_downstream_prompts():
     # the warm-start hand-off: replan (both decompose) + ops charter surface it
     flows = json.load(open(os.path.join(_ROOT, "flows", "compiled.json")))
-    for flow, step in (("replan", "decompose_directive"), ("replan", "decompose_repair"),
-                       ("ops_task", "plan_charter")):
+    for flow, step in (
+        ("replan", "decompose_directive"),
+        ("replan", "decompose_repair"),
+        ("ops_task", "plan_charter"),
+    ):
         ck = flows[flow]["steps"][step]["prompt_template"]["context_keys"]
         assert "router_findings" in ck, f"{flow}.{step} missing router_findings"

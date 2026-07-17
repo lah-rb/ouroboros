@@ -515,7 +515,6 @@ async def resolve_llm_menu(
     return _resolve_option_target(fallback, resolver_def)
 
 
-
 def _resolve_option_target(
     choice: str,
     resolver_def: dict,

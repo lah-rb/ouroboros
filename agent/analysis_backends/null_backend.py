@@ -19,5 +19,7 @@ class NullBackend:
     def references(self, file_path: str, content: str) -> list[SymbolRef]:
         return []
 
-    def attribute_accesses(self, file_path: str, content: str) -> list[FunctionAccesses]:
+    def attribute_accesses(
+        self, file_path: str, content: str
+    ) -> list[FunctionAccesses]:
         return []

@@ -341,8 +341,12 @@ class Query:
             **{
                 k: trend_status.get(k)
                 for k in (
-                    "trend_samples", "decode_tps_recent", "prefill_tps_recent",
-                    "ttft_recent_s", "decode_tps_baseline", "throughput_drift",
+                    "trend_samples",
+                    "decode_tps_recent",
+                    "prefill_tps_recent",
+                    "ttft_recent_s",
+                    "decode_tps_baseline",
+                    "throughput_drift",
                 )
             },
         )
@@ -444,9 +448,7 @@ class Query:
             ``run_completion`` itself stays free of API-shape concerns.
         """
         run_fn = run_tool_completion if use_tools else run_completion
-        effective_max = (
-            resolve_max_tokens(request.max_tokens)
-        )
+        effective_max = resolve_max_tokens(request.max_tokens)
         # Flow-cache fields only apply to the plain completion path.
         extra = (
             {}

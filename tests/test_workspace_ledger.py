@@ -18,9 +18,7 @@ from agent.persistence.models import MissionConfig, MissionState
 
 
 def _mission():
-    return MissionState(
-        objective="x", config=MissionConfig(working_directory="/tmp")
-    )
+    return MissionState(objective="x", config=MissionConfig(working_directory="/tmp"))
 
 
 def _step(ctx):
@@ -48,8 +46,12 @@ def test_harvests_setup_results_and_session_entry():
 def test_successful_provision_is_deduped_across_cycles():
     m = _mission()
     ok = {"setup_results": [{"name": "datasets", "passed": True}]}
-    _record_workspace_ledger(m, _step({**ok, "cycle": 0}), session_status="attempt", session_desc="")
-    _record_workspace_ledger(m, _step({**ok, "cycle": 1}), session_status="attempt", session_desc="")
+    _record_workspace_ledger(
+        m, _step({**ok, "cycle": 0}), session_status="attempt", session_desc=""
+    )
+    _record_workspace_ledger(
+        m, _step({**ok, "cycle": 1}), session_status="attempt", session_desc=""
+    )
     provisions = [e for e in m.workspace_ledger if e.kind == "provision"]
     assert len(provisions) == 1, "a re-reported successful provision must not duplicate"
 
@@ -57,17 +59,27 @@ def test_successful_provision_is_deduped_across_cycles():
 def test_failed_provision_is_recorded_each_time():
     m = _mission()
     bad = {"setup_results": [{"name": "torch", "passed": False}]}
-    _record_workspace_ledger(m, _step({**bad, "cycle": 0}), session_status="attempt", session_desc="")
-    _record_workspace_ledger(m, _step({**bad, "cycle": 1}), session_status="attempt", session_desc="")
-    fails = [e for e in m.workspace_ledger if e.kind == "provision" and e.status == "failed"]
-    assert len(fails) == 2  # a failure can recur — record each so the agent sees it failing
+    _record_workspace_ledger(
+        m, _step({**bad, "cycle": 0}), session_status="attempt", session_desc=""
+    )
+    _record_workspace_ledger(
+        m, _step({**bad, "cycle": 1}), session_status="attempt", session_desc=""
+    )
+    fails = [
+        e for e in m.workspace_ledger if e.kind == "provision" and e.status == "failed"
+    ]
+    assert (
+        len(fails) == 2
+    )  # a failure can recur — record each so the agent sees it failing
 
 
 def test_no_ledger_attr_is_a_noop():
     # non-ops mission / old state: getattr returns None → harvest is a safe no-op
     _record_workspace_ledger(
-        SimpleNamespace(), _step({"setup_results": [{"name": "x", "passed": True}]}),
-        session_status="attempt", session_desc="y",
+        SimpleNamespace(),
+        _step({"setup_results": [{"name": "x", "passed": True}]}),
+        session_status="attempt",
+        session_desc="y",
     )  # must not raise
 
 

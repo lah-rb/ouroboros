@@ -114,7 +114,10 @@ def extract_model_patch(container, repo_dir: str = "/testbed") -> str:
         logger.warning(
             "patch pollution: %d files / %d bytes exceeds sanity cap "
             "(%d / %d) — retrying tracked-only (dropping untracked spew)",
-            n_files, len(patch), _MAX_PATCH_FILES, _MAX_PATCH_BYTES,
+            n_files,
+            len(patch),
+            _MAX_PATCH_FILES,
+            _MAX_PATCH_BYTES,
         )
         tracked = _run_diff(container, repo_dir, staged=False)
         # Keep tracked-only if it recovered a real (bounded) change; else the

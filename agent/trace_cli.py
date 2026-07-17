@@ -62,8 +62,12 @@ def render_finite_breakdown(summary: dict) -> list[str]:
     for cat, ms in sorted(time_ms.items(), key=lambda kv: -kv[1]):
         if ms <= 0:
             continue
-        lines.append(f"    {cat:<16s} {_fmt_ms(ms):>9s}  {time_pct.get(cat, 0.0):5.1f}%")
-    lines.append(f"    {'residual':<16s} {_fmt_ms(residual_ms):>9s}  {residual_pct:5.1f}%")
+        lines.append(
+            f"    {cat:<16s} {_fmt_ms(ms):>9s}  {time_pct.get(cat, 0.0):5.1f}%"
+        )
+    lines.append(
+        f"    {'residual':<16s} {_fmt_ms(residual_ms):>9s}  {residual_pct:5.1f}%"
+    )
     # Sub-split of the inference bucket: prefill (prompt eval) vs decode.
     ph = summary.get("inference_phase", {})
     if ph and (ph.get("prefill_ms") or ph.get("decode_ms")):
@@ -100,9 +104,7 @@ def render_finite_breakdown(summary: dict) -> list[str]:
             )
         fresh_io, ctx_io = io.get("fresh"), io.get("context")
         if fresh_io is not None:
-            lines.append(
-                f"  in:out  {fresh_io} fresh:gen   |   {ctx_io} context:gen"
-            )
+            lines.append(f"  in:out  {fresh_io} fresh:gen   |   {ctx_io} context:gen")
     ws_calls = tok.get("whitespace_calls", 0)
     if ws_calls:
         lines.append(

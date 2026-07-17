@@ -19,7 +19,9 @@ import os
 from mcp_servers.terminal import pty_session as P
 
 
-def _run_poll(monkeypatch, activity_fn, container_name="c", settle_ms=150, timeout_ms=200):
+def _run_poll(
+    monkeypatch, activity_fn, container_name="c", settle_ms=150, timeout_ms=200
+):
     monkeypatch.setattr(P, "CONTAINER_SAMPLE_MIN_INTERVAL_S", 0.02)
     monkeypatch.setattr(P, "CONTAINER_HARD_MAX_MS", 1000)  # 1s ceiling for the test
     monkeypatch.setattr(P, "_container_activity", activity_fn)
@@ -83,7 +85,9 @@ def test_idle_daemon_noise_is_not_busy(monkeypatch):
 def test_flat_container_backstops_at_deadline(monkeypatch):
     res, elapsed = _run_poll(monkeypatch, lambda name: (5.0, 5.0))
     assert res["timed_out"] is True
-    assert elapsed < 0.55, f"flat container should backstop ~deadline, got {elapsed:.2f}s"
+    assert (
+        elapsed < 0.55
+    ), f"flat container should backstop ~deadline, got {elapsed:.2f}s"
 
 
 def test_probe_unavailable_falls_back(monkeypatch):

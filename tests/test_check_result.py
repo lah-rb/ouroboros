@@ -6,7 +6,13 @@ from agent.actions.check_result import CHECK_OUTPUT_CAP, check_result
 def test_shape_is_the_seven_key_contract():
     r = check_result("n", "cmd", True)
     assert set(r) == {
-        "name", "command", "passed", "required", "stdout", "stderr", "return_code",
+        "name",
+        "command",
+        "passed",
+        "required",
+        "stdout",
+        "stderr",
+        "return_code",
     }
 
 

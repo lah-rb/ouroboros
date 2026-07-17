@@ -35,7 +35,14 @@ MAX_ROUTER_EXPLORE_TURNS = 5
 MAX_ROUTER_CORRECTIONS = 4
 
 VALID_FLOW_SETS = ("ops", "code_core")
-VALID_PROFILES = ("service", "data_transform", "invertible", "repair", "answer", "plain")
+VALID_PROFILES = (
+    "service",
+    "data_transform",
+    "invertible",
+    "repair",
+    "answer",
+    "plain",
+)
 
 SYSTEM_PROMPT = """\
 ---ACT AS---
@@ -52,7 +59,7 @@ stage a head start, not fixing anything.
 CONCLUDE_ROUTE_PROMPT = (
     "You have investigated enough. Route the task. Return a JSON object inside a "
     "fenced code block with these fields:\n\n"
-    "  flow_set — \"ops\" or \"code_core\":\n"
+    '  flow_set — "ops" or "code_core":\n'
     "    ops = a LOCALIZED fix (one file / one symbol) OR a produce/operate task "
     "(author a new file, install, run, configure, transform data, start a "
     "service, a CTF). ops works fast in a terminal, iterating against live "
@@ -72,7 +79,9 @@ CONCLUDE_ROUTE_PROMPT = (
 
 
 def _flow_key() -> str:
-    return f"classify:route:{hashlib.md5(SYSTEM_PROMPT.encode('utf-8')).hexdigest()[:10]}"
+    return (
+        f"classify:route:{hashlib.md5(SYSTEM_PROMPT.encode('utf-8')).hexdigest()[:10]}"
+    )
 
 
 def _bounded(s: str, n: int) -> str:
@@ -141,7 +150,8 @@ async def action_open_router_session(step_input: StepInput) -> StepOutput:
     mission = step_input.context.get("mission")
     objective = str(getattr(mission, "objective", "") or "").strip() or "(no objective)"
     parts = [
-        SYSTEM_PROMPT, "",
+        SYSTEM_PROMPT,
+        "",
         "## The task to route",
         _bounded(objective, 4000),
         "",
@@ -195,7 +205,9 @@ async def action_router_run(step_input: StepInput) -> StepOutput:
         return _correction(step_input, f"command failed to run: {e}")
     out = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
     rc = getattr(res, "return_code", None)
-    return _observe(step_input, f"Observation:\n$ {cmd}\n[exit {rc}]\n{_bounded(out, 4000)}")
+    return _observe(
+        step_input, f"Observation:\n$ {cmd}\n[exit {rc}]\n{_bounded(out, 4000)}"
+    )
 
 
 async def action_conclude_route(step_input: StepInput) -> StepOutput:
@@ -232,7 +244,8 @@ async def action_conclude_route(step_input: StepInput) -> StepOutput:
                 findings = str(parsed.get("findings", "") or "")[:1200]
                 break
             logger.warning(
-                "Router conclude attempt %d/3: no valid flow_set in response", attempt + 1
+                "Router conclude attempt %d/3: no valid flow_set in response",
+                attempt + 1,
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("Router conclude attempt %d/3 failed (%s)", attempt + 1, e)

@@ -23,6 +23,7 @@ Modes (env ``OURO_TB_PRUNE_IMAGES``):
 ``note_task_image(container)`` is called once per task after the container is
 resolved. Best-effort throughout — a prune failure never touches the run.
 """
+
 from __future__ import annotations
 
 import atexit
@@ -34,8 +35,8 @@ logger = logging.getLogger(__name__)
 
 _PRUNE_MODE = prune_mode("OURO_TB_PRUNE_IMAGES")
 
-_touched: set[str] = set()   # all task images seen (run_end sweep target)
-_prev: list[str] = []        # [prior task image] — the per_instance lag slot
+_touched: set[str] = set()  # all task images seen (run_end sweep target)
+_prev: list[str] = []  # [prior task image] — the per_instance lag slot
 _atexit_registered = False
 
 

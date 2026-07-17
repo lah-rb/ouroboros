@@ -66,7 +66,9 @@ def test_stops_before_self_play_ramble():
     )
     triggered, at = _feed_bytewise(raw)
     assert triggered
-    first_close = raw.encode().index(b'_line_type"}<|end|>') + len(b'_line_type"}<|end|>')
+    first_close = raw.encode().index(b'_line_type"}<|end|>') + len(
+        b'_line_type"}<|end|>'
+    )
     assert at == first_close  # stopped at the answer; ramble not reached
 
 

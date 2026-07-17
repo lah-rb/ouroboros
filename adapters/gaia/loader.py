@@ -51,7 +51,9 @@ def _resolve_file(row: dict, split: str) -> str:
             filename=f"2023/{split}/{name}",
         )
     except Exception as e:  # noqa: BLE001 — a missing attachment shouldn't kill the run
-        logger.warning("attachment fetch failed for %s (%s): %s", name, row.get("task_id"), e)
+        logger.warning(
+            "attachment fetch failed for %s (%s): %s", name, row.get("task_id"), e
+        )
         return ""
 
 
@@ -83,6 +85,10 @@ def load_questions(
         )
         if limit and len(out) >= limit:
             break
-    logger.info("loaded %d GAIA %s questions%s", len(out), split,
-                f" (levels {levels})" if levels else "")
+    logger.info(
+        "loaded %d GAIA %s questions%s",
+        len(out),
+        split,
+        f" (levels {levels})" if levels else "",
+    )
     return out

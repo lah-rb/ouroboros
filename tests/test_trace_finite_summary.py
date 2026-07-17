@@ -27,23 +27,42 @@ from agent.trace import (
 def _events():
     return [
         {"event_type": "cycle_start", "flow": "f", "cycle": 0},
-        {"event_type": "step_start", "flow": "f", "step": "plan", "input_build_ms": 4.0},
         {
-            "event_type": "inference_call", "flow": "f", "step": "plan",
-            "wall_ms": 1000.0, "prompt_render_ms": 30.0, "pre_compute_ms": 12.0,
-            "cached_prefix_tokens": 900, "fresh_prefill_tokens": 100,
-            "generated_tokens": 50, "cache_hit": True,
+            "event_type": "step_start",
+            "flow": "f",
+            "step": "plan",
+            "input_build_ms": 4.0,
         },
         {
-            "event_type": "inference_call", "flow": "f", "step": "judge",
-            "wall_ms": 500.0, "tokens_in": 42, "tokens_out": 7,  # whitespace fallback
+            "event_type": "inference_call",
+            "flow": "f",
+            "step": "plan",
+            "wall_ms": 1000.0,
+            "prompt_render_ms": 30.0,
+            "pre_compute_ms": 12.0,
+            "cached_prefix_tokens": 900,
+            "fresh_prefill_tokens": 100,
+            "generated_tokens": 50,
+            "cache_hit": True,
+        },
+        {
+            "event_type": "inference_call",
+            "flow": "f",
+            "step": "judge",
+            "wall_ms": 500.0,
+            "tokens_in": 42,
+            "tokens_out": 7,  # whitespace fallback
         },
         {"event_type": "command_run", "flow": "f", "wall_ms": 300.0},
         {"event_type": "mcp_tool_call", "flow": "f", "wall_ms": 200.0},
         {"event_type": "step_end", "flow": "f", "step": "plan", "resolver_ms": 2.0},
         {
-            "event_type": "cycle_end", "flow": "f", "cycle": 0,
-            "cycle_duration_ms": 2100.0, "projection_ms": 8.0, "tail_resolution_ms": 3.0,
+            "event_type": "cycle_end",
+            "flow": "f",
+            "cycle": 0,
+            "cycle_duration_ms": 2100.0,
+            "projection_ms": 8.0,
+            "tail_resolution_ms": 3.0,
         },
     ]
 
@@ -118,11 +137,18 @@ def test_per_flow_rollup_sums_to_inference_total():
 def test_real_counts_take_precedence_over_whitespace():
     # a call with BOTH real and (stale) whitespace fields → real wins, ws ignored
     led = new_ledger()
-    fold_event(led, {
-        "event_type": "inference_call", "flow": "f",
-        "tokens_in": 5, "tokens_out": 1,  # whitespace (should be ignored)
-        "cached_prefix_tokens": 800, "fresh_prefill_tokens": 200, "generated_tokens": 40,
-    })
+    fold_event(
+        led,
+        {
+            "event_type": "inference_call",
+            "flow": "f",
+            "tokens_in": 5,
+            "tokens_out": 1,  # whitespace (should be ignored)
+            "cached_prefix_tokens": 800,
+            "fresh_prefill_tokens": 200,
+            "generated_tokens": 40,
+        },
+    )
     s = finalize_ledger(led, 1000.0)
     assert s["tokens"]["real_input_total"] == 1000  # not 5
     assert s["tokens"]["generated"] == 40  # not 1
@@ -134,9 +160,19 @@ def test_old_trace_without_new_fields_folds_to_zeros():
     # fold without KeyError and contribute its inference/whitespace cleanly.
     old = [
         {"event_type": "cycle_start", "flow": "f", "cycle": 0},
-        {"event_type": "inference_call", "flow": "f", "wall_ms": 100.0,
-         "tokens_in": 80, "tokens_out": 20},
-        {"event_type": "cycle_end", "flow": "f", "cycle": 0, "cycle_duration_ms": 120.0},
+        {
+            "event_type": "inference_call",
+            "flow": "f",
+            "wall_ms": 100.0,
+            "tokens_in": 80,
+            "tokens_out": 20,
+        },
+        {
+            "event_type": "cycle_end",
+            "flow": "f",
+            "cycle": 0,
+            "cycle_duration_ms": 120.0,
+        },
     ]
     s = summarize_events(old)  # total falls back to Σ cycle_duration_ms = 120
     assert s["total_wall_ms"] == 120.0

@@ -17,7 +17,6 @@ import pytest
 from core.config import Config, PersonaConfig
 from inference.backends.llama_cpp_backend import LlamaCppBackend
 
-
 # ── config layer ──────────────────────────────────────────────────────
 
 
@@ -26,8 +25,13 @@ def _mk_config(personas=None, slot_personas=None, n=2) -> Config:
         {
             "app": {"host": "0.0.0.0", "port": 1, "log_level": "info"},
             "model": {
-                "name": "m", "family": "chatml", "path": "/nonexistent.gguf",
-                "n_ctx": 4096, "n_gpu_layers": 0, "seed": -1, "verbose": False,
+                "name": "m",
+                "family": "chatml",
+                "path": "/nonexistent.gguf",
+                "n_ctx": 4096,
+                "n_gpu_layers": 0,
+                "seed": -1,
+                "verbose": False,
             },
             "prompt": {"persona_file": "./knowledge/SOUL.md"},
             "generation": {},
@@ -53,9 +57,13 @@ def test_absent_personas_is_default_for_all_slots():
 
 def test_slot_personas_resolve_and_carry_n_ctx():
     c = _mk_config(
-        personas={"user_sim": {"persona_file": "./knowledge/USER_SIM.md",
-                               "tokens_bin": "./data/m-user.tokens.bin",
-                               "n_ctx": 2048}},
+        personas={
+            "user_sim": {
+                "persona_file": "./knowledge/USER_SIM.md",
+                "tokens_bin": "./data/m-user.tokens.bin",
+                "n_ctx": 2048,
+            }
+        },
         slot_personas=["default", "user_sim"],
     )
     assert c.slot_persona_names() == ["default", "user_sim"]
@@ -66,7 +74,8 @@ def test_slot_personas_resolve_and_carry_n_ctx():
 def test_slot_personas_length_mismatch_raises():
     c = _mk_config(
         personas={"user_sim": {"persona_file": "a", "tokens_bin": "b"}},
-        slot_personas=["default", "user_sim"], n=3,
+        slot_personas=["default", "user_sim"],
+        n=3,
     )
     with pytest.raises(ValueError, match="must match"):
         c.slot_persona_names()
@@ -127,16 +136,15 @@ def make_duo_backend() -> LlamaCppBackend:
         app=SimpleNamespace(backend_timeout=0.2),
         slot_persona_names=lambda: ["default", "user_sim"],
         resolve_persona=lambda name: SimpleNamespace(
-            persona_file="x", tokens_bin="y",
+            persona_file="x",
+            tokens_bin="y",
             n_ctx=2048 if name == "user_sim" else None,
         ),
     )
     backend = LlamaCppBackend(config)
     backend._check_is_hybrid = lambda inst: False
     backend._create_primary_instance = lambda: FakeLlama()
-    backend._create_shared_instance = (
-        lambda primary, n_ctx_override=None: FakeLlama()
-    )
+    backend._create_shared_instance = lambda primary, n_ctx_override=None: FakeLlama()
 
     def _warm_up(inst, idx=0, persona=None):
         persona = persona or backend._slot_personas[idx]

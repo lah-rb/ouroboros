@@ -91,8 +91,9 @@ def test_read_pointer_file_no_file():
 
 def test_read_pointer_file_empty():
     """Test _read_pointer_file with empty content."""
-    with patch.object(Path, "is_file", return_value=True), patch.object(
-        Path, "read_text", return_value=""
+    with (
+        patch.object(Path, "is_file", return_value=True),
+        patch.object(Path, "read_text", return_value=""),
     ):
         result = _read_pointer_file()
         assert result is None

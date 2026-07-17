@@ -4,6 +4,7 @@ Covers the resolution ladder (explicit config > high-steps > router > None),
 the dormant-flag gate, session-path-only behavior, threshold routing against a
 real (tiny) artifact, and fail-open on a missing artifact.
 """
+
 import joblib
 import pytest
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -19,18 +20,26 @@ def tiny_artifact(tmp_path):
     'alpha'-heavy texts are low, 'omega'-heavy texts are medium — so
     P(medium | 'omega omega omega') is high and P(medium | 'alpha alpha') low.
     """
-    texts = ["alpha beta run list", "alpha gamma cat file", "alpha beta print",
-             "omega think strategy plan", "omega omega tradeoff design",
-             "omega analyze compare plan"]
+    texts = [
+        "alpha beta run list",
+        "alpha gamma cat file",
+        "alpha beta print",
+        "omega think strategy plan",
+        "omega omega tradeoff design",
+        "omega analyze compare plan",
+    ]
     labels = ["low", "low", "low", "medium", "medium", "medium"]
     vec = TfidfVectorizer()
     X = vec.fit_transform(texts)
     clf = LogisticRegression(class_weight="balanced").fit(X, labels)
     path = tmp_path / "router.joblib"
     joblib.dump(
-        {"vectorizer": vec, "clf": clf,
-         "medium_idx": list(clf.classes_).index("medium"),
-         "meta": {"built": "test"}},
+        {
+            "vectorizer": vec,
+            "clf": clf,
+            "medium_idx": list(clf.classes_).index("medium"),
+            "meta": {"built": "test"},
+        },
         path,
     )
     return str(path)
@@ -38,9 +47,14 @@ def tiny_artifact(tmp_path):
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for var in ("OURO_ADAPTIVE_REASONING", "OURO_REASONING_ROUTER",
-                "OURO_ROUTER_THR", "OURO_ROUTER_STEPS", "OURO_REASONING_HIGH_STEPS",
-                "OURO_REASONING_OFF"):
+    for var in (
+        "OURO_ADAPTIVE_REASONING",
+        "OURO_REASONING_ROUTER",
+        "OURO_ROUTER_THR",
+        "OURO_ROUTER_STEPS",
+        "OURO_REASONING_HIGH_STEPS",
+        "OURO_REASONING_OFF",
+    ):
         monkeypatch.delenv(var, raising=False)
     rr._artifact_cache.clear()
     yield
@@ -66,7 +80,10 @@ def test_dormant_without_flag(tiny_artifact, monkeypatch):
 def test_kill_switch_overrides_everything(tiny_artifact, monkeypatch):
     _on(monkeypatch, tiny_artifact, OURO_REASONING_HIGH_STEPS="judge_step")
     monkeypatch.setenv("OURO_REASONING_OFF", "1")
-    assert rr.resolve_reasoning("verify_completion", {"reasoning": "high"}, "x", True) is None
+    assert (
+        rr.resolve_reasoning("verify_completion", {"reasoning": "high"}, "x", True)
+        is None
+    )
     assert rr.resolve_reasoning("judge_step", {}, "x", True) is None
     assert rr.resolve_reasoning("plan_interaction", {}, "omega omega", True) is None
 
@@ -74,8 +91,14 @@ def test_kill_switch_overrides_everything(tiny_artifact, monkeypatch):
 def test_explicit_config_works_without_flag(monkeypatch):
     # ...but explicit cue-authored reasoning is static config, honored always —
     # on sessions AND stateless completions (server carries the field on both)
-    assert rr.resolve_reasoning("verify_completion", {"reasoning": "high"}, "x", True) == "high"
-    assert rr.resolve_reasoning("verify_completion", {"reasoning": "high"}, "x", False) == "high"
+    assert (
+        rr.resolve_reasoning("verify_completion", {"reasoning": "high"}, "x", True)
+        == "high"
+    )
+    assert (
+        rr.resolve_reasoning("verify_completion", {"reasoning": "high"}, "x", False)
+        == "high"
+    )
 
 
 def test_stateless_gating(tiny_artifact, monkeypatch):
@@ -89,26 +112,49 @@ def test_stateless_gating(tiny_artifact, monkeypatch):
 def test_explicit_step_config_wins(tiny_artifact, monkeypatch):
     _on(monkeypatch, tiny_artifact, OURO_REASONING_HIGH_STEPS="plan_interaction")
     # explicit config outranks even the high-steps list
-    assert rr.resolve_reasoning("plan_interaction", {"reasoning": "LOW"}, "x", True) == "low"
-    assert rr.resolve_reasoning("plan_interaction", {"reasoning": "bogus"}, "omega omega omega", True) == "high"
+    assert (
+        rr.resolve_reasoning("plan_interaction", {"reasoning": "LOW"}, "x", True)
+        == "low"
+    )
+    assert (
+        rr.resolve_reasoning(
+            "plan_interaction", {"reasoning": "bogus"}, "omega omega omega", True
+        )
+        == "high"
+    )
 
 
 def test_high_steps_sprinkle(tiny_artifact, monkeypatch):
-    _on(monkeypatch, tiny_artifact, OURO_REASONING_HIGH_STEPS="write_charter,design_gate")
+    _on(
+        monkeypatch,
+        tiny_artifact,
+        OURO_REASONING_HIGH_STEPS="write_charter,design_gate",
+    )
     assert rr.resolve_reasoning("write_charter", {}, "trivial text", True) == "high"
     assert rr.resolve_reasoning("design_gate", None, "trivial text", True) == "high"
 
 
 def test_router_threshold_routing(tiny_artifact, monkeypatch):
     _on(monkeypatch, tiny_artifact)
-    assert rr.resolve_reasoning("plan_interaction", {}, "alpha alpha beta list", True) == "low"
-    assert rr.resolve_reasoning("plan_interaction", {}, "omega omega tradeoff strategy", True) == "medium"
+    assert (
+        rr.resolve_reasoning("plan_interaction", {}, "alpha alpha beta list", True)
+        == "low"
+    )
+    assert (
+        rr.resolve_reasoning(
+            "plan_interaction", {}, "omega omega tradeoff strategy", True
+        )
+        == "medium"
+    )
 
 
 def test_threshold_env_moves_the_cut(tiny_artifact, monkeypatch):
     _on(monkeypatch, tiny_artifact, OURO_ROUTER_THR="0.999")
     # impossible bar -> everything routes low
-    assert rr.resolve_reasoning("plan_interaction", {}, "omega omega tradeoff", True) == "low"
+    assert (
+        rr.resolve_reasoning("plan_interaction", {}, "omega omega tradeoff", True)
+        == "low"
+    )
     monkeypatch.setenv("OURO_ROUTER_THR", "0.0")
     assert rr.resolve_reasoning("plan_interaction", {}, "alpha alpha", True) == "medium"
 
@@ -127,4 +173,9 @@ def test_missing_artifact_fails_open(monkeypatch):
 
 def test_bad_threshold_falls_back(tiny_artifact, monkeypatch):
     _on(monkeypatch, tiny_artifact, OURO_ROUTER_THR="not-a-float")
-    assert rr.resolve_reasoning("plan_interaction", {}, "omega omega tradeoff strategy", True) == "medium"
+    assert (
+        rr.resolve_reasoning(
+            "plan_interaction", {}, "omega omega tradeoff strategy", True
+        )
+        == "medium"
+    )

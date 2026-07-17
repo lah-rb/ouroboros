@@ -183,7 +183,9 @@ async def action_apply_data_ops(step_input: StepInput) -> StepOutput:
         return _defer("no effects available")
     try:
         existing = await effects.read_file(path)
-        existing_content = existing.content if getattr(existing, "exists", False) else None
+        existing_content = (
+            existing.content if getattr(existing, "exists", False) else None
+        )
         parse_err = scaffold_parse_error(path, text, existing_content)
         if parse_err:
             return _defer(f"patched {path} would not parse ({parse_err})")

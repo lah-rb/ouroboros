@@ -39,7 +39,9 @@ def test_normal_return_carries_result_and_drains():
 
 def test_park_runtimeerror_classified_clean():
     def boom():
-        raise RuntimeError("Agent completed 3 cycles. Mission parked as paused — resume later")
+        raise RuntimeError(
+            "Agent completed 3 cycles. Mission parked as paused — resume later"
+        )
 
     out, fx = _run(boom)
     assert out.parked is True and out.error is None
@@ -73,7 +75,5 @@ def test_cancelled_during_drain_is_swallowed():
 
     fx = CancellingEffects()
     with mock.patch("agent.loop.run_agent", new=fake_run_agent):
-        out = run_mission_isolated(
-            fx, mission_id="m1", entry_flow="mission_control"
-        )
+        out = run_mission_isolated(fx, mission_id="m1", entry_flow="mission_control")
     assert out.result == "ok"  # drain failure never masks the outcome

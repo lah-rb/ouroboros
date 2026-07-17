@@ -120,10 +120,7 @@ class TokenPipeline:
         # Long-cycle check runs on the accumulator BEFORE this token's
         # bytes land (parity with the original pool ordering: it fires
         # between append and detok).
-        if (
-            self._long_cycle_on
-            and self.n_tokens % runaway_capture.CHECK_INTERVAL == 0
-        ):
+        if self._long_cycle_on and self.n_tokens % runaway_capture.CHECK_INTERVAL == 0:
             lc_reason = runaway_capture.detect_long_cycle(self.acc_bytes)
             if lc_reason:
                 return Verdict(degenerate=f"long-cycle: {lc_reason}")
@@ -133,9 +130,7 @@ class TokenPipeline:
         # passed to PyBytes_FromStringAndSize" on a degenerate token) is
         # converted to the same controlled-abort path as the guards.
         try:
-            piece: bytes = self._llama.detokenize(
-                [token], prev_tokens=self._prior_tail
-            )
+            piece: bytes = self._llama.detokenize([token], prev_tokens=self._prior_tail)
         except Exception as e:  # noqa: BLE001 — convert to controlled abort
             return Verdict(degenerate=f"detokenization failed: {e}")
         self._prior_tail.append(token)
@@ -147,7 +142,7 @@ class TokenPipeline:
         # stripped — it stays in the output so downstream consumers (FSM
         # labeller, capture log) see the full output.
         should_stop = any(
-            sb in self.acc_bytes[-self._stop_tail:] for sb in self._stop_bytes
+            sb in self.acc_bytes[-self._stop_tail :] for sb in self._stop_bytes
         )
         end_reason = None
         # Stateful harmony final-channel close (runs on the full accumulator —
@@ -163,7 +158,7 @@ class TokenPipeline:
         if self.buffer_mode or len(self.acc_bytes) <= self._returned_bytes:
             return None
         try:
-            text = self.acc_bytes[self._returned_bytes:].decode("utf-8")
+            text = self.acc_bytes[self._returned_bytes :].decode("utf-8")
         except UnicodeDecodeError:
             return None  # incomplete multi-byte char — wait for next token
         self._returned_bytes = len(self.acc_bytes)
@@ -173,7 +168,7 @@ class TokenPipeline:
         """Remaining bytes at stream end (buffer_mode content or a final
         partial char), decoded with errors="replace"."""
         if len(self.acc_bytes) > self._returned_bytes:
-            text = self.acc_bytes[self._returned_bytes:].decode(
+            text = self.acc_bytes[self._returned_bytes :].decode(
                 "utf-8", errors="replace"
             )
             self._returned_bytes = len(self.acc_bytes)
@@ -191,7 +186,10 @@ class TokenPipeline:
                 meta = {}
         try:
             runaway_capture.dump_capture(
-                self._capture_dir, reason, self.acc_bytes, self.n_tokens,
+                self._capture_dir,
+                reason,
+                self.acc_bytes,
+                self.n_tokens,
                 meta=dict(meta or {}),
             )
         except Exception:  # noqa: BLE001 — forensics must not break the loop

@@ -1389,7 +1389,9 @@ class LocalEffects:
             except Exception:  # noqa: BLE001 — best-effort teardown
                 self._session_started_at.pop(sid, None)  # don't strand a broken close
         if closed:
-            logger.info("Drained %d open inference session(s) at mission teardown", closed)
+            logger.info(
+                "Drained %d open inference session(s) at mission teardown", closed
+            )
         return closed
 
     async def session_snapshot(self, session_id: str, key: str) -> dict:

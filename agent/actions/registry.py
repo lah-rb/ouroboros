@@ -357,9 +357,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register(
         "parse_and_store_architecture", action_parse_and_store_architecture
     )
-    registry.register(
-        "ground_design_gate_verdict", action_ground_design_gate_verdict
-    )
+    registry.register("ground_design_gate_verdict", action_ground_design_gate_verdict)
     # Goal derivation
     registry.register("derive_project_goals", action_derive_project_goals)
     registry.register("derive_directive_goals", action_derive_directive_goals)
@@ -387,7 +385,9 @@ def build_action_registry() -> ActionRegistry:
     # Grounded output-format derivation ("reground" = historical name): gate fires
     # once, store persists the spec + marks grounded.
     registry.register("gate_reground_output_format", action_gate_reground_output_format)
-    registry.register("store_reground_output_format", action_store_reground_output_format)
+    registry.register(
+        "store_reground_output_format", action_store_reground_output_format
+    )
     # Grounded definition-of-done derivation (criteria analog): gate fires until a
     # non-empty store grounds it; store union-merges (tighten-only).
     registry.register("gate_reground_criteria", action_gate_reground_criteria)

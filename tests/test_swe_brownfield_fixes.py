@@ -30,7 +30,10 @@ from agent.persistence.models import (
 )
 
 VALID_TOML = '[project]\nname = "x"\nversion = "0.1"\n'
-BIG_VALID_TOML = VALID_TOML + '[tool.pytest.ini_options]\naddopts = "-q"\n[tool.mypy]\nstrict = true\n'
+BIG_VALID_TOML = (
+    VALID_TOML
+    + '[tool.pytest.ini_options]\naddopts = "-q"\n[tool.mypy]\nstrict = true\n'
+)
 BAD_TOML = '[project\nname = = "x"\n'
 
 
@@ -93,7 +96,9 @@ def test_parse_floor_allows_valid_and_non_config():
     assert scaffold_parse_error("pyproject.toml", VALID_TOML, None) is None
     assert scaffold_parse_error("main.py", "def f(:\n", None) is None  # not a config
     # Existing file already unparseable (template) → stand down.
-    assert scaffold_parse_error("vars.yaml", "a: [unclosed", "b: {{ jinja }}: [") is None
+    assert (
+        scaffold_parse_error("vars.yaml", "a: [unclosed", "b: {{ jinja }}: [") is None
+    )
 
 
 @pytest.mark.asyncio
@@ -102,7 +107,9 @@ async def test_guarded_write_rejects_unparseable_scaffold():
     ok, err = await guarded_write_file(fx, "pyproject.toml", BAD_TOML + VALID_TOML)
     assert ok is False and "parse floor" in err
     # A valid replacement still writes.
-    ok2, err2 = await guarded_write_file(fx, "pyproject.toml", BIG_VALID_TOML + '[tool.ruff]\nline-length = 88\n')
+    ok2, err2 = await guarded_write_file(
+        fx, "pyproject.toml", BIG_VALID_TOML + "[tool.ruff]\nline-length = 88\n"
+    )
     assert ok2 is True and err2 is None
 
 
@@ -124,7 +131,7 @@ async def test_protect_existing_skips_present_files_writes_missing():
     existing = BIG_VALID_TOML
     fx = MockEffects(files={"pyproject.toml": existing})
     blob = (
-        "```toml\n# === FILE: pyproject.toml ===\n[tool.poetry]\nname = \"x\"\n```\n\n"
+        '```toml\n# === FILE: pyproject.toml ===\n[tool.poetry]\nname = "x"\n```\n\n'
         "```\n# === FILE: .gitignore ===\n__pycache__/\n```\n"
     )
     out = await action_apply_multi_file_changes(_si(fx, blob, protect_existing=True))

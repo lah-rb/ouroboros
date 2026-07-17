@@ -82,10 +82,10 @@ _CONDENSE_CFG = {"reasoning": "low", "temperature": "t*0.2", "max_tokens": 512}
 CONCLUDE_SEARCH_PROMPT = (
     "Conclude the research. Based on the distilled findings above, return a JSON "
     "object inside a fenced code block with these fields:\n\n"
-    '  research_summary — the answer to the brief in 2-6 sentences, grounded in '
+    "  research_summary — the answer to the brief in 2-6 sentences, grounded in "
     "the findings (cite source URLs inline). If the brief could not be answered, "
     "say what IS known and what remains open.\n"
-    '  sufficient — true if the findings actually answer the brief; false if '
+    "  sufficient — true if the findings actually answer the brief; false if "
     "they are partial or the question remains open.\n\n"
     "Return ONLY the fenced JSON object."
 )
@@ -96,7 +96,9 @@ def _bounded(s: str, n: int) -> str:
     return s if len(s) <= n else s[:n] + " …[truncated]"
 
 
-def _round_observe(step_input: StepInput, message: str, extra: dict | None = None) -> StepOutput:
+def _round_observe(
+    step_input: StepInput, message: str, extra: dict | None = None
+) -> StepOutput:
     """Queue an observation into the search session and bump the round counter."""
     rnd = int(step_input.context.get("search_round", 0) or 0) + 1
     updates: dict = {"search_round": rnd}
@@ -145,7 +147,9 @@ async def action_open_search_session(step_input: StepInput) -> StepOutput:
     try:
         mission = await effects.load_mission()
         web_ok = bool(getattr(getattr(mission, "config", None), "web_research", True))
-    except Exception:  # noqa: BLE001 - no mission → assume enabled, rely on key backstop
+    except (
+        Exception
+    ):  # noqa: BLE001 - no mission → assume enabled, rely on key backstop
         web_ok = True
     if not web_ok:
         return StepOutput(
@@ -228,14 +232,20 @@ async def action_search_run(step_input: StepInput) -> StepOutput:
         return _round_correction(step_input, f"search failed for {query!r}: {e}")
 
     hits = [
-        {"url": h.get("url", ""), "title": h.get("title", ""), "content": h.get("content", "")}
+        {
+            "url": h.get("url", ""),
+            "title": h.get("title", ""),
+            "content": h.get("content", ""),
+        }
         for h in _extract_exa_hits(mcp_result)
         if h.get("content", "").strip()
     ]
     queries_run = list(step_input.context.get("search_queries_run", []) or []) + [query]
     if not hits:
         # No usable hits — nudge a refine; does NOT spend a round (correction).
-        out = _round_correction(step_input, f"no results for {query!r} — refine the query.")
+        out = _round_correction(
+            step_input, f"no results for {query!r} — refine the query."
+        )
         out.context_updates["search_queries_run"] = queries_run
         out.context_updates["raw_search_results"] = []
         return out
@@ -260,10 +270,16 @@ async def action_condense_results(step_input: StepInput) -> StepOutput:
     """
     effects = step_input.effects
     hits = list(step_input.context.get("raw_search_results", []) or [])
-    query = str(step_input.context.get("last_query", "") or step_input.context.get("search_choice_arg", "") or "")
+    query = str(
+        step_input.context.get("last_query", "")
+        or step_input.context.get("search_choice_arg", "")
+        or ""
+    )
     if not hits:
         # Nothing to condense — treat as an empty round observation.
-        return _round_observe(step_input, f"Observation (search {query!r}): no results to condense.")
+        return _round_observe(
+            step_input, f"Observation (search {query!r}): no results to condense."
+        )
 
     hits_block = "\n\n---\n\n".join(
         f"[{h.get('url', '')}] {h.get('title', '')}\n{_bounded(h.get('content', ''), 1500)}"
@@ -281,7 +297,9 @@ async def action_condense_results(step_input: StepInput) -> StepOutput:
             sess = await effects.start_inference_session({"ttl_seconds": 120})
             res = await effects.session_inference(sess, prompt, dict(_CONDENSE_CFG))
             fact = (getattr(res, "text", None) or "").strip()
-        except Exception as e:  # noqa: BLE001 - fold a degraded note, keep the loop alive
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 - fold a degraded note, keep the loop alive
             logger.warning("condense failed for %r: %s", query, e)
             fact = ""
         finally:

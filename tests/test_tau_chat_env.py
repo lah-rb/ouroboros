@@ -9,7 +9,6 @@ import asyncio
 from agent.chat.boss import MenuBoss, MenuOption
 from agent.chat.env import ChatEnv, WorkerReport
 
-
 # ── MenuBoss ───────────────────────────────────────────────────────────
 
 
@@ -46,10 +45,12 @@ def test_boss_parses_compound_choice_and_arg():
 
 
 def test_boss_briefing_only_on_first_turn():
-    b = _boss([
-        '{"choice": "instruct", "directive": "a"}',
-        '{"choice": "end_episode", "reason": "done"}',
-    ])
+    b = _boss(
+        [
+            '{"choice": "instruct", "directive": "a"}',
+            '{"choice": "end_episode", "reason": "done"}',
+        ]
+    )
     asyncio.run(b.decide("u1"))
     asyncio.run(b.decide("u2"))
     assert "BRIEF" in b.session.prompts[0]
@@ -57,25 +58,32 @@ def test_boss_briefing_only_on_first_turn():
 
 
 def test_boss_retries_then_parses():
-    b = _boss([
-        "I think we should probably look up the order first, no JSON here",
-        '{"choice": "instruct", "directive": "verify identity"}',
-    ])
+    b = _boss(
+        [
+            "I think we should probably look up the order first, no JSON here",
+            '{"choice": "instruct", "directive": "verify identity"}',
+        ]
+    )
     d = asyncio.run(b.decide("u"))
     assert d.choice == "instruct" and d.attempts == 2 and not d.fallback
     assert "not a single valid JSON" in b.session.prompts[1]  # retry nudge
 
 
 def test_boss_falls_back_to_safe_default_after_exhausting_retries():
-    b = _boss(["nope", "still prose", "no json at all"],
-              default_choice="instruct", default_arg="proceed per policy")
+    b = _boss(
+        ["nope", "still prose", "no json at all"],
+        default_choice="instruct",
+        default_arg="proceed per policy",
+    )
     d = asyncio.run(b.decide("u"))
     assert d.fallback and d.choice == "instruct" and d.arg == "proceed per policy"
     assert b.fallback_rate == 1.0
 
 
 def test_boss_handles_fenced_and_prefixed_json():
-    b = _boss(['analysis... ```json\n{"choice":"end_episode","reason":"resolved"}\n```'])
+    b = _boss(
+        ['analysis... ```json\n{"choice":"end_episode","reason":"resolved"}\n```']
+    )
     d = asyncio.run(b.decide("u"))
     assert d.choice == "end_episode" and d.arg == "resolved"
 

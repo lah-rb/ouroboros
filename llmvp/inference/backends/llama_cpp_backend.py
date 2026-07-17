@@ -43,6 +43,7 @@ from inference.seq_layout import (  # noqa: E402 — single source of the pool b
     SEQ_WORKING,
     plan_pool_seq_map,
 )
+
 # Generation headroom a snapshot capture must leave free in the shared
 # n_ctx cell pool (capacity check in snapshot_working_seq).
 SNAP_GEN_RESERVE = 8192
@@ -93,8 +94,11 @@ def _install_ggml_log_forwarding() -> None:
                     # CONT fragments arrive as level 5 — the buffered line's
                     # severity rides on the level of its final fragment; treat
                     # unknown levels as DEBUG so noise stays out of prod logs.
-                    log.log(_GGML_LOG_LEVELS.get(level, logging.DEBUG),
-                            "ggml: %s", line.strip())
+                    log.log(
+                        _GGML_LOG_LEVELS.get(level, logging.DEBUG),
+                        "ggml: %s",
+                        line.strip(),
+                    )
         except Exception:  # noqa: BLE001 — a log hook must never throw into C
             pass
 
@@ -149,9 +153,7 @@ class LlamaCppBackend(BaseBackend):
         # context, N working seqs, one llama_decode per step — the
         # llama-server slot pattern). Config-gated; the pool path is not
         # modified when "batched" is off. See inference/batched_engine.py.
-        self._decode_mode: str = getattr(
-            config.resources, "decode_mode", "pool"
-        )
+        self._decode_mode: str = getattr(config.resources, "decode_mode", "pool")
         self._engine: Any = None  # BatchedEngine when _decode_mode=="batched"
         self._engine_seats: List[Any] = []  # SeqSlot seats (batched mode)
         self._batched_map: Any = None  # memoized SeqMap (batched mode)
@@ -273,7 +275,8 @@ class LlamaCppBackend(BaseBackend):
         # before it spoils a run; a premature ~0.85s refresh beats a spoiled mission.
         self._refresh_loop_task: Optional[asyncio.Task] = None
         self._refresh_interval = int(
-            getattr(getattr(config, "model", None), "context_refresh_interval", 75) or 75
+            getattr(getattr(config, "model", None), "context_refresh_interval", 75)
+            or 75
         )
         # Time-based backstop for the refresh loop. The request-count + idle gate alone
         # can starve under CONTINUOUS load: a long mission never goes idle, so the
@@ -282,7 +285,8 @@ class LlamaCppBackend(BaseBackend):
         # graceful drain just lets the in-flight generation finish — real work, not
         # overhead). Default 30 min.
         self._refresh_seconds = int(
-            getattr(getattr(config, "model", None), "context_refresh_seconds", 1800) or 1800
+            getattr(getattr(config, "model", None), "context_refresh_seconds", 1800)
+            or 1800
         )
         # Drain window for refreshing under load (0 = legacy defer-while-busy,
         # which starves forever under continuous multi-mission load). When set,
@@ -291,7 +295,8 @@ class LlamaCppBackend(BaseBackend):
         # normal listener path; streams retire retriable), then the context
         # rebuilds. See core/config.ModelConfig.context_refresh_drain_s.
         self._refresh_drain_s = float(
-            getattr(getattr(config, "model", None), "context_refresh_drain_s", 0.0) or 0.0
+            getattr(getattr(config, "model", None), "context_refresh_drain_s", 0.0)
+            or 0.0
         )
         # Admission gate — cleared while a drain-refresh is in progress so
         # acquire_instance() waiters queue instead of keeping the pool busy.
@@ -389,8 +394,12 @@ class LlamaCppBackend(BaseBackend):
         from llama_cpp.llama_speculative import LlamaNGramMapDecoding
 
         return LlamaNGramMapDecoding(
-            ngram_size=int(getattr(self.config.model, "speculative_ngram_size", 3) or 3),
-            num_pred_tokens=int(getattr(self.config.model, "speculative_num_pred", 10) or 10),
+            ngram_size=int(
+                getattr(self.config.model, "speculative_ngram_size", 3) or 3
+            ),
+            num_pred_tokens=int(
+                getattr(self.config.model, "speculative_num_pred", 10) or 10
+            ),
         )
 
     def _create_primary_instance(self) -> Any:
@@ -419,9 +428,7 @@ class LlamaCppBackend(BaseBackend):
             n_seq_max=(
                 self._batched_seq_map().n_seq_max
                 if self._decode_mode == "batched"
-                else self._pool_seq_map().n_seq_max
-                if self._resident_requested
-                else 1
+                else self._pool_seq_map().n_seq_max if self._resident_requested else 1
             ),
             seed=self.config.model.seed,
             verbose=self.config.model.verbose,
@@ -433,7 +440,9 @@ class LlamaCppBackend(BaseBackend):
             draft_model=self._make_draft(),
         )
 
-    def _create_shared_instance(self, primary: Any, n_ctx_override: Optional[int] = None) -> Any:
+    def _create_shared_instance(
+        self, primary: Any, n_ctx_override: Optional[int] = None
+    ) -> Any:
         """Create a pool instance that shares model weights with the primary.
 
         The returned object is a full ``Llama`` instance (same class,
@@ -622,8 +631,8 @@ class LlamaCppBackend(BaseBackend):
                 # same-persona slots simply re-eval (~0.6s per 488 tok).
                 if llm_inst is self._primary_instance or not self._resident_active:
                     self._static_states[persona] = llm_inst.save_state()
-                    state_mb = (
-                        self._static_states[persona].llama_state_size / (1024 * 1024)
+                    state_mb = self._static_states[persona].llama_state_size / (
+                        1024 * 1024
                     )
                     log.info(
                         f"✅ State snapshot saved [{persona}] — {n_tokens:,} tokens, "
@@ -661,7 +670,9 @@ class LlamaCppBackend(BaseBackend):
                 llm_inst._snap_seqs = OrderedDict()
                 log.debug(
                     "🧩 Pinned %d static tokens [%s] to SEQ_STATIC (pool slot #%d)",
-                    n_tokens, persona, idx,
+                    n_tokens,
+                    persona,
+                    idx,
                 )
                 # Reasoning HEAD-SWAP: pin a head per non-default level (re-pinned
                 # here on every refresh/rewarm since this is the single warm path).
@@ -732,12 +743,13 @@ class LlamaCppBackend(BaseBackend):
                 primary.eval(tokens)
                 ctx.memory_seq_rm(head_seq, 0, -1)
                 ctx.memory_seq_cp(SEQ_WORKING, head_seq, -1, -1)
-            heads[persona] = PersonaHead(
-                name=persona, seq=head_seq, tokens=tokens
-            )
+            heads[persona] = PersonaHead(name=persona, seq=head_seq, tokens=tokens)
             log.info(
                 "🧩 Pinned persona head [%s] — %d tokens on seq %d in %.2fs",
-                persona, len(tokens), head_seq, time.perf_counter() - started,
+                persona,
+                len(tokens),
+                head_seq,
+                time.perf_counter() - started,
             )
             if persona == "default":
                 # Legacy backend-level readers (windowing, session paths).
@@ -814,12 +826,8 @@ class LlamaCppBackend(BaseBackend):
         )
         primary.input_ids = np.ndarray((primary._n_ctx,), dtype=np.intc)
         logits_rows = primary._n_ctx if primary._logits_all else 1
-        primary.scores = np.ndarray(
-            (logits_rows, primary._n_vocab), dtype=np.single
-        )
-        primary._candidates = internals.LlamaTokenDataArray(
-            n_vocab=primary._n_vocab
-        )
+        primary.scores = np.ndarray((logits_rows, primary._n_vocab), dtype=np.single)
+        primary._candidates = internals.LlamaTokenDataArray(n_vocab=primary._n_vocab)
         primary.n_tokens = 0
         primary._sampler = None
         primary._sampling_ctx = None
@@ -858,21 +866,16 @@ class LlamaCppBackend(BaseBackend):
         self._session_flow_fork = False
 
         self._engine_seats = [
-            SeqSlot(seq=i, _n_ctx=primary._n_ctx)
-            for i in range(self._pool_size)
+            SeqSlot(seq=i, _n_ctx=primary._n_ctx) for i in range(self._pool_size)
         ]
 
         gen_cfg = self.config.generation
-        capture_dir = getattr(
-            getattr(self.config, "logging", None), "directory", None
-        )
+        capture_dir = getattr(getattr(self.config, "logging", None), "directory", None)
         engine = BatchedEngine(
             primary,
             seq_map,
             n_batch=int(getattr(self.config.model, "n_batch", 2048) or 2048),
-            prefill_chunk=getattr(
-                self.config.resources, "batched_prefill_chunk", None
-            ),
+            prefill_chunk=getattr(self.config.resources, "batched_prefill_chunk", None),
             persona_heads=heads,
             capture_dir=str(capture_dir or "./logs"),
             seats=self._engine_seats,
@@ -891,8 +894,7 @@ class LlamaCppBackend(BaseBackend):
                 return RepetitionGuard(
                     max_run=gen_cfg.repetition_max_run or DEFAULT_MAX_RUN,
                     max_cycle_period=(
-                        gen_cfg.repetition_max_cycle_period
-                        or DEFAULT_MAX_CYCLE_PERIOD
+                        gen_cfg.repetition_max_cycle_period or DEFAULT_MAX_CYCLE_PERIOD
                     ),
                     min_cycle_reps=gen_cfg.repetition_min_cycle_reps
                     or DEFAULT_MIN_CYCLE_REPS,
@@ -1021,7 +1023,9 @@ class LlamaCppBackend(BaseBackend):
         log.info(
             "🧼 refresh drain (%s): admissions gated; %d seat(s) out, "
             "%d generation(s) live; window %.0fs",
-            reason, self._checked_out, self._active_generations,
+            reason,
+            self._checked_out,
+            self._active_generations,
             self._refresh_drain_s,
         )
         deadline = time.monotonic() + self._refresh_drain_s
@@ -1033,7 +1037,9 @@ class LlamaCppBackend(BaseBackend):
         # Force-clear stragglers.
         if self._session_expirer is not None and self._checked_out > 0:
             try:
-                n = await self._session_expirer(f"context refresh drain deadline ({reason})")
+                n = await self._session_expirer(
+                    f"context refresh drain deadline ({reason})"
+                )
                 log.warning("🧼 refresh drain: force-expired %d session(s)", n)
             except Exception:  # noqa: BLE001 — drain must not die on expiry
                 log.exception("refresh drain: session expiry failed")
@@ -1054,7 +1060,8 @@ class LlamaCppBackend(BaseBackend):
             await asyncio.sleep(1.0)
         log.error(
             "⚠️ refresh drain failed to clear the pool (%d out, %d live)",
-            self._checked_out, self._active_generations,
+            self._checked_out,
+            self._active_generations,
         )
         return False
 
@@ -1087,7 +1094,8 @@ class LlamaCppBackend(BaseBackend):
                 if self._refresh_drain_s <= 0:
                     self._h_refresh_deferred += 1
                     return {
-                        "refreshed": 0, "reason": reason,
+                        "refreshed": 0,
+                        "reason": reason,
                         "status": "deferred_busy",
                     }
                 drained = await self._drain_for_refresh(reason)
@@ -1095,7 +1103,8 @@ class LlamaCppBackend(BaseBackend):
                     self._h_refresh_deferred += 1
                     self._refresh_admission_gate.set()
                     return {
-                        "refreshed": 0, "reason": reason,
+                        "refreshed": 0,
+                        "reason": reason,
                         "status": "drain_timeout",
                     }
             engine = self._engine
@@ -1115,10 +1124,14 @@ class LlamaCppBackend(BaseBackend):
             elapsed = time.perf_counter() - started
             log.info(
                 "✅ Batched context refresh #%d in %.2fs (reason=%s)",
-                self._h_context_refreshes, elapsed, reason,
+                self._h_context_refreshes,
+                elapsed,
+                reason,
             )
             return {
-                "refreshed": 1, "reason": reason, "status": "ok",
+                "refreshed": 1,
+                "reason": reason,
+                "status": "ok",
                 "elapsed_s": round(elapsed, 3),
                 "total_refreshes": self._h_context_refreshes,
             }
@@ -1135,7 +1148,10 @@ class LlamaCppBackend(BaseBackend):
         elapsed = time.perf_counter() - started
         log.info(
             "✅ In-process context refresh #%d: %d context(s) in %.2fs (reason=%s)",
-            self._h_context_refreshes, len(targets), elapsed, reason,
+            self._h_context_refreshes,
+            len(targets),
+            elapsed,
+            reason,
         )
         return {
             "refreshed": len(targets),
@@ -1174,8 +1190,10 @@ class LlamaCppBackend(BaseBackend):
                     log.info(
                         "🧼 proactive refresh (%s): %d req since last "
                         "(interval %d), cap %ds — rebuilding context",
-                        reason, self._h_requests_since_refresh,
-                        self._refresh_interval, self._refresh_seconds,
+                        reason,
+                        self._h_requests_since_refresh,
+                        self._refresh_interval,
+                        self._refresh_seconds,
                     )
                     await self.refresh_context(reason=reason)
         except asyncio.CancelledError:
@@ -1245,7 +1263,8 @@ class LlamaCppBackend(BaseBackend):
             self._h_latch_heals += 1
             log.info(
                 "🩹 latch heal #%d complete [%s] — context rebuilt, slot healthy",
-                self._h_latch_heals, getattr(inst, "_persona", "default"),
+                self._h_latch_heals,
+                getattr(inst, "_persona", "default"),
             )
         except Exception:  # noqa: BLE001 — healing must never crash the caller
             log.exception("latch heal failed — instance stays flagged")
@@ -1295,7 +1314,9 @@ class LlamaCppBackend(BaseBackend):
         inst_static_tokens = getattr(inst, "_static_tokens", None)
         if inst_static_tokens is None:
             inst_static_tokens = self._resident_static_tokens
-        inst_static_len = int(getattr(inst, "_static_len", self._resident_static_len) or 0)
+        inst_static_len = int(
+            getattr(inst, "_static_len", self._resident_static_len) or 0
+        )
         # The default level (thinking_mode) reuses the already-pinned SEQ_STATIC
         # (which holds THIS instance's persona head).
         if self._reasoning_default_level in self._reasoning_levels:
@@ -1309,7 +1330,9 @@ class LlamaCppBackend(BaseBackend):
             from preprocessing.builder import build_static_tokens
 
             for i, level in enumerate(self._reasoning_pin_levels):
-                toks = build_static_tokens(self.config, reasoning=level, persona=persona)
+                toks = build_static_tokens(
+                    self.config, reasoning=level, persona=persona
+                )
                 seq = base + i
                 inst._ctx.memory_seq_rm(SEQ_WORKING, 0, -1)
                 inst.n_tokens = 0
@@ -1325,8 +1348,12 @@ class LlamaCppBackend(BaseBackend):
                 {lv: inst._reasoning_head_len[lv] for lv in self._reasoning_pin_levels},
                 base,
             )
-        except Exception as exc:  # noqa: BLE001 — disable head-swap for this inst, stay safe
-            log.warning("reasoning head pin failed (%s) — head-swap off for this slot", exc)
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 — disable head-swap for this inst, stay safe
+            log.warning(
+                "reasoning head pin failed (%s) — head-swap off for this slot", exc
+            )
             inst._reasoning_seqs = {}
         finally:
             # Restore seq 0 to the pristine static so acquire_instance's fork is sound.
@@ -1353,7 +1380,9 @@ class LlamaCppBackend(BaseBackend):
             self._h_reasoning_swaps += 1
             log.info(
                 "🧠 reasoning head-swap → %s (seat seq %d, %d tok, batched)",
-                level, inst.seq, head.n_tokens,
+                level,
+                inst.seq,
+                head.n_tokens,
             )
             return True
         seqs = getattr(inst, "_reasoning_seqs", None) or {}
@@ -1406,7 +1435,10 @@ class LlamaCppBackend(BaseBackend):
         verified per call; a mismatch refuses the splice (turn proceeds on the
         current level). Returns True if the splice happened."""
         if self._decode_mode == "batched":
-            cur = getattr(inst, "_reasoning_current", None) or self._reasoning_default_level
+            cur = (
+                getattr(inst, "_reasoning_current", None)
+                or self._reasoning_default_level
+            )
             if level == cur:
                 return False
             if level == self._reasoning_default_level:
@@ -1423,7 +1455,8 @@ class LlamaCppBackend(BaseBackend):
             self._h_reasoning_swaps += 1
             log.info(
                 "🧠 reasoning head-splice → %s (seat seq %d, batched, body intact)",
-                level, inst.seq,
+                level,
+                inst.seq,
             )
             return True
         cur = getattr(inst, "_reasoning_current", None) or self._reasoning_default_level
@@ -1439,7 +1472,11 @@ class LlamaCppBackend(BaseBackend):
         if hlen != cur_hlen or hlen > n_tokens:
             log.warning(
                 "🧠 reasoning splice refused: head-len mismatch (%s:%d vs %s:%d, n=%d)",
-                cur, cur_hlen, level, hlen, n_tokens,
+                cur,
+                cur_hlen,
+                level,
+                hlen,
+                n_tokens,
             )
             return False
         ctx = inst._ctx
@@ -1450,7 +1487,9 @@ class LlamaCppBackend(BaseBackend):
         self._h_reasoning_swaps += 1
         log.info(
             "🧠 reasoning head-splice → %s (per-turn, %d tok head, %d tok body intact)",
-            level, hlen, n_tokens - hlen,
+            level,
+            hlen,
+            n_tokens - hlen,
         )
         return True
 
@@ -1478,7 +1517,9 @@ class LlamaCppBackend(BaseBackend):
         if not level or level == self._reasoning_default_level:
             return prompt_tokens
         if not (self._reasoning_head_swap and getattr(self, "_resident_active", False)):
-            log.debug("completion reasoning=%s ignored (swap off or non-resident)", level)
+            log.debug(
+                "completion reasoning=%s ignored (swap off or non-resident)", level
+            )
             return prompt_tokens
         source = self._reasoning_head_source(inst, level)
         if source is None:
@@ -1489,7 +1530,10 @@ class LlamaCppBackend(BaseBackend):
         if hlen != static_len or len(prompt_tokens) < static_len or static_len <= 0:
             log.warning(
                 "completion reasoning=%s refused: head len %d vs static %d (prompt %d)",
-                level, hlen, static_len, len(prompt_tokens),
+                level,
+                hlen,
+                static_len,
+                len(prompt_tokens),
             )
             return prompt_tokens
         if not self._install_reasoning_head(inst, level):
@@ -1514,14 +1558,16 @@ class LlamaCppBackend(BaseBackend):
             return n_tokens
         ctx.memory_seq_rm(SEQ_WORKING, n_keep, n_keep + n_discard)
         ctx.memory_seq_add(SEQ_WORKING, n_keep + n_discard, n_tokens, -n_discard)
-        inst.input_ids[n_keep: n_tokens - n_discard] = inst.input_ids[
-            n_keep + n_discard: n_tokens
+        inst.input_ids[n_keep : n_tokens - n_discard] = inst.input_ids[
+            n_keep + n_discard : n_tokens
         ]
         inst.n_tokens = n_tokens - n_discard
         log.warning(
             "🪟 windowed resident seq: dropped %d oldest tokens "
             "(kept %d static head + %d recent)",
-            n_discard, n_keep, inst.n_tokens - n_keep,
+            n_discard,
+            n_keep,
+            inst.n_tokens - n_keep,
         )
         return inst.n_tokens
 
@@ -1568,12 +1614,16 @@ class LlamaCppBackend(BaseBackend):
                 self._h_flow_hits += 1
                 log.info(
                     "🔁 resident flow HIT %r (seq %d, %d tok)",
-                    flow_key, seq, flow_prefix_len,
+                    flow_key,
+                    seq,
+                    flow_prefix_len,
                 )
             else:
                 # BUILD: seq 0 holds the global static (acquire fork); eval the flow
                 # head on top, then pin a copy on a dedicated flow seq.
-                inst.eval(list(prompt_tokens[self._resident_static_len: flow_prefix_len]))
+                inst.eval(
+                    list(prompt_tokens[self._resident_static_len : flow_prefix_len])
+                )
                 seq = self._alloc_flow_seq(inst, flow_key)
                 ctx.memory_seq_rm(seq, 0, -1)
                 ctx.memory_seq_cp(SEQ_WORKING, seq, -1, -1)
@@ -1581,7 +1631,9 @@ class LlamaCppBackend(BaseBackend):
                 self._h_flow_builds += 1
                 log.info(
                     "🆕 resident flow BUILD %r (seq %d, %d tok)",
-                    flow_key, seq, flow_prefix_len,
+                    flow_key,
+                    seq,
+                    flow_prefix_len,
                 )
             return flow_prefix_len
         except Exception as exc:  # noqa: BLE001 — fall back to the static base
@@ -1690,7 +1742,10 @@ class LlamaCppBackend(BaseBackend):
         self._snap_registry[key] = entry
         log.info(
             "📸 snapshot %r pinned: seq %d, %d tokens (%d dynamic)",
-            key, seq, n_tokens, n_tokens - static_len,
+            key,
+            seq,
+            n_tokens,
+            n_tokens - static_len,
         )
         return {"tokens": n_tokens, "resident": True}
 
@@ -1699,9 +1754,7 @@ class LlamaCppBackend(BaseBackend):
         instance): pure seq_cp, ~zero cost. Cold miss: returns None — caller
         runs rebuild_snapshot_cold. Unknown key: KeyError."""
         if self._decode_mode == "batched":
-            raise RuntimeError(
-                "session snapshots are pool-only in batched mode v1"
-            )
+            raise RuntimeError("session snapshots are pool-only in batched mode v1")
         entry = self._snap_registry[key]
         self._guard_snapshot_persona(inst, key, entry)
         seq = inst._snap_seqs.get(key)
@@ -1749,9 +1802,7 @@ class LlamaCppBackend(BaseBackend):
                 inst._snap_seqs.pop(key, None)
                 log.warning("snapshot %r re-pin failed (%s) — stays cold", key, exc)
         self._h_snapshot_rebuilds += 1
-        log.info(
-            "🧊 snapshot %r cold rebuild: %d tokens re-prefixed", key, n_total
-        )
+        log.info("🧊 snapshot %r cold rebuild: %d tokens re-prefixed", key, n_total)
         return n_total
 
     def purge_snapshot(self, key: str) -> bool:
@@ -1786,7 +1837,9 @@ class LlamaCppBackend(BaseBackend):
             "created_at": time.time(),
             "resident": False,
         }
-        log.info("📸 snapshot %r registered (replay mode, %d tok)", key, len(dyn_tokens))
+        log.info(
+            "📸 snapshot %r registered (replay mode, %d tok)", key, len(dyn_tokens)
+        )
         return {"tokens": len(dyn_tokens), "resident": False}
 
     def sweep_stale_snapshots(self, max_age_s: float) -> int:
@@ -2120,7 +2173,8 @@ class LlamaCppBackend(BaseBackend):
             log.warning(
                 "slot 0 persona is '%s' (not 'default') — the primary context is "
                 "built at the model n_ctx; a persona n_ctx override on slot 0 is "
-                "ignored", self._slot_personas[0],
+                "ignored",
+                self._slot_personas[0],
             )
 
         if self._decode_mode == "batched":
@@ -2204,9 +2258,13 @@ class LlamaCppBackend(BaseBackend):
             self._persona_queues = {"default": self._pool_queue}
             for persona in set(self._slot_personas):
                 if persona != "default":
-                    self._persona_queues[persona] = asyncio.Queue(maxsize=self._pool_size)
+                    self._persona_queues[persona] = asyncio.Queue(
+                        maxsize=self._pool_size
+                    )
             for inst in self._all_instances:
-                self._persona_queues[getattr(inst, "_persona", "default")].put_nowait(inst)
+                self._persona_queues[getattr(inst, "_persona", "default")].put_nowait(
+                    inst
+                )
 
             log.info(
                 f"✅ Llama pool ready ({len(self._all_instances)} instances, "
@@ -2381,7 +2439,8 @@ class LlamaCppBackend(BaseBackend):
                 )
             log.debug(
                 "🧩 Forked persona head [%s] → seat seq %d (batched)",
-                persona_key, seat.seq,
+                persona_key,
+                seat.seq,
             )
         elif self._resident_active:
             async with self.generation_guard():
@@ -2830,7 +2889,8 @@ class LlamaCppBackend(BaseBackend):
                     self._h_flow_hits += 1
                     log.info(
                         "🔁 flow_kv_cache HIT %r (%d tok pinned)",
-                        flow_key, flow_prefix_len,
+                        flow_key,
+                        flow_prefix_len,
                     )
                 else:
                     # Build ON TOP of the global static that acquire_instance
@@ -2840,9 +2900,7 @@ class LlamaCppBackend(BaseBackend):
                     # so output is bit-identical; reset()+eval(whole prefix)
                     # recomputes the global KV and diverges. (eval-on-top of a
                     # loaded state is what generate() does every request.)
-                    n_global = (
-                        self._static_state.n_tokens if self._static_state else 0
-                    )
+                    n_global = self._static_state.n_tokens if self._static_state else 0
                     instance.eval(list(prompt_tokens[n_global:flow_prefix_len]))
                     self._flow_states[flow_key] = instance.save_state()
                     cap = max(
@@ -2855,14 +2913,16 @@ class LlamaCppBackend(BaseBackend):
                     self._h_flow_builds += 1
                     log.info(
                         "🆕 flow_kv_cache BUILD %r (%d tok)",
-                        flow_key, flow_prefix_len,
+                        flow_key,
+                        flow_prefix_len,
                     )
                 flow_n_static = flow_prefix_len
             except Exception as exc:  # noqa: BLE001 — save_state fragility net
                 self._h_flow_fallbacks += 1
                 log.warning(
                     "flow_kv_cache failed for %r (%s) — using static base",
-                    flow_key, exc,
+                    flow_key,
+                    exc,
                 )
                 if self._static_state is not None:
                     instance.load_state(self._static_state)
@@ -3082,7 +3142,9 @@ class LlamaCppBackend(BaseBackend):
             # _last_flow_hit only — the flow-pin, which fires on the ~1/N stateless
             # completions — so it reported ~0% while the resident cache was doing
             # the heavy lifting. (_last_flow_hit is kept for flow-pin-specific stats.)
-            instance._last_cache_hit = bool(flow_hit_telemetry) or int(kv_base) > self._resident_static_len
+            instance._last_cache_hit = (
+                bool(flow_hit_telemetry) or int(kv_base) > self._resident_static_len
+            )
         except RuntimeError as e:
             # llama_decode -3 (GGML_STATUS_FAILED) latches the Metal backend:
             # ggml-metal sets a sticky has_error on any failed command buffer
@@ -3234,16 +3296,19 @@ class LlamaCppBackend(BaseBackend):
             ):
                 self._engine.install_head_sync(seat, _level_head)
                 prompt_tokens = list(_level_head.tokens) + list(
-                    prompt_tokens[_level_head.n_tokens:]
+                    prompt_tokens[_level_head.n_tokens :]
                 )
                 _restore_head = _persona_head
                 self._h_reasoning_swaps += 1
                 log.info(
                     "🧠 completion head-swap → %s (seat seq %d, batched)",
-                    _level, seat.seq,
+                    _level,
+                    seat.seq,
                 )
             else:
-                log.debug("completion reasoning=%s refused (batched preconditions)", _level)
+                log.debug(
+                    "completion reasoning=%s refused (batched preconditions)", _level
+                )
 
         n_static = seat.static_len if static_in_prompt else 0
         if n_static > len(prompt_tokens):
@@ -3280,8 +3345,12 @@ class LlamaCppBackend(BaseBackend):
         log.info(
             "🔧 batched stream %s: dynamic=%d tok, kv_base=%d, max_gen=%d "
             "[seq %d, %s]",
-            stream_id, len(dynamic_tokens), kv_base, max_tokens,
-            seat.seq, req.persona,
+            stream_id,
+            len(dynamic_tokens),
+            kv_base,
+            max_tokens,
+            seat.seq,
+            req.persona,
         )
         completed = False
         try:
@@ -3317,9 +3386,11 @@ class LlamaCppBackend(BaseBackend):
         ready = self._ready_event.is_set()
         scaling = not self._scaling_gate.is_set()
         # Sum across persona queues (single-persona: just _pool_queue).
-        available = sum(q.qsize() for q in self._persona_queues.values()) if (
-            self._persona_queues
-        ) else (self._pool_queue.qsize() if self._pool_queue else 0)
+        available = (
+            sum(q.qsize() for q in self._persona_queues.values())
+            if (self._persona_queues)
+            else (self._pool_queue.qsize() if self._pool_queue else 0)
+        )
         active = len(self._all_instances)
 
         if not ready:
@@ -3378,7 +3449,9 @@ class LlamaCppBackend(BaseBackend):
             import psutil
 
             vm = psutil.virtual_memory()
-            info["mem_process_rss_mb"] = round(psutil.Process().memory_info().rss / 1e6, 1)
+            info["mem_process_rss_mb"] = round(
+                psutil.Process().memory_info().rss / 1e6, 1
+            )
             info["mem_system_used_percent"] = vm.percent
             info["mem_system_available_mb"] = round(vm.available / 1e6, 1)
             # Wired (unevictable) bytes — on macOS a drop here while the model is

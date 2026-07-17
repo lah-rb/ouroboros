@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(
     not R.is_tree_sitter_available(), reason="tree-sitter grammars unavailable"
 )
 
-PY = '''import os
+PY = """import os
 
 
 class Cmd:
@@ -31,7 +31,7 @@ def helper(c):
 
 
 helper(Cmd())
-'''
+"""
 
 GO = 'package main\nimport "fmt"\nfunc greet() { fmt.Println("x") }\n'
 JS = "import x from 'y'\nfunction build(o) { return o.value }\nbuild({value: 1})\n"
@@ -135,6 +135,6 @@ def test_analysis_backends_has_no_module_level_repomap_import():
                 mods = [a.name for a in node.names]
             elif isinstance(node, ast.ImportFrom):
                 mods = [node.module or ""]
-            assert "agent.repomap" not in mods, (
-                f"{py_file.name} imports repomap at module level — cycle risk"
-            )
+            assert (
+                "agent.repomap" not in mods
+            ), f"{py_file.name} imports repomap at module level — cycle risk"

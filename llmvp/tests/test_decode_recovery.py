@@ -39,8 +39,10 @@ class FakeLlama:
 def make_backend() -> LlamaCppBackend:
     config = SimpleNamespace(
         resources=SimpleNamespace(
-            cpu_threads=1, max_concurrent_requests=1,
-            jit_concurrency_limit=None, scale_wait_timeout=0.5,
+            cpu_threads=1,
+            max_concurrent_requests=1,
+            jit_concurrency_limit=None,
+            scale_wait_timeout=0.5,
             instance_idle_ttl=0.1,
         ),
         app=SimpleNamespace(backend_timeout=0.2),

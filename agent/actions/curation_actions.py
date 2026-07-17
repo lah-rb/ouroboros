@@ -313,7 +313,6 @@ _FIG_TOOL_SCRIPT = "tools/fig_review/fig_review.py"
 FIG_MODEL = "mlx-community/Qwen3-VL-8B-Instruct-8bit"
 
 
-
 def _active_text_model() -> str:
     """The LLMVP config name serving this run (per-paper provenance —
     the denial second-opinion pass runs a different model over the same

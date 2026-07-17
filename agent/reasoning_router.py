@@ -78,7 +78,9 @@ def _load_artifact(path_str: str) -> Optional[dict]:
             loaded.get("meta", {}).get("built", "no meta"),
         )
     except Exception as exc:  # noqa: BLE001 — router must never sink a mission
-        logger.warning("reasoning_router: cannot load %s (%s); router disabled", path, exc)
+        logger.warning(
+            "reasoning_router: cannot load %s (%s); router disabled", path, exc
+        )
     _artifact_cache[path_str] = artifact
     return artifact
 
@@ -106,7 +108,9 @@ def resolve_reasoning(
     # sessions swap/splice the head; stateless completions carry the field too.
     explicit = (step_config or {}).get("reasoning")
     if isinstance(explicit, str) and explicit.lower() in VALID_LEVELS:
-        logger.info("reasoning_router: step=%s explicit -> %s", step_name, explicit.lower())
+        logger.info(
+            "reasoning_router: step=%s explicit -> %s", step_name, explicit.lower()
+        )
         return explicit.lower()
 
     if not _enabled():
@@ -122,13 +126,15 @@ def resolve_reasoning(
         return None
 
     if step_name in _csv_env("OURO_ROUTER_STEPS", "plan_interaction"):
-        artifact = _load_artifact(os.environ.get("OURO_REASONING_ROUTER", DEFAULT_ARTIFACT))
+        artifact = _load_artifact(
+            os.environ.get("OURO_REASONING_ROUTER", DEFAULT_ARTIFACT)
+        )
         if artifact is None:
             return None
         p_medium = float(
-            artifact["clf"].predict_proba(
-                artifact["vectorizer"].transform([prompt])
-            )[0][artifact["medium_idx"]]
+            artifact["clf"].predict_proba(artifact["vectorizer"].transform([prompt]))[
+                0
+            ][artifact["medium_idx"]]
         )
         level = "medium" if p_medium >= _threshold() else "low"
         logger.info(

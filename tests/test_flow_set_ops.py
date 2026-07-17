@@ -78,10 +78,18 @@ def test_compiled_ops_wiring():
     # The blind pre-exploration derivations were REMOVED from ops_control — the
     # definition-of-done + output-format spec derive grounded inside ops_task.
     ocs = c["ops_control"]["steps"]
-    for gone in ("derive_criteria", "retry_setup", "store_criteria",
-                 "derive_output_format", "store_output_format"):
+    for gone in (
+        "derive_criteria",
+        "retry_setup",
+        "store_criteria",
+        "derive_output_format",
+        "store_output_format",
+    ):
         assert gone not in ocs, f"blind early derivation step {gone} resurrected"
-    bg = {r["condition"]: r["transition"] for r in ocs["bootstrap_goals"]["resolver"]["rules"]}
+    bg = {
+        r["condition"]: r["transition"]
+        for r in ocs["bootstrap_goals"]["resolver"]["rules"]
+    }
     assert bg["result.goals_ready == true"] == "check_phase"
     assert c["ops_control"]["steps"]["dispatch_task"]["tail_call"]["flow"] == "ops_task"
     # ops_task reuses run_session verbatim and judges completion.
@@ -89,22 +97,33 @@ def test_compiled_ops_wiring():
     # Ground the cycle in the real working directory BEFORE planning, so the
     # charter plans against actual files (not blind). load_state →
     # gather_context (scan_project) → exa_probe_gate → plan_provision.
-    assert (
-        steps["load_state"]["resolver"]["rules"][0]["transition"] == "gather_context"
-    )
+    assert steps["load_state"]["resolver"]["rules"][0]["transition"] == "gather_context"
     assert steps["gather_context"]["action"] == "scan_project"
     assert (
-        steps["gather_context"]["resolver"]["rules"][0]["transition"] == "exa_probe_gate"
+        steps["gather_context"]["resolver"]["rules"][0]["transition"]
+        == "exa_probe_gate"
     )
     # Stuck-task external-search arm: gate (attempts>=2, once) → exa_search → store →
     # plan_provision; skips straight to plan_provision otherwise.
-    eg = {r["condition"]: r["transition"] for r in steps["exa_probe_gate"]["resolver"]["rules"]}
+    eg = {
+        r["condition"]: r["transition"]
+        for r in steps["exa_probe_gate"]["resolver"]["rules"]
+    }
     assert eg["result.should_search == true"] == "exa_search"
     assert eg["true"] == "plan_provision"
     assert steps["exa_search"]["action"] == "exa_search"
-    assert steps["exa_search"]["resolver"]["rules"][0]["transition"] == "store_search_findings"
-    assert steps["store_search_findings"]["resolver"]["rules"][0]["transition"] == "plan_provision"
-    assert "search_findings_block" in steps["plan_charter"]["prompt_template"]["context_keys"]
+    assert (
+        steps["exa_search"]["resolver"]["rules"][0]["transition"]
+        == "store_search_findings"
+    )
+    assert (
+        steps["store_search_findings"]["resolver"]["rules"][0]["transition"]
+        == "plan_provision"
+    )
+    assert (
+        "search_findings_block"
+        in steps["plan_charter"]["prompt_template"]["context_keys"]
+    )
     # The charter consumes the workspace manifest (grounded, not blind).
     assert (
         "workspace_context" in steps["plan_charter"]["prompt_template"]["context_keys"]
@@ -118,29 +137,48 @@ def test_compiled_ops_wiring():
     # artifact oracle (sanity + format + profile rungs over ONE read).
     assert steps["run_checks"]["resolver"]["rules"][0]["transition"] == "gate_reground"
     assert steps["gate_reground"]["action"] == "gate_reground_output_format"
-    gr = {r["condition"]: r["transition"] for r in steps["gate_reground"]["resolver"]["rules"]}
+    gr = {
+        r["condition"]: r["transition"]
+        for r in steps["gate_reground"]["resolver"]["rules"]
+    }
     assert gr["result.needs_reground == true"] == "reground_output_format"
     assert gr["true"] == "artifact_oracle"
-    rof = {r["condition"]: r["transition"] for r in steps["reground_output_format"]["resolver"]["rules"]}
+    rof = {
+        r["condition"]: r["transition"]
+        for r in steps["reground_output_format"]["resolver"]["rules"]
+    }
     assert rof["result.tokens_generated > 0"] == "store_reground_format"
     assert rof["true"] == "artifact_oracle"
     assert steps["store_reground_format"]["action"] == "store_reground_output_format"
-    assert steps["store_reground_format"]["resolver"]["rules"][0]["transition"] == "artifact_oracle"
+    assert (
+        steps["store_reground_format"]["resolver"]["rules"][0]["transition"]
+        == "artifact_oracle"
+    )
     # The combined oracle replaced the separate check_sanity/profile_oracle/
     # check_format steps (three reads of the same artifact → one).
     for gone in ("check_sanity", "profile_oracle", "check_format"):
         assert gone not in steps, f"standalone rung step {gone} resurrected"
     assert steps["artifact_oracle"]["action"] == "check_artifact_oracles"
-    ao = {r["condition"]: r["transition"] for r in steps["artifact_oracle"]["resolver"]["rules"]}
+    ao = {
+        r["condition"]: r["transition"]
+        for r in steps["artifact_oracle"]["resolver"]["rules"]
+    }
     assert ao["result.check_plausibility == true"] == "sanity_plausibility"
     assert ao["true"] == "probe_gate"
     assert steps["record_sanity"]["resolver"]["rules"][0]["transition"] == "probe_gate"
-    assert steps["judge_step"]["resolver"]["rules"][0]["transition"] == "reprobe_completion"
-    rp = {r["condition"]: r["transition"] for r in steps["reprobe_completion"]["resolver"]["rules"]}
+    assert (
+        steps["judge_step"]["resolver"]["rules"][0]["transition"]
+        == "reprobe_completion"
+    )
+    rp = {
+        r["condition"]: r["transition"]
+        for r in steps["reprobe_completion"]["resolver"]["rules"]
+    }
     assert rp["result.do_verify == true"] == "verify_completion"
     assert rp["true"] == "decide"
     assert (
-        steps["record_completion_verify"]["resolver"]["rules"][0]["transition"] == "decide"
+        steps["record_completion_verify"]["resolver"]["rules"][0]["transition"]
+        == "decide"
     )
     # No restore dance: record_completion_verify publishes only its findings; the
     # judge verdict reaches decide via the dedicated judge_response key.
@@ -149,25 +187,41 @@ def test_compiled_ops_wiring():
     # Provision the env BEFORE the work session (reuse project_ops's install
     # runner), so run_session stays observe-only and tb env-setup works.
     assert steps["run_provision"]["action"] == "execute_project_setup"
-    pp = {r["condition"]: r["transition"] for r in steps["plan_provision"]["resolver"]["rules"]}
+    pp = {
+        r["condition"]: r["transition"]
+        for r in steps["plan_provision"]["resolver"]["rules"]
+    }
     assert pp["result.tokens_generated > 0"] == "run_provision"
-    assert steps["run_provision"]["resolver"]["rules"][0]["transition"] == "plan_charter"
+    assert (
+        steps["run_provision"]["resolver"]["rules"][0]["transition"] == "plan_charter"
+    )
     assert steps["run_terminal"]["flow"] == "run_session"
     # run_terminal → grounded criteria reground (once) → run_checks: the done-criteria
     # are re-derived grounded in the explored workspace, union-merged, then enforced.
-    assert steps["run_terminal"]["resolver"]["rules"][0]["transition"] == "gate_reground_criteria"
-    gc = {r["condition"]: r["transition"] for r in steps["gate_reground_criteria"]["resolver"]["rules"]}
+    assert (
+        steps["run_terminal"]["resolver"]["rules"][0]["transition"]
+        == "gate_reground_criteria"
+    )
+    gc = {
+        r["condition"]: r["transition"]
+        for r in steps["gate_reground_criteria"]["resolver"]["rules"]
+    }
     assert gc["result.needs_reground == true"] == "reground_criteria"
     assert gc["true"] == "run_checks"
-    assert steps["reground_criteria"]["resolver"]["rules"][0]["transition"] == "store_reground_criteria"
-    assert steps["store_reground_criteria"]["resolver"]["rules"][0]["transition"] == "run_checks"
+    assert (
+        steps["reground_criteria"]["resolver"]["rules"][0]["transition"]
+        == "store_reground_criteria"
+    )
+    assert (
+        steps["store_reground_criteria"]["resolver"]["rules"][0]["transition"]
+        == "run_checks"
+    )
     assert steps["run_checks"]["action"] == "run_validation_checks"
     assert steps["decide"]["action"] == "judge_task_completion"
     # Both decide branches release the memoryful inference session before
     # returning (else every ops cycle leaks an LLMVP pool instance).
     decide_t = {
-        r["condition"]: r["transition"]
-        for r in steps["decide"]["resolver"]["rules"]
+        r["condition"]: r["transition"] for r in steps["decide"]["resolver"]["rules"]
     }
     assert decide_t["result.task_done == true"] == "end_session_success"
     assert decide_t["true"] == "end_session_loop"

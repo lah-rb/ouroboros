@@ -149,7 +149,9 @@ def build_static_tokens(
         persona_path = Path(persona_file).expanduser().resolve()
         if persona_path.is_file():
             persona_text = persona_path.read_text(encoding="utf-8")
-            emit(f"📄 Persona [{persona}]: {persona_path.name} ({len(persona_text)} chars)")
+            emit(
+                f"📄 Persona [{persona}]: {persona_path.name} ({len(persona_text)} chars)"
+            )
         else:
             emit(f"⚠️  Persona file not found: {persona_path}")
 

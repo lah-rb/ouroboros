@@ -48,7 +48,6 @@ NOTES_CAP = 100
 DISPATCH_CAP = 50
 
 
-
 def _archive_root(agent_dir: str) -> str:
     return os.path.join(agent_dir, ARCHIVE_DIR)
 
@@ -176,7 +175,9 @@ def archive_mission_overflow(agent_dir: str, mission: Any) -> bool:
         )
         del notes[:-NOTES_CAP]
         changed = True
-        logger.info("🗄️ archived %d note(s) beyond the %d cap", len(overflow), NOTES_CAP)
+        logger.info(
+            "🗄️ archived %d note(s) beyond the %d cap", len(overflow), NOTES_CAP
+        )
 
     dispatch = getattr(mission, "dispatch_history", None)
     if dispatch is not None and len(dispatch) > DISPATCH_CAP:

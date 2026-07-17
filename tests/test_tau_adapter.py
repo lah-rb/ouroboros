@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("tau_bench", reason="tau-bench not installed (uv pip install -e ~/Repos/tau-bench)")
+pytest.importorskip(
+    "tau_bench", reason="tau-bench not installed (uv pip install -e ~/Repos/tau-bench)"
+)
 
 
 # ── domain data + tools (real, offline) ───────────────────────────────
@@ -36,8 +38,7 @@ def test_retail_read_tool_invokes_against_data():
 
     data = load_data()
     get_order = next(
-        t for t in ALL_TOOLS
-        if t.get_info()["function"]["name"] == "get_order_details"
+        t for t in ALL_TOOLS if t.get_info()["function"]["name"] == "get_order_details"
     )
     order_id = next(iter(data["orders"]))
     out = get_order.invoke(data=data, order_id=order_id)
@@ -50,7 +51,8 @@ def test_write_tool_mutates_only_its_copy_and_reload_resets():
 
     data = load_data()
     cancel = next(
-        t for t in ALL_TOOLS
+        t
+        for t in ALL_TOOLS
         if t.get_info()["function"]["name"] == "cancel_pending_order"
     )
     order_id = next(
@@ -100,6 +102,7 @@ class _FakeEnv:
         class R:
             observation = "hi, I need help"
             info = _FakeInfo()
+
         return R()
 
     def step(self, action):

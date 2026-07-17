@@ -24,20 +24,37 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-id", required=True)
-    ap.add_argument("--split", default="validation",
-                    help="validation (165, locally scorable) | test (300, leaderboard)")
-    ap.add_argument("--levels", default="",
-                    help="comma-separated levels to include, e.g. 1 or 1,2 (default: all)")
-    ap.add_argument("--limit", type=int, default=0, help="cap to first N after shuffle (0=all)")
-    ap.add_argument("--seed", type=int, default=0, help="shuffle seed (reproducible order)")
+    ap.add_argument(
+        "--split",
+        default="validation",
+        help="validation (165, locally scorable) | test (300, leaderboard)",
+    )
+    ap.add_argument(
+        "--levels",
+        default="",
+        help="comma-separated levels to include, e.g. 1 or 1,2 (default: all)",
+    )
+    ap.add_argument(
+        "--limit", type=int, default=0, help="cap to first N after shuffle (0=all)"
+    )
+    ap.add_argument(
+        "--seed", type=int, default=0, help="shuffle seed (reproducible order)"
+    )
     ap.add_argument("--no-shuffle", action="store_true", help="keep dataset order")
-    ap.add_argument("--resume", action="store_true",
-                    help="skip task_ids already in predictions.jsonl")
-    ap.add_argument("--wall", type=float, default=None, help="per-question wall clock (s)")
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="skip task_ids already in predictions.jsonl",
+    )
+    ap.add_argument(
+        "--wall", type=float, default=None, help="per-question wall clock (s)"
+    )
     ap.add_argument("--out-dir", default=os.path.join(_REPO_ROOT, "runs", "gaia"))
     args = ap.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-5s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)-5s %(message)s"
+    )
 
     from adapters.gaia.loader import load_questions
     from adapters.gaia.runner import run_question
@@ -46,8 +63,10 @@ def main() -> None:
     levels = tuple(int(x) for x in args.levels.split(",") if x.strip()) or None
     questions = load_questions(split=args.split, levels=levels)
     if not questions:
-        sys.exit("No questions loaded — is the gated GAIA dataset accessible "
-                 "(huggingface-cli login + accept terms)?")
+        sys.exit(
+            "No questions loaded — is the gated GAIA dataset accessible "
+            "(huggingface-cli login + accept terms)?"
+        )
     if not args.no_shuffle:
         random.Random(args.seed).shuffle(questions)
     if args.limit:
@@ -78,8 +97,11 @@ def main() -> None:
         preds.append(row)
         if scorable:
             n_ok = sum(1 for r in rows if r.get("correct"))
-            print(f"    -> {row['model_answer']!r}  "
-                  f"{'✓' if row.get('correct') else '✗'}   running: {n_ok}/{len(rows)}", flush=True)
+            print(
+                f"    -> {row['model_answer']!r}  "
+                f"{'✓' if row.get('correct') else '✗'}   running: {n_ok}/{len(rows)}",
+                flush=True,
+            )
 
     if scorable:
         by_level: dict[int, list[dict]] = {}
@@ -90,7 +112,10 @@ def main() -> None:
             "total": len(rows),
             "correct": sum(1 for r in rows if r.get("correct")),
             "by_level": {
-                lvl: {"total": len(rs), "correct": sum(1 for r in rs if r.get("correct"))}
+                lvl: {
+                    "total": len(rs),
+                    "correct": sum(1 for r in rs if r.get("correct")),
+                }
                 for lvl, rs in sorted(by_level.items())
             },
         }

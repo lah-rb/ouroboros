@@ -165,11 +165,7 @@ async def test_end_to_end_routing_on_success(compiled_rewrite_flow) -> None:
         # context.target_file (effects-routed, container-safe) and the
         # target_file_content pre_compute sources from it — not from the
         # file_context projection (which host-reads, empty in a container).
-        context={
-            "target_file": {
-                "content": "def add_todo(item): _store.append(item)"
-            }
-        },
+        context={"target_file": {"content": "def add_todo(item): _store.append(item)"}},
         config={},
         params={},
         meta=FlowMeta(flow_name="rewrite", step_id="generate_rewrite"),

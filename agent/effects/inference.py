@@ -32,6 +32,7 @@ def _reasoning_off() -> bool:
     """
     return os.environ.get("OURO_REASONING_OFF", "") == "1"
 
+
 # GraphQL query for non-streaming completion
 COMPLETION_QUERY = """
 query Completion($request: CompletionRequest!) {

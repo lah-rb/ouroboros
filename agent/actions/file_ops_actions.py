@@ -86,7 +86,7 @@ def scaffold_parse_error(
 _TEST_PATH_RE = re.compile(r"(^|/)(tests?)(/|$)|(^|/)(test_[^/]*|[^/]*_test)\.py$")
 # config/CI/docs by path fragment (case-insensitive) — always blocked on repair.
 _CONFIG_CI_DOCS_RE = re.compile(
-    r"(^|/)\.github/"                       # workflows, ISSUE_TEMPLATE, FUNDING, …
+    r"(^|/)\.github/"  # workflows, ISSUE_TEMPLATE, FUNDING, …
     r"|(^|/)(contributing|changelog|readme|authors|history)\b"
     r"|(^|/)\.pre-commit-config\.ya?ml$"
     r"|(^|/)\.?codecov\.ya?ml$"
@@ -98,7 +98,10 @@ _CONFIG_CI_DOCS_RE = re.compile(
     re.IGNORECASE,
 )
 _CONFIG_NAMES = {  # exact basenames — build/package config
-    "pyproject.toml", "setup.py", "setup.cfg", "package.json",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "package.json",
 }
 
 
@@ -170,11 +173,15 @@ async def guarded_write_file(
         reason, block_edits = repair_write_reason(file_path)
         if reason is not None:
             if block_edits:
-                logger.warning("Repair write guard rejected config/CI/docs write %s", file_path)
+                logger.warning(
+                    "Repair write guard rejected config/CI/docs write %s", file_path
+                )
                 return False, f"Repair write guard: {reason}"
             existing = await effects.read_file(file_path)
             if not (getattr(existing, "exists", False) and (existing.content or "")):
-                logger.warning("Repair write guard rejected NEW test file %s", file_path)
+                logger.warning(
+                    "Repair write guard rejected NEW test file %s", file_path
+                )
                 return False, f"Repair write guard: {reason}"
     if min_retention_ratio > 0:
         existing = await effects.read_file(file_path)
@@ -286,14 +293,21 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
         try:
             if protect_existing:
                 existing = await effects.read_file(file_path)
-                if getattr(existing, "exists", False) and (existing.content or "").strip():
+                if (
+                    getattr(existing, "exists", False)
+                    and (existing.content or "").strip()
+                ):
                     skipped_existing.append(file_path)
                     logger.info(
                         "protect_existing: %s already present — not replaced", file_path
                     )
                     continue
             written_ok, err = await guarded_write_file(
-                effects, file_path, content, min_retention_ratio, repair_mode=repair_mode
+                effects,
+                file_path,
+                content,
+                min_retention_ratio,
+                repair_mode=repair_mode,
             )
             if written_ok:
                 files_written += 1
@@ -316,11 +330,7 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
             "errors": errors,
         },
         observations=f"Wrote {files_written}/{len(file_blocks)} files"
-        + (
-            f" ({len(skipped_existing)} existing protected)"
-            if skipped_existing
-            else ""
-        )
+        + (f" ({len(skipped_existing)} existing protected)" if skipped_existing else "")
         + (f", errors: {errors}" if errors else ""),
         context_updates={"files_changed": files_changed},
     )

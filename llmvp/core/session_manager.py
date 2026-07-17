@@ -302,7 +302,10 @@ class SessionManager:
         head = list(static_toks) + list(dynamic_full[:n])
         got = await run_in_threadpool(
             self._backend._resident_flow,
-            instance, session.flow_key, len(head), head,
+            instance,
+            session.flow_key,
+            len(head),
+            head,
         )
         if got is None:  # backend fell back to the global static base
             session.static_base = glob
@@ -310,7 +313,9 @@ class SessionManager:
         session.static_base = int(got)
         log.info(
             "🪡 session flow-fork %r: pinned %d-tok head, turn-0 suffix %d tok",
-            session.flow_key, len(head), len(dynamic_full) - n,
+            session.flow_key,
+            len(head),
+            len(dynamic_full) - n,
         )
         return list(dynamic_full[n:])
 
@@ -514,7 +519,9 @@ class SessionManager:
                     flow_turn_suffix = await self._resident_session_flow_fork(
                         instance, session, prompt
                     )
-                elif reasoning and getattr(self._backend, "_reasoning_head_swap", False):
+                elif reasoning and getattr(
+                    self._backend, "_reasoning_head_swap", False
+                ):
                     if session.turn_count == 0:
                         # Reasoning HEAD-SWAP: override acquire's default-static fork
                         # with the requested level's pinned head. Whole-seq install is
@@ -749,6 +756,7 @@ class SessionManager:
                     if hasattr(instance, "purge_to"):
                         await run_in_threadpool(instance.purge_to, pre_turn_pos)
                     else:
+
                         def _purge_resident() -> None:
                             instance._ctx.memory_seq_rm(0, pre_turn_pos, -1)
                             instance.n_tokens = pre_turn_pos
@@ -801,6 +809,7 @@ class SessionManager:
                         "scheduling session teardown + slot heal",
                         session_id,
                     )
+
                     # Deferred, NOT inline: at this point the failed turn's
                     # generator chain has not unwound, so its generation_guard
                     # is still counted in-flight — an inline end_session would
@@ -858,15 +867,22 @@ class SessionManager:
                 len(replay),
             )
             import os as _os
+
             if _os.getenv("OURO_RESIDENT_STRIP") == "1":  # diagnostic
                 try:
-                    gen_txt = instance.detokenize(list(gen_tokens)).decode("utf-8", "replace")
+                    gen_txt = instance.detokenize(list(gen_tokens)).decode(
+                        "utf-8", "replace"
+                    )
                     nt = instance.n_tokens
-                    tail_ids = list(instance.input_ids[max(0, nt - 110):nt])
+                    tail_ids = list(instance.input_ids[max(0, nt - 110) : nt])
                     tail = instance.detokenize(tail_ids).decode("utf-8", "replace")
                     log.warning(
                         "🔬 STRIP DIAG t0=%d nt=%d | content=%r | gen=%r | post-tail=%r",
-                        t0, nt, (content or "")[:70], gen_txt[:110], tail[-230:],
+                        t0,
+                        nt,
+                        (content or "")[:70],
+                        gen_txt[:110],
+                        tail[-230:],
                     )
                 except Exception as ex:  # noqa: BLE001
                     log.warning("strip diag failed: %s", ex)
@@ -946,14 +962,18 @@ class SessionManager:
                     getattr(_inst, "_last_prefill_s", 0)
                     or _diag.get("eval_duration", 0)
                     or 0
-                ) * 1000, 1,
+                )
+                * 1000,
+                1,
             ),
             "decode_ms": round(
                 (
                     getattr(_inst, "_last_decode_s", 0)
                     or _diag.get("generation_duration", 0)
                     or 0
-                ) * 1000, 1,
+                )
+                * 1000,
+                1,
             ),
         }
 
@@ -1207,14 +1227,14 @@ class SessionManager:
                         log.warning(
                             "🧹 Orphan reaper: session %s idle %.0fs > 2x TTL (%ds) "
                             "— TTL monitor likely died; force-releasing instance",
-                            sid, idle, session.ttl,
+                            sid,
+                            idle,
+                            session.ttl,
                         )
                         try:
                             await self.end_session(sid)
                         except Exception:
-                            log.exception(
-                                "Orphan reaper failed to end session %s", sid
-                            )
+                            log.exception("Orphan reaper failed to end session %s", sid)
                 # Crash insurance for the semi-permanent tier: snapshots
                 # survive session end/TTL/refresh by design, so a client
                 # that dies between snapshot and purge would hold its

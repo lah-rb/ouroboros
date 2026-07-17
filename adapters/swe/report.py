@@ -116,7 +116,13 @@ def build_rows(report: dict, logs_dir: str) -> list[dict]:
             }
         )
     # Divergences first (UNDERCLAIM, OVERCLAIM), then by grade, then id.
-    _grade_rank = {"resolved": 0, "unresolved": 1, "empty_patch": 2, "error": 3, "ungraded": 4}
+    _grade_rank = {
+        "resolved": 0,
+        "unresolved": 1,
+        "empty_patch": 2,
+        "error": 3,
+        "ungraded": 4,
+    }
     rows.sort(
         key=lambda r: (
             0 if r["divergence"] in ("UNDERCLAIM", "OVERCLAIM") else 1,
@@ -161,8 +167,10 @@ def format_report(rows: list[dict], run_id: str = "") -> str:
 
     resolved = sum(1 for r in rows if r["grade"] == "resolved")
     self_solved = sum(
-        1 for r in rows
-        if r["self_found"] and r["goals_total"] > 0
+        1
+        for r in rows
+        if r["self_found"]
+        and r["goals_total"] > 0
         and r["goals_complete"] == r["goals_total"]
     )
     lines.append("-" * len(header))
@@ -174,7 +182,9 @@ def format_report(rows: list[dict], run_id: str = "") -> str:
     return "\n".join(lines)
 
 
-def unified_report(report: dict, logs_dir: str, run_id: str = "") -> tuple[list[dict], str]:
+def unified_report(
+    report: dict, logs_dir: str, run_id: str = ""
+) -> tuple[list[dict], str]:
     """Build rows + render the table. Returns (rows, text)."""
     rows = build_rows(report, logs_dir)
     return rows, format_report(rows, run_id)
@@ -183,10 +193,18 @@ def unified_report(report: dict, logs_dir: str, run_id: str = "") -> tuple[list[
 def main() -> None:
     ap = argparse.ArgumentParser(description="Unified SWE report: self-verdict + grade")
     ap.add_argument("--run-id", required=True)
-    ap.add_argument("--out-dir", default=os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs", "swe"))
-    ap.add_argument("--report", default="", help="path to the harness report JSON "
-                    "(default: locate <model>.<run_id>.json next to predictions)")
+    ap.add_argument(
+        "--out-dir",
+        default=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs", "swe"
+        ),
+    )
+    ap.add_argument(
+        "--report",
+        default="",
+        help="path to the harness report JSON "
+        "(default: locate <model>.<run_id>.json next to predictions)",
+    )
     ap.add_argument("--json", action="store_true", help="emit rows as JSON")
     args = ap.parse_args()
 

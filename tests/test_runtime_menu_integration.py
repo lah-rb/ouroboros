@@ -396,9 +396,7 @@ class _TracingNoSessionEffects:
         self.trace_events: list = []
 
     async def run_inference(self, prompt, config_overrides=None):
-        return InferenceResult(
-            text='```json\n{"choice": "a"}\n```', tokens_generated=3
-        )
+        return InferenceResult(text='```json\n{"choice": "a"}\n```', tokens_generated=3)
 
     async def emit_trace(self, event):
         self.trace_events.append(event)

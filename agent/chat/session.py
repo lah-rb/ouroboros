@@ -61,13 +61,18 @@ class PersonaSession:
         session ONCE (fresh session + a continuation note) before failing."""
         if self.session_id is None:
             await self.start()
-        cfg = {**self._defaults, **{k: v for k, v in overrides.items() if v is not None}}
+        cfg = {
+            **self._defaults,
+            **{k: v for k, v in overrides.items() if v is not None},
+        }
         try:
             result = await self._fx.session_turn(self.session_id, prompt, cfg)
         except InferenceError as exc:
             log.warning(
                 "persona session [%s] turn failed (%s) — healing with a "
-                "fresh session", self.persona, exc,
+                "fresh session",
+                self.persona,
+                exc,
             )
             self.heals += 1
             await self.end()

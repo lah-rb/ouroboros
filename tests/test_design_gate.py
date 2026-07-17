@@ -89,7 +89,9 @@ async def test_incoherent_verdict_grounds_persists_and_loops():
     out = await action_ground_design_gate_verdict(_si(m, resp))
     assert out.result["coherent"] is False
     a = m.architecture
-    assert a.coherence_criteria and any("src" in c.lower() for c in a.coherence_criteria)
+    assert a.coherence_criteria and any(
+        "src" in c.lower() for c in a.coherence_criteria
+    )
     assert a.coherence_attempts == 1 and a.coherence_grounded is True
     assert any(
         n.category == "architecture_blueprint" and "rejected" in n.content
@@ -101,7 +103,11 @@ async def test_incoherent_verdict_grounds_persists_and_loops():
 async def test_coherent_verdict_passes_and_clears():
     m = _mission(_coherent_arch())
     resp = _fenced(
-        {"coherent": True, "reason": "flat main.py at root matches python main.py", "criteria": []}
+        {
+            "coherent": True,
+            "reason": "flat main.py at root matches python main.py",
+            "criteria": [],
+        }
     )
     out = await action_ground_design_gate_verdict(_si(m, resp))
     assert out.result["coherent"] is True
@@ -125,13 +131,19 @@ async def test_grounding_drops_hallucinated_and_flips_when_all_hallucinated():
     )
     out = await action_ground_design_gate_verdict(_si(m, resp))
     assert out.result["coherent"] is False
-    assert m.architecture.coherence_criteria == ["flatten src/ modules to root for python -m"]
+    assert m.architecture.coherence_criteria == [
+        "flatten src/ modules to root for python -m"
+    ]
 
     # ALL criteria hallucinated → no concrete incoherence survives → flip to
     # coherent (evidence-based over-block guard: never BLOCK on a vague critique).
     m2 = _mission(_incoherent_arch())
     resp2 = _fenced(
-        {"coherent": False, "reason": "vague", "criteria": ["improve error handling in nonexistent_widget.py"]}
+        {
+            "coherent": False,
+            "reason": "vague",
+            "criteria": ["improve error handling in nonexistent_widget.py"],
+        }
     )
     out2 = await action_ground_design_gate_verdict(_si(m2, resp2))
     assert out2.result["coherent"] is True
@@ -185,8 +197,16 @@ def test_compiled_design_gate_wiring():
     assert route["result.drift_detected == true"] == "design_reconcile"
     assert route["result.has_tasks == true"] == "derive_goals"
     # both parse paths funnel through the gate
-    assert _rules(steps, "parse_architecture")["result.architecture_parsed == true"] == "design_gate_facts"
-    assert _rules(steps, "parse_architecture_reconcile")["result.architecture_parsed == true"] == "design_gate_facts"
+    assert (
+        _rules(steps, "parse_architecture")["result.architecture_parsed == true"]
+        == "design_gate_facts"
+    )
+    assert (
+        _rules(steps, "parse_architecture_reconcile")[
+            "result.architecture_parsed == true"
+        ]
+        == "design_gate_facts"
+    )
     assert _rules(steps, "design_gate_facts")["true"] == "design_gate_critique"
     crit = _rules(steps, "design_gate_critique")
     assert crit["result.tokens_generated > 0"] == "design_gate_ground"
@@ -194,10 +214,15 @@ def test_compiled_design_gate_wiring():
     # ground: pass / loop / BLOCK
     ground = _rules(steps, "design_gate_ground")
     assert ground["result.coherent == true"] == "design_gate_pass"
-    assert ground["result.coherent == false and meta.attempt <= 2"] == "design_reconcile"
+    assert (
+        ground["result.coherent == false and meta.attempt <= 2"] == "design_reconcile"
+    )
     assert ground["true"] == "failed"  # BLOCK on budget exhaustion (user decision)
     # pass preserves the web_research fork
-    assert _rules(steps, "design_gate_pass")["context.mission.config.web_research == true"] == "domain_research"
+    assert (
+        _rules(steps, "design_gate_pass")["context.mission.config.web_research == true"]
+        == "domain_research"
+    )
 
 
 def test_critique_context_is_fresh_and_bundle_is_sufficient():
@@ -209,8 +234,14 @@ def test_critique_context_is_fresh_and_bundle_is_sufficient():
     # SUFFICIENT (starvation guard): the rendered blueprint carries the src path + run/smoke/wd,
     # so the critic can actually see the src/-vs-`python -m` mismatch.
     listing = format_architecture_listing({"source": _incoherent_arch()}, {})
-    assert "src/regex_engine/cli.py" in listing and "python -m regex_engine.cli" in listing
+    assert (
+        "src/regex_engine/cli.py" in listing and "python -m regex_engine.cli" in listing
+    )
     assert "Smoke command" in listing and "Working directory" in listing
     # the new formatters are registered
-    for f in ("format_tooling_convention", "format_drift_facts", "format_prior_rejection"):
+    for f in (
+        "format_tooling_convention",
+        "format_drift_facts",
+        "format_prior_rejection",
+    ):
         assert f in PRE_COMPUTE_FORMATTERS

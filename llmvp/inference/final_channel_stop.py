@@ -26,6 +26,7 @@ history-form collision, so they need no dynamic stop.
 
 from __future__ import annotations
 
+
 # Byte markers (UTF-8). Matching on the cumulative byte accumulator's tail keeps
 # this whitespace-insensitive and split-token safe, exactly like the backend's
 # substring stop machinery.

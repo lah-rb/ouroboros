@@ -24,7 +24,11 @@ from typing import List, Optional
 
 from agent.chat.env import WorkerReport
 from adapters.tau.bridge import TAU_CLI_TEMPLATE
-from adapters._common import llmvp_endpoint as llmvp_endpoint_default, preserve_agent_dir, seed_workspace_venv  # noqa: E402
+from adapters._common import (
+    llmvp_endpoint as llmvp_endpoint_default,
+    preserve_agent_dir,
+    seed_workspace_venv,
+)  # noqa: E402
 from agent.mission_runner import (  # noqa: E402
     build_and_save_mission,
     run_mission_isolated,
@@ -112,8 +116,7 @@ class MissionWorker:
         # No reply.txt: one retry with pointed feedback, then a holding line.
         if ok:
             retry_obj = (
-                objective
-                + "\n\nYOU DID NOT WRITE ./reply.txt LAST RUN. Your ONLY "
+                objective + "\n\nYOU DID NOT WRITE ./reply.txt LAST RUN. Your ONLY "
                 "remaining job: write the customer message to ./reply.txt now."
             )
             await self._run_mission(retry_obj)
@@ -185,7 +188,7 @@ class MissionWorker:
         # Defensive strip of an "Agent:" prefix the model may add.
         for prefix in ("Agent:", "AGENT:", "Reply:"):
             if text.startswith(prefix):
-                text = text[len(prefix):].strip()
+                text = text[len(prefix) :].strip()
         return text.strip().strip('"').strip()
 
     def _tool_note(self) -> str:
@@ -201,8 +204,11 @@ class MissionWorker:
 
 
 def _render_tools(tools_info: List[dict]) -> str:
-    lines = ["# Account Tools", "",
-             "Call each via `./tau <name> --json '{...}'`. Arguments:"]
+    lines = [
+        "# Account Tools",
+        "",
+        "Call each via `./tau <name> --json '{...}'`. Arguments:",
+    ]
     for t in tools_info:
         fn = t.get("function", {})
         name = fn.get("name", "?")
@@ -222,11 +228,12 @@ def _render_conversation(transcript: List[dict]) -> str:
     """Render the chat-env transcript into the operator's briefing. Only
     customer/agent utterances (boss decisions are internal)."""
     lines = ["# Conversation so far", ""]
-    spoken = [e for e in transcript if e.get("role") in ("user", "agent")
-              and e.get("text")]
+    spoken = [
+        e for e in transcript if e.get("role") in ("user", "agent") and e.get("text")
+    ]
     for i, e in enumerate(spoken):
         who = "Customer" if e["role"] == "user" else "You (agent)"
-        latest = (e["role"] == "user" and i == len(spoken) - 1)
+        latest = e["role"] == "user" and i == len(spoken) - 1
         flag = "  ← LATEST, respond to this" if latest else ""
         lines.append(f"**{who}:**{flag}\n{e['text']}\n")
     return "\n".join(lines)

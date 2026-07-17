@@ -167,9 +167,7 @@ async def action_start_interactive_session(step_input: StepInput) -> StepOutput:
         try:
             # Pin the interact OPERATOR_PERSONA head across sessions (it leads
             # every charter seed) — later interact sessions skip re-prefilling it.
-            _interact_key = (
-                f"interact:plan:{hashlib.md5(OPERATOR_PERSONA.encode('utf-8')).hexdigest()[:10]}"
-            )
+            _interact_key = f"interact:plan:{hashlib.md5(OPERATOR_PERSONA.encode('utf-8')).hexdigest()[:10]}"
             inference_session_id = await effects.start_inference_session(
                 {"ttl_seconds": 300},
                 static_prefix=OPERATOR_PERSONA,

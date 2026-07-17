@@ -41,9 +41,19 @@ logger = logging.getLogger(__name__)
 # lifted here so any flow can reuse the predicate via liveness_scan().
 _FAILURE_PATTERNS = [
     "Traceback (most recent call last)",
-    "ImportError:", "ModuleNotFoundError:", "SyntaxError:", "FileNotFoundError:",
-    "NameError:", "TypeError:", "AttributeError:", "ValueError:", "KeyError:",
-    "IndentationError:", "OSError:", "PermissionError:", "RuntimeError:",
+    "ImportError:",
+    "ModuleNotFoundError:",
+    "SyntaxError:",
+    "FileNotFoundError:",
+    "NameError:",
+    "TypeError:",
+    "AttributeError:",
+    "ValueError:",
+    "KeyError:",
+    "IndentationError:",
+    "OSError:",
+    "PermissionError:",
+    "RuntimeError:",
 ]
 
 
@@ -100,8 +110,10 @@ def _degenerate_reason(content: str, criteria: list) -> str | None:
         str(c.get("command", "")) for c in (criteria or []) if isinstance(c, dict)
     )
     if s == "0" and not re.search(r"(?<![\d.])0(?![\d.])", crit_text):
-        return ("answer artifact is a bare 0 — a degenerate default; the producing "
-                "step likely matched or computed nothing")
+        return (
+            "answer artifact is a bare 0 — a degenerate default; the producing "
+            "step likely matched or computed nothing"
+        )
     if _PLACEHOLDER_RE.match(s) or (len(s) <= 24 and _PLACEHOLDER_RE.match(s.lower())):
         return f"answer artifact looks like a placeholder/non-answer ({s[:40]!r})"
     return None
@@ -163,16 +175,22 @@ async def action_check_output_sanity(step_input: StepInput) -> StepOutput:
         results.append(_sanity_result(False, path, reason))
         updates["validation_results"] = results
         return StepOutput(
-            result={"check_plausibility": False, "sanity_eligible": True,
-                    "sanity_passed": False},
+            result={
+                "check_plausibility": False,
+                "sanity_eligible": True,
+                "sanity_passed": False,
+            },
             observations=f"output-sanity FAIL: {reason}",
             context_updates=updates,
         )
 
     # Floor clean — ask for the light-inference plausibility pass.
     return StepOutput(
-        result={"check_plausibility": True, "sanity_eligible": True,
-                "sanity_passed": True},
+        result={
+            "check_plausibility": True,
+            "sanity_eligible": True,
+            "sanity_passed": True,
+        },
         observations=f"output-sanity floor passed for {path}; plausibility next",
         context_updates=updates,
     )
@@ -208,8 +226,9 @@ async def action_record_output_sanity(step_input: StepInput) -> StepOutput:
             observations=f"output-sanity plausible: {reason[:120]}",
             context_updates={},
         )
-    results.append(_sanity_result(
-        False, path, f"answer implausible for the task: {reason}"))
+    results.append(
+        _sanity_result(False, path, f"answer implausible for the task: {reason}")
+    )
     updates["validation_results"] = results
     return StepOutput(
         result={"sanity_passed": False},
@@ -285,12 +304,18 @@ def _apply_format_checks(content: str, checks: list) -> list[str]:
                 if isinstance(obj, dict):
                     missing = [k for k in keys if k not in obj]
                     if missing:
-                        viol.append(f"JSON missing required key(s): {', '.join(missing)}")
+                        viol.append(
+                            f"JSON missing required key(s): {', '.join(missing)}"
+                        )
                 elif keys:
-                    viol.append("output is not a valid JSON object — required keys cannot be present")
+                    viol.append(
+                        "output is not a valid JSON object — required keys cannot be present"
+                    )
             elif t == "columns":
                 cols = [str(c) for c in (chk.get("columns") or [])]
-                header = [c.strip() for c in (s.splitlines()[0] if s else "").split(",")]
+                header = [
+                    c.strip() for c in (s.splitlines()[0] if s else "").split(",")
+                ]
                 missing = [c for c in cols if c not in header]
                 if missing:
                     viol.append(f"CSV header missing column(s): {', '.join(missing)}")
@@ -356,8 +381,11 @@ async def action_check_output_format(step_input: StepInput) -> StepOutput:
         # exact path a requirement (catches the wrong-filename close-miss); else
         # defer to the existence completion-check (don't double-report).
         if has_exists_check:
-            results.append(_format_result(
-                False, path, f"expected output file {path} was not produced"))
+            results.append(
+                _format_result(
+                    False, path, f"expected output file {path} was not produced"
+                )
+            )
             updates["validation_results"] = results
             return StepOutput(
                 result={"format_eligible": True, "format_passed": False},
@@ -405,7 +433,10 @@ async def action_gate_reground_output_format(step_input: StepInput) -> StepOutpu
     mission = step_input.context.get("mission")
     td = getattr(mission, "task_definition", None) if mission else None
     if td is None:
-        return StepOutput(result={"needs_reground": False}, observations="reground: no task_definition")
+        return StepOutput(
+            result={"needs_reground": False},
+            observations="reground: no task_definition",
+        )
     spec = getattr(td, "output_format_spec", None)
     grounded = bool(getattr(td, "output_format_grounded", False))
     spec_usable = isinstance(spec, dict) and bool(spec.get("checks"))
@@ -414,8 +445,8 @@ async def action_gate_reground_output_format(step_input: StepInput) -> StepOutpu
         result={"needs_reground": needs},
         observations=(
             "reground: deriving grounded output-format spec"
-            if needs else
-            f"reground: skip (grounded={grounded}, usable_spec={spec_usable})"
+            if needs
+            else f"reground: skip (grounded={grounded}, usable_spec={spec_usable})"
         ),
     )
 
@@ -435,12 +466,18 @@ async def action_gate_reground_criteria(step_input: StepInput) -> StepOutput:
     mission = step_input.context.get("mission")
     td = getattr(mission, "task_definition", None) if mission else None
     if td is None:
-        return StepOutput(result={"needs_reground": False}, observations="reground-criteria: no task_definition")
+        return StepOutput(
+            result={"needs_reground": False},
+            observations="reground-criteria: no task_definition",
+        )
     grounded = bool(getattr(td, "completion_criteria_grounded", False))
     return StepOutput(
         result={"needs_reground": not grounded},
-        observations=("reground-criteria: re-deriving grounded criteria" if not grounded
-                      else "reground-criteria: skip (already grounded)"),
+        observations=(
+            "reground-criteria: re-deriving grounded criteria"
+            if not grounded
+            else "reground-criteria: skip (already grounded)"
+        ),
     )
 
 
@@ -478,9 +515,11 @@ async def action_reprobe_completion(step_input: StepInput) -> StepOutput:
     judge_done = isinstance(parsed, dict) and bool(parsed.get("task_complete"))
 
     def _skip(why: str) -> StepOutput:
-        return StepOutput(result={"do_verify": False},
-                          observations=f"completion re-probe skipped ({why})",
-                          context_updates={})
+        return StepOutput(
+            result={"do_verify": False},
+            observations=f"completion re-probe skipped ({why})",
+            context_updates={},
+        )
 
     if not judge_done:
         return _skip("judge did not claim done")
@@ -499,14 +538,17 @@ async def action_reprobe_completion(step_input: StepInput) -> StepOutput:
                 continue
             res = await effects.run_command(["/bin/sh", "-c", cmd], timeout=20)
             rc = getattr(res, "return_code", None)
-            out = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
+            out = (getattr(res, "stdout", "") or "") + (
+                getattr(res, "stderr", "") or ""
+            )
             lines.append(f"$ {cmd}\n[exit {rc}] {_bounded(out, 400)}")
         path = _extract_artifact_path(criteria)
         if path:
             fc = await effects.read_file(path)
             if getattr(fc, "exists", False):
                 lines.append(
-                    f"$ cat {path}\n{_bounded(getattr(fc, 'content', '') or '', 800)}")
+                    f"$ cat {path}\n{_bounded(getattr(fc, 'content', '') or '', 800)}"
+                )
     except Exception as exc:  # FAIL-SAFE: re-probe infra error → don't block
         return _skip(f"re-probe error: {exc}")
 
@@ -515,8 +557,10 @@ async def action_reprobe_completion(step_input: StepInput) -> StepOutput:
     return StepOutput(
         result={"do_verify": True},
         observations=f"re-probed {len(lines)} completion signal(s) for verify",
-        context_updates={"vbh_transcript": "\n\n".join(lines),
-                         "judge_response": judge_raw},
+        context_updates={
+            "vbh_transcript": "\n\n".join(lines),
+            "judge_response": judge_raw,
+        },
     )
 
 
@@ -537,21 +581,32 @@ async def action_record_completion_verify(step_input: StepInput) -> StepOutput:
 
     parsed = parse_llm_json(str(step_input.context.get("inference_response", "")))
     if not isinstance(parsed, dict) or "genuinely_done" not in parsed:
-        return StepOutput(result={"verified_done": True},
-                          observations="completion verify inconclusive — no finding",
-                          context_updates=updates)
+        return StepOutput(
+            result={"verified_done": True},
+            observations="completion verify inconclusive — no finding",
+            context_updates=updates,
+        )
     if bool(parsed.get("genuinely_done")):
-        return StepOutput(result={"verified_done": True},
-                          observations="completion verified genuinely done",
-                          context_updates=updates)
+        return StepOutput(
+            result={"verified_done": True},
+            observations="completion verified genuinely done",
+            context_updates=updates,
+        )
     reason = str(parsed.get("reason", ""))[:400]
-    results.append(check_result(
-        "completion_verify", "verify-before-harvest re-probe", False, stdout=reason,
-    ))
+    results.append(
+        check_result(
+            "completion_verify",
+            "verify-before-harvest re-probe",
+            False,
+            stdout=reason,
+        )
+    )
     updates["validation_results"] = results
-    return StepOutput(result={"verified_done": False},
-                      observations=f"completion REFUTED on re-probe: {reason[:120]}",
-                      context_updates=updates)
+    return StepOutput(
+        result={"verified_done": False},
+        observations=f"completion REFUTED on re-probe: {reason[:120]}",
+        context_updates=updates,
+    )
 
 
 # ── Profile-gated oracle rungs (Phase 2) ──────────────────────────────────
@@ -564,17 +619,22 @@ async def action_record_completion_verify(step_input: StepInput) -> StepOutput:
 # needs task-specific knowledge and is out of scope here.
 
 _PROBE_RE = re.compile(
-    r"(?i)\b(curl|wget|nc\b|ncat|is-active|systemctl\s+status|pgrep|\bss\b|netstat|health)")
+    r"(?i)\b(curl|wget|nc\b|ncat|is-active|systemctl\s+status|pgrep|\bss\b|netstat|health)"
+)
 _PORT_RE = re.compile(r"(?::|\bport\s+)(\d{2,5})\b")
 _ARCHIVE_RE = re.compile(r"(\S+\.(?:tar\.gz|tgz|tar\.bz2|tar|zip|gz|bz2|xz))")
 _DEAD_RE = re.compile(
     r"(?i)connection refused|could not connect|couldn't connect|not running|"
-    r"\binactive\b|failed to|no such (?:file|host)|empty reply")
+    r"\binactive\b|failed to|no such (?:file|host)|empty reply"
+)
 
 
 def _commands(criteria: list) -> list[str]:
-    return [c["command"] for c in (criteria or [])
-            if isinstance(c, dict) and isinstance(c.get("command"), str)]
+    return [
+        c["command"]
+        for c in (criteria or [])
+        if isinstance(c, dict) and isinstance(c.get("command"), str)
+    ]
 
 
 async def _run(effects, cmd: str, timeout: int = 15):
@@ -608,10 +668,13 @@ async def _check_liveness(effects, criteria, objective) -> str | None:
     m = _PORT_RE.search(text)
     if m:
         port = m.group(1)
-        v = _alive(await _run(
-            effects,
-            f"curl -sf -m 3 -o /dev/null http://localhost:{port} "
-            f"|| nc -z -w 3 localhost {port}"))
+        v = _alive(
+            await _run(
+                effects,
+                f"curl -sf -m 3 -o /dev/null http://localhost:{port} "
+                f"|| nc -z -w 3 localhost {port}",
+            )
+        )
         if v is False:
             return f"service on port {port} did not respond to an active probe"
     return None
@@ -633,8 +696,10 @@ async def _check_conservation(effects, criteria, objective) -> str | None:
         return f"transform output {out} is empty — input data was dropped"
     rows = [ln for ln in content.splitlines() if ln.strip()]
     if out.endswith((".csv", ".tsv", ".jsonl", ".ndjson")) and len(rows) <= 1:
-        return (f"transform output {out} has no data rows ({len(rows)} line) — "
-                "the transform likely produced nothing")
+        return (
+            f"transform output {out} has no data rows ({len(rows)} line) — "
+            "the transform likely produced nothing"
+        )
     return None
 
 
@@ -651,12 +716,22 @@ async def _check_roundtrip(effects, criteria, objective) -> str | None:
     except Exception:
         return None
     test = (
-        f"tar -tzf {arc} >/dev/null" if arc.endswith((".tar.gz", ".tgz"))
-        else f"tar -tf {arc} >/dev/null" if arc.endswith(".tar")
-        else f"unzip -t {arc} >/dev/null" if arc.endswith(".zip")
-        else f"gzip -t {arc}" if arc.endswith(".gz")
-        else f"bzip2 -t {arc}" if arc.endswith(".bz2")
-        else "")
+        f"tar -tzf {arc} >/dev/null"
+        if arc.endswith((".tar.gz", ".tgz"))
+        else (
+            f"tar -tf {arc} >/dev/null"
+            if arc.endswith(".tar")
+            else (
+                f"unzip -t {arc} >/dev/null"
+                if arc.endswith(".zip")
+                else (
+                    f"gzip -t {arc}"
+                    if arc.endswith(".gz")
+                    else f"bzip2 -t {arc}" if arc.endswith(".bz2") else ""
+                )
+            )
+        )
+    )
     if not test:
         return None
     res = await _run(effects, test)
@@ -675,15 +750,25 @@ async def _check_regression(effects, criteria, objective) -> str | None:
     res = await _run(effects, "python -m pytest --co -q 2>&1 | tail -40", timeout=60)
     if res is None:
         return None
-    out = ((getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")).lower()
+    out = (
+        (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
+    ).lower()
     if "no module named pytest" in out or "no tests ran" in out or not out.strip():
         return None  # pytest absent / no suite — not a fix-induced break
-    if re.search(r"errors during collection|error collecting|cannot import|"
-                 r"importerror|modulenotfounderror|syntaxerror|indentationerror", out):
-        m = re.search(r"(importerror|modulenotfounderror|syntaxerror|indentationerror"
-                      r"|errors during collection)[^\n]*", out)
-        return ("the fix broke test collection (structural collateral damage): "
-                f"{(m.group(0) if m else 'collection error')[:120]}")
+    if re.search(
+        r"errors during collection|error collecting|cannot import|"
+        r"importerror|modulenotfounderror|syntaxerror|indentationerror",
+        out,
+    ):
+        m = re.search(
+            r"(importerror|modulenotfounderror|syntaxerror|indentationerror"
+            r"|errors during collection)[^\n]*",
+            out,
+        )
+        return (
+            "the fix broke test collection (structural collateral damage): "
+            f"{(m.group(0) if m else 'collection error')[:120]}"
+        )
     return None
 
 
@@ -708,17 +793,23 @@ async def action_check_profile_oracle(step_input: StepInput) -> StepOutput:
     results = list(step_input.context.get("validation_results") or [])
     # ops_task has the mission; quality_gate (code_core) threads task_profile as a
     # flow input instead (it holds only working_directory + mission_id).
-    profile = getattr(getattr(mission, "config", None), "task_profile", "") if mission else ""
+    profile = (
+        getattr(getattr(mission, "config", None), "task_profile", "") if mission else ""
+    )
     if not profile:
-        profile = (step_input.inputs or {}).get("task_profile", "") or \
-            step_input.context.get("task_profile", "") or ""
+        profile = (
+            (step_input.inputs or {}).get("task_profile", "")
+            or step_input.context.get("task_profile", "")
+            or ""
+        )
     fn = _PROFILE_CHECKS.get(profile)
 
     if fn is None or effects is None:
         return StepOutput(
             result={"profile_checked": False},
             observations=f"profile oracle skipped (profile={profile or 'none'})",
-            context_updates={})
+            context_updates={},
+        )
 
     td = getattr(mission, "task_definition", None)
     criteria = list(getattr(td, "completion_criteria", None) or [])
@@ -729,20 +820,28 @@ async def action_check_profile_oracle(step_input: StepInput) -> StepOutput:
         return StepOutput(
             result={"profile_checked": False},
             observations=f"profile oracle error ({exc}) — skipped",
-            context_updates={})
+            context_updates={},
+        )
 
     if not reason:
         return StepOutput(
             result={"profile_checked": True, "profile_passed": True},
             observations=f"{profile} oracle passed",
-            context_updates={"validation_results": results})
-    results.append(check_result(
-        f"{profile}_oracle", f"{profile} verification", False, stdout=reason,
-    ))
+            context_updates={"validation_results": results},
+        )
+    results.append(
+        check_result(
+            f"{profile}_oracle",
+            f"{profile} verification",
+            False,
+            stdout=reason,
+        )
+    )
     return StepOutput(
         result={"profile_checked": True, "profile_passed": False},
         observations=f"{profile} oracle FAIL: {reason[:120]}",
-        context_updates={"validation_results": results})
+        context_updates={"validation_results": results},
+    )
 
 
 # ── Boot-liveness floor (code_core quality gate, rung 0 analog) ───────────
@@ -777,9 +876,14 @@ async def action_check_boot_liveness(step_input: StepInput) -> StepOutput:
         "startup output contains an error trace despite a passing exit "
         f"status: {', '.join(errs)}"
     )
-    results.append(check_result(
-        "boot_liveness", "startup output scan", False, stdout=reason,
-    ))
+    results.append(
+        check_result(
+            "boot_liveness",
+            "startup output scan",
+            False,
+            stdout=reason,
+        )
+    )
     return StepOutput(
         result={"boot_clean": False},
         observations=f"boot-liveness FAIL: {', '.join(errs)}",

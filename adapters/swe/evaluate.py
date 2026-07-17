@@ -37,8 +37,7 @@ def write_predictions(rows: list[dict], path: str) -> str:
 def write_gold_predictions(instances: list[SweInstance], path: str) -> str:
     """Predictions whose model_patch is the gold patch — the oracle input."""
     rows = [
-        prediction_row(inst.instance_id, GOLD_MODEL, inst.patch)
-        for inst in instances
+        prediction_row(inst.instance_id, GOLD_MODEL, inst.patch) for inst in instances
     ]
     return write_predictions(rows, path)
 
@@ -57,11 +56,17 @@ def run_evaluation(
     report entry).
     """
     cmd = [
-        "python", "-m", "swebench.harness.run_evaluation",
-        "--dataset_name", dataset,
-        "--predictions_path", predictions_path,
-        "--run_id", run_id,
-        "--max_workers", str(max_workers),
+        "python",
+        "-m",
+        "swebench.harness.run_evaluation",
+        "--dataset_name",
+        dataset,
+        "--predictions_path",
+        predictions_path,
+        "--run_id",
+        run_id,
+        "--max_workers",
+        str(max_workers),
     ]
     logger.info("running evaluator: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
@@ -106,7 +111,6 @@ def summarize(report: dict) -> dict:
         "total": total,
         "resolved_ids": list(resolved),
         "unresolved_ids": list(
-            report.get("unresolved_ids", [])
-            or report.get("error_ids", [])
+            report.get("unresolved_ids", []) or report.get("error_ids", [])
         ),
     }

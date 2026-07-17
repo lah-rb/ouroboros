@@ -25,7 +25,12 @@ if _REPO_ROOT not in sys.path:
 
 from adapters.swe.instance import SweInstance  # noqa: E402
 from adapters.swe.patch import extract_model_patch, prediction_row  # noqa: E402
-from adapters._common import llmvp_endpoint, preserve_agent_dir, prune_mode, remove_image  # noqa: E402
+from adapters._common import (  # noqa: E402
+    llmvp_endpoint,
+    preserve_agent_dir,
+    prune_mode,
+    remove_image,
+)  # noqa: E402
 from agent.mission_runner import (  # noqa: E402
     build_and_save_mission,
     run_mission_isolated,
@@ -215,12 +220,12 @@ def run_instance(
             except Exception:
                 pass
 
-    logger.info(
-        "%s: %d-char patch", instance.instance_id, len(model_patch)
-    )
+    logger.info("%s: %d-char patch", instance.instance_id, len(model_patch))
     # run_end: hand the freshly-pulled image up so run_pilot prunes it after the
     # whole run (pre-cached images are left alone; was_pulled gates that).
-    prune_at_end = instance.image_key if (was_pulled and _PRUNE_MODE == "run_end") else None
+    prune_at_end = (
+        instance.image_key if (was_pulled and _PRUNE_MODE == "run_end") else None
+    )
     return prediction_row(instance.instance_id, model_name, model_patch), prune_at_end
 
 

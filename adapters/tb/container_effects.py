@@ -168,7 +168,8 @@ class ContainerEffects(LocalEffects):
         # so it doesn't pollute the re-probe transcript or a stderr check.
         if "job control" in err_text or "terminal process group" in err_text:
             err_text = "\n".join(
-                ln for ln in err_text.splitlines()
+                ln
+                for ln in err_text.splitlines()
                 if "no job control" not in ln
                 and "cannot set terminal process group" not in ln
             )

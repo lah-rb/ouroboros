@@ -1107,9 +1107,7 @@ def _get_sweep_files(arch: Any) -> list[str]:
     ordered = (
         list(arch.creation_order)
         if hasattr(arch, "creation_order") and arch.creation_order
-        else [m.file for m in arch.modules]
-        if hasattr(arch, "modules")
-        else []
+        else [m.file for m in arch.modules] if hasattr(arch, "modules") else []
     )
     seen = set(ordered)
 
@@ -1549,9 +1547,7 @@ async def _sweep_first_test(
     # that hijacks the goal into a deterministic verify against an
     # effectively-green suite. Fall through to diagnose-first, which
     # drives off the problem statement.
-    held_out = getattr(
-        getattr(mission, "config", None), "held_out_tests", False
-    )
+    held_out = getattr(getattr(mission, "config", None), "held_out_tests", False)
     if (
         is_repair_profile(mission)
         and not held_out
@@ -1563,8 +1559,7 @@ async def _sweep_first_test(
             cmds = {c.get("command") for c in (goal.acceptance_checks or [])}
             if rt["command"] not in cmds:
                 goal.acceptance_checks = list(goal.acceptance_checks or []) + [
-                    {"command": rt["command"], "name": "repair suite",
-                     "required": True}
+                    {"command": rt["command"], "name": "repair suite", "required": True}
                 ]
             if effects:
                 await effects.save_mission(mission)
@@ -1627,14 +1622,11 @@ async def _sweep_first_test(
             "run_command": "",
             "interactive_prompt": interactive_prompt,
         }
-        logger.info(
-            "Functional sweep: exploring to build %s", goal.description[:50]
-        )
+        logger.info("Functional sweep: exploring to build %s", goal.description[:50])
         return StepOutput(
             result={"sweep_complete": False, "needs_test": True},
             observations=(
-                f"Functional sweep: exploring to build "
-                f"'{goal.description[:50]}'"
+                f"Functional sweep: exploring to build " f"'{goal.description[:50]}'"
             ),
             context_updates={"dispatch_config": dispatch_config},
         )
@@ -1650,15 +1642,12 @@ async def _sweep_first_test(
     # a surgical fix AND localizes (diagnose explores to name the
     # target). Only for non-capability_absent goals (a real fix, not a
     # feature to build).
-    if is_repair_profile(mission) and not getattr(
-        goal, "capability_absent", False
-    ):
+    if is_repair_profile(mission) and not getattr(goal, "capability_absent", False):
         directive = (
             "This is a confirmed defect reported against existing code "
             "(a hidden test pins it). Diagnose the root cause and name "
             "the specific existing file and symbol to change — make the "
-            "SMALLEST edit that fixes the reported behavior:\n"
-            + goal.description
+            "SMALLEST edit that fixes the reported behavior:\n" + goal.description
         )
         directive += _goal_repro_block(goal)
         dispatch_config = {
@@ -1756,8 +1745,7 @@ async def _sweep_capability_build(goal: Any, last_report: Any) -> StepOutput:
         "target_file_path": "",
         "flow_directive": directive,
         "what_happened": getattr(last_report, "summary", ""),
-        "error_headline": getattr(last_report, "headline", "")
-        or goal.description[:80],
+        "error_headline": getattr(last_report, "headline", "") or goal.description[:80],
     }
     logger.info(
         "Functional sweep: building explored capability %s",
@@ -1912,9 +1900,7 @@ async def _sweep_after_file_ops(
                 "goal_files": goal.associated_files or [],
                 "flow": "interact",
                 "target_file_path": "",
-                "flow_directive": _functional_retest_directive(
-                    goal, after="fix"
-                ),
+                "flow_directive": _functional_retest_directive(goal, after="fix"),
                 "interaction_mode": "deterministic",
                 "run_command": rt["command"],
                 "interactive_prompt": "",
@@ -1947,9 +1933,7 @@ async def _sweep_after_file_ops(
             "run_command": run_command if goal_mode == "deterministic" else "",
             "interactive_prompt": interactive_prompt,
         }
-        logger.info(
-            "Functional sweep: re-testing %s after fix", goal.description[:50]
-        )
+        logger.info("Functional sweep: re-testing %s after fix", goal.description[:50])
         if effects:
             await effects.save_mission(mission)
         return StepOutput(
@@ -2087,9 +2071,7 @@ async def _sweep_after_diagnose(
     junk-target and evasion-loop guards."""
     diag_summary = getattr(last_report, "summary", "")
     diag_files = getattr(last_report, "files_affected", [])
-    recommended_flow = (
-        getattr(last_report, "recommended_flow", "") or "file_ops"
-    )
+    recommended_flow = getattr(last_report, "recommended_flow", "") or "file_ops"
 
     # Phase A (patch redesign) — read structured operation spec
     # from the report. Diagnose's flat schema gives us the
@@ -2113,9 +2095,7 @@ async def _sweep_after_diagnose(
     # picks them up alongside target_symbol. Empty list
     # means the change is local to target_symbol, which is
     # the majority of cases.
-    struct_related_symbols = list(
-        getattr(last_report, "related_symbols", []) or []
-    )
+    struct_related_symbols = list(getattr(last_report, "related_symbols", []) or [])
 
     # b75 regression guard — the model sometimes emits
     # placeholder markers from the CONCLUDE_PROMPT example
@@ -2169,8 +2149,7 @@ async def _sweep_after_diagnose(
         not struct_target_file
         and recommended_flow == "project_ops"
         and any(
-            change_spec_lower.startswith(marker)
-            for marker in _evasion_spec_markers
+            change_spec_lower.startswith(marker) for marker in _evasion_spec_markers
         )
     )
     if looks_like_evasion:
@@ -2230,9 +2209,7 @@ async def _sweep_after_diagnose(
     if fix_target:
         # Diagnosis explicitly named a file — use it directly
         for sg in mission.goals:
-            if sg.type == "structural" and fix_target in (
-                sg.associated_files or []
-            ):
+            if sg.type == "structural" and fix_target in (sg.associated_files or []):
                 if sg.status == "complete":
                     sg.status = "incomplete"
                     logger.info(
@@ -2275,9 +2252,7 @@ async def _sweep_after_diagnose(
             # context.
             "related_symbols": struct_related_symbols,
         }
-        logger.info(
-            "Functional sweep: applying fix to %s from diagnosis", fix_target
-        )
+        logger.info("Functional sweep: applying fix to %s from diagnosis", fix_target)
         if effects:
             await effects.save_mission(mission)
         return StepOutput(
@@ -2487,8 +2462,12 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
         # Last report was project_ops — env/dep fix applied, re-test
         if report_flow == "project_ops":
             return await _sweep_after_project_ops(
-                goal, last_report, report_status, goal_mode, run_command,
-                interactive_prompt
+                goal,
+                last_report,
+                report_status,
+                goal_mode,
+                run_command,
+                interactive_prompt,
             )
 
         # Last report was diagnose_issue — extract fix target and dispatch
@@ -2959,8 +2938,11 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
         # never loop on an environmental failure).
         try:
             cres = await effects.run_command(
-                ["/bin/sh", "-c",
-                 "python -m pytest --collect-only -q " + " ".join(test_files[:3])],
+                [
+                    "/bin/sh",
+                    "-c",
+                    "python -m pytest --collect-only -q " + " ".join(test_files[:3]),
+                ],
                 timeout=60,
             )
             cout = (getattr(cres, "stdout", "") or "") + (
@@ -3165,7 +3147,12 @@ async def action_fallback_fix_target(step_input: StepInput) -> StepOutput:
 # (the router this generalizes) — kept inline to avoid an agent→adapters.tb dep.
 _ROUTABLE_FLOW_SETS = ("ops", "code_core")
 _ROUTABLE_PROFILES = (
-    "service", "data_transform", "invertible", "repair", "answer", "plain",
+    "service",
+    "data_transform",
+    "invertible",
+    "repair",
+    "answer",
+    "plain",
 )
 
 
@@ -3215,7 +3202,9 @@ async def action_persist_routing(step_input: StepInput) -> StepOutput:
         await effects.save_mission(mission)
         try:  # best-effort routing audit (parity with task_judge's log)
             rec = {
-                "flow_set": flow_set, "profile": profile, "method": method,
+                "flow_set": flow_set,
+                "profile": profile,
+                "method": method,
                 "objective": (getattr(mission, "objective", "") or "")[:500],
                 "findings": findings[:500],
             }
@@ -3225,9 +3214,7 @@ async def action_persist_routing(step_input: StepInput) -> StepOutput:
         except Exception:  # noqa: BLE001 — audit is non-critical
             pass
 
-    logger.info(
-        "Routing: flow_set=%s profile=%s (%s)", flow_set, profile, method
-    )
+    logger.info("Routing: flow_set=%s profile=%s (%s)", flow_set, profile, method)
     return StepOutput(
         result={"flow_set": flow_set, "profile": profile, "method": method},
         observations=f"Routed to {flow_set} / {profile} ({method})",

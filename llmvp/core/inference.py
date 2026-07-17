@@ -57,7 +57,6 @@ class CompletionOutcome:
     decode_ms: float = 0.0
 
 
-
 def resolve_max_tokens(requested: "int | None") -> int:
     """Canonical request→config→256 max_tokens chain (single source of truth;
     previously copy-pasted at every completion entry point)."""
@@ -73,7 +72,9 @@ def resolve_temperature(requested: "float | None", label: str = "Completion") ->
     temperature = requested or config.generation.temperature_default or 0.7
     floored = _global_temperature_floor(temperature, config.generation)
     if floored != temperature:
-        log.info("🌡️ %s: global temperature floor %.2f -> %.2f", label, temperature, floored)
+        log.info(
+            "🌡️ %s: global temperature floor %.2f -> %.2f", label, temperature, floored
+        )
     return floored
 
 
@@ -276,7 +277,10 @@ async def run_completion(
         dynamic_ids = build_full_prompt(static_prefix + prompt, tokenizer)
         n = len(flow_head_tokens(static_prefix, tokenizer, confirm_with=dynamic_ids))
         if n > 0:
-            flow_kwargs = {"flow_key": flow_key, "flow_prefix_len": len(static_tokens) + n}
+            flow_kwargs = {
+                "flow_key": flow_key,
+                "flow_prefix_len": len(static_tokens) + n,
+            }
     else:
         # static_prefix carries the per-flow cache:true sections (instructions,
         # OUTPUT FORMAT, examples). The client sends it separately from `prompt`
@@ -382,14 +386,18 @@ async def run_completion(
                     getattr(gen_target, "_last_prefill_s", 0)
                     or _diag.get("eval_duration", 0)
                     or 0
-                ) * 1000, 1,
+                )
+                * 1000,
+                1,
             ),
             decode_ms=round(
                 (
                     getattr(gen_target, "_last_decode_s", 0)
                     or _diag.get("generation_duration", 0)
                     or 0
-                ) * 1000, 1,
+                )
+                * 1000,
+                1,
             ),
         )
 

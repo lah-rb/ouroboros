@@ -16,7 +16,9 @@ from inference.seq_layout import (  # noqa: E402
 
 
 def test_full_layout_tiles_exactly():
-    m = plan_pool_seq_map(flow_hot_set=8, snapshot_max=2, reasoning_levels=["low", "high"])
+    m = plan_pool_seq_map(
+        flow_hot_set=8, snapshot_max=2, reasoning_levels=["low", "high"]
+    )
     assert (SEQ_WORKING, SEQ_STATIC) == (0, 1)
     assert m.flow_base == SEQ_FLOW_BASE == 2
     assert m.snap_base == 10

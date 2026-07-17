@@ -351,7 +351,9 @@ def test_start_session_queues_persona_then_charter():
     from agent.effects.mock import MockEffects
     from agent.models import StepInput
 
-    assert "---ACT AS---" in OPERATOR_PERSONA and "BUILD / ACCOMPLISH" in OPERATOR_PERSONA
+    assert (
+        "---ACT AS---" in OPERATOR_PERSONA and "BUILD / ACCOMPLISH" in OPERATOR_PERSONA
+    )
 
     eff = MockEffects()
     eff._state["mcp_tool_responses"] = {"create_session": {"session_id": "pty_test"}}
@@ -384,9 +386,12 @@ def test_plan_interaction_turn_has_no_persona_section():
     def menu_turn_sections(o):
         if isinstance(o, dict):
             if o.get("response_shape") == "menu_compound":
-                secs = (o.get("turn", {}) or {}).get("sections") or o.get("sections") or []
+                secs = (
+                    (o.get("turn", {}) or {}).get("sections") or o.get("sections") or []
+                )
                 if any(
-                    isinstance(s, dict) and s.get("template") == "run_in_terminal/session_state"
+                    isinstance(s, dict)
+                    and s.get("template") == "run_in_terminal/session_state"
                     for s in secs
                 ):
                     yield secs
@@ -401,7 +406,7 @@ def test_plan_interaction_turn_has_no_persona_section():
     for secs in found:
         templates = [s.get("template") for s in secs if isinstance(s, dict)]
         types = [s.get("type") for s in secs if isinstance(s, dict)]
-        assert "personas/run_session_operator" not in templates, (
-            "persona section is back in the per-turn prompt — the hoist regressed"
-        )
+        assert (
+            "personas/run_session_operator" not in templates
+        ), "persona section is back in the per-turn prompt — the hoist regressed"
         assert "role" not in types

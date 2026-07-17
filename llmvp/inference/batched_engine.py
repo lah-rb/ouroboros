@@ -410,9 +410,11 @@ class BatchedEngine:
         drain deadline). Runs on the decode thread via the control inbox —
         the same retire path as KV-pressure eviction, so clients recover
         through their existing retry logic. Returns the victim count."""
+
         def _do() -> int:
             victims = [
-                s for s in list(self._streams.values())
+                s
+                for s in list(self._streams.values())
                 if s.phase is not StreamPhase.DONE
             ]
             for s in victims:
@@ -477,9 +479,7 @@ class BatchedEngine:
                     self._on_fatal(exc)
 
     def _has_active_streams(self) -> bool:
-        return any(
-            s.phase is not StreamPhase.DONE for s in self._streams.values()
-        )
+        return any(s.phase is not StreamPhase.DONE for s in self._streams.values())
 
     def _sweep_closed_bridges(self) -> None:
         for s in list(self._streams.values()):
@@ -503,12 +503,12 @@ class BatchedEngine:
         total = slot.n_tokens + len(req.prompt_tokens)
         if n_ctx and total >= n_ctx:
             req.out.finish(
-                ValueError(
-                    f"Prompt ({total} tokens) exceeds context window ({n_ctx})"
-                )
+                ValueError(f"Prompt ({total} tokens) exceeds context window ({n_ctx})")
             )
             return
-        effective_max = min(req.max_tokens, (n_ctx - total) if n_ctx else req.max_tokens)
+        effective_max = min(
+            req.max_tokens, (n_ctx - total) if n_ctx else req.max_tokens
+        )
         buffer_mode = effective_max <= BUFFER_MODE_MAX_TOKENS
 
         try:
@@ -563,8 +563,13 @@ class BatchedEngine:
         logger.info(
             "🧵 stream %s admitted [seq %d, %s]: dynamic=%d tok, kv_base=%d, "
             "max_gen=%d%s",
-            stream_id, slot.seq, slot.persona, len(req.prompt_tokens),
-            slot.n_tokens, effective_max, " (buffered)" if buffer_mode else "",
+            stream_id,
+            slot.seq,
+            slot.persona,
+            len(req.prompt_tokens),
+            slot.n_tokens,
+            effective_max,
+            " (buffered)" if buffer_mode else "",
         )
 
     # -- the step loop -------------------------------------------------------
@@ -574,10 +579,7 @@ class BatchedEngine:
         batch.reset()
         rows = 0
 
-        active = [
-            s for s in self._streams.values()
-            if s.phase is not StreamPhase.DONE
-        ]
+        active = [s for s in self._streams.values() if s.phase is not StreamPhase.DONE]
         for s in active:
             s.mark = (s.n_past, s.prompt_pos)
             s.i_batch = -1
@@ -626,7 +628,9 @@ class BatchedEngine:
                 mark_past, mark_pos = s.mark
                 if s.n_past != mark_past:
                     self._llama._ctx.memory_seq_rm(s.slot.seq, mark_past, -1)
-                    del s.slot.input_ids[len(s.slot.input_ids) - (s.n_past - mark_past):]
+                    del s.slot.input_ids[
+                        len(s.slot.input_ids) - (s.n_past - mark_past) :
+                    ]
                     s.n_past, s.prompt_pos = mark_past, mark_pos
                     if s.prompt_pos < len(s.req.prompt_tokens):
                         s.phase = StreamPhase.PREFILL  # roll back mid-step join
@@ -635,9 +639,7 @@ class BatchedEngine:
             return
 
         # 4. Sample + per-stream hooks.
-        for s in sorted(
-            (x for x in active if x.i_batch >= 0), key=lambda x: x.i_batch
-        ):
+        for s in sorted((x for x in active if x.i_batch >= 0), key=lambda x: x.i_batch):
             if s.phase is StreamPhase.DONE:
                 continue
             tok = s.sampling.sample(self._llama._ctx, idx=s.i_batch)
@@ -691,15 +693,15 @@ class BatchedEngine:
             )
             return
         victims = [
-            s for s in active
-            if not s.slot.pinned and s.phase is not StreamPhase.DONE
+            s for s in active if not s.slot.pinned and s.phase is not StreamPhase.DONE
         ]
         if victims:
             victim = max(victims, key=lambda s: s.n_past)
             self._h_evictions += 1
             logger.error(
                 "⚠️ KV pressure: evicting stream %s (%d tokens resident)",
-                victim.stream_id, victim.n_past,
+                victim.stream_id,
+                victim.n_past,
             )
             self._retire(
                 victim,
@@ -767,7 +769,9 @@ class BatchedEngine:
             slot.n_tokens = s.n_past
         logger.info(
             "🧵 stream %s retired (%s): %d tokens",
-            s.stream_id, s.end_reason, len(s.completion_tokens),
+            s.stream_id,
+            s.end_reason,
+            len(s.completion_tokens),
         )
 
     def _retire_abandoned(self, s: StreamState) -> None:
@@ -795,14 +799,13 @@ class BatchedEngine:
             "💥 fatal decode failure on the batched context: %s — all %d "
             "stream(s) failed (Metal error latch; rebuilding the shared "
             "context; check preceding ggml lines for the root cause)",
-            exc, len(self._streams),
+            exc,
+            len(self._streams),
         )
         for seat in self._seats:
             seat._needs_context_refresh = True
             seat.dead = True
-        self._fail_all(
-            RetriableEngineError(f"shared context failed: {exc}")
-        )
+        self._fail_all(RetriableEngineError(f"shared context failed: {exc}"))
         if self._rebuild_fn is None:
             self._fatal = exc
             return
@@ -881,16 +884,19 @@ class BatchedEngine:
                 return n_tokens
             ctx.memory_seq_rm(slot.seq, n_keep, n_keep + n_discard)
             ctx.memory_seq_add(slot.seq, n_keep + n_discard, n_tokens, -n_discard)
-            slot.input_ids[n_keep: n_tokens - n_discard] = slot.input_ids[
-                n_keep + n_discard: n_tokens
+            slot.input_ids[n_keep : n_tokens - n_discard] = slot.input_ids[
+                n_keep + n_discard : n_tokens
             ]
-            del slot.input_ids[n_tokens - n_discard:]
+            del slot.input_ids[n_tokens - n_discard :]
             slot.n_tokens = n_tokens - n_discard
             self._h_forced_windows += 1
             logger.warning(
                 "🪟 windowed seat seq %d: dropped %d oldest tokens "
                 "(kept %d static head + %d recent)",
-                slot.seq, n_discard, n_keep, slot.n_tokens - n_keep,
+                slot.seq,
+                n_discard,
+                n_keep,
+                slot.n_tokens - n_keep,
             )
             return slot.n_tokens
 
@@ -929,7 +935,10 @@ class BatchedEngine:
             if hlen <= 0 or hlen != int(slot.static_len) or hlen > int(slot.n_tokens):
                 logger.warning(
                     "🧠 seat head-splice refused: head %d vs static %d (n=%d, seq %d)",
-                    hlen, slot.static_len, slot.n_tokens, slot.seq,
+                    hlen,
+                    slot.static_len,
+                    slot.n_tokens,
+                    slot.seq,
                 )
                 return False
             ctx.memory_seq_rm(slot.seq, 0, hlen)
@@ -968,9 +977,7 @@ class BatchedEngine:
     def _default_is_eog(self, token: int) -> bool:
         import llama_cpp
 
-        return bool(
-            llama_cpp.llama_token_is_eog(self._llama._model.vocab, token)
-        )
+        return bool(llama_cpp.llama_token_is_eog(self._llama._model.vocab, token))
 
     def _ensure_batch(self) -> Any:
         if self._batch is None:
@@ -1015,8 +1022,7 @@ class BatchedEngine:
 
     def health(self) -> dict:
         active = sum(
-            1 for s in self._streams.values()
-            if s.phase is not StreamPhase.DONE
+            1 for s in self._streams.values() if s.phase is not StreamPhase.DONE
         )
         return {
             "decode_mode": "batched",

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 
-
 from adapters.gaia.loader import GaiaQuestion
 from adapters.gaia.runner import _ANSWER_CONTRACT, build_mission, extract_answer
 from adapters.gaia.scorer import question_scorer
 
-
 # ── scorer: the official quasi-exact-match semantics ────────────────────────
+
 
 def test_scorer_numbers_normalize_currency_percent_commas():
     assert question_scorer("$1,234.5", "1234.5")
@@ -29,7 +28,7 @@ def test_scorer_strings_ignore_case_space_punct():
 def test_scorer_lists_elementwise_with_mixed_types():
     assert question_scorer("a, b, 3", "a,b,3")
     assert question_scorer("A; B; 3.0", "a,b,3")  # ; and , both split
-    assert not question_scorer("a, b", "a,b,3")   # length mismatch
+    assert not question_scorer("a, b", "a,b,3")  # length mismatch
     assert not question_scorer("a, x, 3", "a,b,3")
 
 
@@ -43,9 +42,14 @@ def test_scorer_empty_answer_never_matches():
 
 # ── mission construction ─────────────────────────────────────────────────────
 
+
 def _q(**kw) -> GaiaQuestion:
-    base = dict(task_id="t-1", question="How many moons does Mars have?",
-                level=1, final_answer="2")
+    base = dict(
+        task_id="t-1",
+        question="How many moons does Mars have?",
+        level=1,
+        final_answer="2",
+    )
     base.update(kw)
     return GaiaQuestion(**base)
 
@@ -101,6 +105,7 @@ def test_answer_contract_bans_prefix_and_units():
 
 
 # ── answer channel ───────────────────────────────────────────────────────────
+
 
 def test_extract_answer_reads_and_strips(tmp_path):
     (tmp_path / "answer.txt").write_text("  right whale \n")

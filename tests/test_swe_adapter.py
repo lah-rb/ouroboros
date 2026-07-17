@@ -104,7 +104,8 @@ def test_extract_model_patch_catastrophic_falls_back_to_tracked():
     # A swept build tree (>100 files) trips the generous sanity cap; the guard
     # retries tracked-only and returns the real fix without the build spew.
     huge = "".join(
-        f"diff --git a/out_html/f{i}.html b/out_html/f{i}.html\n+x\n" for i in range(150)
+        f"diff --git a/out_html/f{i}.html b/out_html/f{i}.html\n+x\n"
+        for i in range(150)
     )
     tracked = "diff --git a/pkg/mod.py b/pkg/mod.py\n+realfix\n"
     c = _SeqContainer([huge.encode(), tracked.encode()])
@@ -117,7 +118,8 @@ def test_extract_model_patch_catastrophic_falls_back_to_tracked():
 def test_extract_model_patch_catastrophic_no_tracked_ships_empty():
     # Nothing recoverable in tracked-only → ship "" (honest unsolved), never 8MB.
     huge = "".join(
-        f"diff --git a/out_html/f{i}.html b/out_html/f{i}.html\n+x\n" for i in range(150)
+        f"diff --git a/out_html/f{i}.html b/out_html/f{i}.html\n+x\n"
+        for i in range(150)
     )
     c = _SeqContainer([huge.encode(), b""])
     assert extract_model_patch(c, "/testbed") == ""
@@ -209,7 +211,9 @@ def test_pilot_has_small_and_large_scouts():
     )
 
     assert len(PILOT_SMALL) >= 5
-    assert any("django" in i or "sympy" in i or "matplotlib" in i for i in PILOT_LARGE_SCOUTS)
+    assert any(
+        "django" in i or "sympy" in i or "matplotlib" in i for i in PILOT_LARGE_SCOUTS
+    )
     assert set(PILOT_INSTANCES) == set(PILOT_SMALL) | set(PILOT_LARGE_SCOUTS)
 
 
@@ -224,8 +228,12 @@ def test_prune_mode_default_is_run_end_and_validated(monkeypatch):
     monkeypatch.delenv("OURO_SWE_PRUNE_IMAGES", raising=False)
     importlib.reload(r)
     assert r._PRUNE_MODE == "run_end"  # sensible default
-    for val, expect in [("off", "off"), ("per_instance", "per_instance"),
-                        ("PER_INSTANCE", "per_instance"), ("garbage", "run_end")]:
+    for val, expect in [
+        ("off", "off"),
+        ("per_instance", "per_instance"),
+        ("PER_INSTANCE", "per_instance"),
+        ("garbage", "run_end"),
+    ]:
         monkeypatch.setenv("OURO_SWE_PRUNE_IMAGES", val)
         importlib.reload(r)
         assert r._PRUNE_MODE == expect

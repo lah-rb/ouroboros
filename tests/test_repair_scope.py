@@ -77,13 +77,24 @@ async def test_nonrepair_goals_stay_capability_absent():
 
 def test_replan_selects_repair_prompt_by_profile():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    steps = json.load(open(os.path.join(root, "flows", "compiled.json")))["replan"]["steps"]
-    cd = {r["condition"]: r["transition"] for r in steps["choose_decompose"]["resolver"]["rules"]}
+    steps = json.load(open(os.path.join(root, "flows", "compiled.json")))["replan"][
+        "steps"
+    ]
+    cd = {
+        r["condition"]: r["transition"]
+        for r in steps["choose_decompose"]["resolver"]["rules"]
+    }
     assert cd["context.mission.config.task_profile == 'repair'"] == "decompose_repair"
     assert cd["true"] == "decompose_directive"
-    assert steps["decompose_repair"]["prompt_template"]["template"] == "replan/decompose_directive_repair"
+    assert (
+        steps["decompose_repair"]["prompt_template"]["template"]
+        == "replan/decompose_directive_repair"
+    )
     # both variants feed the same derive step
-    assert steps["decompose_repair"]["resolver"]["rules"][0]["transition"] == "derive_directive_goals"
+    assert (
+        steps["decompose_repair"]["resolver"]["rules"][0]["transition"]
+        == "derive_directive_goals"
+    )
 
 
 # ── §2: repair write-guard ────────────────────────────────────────────
@@ -93,19 +104,33 @@ def test_repair_write_reason_classifies_tests_vs_config():
     from agent.actions.file_ops_actions import repair_write_reason
 
     # test files → reason set, block_edits=False (block CREATE only)
-    for p in ("django/tests/queryset_union_ordering.py", "pkg/test_thing.py",
-              "pkg/thing_test.py"):
+    for p in (
+        "django/tests/queryset_union_ordering.py",
+        "pkg/test_thing.py",
+        "pkg/thing_test.py",
+    ):
         reason, block_edits = repair_write_reason(p)
         assert reason and block_edits is False, p
     # config/CI/docs → reason set, block_edits=True (block CREATE and EDIT)
-    for p in ("pyproject.toml", "setup.cfg", "requirements-dev.txt", "README.md",
-              "CONTRIBUTING.rst", ".github/workflows/ci.yml", "tox.ini",
-              ".pre-commit-config.yaml", "docs/.github/FUNDING.yml"):
+    for p in (
+        "pyproject.toml",
+        "setup.cfg",
+        "requirements-dev.txt",
+        "README.md",
+        "CONTRIBUTING.rst",
+        ".github/workflows/ci.yml",
+        "tox.ini",
+        ".pre-commit-config.yaml",
+        "docs/.github/FUNDING.yml",
+    ):
         reason, block_edits = repair_write_reason(p)
         assert reason and block_edits is True, p
     # real source is fine (no reason)
-    for p in ("sympy/geometry/point.py", "django/db/models/sql/compiler.py",
-              "src/_pytest/unittest.py"):
+    for p in (
+        "sympy/geometry/point.py",
+        "django/db/models/sql/compiler.py",
+        "src/_pytest/unittest.py",
+    ):
         reason, _ = repair_write_reason(p)
         assert reason is None, p
 
@@ -116,11 +141,15 @@ async def test_guarded_write_blocks_new_test_on_repair_allows_source():
 
     fx = MockEffects(files={"pkg/mod.py": "def f():\n    return 1\n"})
     # new test file → rejected in repair mode
-    ok, err = await guarded_write_file(fx, "pkg/tests/test_new.py", "def test_x(): pass\n", repair_mode=True)
+    ok, err = await guarded_write_file(
+        fx, "pkg/tests/test_new.py", "def test_x(): pass\n", repair_mode=True
+    )
     assert ok is False and "do not author tests" in err
     assert "pkg/tests/test_new.py" not in fx._files
     # editing existing source → allowed
-    ok2, err2 = await guarded_write_file(fx, "pkg/mod.py", "def f():\n    return 2\n", repair_mode=True)
+    ok2, err2 = await guarded_write_file(
+        fx, "pkg/mod.py", "def f():\n    return 2\n", repair_mode=True
+    )
     assert ok2 is True and err2 is None
 
 
@@ -129,7 +158,9 @@ async def test_guarded_write_test_file_allowed_when_not_repair():
     from agent.actions.file_ops_actions import guarded_write_file
 
     fx = MockEffects(files={})
-    ok, err = await guarded_write_file(fx, "pkg/tests/test_new.py", "def test_x(): pass\n", repair_mode=False)
+    ok, err = await guarded_write_file(
+        fx, "pkg/tests/test_new.py", "def test_x(): pass\n", repair_mode=False
+    )
     assert ok is True and err is None
 
 
@@ -141,13 +172,19 @@ async def test_guarded_write_blocks_editing_config_on_repair():
     from agent.actions.file_ops_actions import guarded_write_file
 
     valid = '[project]\nname = "x"\nversion = "1"\n'
-    fx = MockEffects(files={
-        "pyproject.toml": valid + '[tool.ruff]\nline-length = 88\n',
-        ".github/workflows/ci.yml": "on: [push]\n",
-    })
-    ok, err = await guarded_write_file(fx, "pyproject.toml", valid + '[tool.mypy]\nstrict = true\n', repair_mode=True)
+    fx = MockEffects(
+        files={
+            "pyproject.toml": valid + "[tool.ruff]\nline-length = 88\n",
+            ".github/workflows/ci.yml": "on: [push]\n",
+        }
+    )
+    ok, err = await guarded_write_file(
+        fx, "pyproject.toml", valid + "[tool.mypy]\nstrict = true\n", repair_mode=True
+    )
     assert ok is False and "config/CI/docs" in err  # existing config edit blocked
-    ok2, err2 = await guarded_write_file(fx, ".github/workflows/ci.yml", "on: [pull_request]\n", repair_mode=True)
+    ok2, err2 = await guarded_write_file(
+        fx, ".github/workflows/ci.yml", "on: [pull_request]\n", repair_mode=True
+    )
     assert ok2 is False and "config/CI/docs" in err2
 
 
@@ -212,7 +249,9 @@ async def test_held_out_test_gate_passes_without_harvest():
     m = _mission("repair")
     m.config.held_out_tests = True
     m.config.test_gate = "auto"
-    m.goals = [GoalRecord(description="fix the bug", type="functional", origin="directive")]
+    m.goals = [
+        GoalRecord(description="fix the bug", type="functional", origin="directive")
+    ]
     # SeqEffects would report failing nodes; the gate must not even run the suite
     out = await action_run_test_suite_gate(_si(m, MockEffects(mission=m)))
     assert out.result["tests_verified"] is True
@@ -230,9 +269,23 @@ async def test_held_out_repair_goal_skips_witness_goes_diagnose():
     m = _mission("repair")
     m.config.held_out_tests = True
     m.pending_directive = ""
-    m.goals = [GoalRecord(description="Point.distance drops a dim", type="functional", origin="directive", capability_absent=False)]
+    m.goals = [
+        GoalRecord(
+            description="Point.distance drops a dim",
+            type="functional",
+            origin="directive",
+            capability_absent=False,
+        )
+    ]
     fx = _SeqEffects(
-        [CommandResult(return_code=1, stdout="FAILED tests/test_point.py::test_x - E", stderr="", command="p")],
+        [
+            CommandResult(
+                return_code=1,
+                stdout="FAILED tests/test_point.py::test_x - E",
+                stderr="",
+                command="p",
+            )
+        ],
         files={"tests/test_point.py": "def test_x(): Point()\n"},
     )
     out = await action_functional_sweep_next(_si(m, fx))
@@ -247,8 +300,14 @@ def test_swe_adapter_sets_held_out_tests():
     import tempfile
     from adapters.swe.instance import SweInstance
 
-    inst = SweInstance(instance_id="a__b-1", repo="a/b", base_commit="c",
-                       problem_statement="bug", patch="P", test_patch="T")
+    inst = SweInstance(
+        instance_id="a__b-1",
+        repo="a/b",
+        base_commit="c",
+        problem_statement="bug",
+        patch="P",
+        test_patch="T",
+    )
     with tempfile.TemporaryDirectory() as d:
         m, _ = build_mission(inst, d)
     assert m.config.held_out_tests is True
@@ -289,7 +348,14 @@ async def test_real_failing_node_is_still_witnessed():
     from agent.actions.pipeline_actions import derive_repair_tests
 
     fx = _SeqEffects(
-        [CommandResult(return_code=1, stdout="FAILED tests/test_point.py::test_d - E", stderr="", command="p")],
+        [
+            CommandResult(
+                return_code=1,
+                stdout="FAILED tests/test_point.py::test_d - E",
+                stderr="",
+                command="p",
+            )
+        ],
         files={"tests/test_point.py": "def test_d():\n    Point()\n"},
     )
     rt = await derive_repair_tests(fx, "`Point.distance` in point.py drops a dimension")
@@ -304,13 +370,22 @@ async def test_selection_prefers_module_matching_test():
     # test_args has MORE term hits, but test_point matches the module name →
     # must rank first (the sympy false-done fix).
     fx = _SeqEffects(
-        [CommandResult(return_code=1, stdout="FAILED tests/test_point.py::test_distance - AssertionError", stderr="", command="p")],
+        [
+            CommandResult(
+                return_code=1,
+                stdout="FAILED tests/test_point.py::test_distance - AssertionError",
+                stderr="",
+                command="p",
+            )
+        ],
         files={
             "tests/test_args.py": "Point\nPoint\nPoint\ndistance\n",  # 4 hits
             "tests/test_point.py": "def test_distance():\n    Point(2,0).distance(Point(1,0,2))\n",  # fewer
         },
     )
-    rt = await derive_repair_tests(fx, "`Point.distance` in sympy/geometry/point.py drops a dimension")
+    rt = await derive_repair_tests(
+        fx, "`Point.distance` in sympy/geometry/point.py drops a dimension"
+    )
     assert rt["test_files"][0] == "tests/test_point.py"
 
 

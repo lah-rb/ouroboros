@@ -43,7 +43,6 @@ _TOOL_SCRIPT = "tools/pdf_extract/extract_batch.py"
 _TOOL_MODEL = "tools/pdf_extract/models/PaddleOCR-VL-1.6-MLX-8bit"
 
 
-
 def _extraction_pending(record: dict) -> bool:
     """A record this stage still owes work to."""
     return (
