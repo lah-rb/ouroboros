@@ -257,7 +257,12 @@ import "list"
 	config: {
 		temperature?: #Temperature
 		max_tokens?:  int & > 0
-		[string]:     _
+		// LLMVP registry model for THIS step (multi-model Phase 4): a
+		// remote provider entry (boss consult) or the active local
+		// config. Model-routed steps run stateless — no session, no
+		// reasoning head-swap (both are resident-local machinery).
+		model?: string
+		[string]: _
 	} | *{}
 
 	// Transition logic

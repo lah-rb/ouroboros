@@ -383,3 +383,28 @@ async def action_escalation_fold_search(step_input: StepInput) -> StepOutput:
         step_input,
         f"Observation (web_search findings):\n{_bounded(summary, 4000)}",
     )
+
+
+async def action_escalation_fold_consult(step_input: StepInput) -> StepOutput:
+    """consult_boss fold-back: inject the supervising boss model's direction
+    into the escalation session as ONE turn.
+
+    The do_consult step already ran the stateless boss completion (routed
+    to the boss registry entry via config.model); here we only fold its
+    text so the next work turn reasons over the direction. A failed or
+    empty consult degrades to an observation — the loop never stalls on
+    the supervisor being unreachable.
+
+    Context: inference_response (the boss's reply), counters.
+    """
+    guidance = str(step_input.context.get("inference_response", "") or "").strip()
+    if not guidance:
+        return _observe(
+            step_input,
+            "Observation (consult_boss): the supervisor was unreachable or "
+            "returned nothing — proceed on your own judgment, or conclude.",
+        )
+    return _observe(
+        step_input,
+        f"Observation (supervisor direction):\n{_bounded(guidance, 4000)}",
+    )

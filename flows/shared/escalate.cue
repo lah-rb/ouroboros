@@ -118,6 +118,14 @@ escalate: #FlowDefinition & {
 								description: "the specific external question to research"
 							}
 						}
+						consult_boss: #MenuOption & {
+							key:         "consult_boss"
+							description: "Ask the supervising engineer for direction (stuck, going in circles, or unsure the approach is right)"
+							arg: {
+								name:        "question"
+								description: "your current understanding of the situation + the specific question"
+							}
+						}
 						conclude: #MenuOption & {
 							key:         "conclude"
 							description: "Finish: report resolved (outcome holds) or deferred (cannot hold from here)"
@@ -127,11 +135,12 @@ escalate: #FlowDefinition & {
 				}
 				transitions: {
 					options: {
-						read_file:   "do_read"
-						run_command: "do_run"
-						write_file:  "do_write"
-						web_search:  "do_web_search"
-						conclude:    "conclude"
+						read_file:    "do_read"
+						run_command:  "do_run"
+						write_file:   "do_write"
+						web_search:   "do_web_search"
+						consult_boss: "do_consult"
+						conclude:     "conclude"
 					}
 					default:   "conclude"
 					no_answer: "conclude"
@@ -232,6 +241,49 @@ escalate: #FlowDefinition & {
 			context: {
 				required: ["escalation_session_id"]
 				optional: ["research_summary", "escalation_turn", "escalation_corrections"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.exhausted == true", transition: "conclude"},
+					{condition: "true", transition: "check_budget"},
+				]
+			}
+			publishes: ["escalation_turn", "escalation_corrections"]
+		}
+
+		// consult_boss tool: one STATELESS completion routed to the boss
+		// registry entry (config.model — remote provider; the session and
+		// head-swap machinery stay untouched). The supervisor sees the
+		// escalation's framing + the agent's question, and fold_consult
+		// injects the direction back as one escalation turn.
+		do_consult: #StepDefinition & {
+			action:      "inference"
+			description: "Put the situation + question to the supervising boss model"
+			context: optional: ["escalation_choice_arg"]
+			prompt_template: {
+				template:     "escalate/boss_consult"
+				context_keys: ["escalation_choice_arg"]
+				input_keys: ["failure_evidence", "expected_outcome"]
+			}
+			config: {
+				model:       "boss-sonnet"
+				temperature: 0.4
+				max_tokens:  1024
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "fold_consult"}]
+			}
+			publishes: ["inference_response"]
+		}
+
+		fold_consult: #StepDefinition & {
+			action:      "escalation_fold_consult"
+			description: "Inject the supervisor's direction into the session; spend one turn"
+			context: {
+				required: ["escalation_session_id"]
+				optional: ["inference_response", "escalation_turn", "escalation_corrections"]
 			}
 			resolver: {
 				type: "rule"

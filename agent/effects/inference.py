@@ -232,15 +232,20 @@ class InferenceEffect:
         endpoint: The LLMVP GraphQL endpoint URL.
         model_default_temperature: Default temperature for the model
             (used to resolve relative temperature values like "t*0.5").
+        model: Optional LLMVP registry model name for ALL completions
+            from this effect (a remote provider entry or the active
+            local config). Per-call config_overrides["model"] wins.
     """
 
     def __init__(
         self,
         endpoint: str = "http://localhost:8008/graphql",
         model_default_temperature: float = 0.7,
+        model: str | None = None,
     ) -> None:
         self._endpoint = endpoint
         self._model_default_temperature = model_default_temperature
+        self._model = model
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -417,6 +422,13 @@ class InferenceEffect:
             # path, config.model.reasoning_head_swap). None/absent → default.
             if config_overrides.get("reasoning") and not _reasoning_off():
                 request_vars["reasoning"] = str(config_overrides["reasoning"])
+
+        # Registry model routing (multi-model Phase 4): per-call override
+        # beats the effect-level default; absent -> the server's resident
+        # model, exactly as before.
+        model = (config_overrides or {}).get("model") or self._model
+        if model:
+            request_vars["model"] = str(model)
 
         request_body = {
             "query": COMPLETION_QUERY,

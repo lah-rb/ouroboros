@@ -3410,6 +3410,15 @@
                 },
                 "terminal": false
               },
+              "consult_boss": {
+                "key": "consult_boss",
+                "description": "Ask the supervising engineer for direction (stuck, going in circles, or unsure the approach is right)",
+                "arg": {
+                  "name": "question",
+                  "description": "your current understanding of the situation + the specific question"
+                },
+                "terminal": false
+              },
               "conclude": {
                 "key": "conclude",
                 "description": "Finish: report resolved (outcome holds) or deferred (cannot hold from here)",
@@ -3426,6 +3435,7 @@
               "run_command": "do_run",
               "write_file": "do_write",
               "web_search": "do_web_search",
+              "consult_boss": "do_consult",
               "conclude": "conclude"
             }
           },
@@ -3594,6 +3604,81 @@
           ],
           "optional": [
             "research_summary",
+            "escalation_turn",
+            "escalation_corrections"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.exhausted == true",
+              "transition": "conclude"
+            },
+            {
+              "condition": "true",
+              "transition": "check_budget"
+            }
+          ]
+        },
+        "publishes": [
+          "escalation_turn",
+          "escalation_corrections"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "do_consult": {
+        "action": "inference",
+        "description": "Put the situation + question to the supervising boss model",
+        "context": {
+          "required": [],
+          "optional": [
+            "escalation_choice_arg"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "escalate/boss_consult",
+          "context_keys": [
+            "escalation_choice_arg"
+          ],
+          "input_keys": [
+            "failure_evidence",
+            "expected_outcome"
+          ]
+        },
+        "config": {
+          "temperature": 0.4,
+          "max_tokens": 1024,
+          "model": "boss-sonnet"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "fold_consult"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "fold_consult": {
+        "action": "escalation_fold_consult",
+        "description": "Inject the supervisor's direction into the session; spend one turn",
+        "context": {
+          "required": [
+            "escalation_session_id"
+          ],
+          "optional": [
+            "inference_response",
             "escalation_turn",
             "escalation_corrections"
           ]

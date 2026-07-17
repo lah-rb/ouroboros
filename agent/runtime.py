@@ -948,6 +948,13 @@ async def _execute_inference_action(
         config_overrides["temperature"] = step_input.config["temperature"]
     if "max_tokens" in step_input.config:
         config_overrides["max_tokens"] = step_input.config["max_tokens"]
+    # Registry model override (multi-model Phase 4): route this step to a
+    # named model — a remote provider entry (boss consult) or the active
+    # local config. Model-routed steps are ALWAYS stateless: sessions and
+    # the reasoning head-swap live on the resident local model only.
+    model_override = step_input.config.get("model")
+    if model_override:
+        config_overrides["model"] = str(model_override)
 
     # Call inference with tracing
     # Session-aware: if an inference session ID is in the step's context, route
@@ -971,15 +978,24 @@ async def _execute_inference_action(
     # is set but effects lacks session_inference we fall through to run_inference
     # and MUST trace here — gating on session_id alone left that inference
     # invisible (soundness fix).
-    actually_session = bool(session_id) and hasattr(effects, "session_inference")
+    actually_session = (
+        bool(session_id)
+        and hasattr(effects, "session_inference")
+        and not model_override
+    )
 
     # Adaptive reasoning level (dormant unless OURO_ADAPTIVE_REASONING=1).
     # Session-path only — the head-swap field exists on SessionTurnRequest.
-    _reasoning = resolve_reasoning(
-        step_name=_step_name,
-        step_config=dict(step_input.config),
-        prompt=rendered_prompt,
-        session=actually_session,
+    # Skipped under a model override: head-swap is resident-local machinery.
+    _reasoning = (
+        resolve_reasoning(
+            step_name=_step_name,
+            step_config=dict(step_input.config),
+            prompt=rendered_prompt,
+            session=actually_session,
+        )
+        if not model_override
+        else None
     )
     if _reasoning:
         config_overrides["reasoning"] = _reasoning

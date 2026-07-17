@@ -239,6 +239,7 @@ def test_escalate_flow_wiring():
         "run_command": "do_run",
         "write_file": "do_write",
         "web_search": "do_web_search",
+        "consult_boss": "do_consult",
         "conclude": "conclude",
     }
     assert steps["work"]["turn"]["transitions"]["no_answer"] == "conclude"

@@ -1,0 +1,11 @@
+# Remote provider entry: the escalation boss (multi-model Phase 4).
+# Sonnet is the testing default — capable enough to supervise, cheap
+# enough to consult freely; swap the model id when the role hardens.
+# Addressed per-request via the completion `model` field (the escalate
+# flow's consult_boss tool); never a swap target.
+provider: claude_cli
+model: claude-sonnet-5
+claude_bin: /Users/lah-rb/.local/bin/claude
+temperature_default: 0.4
+max_tokens_default: 1024
+timeout_s: 240

@@ -337,7 +337,26 @@ The registry entry grows a `provider` discriminator:
 - **Definition of done**: a boss turn served by `claude -p` through the
   SAME GraphQL surface a local boss would use, with tokens in the trace.
 
-## Phase 4 — Ouroboros interface
+## Phase 4 — Ouroboros interface — **SHIPPED 2026-07-17**
+
+Landed: `InferenceEffect(model=...)` effect-level default + per-call
+`config_overrides["model"]` (override wins; absent = resident model as
+always); flow steps carry `config: model:` (documented in the
+#StepDefinition schema) and the runtime routes model-overridden steps
+STATELESS — session handles ignored, reasoning head-swap skipped (both
+resident-local machinery). First consumer: the escalate flow's new
+`consult_boss` menu tool — the agent states its situation + question,
+a stateless completion goes to the `boss-sonnet` registry entry
+(claude-sonnet-5, the testing default; `configs/boss-sonnet.yaml`), and
+`fold_consult` injects the supervisor's direction back into the session
+as one turn (mirrors web_search/fold_search; unreachable boss degrades
+to an observation, never a stall). This closes escalate v1's deliberate
+"consult" non-goal. Live smoke: sonnet's direction on the engine.py
+two-gate trap was exactly right, tokens in the trace (39.4k/2.3k).
+Deferred: MissionYAMLConfig llmvp_model (per-mission default model) —
+YAGNI until the τ growth step wants declarative boss/operator pairs.
+
+### Original Phase 4 sketch
 
 - `InferenceEffect`: optional `model` (constructor default + per-call
   override), rides the GraphQL variables. `MissionYAMLConfig`: optional
