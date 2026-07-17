@@ -1,7 +1,8 @@
 # Ouroboros — Contributing Guide
 
 *Patterns and recipes for adding new capabilities to Ouroboros. For architectural
-overview, see `IMPLEMENTATION.md`. For operational guidance, see `AGENT.md`.*
+overview, see `IMPLEMENTATION.md`. For operational guidance, see `AGENT.md`.
+For test philosophy and structure rules, see `TESTING.md`.*
 
 ---
 
