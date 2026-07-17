@@ -35,10 +35,14 @@ class FakeInstance:
 
 
 class FakeBackend:
-    """Backend whose generate_stream_async is supplied per-test."""
+    """Backend whose generate_stream_async is supplied per-test.
 
-    def __init__(self, gen_factory):
+    Carries its own config (Phase 2a: the manager reads
+    self._backend.config, never the global)."""
+
+    def __init__(self, gen_factory, config=None):
         self._gen_factory = gen_factory
+        self.config = config if config is not None else _FakeConfig()
 
     def generate_stream_async(self, **kwargs):
         return self._gen_factory()
@@ -72,7 +76,6 @@ class _FakeConfig:
 @pytest.fixture(autouse=True)
 def _stub_session_deps(monkeypatch):
     """Stub the model-dependent helpers session_turn calls."""
-    monkeypatch.setattr(sm, "get_config", lambda: _FakeConfig())
     monkeypatch.setattr(sm, "_get_format_renderer", lambda family: _FakeRenderer())
     monkeypatch.setattr(sm, "get_cached_tokenizer", lambda: object())
     monkeypatch.setattr(sm, "tokenize_segments", lambda tok, segs: [1, 2, 3])
@@ -197,27 +200,17 @@ def test_floored_deep_turn_completes_through_session_turn():
             seen_temps.append(kwargs.get("temperature"))
             return self._gen_factory()
 
-    mgr = SessionManager(_SpyBackend(good_gen))
+    mgr = SessionManager(_SpyBackend(good_gen, config=_FloorConfig()))
     inst, sess = _make_session(mgr)
     sess.turn_count = 2  # third turn — floor engages
 
-    import core.session_manager as _sm
+    async def drive():
+        return [
+            c
+            async for c in mgr.session_turn("s1", "hi", max_tokens=64, temperature=0.2)
+        ]
 
-    orig = _sm.get_config
-    _sm.get_config = lambda: _FloorConfig()
-    try:
-
-        async def drive():
-            return [
-                c
-                async for c in mgr.session_turn(
-                    "s1", "hi", max_tokens=64, temperature=0.2
-                )
-            ]
-
-        chunks = asyncio.run(drive())
-    finally:
-        _sm.get_config = orig
+    chunks = asyncio.run(drive())
 
     assert chunks == ["ok"]  # the turn completes (no NameError)
     assert seen_temps == [0.5]  # and the floored temperature reached the backend
@@ -258,15 +251,11 @@ class _ReplayInstance(FakeInstance):
         self.reset_calls += 1
 
 
-def _with_replay_config(monkey_target, fn):
-    import core.session_manager as _sm
-
-    orig = _sm.get_config
-    _sm.get_config = lambda: _ReplayConfig()
-    try:
-        return fn()
-    finally:
-        _sm.get_config = orig
+def _with_replay_config(backend, fn):
+    # Phase 2a: the manager reads its backend's config, so the replay
+    # policy is injected there — no global swapping.
+    backend.config = _ReplayConfig()
+    return fn()
 
 
 def test_full_replay_reprefills_history_and_skips_state_surgery():
@@ -294,7 +283,7 @@ def test_full_replay_reprefills_history_and_skips_state_surgery():
 
         return asyncio.run(turns())
 
-    _with_replay_config(None, drive)
+    _with_replay_config(backend, drive)
 
     # tokenize_segments is stubbed to [1,2,3] per turn.
     assert backend.prompts_seen[0] == [1, 2, 3]
@@ -336,7 +325,7 @@ def test_full_replay_degenerate_turn_drops_from_history():
 
         return asyncio.run(run())
 
-    _with_replay_config(None, drive)
+    _with_replay_config(backend, drive)
 
     assert sess.turn_count == 1, "degenerate turn must not advance"
     # The degenerate turn's tokens never entered history: the good turn's

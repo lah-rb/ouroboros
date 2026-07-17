@@ -13,8 +13,11 @@ from typing import List, Optional, Any
 # Local imports
 from core.config import get_config
 
-# Global cached tokenizer instance with thread-safe initialization
-_tokenizer_cache: Optional[Any] = None
+# Tokenizer cache KEYED BY MODEL PATH (thread-safe init). Keying — not a
+# single slot — makes correctness across model swaps structural: a new
+# active model resolves to a new key, so no reset choreography can be
+# forgotten (Phase 2a of MULTI_MODEL_PLAN.md).
+_tokenizer_cache: dict = {}
 _tokenizer_lock = threading.Lock()
 
 
@@ -79,68 +82,70 @@ def _create_mlc_tokenizer(config):
 
 
 def reset_tokenizer_cache() -> None:
-    """Drop the cached tokenizer so the next call rebuilds it.
-
-    The cache is model-bound (it wraps the active backend or the active
-    config's GGUF); a model swap MUST reset it or every post-swap
-    tokenization runs through the previous model's vocabulary.
-    """
-    global _tokenizer_cache
+    """Drop cached tokenizers (memory hygiene on swap — correctness no
+    longer depends on this; the cache is keyed by model path)."""
     with _tokenizer_lock:
-        _tokenizer_cache = None
+        _tokenizer_cache.clear()
 
 
 def get_cached_tokenizer() -> Any:
     """
-    Get a cached tokenizer instance.
+    Get the ACTIVE model's cached tokenizer instance.
 
-    Creates the tokenizer on first call and reuses it for subsequent calls.
+    Creates the tokenizer on first call per model path and reuses it.
     Automatically selects the appropriate tokenizer based on backend type.
 
     Returns:
         Tokenizer instance (llama_cpp.Llama or transformers.AutoTokenizer)
     """
-    global _tokenizer_cache
+    config = get_config()
+    key = str(config.model.path)
 
-    if _tokenizer_cache is not None:
-        return _tokenizer_cache
+    cached = _tokenizer_cache.get(key)
+    if cached is not None:
+        return cached
 
     with _tokenizer_lock:
         # Double-check pattern to avoid race conditions
-        if _tokenizer_cache is not None:
-            return _tokenizer_cache
-
-        config = get_config()
+        cached = _tokenizer_cache.get(key)
+        if cached is not None:
+            return cached
 
         # Import here to avoid circular imports
         from inference.backends.factory import get_backend
 
         backend = get_backend()
 
-        # Determine which tokenizer to use based on backend type
-        if backend is not None:
-            # Use backend's tokenizer method if available
-            if hasattr(backend, "tokenize"):
-                # Create a wrapper that matches the expected interface
-                _tokenizer_cache = _BackendTokenizerWrapper(backend)
-                return _tokenizer_cache
-
-        # Fallback: detect based on model path
-        if _is_mlc_model(config.model.path):
-            _tokenizer_cache = _create_mlc_tokenizer(config)
+        # Use backend's tokenizer method if available
+        if backend is not None and hasattr(backend, "tokenize"):
+            tokenizer = _BackendTokenizerWrapper()
+        elif _is_mlc_model(config.model.path):
+            tokenizer = _create_mlc_tokenizer(config)
         else:
-            _tokenizer_cache = _create_llama_tokenizer(config)
+            tokenizer = _create_llama_tokenizer(config)
 
-        return _tokenizer_cache
+        _tokenizer_cache[key] = tokenizer
+        return tokenizer
 
 
 class _BackendTokenizerWrapper:
     """
     Wrapper to make backend tokenizer compatible with llama.cpp interface.
+
+    Resolves the backend at CALL time (never pins the instance): a cached
+    wrapper must not keep a torn-down backend alive across an A->B->A
+    swap cycle, and the live backend is always the right one for the
+    active model the cache key selected.
     """
 
-    def __init__(self, backend):
-        self.backend = backend
+    @property
+    def backend(self):
+        from inference.backends.factory import get_backend
+
+        backend = get_backend()
+        if backend is None:
+            raise RuntimeError("no backend resident (mid-swap?) — retry shortly")
+        return backend
 
     def tokenize(
         self, text: bytes, add_bos: bool = False, special: bool = False

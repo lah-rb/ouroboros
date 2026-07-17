@@ -331,9 +331,6 @@ def test_windowing_forbid_on_snapshot_linked_sessions(monkeypatch):
         session_full_replay = True
         resident_strip_reasoning = False
 
-    monkeypatch.setattr(
-        sm, "get_config", lambda: SimpleNamespace(model=_Model(), generation=None)
-    )
     monkeypatch.setattr(sm, "_get_format_renderer", lambda family: _Renderer())
     monkeypatch.setattr(sm, "get_cached_tokenizer", lambda: object())
     monkeypatch.setattr(sm, "tokenize_segments", lambda tok, segs: [1] * 50)
@@ -345,6 +342,8 @@ def test_windowing_forbid_on_snapshot_linked_sessions(monkeypatch):
         _resident_active = True
         _resident_static_len = 3
         _session_flow_fork = False
+        # Phase 2a: the manager reads config from its backend.
+        config = SimpleNamespace(model=_Model(), generation=None)
 
         def _window_resident_seq(self, inst, n_keep):
             windowed.append(n_keep)

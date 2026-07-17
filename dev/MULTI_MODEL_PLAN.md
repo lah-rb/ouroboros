@@ -197,7 +197,44 @@ is a *catalog*.
   both suites + fence green; a benchmark run switched configs with zero
   process restarts.
 
-## Phase 2 — Co-residency: N hot backends + routing
+## Phase 2 — RESTRUCTURED 2026-07-17 (Luke's lens: generalization/UX only)
+
+Split into 2a (shipped) and 2b (parked with triggers); routing moved
+into Phase 3 where it was needed anyway.
+
+### Phase 2a — bind model state to the backend — **SHIPPED 2026-07-17**
+
+The generalizing refactor, done WITHOUT co-residency: model-bound
+singletons became KEYED stores so swap correctness is structural, not
+choreographed — the reset ledger is now memory hygiene, not a
+correctness dependency. Tokenizer cache keyed by model path (backend
+wrapper resolves the live backend at call time — never pins a torn-down
+instance across A→B→A); GGUF metadata keyed by model path (lifecycle's
+"read when missing" self-heals on swap); static-token buffers keyed by
+resolved tokens_bin path; SessionManager's five per-model config reads
+bound to `self._backend.config` (its get_config import is GONE — session
+tests inject config via their fake backends now). Found-item: lifecycle's
+skip-knowledge path writes `_static_tokens_list`, which nothing reads —
+dead store, likely a latent --skip-knowledge defect; flagged, not fixed
+blind.
+
+### Phase 2b — local co-residency — **PARKED (named triggers)**
+
+N hot local backends + memory governor + decode lock. Park rationale:
+P0.b showed in-process co-residency buys no decode parallelism (Metal
+serializes), so its only UX win is skipping an ~11s warm swap; the
+cross-process route (openai_compat → LMStudio) delivers a concurrently-
+decoding local boss with zero surgery. Triggers to un-park BOTH must
+hold: (1) a formalized LLMVP-based boss ROLE in Ouroboros (beyond
+general escalation) with a measured cadence that swap latency actually
+hurts — plausibly waiting on hardware that can host a boss-worthy local
+model; (2) cross-process proves inadequate for a concrete reason (needs
+real LLMVP sessions/persona-bins/telemetry on the boss model). Also
+still open as a small Phase-1 UX patch: pre-flight wired-fit check on
+swapModel (refuse with a clear message; count hot models as FULLY wired
+per P0.a). Original sketch follows for when it un-parks.
+
+### Original Phase 2 sketch (pre-split)
 
 Gated on P0.a/P0.b verdicts. Semantics: registry holds LIVE entries
 `{name → (backend, session_manager, config)}`; one is "primary"
@@ -234,7 +271,30 @@ Gated on P0.a/P0.b verdicts. Semantics: registry holds LIVE entries
   and operator missions hit gpt-oss, interleaved, no errors, no wired
   creep after both offload.
 
-## Phase 3 — Provider adapters: remote models as registry entries
+## Phase 3 — Provider adapters — **SHIPPED 2026-07-17**
+
+Landed as designed, plus the routing that was originally Phase 2's:
+`inference/providers/` (claude_cli subprocess adapter + openai_compat
+HTTP adapter, both normalized to RemoteCompletion with token counts in
+the standard trace fields), `core/remote_router.py` (per-request
+dispatch: remote entry → adapter; active local → fall through; inactive
+local → explicit "swapModel first" error; adapters cached per entry,
+invalidated by config mtime — editing a remote yaml is live without
+restart), `model` field on CompletionRequest (query + mutation),
+provider column in registry/models/CLI. First production entry:
+`configs/boss-claude.yaml` (claude-opus-4-8). Live smoke: given the
+morning's engine.py two-gate trap as a supervision question, the opus
+boss answered with exactly the correct move (test whether the stale
+circular import still reproduces; move imports; delete the comment).
+Note the claude CLI usage quirk found live: some runs zero top-level
+`usage` and carry real numbers only in camelCase `modelUsage` — the
+adapter sums fresh + cache-creation + cache-read for input (the trace
+question is context consumed, not tokens billed) with a modelUsage
+fallback, both pinned by tests. Remote entries are never swap targets;
+`start_session` remains local-only by construction (sessions route
+through the session manager, which has no remote path).
+
+### Original Phase 3 sketch
 
 The registry entry grows a `provider` discriminator:
 `local_llama` (default) | `claude_cli` | `openai_compat`.

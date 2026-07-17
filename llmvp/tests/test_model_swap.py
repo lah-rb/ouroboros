@@ -293,16 +293,29 @@ def test_config_view_follows_swap(catalog, active_alpha):
 def test_tokenizer_cache_reset():
     import inference.tokenizer as tok
 
-    tok._tokenizer_cache = object()
+    tok._tokenizer_cache["/some/model.gguf"] = object()
     tok.reset_tokenizer_cache()
-    assert tok._tokenizer_cache is None
+    assert tok._tokenizer_cache == {}
 
 
-def test_metadata_reset():
+def test_metadata_keyed_by_model_path(catalog, active_alpha):
+    """Phase 2a: the store is keyed by the ACTIVE model path — after a
+    set_config to a different model, the previous model's metadata is
+    invisible (lifecycle re-reads), and swapping back restores it."""
     from inference import metadata as md
 
     sentinel = object()
-    md._model_metadata = sentinel
+    md._model_metadata.clear()
+    md.set_model_metadata(sentinel)
     assert md.get_model_metadata() is sentinel
+
+    alpha_cfg = get_config()
+    beta_gguf = str(Path(alpha_cfg.model.path).parent / "other.gguf")
+    set_config(Config(**_config_dict("beta-model", "tekken", beta_gguf)))
+    assert md.get_model_metadata() is None  # new model => no entry, no reset needed
+
+    set_config(alpha_cfg)
+    assert md.get_model_metadata() is sentinel  # swap back finds its own entry
+
     md.reset_model_metadata()
     assert md.get_model_metadata() is None

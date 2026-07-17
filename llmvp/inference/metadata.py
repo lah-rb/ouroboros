@@ -117,32 +117,34 @@ def read_metadata(llm_instance) -> ModelMetadata:
 
 # ── Module-level accessor ────────────────────────────────────────────
 #
-# Populated once at startup (and again after a model swap), read-only
-# in between.
+# Metadata store KEYED BY MODEL PATH (Phase 2a): the active config's
+# path selects the entry, so a swapped-in model can never inherit the
+# previous model's BOS/EOS behavior — lifecycle's "read when missing"
+# check finds no entry for a new model and re-reads, no reset required.
 
-_model_metadata: ModelMetadata | None = None
+_model_metadata: dict[str, ModelMetadata] = {}
+
+
+def _active_model_key() -> str:
+    from core.config import get_config
+
+    return str(get_config().model.path)
 
 
 def set_model_metadata(metadata: ModelMetadata) -> None:
-    """Store metadata for global access. Called once at startup."""
-    global _model_metadata
-    _model_metadata = metadata
+    """Store the ACTIVE model's metadata. Called at startup/re-init."""
+    _model_metadata[_active_model_key()] = metadata
 
 
 def reset_model_metadata() -> None:
-    """Clear stored metadata so server re-init re-reads it.
-
-    Model-swap hook: lifecycle's startup path only reads GGUF metadata
-    when none is stored, so without this reset a swapped-in model would
-    inherit the previous model's BOS/EOS behavior.
-    """
-    global _model_metadata
-    _model_metadata = None
+    """Drop stored metadata (memory hygiene on swap — correctness no
+    longer depends on this; the store is keyed by model path)."""
+    _model_metadata.clear()
 
 
 def get_model_metadata() -> ModelMetadata | None:
-    """Retrieve stored metadata. Returns None if not yet initialized."""
-    return _model_metadata
+    """The ACTIVE model's metadata, or None if not yet read."""
+    return _model_metadata.get(_active_model_key())
 
 
 def log_metadata(metadata: ModelMetadata) -> None:

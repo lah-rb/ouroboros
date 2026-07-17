@@ -25,7 +25,6 @@ from typing import Any, AsyncGenerator, Optional
 
 from starlette.concurrency import run_in_threadpool
 
-from core.config import get_config
 from core.interaction_logger import log_interaction
 from inference.tokenizer import get_cached_tokenizer, tokenize_segments, tokenize_text
 from inference.repetition import DegenerateGenerationError
@@ -253,7 +252,7 @@ class SessionManager:
         if self._turn_transition_cache is not None:
             return self._turn_transition_cache
 
-        config = get_config()
+        config = self._backend.config
         renderer = _get_format_renderer(config.model.family)
         self._turn_transition_cache = renderer.render_turn_transition()
         log.info(
@@ -488,7 +487,9 @@ class SessionManager:
         # so a JIT scaling operation can neither interleave with the
         # turn nor start mid-turn.
         async with self._generation_guard():
-            config = get_config()
+            # Bound to the backend this manager serves, not the global —
+            # correct by construction across model swaps (Phase 2a).
+            config = self._backend.config
             # Hybrid/recurrent policy: per-turn save/load round-trips and
             # tail seq_rm are unsound for recurrent state (it cannot be
             # partially rolled back). Full-replay sessions restore the
@@ -845,7 +846,7 @@ class SessionManager:
             # channel, writing an answerless assistant turn into the KV (which
             # compounds across turns). Keep the raw generation instead.
             return
-        config = get_config()
+        config = self._backend.config
         span = reasoning_span(
             config.model.family,
             config.model.thinking,
@@ -989,7 +990,7 @@ class SessionManager:
             prompt_text=prompt,
         )
 
-        config = get_config()
+        config = self._backend.config
         delim = _get_format_renderer(config.model.family).delimiter_pattern()
         if not delim:
             text = raw_text.strip()
@@ -1245,11 +1246,9 @@ class SessionManager:
                 sweep = getattr(self._backend, "sweep_stale_snapshots", None)
                 if sweep is not None:
                     try:
-                        from core.config import get_config
-
                         ttl = float(
                             getattr(
-                                get_config().model,
+                                self._backend.config.model,
                                 "session_snapshot_ttl_s",
                                 7200,
                             )
