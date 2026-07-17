@@ -3656,7 +3656,8 @@
             "escalation_session_id"
           ],
           "optional": [
-            "escalation_files"
+            "escalation_files",
+            "inference_session_id"
           ]
         },
         "params": {},

@@ -264,7 +264,9 @@ escalate: #FlowDefinition & {
 			description: "One conclude turn → outcome resolved | deferred (fail-safe: deferred)"
 			context: {
 				required: ["escalation_session_id"]
-				optional: ["escalation_files"]
+				// inference_session_id: fallback session handle the action
+				// accepts when the escalation-specific key is absent.
+				optional: ["escalation_files", "inference_session_id"]
 			}
 			resolver: {
 				type: "rule"
