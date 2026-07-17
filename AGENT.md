@@ -29,7 +29,7 @@ All inference requests go through LLMVP's GraphQL API over HTTP.
 Ouroboros is **unpublished**. There are no downstream users, no compatibility guarantees, and no migration windows to honor. This has direct implications for how changes should be made:
 
 - **Prefer clean-break, big-bang transitions over gradual migrations.** When a concept is being replaced, delete the old version in the same change that introduces the new one. Do not leave "kept for backward compatibility" shims, dual-path code, or feature flags guarding deprecated behavior — if the old path is dead, remove it fully. Comments marking code as "legacy" or "for migration" are an anti-pattern here; they become lies the moment the migration completes and noise that obscures what the code actually does.
-- **Expect cleanup as part of every feature change.** A feature change is not complete until its footprint is clean: unused imports are removed, superseded code paths are deleted, stale documentation is updated, orphan prompts/flows/actions are pruned, and lint categories pass cleanly. Lint, smoke, and the CLI smoke are the verification fence — if any of them regress, the change isn't done. The lint tooling (both `ouroboros.py lint` and `dev/lint_flows.py`) is calibrated to surface this kind of drift; treat new warnings as defects to resolve, not noise to tolerate.
+- **Expect cleanup as part of every feature change.** A feature change is not complete until its footprint is clean: unused imports are removed, superseded code paths are deleted, stale documentation is updated, orphan prompts/flows/actions are pruned, and lint categories pass cleanly. Lint, smoke, and the CLI smoke are the verification fence — if any of them regress, the change isn't done. The lint tooling (`ouroboros.py lint` and `ouroboros.py lint-flows`) is calibrated to surface this kind of drift; treat new warnings as defects to resolve, not noise to tolerate.
 - **Favor consolidation over proliferation.** When two pieces of code do similar things, collapse them rather than adding a third. When a concept has grown three call sites, extract it. When a helper is only used once and the caller is clear, inline it. The goal is a codebase that stays small enough for a single reader to hold in their head.
 
 These norms apply to AI-directed changes as much as to human ones. If a change appears to be "too large" because it spans feature code, flow definitions, prompts, and docs — that is usually the right size, not a red flag.
@@ -59,8 +59,10 @@ These norms apply to AI-directed changes as much as to human ones. If a change a
 | Runtime tracing / trace events | `agent/trace.py`, `agent/trace_cli.py` | |
 | Architecture / design decisions | `IMPLEMENTATION.md` | |
 | Prompt quality / conventions | `PROMPTING_CONVENTIONS.md` | |
-| Static analysis of flow contracts | `dev/lint_flows.py` | `uv run ouroboros.py lint-flows` |
+| Static analysis of flow contracts | `agent/flow_lint.py` | `uv run ouroboros.py lint-flows` |
 | Smoke testing | `dev/smoke_test.py` | `uv run ouroboros.py smoke` |
+| CLI import-rot gate | `dev/cli_smoke.py` | `uv run ouroboros.py cli-smoke` |
+| Test philosophy / structure rules | `TESTING.md` | |
 
 ---
 
@@ -95,6 +97,7 @@ uv run ouroboros.py mission create --objective "..." [opts]   # from CLI flags
 uv run ouroboros.py mission status  [--working-dir /path]
 uv run ouroboros.py mission pause   [--working-dir /path]
 uv run ouroboros.py mission resume  [--working-dir /path]
+uv run ouroboros.py mission reopen  [--working-dir /path]  # re-activate a completed/aborted mission
 uv run ouroboros.py mission abort   [--working-dir /path]
 uv run ouroboros.py mission message "text" [--working-dir /path]
 uv run ouroboros.py mission history [--working-dir /path]
@@ -104,7 +107,7 @@ uv run ouroboros.py mission history [--working-dir /path]
 
 | Flag | Description |
 |------|-------------|
-| `--mission_config` | YAML config name or path (e.g. `test` loads `test.yaml`) |
+| `--mission_config` | YAML config name or path (bare names resolve in cwd, then `missions/`) |
 | `--objective` | Mission objective (required unless in YAML config) |
 | `--working-dir` | Project working directory |
 | `--principles` | Guiding principles (space-separated) |
@@ -144,9 +147,9 @@ uv run ouroboros.py blueprint [--format pdf|md] [--output <dir>]
 Instead of passing many CLI flags, declare a mission in a YAML file:
 
 ```bash
-uv run ouroboros.py mission create --mission_config test            # loads test.yaml
-uv run ouroboros.py mission create --mission_config ./configs/deploy.yaml
-uv run ouroboros.py mission create --mission_config test --working-dir /other  # CLI overrides YAML
+uv run ouroboros.py mission create --mission_config game_challenge   # missions/game_challenge.yaml
+uv run ouroboros.py mission create --mission_config ./missions/ops_demo.yaml
+uv run ouroboros.py mission create --mission_config game_challenge --working-dir /other  # CLI overrides YAML
 ```
 
 ### YAML Schema
@@ -235,7 +238,7 @@ To add a new service, drop an entry into `_MCP_SERVERS` and write an action that
    - Auto-fix what's safe: `uv run ruff check --fix`.
    - Investigate every remaining warning — F841 in particular surfaces dropped wiring, not stylistic noise.
 
-4. **Test** → `uv run pytest tests/ -v` if tests exist for the touched code.
+4. **Test** → `uv run pytest tests/ -v` if tests exist for the touched code (conventions: `TESTING.md`).
 
 5. **Compile flows** → `uv run ouroboros.py cue-compile` (if CUE files changed)
    - `flows/compiled.json` is a build artifact regenerated from `flows/<set>/*.cue` — it is committed (tests read it directly), so rebuild and include it whenever CUE sources change.
@@ -282,7 +285,7 @@ curl -X POST http://localhost:8008/graphql \
 
 LLMVP pre-tokenizes a knowledge base file into a binary token buffer (`data/<model>.tokens.bin`) at preprocessing time. At server startup, this buffer is memory-mapped and prepended to every inference call as a static prefix. The model evaluates these tokens once on first use, and the KV cache snapshot is reused for all subsequent calls — making the universal context effectively free at inference time.
 
-The knowledge base is composed from a model-specific wrapper template (`llmvp/knowledge/<model>-wrapper.txt`) that includes `SOUL.md` via `{{SOUL.md}}` placeholder substitution. To update the universal context after editing the soul or knowledge files:
+The static stream is composed per PERSONA (llmvp/preprocessing/builder.py): the persona file (`config.prompt.persona_file`, e.g. `llmvp/knowledge/SOUL.md`; alternate personas via the `personas:` map) plus the `llmvp/knowledge/` documents, tokenized into `config.knowledge.tokens_bin`. The bin auto-rebuilds when missing or stale. To force a rebuild after editing the soul or knowledge files:
 
 ```bash
 cd ouroboros/llmvp
@@ -325,7 +328,7 @@ The full inventory is derivable from the `flows/` set directories at any time. R
 
 ## Development Conventions
 
-- **temperature** — prefer `t*` specifiers: `t*0.5` for deterministic, `t*1` for balanced, `t*1.2` for creative.
+- **temperature** — prefer `t*` specifiers (multipliers on the model default): `t*0.0`–`t*0.2` deterministic/JSON extraction, `t*0.4`–`t*0.6` balanced planning/editing, `t*0.8` exploratory (see PROMPTING_CONVENTIONS §11 for the full table).
 - **Pydantic v2** with strict validation for all models.
 - **Declarative CUE** for flow definitions — never Python code for flow structure. Compile with `uv run ouroboros.py cue-compile`.
 - **Async callables** with signature `(StepInput) -> StepOutput` for all actions.

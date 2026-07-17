@@ -35,14 +35,15 @@ In practice:
 - **Carries across turns → session.** If a fact must survive into the *next* turn of the same multi-turn loop, let the session hold it — don't re-send it each turn. The session-injection queue (§7) adds to it without a wasted inference.
 - **Just this task → tail.** Everything keyed to the specific input — file contents, feedback, per-cycle results — is the dynamic tail. It comes last (§10) and is the only part re-prefilled each call.
 
-The runtime mechanics behind these lifetimes (resident in-context sequences vs the legacy `save_state` path, eviction bounds, the SWA `swa_full` requirement) live in [dev/CACHE_STATE.md](dev/CACHE_STATE.md). As a prompt author you only need the placement guidance above plus the ordering rule in §10.
+The runtime mechanics behind these lifetimes (resident in-context sequences vs the legacy `save_state` path, eviction bounds, the SWA `swa_full` requirement) live in [dev/archive/docs/CACHE_STATE.md](dev/archive/docs/CACHE_STATE.md). As a prompt author you only need the placement guidance above plus the ordering rule in §10.
 
 ### Template Format
 
-Prompts are **section-based YAML files** in `prompts/<flow>/<step>.yaml`, referenced by CUE flow definitions via `prompt_template.template`. Complex data formatting is handled by **pre-compute formatters** (Python functions) that run before template rendering — the template itself only does simple variable substitution.
+Prompts live as YAML files in `prompts/<flow>/<step>.yaml` in two shapes. The PRIMARY shape (turn-based steps, the migration target — ~2/3 of files) is **single-`content` fragments** composed by the CUE step's `turn.sections: [{type, template}]` list — each fragment holds one section's text and the CUE declaration owns the assembly order. The legacy shape is a **section-based file** carrying its own `sections:` list, referenced via `prompt_template.template`. In both shapes, complex data formatting is handled by **pre-compute formatters** (Python functions) that run before template rendering — the template itself only does simple variable substitution.
 
 ```yaml
-# prompts/create_file/generate_content.yaml
+# Legacy section-based shape (fragment example: prompts/create/task.yaml
+# plus flows/code_core/create.cue's turn.sections list):
 id: create_file/generate_content
 description: "Generate complete file content for a new source file"
 
@@ -489,7 +490,7 @@ Standard named blocks:
 
 - Persona definitions live in `flows/code_core/personas.cue` as `_personas` (hidden, not exported)
 - Flows reference them: `flow_persona: _personas.file_ops`
-- Pre-compute formatters `format_flow_persona` and `format_known_personas` render the blocks
+- Persona text is lazy-loaded from compiled.json (`agent/formatters.py` `_persona_cache`) and rendered into the persona sections
 - Prompt templates include conditional sections gated on `context.flow_persona` / `context.peer_personas`
 
 When adding personas to a new flow, add the definition to `personas.cue`, declare `flow_persona` and/or `known_personas` on the flow, add a pre-compute entry to the inference step, and add conditional template sections.
