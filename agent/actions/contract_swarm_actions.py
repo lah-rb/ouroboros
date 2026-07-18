@@ -405,19 +405,27 @@ def _pyi_view(stub_text: str) -> str:
     return "\n".join(out).strip()
 
 
-def _dep_digest(contract_set: dict, path: str) -> str:
-    """Full-shape digest of the contract modules ``path`` imports — class
-    fields/constructors + method signatures + free-function signatures,
-    so a worker never has to invent an imported type's API."""
+def _project_digest(contract_set: dict, self_path: str) -> str:
+    """Round-3 SHARED-CORE BROADCAST: the full-shape ``.pyi`` view of EVERY
+    OTHER module's contract — class fields/constructors + method signatures
+    + free-function signatures — handed to EVERY worker, not just its
+    imports.
+
+    Rounds 0–2 gave a worker only its imported deps' signatures, so each
+    worker re-derived the shared data vocabulary (GameState/Command/the
+    world_data shape) independently and they drifted — the telephone game.
+    Broadcasting the whole project's interface makes that vocabulary
+    byte-identical for all workers (the conference call): private bodies,
+    shared interfaces. Compact (sigs + fields, no bodies/docstrings) and
+    identical across workers (rides a shared prefill prefix)."""
     files = _code_files(contract_set)
     lines: list[str] = []
-    for dep in files.get(path, {}).get("imports") or []:
-        dep_entry = files.get(dep)
-        if not dep_entry:
+    for mod, entry in files.items():
+        if mod == self_path:
             continue
-        view = _pyi_view(dep_entry.get("stub_text", ""))
+        view = _pyi_view(entry.get("stub_text", ""))
         if view:
-            lines.append(f"### {dep}\n```python\n{view}\n```")
+            lines.append(f"### {mod}\n```python\n{view}\n```")
     return "\n".join(lines)
 
 
@@ -426,17 +434,19 @@ def _worker_prompt(
 ) -> str:
     entry = _code_files(contract_set)[path]
     meta = entry["symbols"][name]
-    deps = _dep_digest(contract_set, path)
+    project = _project_digest(contract_set, path)
     parts = [
         persona,
         f"## Module: {path}\n\nModule skeleton (imports are FINAL — you may not add any):\n"
         f"```python\n{entry['skeleton']}\n```",
         f"## This module's full contract\n```python\n{entry['stub_text']}\n```",
     ]
-    if deps:
+    if project:
         parts.append(
-            "## Imported contract modules (their public API — call through "
-            f"these exactly)\n{deps}"
+            "## Project interfaces — the SHARED VOCABULARY (every other "
+            "module's public API). Construct, call, and access attributes on "
+            "ANY symbol here EXACTLY as declared; never invent a shape:\n"
+            f"{project}"
         )
     parts.append(
         f"## Your assignment: implement `{name}` ({meta['kind']})\n"

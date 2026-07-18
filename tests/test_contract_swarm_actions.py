@@ -15,8 +15,8 @@ from types import SimpleNamespace
 import pytest
 
 from agent.actions.contract_swarm_actions import (
-    _dep_digest,
     _pyi_view,
+    _project_digest,
     _validate_worker_body,
     action_apply_contract_review,
     action_assemble_contract_files,
@@ -499,17 +499,24 @@ def test_pyi_view_renders_fields_methods_and_functions():
     assert view.strip() != "class GameState:"
 
 
-def test_dep_digest_gives_consuming_worker_the_type_shape():
+def test_project_digest_broadcasts_all_modules_type_shapes():
+    # Round-3 broadcast: a worker sees a module's full type shape even when
+    # its own module does NOT import it (parser.py declares no imports).
     cs = {
         "files": {
             "models.py": {"stub_text": _MODELS_RICH, "symbols": {}, "imports": []},
-            "engine.py": {"stub_text": "", "symbols": {}, "imports": ["models.py"]},
+            "parser.py": {
+                "stub_text": "def parse(s: str) -> str:\n    ...\n",
+                "symbols": {},
+                "imports": [],
+            },
         }
     }
-    digest = _dep_digest(cs, "engine.py")
-    assert "### models.py" in digest
-    assert "rooms_state: dict" in digest  # fields reach the consumer
+    digest = _project_digest(cs, "parser.py")  # parser imports nothing
+    assert "### models.py" in digest  # still broadcast to the parser worker
+    assert "rooms_state: dict" in digest  # fields reach every worker
     assert "def apply(self" in digest
+    assert "### parser.py" not in digest  # own module excluded
 
 
 def test_pyi_view_falls_back_on_unparseable():
