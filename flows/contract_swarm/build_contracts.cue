@@ -59,10 +59,68 @@ build_contracts: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
+					// Round-5: coin a shared entity-id namespace ONLY when ≥2 data
+					// files exist (cross-file id drift is impossible otherwise).
+					{condition: "context.mission != None and context.mission.architecture != None and len(context.mission.architecture.data_shapes or []) >= 2", transition: "author_data_registry"},
 					{condition: "true", transition: "author_contracts"},
 				]
 			}
 			publishes: ["mission", "events"]
+		}
+
+		// Round-5 SHARED ENTITY-ID REGISTRY. One completion coins the
+		// canonical id namespace across the runtime data files (which ids
+		// each file DEFINES + which it may REFERENCE in siblings), so the
+		// independently-generated data files bind to the same ids and
+		// cross-file references resolve. Derived ONCE, before the
+		// author⇄parse revision loop; boss-swappable like the other swarm
+		// turns. no_answer degrades straight to round-4 (shape-only).
+		author_data_registry: #StepDefinition & {
+			action:      "inference"
+			description: "Coin one canonical entity-id namespace across the data files"
+			context: {
+				required: ["mission"]
+			}
+			turn: #Turn & {
+				response_shape: "json_document"
+				response: schema_id: "data_entity_registry"
+				sections: [
+					{type: "role", template: "personas/registry_author"},
+					{type: "problem", template: "build_contracts/registry_task"},
+					{type: "context_files", ref: {$ref: "context.data_registry_brief"}},
+					{type: "instruction", template: "build_contracts/registry_instruction"},
+					{type: "envelope"},
+				]
+				transitions: {
+					default:   "store_data_registry"
+					no_answer: "author_contracts"
+				}
+				config: {
+					temperature: "t*0.2"
+					max_tokens:  4096
+					model:       string | *""
+				}
+				retries: 2
+			}
+			pre_compute: [
+				{formatter: "render_data_registry_brief", output_key: "data_registry_brief"
+					params: source: {$ref: "context.mission"}},
+			]
+			publishes: ["inference_response"]
+		}
+
+		store_data_registry: #StepDefinition & {
+			action:      "store_data_registry"
+			description: "Parse + clean the registry (drop dangling refs) into data_registry"
+			context: {
+				required: ["inference_response"]
+				optional: ["mission"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "author_contracts"}]
+			}
+			publishes: ["data_registry"]
 		}
 
 		// One completion, every CONTRACT. Same FILE-marker envelope the
@@ -119,7 +177,7 @@ build_contracts: #FlowDefinition & {
 			description: "Parse + validate contract stubs; build skeletons and symbol slices"
 			context: {
 				required: ["inference_response", "mission"]
-				optional: ["contract_revision", "swarm_token_base", "inference_tokens_generated"]
+				optional: ["contract_revision", "swarm_token_base", "inference_tokens_generated", "data_registry"]
 			}
 			resolver: {
 				type: "rule"

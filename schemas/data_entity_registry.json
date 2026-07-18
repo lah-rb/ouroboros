@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "data_entity_registry",
+  "description": "One canonical entity-id namespace shared across the project's runtime data files. Each file lists the ids it DEFINES (its own top-level entities) and, per sibling file, the ids it REFERENCES there. Every referenced id MUST appear in the target file's `defines`, so cross-file references resolve at runtime.",
+  "type": "object",
+  "required": ["files"],
+  "properties": {
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "defines"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Data file path exactly as it appears in the blueprint (e.g. rooms.yaml)."
+          },
+          "defines": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Canonical ids this file defines as its top-level entities."
+          },
+          "references": {
+            "type": "object",
+            "additionalProperties": {"type": "array", "items": {"type": "string"}},
+            "description": "sibling file path -> the ids this file references there. Each id MUST be in that sibling's `defines`."
+          }
+        }
+      }
+    }
+  },
+  "x-example": {
+    "files": [
+      {
+        "file": "playlists.yaml",
+        "defines": ["morning_focus", "evening_wind_down"],
+        "references": {"tracks.yaml": ["sunrise_theme", "quiet_rain"]}
+      },
+      {
+        "file": "tracks.yaml",
+        "defines": ["sunrise_theme", "quiet_rain"],
+        "references": {"artists.yaml": ["ada_vance"]}
+      },
+      {
+        "file": "artists.yaml",
+        "defines": ["ada_vance"],
+        "references": {}
+      }
+    ]
+  }
+}

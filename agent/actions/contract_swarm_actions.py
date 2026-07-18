@@ -146,12 +146,14 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
         "primary_code_file": "",
     }
 
-    # Round-4: the data-shape exemplars are the shared DATA vocabulary —
-    # broadcast to every worker (below, via contract_set) and pushed to
-    # each data file's own generation directive now (idempotent, saved),
-    # so both readers and the file bind to the same keys.
+    # Round-4: data-shape exemplars (the shared KEY vocabulary). Round-5:
+    # data_registry (the shared ID namespace, derived earlier by
+    # store_data_registry — absent → shape-only round-4 behavior). Both are
+    # broadcast to every worker (below, via contract_set) and pushed to each
+    # data file's own generation directive now (idempotent, saved).
     data_contracts = _data_contracts(mission)
-    await _enrich_data_goals(effects, mission, data_contracts)
+    data_registry = ctx.get("data_registry") or []
+    await _enrich_data_goals(effects, mission, data_contracts, data_registry)
 
     blocks = parse_file_blocks(raw) if raw else []
     if not blocks or not declared_code:
@@ -164,6 +166,7 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
                     "files": {},
                     "issues": [],
                     "data_contracts": data_contracts,
+                    "data_registry": data_registry,
                 },
                 "contract_feedback": "",
                 "contract_revision": revision,
@@ -298,6 +301,7 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
                 "files": files,
                 "issues": issues,
                 "data_contracts": data_contracts,
+                "data_registry": data_registry,
             },
             "contract_feedback": feedback,
             "contract_revision": revision,
@@ -435,6 +439,58 @@ def _pyi_view(stub_text: str) -> str:
 # exactly these keys).
 _DATA_CONTRACT_MARKER = "## DATA SHAPE CONTRACT (authoritative)"
 
+# Round-5 SHARED ENTITY-ID REGISTRY. Round 4 closed code↔data SHAPE drift
+# (readers + file bind to the exemplar's KEYS). The residual moved to
+# code↔data / data↔data REFERENTIAL drift: the data files are generated
+# independently, so rooms.yaml references item/npc ids that items.yaml
+# never defines. This carries ONE canonical id namespace — which ids each
+# file DEFINES and which ids it REFERENCES in siblings — through the same
+# two broadcast sites (each data goal's directive + every worker prompt),
+# so cross-file references resolve. Separate marker from the shape block
+# so the two are appended (and made idempotent) independently.
+_ENTITY_REGISTRY_MARKER = "## ENTITY-ID REGISTRY (authoritative)"
+
+
+def _registry_by_file(data_registry: list[dict] | None) -> dict[str, dict]:
+    """Index a cleaned registry (list[{file, defines, references}]) by file."""
+    out: dict[str, dict] = {}
+    for entry in data_registry or []:
+        f = str((entry or {}).get("file") or "").strip()
+        if f:
+            out[f] = entry
+    return out
+
+
+def _registry_slice_text(entry: dict) -> str:
+    """Render one file's registry slice: the ids it defines + the sibling
+    ids it may reference. Shared by the directive and worker broadcasts."""
+    lines: list[str] = []
+    defines = [str(d) for d in (entry.get("defines") or []) if str(d).strip()]
+    if defines:
+        lines.append(f"defines (this file's canonical ids): {', '.join(defines)}")
+    refs = entry.get("references") or {}
+    if isinstance(refs, dict):
+        for sib, ids in refs.items():
+            id_list = [str(i) for i in (ids or []) if str(i).strip()]
+            if id_list:
+                lines.append(f"may reference in {sib}: {', '.join(id_list)}")
+    return "\n".join(lines)
+
+
+def _registry_digest(data_registry: list[dict] | None) -> str:
+    """Worker-facing view of the shared id namespace: per data file, the
+    ids it defines and the sibling ids it references. Isolated workers that
+    look entities up by id across files bind to these exact ids."""
+    blocks: list[str] = []
+    for entry in data_registry or []:
+        f = str((entry or {}).get("file") or "").strip()
+        if not f:
+            continue
+        body = _registry_slice_text(entry)
+        if body:
+            blocks.append(f"### {f}\n{body}")
+    return "\n\n".join(blocks)
+
 
 def _data_contracts(mission: Any) -> list[dict]:
     """The architecture's data-shape contracts as plain dicts (file,
@@ -483,15 +539,19 @@ def _data_digest(data_contracts: list[dict]) -> str:
 
 
 async def _enrich_data_goals(
-    effects: Any, mission: Any, data_contracts: list[dict]
+    effects: Any,
+    mission: Any,
+    data_contracts: list[dict],
+    data_registry: list[dict] | None = None,
 ) -> int:
-    """Append the authoritative shape+exemplar to each data file's
-    structural goal, so the serially-generated data file binds to the
-    SAME exemplar the code workers were handed. The other half of the
-    conference call: without it only the readers bind to the vocabulary
-    and the file still drifts. Idempotent across contract revisions via
-    the marker; persisted so the sweep's later data-file create (a fresh
-    mission load) sees it. Returns count enriched."""
+    """Append the authoritative shape+exemplar (round 4) AND the shared
+    entity-id slice (round 5) to each data file's structural goal, so the
+    serially-generated data file binds to the SAME vocabulary the code
+    workers were handed. Without it only the readers bind and the file
+    still drifts. Each block is idempotent via its own marker (a goal that
+    already carries the shape block still gains the registry block, and
+    vice versa); persisted once so the sweep's later data-file create (a
+    fresh mission load) sees it. Returns count of goals changed."""
     goals = getattr(mission, "goals", None) if mission else None
     if not goals:
         return 0
@@ -500,39 +560,149 @@ async def _enrich_data_goals(
         for dc in data_contracts
         if dc.get("example") or dc.get("structure")
     }
-    if not by_file:
+    reg_by_file = _registry_by_file(data_registry)
+    if not by_file and not reg_by_file:
         return 0
-    enriched = 0
+    changed = 0
     for g in goals:
         files = getattr(g, "associated_files", None) or []
         dc = next((by_file[f] for f in files if f in by_file), None)
-        if dc is None:
-            continue
+        reg = next((reg_by_file[f] for f in files if f in reg_by_file), None)
         desc = getattr(g, "description", "") or ""
-        if _DATA_CONTRACT_MARKER in desc:
-            continue
-        block = [
-            _DATA_CONTRACT_MARKER,
-            "The code that loads this file was generated against the exact "
-            "keys below. Produce rich, creative CONTENT, but the SHAPE is "
-            "fixed: use exactly these keys at every level — do not rename, "
-            "drop, or invent keys (add more entries freely).",
-        ]
-        if dc.get("structure"):
-            block.append(f"\nshape: {dc['structure']}")
-        if dc.get("example"):
-            block.append(
-                "\nMinimal exemplar (one entry per collection — mirror this "
-                f"key set):\n```\n{dc['example']}\n```"
-            )
-        g.description = desc + "\n\n" + "\n".join(block)
-        enriched += 1
-    if enriched and effects:
+        goal_changed = False
+
+        # Round-4 shape block.
+        if dc is not None and _DATA_CONTRACT_MARKER not in desc:
+            block = [
+                _DATA_CONTRACT_MARKER,
+                "The code that loads this file was generated against the exact "
+                "keys below. Produce rich, creative CONTENT, but the SHAPE is "
+                "fixed: use exactly these keys at every level — do not rename, "
+                "drop, or invent keys (add more entries freely).",
+            ]
+            if dc.get("structure"):
+                block.append(f"\nshape: {dc['structure']}")
+            if dc.get("example"):
+                block.append(
+                    "\nMinimal exemplar (one entry per collection — mirror this "
+                    f"key set):\n```\n{dc['example']}\n```"
+                )
+            desc = desc + "\n\n" + "\n".join(block)
+            goal_changed = True
+
+        # Round-5 entity-id block.
+        if reg is not None and _ENTITY_REGISTRY_MARKER not in desc:
+            slice_text = _registry_slice_text(reg)
+            if slice_text:
+                block = [
+                    _ENTITY_REGISTRY_MARKER,
+                    "This file's entities share one id namespace with the other "
+                    "data files, which are generated separately and bind to the "
+                    "SAME ids. Define EXACTLY the ids listed under `defines` as "
+                    "this file's top-level entities, and when you reference an "
+                    "entity that lives in another file, use ONLY the ids listed "
+                    "for that file — never invent a cross-file id.",
+                    "",
+                    slice_text,
+                ]
+                desc = desc + "\n\n" + "\n".join(block)
+                goal_changed = True
+
+        if goal_changed:
+            g.description = desc
+            changed += 1
+    if changed and effects:
         try:
             await effects.save_mission(mission)
         except Exception:  # noqa: BLE001 - enrichment must not break the flow
             logger.warning("data-goal enrichment save failed", exc_info=True)
-    return enriched
+    return changed
+
+
+async def action_store_data_registry(step_input: StepInput) -> StepOutput:
+    """Parse the entity-id registry turn into a CLEANED per-file id map.
+
+    Context required: inference_response
+    Context optional: mission
+    Publishes: data_registry
+
+    Restricts to declared DATA files and deterministically DROPS any
+    reference whose target isn't a declared data file or whose id the
+    target doesn't `define` — the registry must never tell a generator to
+    reference an id no file will define. A garbage/empty verdict publishes
+    an empty registry, degrading the run to round-4 (shape-only) behavior.
+    """
+    ctx = step_input.context
+    mission = ctx.get("mission")
+    declared = _declared_files(mission) if mission else []
+    data_files = {
+        _normalize_path(f)
+        for f in declared
+        if "." in f and languages.is_data(f.rsplit(".", 1)[-1])
+    }
+
+    parsed = parse_llm_json(str(ctx.get("inference_response", "") or ""))
+    entries = parsed.get("files") if isinstance(parsed, dict) else None
+    if not isinstance(entries, list):
+        return StepOutput(
+            result={"registry_files": 0},
+            observations="entity-registry: no usable verdict — shape-only (round-4)",
+            context_updates={"data_registry": []},
+        )
+
+    # Pass 1: file -> set(defines), restricted to declared data files.
+    defines_by_file: dict[str, set[str]] = {}
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        f = _normalize_path(str(e.get("file") or "").strip())
+        if f not in data_files:
+            continue
+        defines_by_file.setdefault(f, set()).update(
+            str(d).strip() for d in (e.get("defines") or []) if str(d).strip()
+        )
+
+    # Pass 2: keep only references that resolve to a sibling's defines.
+    cleaned: list[dict] = []
+    dropped = 0
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        f = _normalize_path(str(e.get("file") or "").strip())
+        if f not in defines_by_file:
+            continue
+        refs_out: dict[str, list[str]] = {}
+        raw_refs = e.get("references") or {}
+        if isinstance(raw_refs, dict):
+            for sib, ids in raw_refs.items():
+                sib_n = _normalize_path(str(sib).strip())
+                sib_defs = defines_by_file.get(sib_n)
+                if not sib_defs:
+                    dropped += sum(1 for _ in (ids or []))
+                    continue
+                keep = [
+                    str(i).strip() for i in (ids or []) if str(i).strip() in sib_defs
+                ]
+                dropped += len([i for i in (ids or []) if str(i).strip()]) - len(keep)
+                if keep:
+                    refs_out[sib_n] = keep
+        cleaned.append(
+            {
+                "file": f,
+                "defines": sorted(defines_by_file[f]),
+                "references": refs_out,
+            }
+        )
+
+    obs = f"entity-registry: {len(cleaned)} data file(s)" + (
+        f", {dropped} dangling ref(s) dropped" if dropped else ""
+    )
+    logger.info(obs)
+    return StepOutput(
+        result={"registry_files": len(cleaned)},
+        observations=obs,
+        context_updates={"data_registry": cleaned},
+    )
 
 
 def _project_digest(contract_set: dict, self_path: str) -> str:
@@ -587,6 +757,15 @@ def _worker_prompt(
             "the data files are generated to match this exemplar; a key not "
             "shown here will not exist at runtime:\n"
             f"{data}"
+        )
+    registry = _registry_digest((contract_set or {}).get("data_registry") or [])
+    if registry:
+        parts.append(
+            "## Entity-id registry — the SHARED ID NAMESPACE across the data "
+            "files. If your symbol looks an entity up by id across files, these "
+            "are the EXACT ids that will exist at runtime; index only these "
+            "(an id not listed here will not exist):\n"
+            f"{registry}"
         )
     parts.append(
         f"## Your assignment: implement `{name}` ({meta['kind']})\n"

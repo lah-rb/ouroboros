@@ -78,6 +78,7 @@ def test_actions_registered():
         "swarm_generate_symbols",
         "assemble_contract_files",
         "run_contract_doctests",
+        "store_data_registry",  # round 5
     ):
         assert a in names
 
@@ -86,6 +87,19 @@ def test_formatter_registered():
     from agent.renderers import RENDERER_REGISTRY
 
     assert "render_contract_digest" in RENDERER_REGISTRY
+    assert "render_data_registry_brief" in RENDERER_REGISTRY  # round 5
+
+
+def test_data_entity_registry_schema_loads_with_example():
+    # The json_document envelope render requires a non-empty x-example.
+    from pathlib import Path
+
+    from agent.schema_registry import SchemaRegistry
+
+    schema = SchemaRegistry.from_dir(Path(__file__).parent.parent / "schemas").get(
+        "data_entity_registry"
+    )
+    assert schema["x-example"]["files"]
 
 
 def test_controller_delta_is_exactly_the_batch_target():
@@ -154,3 +168,22 @@ def test_build_contracts_graph():
     # Boss-swappable turns expose config.model (default local).
     assert steps["author_contracts"]["turn"]["config"]["model"] == ""
     assert steps["review_contracts"]["turn"]["config"]["model"] == ""
+
+    # Round-5 entity-id registry: load_state gates ≥2-data-file → registry,
+    # else straight to author; the registry step degrades on no_answer.
+    ls_rules = steps["load_state"]["resolver"]["rules"]
+    assert ls_rules[0]["transition"] == "author_data_registry"
+    assert "data_shapes" in ls_rules[0]["condition"]
+    assert ls_rules[-1]["transition"] == "author_contracts"
+    adr = steps["author_data_registry"]
+    assert adr["turn"]["response"]["schema_id"] == "data_entity_registry"
+    assert adr["turn"]["transitions"]["default"] == "store_data_registry"
+    assert adr["turn"]["transitions"]["no_answer"] == "author_contracts"  # degrade
+    assert adr["turn"]["config"]["model"] == ""  # boss-swappable
+    assert steps["store_data_registry"]["action"] == "store_data_registry"
+    assert (
+        steps["store_data_registry"]["resolver"]["rules"][0]["transition"]
+        == "author_contracts"
+    )
+    assert "data_registry" in steps["store_data_registry"]["publishes"]
+    assert "data_registry" in steps["parse_contracts"]["context"]["optional"]

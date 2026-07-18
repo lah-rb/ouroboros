@@ -734,6 +734,76 @@ def render_batch_blueprint(params: dict, namespaces: dict) -> str:
     return "\n".join(lines)
 
 
+def render_data_registry_brief(params: dict, namespaces: dict) -> str:
+    """Render the input for the entity-id registry turn (round 5).
+
+    Input: mission (params.source) — needs both architecture.data_shapes
+    AND the goals (for each data file's content brief).
+    Output key: data_registry_brief
+
+    For every data file: its shape + exemplar (so ids fit the structure)
+    AND the file's independently-written content brief (so the author can
+    RECONCILE those briefs into one shared id namespace rather than let
+    each file invent its own — the round-4 residual). Data-file goals only.
+    """
+    import json
+
+    mission = params.get("source")
+    if not mission:
+        return ""
+
+    def _get(obj: Any, key: str, default: Any = "") -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    arch = _get(mission, "architecture", None)
+    data_shapes = list(_get(arch, "data_shapes", []) or []) if arch else []
+    if not data_shapes:
+        return ""
+
+    # file -> content brief, from the matching goal's description (strip the
+    # "Create <file> with content: " prefix and any appended marker blocks).
+    briefs: dict[str, str] = {}
+    for g in _get(mission, "goals", []) or []:
+        files = _get(g, "associated_files", []) or []
+        desc = str(_get(g, "description", "") or "")
+        for f in files:
+            brief = desc
+            marker = brief.find("\n\n## ")
+            if marker != -1:
+                brief = brief[:marker]
+            prefix = f"Create {f} with content:"
+            if brief.startswith(prefix):
+                brief = brief[len(prefix) :]
+            briefs[f] = brief.strip()
+
+    lines = ["---DATA FILES TO GIVE A SHARED ID NAMESPACE---"]
+    for ds in data_shapes:
+        f = _get(ds, "file")
+        lines.append("")
+        lines.append(f"File: {f}")
+        consumer = _get(ds, "consumed_by")
+        if consumer:
+            lines.append(f"Consumer: {consumer}")
+        structure = _get(ds, "structure")
+        if structure:
+            lines.append(f"Structure: {structure}")
+        example = (_get(ds, "example") or "").strip()
+        if example:
+            try:
+                example = json.dumps(json.loads(example), indent=2)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+            lines.append("Exemplar (shape only — ids here are throwaway):")
+            lines.append(example)
+        brief = briefs.get(f, "")
+        if brief:
+            lines.append(f"Content brief: {brief}")
+    lines.append("---END DATA FILES---")
+    return "\n".join(lines)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Registry
 # ══════════════════════════════════════════════════════════════════════
@@ -772,5 +842,6 @@ RENDERER_REGISTRY: dict[str, Any] = {
     "render_interaction_context": render_interaction_context,
     "render_project_setup_context": render_project_setup_context,
     "render_batch_blueprint": render_batch_blueprint,
+    "render_data_registry_brief": render_data_registry_brief,
     "render_contract_digest": render_contract_digest,
 }

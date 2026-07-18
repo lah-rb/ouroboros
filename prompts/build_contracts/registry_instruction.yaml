@@ -1,0 +1,45 @@
+# Prompt template: build_contracts/registry_instruction
+#
+# Instruction section for the entity-id registry turn. JSON output
+# (schema data_entity_registry): one object per data file with the ids
+# it `defines` and, per sibling file, the ids it `references` there.
+# The worked example is a DIFFERENT domain (a music library) — the
+# sanitation doctrine: examples never share the benchmark domain.
+
+id: build_contracts/registry_instruction
+content: |
+  Produce the shared entity-id registry as a JSON object with a "files"
+  array — one entry per DATA file in the blueprint above. For each file:
+
+  - `defines`: the exact canonical ids this file declares as its
+    top-level entities. Coin short, descriptive `snake_case` ids. Honor
+    any quantities the objective states (e.g. "at least eight rooms" →
+    at least eight ids in that file's `defines`).
+  - `references`: a map of sibling-file path → the ids this file names
+    that live in that sibling. EVERY id you put here MUST appear in that
+    sibling's own `defines`. Do not reference an id no file defines, and
+    do not reference a file that is not one of the data files.
+
+  One namespace, no collisions: an id is defined in exactly ONE file;
+  every reference resolves to a definition. Files with no cross-file
+  references still list their `defines` (use `{}` or omit `references`).
+
+  Return ONLY a JSON object inside a fenced code block — no prose.
+
+  ✅ CORRECT (playlists reference tracks that tracks.yaml defines):
+  ```json
+  {"files": [
+    {"file": "playlists.yaml", "defines": ["morning_focus"], "references": {"tracks.yaml": ["sunrise_theme"]}},
+    {"file": "tracks.yaml", "defines": ["sunrise_theme"], "references": {}}
+  ]}
+  ```
+
+  ❌ WRONG — references an id no file defines (dangling → runtime crash):
+  ```json
+  {"files": [
+    {"file": "playlists.yaml", "defines": ["morning_focus"], "references": {"tracks.yaml": ["rainy_day"]}},
+    {"file": "tracks.yaml", "defines": ["sunrise_theme"], "references": {}}
+  ]}
+  ```
+
+  Return ONLY the fenced JSON object.

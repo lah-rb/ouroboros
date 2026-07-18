@@ -1,0 +1,23 @@
+# Prompt template: build_contracts/registry_task
+#
+# Problem section for the entity-id registry turn. The objective plus
+# the framing that this response coins ONE shared id namespace across
+# the project's data files (which are generated independently and only
+# bind to this registry). The per-file shapes, exemplars, and content
+# briefs follow as a context_files section from render_data_registry_brief.
+
+id: build_contracts/registry_task
+content: |
+  ## Task
+  {context.mission.objective}
+
+  This program loads several runtime DATA files that cross-reference
+  each other BY ID — e.g. a container file names the ids of the entities
+  it holds, and those entities are defined in separate files. Each data
+  file is generated LATER, in isolation, seeing only its own shape and
+  the registry you produce now. Your job is to coin ONE canonical id
+  namespace: for every data file, decide the exact ids it DEFINES, and
+  for every id it must REFERENCE in a sibling file, ensure that sibling
+  actually defines it. Reconcile the per-file content briefs below into a
+  single consistent set — where two briefs imply the same entity, pick
+  ONE id both will use.

@@ -16,11 +16,13 @@ import pytest
 
 from agent.actions.contract_swarm_actions import (
     _DATA_CONTRACT_MARKER,
+    _ENTITY_REGISTRY_MARKER,
     _data_contracts,
     _data_digest,
     _enrich_data_goals,
-    _pyi_view,
     _project_digest,
+    _pyi_view,
+    _registry_digest,
     _validate_worker_body,
     _worker_prompt,
     action_apply_contract_review,
@@ -28,6 +30,7 @@ from agent.actions.contract_swarm_actions import (
     action_parse_contracts,
     action_run_contract_doctests,
     action_run_contract_typecheck,
+    action_store_data_registry,
     action_swarm_generate_symbols,
 )
 from agent.models import FlowMeta, StepInput
@@ -861,3 +864,172 @@ def test_worker_prompt_broadcasts_data_vocabulary(tmp_path):
     assert "SHARED DATA VOCABULARY" not in _worker_prompt(
         cs, "loader.py", "load", "PERSONA", "INSTRUCTION"
     )
+
+
+# ── Round-5: shared entity-id registry (data↔data cohesion) ──────────
+
+
+def _mission_two_data(tmp_path):
+    m = _mission(tmp_path)
+    m.architecture.data_shapes = [
+        DataShapeContract(file="rooms.yaml", consumed_by="loader.py"),
+        DataShapeContract(file="items.yaml", consumed_by="loader.py"),
+    ]
+    m.goals = [
+        GoalRecord(
+            description="Create rooms.yaml with content: a world",
+            type="structural",
+            associated_files=["rooms.yaml"],
+        ),
+        GoalRecord(
+            description="Create items.yaml with content: some items",
+            type="structural",
+            associated_files=["items.yaml"],
+        ),
+    ]
+    return m
+
+
+# rooms references torch (defined in items) AND phantom (defined nowhere).
+_REGISTRY_RESP = (
+    '```json\n{"files": ['
+    '{"file": "rooms.yaml", "defines": ["entrance", "hall"], '
+    '"references": {"items.yaml": ["torch", "phantom"]}}, '
+    '{"file": "items.yaml", "defines": ["torch"], "references": {}}]}\n```'
+)
+
+
+@pytest.mark.asyncio
+async def test_store_data_registry_cleans_and_drops_dangling(tmp_path):
+    out = await action_store_data_registry(
+        _si(
+            {
+                "inference_response": _REGISTRY_RESP,
+                "mission": _mission_two_data(tmp_path),
+            }
+        )
+    )
+    reg = {e["file"]: e for e in out.context_updates["data_registry"]}
+    assert set(reg) == {"rooms.yaml", "items.yaml"}
+    # 'phantom' is not in items.yaml's defines → dropped; 'torch' kept.
+    assert reg["rooms.yaml"]["references"]["items.yaml"] == ["torch"]
+    assert reg["rooms.yaml"]["defines"] == ["entrance", "hall"]
+    assert "dropped" in out.observations
+
+
+@pytest.mark.asyncio
+async def test_store_data_registry_degrades_on_garbage(tmp_path):
+    for resp in ("junk", '```json\n{"nope": 1}\n```', ""):
+        out = await action_store_data_registry(
+            _si({"inference_response": resp, "mission": _mission_two_data(tmp_path)})
+        )
+        assert out.context_updates["data_registry"] == []
+
+
+@pytest.mark.asyncio
+async def test_store_data_registry_drops_undeclared_file(tmp_path):
+    # A registry entry for a file that isn't a declared data file is ignored.
+    resp = (
+        '```json\n{"files": ['
+        '{"file": "rooms.yaml", "defines": ["entrance"], "references": {}}, '
+        '{"file": "not_a_file.yaml", "defines": ["x"], "references": {}}]}\n```'
+    )
+    out = await action_store_data_registry(
+        _si({"inference_response": resp, "mission": _mission_two_data(tmp_path)})
+    )
+    files = {e["file"] for e in out.context_updates["data_registry"]}
+    assert files == {"rooms.yaml"}
+
+
+@pytest.mark.asyncio
+async def test_enrich_data_goals_appends_id_block_scoped_idempotent(tmp_path):
+    m = _mission_two_data(tmp_path)
+    registry = [
+        {
+            "file": "rooms.yaml",
+            "defines": ["entrance", "hall"],
+            "references": {"items.yaml": ["torch"]},
+        },
+        {"file": "items.yaml", "defines": ["torch"], "references": {}},
+    ]
+    eff = _SaveEffects()
+    n = await _enrich_data_goals(eff, m, [], registry)
+    assert n == 2 and eff.saves == 1
+    rooms = next(g for g in m.goals if g.associated_files == ["rooms.yaml"])
+    assert _ENTITY_REGISTRY_MARKER in rooms.description
+    assert "entrance" in rooms.description and "torch" in rooms.description
+    # Idempotent: second pass appends nothing, no re-save.
+    n2 = await _enrich_data_goals(eff, m, [], registry)
+    assert n2 == 0 and eff.saves == 1
+    assert rooms.description.count(_ENTITY_REGISTRY_MARKER) == 1
+
+
+@pytest.mark.asyncio
+async def test_enrich_data_goals_registry_none_is_round4(tmp_path):
+    # No registry → only the round-4 shape block; no id block (degrade).
+    m = _mission_with_data(tmp_path)
+    await _enrich_data_goals(_SaveEffects(), m, _data_contracts(m), None)
+    world = next(g for g in m.goals if g.associated_files == ["world.yaml"])
+    assert _DATA_CONTRACT_MARKER in world.description
+    assert _ENTITY_REGISTRY_MARKER not in world.description
+
+
+def test_registry_digest_and_worker_broadcast(tmp_path):
+    registry = [
+        {
+            "file": "rooms.yaml",
+            "defines": ["entrance", "hall"],
+            "references": {"items.yaml": ["torch"]},
+        },
+        {"file": "items.yaml", "defines": ["torch"], "references": {}},
+    ]
+    dig = _registry_digest(registry)
+    assert "### rooms.yaml" in dig and "defines" in dig
+    assert "may reference in items.yaml: torch" in dig
+    assert _registry_digest([]) == ""
+    cs = {
+        "files": {
+            "loader.py": {
+                "stub_text": "def load(): ...",
+                "skeleton": "def load(): ...",
+                "symbols": {"load": {"stub": "def load(): ...", "kind": "function"}},
+                "order": ["load"],
+                "imports": [],
+            }
+        },
+        "data_contracts": [],
+        "data_registry": registry,
+    }
+    wp = _worker_prompt(cs, "loader.py", "load", "P", "I")
+    assert "SHARED ID NAMESPACE" in wp and "torch" in wp
+    cs["data_registry"] = []
+    assert "SHARED ID NAMESPACE" not in _worker_prompt(
+        cs, "loader.py", "load", "P", "I"
+    )
+
+
+@pytest.mark.asyncio
+async def test_parse_contracts_threads_registry(tmp_path):
+    m = _mission_two_data(tmp_path)
+    registry = [
+        {
+            "file": "rooms.yaml",
+            "defines": ["entrance"],
+            "references": {"items.yaml": ["torch"]},
+        },
+        {"file": "items.yaml", "defines": ["torch"], "references": {}},
+    ]
+    out = await action_parse_contracts(
+        _si(
+            {
+                "inference_response": _MODELS_STUB + "\n" + _ENGINE_STUB,
+                "mission": m,
+                "data_registry": registry,
+            },
+            effects=_SaveEffects(),
+        )
+    )
+    cs = out.context_updates["contract_set"]
+    assert cs["data_registry"] == registry
+    rooms = next(g for g in m.goals if g.associated_files == ["rooms.yaml"])
+    assert _ENTITY_REGISTRY_MARKER in rooms.description

@@ -12294,6 +12294,10 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "context.mission != None and context.mission.architecture != None and len(context.mission.architecture.data_shapes or []) >= 2",
+              "transition": "author_data_registry"
+            },
+            {
               "condition": "true",
               "transition": "author_contracts"
             }
@@ -12302,6 +12306,106 @@
         "publishes": [
           "mission",
           "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "author_data_registry": {
+        "action": "inference",
+        "description": "Coin one canonical entity-id namespace across the data files",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "json_document",
+          "response": {
+            "schema_id": "data_entity_registry"
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/registry_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "build_contracts/registry_task",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.data_registry_brief"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_contracts/registry_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "store_data_registry",
+            "no_answer": "author_contracts"
+          },
+          "config": {
+            "temperature": "t*0.2",
+            "max_tokens": 4096,
+            "model": ""
+          },
+          "retries": 2
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_data_registry_brief",
+            "output_key": "data_registry_brief",
+            "params": {
+              "source": {
+                "$ref": "context.mission"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "store_data_registry": {
+        "action": "store_data_registry",
+        "description": "Parse + clean the registry (drop dangling refs) into data_registry",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "author_contracts"
+            }
+          ]
+        },
+        "publishes": [
+          "data_registry"
         ],
         "effects": [],
         "terminal": false
@@ -12399,7 +12503,8 @@
           "optional": [
             "contract_revision",
             "swarm_token_base",
-            "inference_tokens_generated"
+            "inference_tokens_generated",
+            "data_registry"
           ]
         },
         "params": {},
