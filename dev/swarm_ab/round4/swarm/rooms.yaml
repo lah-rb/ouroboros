@@ -1,0 +1,116 @@
+rooms:
+  - id: village_square
+    name: "Misty Village Square"
+    description: >-
+      A quiet square shrouded in a perpetual mist. Lanterns flicker weakly,
+      casting ghostly shadows on cobblestones. Paths lead in all cardinal
+      directions, inviting travelers deeper into the forest.
+    connections:
+      north: "marketplace"
+      east: "library"
+      south: "cave_entrance"
+      west: "healing_grove"
+    items: []
+    npcs: []
+    monsters: []
+
+  - id: marketplace
+    name: "Bustling Marketplace"
+    description: >-
+      Stalls line the square, their awnings bright against the gloom.
+      Merchants shout offers of fresh produce, trinkets, and rare herbs.
+      The air smells of baked bread and pine resin.
+    connections:
+      south: "village_square"
+    items:
+      - "apple"
+      - "gold_coin"
+    npcs:
+      - "merchant"
+    monsters: []
+
+  - id: library
+    name: "Ancient Library"
+    description: >-
+      Shelves of weathered tomes tower to the ceiling, their spines etched
+      with forgotten runes. A faint magical hum resonates through the dust.
+      A narrow passage leads east toward the armory.
+    connections:
+      west: "village_square"
+      east: "armory"
+      south: "village_square"
+    items:
+      - "ancient_tome"
+    npcs:
+      - "librarian"
+    monsters: []
+
+  - id: armory
+    name: "Dimly Lit Armory"
+    description: >-
+      Rows of rusted armor and gleaming weapons line the walls. The air is
+      thick with iron and oil. A concealed doorway hides behind a battered
+      bookshelf.
+    connections:
+      west: "library"
+      north: "secret_chamber"
+    items:
+      - "steel_sword"
+    npcs:
+      - "armorer"
+    monsters: []
+
+  - id: cave_entrance
+    name: "Shadowy Cave Entrance"
+    description: >-
+      The mouth of a dark cavern yawns before you, its depths echoing with
+      distant drips. Stalactites glisten in the faint light that manages to
+      pierce the gloom.
+    connections:
+      north: "village_square"
+      south: "deep_cave"
+    items: []
+    npcs: []
+    monsters:
+      - "cave_spider"
+
+  - id: deep_cave
+    name: "Cavernous Deep Cave"
+    description: >-
+      The cavern opens into a massive chamber where the forest's ancient
+      guardian dwells. Stalagmites rise like teeth, and the ground trembles
+      with each of the beast's breaths.
+    connections:
+      north: "cave_entrance"
+    items:
+      - "boss_loot"
+    npcs: []
+    monsters:
+      - "forest_boss"
+
+  - id: healing_grove
+    name: "Tranquil Healing Grove"
+    description: >-
+      Sunlight filters through a canopy of emerald leaves, illuminating a
+      serene clearing. A gentle brook babbles nearby, and the scent of
+      medicinal herbs fills the air.
+    connections:
+      east: "village_square"
+    items:
+      - "healing_herb"
+    npcs:
+      - "herbalist"
+    monsters: []
+
+  - id: secret_chamber
+    name: "Hidden Secret Chamber"
+    description: >-
+      Tucked behind a false shelf, this cramped chamber holds a single pedestal
+      bearing an ancient relic. The walls are etched with warnings of the
+      forest's true power.
+    connections:
+      south: "armory"
+    items:
+      - "weakness_relic"
+    npcs: []
+    monsters: []

@@ -1,0 +1,22 @@
+npcs:
+  - id: librarian
+    name: "Eldric the Wise"
+    description: "An elderly scholar with silver hair, perched among towering shelves in the Ancient Library. He knows the lore of forgotten relics."
+    dialogue:
+      - "Greetings, traveler. The whispers of this library speak of many secrets."
+      - "If you are curious about legendary relics, I can share a tale."
+      - "Choice: Ask about the Cryptic Amulet | Ignore and leave"
+      - "The Cryptic Amulet is said to nullify the final guardian's shield, but its power lies hidden in a Secret Chamber behind a bookshelf."
+      - "Seek the hidden passage; the old map may guide you to that chamber."
+      - "Beware the forest boss: its second phase can be broken by a shining trinket."
+
+  - id: herbalist
+    name: "Mira the Healer"
+    description: "A gentle caretaker tending to the Healing Grove, her hands steady as she prepares restorative brews."
+    dialogue:
+      - "Welcome to the Healing Grove. Rest here and let the herbs soothe your wounds."
+      - "Do you wish to learn how to use the Flask of Revitalizing Elixir?"
+      - "Choice: Learn about the elixir | Decline"
+      - "Take a sip, and your vitality will be restored. It can turn the tide in battle."
+      - "The final guardian fears a certain shining trinket; wield it wisely against its weakness."
+      - "May your path be safe, and may the light guide you."

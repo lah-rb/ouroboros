@@ -1,0 +1,52 @@
+items:
+  - id: sword_of_dawn
+    name: "Sword of Dawn"
+    description: >-
+      A blade forged from meteoric steel that catches the first light of day.
+      Its edge hums with a faint golden resonance, promising swift strikes
+      against the darkness.
+    type: "weapon"
+    attack_bonus: 3
+    defense_bonus: 0
+    heal_amount: 0
+
+  - id: iron_shield
+    name: "Iron Shield"
+    description: >-
+      A sturdy shield of dark iron, banded with rivets and etched with ancient
+      runes of protection. It feels heavy but unyielding, bolstering the bearer’s resolve.
+    type: "armor"
+    attack_bonus: 0
+    defense_bonus: 2
+    heal_amount: 0
+
+  - id: revitalizing_elixir
+    name: "Flask of Revitalizing Elixir"
+    description: >-
+      A crystal vial filled with a swirling ruby liquid that glows softly.
+      One sip restores vitality, mending wounds and renewing stamina.
+    type: "healing"
+    attack_bonus: 0
+    defense_bonus: 0
+    heal_amount: 20
+
+  - id: cryptic_amulet
+    name: "Cryptic Amulet"
+    description: >-
+      An enigmatic amulet bearing a shifting sigil. Legends say it can
+      nullify the final boss’s shield during the second phase, exposing its true weakness.
+    type: "special"
+    attack_bonus: 0
+    defense_bonus: 0
+    heal_amount: 0
+
+  - id: old_map
+    name: "Old Map"
+    description: >-
+      A weather‑worn parchment map, its ink faded but still legible.
+      When examined, it reveals the hidden location of the Secret Chamber,
+      guiding the seeker through unseen passages.
+    type: "utility"
+    attack_bonus: 0
+    defense_bonus: 0
+    heal_amount: 0

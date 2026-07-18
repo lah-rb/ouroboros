@@ -1,0 +1,38 @@
+monsters:
+  - id: goblin_scout
+    name: "Goblin Scout"
+    description: >-
+      A wiry green creature darting through the Village Square, eyes gleaming with mischief.
+    health: 15
+    attack: 3
+    behavior: "quick_attacks"
+    location: "village_square"
+
+  - id: cave_bat
+    name: "Cave Bat"
+    description: >-
+      A pale bat flutters erratically in the dim light of the Cave Entrance, screeching ominously.
+    health: 30
+    attack: 5
+    behavior: "erratic"
+    location: "cave_entrance"
+
+  - id: stone_golem
+    name: "Stone Golem"
+    description: >-
+      A massive golem of ancient stone stands guard at the Deep Cave entrance, its movements slow but crushing.
+    health: 120
+    attack: 20
+    behavior: "slow_strong"
+    location: "deep_cave"
+
+  - id: forest_boss
+    name: "Shadow Dragon"
+    description: >-
+      A towering drake of darkness and flame, the final guardian of the forest. Its scales shimmer with an eerie shadow.
+    health_phase1: 300
+    health_phase2: 200
+    attack_phase1: 12
+    attack_phase2: 15
+    weakness_item_id: "cryptic_amulet"
+    location: "deep_cave"

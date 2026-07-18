@@ -1,5 +1,91 @@
 # Contract-swarm A/B — iteration reference
 
+## round4 (2026-07-17, code 701de84) — FIRST BOOTING SWARM; frontier → data↔data
+
+Levers (both in the round-4 commit): (1) **data-exemplar broadcast** —
+`DataShapeContract.example` (a literal minimal instance the architecture
+already carries) is broadcast to EVERY worker (`_worker_prompt`: "index
+ONLY these keys") AND appended to each data file's own generation
+directive (`_enrich_data_goals`, idempotent+persisted), so readers and
+the file bind to one exemplar; (2) **flow fix** — the create-loophole
+backfill now skips infrastructure files (`is_infrastructure_file`,
+shared with the drift detector), so an unplanned `__init__.py` can't
+strand the sweep.
+
+Result — **the swarm produced a BOOTING, PLAYABLE program for the first
+time** (rounds 0–3 never launched):
+- Structural **11/11 goals complete**, reached the environment boundary
+  cleanly (round 3 died at 9/10) → first clean judge since round 2.
+- Cross-module type check **6/6 clean**; the assembled game launches
+  (`python main.py`), and `help`/`look`/`go <dir>`/`status`/`take`/
+  `talk to <defined-npc>` all work — real movement across a data-driven
+  world, no loader `KeyError`. The **code↔data SHAPE drift is CLOSED**:
+  the exemplar bound `world_loader`'s key access to the yaml shape.
+- This round's design chose a FLAT layout with FOUR data files
+  (rooms/items/npcs/monsters.yaml), so the `__init__.py` case didn't
+  recur — but the fix is in and the sweep reached the boundary.
+
+Blind judge (1 judge, both builds RUN): **batch (B) preferred — 4th
+straight batch win**, but the closest round yet and both builds have a
+blocking defect:
+
+| axis | swarm r4 (A) | batch baseline (B) |
+|---|---|---|
+| runs | 3 | 2 |
+| coverage | 3 | 5 |
+| cohesion | 1 | 4 |
+| quality | 3 | 4 |
+| play | 1 | 4 |
+
+- Swarm launches out-of-the-box but crashes on normal play; batch is a
+  complete coherent game (save/load round-trips, narrated combat, boss
+  phases) that **doesn't launch as delivered** (relative-import +
+  hardcoded `src/world.yaml` + broken entry point — a near-trivial fix),
+  after which it plays flawlessly. Its only gameplay flaw: unwinnable
+  boss (silver_key can't be equipped) — same class as round 0.
+
+**The frontier advanced exactly one joint — now data↔data referential
+integrity** (verified against the canonical output, not just the judge):
+the 4 data files were each generated INDEPENDENTLY by serial fallback,
+each with its own exemplar but NO shared id registry, so each invented
+its own id namespace and they diverged — the telephone game at the DATA
+layer. `rooms.yaml` references 7 item ids (`apple`, `steel_sword`, …) of
+which **7/7 are dangling** (items.yaml uses a disjoint set:
+`sword_of_dawn`, …); 2/4 npc refs dangle (`merchant`/`armorer` absent
+from npcs.yaml). So placed items are inert and `talk to merchant` hard-
+crashes with `KeyError`. The exemplar broadcast fixed the SHAPE (which
+keys exist) but not the cross-file VOCABULARY (which entity ids exist) —
+the same class round 3 closed for code, one layer down.
+
+Two smaller residuals: (a) the serial-fallback `engine.py` (a MISSING
+file, not a swarm-worker artifact) has a broken save/load — `json` never
+imported + the loaded dict is never rehydrated to a player object; the
+serial-fallback file is the weak link AGAIN (round 2 it was engine arity,
+round 4 it's engine save/load); (b) a **residual splice sentinel** leaked
+into shipped code as a comment (`# ⟦OUROBOROS-SYMBOL load_world⟧ …`) —
+harmless (a `#` line) but a real assembly-hygiene bug: a worker echoed
+the frame guidance and `splice_frame` kept it.
+
+Cost: swarm **46,130 gen tokens** (4 data files + revisions, up from
+round-3's ~30k) vs batch's 7.8k ≈ **6×**. Batch still wins on cost,
+cohesion, and playability for THIS problem class (small, tightly-coupled)
+— but the swarm now BOOTS and the coordination mechanism is visibly
+converging joint-by-joint.
+
+**Round-5 direction:** apply the round-3 broadcast principle to the DATA
+layer — a **shared entity-id registry** as one broadcast artifact every
+data-file generator binds to (the canonical room/item/npc/monster ids,
+so cross-file references resolve), OR generate the coupled data files
+together (one author) instead of independently. Secondary: route
+serial-fallback files through the same contract/gate rigor as swarm
+workers (the fallback file has been the weak link in 2 of 3 booting-
+blocked rounds), and drop the leaked splice sentinel. The tipping-point
+question — at what upfront-design rigor does cohesion hold, and is 6×
+the cost worth it, and where — stays open, but the answer is sharpening:
+the swarm's niche is loosely-coupled work where the batch can't fit one
+context; on the tightly-coupled game the batch still wins, yet each round
+the swarm closes another coordination joint.
+
 ## round3 (2026-07-17, code 0f94885) — broadcast MOVED THE NEEDLE
 
 Lever (isolated): `_project_digest` broadcasts every module's full-shape
@@ -67,6 +153,7 @@ Per-round history — each round a DIFFERENT joint, frontier advancing:
 | 1 | .pyi digest, worker validation, import-completeness, author dispatch/attr rules | 1 / 1 / 1 / 2 / 1 | data-shape drift (load_world dict vs .id objects) + broad seam mismatch |
 | 2 | + deterministic cross-module AST gate + dict-shape rule | 1 / 1 / 1 / 3 / 1 | run_engine arity — worker-FAILED engine.py went to off-contract serial fallback, AFTER the gate ran (coverage hole) |
 | 3 | + full shared-interface BROADCAST to every worker | (no judge — flow bug) | code↔DATA drift (loader wants max_health, world.yaml lacks it); flow bug on src/__init__.py sweep loop |
+| 4 | + data-exemplar broadcast (readers+file bind to example) + infra-backfill flow fix | 3 / 3 / 1 / 3 / 1 (batch 2 / 5 / 4 / 4 / 4) — **first BOOTING swarm** | data↔DATA referential integrity (4 independently-generated data files, disjoint id namespaces → dangling room→item/npc refs); serial-fallback engine.py save/load bug |
 
 Batch baseline stayed ~2–3 / 3 / 4 / 4 / 3 throughout (a coherent,
 mostly-playable game with real bugs — unwinnable boss, atomic combat).
