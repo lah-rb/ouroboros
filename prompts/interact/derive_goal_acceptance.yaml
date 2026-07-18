@@ -1,11 +1,13 @@
 # Prompt template: interact/derive_goal_acceptance
 #
 # Per-goal grounded acceptance checks (ops definition-of-done port). Derived
-# ONCE per functional/quality goal, right after the interact session has
-# explored the live program, so the checks are grounded in observed behavior
-# rather than the goal text alone. They are a TIGHTENER on the LLM evaluator's
-# goal_met verdict — a required failure vetoes a credulous pass; passing
-# checks never certify the goal on their own.
+# ONCE per functional/quality goal, right after the goal's first genuine PASS,
+# grounded in that passing session's transcript. Each candidate is executed
+# immediately against the just-passed state and DROPPED unless it already
+# exits 0, so a malformed or mis-grounded check can never be armed. The stored
+# check is a REGRESSION GUARD re-run on every later verification: a required
+# failure vetoes a credulous goal_met; passing checks never certify the goal
+# on their own.
 #
 # Pre-computed: session_tail.  Inputs: flow_directive (the goal directive).
 
@@ -45,7 +47,7 @@ sections:
 
       These checks are a SCREEN layered under a separate behavioral evaluator
       that judges the session itself — you do NOT have to prove the behavior
-      correct, only pin the durable artifacts/state the goal requires. Five
+      correct, only pin the durable artifacts/state the goal requires. Seven
       rules keep the screen safe (a failing check VETOES an otherwise-passing
       evaluation, so a wrong check is the only way to harm a correct result):
 
@@ -102,6 +104,30 @@ sections:
          ❌ same call rigged with check=False — skips the validation the bug
             lives in, so it passes whether or not the fix works:
             {"command": "python -c \"... homomorphism(D,D,D.generators,D.generators,check=False)\"", "description": "constructs"}
+      6. EMIT ONLY SYNTACTICALLY-VALID, SELF-CONTAINED COMMANDS. Every check
+         runs as `/bin/sh -c '<command>'`; a command that ERRORS — an
+         unbalanced paren or quote in a `python -c`, a missing bracket, an
+         uninstalled binary, an unset variable — exits non-zero and is scored
+         EXACTLY like a failed assertion. A malformed check therefore vetoes a
+         correct result, so a broken check is strictly worse than no check.
+         Before emitting, mentally execute it: every paren/quote/bracket
+         balanced, every referenced file and binary present in the working
+         directory, no `<...>` placeholder left in. If you are not certain it
+         parses and runs cleanly, drop it — {"checks": []} beats a check that
+         cannot execute.
+         ✅ balanced, self-contained:
+            {"command": "python -c \"import json,sys; d=json.load(open('save.json')); sys.exit(0 if 'room' in d else 1)\"", "description": "the save file records the player's room"}
+         ❌ unbalanced paren — SyntaxErrors, so it fails forever:
+            {"command": "python -c \"import sys; sys.exit(0 if open('save.json').read() else 1\"", "description": "save exists"}
+      7. GROUND EVERY OUTPUT ASSERTION IN THE SESSION BLOCK ABOVE, VERBATIM.
+         When a check greps for or matches program output, copy the string
+         EXACTLY as it appears in ---WHAT THE SESSION HAS SHOWN--- — same
+         words, case, and punctuation. NEVER guess or paraphrase what the
+         program "should" print: a `grep -qF 'You take the Book'` for wording
+         the program never emitted fails forever and vetoes a correct result.
+         If the exact text is not visible in the session block, do not assert
+         on it — use a structural predicate (a file, an exit code) or drop the
+         check.
 
       Most purely-behavioral goals (interactive flows, conversational
       output) have NO robust shell-checkable end-state — for those return

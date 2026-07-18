@@ -1407,12 +1407,17 @@ def _derive_failure_headline(terminal_output: str, found_errors: list[str]) -> s
 
 
 async def action_gate_goal_acceptance(step_input: StepInput) -> StepOutput:
-    """Gate the per-goal acceptance-check derivation. Fires once per eligible
-    goal (functional/quality, not yet grounded); always publishes the goal's
-    stored checks so the run step enforces them on every pass.
+    """LOAD the goal's stored acceptance checks (no pre-pass derivation).
 
-    Inputs: goal_id.  Result: needs_derive.
-    Publishes: mission, goal_acceptance_checks.
+    Runs before the evaluator on every verification pass: publishes the
+    stored checks so run_acceptance_checks enforces them as a regression
+    guard, and reports whether the goal still needs its check DERIVED
+    (functional/quality AND not yet grounded). Derivation itself happens
+    only on the SUCCESS branch, after a genuine pass (see arm_acceptance /
+    store_goal_acceptance) — this action never triggers it.
+
+    Inputs: goal_id.  Result: has_checks, needs_derive.
+    Publishes: mission, goal_acceptance_checks, acceptance_needs_derive.
     """
     effects = step_input.effects
     goal_id = str(step_input.inputs.get("goal_id", "") or "")
@@ -1425,34 +1430,51 @@ async def action_gate_goal_acceptance(step_input: StepInput) -> StepOutput:
     )
     if goal is None or getattr(goal, "type", "") not in ("functional", "quality"):
         return StepOutput(
-            result={"needs_derive": False},
+            result={"has_checks": False, "needs_derive": False},
             observations="goal-acceptance: no eligible goal — evaluator judges alone",
-            context_updates={"goal_acceptance_checks": []},
+            context_updates={
+                "goal_acceptance_checks": [],
+                "acceptance_needs_derive": False,
+            },
         )
     checks = list(getattr(goal, "acceptance_checks", None) or [])
     needs = not bool(getattr(goal, "acceptance_grounded", False))
     return StepOutput(
-        result={"needs_derive": needs},
+        result={"has_checks": bool(checks), "needs_derive": needs},
         observations=(
-            "goal-acceptance: deriving grounded checks"
-            if needs
-            else f"goal-acceptance: {len(checks)} stored check(s)"
+            f"goal-acceptance: {len(checks)} stored check(s)"
+            + (" — will derive after a pass" if needs else "")
         ),
-        context_updates={"mission": mission, "goal_acceptance_checks": checks},
+        context_updates={
+            "mission": mission,
+            "goal_acceptance_checks": checks,
+            "acceptance_needs_derive": needs,
+        },
     )
 
 
 async def action_store_goal_acceptance(step_input: StepInput) -> StepOutput:
-    """Parse the derived acceptance checks and merge them onto the goal
-    (TIGHTEN-ONLY union by command). One-shot: acceptance_grounded is set even
-    on an empty parse — unlike ops' mandatory task definition-of-done, the
-    per-goal checks are an optional tightener, so we never re-pay the
-    derivation inference on a goal the model couldn't pin with robust checks.
+    """VALIDATE the derived acceptance checks against the just-passed state,
+    then merge the survivors onto the goal (TIGHTEN-ONLY union by command).
+
+    Runs only on the SUCCESS branch (the goal just passed goal_met AND
+    acceptance_ok), so a correct check MUST exit 0 against the current
+    working dir right now. Each candidate is probed via the SAME runner the
+    regression pass uses (format_completion_criteria + run_validation_checks,
+    so identical /bin/sh -c wrapping); any that does not pass NOW — a
+    SyntaxError command, a missing binary, a mis-grounded grep — is dropped
+    and logged. This is why no error-vs-fail classification is needed: a
+    broken/mis-grounded check simply fails the known-good state and never
+    gets armed. One-shot: acceptance_grounded is set even when all
+    candidates are dropped (the evaluator judges alone thereafter — never
+    vacuous), so we never re-pay the derivation inference.
 
     Context: mission, inference_response.  Inputs: goal_id.
     Publishes: mission, goal_acceptance_checks.
     """
     from agent.actions.operations_actions import _parse_completion_criteria
+    from agent.actions.refinement_actions import action_run_validation_checks
+    from agent.formatters import format_completion_criteria
 
     effects = step_input.effects
     mission = step_input.context.get("mission")
@@ -1466,13 +1488,43 @@ async def action_store_goal_acceptance(step_input: StepInput) -> StepOutput:
             observations="goal-acceptance: no goal",
             context_updates={"goal_acceptance_checks": []},
         )
-    new = _parse_completion_criteria(
+    candidates = _parse_completion_criteria(
         str(step_input.context.get("inference_response", ""))
     )
+
+    # Validate-on-create: probe each candidate against the known-good state.
+    survivors = list(candidates)
+    dropped = 0
+    if candidates and effects:
+        probe_strategy = format_completion_criteria(
+            {"source": [{**c, "required": False} for c in candidates]}, {}
+        )
+        probe = await action_run_validation_checks(
+            StepInput(
+                effects=effects,
+                context={"validation_strategy": probe_strategy},
+                params={"max_checks": max(len(candidates), 1)},
+            )
+        )
+        results = probe.context_updates.get("validation_results") or []
+        survivors = []
+        for i, cand in enumerate(candidates):
+            row = results[i] if i < len(results) else None
+            if row is not None and row.get("passed"):
+                survivors.append(cand)
+            else:
+                dropped += 1
+                logger.warning(
+                    "goal-acceptance: dropped non-passing check (rc=%s): %s | %s",
+                    (row or {}).get("return_code"),
+                    str(cand.get("command", ""))[:120],
+                    str((row or {}).get("stderr", ""))[:200],
+                )
+
     merged = list(getattr(goal, "acceptance_checks", None) or [])
     seen = {c.get("command") for c in merged}
     added = 0
-    for c in new:
+    for c in survivors:
         if c["command"] not in seen:
             merged.append(c)
             seen.add(c["command"])
@@ -1483,7 +1535,10 @@ async def action_store_goal_acceptance(step_input: StepInput) -> StepOutput:
         await effects.save_mission(mission)
     return StepOutput(
         result={"criteria_count": len(merged)},
-        observations=f"goal-acceptance: {len(merged)} check(s) (+{added} grounded)",
+        observations=(
+            f"goal-acceptance: {len(merged)} check(s) "
+            f"(+{added} grounded, {dropped} dropped as non-passing)"
+        ),
         context_updates={"mission": mission, "goal_acceptance_checks": merged},
     )
 

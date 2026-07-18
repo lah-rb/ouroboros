@@ -33,6 +33,7 @@ from agent.actions.pipeline_actions import (
     action_store_goal_acceptance,
 )
 from agent.effects.mock import MockEffects
+from agent.effects.protocol import CommandResult
 from agent.models import FlowMeta, StepInput
 from agent.persistence.models import (
     FailedAttempt,
@@ -245,17 +246,24 @@ def _functional_goal(**kw) -> GoalRecord:
 
 
 @pytest.mark.asyncio
-async def test_gate_acceptance_fires_once_per_eligible_goal():
+async def test_gate_acceptance_loads_and_flags_derive_need():
+    # An ungrounded eligible goal: no stored checks yet, but flagged to
+    # derive AFTER a pass (has_checks False, acceptance_needs_derive True).
     goal = _functional_goal()
     fx = MockEffects(mission=_mission([goal]))
     out = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": goal.id}))
     assert out.result["needs_derive"] is True
+    assert out.result["has_checks"] is False
+    assert out.context_updates["acceptance_needs_derive"] is True
+    # Once grounded with a stored check: has_checks True, no more derive.
     goal.acceptance_grounded = True
     goal.acceptance_checks = [
         {"command": "test -s save.json", "name": "s", "required": True}
     ]
     out2 = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": goal.id}))
     assert out2.result["needs_derive"] is False
+    assert out2.result["has_checks"] is True
+    assert out2.context_updates["acceptance_needs_derive"] is False
     assert out2.context_updates["goal_acceptance_checks"] == goal.acceptance_checks
 
 
@@ -265,8 +273,11 @@ async def test_gate_acceptance_skips_structural_and_missing_goal():
     fx = MockEffects(mission=_mission([goal]))
     out = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": goal.id}))
     assert out.result["needs_derive"] is False
+    assert out.result["has_checks"] is False
+    assert out.context_updates["acceptance_needs_derive"] is False
     out2 = await action_gate_goal_acceptance(_si(fx, inputs={"goal_id": "nope"}))
     assert out2.result["needs_derive"] is False
+    assert out2.result["has_checks"] is False
 
 
 @pytest.mark.asyncio
@@ -279,9 +290,11 @@ async def test_store_acceptance_merges_tighten_only_and_one_shots():
         '{"command": "test -s save.json", "description": "save exists"}, '
         '{"command": "test -f a", "description": "dup"}]}\n```'
     )
+    # All probes pass (validate-on-create runs each candidate as /bin/sh -c …;
+    # the command[0] "/bin/sh" fallback makes every wrapped check exit 0).
     out = await action_store_goal_acceptance(
         _si(
-            MockEffects(),
+            MockEffects(commands={"/bin/sh": CommandResult(0, "", "", "/bin/sh")}),
             inputs={"goal_id": goal.id},
             mission=m,
             inference_response=resp,
@@ -305,6 +318,57 @@ async def test_store_acceptance_merges_tighten_only_and_one_shots():
 
 
 @pytest.mark.asyncio
+async def test_store_acceptance_validates_and_drops_broken():
+    # Validate-on-create: the goal just passed, so a correct check exits 0
+    # against the current state. A candidate that fails the probe now — a
+    # broken command or a mis-grounded assertion — is dropped, not stored.
+    goal = _functional_goal()
+    m = _mission([goal])
+    resp = (
+        '```json\n{"checks": ['
+        '{"command": "test -s good.json", "description": "produced file"}, '
+        '{"command": "test -s bad.json", "description": "mis-grounded"}]}\n```'
+    )
+    fx = MockEffects(
+        commands={
+            "/bin/sh -c test -s good.json": CommandResult(0, "", "", "good"),
+            "/bin/sh -c test -s bad.json": CommandResult(1, "", "", "bad"),
+        }
+    )
+    out = await action_store_goal_acceptance(
+        _si(fx, inputs={"goal_id": goal.id}, mission=m, inference_response=resp)
+    )
+    cmds = [c["command"] for c in goal.acceptance_checks]
+    assert cmds == ["test -s good.json"]  # only the passing check armed
+    assert goal.acceptance_grounded is True
+    assert out.result["criteria_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_store_acceptance_all_broken_empty_but_grounded():
+    # Every candidate fails the probe (unconfigured MockEffects → rc 127):
+    # nothing is armed, but the goal is still grounded one-shot so the
+    # evaluator judges alone thereafter (never re-derives, never vacuous).
+    goal = _functional_goal()
+    resp = (
+        '```json\n{"checks": ['
+        '{"command": "python -c \\"broken(\\"", "description": "syntaxerror"}, '
+        '{"command": "test -s nope.json", "description": "absent"}]}\n```'
+    )
+    out = await action_store_goal_acceptance(
+        _si(
+            MockEffects(),
+            inputs={"goal_id": goal.id},
+            mission=_mission([goal]),
+            inference_response=resp,
+        )
+    )
+    assert goal.acceptance_checks == []
+    assert goal.acceptance_grounded is True
+    assert out.result["criteria_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_acceptance_verdict_never_vacuous_and_vetoes():
     # Zero checks: acceptance_ok True but summary EMPTY (no vacuous evidence).
     none = await action_apply_acceptance_verdict(_si())
@@ -319,28 +383,54 @@ async def test_acceptance_verdict_never_vacuous_and_vetoes():
 
 
 def test_interact_wiring_acceptance_rung():
+    # Post-2026-07-18 restructure: derivation is a REGRESSION GUARD armed on
+    # the SUCCESS branch after a genuine pass — never pre-pass. On entry the
+    # step only LOADS stored checks; derive/store live after
+    # end_eval_session_success.
     steps = _compiled()["interact"]["steps"]
+    assert "gate_acceptance" not in steps  # renamed → load_stored_checks
     assert (
-        steps["run_session"]["resolver"]["rules"][0]["transition"] == "gate_acceptance"
+        steps["run_session"]["resolver"]["rules"][0]["transition"]
+        == "load_stored_checks"
     )
-    ga = {
+    ls = {
         r["condition"]: r["transition"]
-        for r in steps["gate_acceptance"]["resolver"]["rules"]
+        for r in steps["load_stored_checks"]["resolver"]["rules"]
     }
-    assert ga["result.needs_derive == true"] == "derive_acceptance"
-    assert ga["true"] == "run_acceptance_checks"
-    assert (
-        steps["store_acceptance"]["resolver"]["rules"][0]["transition"]
-        == "run_acceptance_checks"
-    )
+    assert ls["result.has_checks == true"] == "run_acceptance_checks"
+    assert ls["true"] == "evaluate_outcome"  # no stored checks → skip to eval
     assert steps["run_acceptance_checks"]["action"] == "run_validation_checks"
     assert (
         steps["acceptance_verdict"]["resolver"]["rules"][0]["transition"]
         == "evaluate_outcome"
     )
     # The deterministic veto: goal_met AND acceptance_ok.
-    cond = steps["parse_evaluation"]["resolver"]["rules"][0]["condition"]
+    pe = steps["parse_evaluation"]["resolver"]["rules"]
+    cond = pe[0]["condition"]
     assert "acceptance_ok" in cond and "goal_met" in cond
+    assert pe[0]["transition"] == "end_eval_session_success"
+    assert pe[1]["transition"] == "end_eval_session_failure"
+    # Success branch arms the check only when the goal wasn't yet grounded.
+    assert (
+        steps["end_eval_session_success"]["resolver"]["rules"][0]["transition"]
+        == "arm_acceptance"
+    )
+    aa = {
+        r["condition"]: r["transition"]
+        for r in steps["arm_acceptance"]["resolver"]["rules"]
+    }
+    assert aa["context.get('acceptance_needs_derive') == true"] == "derive_acceptance"
+    assert aa["true"] == "flush_transient_success"
+    da = {
+        r["condition"]: r["transition"]
+        for r in steps["derive_acceptance"]["resolver"]["rules"]
+    }
+    assert da["result.tokens_generated > 0"] == "store_acceptance"
+    assert da["true"] == "flush_transient_success"
+    assert (
+        steps["store_acceptance"]["resolver"]["rules"][0]["transition"]
+        == "flush_transient_success"
+    )
 
 
 # ── C5: stuck-goal web search ─────────────────────────────────────────

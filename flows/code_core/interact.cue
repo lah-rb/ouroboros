@@ -246,64 +246,36 @@ interact: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "true", transition: "gate_acceptance"},
+					{condition: "true", transition: "load_stored_checks"},
 				]
 			}
 			publishes: ["terminal_output", "inference_session_id"]
 		}
 
 		// ── Per-goal grounded acceptance checks (ops DoD port) ─────
-		// Once per functional/quality goal, derive shell acceptance checks
-		// GROUNDED in what the session just showed (a durable artifact, a
-		// produced file, a state the goal requires), store them tighten-only
-		// on the goal, then run them every verification pass. The result is
-		// a deterministic TIGHTENER on the evaluator: a required failure
-		// vetoes a credulous goal_met; zero checks means the evaluator
-		// judges alone (never vacuous verification).
-		gate_acceptance: #StepDefinition & {
+		// A per-goal deterministic TIGHTENER on the evaluator: a required
+		// check failure vetoes a credulous goal_met; zero checks means the
+		// evaluator judges alone (never vacuous verification).
+		//
+		// TIMING (2026-07-18 fix): the check is a REGRESSION GUARD — it is
+		// derived ONLY AFTER the goal's first genuine pass, grounded in that
+		// passing session's transcript, and each candidate is validated
+		// against the just-passed state before it is stored (store_acceptance
+		// drops any that don't already hold). So a check can never block a
+		// first pass, and a malformed/mis-grounded check can never be armed.
+		// On every LATER verification the stored checks run BEFORE the
+		// evaluator (load_stored_checks → run_acceptance_checks) and catch a
+		// regression. Derivation/store therefore live on the SUCCESS branch
+		// (arm_acceptance, below), not here.
+		load_stored_checks: #StepDefinition & {
 			action:      "gate_goal_acceptance"
-			description: "Gate the per-goal acceptance-check derivation (once per goal)"
+			description: "Load the goal's stored acceptance checks (no pre-pass derivation)"
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.needs_derive == true", transition: "derive_acceptance"},
-					{condition: "true", transition: "run_acceptance_checks"},
+					{condition: "result.has_checks == true", transition: "run_acceptance_checks"},
+					{condition: "true", transition: "evaluate_outcome"},
 				]
-			}
-			publishes: ["mission", "goal_acceptance_checks"]
-		}
-
-		derive_acceptance: #StepDefinition & {
-			action:      "inference"
-			description: "Derive acceptance checks grounded in the explored session"
-			context: optional: ["terminal_output"]
-			prompt_template: {
-				template: "interact/derive_goal_acceptance"
-				context_keys: ["session_tail"]
-				input_keys: ["flow_directive"]
-			}
-			pre_compute: [
-				{formatter: "format_session_tail", output_key: "session_tail"
-					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
-			]
-			config: temperature: "t*0.1"
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.tokens_generated > 0", transition: "store_acceptance"},
-					{condition: "true", transition: "run_acceptance_checks"},
-				]
-			}
-			publishes: ["inference_response"]
-		}
-
-		store_acceptance: #StepDefinition & {
-			action:      "store_goal_acceptance"
-			description: "Merge the derived checks onto the goal (tighten-only, one-shot)"
-			context: required: ["mission", "inference_response"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "run_acceptance_checks"}]
 			}
 			publishes: ["mission", "goal_acceptance_checks"]
 		}
@@ -416,9 +388,63 @@ interact: #FlowDefinition & {
 
 		// Release the memoryful inference session now that evaluation is done.
 		end_eval_session_success: #StepDefinition & _templates.close_session & {
-			_next:       "flush_transient_success"
+			_next:       "arm_acceptance"
 			description: "Release inference session after successful evaluation"
 			context: optional: ["inference_session_id"]
+		}
+
+		// ── Arm the regression guard (only after a genuine pass) ───
+		// The goal just passed (goal_met AND acceptance_ok). If it is not yet
+		// grounded, derive a check from this passing session's transcript and
+		// store it (validated against the just-passed state). Already-grounded
+		// goals (including a passed-then-reopened goal) skip straight to flush.
+		arm_acceptance: #StepDefinition & {
+			action:      "noop"
+			description: "After a genuine pass, derive the regression check once"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "context.get('acceptance_needs_derive') == true", transition: "derive_acceptance"},
+					{condition: "true", transition: "flush_transient_success"},
+				]
+			}
+		}
+
+		// Derived AFTER a pass — the session is already closed, so this is a
+		// fresh stateless inference grounded purely in the passing transcript.
+		derive_acceptance: #StepDefinition & {
+			action:      "inference"
+			description: "Derive the regression check grounded in the passing session"
+			context: optional: ["terminal_output"]
+			prompt_template: {
+				template: "interact/derive_goal_acceptance"
+				context_keys: ["session_tail"]
+				input_keys: ["flow_directive"]
+			}
+			pre_compute: [
+				{formatter: "format_session_tail", output_key: "session_tail"
+					params: {source: {$ref: "context.terminal_output"}, max_chars: 3000}},
+			]
+			config: temperature: "t*0.1"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.tokens_generated > 0", transition: "store_acceptance"},
+					{condition: "true", transition: "flush_transient_success"},
+				]
+			}
+			publishes: ["inference_response"]
+		}
+
+		store_acceptance: #StepDefinition & {
+			action:      "store_goal_acceptance"
+			description: "Validate each derived check against the just-passed state, store survivors (tighten-only, one-shot)"
+			context: required: ["mission", "inference_response"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "flush_transient_success"}]
+			}
+			publishes: ["mission", "goal_acceptance_checks"]
 		}
 
 		end_eval_session_failure: #StepDefinition & _templates.close_session & {

@@ -6004,15 +6004,15 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "gate_acceptance"
+              "transition": "load_stored_checks"
             }
           ]
         },
         "terminal": false
       },
-      "gate_acceptance": {
+      "load_stored_checks": {
         "action": "gate_goal_acceptance",
-        "description": "Gate the per-goal acceptance-check derivation (once per goal)",
+        "description": "Load the goal's stored acceptance checks (no pre-pass derivation)",
         "context": {
           "required": [],
           "optional": []
@@ -6023,93 +6023,12 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.needs_derive == true",
-              "transition": "derive_acceptance"
+              "condition": "result.has_checks == true",
+              "transition": "run_acceptance_checks"
             },
             {
               "condition": "true",
-              "transition": "run_acceptance_checks"
-            }
-          ]
-        },
-        "publishes": [
-          "mission",
-          "goal_acceptance_checks"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "derive_acceptance": {
-        "action": "inference",
-        "description": "Derive acceptance checks grounded in the explored session",
-        "context": {
-          "required": [],
-          "optional": [
-            "terminal_output"
-          ]
-        },
-        "params": {},
-        "prompt_template": {
-          "template": "interact/derive_goal_acceptance",
-          "context_keys": [
-            "session_tail"
-          ],
-          "input_keys": [
-            "flow_directive"
-          ]
-        },
-        "pre_compute": [
-          {
-            "formatter": "format_session_tail",
-            "output_key": "session_tail",
-            "params": {
-              "source": {
-                "$ref": "context.terminal_output"
-              },
-              "max_chars": 3000
-            }
-          }
-        ],
-        "config": {
-          "temperature": "t*0.1"
-        },
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "result.tokens_generated > 0",
-              "transition": "store_acceptance"
-            },
-            {
-              "condition": "true",
-              "transition": "run_acceptance_checks"
-            }
-          ]
-        },
-        "publishes": [
-          "inference_response"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "store_acceptance": {
-        "action": "store_goal_acceptance",
-        "description": "Merge the derived checks onto the goal (tighten-only, one-shot)",
-        "context": {
-          "required": [
-            "mission",
-            "inference_response"
-          ],
-          "optional": []
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "true",
-              "transition": "run_acceptance_checks"
+              "transition": "evaluate_outcome"
             }
           ]
         },
@@ -6311,11 +6230,118 @@
           "rules": [
             {
               "condition": "true",
+              "transition": "arm_acceptance"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "arm_acceptance": {
+        "action": "noop",
+        "description": "After a genuine pass, derive the regression check once",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "context.get('acceptance_needs_derive') == true",
+              "transition": "derive_acceptance"
+            },
+            {
+              "condition": "true",
               "transition": "flush_transient_success"
             }
           ]
         },
         "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "derive_acceptance": {
+        "action": "inference",
+        "description": "Derive the regression check grounded in the passing session",
+        "context": {
+          "required": [],
+          "optional": [
+            "terminal_output"
+          ]
+        },
+        "params": {},
+        "prompt_template": {
+          "template": "interact/derive_goal_acceptance",
+          "context_keys": [
+            "session_tail"
+          ],
+          "input_keys": [
+            "flow_directive"
+          ]
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_session_tail",
+            "output_key": "session_tail",
+            "params": {
+              "source": {
+                "$ref": "context.terminal_output"
+              },
+              "max_chars": 3000
+            }
+          }
+        ],
+        "config": {
+          "temperature": "t*0.1"
+        },
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.tokens_generated > 0",
+              "transition": "store_acceptance"
+            },
+            {
+              "condition": "true",
+              "transition": "flush_transient_success"
+            }
+          ]
+        },
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "store_acceptance": {
+        "action": "store_goal_acceptance",
+        "description": "Validate each derived check against the just-passed state, store survivors (tighten-only, one-shot)",
+        "context": {
+          "required": [
+            "mission",
+            "inference_response"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "flush_transient_success"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "goal_acceptance_checks"
+        ],
         "effects": [],
         "terminal": false
       },
