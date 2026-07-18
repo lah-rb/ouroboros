@@ -1247,6 +1247,21 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
         )
 
     sweep_files = _get_sweep_files(arch)
+    # Include incomplete structural goals whose file the architecture does
+    # NOT list — e.g. a create_backfill goal for an unplanned file. The
+    # sweep's walk is architecture-derived, so without this such a goal is
+    # counted incomplete by check_phase yet never SELECTED below: the sweep
+    # returns "complete", check_phase re-routes here, and the controller
+    # spins to the 51x-no-dispatch guard (2026-07-18: a create_backfill
+    # `src/command.py` goal crashed the boss baseline exactly this way).
+    # Appended LAST so architecture files keep their creation_order priority.
+    _seen_sweep = set(sweep_files)
+    for _g in mission.goals:
+        if getattr(_g, "type", "") == "structural" and _g.status != "complete":
+            for _f in _g.associated_files or []:
+                if _f and _f not in _seen_sweep:
+                    sweep_files.append(_f)
+                    _seen_sweep.add(_f)
     working_dir = _get_working_dir(mission)
 
     if not sweep_files or not working_dir:
@@ -1323,6 +1338,20 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
         file_exists = os.path.isfile(full_path)
 
         if not file_exists:
+            # A create_backfill orphan whose file is now gone is the
+            # backfill's "remove it if it should not exist" outcome —
+            # resolved. Complete it; never RECREATE an unplanned file (that
+            # would spin a create→remove→create loop).
+            if getattr(goal, "origin", "") == "create_backfill":
+                goal.status = "complete"
+                logger.info(
+                    "Structural sweep: %s (backfill) removed — goal completed",
+                    file_path,
+                )
+                if effects:
+                    await effects.save_mission(mission)
+                continue
+
             # File doesn't exist — create it.
             # Use the goal description as the directive — for data files,
             # this contains the content brief with creative requirements.

@@ -209,3 +209,71 @@ async def test_fix_dispatch_without_siblings_has_no_block(tmp_path):
     directive = out.context_updates["dispatch_config"]["flow_directive"]
     assert "one constraint set" not in directive
     assert "do NOT regress" not in directive
+
+
+# ── Orphan create_backfill goal handling in the structural sweep ─────
+# A backfill goal's file is NOT in the architecture, so the sweep's
+# architecture-derived walk could never select it — check_phase counted
+# it incomplete, the sweep returned "complete", and the controller spun
+# to the 51x-no-dispatch guard (2026-07-18: crashed the boss baseline on
+# a `src/command.py` orphan). The sweep now walks orphan goal files too.
+
+
+@pytest.mark.asyncio
+async def test_sweep_drives_orphan_backfill_goal_that_exists(tmp_path):
+    (tmp_path / "extra.py").write_text("x = 1\n")  # unplanned file on disk
+    arch_done = GoalRecord(
+        description="world",
+        type="structural",
+        associated_files=["world.yaml"],
+        status="complete",
+    )
+    orphan = GoalRecord(
+        description="extra.py was written without a planned goal — review it.",
+        type="structural",
+        associated_files=["extra.py"],
+        origin="create_backfill",
+    )
+    mission = _mission(tmp_path, [arch_done, orphan])
+    out = await action_structural_sweep_next(_si(mission))
+    # SELECTED + dispatched (not sweep_complete=True — the orphan-loop bug).
+    assert out.result.get("sweep_complete") is not True
+    assert out.context_updates["dispatch_config"]["target_file_path"] == "extra.py"
+
+
+@pytest.mark.asyncio
+async def test_sweep_completes_orphan_backfill_goal_when_file_removed(tmp_path):
+    # The backfill's "remove it if it should not exist" outcome: file gone
+    # → complete the goal; never recreate (no create→remove→create loop).
+    arch_done = GoalRecord(
+        description="world",
+        type="structural",
+        associated_files=["world.yaml"],
+        status="complete",
+    )
+    orphan = GoalRecord(
+        description="gone.py was written without a planned goal — review it.",
+        type="structural",
+        associated_files=["gone.py"],  # NOT on disk
+        origin="create_backfill",
+    )
+    mission = _mission(tmp_path, [arch_done, orphan])
+    out = await action_structural_sweep_next(_si(mission))
+    assert orphan.status == "complete"
+    assert not out.result.get("needs_create")
+    assert out.result.get("sweep_complete") is True
+
+
+@pytest.mark.asyncio
+async def test_sweep_still_creates_missing_architecture_file(tmp_path):
+    # Guard: a NORMAL (design-origin) missing arch file is still created —
+    # the create path is untouched for non-backfill goals.
+    goal = GoalRecord(
+        description="Create world.yaml with content: a world",
+        type="structural",
+        associated_files=["world.yaml"],  # NOT on disk
+    )
+    mission = _mission(tmp_path, [goal])
+    out = await action_structural_sweep_next(_si(mission))
+    assert out.result.get("needs_create") is True
+    assert goal.status == "incomplete"  # not spuriously completed
