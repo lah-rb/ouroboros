@@ -118,6 +118,25 @@ def test_backfill_covers_corrupted_symbol_paths(tmp_path):
     assert mission.goals[-1].associated_files == ["inventory.py:equip_item"]
 
 
+def test_backfill_skips_infrastructure_files(tmp_path):
+    """A package `__init__.py` (and other infra) is not smuggled code and
+    is not in the architecture — a backfill goal for it can never be
+    selected by the structural sweep, so it stalls the run in a
+    no-dispatch loop (2026-07-17 swarm round 3 died at structural 9/10 on
+    a `src/__init__.py` backfill goal). It must be skipped, matching the
+    drift detector's infrastructure policy."""
+    mission = _mission(
+        tmp_path,
+        [GoalRecord(description="g", type="structural", associated_files=["main.py"])],
+    )
+    report = _report(["src/__init__.py", "__init__.py", "pyproject.toml", "loader.py"])
+    assert _backfill_untracked_file_goals(mission, report) == 1
+    # Only the real application module got a goal; the three infra files
+    # were skipped.
+    assert mission.goals[-1].associated_files == ["loader.py"]
+    assert all(g.associated_files != ["src/__init__.py"] for g in mission.goals)
+
+
 # ── Sibling-goal context in fix dispatches ───────────────────────────
 
 

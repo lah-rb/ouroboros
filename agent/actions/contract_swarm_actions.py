@@ -127,6 +127,7 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
     exhausted, the valid subset proceeds and the rest stays missing.
     """
     ctx = step_input.context
+    effects = step_input.effects
     raw = str(ctx.get("inference_response", "") or "")
     mission = ctx.get("mission")
     revision = int(ctx.get("contract_revision", 0) or 0)
@@ -145,6 +146,13 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
         "primary_code_file": "",
     }
 
+    # Round-4: the data-shape exemplars are the shared DATA vocabulary —
+    # broadcast to every worker (below, via contract_set) and pushed to
+    # each data file's own generation directive now (idempotent, saved),
+    # so both readers and the file bind to the same keys.
+    data_contracts = _data_contracts(mission)
+    await _enrich_data_goals(effects, mission, data_contracts)
+
     blocks = parse_file_blocks(raw) if raw else []
     if not blocks or not declared_code:
         return StepOutput(
@@ -152,7 +160,11 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
             observations="Contract turn produced no usable file blocks",
             context_updates={
                 **base_updates,
-                "contract_set": {"files": {}, "issues": []},
+                "contract_set": {
+                    "files": {},
+                    "issues": [],
+                    "data_contracts": data_contracts,
+                },
                 "contract_feedback": "",
                 "contract_revision": revision,
             },
@@ -282,7 +294,11 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
         observations=obs,
         context_updates={
             **base_updates,
-            "contract_set": {"files": files, "issues": issues},
+            "contract_set": {
+                "files": files,
+                "issues": issues,
+                "data_contracts": data_contracts,
+            },
             "contract_feedback": feedback,
             "contract_revision": revision,
         },
@@ -405,6 +421,120 @@ def _pyi_view(stub_text: str) -> str:
     return "\n".join(out).strip()
 
 
+# ── Round-4 data-shape broadcast ─────────────────────────────────────
+#
+# Round 3's interface broadcast made the CODE↔CODE vocabulary
+# byte-identical for every worker (8/8 type-clean). The residual moved
+# one joint over: the loader read ``mon["max_health"]`` while world.yaml
+# (built off-contract, by serial fallback) had no such key → boot
+# KeyError. The data file was the one participant NOT in the conference
+# call. Round 4 makes ``DataShapeContract.example`` — a literal minimal
+# instance the architecture already carries — the shared DATA vocabulary
+# both sides bind to: broadcast to every code worker (index only these
+# keys) AND appended to the data file's generation directive (emit
+# exactly these keys).
+_DATA_CONTRACT_MARKER = "## DATA SHAPE CONTRACT (authoritative)"
+
+
+def _data_contracts(mission: Any) -> list[dict]:
+    """The architecture's data-shape contracts as plain dicts (file,
+    consumed_by, structure, exemplar). Robust to model-object or dict
+    shapes; drops entries with no file."""
+    arch = getattr(mission, "architecture", None) if mission else None
+    shapes = getattr(arch, "data_shapes", None) if arch else None
+    out: list[dict] = []
+    for ds in shapes or []:
+        get = ds.get if isinstance(ds, dict) else (lambda k: getattr(ds, k, ""))
+        file = str(get("file") or "").strip()
+        if not file:
+            continue
+        out.append(
+            {
+                "file": file,
+                "consumed_by": str(get("consumed_by") or "").strip(),
+                "structure": str(get("structure") or "").strip(),
+                "example": str(get("example") or "").strip(),
+            }
+        )
+    return out
+
+
+def _data_digest(data_contracts: list[dict]) -> str:
+    """Worker-facing view of every runtime data file: its shape and a
+    literal exemplar. Isolated workers never see the data files, so an
+    off-vocabulary key ships a boot crash the worker cannot detect."""
+    blocks: list[str] = []
+    for dc in data_contracts or []:
+        if not (dc.get("example") or dc.get("structure")):
+            continue
+        header = f"### {dc['file']}"
+        if dc.get("consumed_by"):
+            header += f" (read by {dc['consumed_by']})"
+        body: list[str] = []
+        if dc.get("structure"):
+            body.append(f"shape: {dc['structure']}")
+        if dc.get("example"):
+            body.append(
+                "exemplar (the exact keys — index ONLY these):\n"
+                f"```\n{dc['example']}\n```"
+            )
+        blocks.append(header + "\n" + "\n".join(body))
+    return "\n\n".join(blocks)
+
+
+async def _enrich_data_goals(
+    effects: Any, mission: Any, data_contracts: list[dict]
+) -> int:
+    """Append the authoritative shape+exemplar to each data file's
+    structural goal, so the serially-generated data file binds to the
+    SAME exemplar the code workers were handed. The other half of the
+    conference call: without it only the readers bind to the vocabulary
+    and the file still drifts. Idempotent across contract revisions via
+    the marker; persisted so the sweep's later data-file create (a fresh
+    mission load) sees it. Returns count enriched."""
+    goals = getattr(mission, "goals", None) if mission else None
+    if not goals:
+        return 0
+    by_file = {
+        dc["file"]: dc
+        for dc in data_contracts
+        if dc.get("example") or dc.get("structure")
+    }
+    if not by_file:
+        return 0
+    enriched = 0
+    for g in goals:
+        files = getattr(g, "associated_files", None) or []
+        dc = next((by_file[f] for f in files if f in by_file), None)
+        if dc is None:
+            continue
+        desc = getattr(g, "description", "") or ""
+        if _DATA_CONTRACT_MARKER in desc:
+            continue
+        block = [
+            _DATA_CONTRACT_MARKER,
+            "The code that loads this file was generated against the exact "
+            "keys below. Produce rich, creative CONTENT, but the SHAPE is "
+            "fixed: use exactly these keys at every level — do not rename, "
+            "drop, or invent keys (add more entries freely).",
+        ]
+        if dc.get("structure"):
+            block.append(f"\nshape: {dc['structure']}")
+        if dc.get("example"):
+            block.append(
+                "\nMinimal exemplar (one entry per collection — mirror this "
+                f"key set):\n```\n{dc['example']}\n```"
+            )
+        g.description = desc + "\n\n" + "\n".join(block)
+        enriched += 1
+    if enriched and effects:
+        try:
+            await effects.save_mission(mission)
+        except Exception:  # noqa: BLE001 - enrichment must not break the flow
+            logger.warning("data-goal enrichment save failed", exc_info=True)
+    return enriched
+
+
 def _project_digest(contract_set: dict, self_path: str) -> str:
     """Round-3 SHARED-CORE BROADCAST: the full-shape ``.pyi`` view of EVERY
     OTHER module's contract — class fields/constructors + method signatures
@@ -447,6 +577,16 @@ def _worker_prompt(
             "module's public API). Construct, call, and access attributes on "
             "ANY symbol here EXACTLY as declared; never invent a shape:\n"
             f"{project}"
+        )
+    data = _data_digest((contract_set or {}).get("data_contracts") or [])
+    if data:
+        parts.append(
+            "## Data contracts — the SHARED DATA VOCABULARY (the exact shape "
+            "of every data file this program loads at runtime). If your symbol "
+            "reads a loaded data structure, index ONLY the keys shown here — "
+            "the data files are generated to match this exemplar; a key not "
+            "shown here will not exist at runtime:\n"
+            f"{data}"
         )
     parts.append(
         f"## Your assignment: implement `{name}` ({meta['kind']})\n"

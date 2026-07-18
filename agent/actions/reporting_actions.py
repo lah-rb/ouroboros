@@ -13,9 +13,56 @@ to mission_control. Mission_control attaches the report to the goal.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from agent.models import StepInput, StepOutput
+
+# Non-application files: build/config, tests, dotfiles, and package
+# markers. Shared policy for BOTH architecture-drift detection and the
+# create-loophole backfill — a bare package ``__init__.py`` or a
+# pyproject is not smuggled application code and must NOT accrue a
+# structural gate goal. A backfill goal for a file the architecture
+# never declares is one the structural sweep cannot select (its walk is
+# architecture-derived: creation_order ∪ modules ∪ data_shapes), so it
+# strands the sweep in a no-dispatch loop until the guard kills the run
+# (2026-07-17 swarm round 3: a `src/__init__.py` backfill goal stalled
+# the mission at structural 9/10, before the environment boundary).
+_INFRASTRUCTURE_NAMES = frozenset(
+    {
+        "pyproject.toml",
+        "setup.cfg",
+        "setup.py",
+        "requirements.txt",
+        "uv.lock",
+        "README.md",
+        "readme.md",
+        "CHANGELOG.md",
+        ".gitignore",
+        ".editorconfig",
+        ".flake8",
+        ".pre-commit-config.yaml",
+        "Makefile",
+        "Dockerfile",
+        "docker-compose.yml",
+    }
+)
+_INFRASTRUCTURE_PREFIXES = (".", "tests/", "test_", "__pycache__/")
+_INFRASTRUCTURE_SUFFIXES = ("__init__.py",)
+
+
+def is_infrastructure_file(filepath: str) -> bool:
+    """True for a non-application file (see the policy note above)."""
+    if not filepath:
+        return False
+    if os.path.basename(filepath) in _INFRASTRUCTURE_NAMES:
+        return True
+    if filepath.startswith(_INFRASTRUCTURE_PREFIXES):
+        return True
+    if filepath.endswith(_INFRASTRUCTURE_SUFFIXES):
+        return True
+    return False
+
 
 logger = logging.getLogger(__name__)
 
@@ -415,6 +462,13 @@ def _backfill_untracked_file_goals(mission: Any, report: Any) -> int:
     for path in files:
         sig = f"create-backfill:{path}"
         if not path or path in covered or sig in existing_sigs:
+            continue
+        # Infrastructure (package markers, build/config, tests) is not
+        # smuggled application code and is not in the architecture, so a
+        # gate goal for it can never be selected by the structural sweep
+        # — it just strands the sweep. Same policy the drift detector
+        # uses to exclude these from application-file accounting.
+        if is_infrastructure_file(path):
             continue
         mission.goals.append(
             GoalRecord(

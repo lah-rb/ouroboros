@@ -15,9 +15,14 @@ from types import SimpleNamespace
 import pytest
 
 from agent.actions.contract_swarm_actions import (
+    _DATA_CONTRACT_MARKER,
+    _data_contracts,
+    _data_digest,
+    _enrich_data_goals,
     _pyi_view,
     _project_digest,
     _validate_worker_body,
+    _worker_prompt,
     action_apply_contract_review,
     action_assemble_contract_files,
     action_parse_contracts,
@@ -28,6 +33,8 @@ from agent.actions.contract_swarm_actions import (
 from agent.models import FlowMeta, StepInput
 from agent.persistence.models import (
     ArchitectureState,
+    DataShapeContract,
+    GoalRecord,
     MissionConfig,
     MissionState,
     ModuleSpec,
@@ -735,3 +742,122 @@ async def test_typecheck_skips_dynamic_and_untyped():
         _si({"files_changed": ["bag.py", "consumer.py"]}, effects=eff)
     )
     assert out.result["typecheck_failed"] == 0
+
+
+# ── Round-4: data-shape broadcast (code↔data cohesion) ───────────────
+
+
+class _SaveEffects:
+    """Minimal effects that count save_mission calls."""
+
+    def __init__(self):
+        self.saves = 0
+
+    async def save_mission(self, mission):
+        self.saves += 1
+        return True
+
+
+def _mission_with_data(tmp_path):
+    m = _mission(tmp_path)
+    m.architecture.data_shapes = [
+        DataShapeContract(
+            file="world.yaml",
+            consumed_by="loader.py",
+            structure="mapping with keys rooms, monsters",
+            example="rooms:\n  - id: entrance\n    name: Hall\nmonsters:\n  - id: rat\n    health: 5",
+        )
+    ]
+    m.goals = [
+        GoalRecord(
+            description="Create world.yaml with content: design a world...",
+            type="structural",
+            associated_files=["world.yaml"],
+        ),
+        GoalRecord(
+            description="Load the world",
+            type="structural",
+            associated_files=["loader.py"],
+        ),
+    ]
+    return m
+
+
+def test_data_contracts_extracts_exemplars(tmp_path):
+    dc = _data_contracts(_mission_with_data(tmp_path))
+    assert len(dc) == 1
+    assert dc[0]["file"] == "world.yaml"
+    assert dc[0]["consumed_by"] == "loader.py"
+    assert dc[0]["example"].startswith("rooms:")
+    assert "health: 5" in dc[0]["example"]
+    # No architecture / no data_shapes → empty, no crash.
+    assert _data_contracts(None) == []
+    assert _data_contracts(SimpleNamespace(architecture=None)) == []
+
+
+def test_data_digest_renders_shape_and_exemplar(tmp_path):
+    dig = _data_digest(_data_contracts(_mission_with_data(tmp_path)))
+    assert "### world.yaml (read by loader.py)" in dig
+    assert "index ONLY these" in dig
+    assert "health: 5" in dig
+    assert _data_digest([]) == ""
+    # An empty exemplar+structure entry is dropped.
+    assert _data_digest([{"file": "x.json", "structure": "", "example": ""}]) == ""
+
+
+@pytest.mark.asyncio
+async def test_enrich_data_goals_idempotent_and_scoped(tmp_path):
+    m = _mission_with_data(tmp_path)
+    eff = _SaveEffects()
+    n = await _enrich_data_goals(eff, m, _data_contracts(m))
+    assert n == 1 and eff.saves == 1
+    world_goal = next(g for g in m.goals if g.associated_files == ["world.yaml"])
+    code_goal = next(g for g in m.goals if g.associated_files == ["loader.py"])
+    assert _DATA_CONTRACT_MARKER in world_goal.description
+    assert "health: 5" in world_goal.description  # exemplar reached the generator
+    assert _DATA_CONTRACT_MARKER not in code_goal.description  # code goal untouched
+    # Idempotent across contract revisions: no duplicate block, no re-save.
+    n2 = await _enrich_data_goals(eff, m, _data_contracts(m))
+    assert n2 == 0 and eff.saves == 1
+    assert world_goal.description.count(_DATA_CONTRACT_MARKER) == 1
+
+
+@pytest.mark.asyncio
+async def test_parse_contracts_publishes_and_enriches_data(tmp_path):
+    m = _mission_with_data(tmp_path)
+    eff = _SaveEffects()
+    out = await action_parse_contracts(
+        _si(
+            {"inference_response": _MODELS_STUB + "\n" + _ENGINE_STUB, "mission": m},
+            effects=eff,
+        )
+    )
+    cs = out.context_updates["contract_set"]
+    assert cs["data_contracts"][0]["file"] == "world.yaml"
+    world_goal = next(g for g in m.goals if g.associated_files == ["world.yaml"])
+    assert _DATA_CONTRACT_MARKER in world_goal.description
+    assert eff.saves >= 1
+
+
+def test_worker_prompt_broadcasts_data_vocabulary(tmp_path):
+    dc = _data_contracts(_mission_with_data(tmp_path))
+    cs = {
+        "files": {
+            "loader.py": {
+                "stub_text": "def load(p): ...",
+                "skeleton": "def load(p): ...",
+                "symbols": {"load": {"stub": "def load(p): ...", "kind": "function"}},
+                "order": ["load"],
+                "imports": [],
+            }
+        },
+        "data_contracts": dc,
+    }
+    wp = _worker_prompt(cs, "loader.py", "load", "PERSONA", "INSTRUCTION")
+    assert "SHARED DATA VOCABULARY" in wp
+    assert "world.yaml" in wp and "health: 5" in wp
+    # Absent when there are no data contracts (no empty section).
+    cs["data_contracts"] = []
+    assert "SHARED DATA VOCABULARY" not in _worker_prompt(
+        cs, "loader.py", "load", "PERSONA", "INSTRUCTION"
+    )

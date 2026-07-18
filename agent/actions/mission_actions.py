@@ -14,7 +14,10 @@ from collections import Counter
 from typing import Any
 
 from agent.models import StepInput, StepOutput
-from agent.actions.reporting_actions import structural_block_reason
+from agent.actions.reporting_actions import (
+    is_infrastructure_file,
+    structural_block_reason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -200,36 +203,12 @@ async def action_design_gate(step_input: StepInput) -> StepOutput:
     else:
         has_tasks = len(mission.goals) > 0
         arch_files = set(mission.architecture.canonical_files())
-        infrastructure = {
-            "pyproject.toml",
-            "setup.cfg",
-            "setup.py",
-            "requirements.txt",
-            "uv.lock",
-            "README.md",
-            "readme.md",
-            "CHANGELOG.md",
-            ".gitignore",
-            ".editorconfig",
-            ".flake8",
-            ".pre-commit-config.yaml",
-            "Makefile",
-            "Dockerfile",
-            "docker-compose.yml",
-        }
-        infrastructure_prefixes = (".", "tests/", "test_", "__pycache__/")
-        infrastructure_suffixes = ("__init__.py",)
 
-        disk_files = set()
-        for filepath in manifest.keys():
-            basename = os.path.basename(filepath)
-            if basename in infrastructure:
-                continue
-            if any(filepath.startswith(p) for p in infrastructure_prefixes):
-                continue
-            if any(filepath.endswith(s) for s in infrastructure_suffixes):
-                continue
-            disk_files.add(filepath)
+        disk_files = {
+            filepath
+            for filepath in manifest.keys()
+            if not is_infrastructure_file(filepath)
+        }
 
         new_on_disk = sorted(disk_files - arch_files)
         drift_detected = len(new_on_disk) > 0
