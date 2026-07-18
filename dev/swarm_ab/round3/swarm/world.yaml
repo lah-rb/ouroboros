@@ -1,0 +1,189 @@
+rooms:
+  - id: village_square
+    name: Village Square
+    description: >
+      The bustling heart of the settlement, lined with market stalls and a
+      stone fountain. Paths lead to the forest, library, and armory.
+    connections:
+      north: ancient_forest_edge
+      east: forgotten_library
+      west: abandoned_armory
+    items: []
+    npcs:
+      - mysterious_merchant
+    monster: null
+
+  - id: ancient_forest_edge
+    name: Ancient Forest Edge
+    description: >
+      The trees grow tall and twisted here, their canopies whispering of
+      forgotten secrets. A faint trail leads deeper into the woods.
+    connections:
+      south: village_square
+      east: underground_cavern
+    items:
+      - rusty_sword
+    npcs: []
+    monster: goblin_scout
+
+  - id: forgotten_library
+    name: Forgotten Library
+    description: >
+      Dusty tomes line cracked shelves, and a faint magical glow hints at
+      hidden knowledge. Shelves conceal a mysterious amulet.
+    connections:
+      west: village_square
+      north: abandoned_armory
+    items:
+      - mystic_amulet
+    npcs:
+      - elder_sage
+    monster: null
+
+  - id: abandoned_armory
+    name: Abandoned Armory
+    description: >
+      Rusted weapons and dented armor litter the floor. A sturdy shield rests
+      against a broken rack, guarded by a stone sentinel.
+    connections:
+      east: village_square
+      south: forgotten_library
+    items:
+      - sturdy_shield
+    npcs: []
+    monster: stone_golem
+
+  - id: underground_cavern
+    name: Underground Cavern
+    description: >
+      Damp walls glisten with mineral veins. The air is thick, and the sound
+      of skittering legs echoes from the darkness.
+    connections:
+      west: ancient_forest_edge
+      north: crystal_shrine
+    items: []
+    npcs: []
+    monster: cave_spider
+
+  - id: crystal_shrine
+    name: Crystal Shrine
+    description: >
+      A serene chamber where a single radiant crystal pulses with pure light.
+      Legends say it can pierce the deepest shadows.
+    connections:
+      south: underground_cavern
+      east: dark_catacombs
+    items:
+      - crystal_of_light
+    npcs: []
+    monster: null
+
+  - id: dark_catacombs
+    name: Dark Catacombs
+    description: >
+      Narrow passages wind beneath the earth, lined with ancient bones.
+      A faint herbal scent offers a glimmer of hope.
+    connections:
+      west: crystal_shrine
+      north: shadow_throne_chamber
+    items:
+      - healing_herb
+    npcs: []
+    monster: null
+
+  - id: shadow_throne_chamber
+    name: Shadow Throne Chamber
+    description: >
+      The final arena, shrouded in darkness. A towering throne of obsidian
+      holds the dreaded Lord Shadowfang, whose presence chills the soul.
+    connections:
+      south: dark_catacombs
+    items: []
+    npcs: []
+    monster: lord_shadowfang
+
+items:
+  - id: rusty_sword
+    name: Rusty Sword
+    type: weapon
+    attack_bonus: 2
+    description: >
+      An old blade with a dull edge, offering a modest boost to attack.
+
+  - id: sturdy_shield
+    name: Sturdy Shield
+    type: armor
+    defense_bonus: 1
+    description: >
+      A well-worn shield that provides a small increase to defense.
+
+  - id: healing_herb
+    name: Healing Herb
+    type: healing
+    heal_amount: 20
+    description: >
+      A fragrant herb that restores health when used.
+
+  - id: crystal_of_light
+    name: Crystal of Light
+    type: quest
+    description: >
+      A radiant crystal capable of weakening the Shadow Lord's darkness.
+
+  - id: mystic_amulet
+    name: Mystic Amulet
+    type: misc
+    description: >
+      An amulet that reveals hidden doors and secret passages.
+
+npcs:
+  - id: elder_sage
+    name: Elder Sage
+    location: forgotten_library
+    dialogue:
+      - "The Shadow Lord's veil can be torn by pure light, but few know where it lies."
+      - "Seek the Crystal of Light; only its radiance can pierce his darkness."
+      - "When you are ready, bring the crystal to the throne chamber and the tide will turn."
+
+  - id: mysterious_merchant
+    name: Mysterious Merchant
+    location: village_square
+    dialogue:
+      - "Rare wares for brave souls—perhaps a shield or a blade?"
+      - "Rumor says the Shadow Lord is vulnerable after an ancient ritual. The crystal you seek may be key."
+
+monsters:
+  - id: goblin_scout
+    name: Goblin Scout
+    location: ancient_forest_edge
+    health: 15
+    attack: 3
+    description: >
+      A quick, sneaky goblin that darts between the trees, scouting for intruders.
+
+  - id: stone_golem
+    name: Stone Golem
+    location: abandoned_armory
+    health: 30
+    attack: 5
+    description: >
+      A massive construct of packed earth and stone, silently guarding the armory.
+
+  - id: cave_spider
+    name: Cave Spider
+    location: underground_cavern
+    health: 20
+    attack: 4
+    description: >
+      A large spider that hangs from the ceiling, dropping onto unsuspecting adventurers.
+
+  - id: lord_shadowfang
+    name: Lord Shadowfang
+    location: shadow_throne_chamber
+    health: 100
+    attack: 12
+    description: >
+      The dread ruler of shadows. In his first phase he can be struck normally;
+      in the second, only the Crystal of Light can wound him.
+
+player_start: village_square

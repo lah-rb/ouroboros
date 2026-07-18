@@ -1,52 +1,94 @@
 # Contract-swarm A/B — iteration reference
 
-## VERDICT (after 3 rounds, 2026-07-17): batch wins decisively; paused
+## round3 (2026-07-17, code 0f94885) — broadcast MOVED THE NEEDLE
 
-Three rounds of prevention/detection levers; the batch build won the
-blind judge 3/3, and it also costs ~4× fewer tokens and ~2.5× less wall
-time. The swarm's PER-SYMBOL quality is consistently fine (code_quality
-2–4 — clean, typed, documented); it is INTEGRATION that fails every
-time, and each round a DIFFERENT cross-module seam crashed the boot:
+Lever (isolated): `_project_digest` broadcasts every module's full-shape
+`.pyi` to EVERY worker (not just imports) — the conference call on the
+shared vocabulary. Result — the FIRST lever to break the recurring
+pattern:
+- **Cross-module type check: 8/8 files clean** (round 2 was 6/7). The
+  code↔code interface drift that crashed rounds 0–2 (undefined methods,
+  arity, wrong attributes) is GONE — workers no longer re-derive the
+  shared API; they read the same broadcast.
+- Assembly 8/8 (round 2 was 7/8), only 1 worker retry.
+
+But it still doesn't boot, for a DIFFERENT residual on a new axis:
+- **Residual 1 — code↔DATA drift:** `loader.load_world` reads
+  `mon["max_health"]` but `world.yaml`'s monsters have no `max_health`
+  → boot `KeyError`. `world.yaml` is a DATA file built by SERIAL
+  FALLBACK with a content brief — it is the one participant NOT in the
+  conference call, so the code's key expectations and the data file
+  drift. The type check is blind here (untyped dict-key access; data
+  files have no type contract).
+- **Residual 2 — a FLOW bug (not paradigm):** the nested-package design
+  produced a `src/__init__.py` structural goal the sweep can't resolve
+  (empty package-init, no contract) → `check_phase ↔ structural_sweep_next`
+  looped to the 100-step cap, errored, and the outer 51×-no-dispatch
+  guard killed the run at structural 9/10 — before the environment
+  boundary, so NO clean judge this round. Package-init handling in the
+  sweep needs a fix for clean measurement.
+
+**Read:** the tipping point is advancing exactly where predicted — the
+shared-vocabulary broadcast tipped code-interface cohesion (the joint
+that broke every prior round). Two things now stand between the swarm
+and a booting program: the data file is outside the contract (code↔data
+drift), and a flow bug on package-init goals blocks the run. This
+vindicates continuing.
+
+**Round 4 direction:** (a) extend the shared contract to the DATA schema
+— the data file's shape becomes a broadcast artifact both the loader
+worker and the world.yaml generator bind to (closes code↔data drift);
+(b) fix the sweep's empty-package-init loop so a round can reach the
+environment boundary for a clean judge; (c) the deferred contract-bound
+serial fallback still pending. Cost curve so far: swarm ~30k+ gen tokens/
+round vs batch 7.8k — the "is it worth it" question stays open until a
+round boots.
+
+## STATUS (2026-07-17): CONTINUING — coordination frontier advancing
+
+Superseding the earlier "pause" call (which was premature — Luke's
+correction: prove/falsify the coordination mechanism at inspectable
+small scale BEFORE scaling, and the consistently-decent per-symbol code
+says the ceiling is COORDINATION, not capability). Rounds 0–2 lost the
+blind judge 3/3 to the batch build (which also costs ~4× fewer tokens),
+but the SHAPE of the losses is the finding: per-symbol quality is fine;
+INTEGRATION fails, and each lever advances the cohesion frontier to the
+NEXT weakest joint rather than failing flat. Round 3's broadcast broke
+the recurring code↔code drift entirely (8/8 type-clean) — the frontier
+is now the code↔data-file contract + a flow bug, not the code interfaces.
+This is a tipping-point search (at what upfront-design rigor does
+cohesion hold, and is it worth the cost), NOT a closed verdict.
+
+Per-round history — each round a DIFFERENT joint, frontier advancing:
 
 | round | lever | judge (swarm runs/cov/coh/qual/play) | boot-crash cause |
 |---|---|---|---|
 | 0 | baseline | 1 / 1 / 1 / 2 / 1 | placeholder main; broken import; divergent GameState ctors |
 | 1 | .pyi digest, worker validation, import-completeness, author dispatch/attr rules | 1 / 1 / 1 / 2 / 1 | data-shape drift (load_world dict vs .id objects) + broad seam mismatch |
 | 2 | + deterministic cross-module AST gate + dict-shape rule | 1 / 1 / 1 / 3 / 1 | run_engine arity — worker-FAILED engine.py went to off-contract serial fallback, AFTER the gate ran (coverage hole) |
+| 3 | + full shared-interface BROADCAST to every worker | (no judge — flow bug) | code↔DATA drift (loader wants max_health, world.yaml lacks it); flow bug on src/__init__.py sweep loop |
 
 Batch baseline stayed ~2–3 / 3 / 4 / 4 / 3 throughout (a coherent,
-mostly-playable game with real bugs — unwinnable boss, atomic combat —
-vs the swarm's non-running skeleton).
+mostly-playable game with real bugs — unwinnable boss, atomic combat).
 
-**Conclusion:** for a SMALL, TIGHTLY-COUPLED multi-module program (fits
-one generation context), contract-mediated coordination of isolated
-workers cannot match single-context batch coherence. Each lever closes
-one integration-failure class; the combinatorial space of cross-module
-inconsistencies produces another. Two structural signals reinforce it:
-the contract author failed to resolve its flagged issues within the
-2-revision budget in ALL THREE rounds (4/4/5 persistent), and workers
-keep failing outright (each failure punches an off-contract hole via
-serial fallback). This is the shared-context coherence the batch gets
-for free and the swarm keeps paying — at 4× cost — to partially recover.
+**The frontier is advancing, not stuck:** round 3's broadcast is the
+first lever to eliminate a whole failure class (code↔code interface
+drift: 8/8 type-clean, up from 6/7). The remaining gap moved to the
+code↔data-file contract (the data file is built off-contract by serial
+fallback — outside the "conference call") and a flow bug. See round 3
+above for the round-4 direction.
 
-**Where the paradigm might still win (untested, the real next target):**
-NOT here. Its premise (parallel decomposition + contracts) only pays off
-where batch CAN'T apply — a project too LARGE for one generation context
-(decomposition mandatory, not optional) or genuinely LOOSELY-COUPLED
-work (independent leaf functions/transformations with no cross-module
-integration to cohere). Re-test there if/when we have such a target.
+Cost stays the open question: swarm ~30k+ gen tokens/round vs batch's
+7.8k, and no round has booted yet — so "at what upfront-design rigor
+does cohesion hold, and is it worth the cost, and where" is still being
+measured. The paradigm's eventual niche is likely where batch CAN'T
+apply (projects too large for one context, or loosely-coupled work), but
+that's not yet proven; the small tightly-coupled game is the hard case
+we're using to find the mechanism first.
 
-**Round-3 lever exists but NOT pursued:** run the cross-module gate over
-the COMPLETE structural deliverable (after serial fallback), not just the
-swarm's assembly — closes the round-2 coverage hole. Deferred: the
-pattern says another seam class would surface; three rounds is decisive
-enough to pause rather than continue whack-a-mole on this benchmark.
-
-Infra kept (committed, tested, code_core untouched): the flow set, the
-`.pyi` digest, worker validation, and the cross-module AST gate
-(`_check_module` / `action_run_contract_typecheck`) — the gate is
-independently reusable and could help code_core catch integration drift,
-though code_core rarely needs it.
+Infra (committed, tested, code_core untouched): the flow set, `.pyi`
+digest + project broadcast, worker validation, the cross-module AST gate
+(`_check_module` / `action_run_contract_typecheck`).
 
 ---
 
