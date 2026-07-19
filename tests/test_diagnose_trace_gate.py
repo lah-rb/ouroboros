@@ -240,3 +240,49 @@ def test_execute_trace_persists_trace_corrections_in_compiled_flow():
         "execute_trace must PUBLISH trace_corrections, or the increment doesn't "
         "persist to the next turn"
     )
+
+
+# ── Fix 2: a bare DATA-file trace target returns full content ─────────
+
+
+@pytest.mark.asyncio
+async def test_bare_data_file_traces_full_content():
+    """A bare data-file path (no `:symbol`) that the seed advertises is now
+    honored: it returns the file's full content instead of a colon-separator
+    correction that redirects to code."""
+    effects = MockEffects(
+        files={"world/rooms.yaml": "rooms:\n  - id: a\n    exits: {north: b}\n"}
+    )
+    out = await action_execute_symbol_trace(
+        _step_input(
+            effects,
+            diagnosis_session_id="s1",
+            investigation_choice_arg="world/rooms.yaml",
+            investigation_turn=2,
+        )
+    )
+    assert out.result.get("trace_ok") is True
+    assert out.context_updates.get("investigation_turn") == 3
+    injected = out.context_updates.get(INJECTION_KEY, [])
+    joined = " ".join(injected) if isinstance(injected, list) else str(injected)
+    assert "world/rooms.yaml" in joined and "data file" in joined
+    assert "exits" in joined  # actual content surfaced
+
+
+@pytest.mark.asyncio
+async def test_bare_code_file_without_colon_still_corrected():
+    """A bare CODE path (no `:symbol`) still gets the file:symbol correction —
+    only data files take the new full-content branch."""
+    effects = MockEffects(files={"engine.py": _ENGINE_SRC})
+    out = await action_execute_symbol_trace(
+        _step_input(
+            effects,
+            diagnosis_session_id="s1",
+            investigation_choice_arg="engine.py",
+            investigation_turn=2,
+        )
+    )
+    assert out.result.get("trace_ok") is False
+    injected = out.context_updates.get(INJECTION_KEY, [])
+    joined = " ".join(injected) if isinstance(injected, list) else str(injected)
+    assert "file:symbol" in joined

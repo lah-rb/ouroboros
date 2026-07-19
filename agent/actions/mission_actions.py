@@ -2860,6 +2860,10 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
             else:
                 skipped += 1
             continue
+        # Data-shape tasks carry the real data file (refinement_actions
+        # _deterministic_shape_tasks); associating it lets the diagnose seed
+        # surface the data instead of losing the link (files=[] → code-only).
+        task_file = task.get("file", "") if isinstance(task, dict) else ""
         mission.goals.append(
             GoalRecord(
                 description=_quality_finding_text(task) or "quality finding",
@@ -2870,6 +2874,7 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
                 interaction_mode="exploratory" if cls == "functional" else None,
                 repro_commands=repro,
                 verification_evidence=evidence,
+                associated_files=[task_file] if task_file else [],
             )
         )
         created += 1

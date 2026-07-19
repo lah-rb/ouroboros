@@ -130,3 +130,25 @@ def test_contract_reaches_modules_the_consumer_imports_from():
     # A module outside the consumer's import set stays unburdened.
     ctx_cli = project_file_context(mission, {"target_file": "cli.py"})
     assert not ctx_cli.get("data_shapes")
+
+
+def test_design_prompt_warns_against_enumerating_open_map_keys():
+    """Fix 3a guardrail: the data-shape convention must tell the model to show
+    ONE representative entry for an arbitrary-key map and NOT enumerate real
+    keys — listing two makes _shape_diff treat it as a fixed object and
+    false-flag unlisted keys (the `exits` west false-positive)."""
+    import pathlib
+    import re
+
+    text = (
+        pathlib.Path(__file__).parent.parent
+        / "prompts"
+        / "design_and_plan"
+        / "design_architecture.yaml"
+    ).read_text()
+    norm = re.sub(r"\s+", " ", text)  # the block scalar wraps mid-phrase
+    assert "do NOT enumerate the actual keys" in norm
+    # A GENERIC open-map example (sanitation doctrine: never the benchmark
+    # domain — no rooms/exits example that would lead the question).
+    assert "currencies: {USD: US Dollar}" in norm
+    assert "exits: {north" not in norm

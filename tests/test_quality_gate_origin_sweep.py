@@ -353,3 +353,27 @@ def test_untested_prefix_is_framing_not_identity():
         {"issue": "untested: take command was not exercised by the UX session"}
     )
     assert plain == prefixed
+
+
+# ── Fix 3b: harvested shape goal carries its data file ────────────────
+
+
+@pytest.mark.asyncio
+async def test_harvested_shape_goal_is_data_linked():
+    """A shape fix_task carrying its data file (from _deterministic_shape_tasks)
+    → the harvested goal is associated with that file, so the diagnose seed can
+    surface the data instead of losing the link (files=[] → code-only)."""
+    m = _mission()
+    shape_task = {
+        "issue": "rooms[2].exits: key 'west' is not in the declared example",
+        "description": "rooms[2].exits: key 'west' is not in the declared example",
+        "class": "functional",
+        "repro": [],
+        "file": "world/rooms.yaml",
+        "signature": "shape|undeclared_key|rooms[2].exits|west",
+    }
+    await action_harvest_quality_findings(_si(m, **_qg(shape_task)))
+    created = [x for x in m.goals if x.origin == "quality_gate"]
+    assert len(created) == 1
+    assert created[0].associated_files == ["world/rooms.yaml"]
+    assert created[0].type == "functional"

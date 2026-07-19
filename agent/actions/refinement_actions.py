@@ -1184,13 +1184,20 @@ def _deterministic_shape_tasks(data_shape_results: Any) -> list[dict]:
         detail = issue.get("detail", "")
         km = _SHAPE_KEY_RE.search(detail)
         key = km.group(1) if km else ""
+        # Prefer the real data file the validator stamped on the issue
+        # (validate_data_shapes: {"file": file_path, **issue}); fall back to
+        # parsing it out of the path. The path is often extensionless (e.g.
+        # "rooms[2].exits"), so the regex alone drops the data-file link and
+        # the harvested goal ends up with associated_files=[] — which is why
+        # diagnose can't surface the data.
         fm = file_re.match(path)
+        task_file = issue.get("file") or (fm.group(1) if fm else "")
         tasks.append(
             {
                 "description": f"{path}: {detail}",
                 "class": "functional",
                 "repro": [],
-                "file": fm.group(1) if fm else "",
+                "file": task_file,
                 "signature": f"shape|{kind}|{path}|{key}",
             }
         )

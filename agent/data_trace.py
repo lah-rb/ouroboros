@@ -219,21 +219,52 @@ def _multihop_loads(
     return out
 
 
+def _reconcile_data_key(path: str, candidates: list[str]) -> str | None:
+    """Match a directory-less query path to a directory-qualified candidate
+    by basename — but ONLY when exactly one candidate matches.
+
+    Static load-detection captures a loader's literal path token and drops
+    any directory prefix a ``base_dir / "rooms.yaml"`` expression contributes,
+    so ``build_data_trace_evidence`` asks for a bare ``rooms.yaml`` while the
+    project stores it under the qualified key ``world/rooms.yaml``. This
+    reconciles the two. On 0 or ≥2 basename matches (an ambiguous filename in
+    two directories) it returns None, so the read degrades to the "not found"
+    note rather than surfacing the wrong file."""
+    base = os.path.basename(path)
+    matches = [c for c in candidates if c != path and os.path.basename(c) == base]
+    return matches[0] if len(matches) == 1 else None
+
+
 async def _read_data_content(path: str, file_context: dict | None, effects: Any) -> str:
-    """Prefer the already-materialized data_file_contents; fall back to effects."""
+    """Prefer the already-materialized data_file_contents; fall back to effects.
+
+    Reconciles a directory-less query (a bare ``rooms.yaml`` whose ``world/``
+    prefix was dropped during static load detection) against the qualified
+    keys/paths the project actually stores."""
     if isinstance(file_context, dict):
         dfc = file_context.get("data_file_contents")
         if isinstance(dfc, dict):
             content = dfc.get(path) or dfc.get(os.path.basename(path))
+            if not content:
+                key = _reconcile_data_key(path, list(dfc.keys()))
+                if key:
+                    content = dfc.get(key)
             if content:
                 return content
     if effects is not None:
-        try:
-            fc = await effects.read_file(path)
+        # Given path first, then its unique directory-qualified match among
+        # the project's known data files.
+        candidates = [path]
+        recon = _reconcile_data_key(path, _project_data_files(file_context))
+        if recon:
+            candidates.append(recon)
+        for cand in candidates:
+            try:
+                fc = await effects.read_file(cand)
+            except Exception:  # noqa: BLE001 - unreadable → try next / no evidence
+                continue
             if getattr(fc, "exists", False):
                 return getattr(fc, "content", "") or ""
-        except Exception:  # noqa: BLE001 - unreadable → no evidence, never raise
-            return ""
     return ""
 
 

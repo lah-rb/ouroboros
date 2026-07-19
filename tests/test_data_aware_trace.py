@@ -410,3 +410,65 @@ async def test_seed_omits_section_when_no_data_files():
     )
     seed = out.context_updates.get("session_injections", [""])[0]
     assert "## Data files" not in seed
+
+
+# ── Fix 1: subdir data-key reconciliation (bare literal → world/ key) ──
+
+_SUBDIR_LOADER = (
+    "def load_world():\n"
+    '    data = yaml.safe_load(open("rooms.yaml"))\n'  # bare literal; world/ dropped
+    '    rooms = data["rooms"]\n'
+    "    return rooms\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_subdir_data_key_reconciled_from_bare_literal():
+    # The loader's `world/` prefix is dropped by static detection; the stored
+    # key is `world/rooms.yaml`. Reconciliation must surface the real content
+    # instead of the "not found" note.
+    target = _sym("load_world", _SUBDIR_LOADER)
+    ev = await build_data_trace_evidence(
+        target_sym=target,
+        symbol_table=[target],
+        file_content="import yaml\n\n\n" + _SUBDIR_LOADER,
+        file_context={"data_file_contents": {"world/rooms.yaml": WORLD_YAML}},
+        effects=MockEffects(files={}),
+    )
+    assert "courtyard" in ev and "items: []" in ev
+    assert "not found" not in ev.lower()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_basename_degrades_to_note():
+    # Same basename in two dirs → ambiguous → reconciliation returns None →
+    # the "not found" note (never the wrong file).
+    target = _sym("load_world", _SUBDIR_LOADER)
+    ev = await build_data_trace_evidence(
+        target_sym=target,
+        symbol_table=[target],
+        file_content="import yaml\n\n\n" + _SUBDIR_LOADER,
+        file_context={
+            "data_file_contents": {
+                "world/rooms.yaml": WORLD_YAML,
+                "dungeon/rooms.yaml": WORLD_YAML,
+            }
+        },
+        effects=MockEffects(files={}),
+    )
+    assert "not found" in ev.lower()
+
+
+@pytest.mark.asyncio
+async def test_toplevel_data_file_still_exact_matches():
+    # No regression: a genuine top-level `rooms.yaml` (key == query) still
+    # exact-matches without going through reconciliation.
+    target = _sym("load_world", _SUBDIR_LOADER)
+    ev = await build_data_trace_evidence(
+        target_sym=target,
+        symbol_table=[target],
+        file_content="import yaml\n\n\n" + _SUBDIR_LOADER,
+        file_context={"data_file_contents": {"rooms.yaml": WORLD_YAML}},
+        effects=MockEffects(files={}),
+    )
+    assert "courtyard" in ev and "not found" not in ev.lower()

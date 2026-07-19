@@ -205,3 +205,32 @@ def test_prompt_levers_in_place():
     assert "round-trip" in cs and "CHANGE something" in cs
     sm = open("prompts/quality_gate/summarize.yaml").read()
     assert "AUTOMATICALLY" in sm and "VERBATIM" not in sm
+
+
+# ── Fix 3b: shape task keeps the real data file (issue["file"]) ───────
+
+
+def test_shape_task_prefers_issue_file_over_path_regex():
+    """A shape issue with an extensionless path (rooms[2].exits) must take its
+    file from issue["file"] (stamped by validate_data_shapes), not the path
+    regex (which yields "") — otherwise the harvested goal loses the data
+    link. Signature is unchanged (no file component)."""
+    from agent.actions.refinement_actions import _deterministic_shape_tasks
+
+    results = {
+        "issues": [
+            {
+                "kind": "undeclared_key",
+                "path": "rooms[2].exits",
+                "detail": (
+                    "key 'west' is not in the declared example "
+                    "(declared keys here: ['east', 'north'])"
+                ),
+                "file": "world/rooms.yaml",
+            }
+        ]
+    }
+    tasks = _deterministic_shape_tasks(results)
+    assert len(tasks) == 1
+    assert tasks[0]["file"] == "world/rooms.yaml"
+    assert tasks[0]["signature"] == "shape|undeclared_key|rooms[2].exits|west"

@@ -816,6 +816,34 @@ async def action_execute_symbol_trace(step_input: StepInput) -> StepOutput:
             "for example, `engine.py:GameEngine._handle_move`."
         )
     if ":" not in symbol_ref:
+        # A bare DATA-file target (no symbol) — the seed advertises data
+        # files as valid trace targets ("a bug may live in the data"), so
+        # honor a bare data path by returning its full content, mirroring
+        # the no-parseable-symbols fallback below. Only for real data files;
+        # a bare code path still gets the file:symbol correction.
+        from agent import languages
+
+        ext = symbol_ref.rsplit(".", 1)[-1].lower() if "." in symbol_ref else ""
+        if languages.is_data(ext):
+            try:
+                fc = await effects.read_file(symbol_ref)
+            except Exception:  # noqa: BLE001 - fall through to the correction
+                fc = None
+            content = getattr(fc, "content", "") if getattr(fc, "exists", False) else ""
+            if content:
+                pending: dict[str, Any] = {}
+                queue_injection(
+                    pending,
+                    ctx,
+                    f"=== {symbol_ref} (data file — showing full content) ===\n{content}",
+                )
+                return StepOutput(
+                    result={"trace_ok": True},
+                    observations=(
+                        f"Turn {turn + 1}: traced {symbol_ref} as full-file data target"
+                    ),
+                    context_updates={**pending, "investigation_turn": turn + 1},
+                )
         return _correction(
             f"symbol reference `{symbol_ref}` is missing the "
             f"`file:symbol` separator. Try "

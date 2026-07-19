@@ -66,8 +66,12 @@ sections:
        file against it, so a nested key the example doesn't show (or names
        differently) is reported as a violation. Prose cannot pin down
        nesting; the example can. Convention: a mapping with ARBITRARY keys
-       (e.g. code -> display name) shows exactly ONE representative entry;
-       a fixed object shows ALL of its keys.
+       — e.g. a code->display-name map like `currencies: {USD: US Dollar}` —
+       declares a key PATTERN, so show exactly ONE representative entry even
+       when the real file has several, and do NOT enumerate the actual keys.
+       Listing two sample keys makes the checker treat the map as a FIXED
+       object and false-flag every key you didn't list. A fixed object (a
+       struct with a known, fixed field set) shows ALL of its keys.
 
     6. **State Contracts**: The canonical representation of runtime state
        that MORE THAN ONE module reads or writes, plus the schema of any
