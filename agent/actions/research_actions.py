@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+from collections import Counter
 from typing import Any
 
 from agent.models import StepInput, StepOutput
@@ -531,6 +532,101 @@ def _identical_dict_shapes(values: list) -> bool:
     return all(set(v.keys()) == first for v in values[1:])
 
 
+def _map_field_is_empirically_open(instances: list[dict]) -> bool:
+    """True when a map field's key-sets vary enough ACROSS sibling data
+    instances to be an open map (direction->room, locale->text) rather than a
+    fixed struct. The exemplar alone can't distinguish a scalar-valued open map
+    from a scalar struct (the KNOWN RESIDUAL above), but the DATA can: an open
+    map's per-instance keys diverge, a struct's are consistent. Rename-safe: a
+    majority sharing one key-set stays CLOSED, so a real key rename still flags.
+
+    OPEN requires all three:
+    - >=3 instances: below that open-vs-closed is undecidable; default CLOSED
+      (protects renames; singleton config maps and 2-instance cases stay closed).
+    - modal_count*2 < n: the most-frequent key-set is shared by FEWER THAN HALF
+      the instances. A rename (7/8 identical) keeps a majority -> CLOSED. Even a
+      50/50 split stays CLOSED (safe direction).
+    - len(union) > len(modal_keyset): genuine key diversity — blocks opening a
+      struct whose only variance is "some instances omit optional fields."
+    """
+    if len(instances) < 3:
+        return False
+    keysets = [frozenset(inst.keys()) for inst in instances]
+    modal_keyset, modal_count = Counter(keysets).most_common(1)[0]
+    union = frozenset().union(*keysets)
+    return modal_count * 2 < len(instances) and len(union) > len(modal_keyset)
+
+
+def _collapse_open_map_fields(element: dict, data_dicts: list[dict]) -> dict:
+    """Return `element` with each empirically-open scalar-map field collapsed to
+    a single entry, so the len==1 open branch (below) treats it as an open map
+    and only checks its VALUES. Returns the SAME object unchanged when nothing
+    is open — callers rely on identity for the no-op fast path.
+
+    Eligibility targets ONLY the residual class: a field whose exemplar value is
+    a dict with >=2 keys and NO dict values (single-entry maps are already open;
+    identical-dict collections are handled by _identical_dict_shapes; nested
+    structs stay closed to protect deep renames). Scope is direct dict-valued
+    fields of a list element — the sibling instances the empirical test needs
+    only exist at a list boundary.
+    """
+    collapse = []
+    for f, ev in element.items():
+        if not (isinstance(ev, dict) and len(ev) >= 2):
+            continue  # single-entry already open; scalar/list handled elsewhere
+        if any(isinstance(v, dict) for v in ev.values()):
+            continue  # dict-valued: identical-shapes open branch / kept closed
+        instances = [el[f] for el in data_dicts if isinstance(el.get(f), dict)]
+        if _map_field_is_empirically_open(instances):
+            collapse.append(f)
+    if not collapse:
+        return element
+    out = dict(element)  # shallow copy; element (the caller's exemplar) untouched
+    for f in collapse:
+        fk = next(iter(element[f]))
+        out[f] = {fk: element[f][fk]}
+    return out
+
+
+def _decontaminate_open_maps(exemplar: Any, data: Any) -> Any:
+    """Return a copy of `exemplar` with empirically-open scalar-map fields
+    collapsed to a single entry, judged from `data`'s sibling instances (same
+    guard/scope as _collapse_open_map_fields). Used to rewrite the stored
+    example so the model-facing contract is clean. Compare the result to the
+    original with `==` (parsed structures) — equal means nothing was open, so
+    the caller skips the write (idempotent, formatting-stable)."""
+    if isinstance(exemplar, dict) and isinstance(data, dict):
+        return {
+            k: _decontaminate_open_maps(v, data.get(k)) for k, v in exemplar.items()
+        }
+    if isinstance(exemplar, list) and exemplar and isinstance(data, list):
+        elem = exemplar[0]
+        if not isinstance(elem, dict):
+            return exemplar
+        data_dicts = [el for el in data if isinstance(el, dict)]
+        elem = _collapse_open_map_fields(elem, data_dicts)
+        new_elem: dict = {}
+        for k, v in elem.items():
+            if isinstance(v, list):
+                # concat this field across siblings so deeper open maps see
+                # their full sibling set
+                child: list = []
+                for el in data_dicts:
+                    ev = el.get(k)
+                    if isinstance(ev, list):
+                        child.extend(ev)
+                new_elem[k] = _decontaminate_open_maps(v, child)
+            elif isinstance(v, dict):
+                sib = next(
+                    (el[k] for el in data_dicts if isinstance(el.get(k), dict)), None
+                )
+                new_elem[k] = _decontaminate_open_maps(v, sib)
+            else:
+                new_elem[k] = v
+        return [new_elem]
+    return exemplar
+
+
 def _shape_diff(data: Any, exemplar: Any, path: str, issues: list[dict]) -> None:
     """Recursive structural diff of a parsed data file vs its exemplar."""
     if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
@@ -666,10 +762,23 @@ def _shape_diff(data: Any, exemplar: Any, path: str, issues: list[dict]) -> None
                             if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
                                 return
                 return
+            # Empirical over-globalization guard: a scalar-valued multi-key map
+            # that VARIES its key-set across sibling data instances is an open
+            # map (rooms[*].exits: direction->room), not a fixed struct.
+            # Collapse such fields in a COPY of exemplar[0] so the len==1 open
+            # branch above handles them and values stay shape-checked. A real
+            # rename keeps a modal majority -> field stays CLOSED -> still
+            # flagged. Additive: with no open fields, normalized IS exemplar[0].
+            base = exemplar[0]
+            if isinstance(base, dict):
+                data_dicts = [el for el in data if isinstance(el, dict)]
+                normalized = _collapse_open_map_fields(base, data_dicts)
+            else:
+                normalized = base
             for i, element in enumerate(data):
                 if len(issues) >= _MAX_SHAPE_ISSUES_PER_FILE:
                     return
-                _shape_diff(element, exemplar[0], f"{path}[{i}]", issues)
+                _shape_diff(element, normalized, f"{path}[{i}]", issues)
         return
     # Scalar exemplar: no value/typing checks (precision over coverage) —
     # except a container where a scalar was declared, which IS structural.
@@ -704,10 +813,16 @@ async def action_validate_data_shapes(step_input: StepInput) -> StepOutput:
     Publishes: data_shape_results, data_shape_summary
     """
     effects = step_input.effects
-    arch = step_input.context.get("architecture")
+    mission = step_input.context.get("mission")
+    # Prefer the LIVE mission.architecture so example write-backs persist; fall
+    # back to the context copy (e.g. unit tests with no mission → no write-back).
+    arch = getattr(mission, "architecture", None) if mission is not None else None
+    if arch is None:
+        arch = step_input.context.get("architecture")
     shapes = getattr(arch, "data_shapes", None) or []
 
     checked = 0
+    dirty = False
     all_issues: list[dict] = []
     for shape in shapes:
         example = (getattr(shape, "example", "") or "").strip()
@@ -746,6 +861,24 @@ async def action_validate_data_shapes(step_input: StepInput) -> StepOutput:
         _shape_diff(data, exemplar, "", issues)
         for issue in issues:
             all_issues.append({"file": file_path, **issue})
+
+        # Data-driven decontamination: if the data reveals an over-enumerated
+        # open-map exemplar, collapse it and persist so every future
+        # model-facing rendered contract is clean. Compare PARSED structures →
+        # idempotent. Only with a live mission to persist to.
+        if mission is not None:
+            try:
+                decon = _decontaminate_open_maps(exemplar, data)
+            except Exception:
+                decon = exemplar
+            if decon != exemplar:
+                shape.example = json.dumps(decon, indent=2)
+                dirty = True
+
+    if dirty and mission is not None and effects is not None:
+        # Persist the decontaminated exemplar(s): mission.architecture was
+        # mutated in place; save once (idiom: mission_actions.py:506-508).
+        await effects.save_mission(mission)
 
     if all_issues:
         lines = [

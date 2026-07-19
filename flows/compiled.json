@@ -9314,7 +9314,8 @@
         "context": {
           "required": [],
           "optional": [
-            "architecture"
+            "architecture",
+            "mission"
           ]
         },
         "params": {},

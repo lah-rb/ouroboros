@@ -238,3 +238,96 @@ def test_multi_key_exemplar_dicts_keep_rename_detection():
     e = "option:\n  text: hi\n  next_id: lore\n"
     kinds = {(i["kind"]) for i in _diff(data, e)}
     assert kinds == {"undeclared_key", "missing_declared_key"}
+
+
+# ── Change 2: data-driven decontamination write-back ──────────────────
+#
+# When the data reveals an over-enumerated open-map exemplar (empirical
+# guard), the gate collapses the stored example to a single entry and
+# persists it, so the model-facing rendered contract is clean thereafter.
+
+_OVER_ENUMERATED_EXEMPLAR = """\
+rooms:
+  - id: a
+    exits:
+      north: b
+      east: c
+"""
+
+# >=3 rooms whose exit key-sets diverge -> exits is empirically an open map.
+_DIVERGENT_ROOMS = """\
+rooms:
+  - id: a
+    exits:
+      north: b
+      east: c
+  - id: b
+    exits:
+      south: a
+      west: d
+  - id: c
+    exits:
+      up: a
+"""
+
+
+def _si_mission(effects, mission) -> StepInput:
+    return StepInput(
+        context={"architecture": mission.architecture, "mission": mission},
+        params={},
+        meta=FlowMeta(flow_name="quality_gate", step_id="data_shape_check"),
+        effects=effects,
+    )
+
+
+def _mission_with(example):
+    from agent.persistence.models import MissionConfig, MissionState
+
+    arch = ArchitectureState(
+        data_shapes=[
+            DataShapeContract(
+                file="world.yaml", consumed_by="loader.py", example=example
+            )
+        ]
+    )
+    return MissionState(
+        objective="t",
+        config=MissionConfig(working_directory="/tmp/x"),
+        architecture=arch,
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_back_decontaminates_over_enumerated_open_map():
+    import json
+
+    mission = _mission_with(_OVER_ENUMERATED_EXEMPLAR)
+    fx = MockEffects(files={"world.yaml": _DIVERGENT_ROOMS})
+    out = await action_validate_data_shapes(_si_mission(fx, mission))
+
+    # The empirically-open exits no longer produce violations...
+    assert out.result["all_conformant"] is True
+    # ...the stored exemplar was collapsed to a single entry and persisted.
+    stored = json.loads(mission.architecture.data_shapes[0].example)
+    assert stored["rooms"][0]["exits"] == {"north": "b"}
+    assert len(fx.calls_to("save_mission")) == 1
+
+
+@pytest.mark.asyncio
+async def test_write_back_is_idempotent():
+    mission = _mission_with(_OVER_ENUMERATED_EXEMPLAR)
+    fx = MockEffects(files={"world.yaml": _DIVERGENT_ROOMS})
+    await action_validate_data_shapes(_si_mission(fx, mission))  # collapses + saves
+    await action_validate_data_shapes(_si_mission(fx, mission))  # already clean
+    assert len(fx.calls_to("save_mission")) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_write_back_without_mission():
+    # No mission in context -> no persistence attempt (backward compatible).
+    fx = MockEffects(files={"world.yaml": _DIVERGENT_ROOMS})
+    out = await action_validate_data_shapes(
+        _si(fx, _arch(example=_OVER_ENUMERATED_EXEMPLAR))
+    )
+    assert out.result["all_conformant"] is True  # Change 1 still fixes the gate
+    assert len(fx.calls_to("save_mission")) == 0

@@ -89,7 +89,8 @@ quality_gate: #FlowDefinition & {
 		data_shape_check: #StepDefinition & {
 			action:      "validate_data_shapes"
 			description: "Validate data files against their exemplar contracts"
-			context: optional: ["architecture"]
+			// mission → persist the decontaminated exemplar write-back
+			context: optional: ["architecture", "mission"]
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "plan_checks"}]

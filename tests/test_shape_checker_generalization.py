@@ -177,3 +177,152 @@ def test_heterogeneous_collection_values_still_checked():
         i["kind"] == "missing_declared_key" and "'handler'" in i["detail"]
         for i in issues
     )
+
+
+# ── empirical over-globalization guard (scalar-valued maps that VARY) ──
+#
+# The residual class above (scalar-valued multi-key maps) is only closed
+# because the EXEMPLAR alone can't distinguish an open map from a struct.
+# The DATA can: an open map's per-instance key-sets diverge across list
+# siblings, a struct's stay consistent. The guard opens the former and
+# leaves the latter closed (rename detection preserved). Fresh domains
+# (i18n locale maps, contacts) — never the benchmark.
+
+
+def test_i18n_locale_maps_open_empirically():
+    # `labels` is a scalar map (locale->text) whose key-set varies across 3
+    # screens -> empirically OPEN; es/de/ja are not undeclared keys.
+    exemplar = {
+        "screens": [{"name": "home", "labels": {"en": "Home", "fr": "Accueil"}}]
+    }
+    data = {
+        "screens": [
+            {"name": "home", "labels": {"en": "Home", "fr": "Accueil"}},
+            {"name": "cart", "labels": {"en": "Cart", "es": "Carrito", "de": "Korb"}},
+            {"name": "help", "labels": {"en": "Help", "ja": "herupu"}},
+        ]
+    }
+    assert diff(data, exemplar) == []
+
+
+def test_contact_field_rename_still_flags_across_records():
+    # Contacts are scalar-only structs (no dict-valued field) -> the guard
+    # never engages; a real key rename (phone->mobile) still flags.
+    exemplar = {"contacts": [{"name": "a", "email": "a@x", "phone": "1"}]}
+    data = {
+        "contacts": [
+            {"name": "a", "email": "a@x", "phone": "1"},
+            {"name": "b", "email": "b@x", "phone": "2"},
+            {"name": "c", "email": "c@x", "phone": "3"},
+            {"name": "d", "email": "d@x", "mobile": "4"},
+        ]
+    }
+    issues = diff(data, exemplar)
+    assert any(
+        i["kind"] == "undeclared_key" and "'mobile'" in i["detail"] for i in issues
+    )
+    assert any(
+        i["kind"] == "missing_declared_key" and "'phone'" in i["detail"] for i in issues
+    )
+
+
+def test_dict_field_rename_stays_closed_by_majority():
+    # `address` is a scalar-valued map, but a modal majority (3/4) share its
+    # key-set -> stays CLOSED -> the zip->postcode rename still flags. This
+    # exercises the helper's rename-safe path directly.
+    exemplar = {
+        "contacts": [{"name": "a", "address": {"street": "s", "city": "c", "zip": "z"}}]
+    }
+    data = {
+        "contacts": [
+            {"name": "a", "address": {"street": "s1", "city": "c1", "zip": "z1"}},
+            {"name": "b", "address": {"street": "s2", "city": "c2", "zip": "z2"}},
+            {"name": "c", "address": {"street": "s3", "city": "c3", "zip": "z3"}},
+            {"name": "d", "address": {"street": "s4", "city": "c4", "postcode": "z4"}},
+        ]
+    }
+    issues = diff(data, exemplar)
+    assert any(
+        i["kind"] == "undeclared_key" and "'postcode'" in i["detail"] for i in issues
+    )
+    assert any(
+        i["kind"] == "missing_declared_key" and "'zip'" in i["detail"] for i in issues
+    )
+
+
+def test_two_divergent_map_instances_stay_closed():
+    # n=2 is below the sample floor -> undecidable -> CLOSED -> es flags.
+    exemplar = {
+        "screens": [{"name": "home", "labels": {"en": "Home", "fr": "Accueil"}}]
+    }
+    data = {
+        "screens": [
+            {"name": "home", "labels": {"en": "Home", "fr": "Accueil"}},
+            {"name": "cart", "labels": {"en": "Cart", "es": "Carrito"}},
+        ]
+    }
+    issues = diff(data, exemplar)
+    assert any(i["kind"] == "undeclared_key" and "'es'" in i["detail"] for i in issues)
+
+
+def test_three_identical_map_instances_produce_no_noise():
+    # modal 3/3 (union == modal) -> CLOSED, and conformant -> no issues.
+    exemplar = {"screens": [{"name": "s", "labels": {"en": "x", "fr": "y"}}]}
+    data = {
+        "screens": [
+            {"name": "a", "labels": {"en": "1", "fr": "2"}},
+            {"name": "b", "labels": {"en": "3", "fr": "4"}},
+            {"name": "c", "labels": {"en": "5", "fr": "6"}},
+        ]
+    }
+    assert diff(data, exemplar) == []
+
+
+def test_three_instance_majority_stays_closed():
+    # 2/3 share {en,fr}; modal not < half -> CLOSED -> de flags. Pins the
+    # modal_count*2 < n threshold.
+    exemplar = {"screens": [{"name": "s", "labels": {"en": "x", "fr": "y"}}]}
+    data = {
+        "screens": [
+            {"name": "a", "labels": {"en": "1", "fr": "2"}},
+            {"name": "b", "labels": {"en": "3", "fr": "4"}},
+            {"name": "c", "labels": {"en": "5", "fr": "6", "de": "7"}},
+        ]
+    }
+    issues = diff(data, exemplar)
+    assert any(i["kind"] == "undeclared_key" and "'de'" in i["detail"] for i in issues)
+
+
+def test_empirically_open_map_values_still_shape_checked():
+    # `labels` opens; a dict value where a scalar is declared still flags.
+    exemplar = {
+        "screens": [{"name": "home", "labels": {"en": "Home", "fr": "Accueil"}}]
+    }
+    data = {
+        "screens": [
+            {"name": "home", "labels": {"en": "Home", "fr": "Accueil"}},
+            {"name": "cart", "labels": {"en": "Cart", "es": "Carrito", "de": "Korb"}},
+            {"name": "help", "labels": {"en": {"text": "Help"}, "ja": "x"}},
+        ]
+    }
+    issues = diff(data, exemplar)
+    assert any(
+        i["kind"] == "type_mismatch" and i["path"] == "f.screens[2].labels.en"
+        for i in issues
+    )
+
+
+def test_map_field_is_empirically_open_unit():
+    from agent.actions.research_actions import _map_field_is_empirically_open
+
+    assert _map_field_is_empirically_open([{"a": 1}, {"b": 2}]) is False  # n<3
+    assert (
+        _map_field_is_empirically_open([{"a": 1}, {"a": 2}, {"a": 3}]) is False
+    )  # homogeneous
+    assert (
+        _map_field_is_empirically_open([{"a": 1}, {"b": 2}, {"c": 3}]) is True
+    )  # all divergent
+    assert (
+        _map_field_is_empirically_open([{"a": 1}, {"a": 2}, {"a": 3}, {"b": 4}])
+        is False
+    )  # modal majority
