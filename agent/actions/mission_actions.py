@@ -2595,6 +2595,11 @@ _REFUTED_CLAIM_RE = re.compile(
     r"Quality gate claimed:\s*(.*?)\s*—\s*probe REFUTED", re.S
 )
 
+# A completed goal reopened this many times by its OWN deterministic shape
+# signature (behavior passed, shape-check keeps re-flagging) is a probable
+# false positive → suppress. Matches the probe-refuted K above.
+_SHAPE_REFUTE_K = 2
+
 
 def _quality_finding_signature(fix_task: Any) -> str:
     """Stable dedup key for a quality finding, robust to LLM rephrasing.
@@ -2849,6 +2854,24 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
         existing = by_sig.get(sig)
         if existing is not None:
             if existing.status == "complete":
+                # Behavior refutes the shape check: a goal whose interact
+                # PASSED (it completed), reopened ONLY by its own deterministic
+                # shape signature, means the program works but the shape-check
+                # keeps re-flagging it — the open-map / under-sampled-exemplar
+                # false positive. A real key rename breaks behavior (interact
+                # fails → the goal never completes → never lands here), so
+                # suppressing this is safe. Suppress at the 2nd refute, leaving
+                # the goal complete (feeds the all-suppressed finalize below).
+                if sig.startswith("shape|"):
+                    existing.shape_refutes += 1
+                    if existing.shape_refutes >= _SHAPE_REFUTE_K:
+                        suppressed += 1
+                        logger.info(
+                            "Quality harvest: suppressing twice-behavior-"
+                            "refuted shape finding %s (goal stays complete)",
+                            sig,
+                        )
+                        continue  # do NOT reopen — leave the goal complete
                 existing.status = "incomplete"
                 reopened += 1
                 # The fresh finding survived a new probe — its repro and

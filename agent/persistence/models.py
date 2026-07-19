@@ -235,6 +235,14 @@ class GoalRecord(BaseModel):
     # (the fix didn't hold). See action_harvest_quality_findings.
     origin: str = "design"
     finding_signature: str = ""
+    # Times a COMPLETED goal was reopened by its OWN `shape|` deterministic
+    # signature — i.e. the program's behavior PASSED (goal completed) but the
+    # shape-check keeps re-flagging it: a probable open-map / under-sampled-
+    # exemplar false positive. At the K=2 threshold the harvester suppresses
+    # it (leaves the goal complete) instead of reopening. A real key rename
+    # breaks behavior → the goal never completes → this never increments, so
+    # rename detection is preserved. See action_harvest_quality_findings.
+    shape_refutes: int = 0
     # Verify-before-harvest: the probe-verified reproduction sequence (stdin
     # lines typed into the running program; launch implicit) and the judge's
     # evidence. Diagnose starts from the exact failing sequence, and the

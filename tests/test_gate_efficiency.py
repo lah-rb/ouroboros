@@ -234,3 +234,108 @@ def test_shape_task_prefers_issue_file_over_path_regex():
     assert len(tasks) == 1
     assert tasks[0]["file"] == "world/rooms.yaml"
     assert tasks[0]["signature"] == "shape|undeclared_key|rooms[2].exits|west"
+
+
+# ── shape false-positive: behavior-refutation suppression ─────────────
+
+
+def _shape_mission(goal: GoalRecord) -> MissionState:
+    return MissionState(
+        objective="t",
+        status="active",
+        config=MissionConfig(working_directory="/tmp/x"),
+        goals=[goal],
+    )
+
+
+def _shape_qg(sig: str, desc: str) -> dict:
+    return {
+        "all_passing": False,
+        "fix_tasks": [
+            {"description": desc, "class": "functional", "repro": [], "signature": sig}
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_shape_finding_suppressed_after_two_behavior_refutes():
+    sig = "shape|undeclared_key|rooms[2].exits|west"
+    desc = "rooms[2].exits: key 'west' is not in the declared example"
+    goal = GoalRecord(
+        description=desc,
+        type="functional",
+        status="complete",  # behavior passed → goal completed
+        origin="quality_gate",
+        finding_signature=sig,
+        interaction_mode="exploratory",
+    )
+    m = _shape_mission(goal)
+    fx = MockEffects(mission=m)
+
+    # Round 1: shape-check re-flags → reopen (fix "didn't hold"), streak 1.
+    out1 = await action_harvest_quality_findings(
+        _si({"mission": m, "quality_results": _shape_qg(sig, desc)}, effects=fx)
+    )
+    assert goal.status == "incomplete"
+    assert goal.shape_refutes == 1
+    assert out1.result.get("done") is not True  # reopened, not finalized
+
+    # Behavior passes again → goal completes.
+    goal.status = "complete"
+
+    # Round 2: second behavior-refute → suppressed, goal STAYS complete.
+    out2 = await action_harvest_quality_findings(
+        _si({"mission": m, "quality_results": _shape_qg(sig, desc)}, effects=fx)
+    )
+    assert goal.status == "complete"
+    assert goal.shape_refutes == 2
+    # Only finding, all suppressed → the loop-breaker finalizes.
+    assert out2.result.get("done") is True
+
+
+@pytest.mark.asyncio
+async def test_behavioral_reopen_not_suppressed():
+    # A completed goal with a NON-shape signature reopens normally — the
+    # behavior-refute gate is shape-only.
+    sig = "engine.py|_handle_move"
+    goal = GoalRecord(
+        description="movement between rooms is broken",
+        type="functional",
+        status="complete",
+        origin="quality_gate",
+        finding_signature=sig,
+        interaction_mode="exploratory",
+    )
+    m = _shape_mission(goal)
+    fx = MockEffects(mission=m)
+    await action_harvest_quality_findings(
+        _si(
+            {"mission": m, "quality_results": _shape_qg(sig, goal.description)},
+            effects=fx,
+        )
+    )
+    assert goal.status == "incomplete"  # reopened as normal
+    assert goal.shape_refutes == 0  # untouched (not a shape finding)
+
+
+@pytest.mark.asyncio
+async def test_in_flight_shape_goal_not_counted():
+    # An INCOMPLETE shape goal being re-flagged is skipped (in flight); only
+    # complete→reopen transitions count toward the refute streak.
+    sig = "shape|undeclared_key|rooms[2].exits|west"
+    desc = "rooms[2].exits: key 'west' is not in the declared example"
+    goal = GoalRecord(
+        description=desc,
+        type="functional",
+        status="incomplete",
+        origin="quality_gate",
+        finding_signature=sig,
+        interaction_mode="exploratory",
+    )
+    m = _shape_mission(goal)
+    fx = MockEffects(mission=m)
+    await action_harvest_quality_findings(
+        _si({"mission": m, "quality_results": _shape_qg(sig, desc)}, effects=fx)
+    )
+    assert goal.status == "incomplete"
+    assert goal.shape_refutes == 0
