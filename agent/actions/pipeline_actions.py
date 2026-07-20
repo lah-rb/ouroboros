@@ -1543,6 +1543,9 @@ async def action_store_goal_acceptance(step_input: StepInput) -> StepOutput:
     )
 
 
+_ACCEPTANCE_DISARM_K = 2  # behavior-refutes-check disarm threshold (cf _SHAPE_REFUTE_K)
+
+
 async def action_apply_acceptance_verdict(step_input: StepInput) -> StepOutput:
     """Fold the acceptance-check run into a deterministic verdict for the
     evaluator. acceptance_ok means "no deterministic objection" — with zero
@@ -1571,4 +1574,89 @@ async def action_apply_acceptance_verdict(step_input: StepInput) -> StepOutput:
             f"goal-acceptance: {'PASS' if ok else 'FAIL'} ({len(results)} check(s))"
         ),
         context_updates={"acceptance_ok": ok, "acceptance_summary": summary},
+    )
+
+
+async def action_reconcile_acceptance(step_input: StepInput) -> StepOutput:
+    """Reached only when the evaluator returned goal_met=true but a required
+    acceptance check FAILED (parse_evaluation's middle rule). The behavior
+    passed while the stored check objects — the check is REFUTED BY BEHAVIOR (a
+    brittle exact-grep an intentional edit broke, or a stateful check run in a
+    new context), NOT a real regression (a real regression keeps goal_met=false
+    and never routes here). Increment each failing check's per-goal conflict
+    counter; disarm (remove from acceptance_checks) any that reach
+    _ACCEPTANCE_DISARM_K; recompute the verdict over the survivors. now_ok=True
+    (the goal completes) iff every failing check was disarmed this pass — else
+    the counter advanced and disarm follows on a later pass. Mirrors the
+    shape_refutes suppression and is the SOLE self-healing path for a grounded
+    check (which never re-derives), so a false positive cannot immortalize a
+    goal.
+
+    Context: mission, validation_results.  Inputs: goal_id.
+    Publishes: mission, now_ok, acceptance_ok.
+    """
+    from agent.persistence.models import NoteRecord
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    goal_id = str(step_input.inputs.get("goal_id", "") or "")
+    results = list(step_input.context.get("validation_results") or [])
+    goal = next(
+        (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id), None
+    )
+    if goal is None or not results:
+        return StepOutput(
+            result={"now_ok": False},
+            observations="reconcile: no goal/results — keeping the veto",
+            context_updates={"now_ok": False, "acceptance_ok": False},
+        )
+
+    def _key(row: dict) -> str:
+        # run_acceptance_checks renders commands as ["/bin/sh","-c",cmd] via
+        # format_completion_criteria, so the row's command is that list; the
+        # stored acceptance_checks[].command is the raw cmd (the last element).
+        raw = row.get("command")
+        return raw[-1] if isinstance(raw, (list, tuple)) and raw else str(raw)
+
+    failed = [r for r in results if r.get("required", True) and not r.get("passed")]
+    disarmed: set[str] = set()
+    for row in failed:
+        k = _key(row)
+        goal.acceptance_conflicts[k] = goal.acceptance_conflicts.get(k, 0) + 1
+        if goal.acceptance_conflicts[k] >= _ACCEPTANCE_DISARM_K:
+            disarmed.add(k)
+
+    if disarmed:
+        goal.acceptance_checks = [
+            c
+            for c in (goal.acceptance_checks or [])
+            if c.get("command") not in disarmed
+        ]
+        for k in disarmed:
+            goal.acceptance_conflicts.pop(k, None)
+            mission.notes.append(
+                NoteRecord(
+                    content=(
+                        f"regression check DISARMED on '{goal.description[:70]}': "
+                        f"behavior passed (goal_met) while this check failed "
+                        f"{_ACCEPTANCE_DISARM_K}x -> refuted by behavior. "
+                        f"Removed: {k[:160]}"
+                    ),
+                    category="failure_analysis",
+                    tags=["regression", "disarm", goal.finding_signature or goal.id],
+                    source_flow="reconcile_acceptance",
+                )
+            )
+            logger.info("reconcile: disarmed check on '%s'", goal.description[:50])
+
+    now_ok = not [r for r in failed if _key(r) not in disarmed]
+    if effects:
+        await effects.save_mission(mission)
+    return StepOutput(
+        result={"now_ok": now_ok, "disarmed": len(disarmed)},
+        observations=(
+            f"reconcile: {len(disarmed)} disarmed, {len(failed)} failing, "
+            f"now_ok={now_ok}"
+        ),
+        context_updates={"mission": mission, "now_ok": now_ok, "acceptance_ok": now_ok},
     )

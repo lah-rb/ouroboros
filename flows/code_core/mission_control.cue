@@ -107,6 +107,9 @@ mission_control: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.phase == 'replan'", transition: "dispatch_replan"},
+						// Cross-goal regression suite: an edit landed with >=1 grounded
+						// completed goal — run every completed goal's acceptance checks.
+						{condition: "result.phase == 'regression'", transition: "regression_sweep_next"},
 						{condition: "result.phase == 'plan'", transition: "dispatch_planning"},
 					{condition: "result.phase == 'structural'", transition: "structural_sweep_next"},
 					{condition: "result.phase == 'environment'", transition: "dispatch_environment_setup"},
@@ -527,6 +530,26 @@ mission_control: #FlowDefinition & {
 			action:      "run_test_suite_gate"
 			description: "Run the repo's test suite; harvest fix goals or certify"
 			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "check_phase"}]
+			}
+			publishes: ["mission"]
+		}
+
+		// Cross-goal regression suite: after an edit lands with >=1 grounded
+		// completed goal, run EVERY completed goal's acceptance checks in
+		// parallel (deterministic, no inference); any that now fail means the
+		// edit regressed that goal -> reopen it. Clears its own trigger
+		// (last_regression_cycle) and re-enters phase routing. last_goal_id
+		// (optional) lets it skip the just-completed goal's own checks.
+		regression_sweep_next: #StepDefinition & {
+			action:      "regression_sweep"
+			description: "Run all completed goals' acceptance checks; reopen regressed goals"
+			context: {
+				required: ["mission"]
+				optional: ["last_goal_id"]
+			}
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "check_phase"}]

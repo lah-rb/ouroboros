@@ -250,3 +250,48 @@ def test_registry_contract():
     # Every spec must end in a terminal rule.
     for spec in FLOW_SETS.values():
         assert spec.phases[-1].kind == "terminal"
+
+
+def _grounded_complete_goal():
+    return GoalRecord(
+        description="done",
+        type="functional",
+        status="complete",
+        acceptance_checks=[{"command": "echo ok", "name": "c", "required": True}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_regression_pending_phase():
+    # Grounded completed goal + an edit since the last sweep -> regression fires.
+    g = _grounded_complete_goal()
+    m = _mission(goals=[g], env_verified=True)
+    m.last_edit_cycle, m.last_regression_cycle = 5, 3
+    phase, _ = await _phase(m)
+    assert phase == "regression"
+
+    # No edit since the last sweep -> not regression (all complete -> quality).
+    m.last_regression_cycle = 5
+    phase, _ = await _phase(m)
+    assert phase != "regression"
+
+    # Edit since sweep but NO grounded check -> not regression (nothing to protect).
+    g.acceptance_checks = []
+    m.last_regression_cycle = 3
+    phase, _ = await _phase(m)
+    assert phase != "regression"
+
+
+@pytest.mark.asyncio
+async def test_regression_preempts_functional_but_not_replan():
+    g = _grounded_complete_goal()
+    open_fn = _goal("functional", status="incomplete")
+    m = _mission(goals=[g, open_fn], env_verified=True)
+    m.last_edit_cycle, m.last_regression_cycle = 5, 3
+    # An incomplete functional goal exists, but the armed regression preempts it.
+    phase, _ = await _phase(m)
+    assert phase == "regression"
+    # ...yet a pending directive (replan) still preempts regression.
+    m.pending_directive = "add feature X"
+    phase, _ = await _phase(m)
+    assert phase == "replan"

@@ -180,6 +180,7 @@ def build_action_registry() -> ActionRegistry:
         action_functional_sweep_next,
         action_harvest_quality_findings,
         action_quality_sweep_next,
+        action_regression_sweep,
         action_run_test_suite_gate,
         # In-graph task router (classify flow)
         action_persist_routing,
@@ -419,6 +420,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("harvest_quality_findings", action_harvest_quality_findings)
     registry.register("quality_sweep_next", action_quality_sweep_next)
     registry.register("run_test_suite_gate", action_run_test_suite_gate)
+    registry.register("regression_sweep", action_regression_sweep)
     # Fix target resolution — menu assembly moved to fix_target_menu projection
     registry.register("persist_routing", action_persist_routing)
     from agent.actions.router_actions import (
@@ -559,6 +561,7 @@ def build_action_registry() -> ActionRegistry:
         action_derive_repair_tests,
         action_evaluate_deterministic_result,
         action_gate_goal_acceptance,
+        action_reconcile_acceptance,
         action_store_goal_acceptance,
     )
 
@@ -571,6 +574,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("gate_goal_acceptance", action_gate_goal_acceptance)
     registry.register("store_goal_acceptance", action_store_goal_acceptance)
     registry.register("apply_acceptance_verdict", action_apply_acceptance_verdict)
+    registry.register("reconcile_acceptance", action_reconcile_acceptance)
     # Repair test loop (Phase B.5): select + baseline the repo's own failing
     # tests for a repair goal (reused by the functional sweep + test gate).
     registry.register("derive_repair_tests", action_derive_repair_tests)

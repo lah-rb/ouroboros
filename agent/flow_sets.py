@@ -44,6 +44,10 @@ class PhaseRule:
                             (inverse of flag_unset; for a pending field like
                             ``pending_directive`` that, when set, must intercept
                             before the normal phases)
+      regression_pending  — a file changed since the last regression sweep
+                            (``last_edit_cycle > last_regression_cycle``) AND a
+                            grounded completed goal exists -> ``phase`` (runs the
+                            cross-goal acceptance-check regression suite)
       terminal            — always matches (the spec's final rule)
     """
 
@@ -52,6 +56,7 @@ class PhaseRule:
         "goal_type_incomplete",
         "flag_unset",
         "attr_truthy",
+        "regression_pending",
         "terminal",
     ]
     phase: str
@@ -85,6 +90,18 @@ CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
         phase="replan",
         flag="pending_directive",
         observation="Pending directive — decomposing into goals (brownfield replan)",
+    ),
+    # Cross-goal regression suite: after an edit lands with >=1 grounded
+    # completed goal, run every completed goal's acceptance checks as a
+    # regression suite before continuing. High priority (right after replan) so
+    # a break is caught on the next cycle; inert until a verified goal exists
+    # (the guard requires a grounded completed goal), so it never fires during
+    # the structural batch phase. Cleared by action_regression_sweep advancing
+    # last_regression_cycle. See evaluate_phases (regression_pending).
+    PhaseRule(
+        kind="regression_pending",
+        phase="regression",
+        observation="Edit since last sweep — running cross-goal regression suite",
     ),
     PhaseRule(kind="requires_planning", phase="plan"),
     PhaseRule(
@@ -340,6 +357,20 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
             # mission (getattr -> None -> falsy), so a pre-mission state
             # falls through to the planning precondition rather than erroring.
             if getattr(mission, rule.flag, None):
+                return rule.phase, rule.observation
+            continue
+
+        if rule.kind == "regression_pending":
+            # A file changed since the last sweep AND there is verified behavior
+            # to protect (a grounded completed goal). Both clauses required:
+            # grounding only happens after a genuine pass, so this is inert
+            # during the structural batch phase. Safe on a None mission.
+            if getattr(mission, "last_edit_cycle", -1) > getattr(
+                mission, "last_regression_cycle", -1
+            ) and any(
+                g.status == "complete" and getattr(g, "acceptance_checks", None)
+                for g in getattr(mission, "goals", []) or []
+            ):
                 return rule.phase, rule.observation
             continue
 

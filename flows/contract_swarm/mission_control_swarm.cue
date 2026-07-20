@@ -98,6 +98,9 @@ mission_control_swarm: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.phase == 'replan'", transition: "dispatch_replan"},
+						// Cross-goal regression suite: an edit landed with >=1 grounded
+						// completed goal — run every completed goal's acceptance checks.
+						{condition: "result.phase == 'regression'", transition: "regression_sweep_next"},
 						{condition: "result.phase == 'plan'", transition: "dispatch_planning"},
 					{condition: "result.phase == 'structural'", transition: "structural_sweep_next"},
 					{condition: "result.phase == 'environment'", transition: "dispatch_environment_setup"},
@@ -518,6 +521,23 @@ mission_control_swarm: #FlowDefinition & {
 			action:      "run_test_suite_gate"
 			description: "Run the repo's test suite; harvest fix goals or certify"
 			context: required: ["mission"]
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "check_phase"}]
+			}
+			publishes: ["mission"]
+		}
+
+		// Cross-goal regression suite (mirror of code_core mission_control): run
+		// every completed goal's acceptance checks after an edit lands; reopen
+		// any goal whose check now fails. Deterministic; clears its own trigger.
+		regression_sweep_next: #StepDefinition & {
+			action:      "regression_sweep"
+			description: "Run all completed goals' acceptance checks; reopen regressed goals"
+			context: {
+				required: ["mission"]
+				optional: ["last_goal_id"]
+			}
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "check_phase"}]

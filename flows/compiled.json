@@ -6201,6 +6201,10 @@
               "transition": "end_eval_session_success"
             },
             {
+              "condition": "result.get('goal_met') == true and context.get('acceptance_ok', true) == false",
+              "transition": "reconcile_acceptance"
+            },
+            {
               "condition": "true",
               "transition": "end_eval_session_failure"
             }
@@ -6210,6 +6214,40 @@
           "goal_met",
           "headline",
           "summary"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "reconcile_acceptance": {
+        "action": "reconcile_acceptance",
+        "description": "Disarm a behavior-refuted acceptance check; recompute the verdict",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "validation_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.get('now_ok') == true",
+              "transition": "end_eval_session_success"
+            },
+            {
+              "condition": "true",
+              "transition": "end_eval_session_failure"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "now_ok",
+          "acceptance_ok"
         ],
         "effects": [],
         "terminal": false
@@ -6896,6 +6934,10 @@
             {
               "condition": "result.phase == 'replan'",
               "transition": "dispatch_replan"
+            },
+            {
+              "condition": "result.phase == 'regression'",
+              "transition": "regression_sweep_next"
             },
             {
               "condition": "result.phase == 'plan'",
@@ -7643,6 +7685,34 @@
             "mission"
           ],
           "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "regression_sweep_next": {
+        "action": "regression_sweep",
+        "description": "Run all completed goals' acceptance checks; reopen regressed goals",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "last_goal_id"
+          ]
         },
         "params": {},
         "config": {},
@@ -13167,6 +13237,10 @@
               "transition": "dispatch_replan"
             },
             {
+              "condition": "result.phase == 'regression'",
+              "transition": "regression_sweep_next"
+            },
+            {
               "condition": "result.phase == 'plan'",
               "transition": "dispatch_planning"
             },
@@ -13912,6 +13986,34 @@
             "mission"
           ],
           "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "regression_sweep_next": {
+        "action": "regression_sweep",
+        "description": "Run all completed goals' acceptance checks; reopen regressed goals",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "last_goal_id"
+          ]
         },
         "params": {},
         "config": {},

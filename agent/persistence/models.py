@@ -270,6 +270,15 @@ class GoalRecord(BaseModel):
     # pre-port behavior). acceptance_grounded is the one-shot guard.
     acceptance_checks: list[dict] = Field(default_factory=list)
     acceptance_grounded: bool = False
+    # Regression disarm-on-refute (mirrors shape_refutes, but per-check): times
+    # each acceptance check has been REFUTED BY BEHAVIOR — the evaluator returned
+    # goal_met=true while this exact required check failed. Keyed by the check's
+    # command string. At _ACCEPTANCE_DISARM_K the check is removed from
+    # acceptance_checks (a brittle / stateful / intentionally-edited check the
+    # behavior contradicts). A real regression keeps behavior failing →
+    # goal_met=false → this never increments, so real-break detection is
+    # preserved. See action_reconcile_acceptance / action_regression_sweep.
+    acceptance_conflicts: dict[str, int] = Field(default_factory=dict)
     # Stuck-goal external search (ops port — TaskState.search_findings analog):
     # exa hits surfaced into the diagnose seed as NEW INFORMATION once a goal
     # has looped (len(failed_attempts) >= 2). One-shot sentinel — set once
@@ -876,6 +885,16 @@ class MissionState(BaseModel):
     # (test_suite) fires the gate until this is set. Failures harvest fix goals
     # instead of setting it, so the functional→fix loop runs first.
     tests_verified: bool = False
+    # Cross-goal regression suite: last_edit_cycle is set (in
+    # attach_directive_report) to the cycle of the most recent file-affecting
+    # report; last_regression_cycle to the cycle of the last sweep. The
+    # `regression_pending` PhaseRule fires when last_edit_cycle >
+    # last_regression_cycle AND a grounded completed goal exists — "a file
+    # changed since the last sweep AND there is verified behavior to protect".
+    # Additive defaults keep old mission.json loading. See
+    # action_regression_sweep + CODE_CORE_PHASES.
+    last_edit_cycle: int = -1
+    last_regression_cycle: int = -1
     # How many times this mission has been reopened after reaching a terminal
     # state (completed/aborted) via `mission reopen`. 0 = original run. Stamped
     # onto goals added in a later generation so reports can distinguish scope

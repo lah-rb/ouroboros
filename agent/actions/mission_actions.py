@@ -2937,6 +2937,155 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
     )
 
 
+_REGRESSION_CONCURRENCY = 8
+_REGRESSION_CHECK_TIMEOUT = 30
+
+
+async def action_regression_sweep(step_input: StepInput) -> StepOutput:
+    """Cross-goal regression suite: run EVERY completed goal's required
+    acceptance checks in parallel (no short-circuit), map each FAIL back to its
+    owning goal, and reopen that goal with a failure note. Turns the per-goal
+    acceptance checks (a regression guard each) into an emergent CI suite that
+    catches an edit for one goal breaking another goal's verified behavior.
+
+    Skips the just-completed goal (its checks just passed, and a stateful check
+    could false-fail run standalone here) — best-effort, since the disarm-on-
+    refute backstop covers any missed skip. Always advances
+    last_regression_cycle to disarm the regression PhaseRule until the next edit
+    (also stops an in-run check_phase -> regression loop). A persistently-
+    refuted (brittle/stateful) check is removed by the interact backstop
+    (action_reconcile_acceptance), so a false positive cannot immortalize a goal.
+
+    Context: mission (required), last_goal_id (optional).
+    Publishes: mission.
+    """
+    import asyncio
+
+    from agent.actions.check_result import check_result
+    from agent.persistence.models import NoteRecord
+    from agent.trace import get_step_context
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    if not mission:
+        return StepOutput(result={"reopened": 0}, observations="No mission")
+
+    skip_id = str(
+        step_input.inputs.get("last_goal_id", "")
+        or step_input.context.get("last_goal_id", "")
+        or ""
+    )
+    sc = get_step_context() or {}
+    cycle = int(sc.get("cycle", 0) or 0)
+    # Disarm the regression PhaseRule regardless of outcome (set before the save
+    # so it persists; the next file-affecting report re-arms via last_edit_cycle).
+    mission.last_regression_cycle = cycle
+
+    if effects is None:
+        return StepOutput(
+            result={"reopened": 0},
+            observations="Regression sweep: no effects",
+            context_updates={"mission": mission},
+        )
+
+    pairs = [
+        (g, c)
+        for g in mission.goals
+        if g.status == "complete" and g.id != skip_id
+        for c in (g.acceptance_checks or [])
+        if c.get("required", True)
+        and isinstance(c.get("command"), str)
+        and c["command"].strip()
+    ]
+
+    reopened: set[str] = set()
+    ran = 0
+    if pairs:
+        sem = asyncio.Semaphore(_REGRESSION_CONCURRENCY)
+
+        async def _run(goal, check):
+            cmd = check["command"]
+            async with sem:
+                try:
+                    res = await effects.run_command(
+                        ["/bin/sh", "-c", cmd], timeout=_REGRESSION_CHECK_TIMEOUT
+                    )
+                    passed = res.return_code == 0 and not getattr(
+                        res, "timed_out", False
+                    )
+                    return (
+                        goal,
+                        check,
+                        check_result(
+                            check.get("name", "acceptance check"),
+                            cmd,
+                            passed,
+                            required=True,
+                            stdout=res.stdout,
+                            stderr=res.stderr,
+                            return_code=res.return_code,
+                        ),
+                    )
+                except (
+                    Exception
+                ) as e:  # noqa: BLE001 — a bad check never aborts the sweep
+                    return (
+                        goal,
+                        check,
+                        check_result(
+                            check.get("name", "acceptance check"),
+                            cmd,
+                            False,
+                            required=True,
+                            stderr=str(e),
+                            return_code=1,
+                        ),
+                    )
+
+        outcomes = await asyncio.gather(*(_run(g, c) for g, c in pairs))
+        ran = len(outcomes)
+        for goal, check, row in outcomes:
+            if row["passed"] or goal.id in reopened:
+                continue
+            goal.status = "incomplete"  # reopen idiom (harvester @2854)
+            reopened.add(goal.id)
+            mission.notes.append(
+                NoteRecord(
+                    content=(
+                        f"regression: goal '{goal.description[:80]}' reopened — its "
+                        f"acceptance check failed after an edit (triggering "
+                        f"goal_id={skip_id or 'n/a'}). check={check['command'][:160]} "
+                        f"| rc={row['return_code']} stderr={row['stderr'][:160]}"
+                    ),
+                    category="failure_analysis",
+                    tags=[
+                        t
+                        for t in [
+                            "regression",
+                            goal.finding_signature or goal.id,
+                            skip_id,
+                        ]
+                        if t
+                    ],
+                    source_flow="regression_sweep_next",
+                )
+            )
+            logger.info("Regression sweep: reopened '%s'", goal.description[:50])
+
+    await effects.save_mission(mission)
+    obs = (
+        f"ran {ran} check(s) over {len({g.id for g, _ in pairs})} goal(s) -> "
+        f"{len(reopened)} reopened"
+        if pairs
+        else "no grounded checks to regress"
+    )
+    return StepOutput(
+        result={"reopened": len(reopened)},
+        observations=f"Regression sweep: {obs}",
+        context_updates={"mission": mission},
+    )
+
+
 _TEST_GATE_SIG = "test-gate:"
 
 

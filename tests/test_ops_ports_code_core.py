@@ -409,7 +409,11 @@ def test_interact_wiring_acceptance_rung():
     cond = pe[0]["condition"]
     assert "acceptance_ok" in cond and "goal_met" in cond
     assert pe[0]["transition"] == "end_eval_session_success"
-    assert pe[1]["transition"] == "end_eval_session_failure"
+    # Regression backstop middle rule: behavior passed (goal_met) but a required
+    # acceptance check failed → reconcile (disarm-on-refute), NOT outright fail.
+    assert pe[1]["transition"] == "reconcile_acceptance"
+    assert "goal_met" in pe[1]["condition"] and "== false" in pe[1]["condition"]
+    assert pe[2]["transition"] == "end_eval_session_failure"
     # Success branch arms the check only when the goal wasn't yet grounded.
     assert (
         steps["end_eval_session_success"]["resolver"]["rules"][0]["transition"]

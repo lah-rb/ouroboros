@@ -380,10 +380,40 @@ interact: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.get('goal_met') == true and context.get('acceptance_ok', true) == true", transition: "end_eval_session_success"},
+					// Behavior passed (goal_met) but a required acceptance check
+					// failed -> the check is refuted by behavior (brittle/stateful),
+					// not a real regression. Reconcile: disarm it at K, else keep the
+					// veto. A real regression has goal_met==false -> terminal failure
+					// below, so it never reaches disarm (safe by construction).
+					{condition: "result.get('goal_met') == true and context.get('acceptance_ok', true) == false", transition: "reconcile_acceptance"},
 					{condition: "true", transition: "end_eval_session_failure"},
 				]
 			}
 			publishes: ["goal_met", "headline", "summary"]
+		}
+
+		// Behavior refutes an acceptance check (goal_met=true but a required
+		// check failed): increment that check's per-goal conflict counter, disarm
+		// it at K, and recompute the verdict over survivors. now_ok -> the goal
+		// completes (every failing check was disarmed); else fail (counter
+		// advanced, disarm follows a later pass). The ONLY self-healing path for
+		// a grounded check (which never re-derives) — prevents a brittle/stateful
+		// check reopened by the regression sweep from sticking forever.
+		reconcile_acceptance: #StepDefinition & {
+			action:      "reconcile_acceptance"
+			description: "Disarm a behavior-refuted acceptance check; recompute the verdict"
+			context: {
+				required: ["mission"]
+				optional: ["validation_results"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.get('now_ok') == true", transition: "end_eval_session_success"},
+					{condition: "true", transition: "end_eval_session_failure"},
+				]
+			}
+			publishes: ["mission", "now_ok", "acceptance_ok"]
 		}
 
 		// Release the memoryful inference session now that evaluation is done.
