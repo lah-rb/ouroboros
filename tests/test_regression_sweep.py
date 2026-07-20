@@ -76,6 +76,13 @@ def _si(mission, effects, last_goal_id: str = "") -> StepInput:
     )
 
 
+def _reopened(gid: str, checks: list[dict]) -> GoalRecord:
+    # An incomplete goal the sweep itself reopened (auto-complete-eligible).
+    g = _goal(gid, checks, status="incomplete")
+    g.regression_reopened = True
+    return g
+
+
 # ── the sweep ─────────────────────────────────────────────────────────
 
 
@@ -254,3 +261,110 @@ def test_regression_step_wired_in_both_controllers():
             if r.get("transition") == "regression_sweep_next"
         ]
         assert routes, f"{ctrl} check_phase does not route 'regression'"
+
+
+# ── auto-complete direction (bidirectional sweep) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_sweep_autocompletes_reopened_goal_on_pass():
+    g = _reopened("g", [_check("recheck")])
+    m = _mission([g])
+    fx = MockEffects(commands={_wrap("recheck"): _cmd(0)})
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert g.status == "complete"
+    assert g.regression_reopened is False
+    assert g.regression_autocompleted is True
+    assert g.acceptance_checks == [_check("recheck")]  # NOT cleared
+    assert out.result["autocompleted"] == 1
+    assert len(fx.calls_to("save_mission")) == 1
+    assert any("auto_complete" in (n.tags or []) for n in m.notes)
+
+
+@pytest.mark.asyncio
+async def test_wave_reclears_blast_radius_after_root_fix():
+    gs = [_reopened(f"g{i}", [_check(f"c{i}")]) for i in range(3)]
+    m = _mission(gs)
+    fx = MockEffects(commands={_wrap(f"c{i}"): _cmd(0) for i in range(3)})
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert out.result["autocompleted"] == 3  # whole blast radius in one sweep
+    assert all(g.status == "complete" for g in gs)
+
+
+@pytest.mark.asyncio
+async def test_only_sweep_reopened_goals_autocomplete():
+    # Incomplete grounded goal that was NOT reopened by the sweep (harvester/
+    # design reopen) — a passing check must NOT auto-complete it.
+    g = _goal("g", [_check("passes")], status="incomplete")  # regression_reopened=False
+    m = _mission([g])
+    fx = MockEffects(commands={_wrap("passes"): _cmd(0)})
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert g.status == "incomplete"
+    assert out.result["autocompleted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_reopened_goal_failing_check_stays_reopened():
+    g = _reopened("g", [_check("still_fails")])
+    m = _mission([g])
+    fx = MockEffects(commands={_wrap("still_fails"): _cmd(1)})
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert g.status == "incomplete"
+    assert g.regression_reopened is True
+    assert out.result["autocompleted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_flipflop_guard_forces_interact_after_first_autocomplete():
+    # A goal already auto-completed once, now breaking again, must reopen with
+    # regression_reopened=False (forced down the interact/disarm path); a fresh
+    # goal reopens eligible (True).
+    g = _goal("g", [_check("now_fails")], status="complete")
+    g.regression_autocompleted = True
+    fresh = _goal("f", [_check("also_fails")], status="complete")
+    m = _mission([g, fresh])
+    fx = MockEffects(
+        commands={_wrap("now_fails"): _cmd(1), _wrap("also_fails"): _cmd(1)}
+    )
+
+    await action_regression_sweep(_si(m, fx))
+
+    assert g.status == "incomplete" and g.regression_reopened is False
+    assert fresh.status == "incomplete" and fresh.regression_reopened is True
+
+
+@pytest.mark.asyncio
+async def test_multi_check_goal_needs_all_pass_to_autocomplete():
+    # Two required checks, only one passes → must NOT auto-complete (pins the
+    # per-goal aggregation; a per-check loop would wrongly complete it).
+    g = _reopened("g", [_check("passA"), _check("failB")])
+    m = _mission([g])
+    fx = MockEffects(commands={_wrap("passA"): _cmd(0), _wrap("failB"): _cmd(1)})
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert g.status == "incomplete"
+    assert out.result["autocompleted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_bidirectional_same_batch():
+    reopened_g = _reopened("r", [_check("fixed")])
+    complete_g = _goal("c", [_check("broke")], status="complete")
+    m = _mission([reopened_g, complete_g])
+    fx = MockEffects(commands={_wrap("fixed"): _cmd(0), _wrap("broke"): _cmd(1)})
+
+    out = await action_regression_sweep(_si(m, fx))
+
+    assert reopened_g.status == "complete"
+    assert complete_g.status == "incomplete"
+    assert out.result == {"reopened": 1, "autocompleted": 1}
+    assert len(fx.calls_to("save_mission")) == 1

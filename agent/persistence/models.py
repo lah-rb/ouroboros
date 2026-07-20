@@ -279,6 +279,20 @@ class GoalRecord(BaseModel):
     # goal_met=false → this never increments, so real-break detection is
     # preserved. See action_reconcile_acceptance / action_regression_sweep.
     acceptance_conflicts: dict[str, int] = Field(default_factory=dict)
+    # Bidirectional regression sweep (auto-complete the blast radius). Set True
+    # ONLY by action_regression_sweep when it reopens a goal — marks it
+    # auto-complete-eligible: a deterministic check (not the harvester/test-gate/
+    # design) de-certified an already-grounded goal, so a later PASSING check
+    # RE-certifies a known-good state (not a fresh certification). Cleared on any
+    # completion (auto-complete, or interact success — so a later reopen by
+    # another provenance can't inherit stale eligibility).
+    regression_reopened: bool = False
+    # Flip-flop guard: set True on auto-complete. On the next reopen the sweep
+    # sets regression_reopened = not regression_autocompleted, so a goal that
+    # already auto-completed once and breaks AGAIN is forced down the interact
+    # path (which can reach reconcile_acceptance to disarm a genuinely flaky /
+    # nondeterministic check). Reset on interact-success completion.
+    regression_autocompleted: bool = False
     # Stuck-goal external search (ops port — TaskState.search_findings analog):
     # exa hits surfaced into the diagnose seed as NEW INFORMATION once a goal
     # has looped (len(failed_attempts) >= 2). One-shot sentinel — set once

@@ -2494,6 +2494,13 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
         # interact success means goal_met was true (the flow routes on this)
         if report_flow == "interact" and report_status == "success":
             goal.status = "complete"
+            # Bidirectional regression sweep: a genuine full-bar re-cert clears
+            # the sweep-provenance marker (MANDATORY — a later harvester/test-gate
+            # reopen must not inherit stale auto-complete eligibility) and re-arms
+            # the flip-flop guard (permissive: a future distinct break may
+            # auto-complete again after a real re-verification here).
+            goal.regression_reopened = False
+            goal.regression_autocompleted = False
             # failed_attempts survive completion — the archive sweep
             # relocates them (retry patterns are mining material).
             logger.info("Functional sweep: '%s' completed", goal.description[:50])
@@ -2942,19 +2949,25 @@ _REGRESSION_CHECK_TIMEOUT = 30
 
 
 async def action_regression_sweep(step_input: StepInput) -> StepOutput:
-    """Cross-goal regression suite: run EVERY completed goal's required
-    acceptance checks in parallel (no short-circuit), map each FAIL back to its
-    owning goal, and reopen that goal with a failure note. Turns the per-goal
-    acceptance checks (a regression guard each) into an emergent CI suite that
-    catches an edit for one goal breaking another goal's verified behavior.
+    """Bidirectional cross-goal regression suite. Runs required acceptance
+    checks in parallel (no short-circuit), aggregated PER GOAL:
 
-    Skips the just-completed goal (its checks just passed, and a stateful check
-    could false-fail run standalone here) — best-effort, since the disarm-on-
-    refute backstop covers any missed skip. Always advances
-    last_regression_cycle to disarm the regression PhaseRule until the next edit
-    (also stops an in-run check_phase -> regression loop). A persistently-
-    refuted (brittle/stateful) check is removed by the interact backstop
-    (action_reconcile_acceptance), so a false positive cannot immortalize a goal.
+    - REOPEN direction — every COMPLETE goal's checks; if ANY fail, an edit
+      regressed a verified behavior -> reopen the goal (mark regression_reopened
+      so it's auto-complete-eligible; the flip-flop guard leaves it False if it
+      was already auto-completed once, forcing the interact path).
+    - AUTO-COMPLETE direction — goals the sweep itself reopened
+      (regression_reopened, grounded); if ALL their checks pass, a collateral/
+      root fix re-cleared them -> complete them (do NOT re-derive), so a root
+      fix re-clears its whole blast radius in one deterministic wave instead of
+      one interact cycle per goal.
+
+    Skips the just-completed goal in the reopen direction (best-effort; the
+    disarm backstop covers a missed skip). Always advances last_regression_cycle
+    to disarm the PhaseRule until the next edit. A persistently-refuted
+    (brittle/stateful) check is removed by the interact backstop
+    (action_reconcile_acceptance) — a false positive cannot immortalize or
+    wrongly-close a goal (a genuine regression keeps the check failing).
 
     Context: mission (required), last_goal_id (optional).
     Publishes: mission.
@@ -2988,7 +3001,9 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
             context_updates={"mission": mission},
         )
 
-    pairs = [
+    # Direction 1 (reopen): completed goals' required checks — a FAIL means an
+    # edit regressed a verified behavior -> reopen the owning goal.
+    complete_pairs = [
         (g, c)
         for g in mission.goals
         if g.status == "complete" and g.id != skip_id
@@ -2997,13 +3012,28 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
         and isinstance(c.get("command"), str)
         and c["command"].strip()
     ]
+    # Direction 2 (auto-complete): goals the SWEEP itself reopened, still
+    # grounded — a PASS means a collateral/root fix re-cleared them. skip_id is
+    # irrelevant here (these are incomplete, not the just-completed goal).
+    recomplete_pairs = [
+        (g, c)
+        for g in mission.goals
+        if g.status == "incomplete"
+        and getattr(g, "regression_reopened", False)
+        and getattr(g, "acceptance_grounded", False)
+        for c in (g.acceptance_checks or [])
+        if c.get("required", True)
+        and isinstance(c.get("command"), str)
+        and c["command"].strip()
+    ]
 
     reopened: set[str] = set()
+    autocompleted: set[str] = set()
     ran = 0
-    if pairs:
+    if complete_pairs or recomplete_pairs:
         sem = asyncio.Semaphore(_REGRESSION_CONCURRENCY)
 
-        async def _run(goal, check):
+        async def _run(goal, check, direction):
             cmd = check["command"]
             async with sem:
                 try:
@@ -3013,74 +3043,123 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
                     passed = res.return_code == 0 and not getattr(
                         res, "timed_out", False
                     )
-                    return (
-                        goal,
-                        check,
-                        check_result(
-                            check.get("name", "acceptance check"),
-                            cmd,
-                            passed,
-                            required=True,
-                            stdout=res.stdout,
-                            stderr=res.stderr,
-                            return_code=res.return_code,
-                        ),
+                    row = check_result(
+                        check.get("name", "acceptance check"),
+                        cmd,
+                        passed,
+                        required=True,
+                        stdout=res.stdout,
+                        stderr=res.stderr,
+                        return_code=res.return_code,
                     )
-                except (
-                    Exception
-                ) as e:  # noqa: BLE001 — a bad check never aborts the sweep
-                    return (
-                        goal,
-                        check,
-                        check_result(
-                            check.get("name", "acceptance check"),
-                            cmd,
-                            False,
-                            required=True,
-                            stderr=str(e),
-                            return_code=1,
-                        ),
+                except Exception as e:  # noqa: BLE001 — a bad check never aborts
+                    row = check_result(
+                        check.get("name", "acceptance check"),
+                        cmd,
+                        False,
+                        required=True,
+                        stderr=str(e),
+                        return_code=1,
                     )
+            return direction, goal, check, row
 
-        outcomes = await asyncio.gather(*(_run(g, c) for g, c in pairs))
+        outcomes = await asyncio.gather(
+            *[_run(g, c, "reopen") for g, c in complete_pairs],
+            *[_run(g, c, "recomplete") for g, c in recomplete_pairs],
+        )
         ran = len(outcomes)
-        for goal, check, row in outcomes:
-            if row["passed"] or goal.id in reopened:
-                continue
-            goal.status = "incomplete"  # reopen idiom (harvester @2854)
-            reopened.add(goal.id)
-            mission.notes.append(
-                NoteRecord(
-                    content=(
-                        f"regression: goal '{goal.description[:80]}' reopened — its "
-                        f"acceptance check failed after an edit (triggering "
-                        f"goal_id={skip_id or 'n/a'}). check={check['command'][:160]} "
-                        f"| rc={row['return_code']} stderr={row['stderr'][:160]}"
-                    ),
-                    category="failure_analysis",
-                    tags=[
-                        t
-                        for t in [
-                            "regression",
-                            goal.finding_signature or goal.id,
-                            skip_id,
-                        ]
-                        if t
-                    ],
-                    source_flow="regression_sweep_next",
-                )
+
+        # Aggregate PER GOAL: reopen if ANY required check failed; auto-complete
+        # only if ALL required checks pass (a per-check loop would auto-complete
+        # a multi-check goal on its first passing check while another failed).
+        by_goal: dict = {}
+        for direction, goal, check, row in outcomes:
+            slot = by_goal.setdefault(
+                goal.id, {"goal": goal, "direction": direction, "rows": []}
             )
-            logger.info("Regression sweep: reopened '%s'", goal.description[:50])
+            slot["rows"].append((check, row))
+
+        for gid, slot in by_goal.items():
+            goal = slot["goal"]
+            rows = slot["rows"]
+            if slot["direction"] == "reopen":
+                failed = next((r for _, r in rows if not r["passed"]), None)
+                if failed is None:
+                    continue  # complete + all pass -> no-op
+                goal.status = "incomplete"  # reopen idiom (harvester)
+                # flip-flop guard: a goal already auto-completed once is NOT
+                # eligible again — force it down the interact path (disarm-capable).
+                goal.regression_reopened = not getattr(
+                    goal, "regression_autocompleted", False
+                )
+                reopened.add(gid)
+                bad_cmd = next((c["command"] for c, r in rows if not r["passed"]), "")
+                mission.notes.append(
+                    NoteRecord(
+                        content=(
+                            f"regression: goal '{goal.description[:80]}' reopened — "
+                            f"an acceptance check failed after an edit (triggering "
+                            f"goal_id={skip_id or 'n/a'}). check={bad_cmd[:160]} "
+                            f"| rc={failed['return_code']} stderr={failed['stderr'][:160]}"
+                        ),
+                        category="failure_analysis",
+                        tags=[
+                            t
+                            for t in [
+                                "regression",
+                                goal.finding_signature or goal.id,
+                                skip_id,
+                            ]
+                            if t
+                        ],
+                        source_flow="regression_sweep_next",
+                    )
+                )
+                logger.info("Regression sweep: reopened '%s'", goal.description[:50])
+            else:  # recomplete
+                if not all(r["passed"] for _, r in rows):
+                    continue  # still failing -> stays reopened (no-op)
+                goal.status = "complete"  # AUTO-COMPLETE (do NOT re-derive)
+                goal.regression_reopened = False
+                goal.regression_autocompleted = True  # arm the flip-flop guard
+                autocompleted.add(gid)
+                mission.notes.append(
+                    NoteRecord(
+                        content=(
+                            f"regression resolved: goal '{goal.description[:80]}' "
+                            f"auto-completed — its acceptance check(s) passed again "
+                            f"after a fix (triggering goal_id={skip_id or 'n/a'})."
+                        ),
+                        category="general",
+                        tags=[
+                            t
+                            for t in [
+                                "regression",
+                                "auto_complete",
+                                goal.finding_signature or goal.id,
+                                skip_id,
+                            ]
+                            if t
+                        ],
+                        source_flow="regression_sweep_next",
+                    )
+                )
+                logger.info(
+                    "Regression sweep: auto-completed '%s'", goal.description[:50]
+                )
 
     await effects.save_mission(mission)
+    n_goals = len(
+        {g.id for g, _ in complete_pairs} | {g.id for g, _ in recomplete_pairs}
+    )
     obs = (
-        f"ran {ran} check(s) over {len({g.id for g, _ in pairs})} goal(s) -> "
-        f"{len(reopened)} reopened"
-        if pairs
-        else "no grounded checks to regress"
+        f"ran {ran} check(s) over {n_goals} goal(s) -> {len(reopened)} reopened, "
+        f"{len(autocompleted)} auto-completed"
+        if (complete_pairs or recomplete_pairs)
+        else "no grounded checks to sweep"
     )
     return StepOutput(
-        result={"reopened": len(reopened)},
+        result={"reopened": len(reopened), "autocompleted": len(autocompleted)},
         observations=f"Regression sweep: {obs}",
         context_updates={"mission": mission},
     )

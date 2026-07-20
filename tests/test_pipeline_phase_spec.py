@@ -295,3 +295,38 @@ async def test_regression_preempts_functional_but_not_replan():
     m.pending_directive = "add feature X"
     phase, _ = await _phase(m)
     assert phase == "replan"
+
+
+def _sweep_reopened_goal(*, grounded=True, checks=True):
+    g = GoalRecord(
+        description="reopened",
+        type="functional",
+        status="incomplete",
+        acceptance_checks=(
+            [{"command": "echo ok", "name": "c", "required": True}] if checks else []
+        ),
+        acceptance_grounded=grounded,
+    )
+    g.regression_reopened = True
+    return g
+
+
+@pytest.mark.asyncio
+async def test_regression_pending_fires_for_autocomplete_only_wave():
+    # No complete grounded goal — only a sweep-reopened grounded incomplete one.
+    # The widened guard must still fire so the auto-complete wave runs (else the
+    # blast radius re-clears one interact cycle at a time).
+    m = _mission(goals=[_sweep_reopened_goal()], env_verified=True)
+    m.last_edit_cycle, m.last_regression_cycle = 5, 3
+    phase, _ = await _phase(m)
+    assert phase == "regression"
+
+
+@pytest.mark.asyncio
+async def test_regression_pending_ignores_ungrounded_or_checkless_reopened():
+    # regression_reopened but not grounded (or no checks) -> not regression.
+    for kwargs in ({"grounded": False}, {"checks": False}):
+        m = _mission(goals=[_sweep_reopened_goal(**kwargs)], env_verified=True)
+        m.last_edit_cycle, m.last_regression_cycle = 5, 3
+        phase, _ = await _phase(m)
+        assert phase != "regression"

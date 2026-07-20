@@ -45,8 +45,10 @@ class PhaseRule:
                             ``pending_directive`` that, when set, must intercept
                             before the normal phases)
       regression_pending  — a file changed since the last regression sweep
-                            (``last_edit_cycle > last_regression_cycle``) AND a
-                            grounded completed goal exists -> ``phase`` (runs the
+                            (``last_edit_cycle > last_regression_cycle``) AND
+                            either a grounded completed goal exists (protect it)
+                            OR a sweep-reopened grounded incomplete goal exists
+                            (re-clear it) -> ``phase`` (runs the bidirectional
                             cross-goal acceptance-check regression suite)
       terminal            — always matches (the spec's final rule)
     """
@@ -91,13 +93,15 @@ CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
         flag="pending_directive",
         observation="Pending directive — decomposing into goals (brownfield replan)",
     ),
-    # Cross-goal regression suite: after an edit lands with >=1 grounded
-    # completed goal, run every completed goal's acceptance checks as a
-    # regression suite before continuing. High priority (right after replan) so
-    # a break is caught on the next cycle; inert until a verified goal exists
-    # (the guard requires a grounded completed goal), so it never fires during
-    # the structural batch phase. Cleared by action_regression_sweep advancing
-    # last_regression_cycle. See evaluate_phases (regression_pending).
+    # Cross-goal regression suite (bidirectional): after an edit lands, run
+    # every completed goal's acceptance checks (auto-reopen on a break) AND
+    # re-run sweep-reopened goals' checks (auto-complete on a fix — re-clear a
+    # root fix's whole blast radius in one wave). High priority (right after
+    # replan) so a break is caught on the next cycle; inert until a grounded
+    # goal exists (complete to protect, or sweep-reopened to re-clear), so it
+    # never fires during the structural batch phase. Cleared by
+    # action_regression_sweep advancing last_regression_cycle. See
+    # evaluate_phases (regression_pending).
     PhaseRule(
         kind="regression_pending",
         phase="regression",
@@ -361,14 +365,26 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
             continue
 
         if rule.kind == "regression_pending":
-            # A file changed since the last sweep AND there is verified behavior
-            # to protect (a grounded completed goal). Both clauses required:
-            # grounding only happens after a genuine pass, so this is inert
-            # during the structural batch phase. Safe on a None mission.
+            # A file changed since the last sweep AND there is something for the
+            # bidirectional sweep to act on: either a grounded COMPLETE goal to
+            # protect (auto-reopen direction) OR a sweep-reopened grounded
+            # INCOMPLETE goal to re-clear (auto-complete direction). The second
+            # clause is required so a root fix that leaves ONLY reopened goals
+            # still fires the wave (else they fall to functional and re-test one
+            # interact cycle at a time). Grounding only happens after a genuine
+            # pass, so this is inert during the structural batch phase. Safe on a
+            # None mission. Fires at most once per edit (sweep advances
+            # last_regression_cycle) → cannot loop.
             if getattr(mission, "last_edit_cycle", -1) > getattr(
                 mission, "last_regression_cycle", -1
             ) and any(
-                g.status == "complete" and getattr(g, "acceptance_checks", None)
+                (g.status == "complete" and getattr(g, "acceptance_checks", None))
+                or (
+                    g.status == "incomplete"
+                    and getattr(g, "regression_reopened", False)
+                    and getattr(g, "acceptance_grounded", False)
+                    and getattr(g, "acceptance_checks", None)
+                )
                 for g in getattr(mission, "goals", []) or []
             ):
                 return rule.phase, rule.observation
