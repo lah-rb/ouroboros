@@ -508,7 +508,9 @@
           "required": [
             "files_changed"
           ],
-          "optional": []
+          "optional": [
+            "mission"
+          ]
         },
         "params": {},
         "config": {},
@@ -12730,8 +12732,8 @@
           ]
         },
         "params": {
-          "workers": 6,
-          "worker_max_tokens": 4096
+          "max_workers": 32,
+          "pool_budget": 131072
         },
         "config": {},
         "resolver": {
@@ -12881,7 +12883,9 @@
           "required": [
             "files_changed"
           ],
-          "optional": []
+          "optional": [
+            "mission"
+          ]
         },
         "params": {},
         "config": {},
@@ -13047,6 +13051,3753 @@
             "last_status": "failed"
           }
         }
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "build_structure_contracted": {
+    "flow": "build_structure_contracted",
+    "version": 1,
+    "description": "Author per-module contracts (typed stubs + DbC docstrings + doctests +\nentity-id registry), then generate the whole project in ONE completion\nthat implements those contracts \u2014 no worker fan-out. Slices per-file,\ngates each file, completes passing structural goals, returns a batch\nsummary to mission_control_contracted.",
+    "context_tier": "flow_directive",
+    "returns": {
+      "files_changed": {
+        "type": "list",
+        "from": "context.files_changed",
+        "optional": true
+      },
+      "batch_manifest": {
+        "type": "dict",
+        "from": "context.batch_manifest",
+        "optional": true
+      },
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "goal_id",
+        "working_directory",
+        "flow_directive"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.4"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state; coin the entity-id registry when >=2 data files",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "context.mission != None and context.mission.architecture != None and len(context.mission.architecture.data_shapes or []) >= 2",
+              "transition": "author_data_registry"
+            },
+            {
+              "condition": "true",
+              "transition": "author_contracts"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "author_data_registry": {
+        "action": "inference",
+        "description": "Coin one canonical entity-id namespace across the data files",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "json_document",
+          "response": {
+            "schema_id": "data_entity_registry"
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/registry_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "build_contracts/registry_task",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.data_registry_brief"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_contracts/registry_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "store_data_registry",
+            "no_answer": "author_contracts"
+          },
+          "config": {
+            "temperature": "t*0.2",
+            "max_tokens": 4096,
+            "model": ""
+          },
+          "retries": 2
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_data_registry_brief",
+            "output_key": "data_registry_brief",
+            "params": {
+              "source": {
+                "$ref": "context.mission"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "store_data_registry": {
+        "action": "store_data_registry",
+        "description": "Parse + clean the registry (drop dangling refs) into data_registry",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "author_contracts"
+            }
+          ]
+        },
+        "publishes": [
+          "data_registry"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "author_contracts": {
+        "action": "inference",
+        "description": "Author per-module symbol contracts (typed stubs + DbC docstrings + doctests)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "contract_feedback"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "code",
+          "response": {
+            "language": ""
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/contract_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "build_contracts/task",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.batch_blueprint"
+              },
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.contract_feedback"
+              },
+              "title": "Revision instructions",
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_contracts/author_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "parse_contracts",
+            "no_answer": "parse_contracts"
+          },
+          "config": {
+            "temperature": "t*0.3",
+            "max_tokens": 16384,
+            "model": ""
+          },
+          "retries": 2
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_batch_blueprint",
+            "output_key": "batch_blueprint",
+            "params": {
+              "source": {
+                "$ref": "context.mission.architecture"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "parse_contracts": {
+        "action": "parse_contracts",
+        "description": "Parse + validate contract stubs; build skeletons and symbol slices",
+        "context": {
+          "required": [
+            "inference_response",
+            "mission"
+          ],
+          "optional": [
+            "contract_revision",
+            "swarm_token_base",
+            "inference_tokens_generated",
+            "data_registry"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.no_files == true",
+              "transition": "apply_results"
+            },
+            {
+              "condition": "result.parse_ok == true",
+              "transition": "generate_all_files"
+            },
+            {
+              "condition": "result.revisions_left > 0",
+              "transition": "author_contracts"
+            },
+            {
+              "condition": "true",
+              "transition": "generate_all_files"
+            }
+          ]
+        },
+        "publishes": [
+          "contract_set",
+          "contract_feedback",
+          "contract_revision",
+          "swarm_token_base",
+          "batch_manifest",
+          "files_changed",
+          "primary_code_file"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "generate_all_files": {
+        "action": "inference",
+        "description": "Generate every file in one completion, implementing the authored contracts",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "contract_set"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "code",
+          "response": {
+            "language": ""
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/code_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "build_structure/task",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.batch_blueprint"
+              },
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.contract_digest"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_structure/generate_all_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "slice_and_write",
+            "no_answer": "slice_and_write"
+          },
+          "config": {
+            "temperature": "t*0.4"
+          },
+          "retries": 2
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_batch_blueprint",
+            "output_key": "batch_blueprint",
+            "params": {
+              "source": {
+                "$ref": "context.mission.architecture"
+              }
+            }
+          },
+          {
+            "formatter": "render_contract_digest",
+            "output_key": "contract_digest",
+            "params": {
+              "source": {
+                "$ref": "context.contract_set"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "slice_and_write": {
+        "action": "slice_batch_files",
+        "description": "Slice FILE blocks, diff against the blueprint, write declared files",
+        "context": {
+          "required": [
+            "inference_response",
+            "mission"
+          ],
+          "optional": [
+            "inference_truncated"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.files_written > 0",
+              "transition": "lookup_env"
+            },
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_manifest",
+          "files_changed",
+          "primary_code_file"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "lookup_env": {
+        "action": "lookup_validation_env",
+        "description": "Ensure validation tooling is configured for the project language",
+        "context": {
+          "required": [
+            "primary_code_file"
+          ],
+          "optional": []
+        },
+        "params": {
+          "target": {
+            "$ref": "context.primary_code_file"
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.env_found == true",
+              "transition": "run_batch_checks"
+            },
+            {
+              "condition": "result.is_data_file == true",
+              "transition": "run_batch_checks"
+            },
+            {
+              "condition": "result.skip_validation == true",
+              "transition": "run_batch_checks"
+            },
+            {
+              "condition": "true",
+              "transition": "run_set_env"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_commands"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_set_env": {
+        "action": "flow",
+        "description": "No validation config yet \u2014 infer tooling for the project",
+        "config": {},
+        "context": {
+          "required": [
+            "primary_code_file"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "set_env",
+        "input_map": {
+          "working_directory": {
+            "$ref": "input.working_directory"
+          },
+          "target_file_path": {
+            "$ref": "context.primary_code_file"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          }
+        },
+        "params": {},
+        "publishes": [],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success' and meta.attempt <= 1",
+              "transition": "lookup_env"
+            },
+            {
+              "condition": "true",
+              "transition": "run_batch_checks"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "run_batch_checks": {
+        "action": "run_batch_file_checks",
+        "description": "Per-file gates: env checks for code, parse-validity for data",
+        "context": {
+          "required": [
+            "files_changed"
+          ],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_check_results",
+          "validation_results",
+          "validation_output"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_results": {
+        "action": "apply_batch_results",
+        "description": "Book per-goal reports, complete passing goals, note the batch",
+        "context": {
+          "required": [
+            "mission",
+            "batch_manifest"
+          ],
+          "optional": [
+            "batch_check_results",
+            "inference_tokens_generated"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.wrote_any == true",
+              "transition": "report_success"
+            },
+            {
+              "condition": "true",
+              "transition": "report_failed"
+            }
+          ]
+        },
+        "publishes": [
+          "directive_report",
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "report_success": {
+        "action": "noop",
+        "description": "Return to mission_control_contracted \u2014 batch written and booked",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      },
+      "report_failed": {
+        "action": "noop",
+        "description": "Return to mission_control_contracted \u2014 batch produced nothing usable",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "failed"
+          }
+        }
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "build_structure_integrated": {
+    "flow": "build_structure_integrated",
+    "version": 1,
+    "description": "Contract-driven parallel structural creation with a single seam-owning\nintegrator: author per-module symbol contracts, gate-review them, fan out\none worker per top-level symbol concurrently, assemble files via sentinel\nsplice, then reconcile the whole assembled package in one integrator\ncompletion, gate the reconciled result, and book the batch.",
+    "context_tier": "flow_directive",
+    "returns": {
+      "files_changed": {
+        "type": "list",
+        "from": "context.files_changed",
+        "optional": true
+      },
+      "batch_manifest": {
+        "type": "dict",
+        "from": "context.batch_manifest",
+        "optional": true
+      },
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "goal_id",
+        "working_directory",
+        "flow_directive"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.3"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state for architecture and goals",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "context.mission != None and context.mission.architecture != None and len(context.mission.architecture.data_shapes or []) >= 2",
+              "transition": "author_data_registry"
+            },
+            {
+              "condition": "true",
+              "transition": "author_contracts"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "author_data_registry": {
+        "action": "inference",
+        "description": "Coin one canonical entity-id namespace across the data files",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "json_document",
+          "response": {
+            "schema_id": "data_entity_registry"
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/registry_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "build_contracts/registry_task",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.data_registry_brief"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_contracts/registry_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "store_data_registry",
+            "no_answer": "author_contracts"
+          },
+          "config": {
+            "temperature": "t*0.2",
+            "max_tokens": 4096,
+            "model": ""
+          },
+          "retries": 2
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_data_registry_brief",
+            "output_key": "data_registry_brief",
+            "params": {
+              "source": {
+                "$ref": "context.mission"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "store_data_registry": {
+        "action": "store_data_registry",
+        "description": "Parse + clean the registry (drop dangling refs) into data_registry",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "author_contracts"
+            }
+          ]
+        },
+        "publishes": [
+          "data_registry"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "author_contracts": {
+        "action": "inference",
+        "description": "Author per-module symbol contracts (typed stubs + DbC docstrings + doctests)",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "contract_feedback"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "code",
+          "response": {
+            "language": ""
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/contract_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "build_contracts/task",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.batch_blueprint"
+              },
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.contract_feedback"
+              },
+              "title": "Revision instructions",
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_contracts/author_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "parse_contracts",
+            "no_answer": "parse_contracts"
+          },
+          "config": {
+            "temperature": "t*0.3",
+            "max_tokens": 16384,
+            "model": ""
+          },
+          "retries": 2
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_batch_blueprint",
+            "output_key": "batch_blueprint",
+            "params": {
+              "source": {
+                "$ref": "context.mission.architecture"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "parse_contracts": {
+        "action": "parse_contracts",
+        "description": "Parse + validate contract stubs; build skeletons and symbol slices",
+        "context": {
+          "required": [
+            "inference_response",
+            "mission"
+          ],
+          "optional": [
+            "contract_revision",
+            "swarm_token_base",
+            "inference_tokens_generated",
+            "data_registry"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.no_files == true",
+              "transition": "apply_results"
+            },
+            {
+              "condition": "result.parse_ok == true",
+              "transition": "review_contracts"
+            },
+            {
+              "condition": "result.revisions_left > 0",
+              "transition": "author_contracts"
+            },
+            {
+              "condition": "true",
+              "transition": "review_contracts"
+            }
+          ]
+        },
+        "publishes": [
+          "contract_set",
+          "contract_feedback",
+          "contract_revision",
+          "swarm_token_base",
+          "batch_manifest",
+          "files_changed",
+          "primary_code_file"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "review_contracts": {
+        "action": "inference",
+        "description": "Fresh-context cohesion review of the contract set",
+        "context": {
+          "required": [
+            "contract_set"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "json_document",
+          "response": {
+            "schema_id": "contract_review"
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/contract_reviewer",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.contract_digest"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_contracts/review_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "apply_review",
+            "no_answer": "fan_out_workers"
+          },
+          "config": {
+            "temperature": "t*0.3",
+            "max_tokens": 4096,
+            "model": ""
+          },
+          "retries": 2
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_contract_digest",
+            "output_key": "contract_digest",
+            "params": {
+              "source": {
+                "$ref": "context.contract_set"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_review": {
+        "action": "apply_contract_review",
+        "description": "Apply the reviewer verdict: approve, or send back for revision",
+        "context": {
+          "required": [
+            "inference_response",
+            "contract_set"
+          ],
+          "optional": [
+            "contract_revision",
+            "swarm_token_base",
+            "inference_tokens_generated"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.revise == true",
+              "transition": "author_contracts"
+            },
+            {
+              "condition": "true",
+              "transition": "fan_out_workers"
+            }
+          ]
+        },
+        "publishes": [
+          "contract_review",
+          "contract_feedback",
+          "contract_revision",
+          "swarm_token_base"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "fan_out_workers": {
+        "action": "swarm_generate_symbols",
+        "description": "Implement every contract symbol with concurrent workers",
+        "context": {
+          "required": [
+            "contract_set"
+          ],
+          "optional": [
+            "swarm_token_base"
+          ]
+        },
+        "params": {
+          "max_workers": 32,
+          "pool_budget": 131072
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.any_ok == true",
+              "transition": "assemble_files"
+            },
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "worker_results",
+          "swarm_stats",
+          "inference_tokens_generated",
+          "batch_manifest",
+          "files_changed",
+          "primary_code_file"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "assemble_files": {
+        "action": "assemble_contract_files",
+        "description": "Splice worker bodies into skeletons; write complete files only",
+        "context": {
+          "required": [
+            "contract_set",
+            "worker_results",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.files_written > 0",
+              "transition": "reconcile_integration"
+            },
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_manifest",
+          "files_changed",
+          "primary_code_file"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "reconcile_integration": {
+        "action": "inference",
+        "description": "Single integrator reconciles cross-file coherence over the assembled package",
+        "context": {
+          "required": [
+            "contract_set",
+            "mission",
+            "files_changed"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "code",
+          "response": {
+            "language": ""
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/code_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "build_contracts/reconcile_task",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.batch_blueprint"
+              },
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.contract_digest"
+              },
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.assembled_package"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_contracts/reconcile_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "slice_and_write",
+            "no_answer": "lookup_env"
+          },
+          "config": {
+            "temperature": "t*0.2",
+            "max_tokens": 16384,
+            "model": ""
+          },
+          "retries": 2
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_batch_blueprint",
+            "output_key": "batch_blueprint",
+            "params": {
+              "source": {
+                "$ref": "context.mission.architecture"
+              }
+            }
+          },
+          {
+            "formatter": "render_contract_digest",
+            "output_key": "contract_digest",
+            "params": {
+              "source": {
+                "$ref": "context.contract_set"
+              }
+            }
+          },
+          {
+            "formatter": "render_assembled_package",
+            "output_key": "assembled_package",
+            "params": {
+              "source": {
+                "$ref": "context.files_changed"
+              },
+              "working_directory": {
+                "$ref": "input.working_directory"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "slice_and_write": {
+        "action": "slice_batch_files",
+        "description": "Slice reconciled FILE blocks, diff against the blueprint, overwrite declared files",
+        "context": {
+          "required": [
+            "inference_response",
+            "mission"
+          ],
+          "optional": [
+            "inference_truncated"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.files_written > 0",
+              "transition": "lookup_env"
+            },
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_manifest",
+          "files_changed",
+          "primary_code_file"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "lookup_env": {
+        "action": "lookup_validation_env",
+        "description": "Ensure validation tooling is configured for the project language",
+        "context": {
+          "required": [
+            "primary_code_file"
+          ],
+          "optional": []
+        },
+        "params": {
+          "target": {
+            "$ref": "context.primary_code_file"
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.env_found == true",
+              "transition": "run_batch_checks"
+            },
+            {
+              "condition": "result.is_data_file == true",
+              "transition": "run_batch_checks"
+            },
+            {
+              "condition": "result.skip_validation == true",
+              "transition": "run_batch_checks"
+            },
+            {
+              "condition": "true",
+              "transition": "run_set_env"
+            }
+          ]
+        },
+        "publishes": [
+          "validation_commands"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_set_env": {
+        "action": "flow",
+        "description": "No validation config yet \u2014 infer tooling for the project",
+        "config": {},
+        "context": {
+          "required": [
+            "primary_code_file"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "set_env",
+        "input_map": {
+          "working_directory": {
+            "$ref": "input.working_directory"
+          },
+          "target_file_path": {
+            "$ref": "context.primary_code_file"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          }
+        },
+        "params": {},
+        "publishes": [],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success' and meta.attempt <= 1",
+              "transition": "lookup_env"
+            },
+            {
+              "condition": "true",
+              "transition": "run_batch_checks"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "run_batch_checks": {
+        "action": "run_batch_file_checks",
+        "description": "Per-file gates: env checks for code, parse-validity for data",
+        "context": {
+          "required": [
+            "files_changed"
+          ],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "run_doctests"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_check_results",
+          "validation_results",
+          "validation_output"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_doctests": {
+        "action": "run_contract_doctests",
+        "description": "Run contract doctests against the reconciled modules",
+        "context": {
+          "required": [
+            "files_changed",
+            "contract_set"
+          ],
+          "optional": [
+            "batch_check_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "run_type_check"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_check_results",
+          "validation_output"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_type_check": {
+        "action": "run_contract_typecheck",
+        "description": "Cross-module interface consistency over reconciled files",
+        "context": {
+          "required": [
+            "files_changed"
+          ],
+          "optional": [
+            "batch_check_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_check_results",
+          "validation_output"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_results": {
+        "action": "apply_batch_results",
+        "description": "Book per-goal reports, complete passing goals, note the batch",
+        "context": {
+          "required": [
+            "mission",
+            "batch_manifest"
+          ],
+          "optional": [
+            "batch_check_results",
+            "inference_tokens_generated"
+          ]
+        },
+        "params": {
+          "flow_label": "build_structure_integrated"
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.wrote_any == true",
+              "transition": "report_success"
+            },
+            {
+              "condition": "true",
+              "transition": "report_failed"
+            }
+          ]
+        },
+        "publishes": [
+          "directive_report",
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "report_success": {
+        "action": "noop",
+        "description": "Return to mission_control_integrated \u2014 batch written and booked",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      },
+      "report_failed": {
+        "action": "noop",
+        "description": "Return to mission_control_integrated \u2014 batch produced nothing usable",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "failed"
+          }
+        }
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "mission_control_contracted": {
+    "flow": "mission_control_contracted",
+    "version": 9,
+    "description": "Deterministic pipeline. Computes the current phase from goal\nstatuses and dispatches the appropriate work without LLM routing.\nPhases: plan \u2192 structural sweep \u2192 environment \u2192 functional sweep \u2192 quality gate.",
+    "context_tier": "project_goal",
+    "returns": {
+      "final_status": {
+        "type": "string",
+        "from": "context.mission.status",
+        "optional": true
+      }
+    },
+    "projections": {
+      "director_overview": {
+        "materializer": "project_director_overview",
+        "params": {
+          "mission_id": {
+            "$ref": "input.mission_id"
+          }
+        },
+        "required": true
+      },
+      "fix_target_menu": {
+        "materializer": "project_fix_target_menu",
+        "params": {
+          "mission_id": {
+            "$ref": "input.mission_id"
+          }
+        },
+        "required": true
+      }
+    },
+    "input": {
+      "required": [
+        "mission_id"
+      ],
+      "optional": [
+        "last_result",
+        "last_status",
+        "last_goal_id"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state and event queue",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.mission.status == 'active'",
+              "transition": "apply_last_result"
+            },
+            {
+              "condition": "result.mission.status == 'paused'",
+              "transition": "idle"
+            },
+            {
+              "condition": "result.mission.status == 'completed'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "aborted"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_last_result": {
+        "action": "attach_directive_report",
+        "description": "Attach returning flow's directive report to goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "events",
+            "last_result",
+            "last_status",
+            "last_goal_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.events_pending == true",
+              "transition": "process_events"
+            },
+            {
+              "condition": "context.mission.pending_directive != ''",
+              "transition": "check_phase"
+            },
+            {
+              "condition": "result.needs_plan == true",
+              "transition": "dispatch_planning"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "process_events": {
+        "action": "handle_events",
+        "description": "Process user messages, abort/pause signals",
+        "context": {
+          "required": [
+            "mission",
+            "events"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.abort_requested == true",
+              "transition": "aborted"
+            },
+            {
+              "condition": "result.pause_requested == true",
+              "transition": "idle"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "check_phase": {
+        "action": "check_pipeline_phase",
+        "description": "Determine which pipeline phase to enter based on goal statuses",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.phase == 'replan'",
+              "transition": "dispatch_replan"
+            },
+            {
+              "condition": "result.phase == 'regression'",
+              "transition": "regression_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'plan'",
+              "transition": "dispatch_planning"
+            },
+            {
+              "condition": "result.phase == 'structural'",
+              "transition": "structural_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'environment'",
+              "transition": "dispatch_environment_setup"
+            },
+            {
+              "condition": "result.phase == 'functional'",
+              "transition": "functional_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'quality_fix'",
+              "transition": "quality_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'test_suite'",
+              "transition": "dispatch_test_gate"
+            },
+            {
+              "condition": "result.phase == 'quality'",
+              "transition": "dispatch_quality_gate"
+            },
+            {
+              "condition": "result.phase == 'complete'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "dispatch_planning"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_planning": {
+        "action": "noop",
+        "description": "No architecture or goals \u2014 dispatch design_and_plan",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "design_and_plan",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          }
+        }
+      },
+      "dispatch_replan": {
+        "action": "noop",
+        "description": "Pending directive \u2014 decompose against the existing codebase",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "replan",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          }
+        }
+      },
+      "structural_sweep_next": {
+        "action": "structural_sweep_next",
+        "description": "Find next incomplete structural goal in creation order",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.sweep_complete == true",
+              "transition": "check_phase"
+            },
+            {
+              "condition": "result.needs_batch_create == true",
+              "transition": "dispatch_batch_create"
+            },
+            {
+              "condition": "result.needs_create == true",
+              "transition": "dispatch_structural_create"
+            },
+            {
+              "condition": "result.needs_fix == true",
+              "transition": "dispatch_structural_fix"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_batch_create": {
+        "action": "noop",
+        "description": "Batch-create all architecture files in one generation",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "build_structure_contracted",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
+      },
+      "dispatch_structural_create": {
+        "action": "noop",
+        "description": "Create next file in dependency order",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "file_ops",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "target_file_path": {
+              "$ref": "context.dispatch_config.target_file_path",
+              "default": ""
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
+      },
+      "dispatch_structural_fix": {
+        "action": "noop",
+        "description": "Repair a structural file that failed its gate",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": {
+            "$ref": "context.dispatch_config.flow"
+          },
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "goal_description": {
+              "$ref": "context.dispatch_config.goal_description",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "target_file_path": {
+              "$ref": "context.dispatch_config.target_file_path",
+              "default": ""
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            },
+            "error_output": {
+              "$ref": "context.dispatch_config.error_output",
+              "default": ""
+            },
+            "what_happened": {
+              "$ref": "context.dispatch_config.what_happened",
+              "default": ""
+            },
+            "error_headline": {
+              "$ref": "context.dispatch_config.error_headline",
+              "default": ""
+            },
+            "target_symbol": {
+              "$ref": "context.dispatch_config.target_symbol",
+              "default": ""
+            },
+            "change_spec": {
+              "$ref": "context.dispatch_config.change_spec",
+              "default": ""
+            },
+            "diagnosis_kind": {
+              "$ref": "context.dispatch_config.diagnosis_kind",
+              "default": ""
+            },
+            "module_statement": {
+              "$ref": "context.dispatch_config.module_statement",
+              "default": ""
+            },
+            "related_symbols": {
+              "$ref": "context.dispatch_config.related_symbols",
+              "default": []
+            }
+          }
+        }
+      },
+      "dispatch_environment_setup": {
+        "action": "noop",
+        "description": "Install dependencies and verify tooling",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "project_ops",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": "",
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            },
+            "flow_directive": "Install all required dependencies and verify the project environment is ready."
+          }
+        }
+      },
+      "functional_sweep_next": {
+        "action": "functional_sweep_next",
+        "description": "Find next incomplete functional goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.sweep_complete == true",
+              "transition": "check_phase"
+            },
+            {
+              "condition": "result.needs_test == true",
+              "transition": "dispatch_functional_test"
+            },
+            {
+              "condition": "result.needs_fix == true",
+              "transition": "dispatch_functional_fix"
+            },
+            {
+              "condition": "result.needs_target_resolution == true",
+              "transition": "resolve_fix_target"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "resolve_fix_target": {
+        "action": "inference",
+        "description": "Model selects which file to fix based on diagnosis",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "dispatch_config"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "menu_single",
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/fix_target_selector",
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.dispatch_config.diagnosis_summary"
+              },
+              "title": "Diagnosis",
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "mission_control/resolve_fix_target_instruction",
+              "required": false
+            },
+            {
+              "type": "options",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {
+            "options_from": {
+              "projection": "fix_target_menu",
+              "source": "projection"
+            },
+            "publish_selection": "selected_fix_target"
+          },
+          "transitions": {
+            "default": "apply_fix_target",
+            "no_answer": "fallback_fix_target"
+          },
+          "config": {
+            "temperature": "t*0.3",
+            "max_tokens": 4096
+          },
+          "retries": 3
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "fallback_fix_target": {
+        "action": "fallback_fix_target",
+        "description": "Menu unanswerable \u2014 take the top-ranked fix target deterministically",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "dispatch_config"
+          ]
+        },
+        "params": {
+          "options": {
+            "$ref": "input.fix_target_menu",
+            "default": []
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_target == true",
+              "transition": "apply_fix_target"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "selected_fix_target"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_fix_target": {
+        "action": "apply_fix_target",
+        "description": "Apply LLM-selected fix target to dispatch config",
+        "context": {
+          "required": [
+            "mission",
+            "dispatch_config",
+            "selected_fix_target"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.target_applied == true",
+              "transition": "dispatch_functional_fix"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_functional_test": {
+        "action": "noop",
+        "description": "Test a functional capability via interact",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "interact",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "target_file_path": {
+              "$ref": "context.dispatch_config.target_file_path",
+              "default": ""
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            },
+            "interaction_mode": {
+              "$ref": "context.dispatch_config.interaction_mode",
+              "default": ""
+            },
+            "run_command": {
+              "$ref": "context.dispatch_config.run_command",
+              "default": ""
+            },
+            "interactive_prompt": {
+              "$ref": "context.dispatch_config.interactive_prompt",
+              "default": ""
+            },
+            "charter_mode": {
+              "$ref": "context.dispatch_config.charter_mode",
+              "default": ""
+            }
+          }
+        }
+      },
+      "dispatch_functional_fix": {
+        "action": "noop",
+        "description": "Fix a file identified by failed functional test",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": {
+            "$ref": "context.dispatch_config.flow"
+          },
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "goal_description": {
+              "$ref": "context.dispatch_config.goal_description",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "target_file_path": {
+              "$ref": "context.dispatch_config.target_file_path",
+              "default": ""
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            },
+            "failed_attempts_context": {
+              "$ref": "context.dispatch_config.failed_attempts_context",
+              "default": null
+            },
+            "error_output": {
+              "$ref": "context.dispatch_config.error_output",
+              "default": ""
+            },
+            "error_description": {
+              "$ref": "context.dispatch_config.error_description",
+              "default": ""
+            },
+            "what_happened": {
+              "$ref": "context.dispatch_config.what_happened",
+              "default": ""
+            },
+            "error_headline": {
+              "$ref": "context.dispatch_config.error_headline",
+              "default": ""
+            },
+            "target_symbol": {
+              "$ref": "context.dispatch_config.target_symbol",
+              "default": ""
+            },
+            "change_spec": {
+              "$ref": "context.dispatch_config.change_spec",
+              "default": ""
+            },
+            "diagnosis_kind": {
+              "$ref": "context.dispatch_config.diagnosis_kind",
+              "default": ""
+            },
+            "module_statement": {
+              "$ref": "context.dispatch_config.module_statement",
+              "default": ""
+            },
+            "related_symbols": {
+              "$ref": "context.dispatch_config.related_symbols",
+              "default": []
+            }
+          }
+        }
+      },
+      "dispatch_quality_gate": {
+        "action": "flow",
+        "description": "Final quality gate for mission completion",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "quality_gate",
+        "input_map": {
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          },
+          "mission_objective": {
+            "$ref": "context.mission.objective"
+          },
+          "architecture_run_command": {
+            "$ref": "context.mission.architecture.run_command",
+            "default": ""
+          },
+          "architecture_smoke_command": {
+            "$ref": "context.mission.architecture.effective_smoke_command",
+            "default": ""
+          },
+          "architecture": {
+            "$ref": "context.mission.architecture",
+            "default": ""
+          },
+          "mode": "completion",
+          "task_profile": {
+            "$ref": "context.mission.config.task_profile",
+            "default": ""
+          }
+        },
+        "params": {},
+        "publishes": [
+          "quality_results"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "harvest_quality_findings"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "harvest_quality_findings": {
+        "action": "harvest_quality_findings",
+        "description": "Create/re-open goals from quality-gate findings",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "quality_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.done == true",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "quality_sweep_next": {
+        "action": "quality_sweep_next",
+        "description": "Diagnose -> file_ops -> complete the next quality goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.needs_fix == true",
+              "transition": "dispatch_quality_fix"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_test_gate": {
+        "action": "run_test_suite_gate",
+        "description": "Run the repo's test suite; harvest fix goals or certify",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "regression_sweep_next": {
+        "action": "regression_sweep",
+        "description": "Run all completed goals' acceptance checks; reopen regressed goals",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "last_goal_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_quality_fix": {
+        "action": "noop",
+        "description": "Dispatch a diagnose_issue/file_ops fix for a quality finding",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": {
+            "$ref": "context.dispatch_config.flow"
+          },
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "goal_description": {
+              "$ref": "context.dispatch_config.goal_description",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "target_file_path": {
+              "$ref": "context.dispatch_config.target_file_path",
+              "default": ""
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            },
+            "error_output": {
+              "$ref": "context.dispatch_config.error_output",
+              "default": ""
+            },
+            "what_happened": {
+              "$ref": "context.dispatch_config.what_happened",
+              "default": ""
+            },
+            "error_headline": {
+              "$ref": "context.dispatch_config.error_headline",
+              "default": ""
+            },
+            "target_symbol": {
+              "$ref": "context.dispatch_config.target_symbol",
+              "default": ""
+            },
+            "change_spec": {
+              "$ref": "context.dispatch_config.change_spec",
+              "default": ""
+            },
+            "diagnosis_kind": {
+              "$ref": "context.dispatch_config.diagnosis_kind",
+              "default": ""
+            },
+            "module_statement": {
+              "$ref": "context.dispatch_config.module_statement",
+              "default": ""
+            },
+            "related_symbols": {
+              "$ref": "context.dispatch_config.related_symbols",
+              "default": []
+            }
+          }
+        }
+      },
+      "completed": {
+        "action": "finalize_mission",
+        "description": "Mark mission complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission",
+            "quality_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "completed"
+      },
+      "idle": {
+        "action": "enter_idle",
+        "description": "Wait for events",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control_contracted",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          },
+          "delay": 5
+        }
+      },
+      "aborted": {
+        "action": "finalize_mission",
+        "description": "Mission aborted",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {
+          "abort": true
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "aborted"
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
+  "mission_control_integrated": {
+    "flow": "mission_control_integrated",
+    "version": 9,
+    "description": "Deterministic pipeline. Computes the current phase from goal\nstatuses and dispatches the appropriate work without LLM routing.\nPhases: plan \u2192 structural sweep \u2192 environment \u2192 functional sweep \u2192 quality gate.",
+    "context_tier": "project_goal",
+    "returns": {
+      "final_status": {
+        "type": "string",
+        "from": "context.mission.status",
+        "optional": true
+      }
+    },
+    "projections": {
+      "director_overview": {
+        "materializer": "project_director_overview",
+        "params": {
+          "mission_id": {
+            "$ref": "input.mission_id"
+          }
+        },
+        "required": true
+      },
+      "fix_target_menu": {
+        "materializer": "project_fix_target_menu",
+        "params": {
+          "mission_id": {
+            "$ref": "input.mission_id"
+          }
+        },
+        "required": true
+      }
+    },
+    "input": {
+      "required": [
+        "mission_id"
+      ],
+      "optional": [
+        "last_result",
+        "last_status",
+        "last_goal_id"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.5"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state and event queue",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.mission.status == 'active'",
+              "transition": "apply_last_result"
+            },
+            {
+              "condition": "result.mission.status == 'paused'",
+              "transition": "idle"
+            },
+            {
+              "condition": "result.mission.status == 'completed'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "aborted"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_last_result": {
+        "action": "attach_directive_report",
+        "description": "Attach returning flow's directive report to goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "events",
+            "last_result",
+            "last_status",
+            "last_goal_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.events_pending == true",
+              "transition": "process_events"
+            },
+            {
+              "condition": "context.mission.pending_directive != ''",
+              "transition": "check_phase"
+            },
+            {
+              "condition": "result.needs_plan == true",
+              "transition": "dispatch_planning"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "process_events": {
+        "action": "handle_events",
+        "description": "Process user messages, abort/pause signals",
+        "context": {
+          "required": [
+            "mission",
+            "events"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.abort_requested == true",
+              "transition": "aborted"
+            },
+            {
+              "condition": "result.pause_requested == true",
+              "transition": "idle"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "check_phase": {
+        "action": "check_pipeline_phase",
+        "description": "Determine which pipeline phase to enter based on goal statuses",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.phase == 'replan'",
+              "transition": "dispatch_replan"
+            },
+            {
+              "condition": "result.phase == 'regression'",
+              "transition": "regression_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'plan'",
+              "transition": "dispatch_planning"
+            },
+            {
+              "condition": "result.phase == 'structural'",
+              "transition": "structural_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'environment'",
+              "transition": "dispatch_environment_setup"
+            },
+            {
+              "condition": "result.phase == 'functional'",
+              "transition": "functional_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'quality_fix'",
+              "transition": "quality_sweep_next"
+            },
+            {
+              "condition": "result.phase == 'test_suite'",
+              "transition": "dispatch_test_gate"
+            },
+            {
+              "condition": "result.phase == 'quality'",
+              "transition": "dispatch_quality_gate"
+            },
+            {
+              "condition": "result.phase == 'complete'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "dispatch_planning"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_planning": {
+        "action": "noop",
+        "description": "No architecture or goals \u2014 dispatch design_and_plan",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "design_and_plan",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          }
+        }
+      },
+      "dispatch_replan": {
+        "action": "noop",
+        "description": "Pending directive \u2014 decompose against the existing codebase",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "replan",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          }
+        }
+      },
+      "structural_sweep_next": {
+        "action": "structural_sweep_next",
+        "description": "Find next incomplete structural goal in creation order",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.sweep_complete == true",
+              "transition": "check_phase"
+            },
+            {
+              "condition": "result.needs_batch_create == true",
+              "transition": "dispatch_batch_create"
+            },
+            {
+              "condition": "result.needs_create == true",
+              "transition": "dispatch_structural_create"
+            },
+            {
+              "condition": "result.needs_fix == true",
+              "transition": "dispatch_structural_fix"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_batch_create": {
+        "action": "noop",
+        "description": "Batch-create all architecture files in one generation",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "build_structure_integrated",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
+      },
+      "dispatch_structural_create": {
+        "action": "noop",
+        "description": "Create next file in dependency order",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "file_ops",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "target_file_path": {
+              "$ref": "context.dispatch_config.target_file_path",
+              "default": ""
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
+      },
+      "dispatch_structural_fix": {
+        "action": "noop",
+        "description": "Repair a structural file that failed its gate",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": {
+            "$ref": "context.dispatch_config.flow"
+          },
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "goal_description": {
+              "$ref": "context.dispatch_config.goal_description",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "target_file_path": {
+              "$ref": "context.dispatch_config.target_file_path",
+              "default": ""
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            },
+            "error_output": {
+              "$ref": "context.dispatch_config.error_output",
+              "default": ""
+            },
+            "what_happened": {
+              "$ref": "context.dispatch_config.what_happened",
+              "default": ""
+            },
+            "error_headline": {
+              "$ref": "context.dispatch_config.error_headline",
+              "default": ""
+            },
+            "target_symbol": {
+              "$ref": "context.dispatch_config.target_symbol",
+              "default": ""
+            },
+            "change_spec": {
+              "$ref": "context.dispatch_config.change_spec",
+              "default": ""
+            },
+            "diagnosis_kind": {
+              "$ref": "context.dispatch_config.diagnosis_kind",
+              "default": ""
+            },
+            "module_statement": {
+              "$ref": "context.dispatch_config.module_statement",
+              "default": ""
+            },
+            "related_symbols": {
+              "$ref": "context.dispatch_config.related_symbols",
+              "default": []
+            }
+          }
+        }
+      },
+      "dispatch_environment_setup": {
+        "action": "noop",
+        "description": "Install dependencies and verify tooling",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "project_ops",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": "",
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            },
+            "flow_directive": "Install all required dependencies and verify the project environment is ready."
+          }
+        }
+      },
+      "functional_sweep_next": {
+        "action": "functional_sweep_next",
+        "description": "Find next incomplete functional goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.sweep_complete == true",
+              "transition": "check_phase"
+            },
+            {
+              "condition": "result.needs_test == true",
+              "transition": "dispatch_functional_test"
+            },
+            {
+              "condition": "result.needs_fix == true",
+              "transition": "dispatch_functional_fix"
+            },
+            {
+              "condition": "result.needs_target_resolution == true",
+              "transition": "resolve_fix_target"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "resolve_fix_target": {
+        "action": "inference",
+        "description": "Model selects which file to fix based on diagnosis",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "dispatch_config"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "menu_single",
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/fix_target_selector",
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.dispatch_config.diagnosis_summary"
+              },
+              "title": "Diagnosis",
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "mission_control/resolve_fix_target_instruction",
+              "required": false
+            },
+            {
+              "type": "options",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {
+            "options_from": {
+              "projection": "fix_target_menu",
+              "source": "projection"
+            },
+            "publish_selection": "selected_fix_target"
+          },
+          "transitions": {
+            "default": "apply_fix_target",
+            "no_answer": "fallback_fix_target"
+          },
+          "config": {
+            "temperature": "t*0.3",
+            "max_tokens": 4096
+          },
+          "retries": 3
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "fallback_fix_target": {
+        "action": "fallback_fix_target",
+        "description": "Menu unanswerable \u2014 take the top-ranked fix target deterministically",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "dispatch_config"
+          ]
+        },
+        "params": {
+          "options": {
+            "$ref": "input.fix_target_menu",
+            "default": []
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_target == true",
+              "transition": "apply_fix_target"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "selected_fix_target"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_fix_target": {
+        "action": "apply_fix_target",
+        "description": "Apply LLM-selected fix target to dispatch config",
+        "context": {
+          "required": [
+            "mission",
+            "dispatch_config",
+            "selected_fix_target"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.target_applied == true",
+              "transition": "dispatch_functional_fix"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_functional_test": {
+        "action": "noop",
+        "description": "Test a functional capability via interact",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "interact",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "target_file_path": {
+              "$ref": "context.dispatch_config.target_file_path",
+              "default": ""
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            },
+            "interaction_mode": {
+              "$ref": "context.dispatch_config.interaction_mode",
+              "default": ""
+            },
+            "run_command": {
+              "$ref": "context.dispatch_config.run_command",
+              "default": ""
+            },
+            "interactive_prompt": {
+              "$ref": "context.dispatch_config.interactive_prompt",
+              "default": ""
+            },
+            "charter_mode": {
+              "$ref": "context.dispatch_config.charter_mode",
+              "default": ""
+            }
+          }
+        }
+      },
+      "dispatch_functional_fix": {
+        "action": "noop",
+        "description": "Fix a file identified by failed functional test",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": {
+            "$ref": "context.dispatch_config.flow"
+          },
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "goal_description": {
+              "$ref": "context.dispatch_config.goal_description",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "target_file_path": {
+              "$ref": "context.dispatch_config.target_file_path",
+              "default": ""
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            },
+            "failed_attempts_context": {
+              "$ref": "context.dispatch_config.failed_attempts_context",
+              "default": null
+            },
+            "error_output": {
+              "$ref": "context.dispatch_config.error_output",
+              "default": ""
+            },
+            "error_description": {
+              "$ref": "context.dispatch_config.error_description",
+              "default": ""
+            },
+            "what_happened": {
+              "$ref": "context.dispatch_config.what_happened",
+              "default": ""
+            },
+            "error_headline": {
+              "$ref": "context.dispatch_config.error_headline",
+              "default": ""
+            },
+            "target_symbol": {
+              "$ref": "context.dispatch_config.target_symbol",
+              "default": ""
+            },
+            "change_spec": {
+              "$ref": "context.dispatch_config.change_spec",
+              "default": ""
+            },
+            "diagnosis_kind": {
+              "$ref": "context.dispatch_config.diagnosis_kind",
+              "default": ""
+            },
+            "module_statement": {
+              "$ref": "context.dispatch_config.module_statement",
+              "default": ""
+            },
+            "related_symbols": {
+              "$ref": "context.dispatch_config.related_symbols",
+              "default": []
+            }
+          }
+        }
+      },
+      "dispatch_quality_gate": {
+        "action": "flow",
+        "description": "Final quality gate for mission completion",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "quality_gate",
+        "input_map": {
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          },
+          "mission_id": {
+            "$ref": "input.mission_id"
+          },
+          "mission_objective": {
+            "$ref": "context.mission.objective"
+          },
+          "architecture_run_command": {
+            "$ref": "context.mission.architecture.run_command",
+            "default": ""
+          },
+          "architecture_smoke_command": {
+            "$ref": "context.mission.architecture.effective_smoke_command",
+            "default": ""
+          },
+          "architecture": {
+            "$ref": "context.mission.architecture",
+            "default": ""
+          },
+          "mode": "completion",
+          "task_profile": {
+            "$ref": "context.mission.config.task_profile",
+            "default": ""
+          }
+        },
+        "params": {},
+        "publishes": [
+          "quality_results"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success'",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "harvest_quality_findings"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "harvest_quality_findings": {
+        "action": "harvest_quality_findings",
+        "description": "Create/re-open goals from quality-gate findings",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "quality_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.done == true",
+              "transition": "completed"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "quality_sweep_next": {
+        "action": "quality_sweep_next",
+        "description": "Diagnose -> file_ops -> complete the next quality goal",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.needs_fix == true",
+              "transition": "dispatch_quality_fix"
+            },
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "dispatch_config"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_test_gate": {
+        "action": "run_test_suite_gate",
+        "description": "Run the repo's test suite; harvest fix goals or certify",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "regression_sweep_next": {
+        "action": "regression_sweep",
+        "description": "Run all completed goals' acceptance checks; reopen regressed goals",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "last_goal_id"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_phase"
+            }
+          ]
+        },
+        "publishes": [
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "dispatch_quality_fix": {
+        "action": "noop",
+        "description": "Dispatch a diagnose_issue/file_ops fix for a quality finding",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": {
+            "$ref": "context.dispatch_config.flow"
+          },
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "goal_description": {
+              "$ref": "context.dispatch_config.goal_description",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "target_file_path": {
+              "$ref": "context.dispatch_config.target_file_path",
+              "default": ""
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            },
+            "error_output": {
+              "$ref": "context.dispatch_config.error_output",
+              "default": ""
+            },
+            "what_happened": {
+              "$ref": "context.dispatch_config.what_happened",
+              "default": ""
+            },
+            "error_headline": {
+              "$ref": "context.dispatch_config.error_headline",
+              "default": ""
+            },
+            "target_symbol": {
+              "$ref": "context.dispatch_config.target_symbol",
+              "default": ""
+            },
+            "change_spec": {
+              "$ref": "context.dispatch_config.change_spec",
+              "default": ""
+            },
+            "diagnosis_kind": {
+              "$ref": "context.dispatch_config.diagnosis_kind",
+              "default": ""
+            },
+            "module_statement": {
+              "$ref": "context.dispatch_config.module_statement",
+              "default": ""
+            },
+            "related_symbols": {
+              "$ref": "context.dispatch_config.related_symbols",
+              "default": []
+            }
+          }
+        }
+      },
+      "completed": {
+        "action": "finalize_mission",
+        "description": "Mark mission complete",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission",
+            "quality_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "completed"
+      },
+      "idle": {
+        "action": "enter_idle",
+        "description": "Wait for events",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control_integrated",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            }
+          },
+          "delay": 5
+        }
+      },
+      "aborted": {
+        "action": "finalize_mission",
+        "description": "Mission aborted",
+        "context": {
+          "required": [],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {
+          "abort": true
+        },
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": true,
+        "status": "aborted"
       }
     },
     "entry": "load_state",

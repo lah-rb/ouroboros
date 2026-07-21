@@ -124,8 +124,30 @@ FLOW_INPUTS = {
     "mission_control_swarm": {
         "mission_id": "test-mission-001",
     },
+    # batch_contracted orchestrator (controller copy; same shape)
+    "mission_control_contracted": {
+        "mission_id": "test-mission-001",
+    },
+    # integrated orchestrator (controller copy; same shape)
+    "mission_control_integrated": {
+        "mission_id": "test-mission-001",
+    },
     # Contract-swarm structural flow
     "build_contracts": {
+        "mission_id": "test-mission-001",
+        "goal_id": "",
+        "working_directory": "/tmp/smoke",
+        "flow_directive": "build everything",
+    },
+    # batch_contracted structural flow (contracts front + single-completion back)
+    "build_structure_contracted": {
+        "mission_id": "test-mission-001",
+        "goal_id": "",
+        "working_directory": "/tmp/smoke",
+        "flow_directive": "build everything",
+    },
+    # integrated structural flow (swarm fan-out front + single integrator back)
+    "build_structure_integrated": {
         "mission_id": "test-mission-001",
         "goal_id": "",
         "working_directory": "/tmp/smoke",
@@ -401,7 +423,12 @@ async def smoke_test_flow(flow_name, flow_def, registry, all_flows, max_steps=15
     # the smoke can observe). The default fixture (goals but no architecture)
     # is a brownfield state that now correctly routes to the structural sweep
     # — which can't progress under mock effects and reads as a loop.
-    if flow_name in ("mission_control", "mission_control_swarm"):
+    if flow_name in (
+        "mission_control",
+        "mission_control_swarm",
+        "mission_control_contracted",
+        "mission_control_integrated",
+    ):
         effects = make_effects(mission=make_mock_mission(with_plan=False))
     else:
         effects = make_effects()

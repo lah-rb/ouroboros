@@ -10,6 +10,7 @@ incomplete."""
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -57,12 +58,13 @@ def _mission(tmp_path, files=("models.py", "engine.py", "world.yaml")):
     )
 
 
-def _si(context, params=None, effects=None):
+def _si(context, params=None, effects=None, inputs=None):
     return StepInput(
         context=context,
         params=params or {},
         meta=FlowMeta(flow_name="build_contracts", step_id="t"),
         effects=effects,
+        inputs=inputs or {},
     )
 
 
@@ -239,22 +241,27 @@ def run() -> int:
 
 
 class _FanoutEffects:
-    """Scripted run_inference recording concurrency + prompts."""
+    """Scripted run_inference recording concurrency + prompts + overrides."""
 
-    def __init__(self, responses):
+    def __init__(self, responses, truncated=False):
         self.responses = list(responses)
         self.prompts: list[str] = []
+        self.overrides: list[dict] = []
+        self.truncated = truncated
         self.in_flight = 0
         self.max_in_flight = 0
 
     async def run_inference(self, prompt, config_overrides=None):
         self.prompts.append(prompt)
+        self.overrides.append(dict(config_overrides or {}))
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
         await asyncio.sleep(0.01)
         self.in_flight -= 1
         text = self.responses.pop(0) if self.responses else _GOOD_BODY
-        return SimpleNamespace(text=text, error=None, tokens_generated=7)
+        return SimpleNamespace(
+            text=text, error=None, tokens_generated=7, truncated=self.truncated
+        )
 
 
 def _contract_set_one_symbol():
@@ -286,7 +293,6 @@ async def test_fanout_happy_path_and_tokens():
     out = await action_swarm_generate_symbols(
         _si(
             {"contract_set": _contract_set_one_symbol(), "swarm_token_base": 100},
-            params={"workers": 2},
             effects=eff,
         )
     )
@@ -294,6 +300,9 @@ async def test_fanout_happy_path_and_tokens():
     wr = out.context_updates["worker_results"]["engine.py"]["run"]
     assert wr["ok"] and wr["body"].startswith("def run()")
     assert out.context_updates["inference_tokens_generated"] == 107
+    # Workers carry NO max_tokens cap — EOS ends generation (the removed
+    # worker_max_tokens starved the biggest symbols, 2026-07-20).
+    assert all("max_tokens" not in ov for ov in eff.overrides)
 
 
 @pytest.mark.asyncio
@@ -323,21 +332,98 @@ async def test_fanout_rejections_and_all_failed():
     assert not wr["ok"] and "no imports" in wr["error"]
 
 
-@pytest.mark.asyncio
-async def test_fanout_semaphore_caps_concurrency():
+def _contract_set_n_symbols(n: int):
     cs = _contract_set_one_symbol()
-    # Five symbols in one file, workers=2 → max in-flight must be ≤ 2.
     sym = cs["files"]["engine.py"]["symbols"]["run"]
-    cs["files"]["engine.py"]["order"] = [f"run{i}" for i in range(5)]
-    cs["files"]["engine.py"]["symbols"] = {f"run{i}": dict(sym) for i in range(5)}
+    cs["files"]["engine.py"]["order"] = [f"run{i}" for i in range(n)]
+    cs["files"]["engine.py"]["symbols"] = {f"run{i}": dict(sym) for i in range(n)}
+    return cs
+
+
+@pytest.mark.asyncio
+async def test_fanout_max_workers_caps_concurrency():
+    # Five symbols, max_workers=2 (admission ceiling) → max in-flight ≤ 2
+    # even though the pool comfortably fits n=symbols.
     eff = _FanoutEffects(
         []
     )  # every response is the default _GOOD_BODY (wrong names → retries fail; fine)
     out = await action_swarm_generate_symbols(
-        _si({"contract_set": cs}, params={"workers": 2}, effects=eff)
+        _si(
+            {"contract_set": _contract_set_n_symbols(5)},
+            params={"max_workers": 2},
+            effects=eff,
+        )
     )
     assert eff.max_in_flight <= 2
     assert out.context_updates["swarm_stats"]["symbols"] == 5
+
+
+@pytest.mark.asyncio
+async def test_fanout_defaults_to_n_symbols():
+    # No params: sem = min(n_symbols, 32) and the gate reports "full".
+    eff = _FanoutEffects([])
+    out = await action_swarm_generate_symbols(
+        _si({"contract_set": _contract_set_n_symbols(5)}, effects=eff)
+    )
+    stats = out.context_updates["swarm_stats"]
+    assert stats["gate"] == "full" and stats["workers"] == 5
+
+
+@pytest.mark.asyncio
+async def test_fanout_pool_fit_gate_waves_when_pool_small():
+    # A pool too small for 5 concurrent draws forces waves: the per-stream
+    # draw (~prompt est + 2048 margin) exceeds half of 80% of pool_budget,
+    # so sem collapses to 1 and in-flight never exceeds it.
+    eff = _FanoutEffects([])
+    out = await action_swarm_generate_symbols(
+        _si(
+            {"contract_set": _contract_set_n_symbols(5)},
+            params={"pool_budget": 4096},
+            effects=eff,
+        )
+    )
+    stats = out.context_updates["swarm_stats"]
+    assert stats["gate"] == "waved" and stats["workers"] == 1
+    assert eff.max_in_flight <= 1
+
+
+@pytest.mark.asyncio
+async def test_fanout_truncated_fails_fast_no_retry():
+    # A generation that hit the server ceiling is a ramble: the attempt
+    # fails with an honest reason and is NOT retried (the AST gate must
+    # never mislabel truncation as invalid code).
+    eff = _FanoutEffects([_GOOD_BODY, _GOOD_BODY], truncated=True)
+    out = await action_swarm_generate_symbols(
+        _si({"contract_set": _contract_set_one_symbol()}, effects=eff)
+    )
+    wr = out.context_updates["worker_results"]["engine.py"]["run"]
+    assert not wr["ok"] and wr["attempts"] == 1
+    assert "ceiling" in wr["error"]
+    assert len(eff.prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_fanout_writes_perf_sidecar(tmp_path):
+    eff = _FanoutEffects([_GOOD_BODY])
+    out = await action_swarm_generate_symbols(
+        _si(
+            {"contract_set": _contract_set_one_symbol()},
+            effects=eff,
+            inputs={"working_directory": str(tmp_path)},
+        )
+    )
+    assert out.result["any_ok"] is True
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / ".agent" / "swarm_perf.jsonl").read_text().splitlines()
+    ]
+    events = [r["event"] for r in rows]
+    assert events[0] == "burst" and events[-1] == "burst_done"
+    worker_rows = [r for r in rows if r["event"] == "worker"]
+    assert len(worker_rows) == 1
+    w = worker_rows[0]
+    assert w["symbol"] == "run" and w["ok"] and w["generated_tokens"] == 7
+    assert w["t_done"] >= w["t_submit"] >= 0
 
 
 # ── assemble_contract_files ──────────────────────────────────────────
@@ -1033,3 +1119,81 @@ async def test_parse_contracts_threads_registry(tmp_path):
     assert cs["data_registry"] == registry
     rooms = next(g for g in m.goals if g.associated_files == ["rooms.yaml"])
     assert _ENTITY_REGISTRY_MARKER in rooms.description
+
+
+# ── data-boundary gate at contract time ───────────────────────────────
+
+
+def _mission_with_boundary_data(tmp_path):
+    m = _mission(tmp_path)
+    m.architecture.data_shapes = [
+        DataShapeContract(
+            file="world.yaml",
+            consumed_by="engine.py",
+            structure="rooms: list",
+            example="rooms:\n  - id: r1\n",
+        )
+    ]
+    return m
+
+
+_DRIFTED_ENGINE_STUB = '''```python
+# === FILE: engine.py ===
+"""Engine.
+
+Loads world.yaml from the 'data' directory at startup.
+"""
+
+from models import make_card
+
+
+def run() -> int:
+    """Run one round reading data/world.yaml.
+
+    >>> isinstance(run, object)
+    True
+    """
+    ...
+```'''
+
+
+@pytest.mark.asyncio
+async def test_parse_contracts_boundary_drift_books_revision(tmp_path):
+    out = await action_parse_contracts(
+        _si(
+            {
+                "inference_response": _MODELS_STUB + "\n" + _DRIFTED_ENGINE_STUB,
+                "mission": _mission_with_boundary_data(tmp_path),
+            }
+        )
+    )
+    assert out.result["parse_ok"] is False
+    assert out.result["revisions_left"] > 0
+    fb = out.context_updates["contract_feedback"]
+    assert "declares it at 'world.yaml'" in fb or "'data' directory" in fb
+
+
+@pytest.mark.asyncio
+async def test_parse_contracts_threads_state_contracts_to_workers(tmp_path):
+    m = _mission(tmp_path)
+    m.architecture.state_shapes = [
+        {
+            "name": "load_world() return / Engine input",
+            "owner": "loader.py",
+            "consumed_by": "engine.py",
+            "structure": "{rooms: dict, items: dict} — exactly these keys",
+        }
+    ]
+    out = await action_parse_contracts(
+        _si(
+            {
+                "inference_response": _MODELS_STUB + "\n" + _ENGINE_STUB,
+                "mission": m,
+            }
+        )
+    )
+    cs = out.context_updates["contract_set"]
+    assert cs["state_contracts"][0]["name"] == "load_world() return / Engine input"
+    prompt = _worker_prompt(cs, "engine.py", "run", "persona text", "instruction text")
+    assert "State & transfer contracts" in prompt
+    assert "exactly these keys" in prompt

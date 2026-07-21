@@ -695,6 +695,12 @@ def render_batch_blueprint(params: dict, namespaces: dict) -> str:
         lines.append("Data files and their consumers MUST agree on these exact")
         lines.append("key names and nesting. The written data file is checked")
         lines.append("against the exemplar structurally.")
+        lines.append("LOCATION IS PART OF THE CONTRACT: each file lives at")
+        lines.append("EXACTLY the path shown, relative to the working directory")
+        lines.append("the program runs from. Code opens it by exactly that")
+        lines.append("path. NEVER prefix a directory the design didn't declare")
+        lines.append("(no invented data/ or assets/) — code path references")
+        lines.append("are checked against these declared paths.")
         for ds in data_shapes:
             lines.append("")
             lines.append(f"File: {_get(ds, 'file')}")
@@ -833,6 +839,38 @@ def render_contract_digest(params: dict, namespaces: dict) -> str:
     return "\n\n".join(parts)
 
 
+def render_assembled_package(params: dict, namespaces: dict) -> str:
+    """Render the on-disk assembled package as one FILE-marker blob.
+
+    Input: params.source = files_changed (list of relative/absolute paths);
+    params.working_directory = mission working dir. Output key: assembled_package.
+
+    The integrator (reconcile_integration) sees the WHOLE assembled artifact
+    at once — every worker-produced file's real source, framed in the same
+    `# === FILE: path ===` envelope it re-emits, so the reconciled response
+    parses cleanly through slice_batch_files. Missing/unreadable files are
+    skipped (a worker/splice failure leaves a file unwritten — serial
+    fallback territory, not the integrator's concern).
+    """
+    files = params.get("source") or []
+    if not isinstance(files, (list, tuple)) or not files:
+        return ""
+    workdir = params.get("working_directory") or ""
+
+    parts = []
+    for path in files:
+        if not path or not isinstance(path, str):
+            continue
+        full = path if os.path.isabs(path) else os.path.join(workdir, path)
+        try:
+            with open(full, "r", encoding="utf-8") as fh:
+                content = fh.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        parts.append(f"# === FILE: {path} ===\n{content}".rstrip())
+    return "\n\n".join(parts)
+
+
 RENDERER_REGISTRY: dict[str, Any] = {
     "render_file_context": render_file_context,
     "render_dependency_excerpts": render_dependency_excerpts,
@@ -844,4 +882,5 @@ RENDERER_REGISTRY: dict[str, Any] = {
     "render_batch_blueprint": render_batch_blueprint,
     "render_data_registry_brief": render_data_registry_brief,
     "render_contract_digest": render_contract_digest,
+    "render_assembled_package": render_assembled_package,
 }

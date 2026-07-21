@@ -72,6 +72,14 @@ sections:
        Listing two sample keys makes the checker treat the map as a FIXED
        object and false-flag every key you didn't list. A fixed object (a
        struct with a known, fixed field set) shows ALL of its keys.
+       **Data file LOCATION is part of the contract**: `file` is the EXACT
+       path, relative to the working directory the program runs from, where
+       the file will exist. Code must open it by exactly this path — a bare
+       filename means "beside the entry point". Decide the layout HERE, once:
+       if you want a subdirectory, declare it in `file` (e.g.
+       `data/decks.yaml`); code that invents a directory the design never
+       declared (a `data/` or `assets/` prefix) will fail its checks and the
+       program will not find its files.
 
     6. **State Contracts**: The canonical representation of runtime state
        that MORE THAN ONE module reads or writes, plus the schema of any
@@ -83,6 +91,14 @@ sections:
          (e.g. "Deck.cards: list of card_id strings — never Card objects").
        - Persisted state: the full schema of what gets written and
          restored (e.g. save JSON: every key and its value type).
+       - **Transfer dicts**: EVERY dict one module builds and another
+         consumes — a loader's return value handed to an engine or state
+         constructor, a config bundle passed between layers. Name both
+         sides (e.g. "load_decks() return / StudyEngine.__init__ input"),
+         set `owner` to the producer file, and `structure` to the EXACT
+         top-level key set. This is the seam where independently-written
+         producer and consumer disagree on required keys ("missing key"
+         crashes at startup) unless the keys are written down here.
        Without this, each file's author guesses independently and the
        mismatches surface as runtime crashes that are expensive to trace.
 
@@ -160,6 +176,12 @@ sections:
           "owner": "engine.py",
           "consumed_by": "engine.py",
           "structure": "{current_deck_id: str, completed: [card_id], scores: {deck_id: int}}"
+        },
+        {
+          "name": "load_decks() return / StudyEngine.__init__ input",
+          "owner": "loader.py",
+          "consumed_by": "engine.py, main.py",
+          "structure": "{decks: {deck_id: Deck}, cards: {card_id: Card}} — exactly these top-level keys, nothing else required"
         }
       ],
       "transient_files": ["progress.json", "*.session.json"],

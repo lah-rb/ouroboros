@@ -1,0 +1,25 @@
+# Prompt template: build_contracts/reconcile_task
+#
+# Problem section for the single-integrator turn: the mission objective
+# plus the framing that this response RECONCILES an already-assembled
+# package built by independent workers, resolving the cross-file drift no
+# individual worker could see. The blueprint, contracts, and the whole
+# assembled package follow as context_files sections.
+
+id: build_contracts/reconcile_task
+content: |
+  ## Task
+  {context.mission.objective}
+
+  The modules below were each implemented by an independent worker from a
+  shared interface contract, in isolation and in parallel. Individually
+  they honor their contracts, but because no worker could see another's
+  code, they DRIFT at the seams: a caller invokes a method under a name the
+  definer spelled differently, a loader expects a data file at a path
+  another module wrote elsewhere, sibling modules reference the same entity
+  under different ids, an import names a symbol its source module never
+  exported, a call passes arguments the callee's real signature does not
+  accept.
+
+  You are the INTEGRATOR. You alone see the whole assembled artifact at
+  once. Your job is to make these pieces cohere into one runnable program.

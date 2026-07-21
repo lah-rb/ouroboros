@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast as stdlib_ast
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -32,7 +33,12 @@ from agent.actions.ast_actions import (
     _count_top_level_defs,
     _validate_symbol_kind,
 )
-from agent.actions.batch_structural_actions import _declared_files, _normalize_path
+from agent.actions.batch_structural_actions import (
+    _data_boundary_prose_violations,
+    _data_boundary_violations,
+    _declared_files,
+    _normalize_path,
+)
 from agent.actions.file_ops_actions import guarded_write_file
 from agent.actions.frame_actions import build_frame, splice_frame
 from agent.actions.refinement_actions import extract_code_from_response
@@ -43,6 +49,11 @@ from agent.models import StepInput, StepOutput
 logger = logging.getLogger(__name__)
 
 MAX_CONTRACT_REVISIONS = 2
+
+# Per-stream generation margin added to the estimated prompt when the
+# pool-fit gate sizes the fan-out (KV cells are consumed per actual token;
+# this only shapes admission, it caps nothing).
+_GEN_MARGIN = 2048
 
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 
@@ -153,6 +164,7 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
     # data file's own generation directive now (idempotent, saved).
     data_contracts = _data_contracts(mission)
     data_registry = ctx.get("data_registry") or []
+    state_contracts = _state_contracts(mission)
     await _enrich_data_goals(effects, mission, data_contracts, data_registry)
 
     blocks = parse_file_blocks(raw) if raw else []
@@ -167,6 +179,7 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
                     "issues": [],
                     "data_contracts": data_contracts,
                     "data_registry": data_registry,
+                    "state_contracts": state_contracts,
                 },
                 "contract_feedback": "",
                 "contract_revision": revision,
@@ -274,6 +287,25 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
     for missing in (f for f in declared_code if f not in files):
         issues.append({"file": missing, "problem": "no contract block for this file"})
 
+    # Data-boundary gate at CONTRACT time: an author-level path drift
+    # (a docstring or stub body addressing a declared data file off its
+    # declared path, or inventing a data/ directory) would be inherited
+    # by every worker — kill it in the revision loop instead. Scans the
+    # full stub text (docstrings included — that's where the 2026-07-21
+    # `'data' directory` drift lived).
+    declared_data_paths = [dc["file"] for dc in data_contracts]
+    if declared_data_paths:
+        for norm, entry in files.items():
+            seen_probs: set[str] = set()
+            for violation in _data_boundary_violations(
+                entry["stub_text"], declared_data_paths
+            ) + _data_boundary_prose_violations(
+                entry["stub_text"], declared_data_paths
+            ):
+                if violation not in seen_probs:
+                    seen_probs.add(violation)
+                    issues.append({"file": norm, "problem": violation})
+
     parse_ok = not issues
     revisions_left = max(0, MAX_CONTRACT_REVISIONS - revision) if issues else 0
     feedback = ""
@@ -302,6 +334,7 @@ async def action_parse_contracts(step_input: StepInput) -> StepOutput:
                 "issues": issues,
                 "data_contracts": data_contracts,
                 "data_registry": data_registry,
+                "state_contracts": state_contracts,
             },
             "contract_feedback": feedback,
             "contract_revision": revision,
@@ -515,6 +548,44 @@ def _data_contracts(mission: Any) -> list[dict]:
     return out
 
 
+def _state_contracts(mission: Any) -> list[dict]:
+    """The architecture's state/transfer-shape contracts as plain dicts
+    (name, owner, consumed_by, structure). Robust to model-object or dict
+    shapes; drops entries with no name."""
+    arch = getattr(mission, "architecture", None) if mission else None
+    shapes = getattr(arch, "state_shapes", None) if arch else None
+    out: list[dict] = []
+    for ss in shapes or []:
+        get = ss.get if isinstance(ss, dict) else (lambda k: getattr(ss, k, ""))
+        name = str(get("name") or "").strip()
+        if not name:
+            continue
+        out.append(
+            {
+                "name": name,
+                "owner": str(get("owner") or "").strip(),
+                "consumed_by": str(get("consumed_by") or "").strip(),
+                "structure": str(get("structure") or "").strip(),
+            }
+        )
+    return out
+
+
+def _state_digest(state_contracts: list[dict]) -> str:
+    """Worker-facing view of the state & transfer contracts: the canonical
+    runtime representations AND the exact producer→consumer dict shapes.
+    Signatures alone can't carry dict-key requirements (Dict[str, Any]
+    says nothing about required keys) — this digest is where a loader's
+    return and a constructor's expectation agree on the SAME key set."""
+    lines: list[str] = []
+    for sc in state_contracts or []:
+        who = f" (owner: {sc['owner']}" + (
+            f"; consumers: {sc['consumed_by']})" if sc.get("consumed_by") else ")"
+        )
+        lines.append(f"- {sc['name']}{who}: {sc['structure']}")
+    return "\n".join(lines)
+
+
 def _data_digest(data_contracts: list[dict]) -> str:
     """Worker-facing view of every runtime data file: its shape and a
     literal exemplar. Isolated workers never see the data files, so an
@@ -535,6 +606,17 @@ def _data_digest(data_contracts: list[dict]) -> str:
                 f"```\n{dc['example']}\n```"
             )
         blocks.append(header + "\n" + "\n".join(body))
+    if blocks:
+        # Locus rule rides only a NON-empty digest (an all-skipped list
+        # must render empty — no dangling paragraph with no files below).
+        blocks.insert(
+            0,
+            "LOCATION IS PART OF THE CONTRACT: each data file lives at "
+            "EXACTLY the path named below, relative to the working directory "
+            "the program runs from. Open it by exactly that path — NEVER "
+            "prefix a directory the design didn't declare (no invented "
+            "data/ or assets/); path references are checked.",
+        )
     return "\n\n".join(blocks)
 
 
@@ -767,6 +849,17 @@ def _worker_prompt(
             "(an id not listed here will not exist):\n"
             f"{registry}"
         )
+    state = _state_digest((contract_set or {}).get("state_contracts") or [])
+    if state:
+        parts.append(
+            "## State & transfer contracts — canonical runtime representations "
+            "AND the exact dict shapes passed between modules (a producer's "
+            "return consumed by another module's constructor). If your symbol "
+            "builds or consumes one of these, use EXACTLY the keys/types shown "
+            "— requiring a key the producer contract doesn't emit (or emitting "
+            "one the consumer doesn't expect) ships a startup crash:\n"
+            f"{state}"
+        )
     parts.append(
         f"## Your assignment: implement `{name}` ({meta['kind']})\n"
         f"```python\n{meta['stub']}\n```"
@@ -866,22 +959,45 @@ async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:
 
     Context required: contract_set
     Context optional: swarm_token_base
-    Params: workers (default 6), worker_max_tokens (default 4096)
+    Params: max_workers (default 32 — the server admission ceiling; match
+        the serving config's max_concurrent_requests), pool_budget
+        (default 131072 — the serving config's n_ctx, the SHARED KV cell
+        pool across all streams)
     Publishes: worker_results, swarm_stats, inference_tokens_generated,
         batch_manifest, files_changed, primary_code_file (failure-path
         defaults; assemble_files overwrites them on success)
+
+    Concurrency shape: n=symbols when the whole read context fits the
+    pool (measured 2026-07-20, dev/serving_perf_reference.md: aggregate
+    decode rises monotonically with streams, KV cells are consumed per
+    ACTUAL token — never reserved — and early-EOS workers release cells
+    and decode share back to the big ones). A deterministic pool-fit
+    gate caps the fan-out to waves that fit within 80% of pool_budget
+    (the wedge-zone margin) when estimated prompts + generation margin
+    exceed it.
+
+    Workers carry NO max_tokens override — generation ends on EOS under
+    the server default ceiling. A worker that hits that ceiling rambled;
+    it fails immediately without a retry (a rambler retried is a
+    rambler), and the failure reason says so rather than letting the AST
+    gate mislabel truncation as bad code.
 
     Each worker output passes a deterministic AST gate (exactly one
     top-level symbol, exact name, kind match, column 0, no imports,
     docstring present) with ONE error-threaded retry — the retry prompt
     carries the validation failure verbatim.
+
+    Tracking layer: every attempt appends one JSON row (server-measured
+    actuals: prompt/prefill/decode tokens and ms, relative submit/done
+    times) to <working_directory>/.agent/swarm_perf.jsonl for
+    dev/plot_swarm_perf.py. Tracking failures never fail the burst.
     """
     effects = step_input.effects
     ctx = step_input.context
     contract_set = ctx.get("contract_set") or {}
     files = _code_files(contract_set)
-    workers = int(step_input.params.get("workers", 6) or 6)
-    max_tokens = int(step_input.params.get("worker_max_tokens", 4096) or 4096)
+    max_workers = int(step_input.params.get("max_workers", 32) or 32)
+    pool_budget = int(step_input.params.get("pool_budget", 131072) or 131072)
     token_base = int(ctx.get("swarm_token_base", 0) or 0)
 
     persona = _load_prompt("personas/symbol_worker")
@@ -904,17 +1020,75 @@ async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:
             },
         )
 
-    sem = asyncio.Semaphore(max(1, workers))
+    # Pool-fit gate: prebuild every prompt, estimate the total read context
+    # (chars/4 × 1.3 code calibration — no tokenize endpoint; actuals are
+    # recorded post-hoc from InferenceResult.prompt_tokens), and fan out
+    # n=symbols when it fits 80% of the shared pool. Otherwise cap to
+    # waves that fit — loudly, never silently.
+    prompts: dict[tuple[str, str], str] = {
+        (path, name): _worker_prompt(contract_set, path, name, persona, instruction)
+        for path, name in tasks
+    }
+    draws = {k: (len(p) * 13) // 40 + _GEN_MARGIN for k, p in prompts.items()}
+    budget80 = (pool_budget * 4) // 5
+    est_total = sum(draws.values())
+    if est_total <= budget80:
+        sem_n = min(len(tasks), max_workers)
+        gate = "full"
+    else:
+        sem_n = max(1, min(max_workers, budget80 // max(draws.values())))
+        gate = "waved"
+        logger.info(
+            "Swarm pool-fit gate: est read context %d tok > 80%% of pool %d — "
+            "capping concurrency to %d-wide waves",
+            est_total,
+            pool_budget,
+            sem_n,
+        )
+    sem = asyncio.Semaphore(sem_n)
+
+    # Tracking sidecar (dev/plot_swarm_perf.py reads this). Never fatal.
+    working_directory = str(step_input.inputs.get("working_directory", "") or "")
+    perf_path = (
+        Path(working_directory) / ".agent" / "swarm_perf.jsonl"
+        if working_directory
+        else None
+    )
+    burst_t0 = time.monotonic()
+
+    def _perf(row: dict) -> None:
+        if perf_path is None:
+            return
+        try:
+            perf_path.parent.mkdir(parents=True, exist_ok=True)
+            with perf_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except OSError:
+            pass
+
+    _perf(
+        {
+            "event": "burst",
+            "t0_epoch": round(time.time(), 3),
+            "symbols": len(tasks),
+            "sem": sem_n,
+            "gate": gate,
+            "max_workers": max_workers,
+            "pool_budget": pool_budget,
+            "est_prompt_tok_sum": est_total,
+        }
+    )
 
     async def run_worker(path: str, name: str) -> tuple[str, str, dict]:
         meta = files[path]["symbols"][name]
-        prompt = _worker_prompt(contract_set, path, name, persona, instruction)
+        prompt = prompts[(path, name)]
         tokens = 0
         attempts = 0
         error = ""
         async with sem:
             for attempt in (1, 2):
                 attempts = attempt
+                t_submit = round(time.monotonic() - burst_t0, 2)
                 try:
                     result = await effects.run_inference(
                         (
@@ -925,18 +1099,65 @@ async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:
                                 f"{error}\nOutput ONLY the corrected symbol."
                             )
                         ),
-                        config_overrides={
-                            "temperature": "t*0.4",
-                            "max_tokens": max_tokens,
-                        },
+                        config_overrides={"temperature": "t*0.4"},
                     )
                 except Exception as e:  # noqa: BLE001 — contained per worker
                     error = f"inference error: {e}"
+                    _perf(
+                        {
+                            "event": "worker",
+                            "symbol": name,
+                            "path": path,
+                            "attempt": attempt,
+                            "t_submit": t_submit,
+                            "t_done": round(time.monotonic() - burst_t0, 2),
+                            "ok": False,
+                            "error_kind": "exception",
+                        }
+                    )
                     continue
+                truncated = bool(getattr(result, "truncated", False))
+                _perf(
+                    {
+                        "event": "worker",
+                        "symbol": name,
+                        "path": path,
+                        "attempt": attempt,
+                        "t_submit": t_submit,
+                        "t_done": round(time.monotonic() - burst_t0, 2),
+                        "ok": not getattr(result, "error", None),
+                        "error_kind": (
+                            "inference" if getattr(result, "error", None) else ""
+                        ),
+                        "prompt_tokens": int(getattr(result, "prompt_tokens", 0) or 0),
+                        "cached_prefix_tokens": int(
+                            getattr(result, "cached_prefix_tokens", 0) or 0
+                        ),
+                        "fresh_prefill_tokens": int(
+                            getattr(result, "fresh_prefill_tokens", 0) or 0
+                        ),
+                        "generated_tokens": int(
+                            getattr(result, "tokens_generated", 0) or 0
+                        ),
+                        "prefill_ms": float(getattr(result, "prefill_ms", 0.0) or 0.0),
+                        "decode_ms": float(getattr(result, "decode_ms", 0.0) or 0.0),
+                        "truncated": truncated,
+                    }
+                )
                 if getattr(result, "error", None):
                     error = f"inference error: {result.error}"
                     continue
                 tokens += int(getattr(result, "tokens_generated", 0) or 0)
+                if truncated:
+                    # The server-default ceiling only binds on a ramble —
+                    # name it honestly and do NOT retry (a rambler retried
+                    # is a rambler; the AST gate would mislabel this
+                    # "does not parse").
+                    error = (
+                        "generation hit the server token ceiling without EOS "
+                        f"(ramble?) — {tokens} tokens"
+                    )
+                    break
                 body = extract_code_from_response(result.text or "")
                 reason = _validate_worker_body(body, name, meta)
                 if reason is None:
@@ -982,13 +1203,25 @@ async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:
         "retried": retried,
         "wall_s": round(wall_s, 1),
         "worker_tokens": worker_tokens,
-        "workers": workers,
+        "workers": sem_n,
+        "gate": gate,
+        "est_prompt_tok_sum": est_total,
     }
     obs = (
         f"Swarm: {ok_count}/{len(tasks)} symbols implemented in {wall_s:.0f}s "
-        f"({workers} workers, {retried} retried, {worker_tokens} tokens)"
+        f"({sem_n} concurrent [{gate}], {retried} retried, {worker_tokens} tokens)"
     )
     logger.info(obs)
+    _perf(
+        {
+            "event": "burst_done",
+            "t_done": round(time.monotonic() - burst_t0, 2),
+            "ok": ok_count,
+            "failed": len(tasks) - ok_count,
+            "retried": retried,
+            "worker_tokens": worker_tokens,
+        }
+    )
     return StepOutput(
         result={"any_ok": ok_count > 0},
         observations=obs,

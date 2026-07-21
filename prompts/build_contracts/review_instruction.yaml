@@ -22,6 +22,12 @@ content: |
      raise for the same condition).
   5. Doctest sanity: doctests are self-contained and their expected
      outputs are consistent with the contracted behavior.
+  6. Transfer-dict and path agreement: every dict one contract builds and
+     another consumes (a loader's return handed to a constructor, a config
+     bundle) is specified with the SAME key set on BOTH sides — a consumer
+     requiring a key the producer never emits is a startup crash. And every
+     file path a contract mentions matches the declared data-file paths
+     EXACTLY (no invented directories).
 
   Do NOT flag style, naming taste, or implementation choices — only
   problems that would make two faithful implementations disagree.

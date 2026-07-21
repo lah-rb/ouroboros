@@ -414,3 +414,96 @@ async def test_apply_nothing_written_records_attempt():
     saved = fx._state["mission"]
     assert any("batch_structural" in n.tags for n in saved.notes)
     assert out.context_updates["directive_report"]["status"] == "failed"
+
+
+# ── data-boundary gate (design locus enforcement) ─────────────────────
+
+from agent.actions.batch_structural_actions import (  # noqa: E402
+    _data_boundary_prose_violations,
+    _data_boundary_violations,
+)
+
+
+def test_boundary_flags_prefixed_literal():
+    code = 'PATH = "data/decks.yaml"\n'
+    v = _data_boundary_violations(code, ["decks.yaml"])
+    assert len(v) == 1 and "declares it at 'decks.yaml'" in v[0]
+
+
+def test_boundary_flags_invented_dir_joins():
+    code = (
+        "from pathlib import Path\nimport os\n"
+        'BASE = Path(__file__).parent / "data"\n'
+        'ALT = os.path.join("x", "data")\n'
+        'P = Path("data")\n'
+    )
+    v = _data_boundary_violations(code, ["decks.yaml"])
+    assert v and all("undeclared 'data/'" in s for s in v)
+
+
+def test_boundary_clean_code_passes():
+    code = (
+        'PATH = "decks.yaml"\n'
+        'GREETING = "load the data before playing"\n'
+        'SAVE = "progress.json"\n'
+    )
+    assert _data_boundary_violations(code, ["decks.yaml"]) == []
+
+
+def test_boundary_declared_prefix_is_allowed():
+    # The design itself declared the subdirectory → conforming code passes.
+    code = 'PATH = "data/decks.yaml"\nBASE = Path(__file__).parent / "data"\n'
+    assert _data_boundary_violations(code, ["data/decks.yaml"]) == []
+
+
+def test_boundary_syntax_error_defers_to_syntax_gate():
+    assert _data_boundary_violations("def broken(:\n", ["decks.yaml"]) == []
+
+
+def test_boundary_prose_flags_directory_phrase_and_prefixed_token():
+    text = (
+        '"""Load world data from the \'data\' directory.\n\n'
+        "    Reads data/decks.yaml at startup.\n"
+        '"""\n'
+    )
+    v = _data_boundary_prose_violations(text, ["decks.yaml"])
+    assert any("'data' directory" in s or "'data'" in s for s in v)
+    assert any("data/decks.yaml" in s for s in v)
+
+
+def test_boundary_prose_clean_passes():
+    text = '"""Load decks.yaml from beside the entry point."""\n'
+    assert _data_boundary_prose_violations(text, ["decks.yaml"]) == []
+
+
+@pytest.mark.asyncio
+async def test_checks_fail_code_file_addressing_undeclared_prefix():
+    # engine.py compiles fine but addresses the declared data file under an
+    # invented data/ prefix → the data_boundary check fails the file.
+    fx = MockEffects(
+        mission=_mission(),
+        files={
+            **_env_files(),
+            "engine.py": 'PATH = "data/decks.yaml"\n',
+        },
+        commands={"python -m py_compile engine.py": _OK},
+    )
+    out = await action_run_batch_file_checks(
+        _si(fx, {"files_changed": ["engine.py"], "mission": _mission()})
+    )
+    per_file = out.context_updates["batch_check_results"]
+    assert per_file["engine.py"]["passed"] is False
+    assert "data_boundary: engine.py" in per_file["engine.py"]["checks_failed"]
+    assert "declares it at 'decks.yaml'" in per_file["engine.py"]["output"]
+
+
+@pytest.mark.asyncio
+async def test_checks_boundary_inert_without_mission():
+    # No mission in context (older callers) → gate inert, behavior unchanged.
+    fx = MockEffects(
+        mission=_mission(),
+        files={**_env_files(), "engine.py": 'PATH = "data/decks.yaml"\n'},
+        commands={"python -m py_compile engine.py": _OK},
+    )
+    out = await action_run_batch_file_checks(_si(fx, {"files_changed": ["engine.py"]}))
+    assert out.context_updates["batch_check_results"]["engine.py"]["passed"] is True

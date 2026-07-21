@@ -275,6 +275,26 @@ FLOW_SETS: dict[str, FlowSetSpec] = {
         entry_flow="mission_control_swarm",
         phases=CODE_CORE_PHASES,
     ),
+    # Ablation variant "batch + doctest & company": identical phase contract,
+    # controller retargets the parallel structural batch to
+    # build_structure_contracted (author contracts front → SINGLE batch
+    # completion implementing them → no worker fan-out). Isolates contract
+    # rigor from the swarm's parallelism.
+    "batch_contracted": FlowSetSpec(
+        name="batch_contracted",
+        entry_flow="mission_control_contracted",
+        phases=CODE_CORE_PHASES,
+    ),
+    # Coordination variant "integrated": full contract-swarm (author contracts →
+    # gate-review → parallel per-symbol workers → splice-assemble), then ONE
+    # seam-owning integrator pass (build_structure_integrated) re-emits the
+    # assembled package reconciled — replacing reliance on the diffuse
+    # per-goal repair loop. Isolates the coordination fix from the parallelism.
+    "integrated": FlowSetSpec(
+        name="integrated",
+        entry_flow="mission_control_integrated",
+        phases=CODE_CORE_PHASES,
+    ),
     "scraper": FlowSetSpec(
         name="scraper",
         entry_flow="research_control",
@@ -373,11 +393,11 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
             # still fires the wave (else they fall to functional and re-test one
             # interact cycle at a time). Grounding only happens after a genuine
             # pass, so this is inert during the structural batch phase. Safe on a
-            # None mission. Fires at most once per edit (sweep advances
-            # last_regression_cycle) → cannot loop.
-            if getattr(mission, "last_edit_cycle", -1) > getattr(
-                mission, "last_regression_cycle", -1
-            ) and any(
+            # None mission. Fires at most once per edit (the sweep clears
+            # regression_dirty) → cannot loop. The flag replaced the
+            # restart-fragile cycle comparison (loop cycles reset per process;
+            # the persisted watermark left the suite dormant after resumes).
+            if getattr(mission, "regression_dirty", False) and any(
                 (g.status == "complete" and getattr(g, "acceptance_checks", None))
                 or (
                     g.status == "incomplete"

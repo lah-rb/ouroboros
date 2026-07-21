@@ -167,6 +167,7 @@ build_structure: #FlowDefinition & {
 			description: "Per-file gates: env checks for code, parse-validity for data"
 			context: {
 				required: ["files_changed"]
+				optional: ["mission"]
 			}
 			resolver: {
 				type: "rule"

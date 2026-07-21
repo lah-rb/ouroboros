@@ -1,40 +1,43 @@
-// build_contracts.cue — Contract-Swarm Structural Creation (v1)
+// build_structure_integrated.cue — Contract-Swarm + single INTEGRATOR (v1)
 //
-// The contract_swarm alternative to build_structure: instead of ONE
-// completion writing every file, ONE completion writes a per-module
-// CONTRACT (a valid Python stub file per module: final imports, typed
-// signatures, Design-by-Contract docstrings with doctests, `...`
-// bodies), a fresh-context reviewer checks cohesion (bounded revision
-// loop), then N symbol workers implement one top-level symbol each,
-// CONCURRENTLY, against just their contract slice. splice_frame
-// assembles each file from its skeleton + worker bodies; the standard
-// batch gates run, plus the contract's own doctests.
+// The `integrated` variant of build_contracts: keep the whole contract-
+// swarm front (author contracts → gate-review → fan out one worker per
+// top-level symbol, concurrently → splice-assemble), then run ONE
+// seam-owning INTEGRATOR pass over the assembled package before the
+// gates. The integrator sees the full design blueprint + the authored
+// contracts + the ENTIRE assembled artifact, and re-emits the fileset
+// reconciled — resolving cross-file drift (data paths, method/function
+// names, entity ids, import/signature mismatches) that no per-symbol
+// worker could see. It replaces reliance on the downstream diffuse
+// per-goal repair loop with a single coherent integration.
 //
-// Failure containment mirrors build_structure exactly: a file whose
-// workers or splice fail is left UNWRITTEN (missing → the sweep's
-// serial needs_create path builds it the proven way); gate-failed
-// files keep an incomplete goal with a failed report (→ diagnose-first
-// repair); the batch never re-runs wholesale (apply_batch_results'
-// note is the attempted-flag). Data files are never swarm targets.
+// Rationale (deep-research, 2026-07-20): the multi-agent coordination
+// penalty is irreducible by contract quality, but a single integrator
+// holding the full spec + the whole artifact restores single-agent-
+// ceiling coherence, whereas conflict-report-driven repair is
+// "diagnostic, not therapeutic". So the integrator is driven by the
+// full spec (not conflict reports) and runs BEFORE the gates.
 //
-// The contract author and reviewer both expose config.model — a yaml
-// flip routes either turn to a boss registry entry (e.g. boss-sonnet)
-// via the multi-model Phase 4 plumbing. Default is the local model.
+// Failure containment mirrors build_contracts: workers/splice that fail
+// leave a file UNWRITTEN (serial fallback); the integrator re-emits only
+// what parses (slice_batch_files overwrites parsed blocks, others keep
+// their assembled version); an unanswerable integrator degrades to
+// gating the assembled-as-is (no_answer → lookup_env). Data files are
+// never swarm targets.
 //
-// Dispatched from mission_control_swarm (dispatch_batch_create) with
-// last_goal_id deliberately empty: apply_batch_results books per-goal
-// reports itself, so attach_directive_report skips.
+// Dispatched from mission_control_integrated (dispatch_batch_create).
 
 package ouroboros
 
-build_contracts: #FlowDefinition & {
-	flow:    "build_contracts"
+build_structure_integrated: #FlowDefinition & {
+	flow:    "build_structure_integrated"
 	version: 1
 	description: """
-		Contract-driven parallel structural creation: author per-module
-		symbol contracts, gate-review them, fan out one worker per top-level
-		symbol concurrently, assemble files via sentinel splice, gate the
-		results, and book the batch to mission_control_swarm.
+		Contract-driven parallel structural creation with a single seam-owning
+		integrator: author per-module symbol contracts, gate-review them, fan out
+		one worker per top-level symbol concurrently, assemble files via sentinel
+		splice, then reconcile the whole assembled package in one integrator
+		completion, gate the reconciled result, and book the batch.
 		"""
 
 	context_tier: "flow_directive"
@@ -69,12 +72,8 @@ build_contracts: #FlowDefinition & {
 		}
 
 		// Round-5 SHARED ENTITY-ID REGISTRY. One completion coins the
-		// canonical id namespace across the runtime data files (which ids
-		// each file DEFINES + which it may REFERENCE in siblings), so the
-		// independently-generated data files bind to the same ids and
-		// cross-file references resolve. Derived ONCE, before the
-		// author⇄parse revision loop; boss-swappable like the other swarm
-		// turns. no_answer degrades straight to round-4 (shape-only).
+		// canonical id namespace across the runtime data files, so the
+		// independently-generated data files bind to the same ids.
 		author_data_registry: #StepDefinition & {
 			action:      "inference"
 			description: "Coin one canonical entity-id namespace across the data files"
@@ -123,11 +122,7 @@ build_contracts: #FlowDefinition & {
 			publishes: ["data_registry"]
 		}
 
-		// One completion, every CONTRACT. Same FILE-marker envelope the
-		// batch build uses, but each block is a stub module, not an
-		// implementation. no_answer converges downstream: an empty
-		// response parses to zero files → apply_results books the
-		// attempt → the sweep falls back to serial creation.
+		// One completion, every CONTRACT.
 		author_contracts: #StepDefinition & {
 			action:      "inference"
 			description: "Author per-module symbol contracts (typed stubs + DbC docstrings + doctests)"
@@ -150,10 +145,6 @@ build_contracts: #FlowDefinition & {
 					default:   "parse_contracts"
 					no_answer: "parse_contracts"
 				}
-				// Contract authoring is a precision task; boss-swappable.
-				// Explicit max_tokens so the multi-file stub set is never
-				// starved by a low server default (the design step's empty-
-				// response failure mode — reasoning eats the whole budget).
 				config: {
 					temperature: "t*0.3"
 					max_tokens:  16384
@@ -168,10 +159,7 @@ build_contracts: #FlowDefinition & {
 			publishes: ["inference_response"]
 		}
 
-		// Deterministic contract gate: every block must parse as a stub
-		// module, frame cleanly (no duplicate top-level names), cover the
-		// declared code files, and carry docstrings. Failures become
-		// revision instructions threaded back to the author (bounded).
+		// Deterministic contract gate.
 		parse_contracts: #StepDefinition & {
 			action:      "parse_contracts"
 			description: "Parse + validate contract stubs; build skeletons and symbol slices"
@@ -185,13 +173,9 @@ build_contracts: #FlowDefinition & {
 					{condition: "result.no_files == true", transition: "apply_results"},
 					{condition: "result.parse_ok == true", transition: "review_contracts"},
 					{condition: "result.revisions_left > 0", transition: "author_contracts"},
-					// Revisions exhausted — proceed with the valid subset;
-					// invalid files stay missing (serial fallback).
 					{condition: "true", transition: "review_contracts"},
 				]
 			}
-			// Also publishes empty manifest defaults so the no_files path
-			// reaches apply_results with its required context satisfied.
 			publishes: [
 				"contract_set", "contract_feedback", "contract_revision",
 				"swarm_token_base", "batch_manifest", "files_changed",
@@ -199,10 +183,7 @@ build_contracts: #FlowDefinition & {
 			]
 		}
 
-		// Fresh-context cohesion review (stateless completion = fresh
-		// eyes by construction). Boss-swappable via config.model. An
-		// unanswerable review proceeds to the workers — the deterministic
-		// gates downstream are the real net.
+		// Fresh-context cohesion review (stateless completion = fresh eyes).
 		review_contracts: #StepDefinition & {
 			action:      "inference"
 			description: "Fresh-context cohesion review of the contract set"
@@ -253,15 +234,10 @@ build_contracts: #FlowDefinition & {
 			publishes: ["contract_review", "contract_feedback", "contract_revision", "swarm_token_base"]
 		}
 
-		// The net-new concurrency primitive: one stateless completion per
-		// top-level symbol, fanned out n=symbols wide when the estimated
-		// read context fits 80% of the shared KV pool (waved otherwise);
-		// the batched server seats decode them concurrently. Workers carry
-		// NO max_tokens cap — generation ends on EOS; hitting the server
-		// ceiling is named a ramble and fails without retry. Per-output
-		// deterministic AST validation with ONE error-threaded retry.
-		// max_workers matches the serving config's max_concurrent_requests;
-		// pool_budget matches its n_ctx (gpt-oss-120b-a5-swarm.yaml).
+		// One stateless completion per top-level symbol, fanned out
+		// n=symbols wide when the read context fits the shared pool
+		// (see build_contracts.cue); no per-worker max_tokens — EOS ends
+		// generation, the server ceiling names a ramble.
 		fan_out_workers: #StepDefinition & {
 			action:      "swarm_generate_symbols"
 			description: "Implement every contract symbol with concurrent workers"
@@ -277,21 +253,86 @@ build_contracts: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.any_ok == true", transition: "assemble_files"},
-					// Every worker failed — book the attempt; serial fallback.
 					{condition: "true", transition: "apply_results"},
 				]
 			}
 			publishes: ["worker_results", "swarm_stats", "inference_tokens_generated", "batch_manifest", "files_changed", "primary_code_file"]
 		}
 
-		// Per-file assembly: splice_frame(skeleton, worker bodies) —
-		// all-or-nothing PER FILE, never per batch. Failed files are left
-		// unwritten (missing → serial fallback).
+		// Per-file assembly: splice_frame(skeleton, worker bodies).
 		assemble_files: #StepDefinition & {
 			action:      "assemble_contract_files"
 			description: "Splice worker bodies into skeletons; write complete files only"
 			context: {
 				required: ["contract_set", "worker_results", "mission"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.files_written > 0", transition: "reconcile_integration"},
+					{condition: "true", transition: "apply_results"},
+				]
+			}
+			publishes: ["batch_manifest", "files_changed", "primary_code_file"]
+		}
+
+		// THE INTEGRATOR. One completion holds the full design blueprint,
+		// the authored contracts, and the WHOLE assembled package, and
+		// re-emits the fileset reconciled — owning every cross-file seam.
+		// Driven by the full spec (not conflict reports), before the gates.
+		// no_answer degrades to gating the assembled-as-is.
+		reconcile_integration: #StepDefinition & {
+			action:      "inference"
+			description: "Single integrator reconciles cross-file coherence over the assembled package"
+			context: {
+				required: ["contract_set", "mission", "files_changed"]
+			}
+			turn: #Turn & {
+				response_shape: "code"
+				response: language: ""
+				sections: [
+					{type: "role", template: "personas/code_author"},
+					{type: "problem", template: "build_contracts/reconcile_task"},
+					{type: "context_files", ref: {$ref: "context.batch_blueprint"}},
+					{type: "context_files", ref: {$ref: "context.contract_digest"}},
+					{type: "context_files", ref: {$ref: "context.assembled_package"}},
+					{type: "instruction", template: "build_contracts/reconcile_instruction"},
+					{type: "envelope"},
+				]
+				transitions: {
+					default:   "slice_and_write"
+					no_answer: "lookup_env"
+				}
+				config: {
+					temperature: "t*0.2"
+					max_tokens:  16384
+					model:       string | *""
+				}
+				retries: 2
+			}
+			pre_compute: [
+				{formatter: "render_batch_blueprint", output_key: "batch_blueprint"
+					params: source: {$ref: "context.mission.architecture"}},
+				{formatter: "render_contract_digest", output_key: "contract_digest"
+					params: source: {$ref: "context.contract_set"}},
+				{formatter: "render_assembled_package", output_key: "assembled_package"
+					params: {
+						source:            {$ref: "context.files_changed"}
+						working_directory: {$ref: "input.working_directory"}
+					}},
+			]
+			publishes: ["inference_response"]
+		}
+
+		// Slice the integrator's re-emitted FILE blocks, diff against the
+		// blueprint, OVERWRITE the assembled files. no_answer/empty → gate
+		// the assembled-as-is (files already on disk).
+		slice_and_write: #StepDefinition & {
+			action:      "slice_batch_files"
+			description: "Slice reconciled FILE blocks, diff against the blueprint, overwrite declared files"
+			context: {
+				required: ["inference_response", "mission"]
+				optional: ["inference_truncated"]
 			}
 			resolver: {
 				type: "rule"
@@ -303,7 +344,7 @@ build_contracts: #FlowDefinition & {
 			publishes: ["batch_manifest", "files_changed", "primary_code_file"]
 		}
 
-		// Env bootstrap + per-file gates: verbatim build_structure doctrine.
+		// Env bootstrap + per-file gates: verbatim build_contracts doctrine.
 		lookup_env: #StepDefinition & {
 			action:      "lookup_validation_env"
 			description: "Ensure validation tooling is configured for the project language"
@@ -362,13 +403,10 @@ build_contracts: #FlowDefinition & {
 			publishes: ["batch_check_results", "validation_results", "validation_output"]
 		}
 
-		// The contract's doctests are the acceptance surface the author
-		// wrote for its own workers — run them against the ASSEMBLED
-		// modules (symbols depend on siblings, so they can't run
-		// per-worker). Failures keep the goal incomplete → repair path.
+		// The contract's doctests against the RECONCILED modules.
 		run_doctests: #StepDefinition & {
 			action:      "run_contract_doctests"
-			description: "Run contract doctests against the assembled modules"
+			description: "Run contract doctests against the reconciled modules"
 			context: {
 				required: ["files_changed", "contract_set"]
 				optional: ["batch_check_results"]
@@ -382,17 +420,10 @@ build_contracts: #FlowDefinition & {
 			publishes: ["batch_check_results", "validation_output"]
 		}
 
-		// Deterministic cross-module interface check (round-2 lever): the
-		// per-symbol doctests can't see integration drift — a call to a
-		// method a class doesn't define, a constructor invoked with the
-		// wrong arity, an attribute the type never declares. A static
-		// resolver over the ASSEMBLED package flags high-confidence
-		// mismatches; a flagged file's check fails → its goal stays
-		// incomplete → repair. Static, so it runs at structural time
-		// (no deps / no program run needed).
+		// Static cross-module interface check over the RECONCILED package.
 		run_type_check: #StepDefinition & {
 			action:      "run_contract_typecheck"
-			description: "Cross-module interface consistency over assembled files"
+			description: "Cross-module interface consistency over reconciled files"
 			context: {
 				required: ["files_changed"]
 				optional: ["batch_check_results"]
@@ -414,7 +445,7 @@ build_contracts: #FlowDefinition & {
 				optional: ["batch_check_results", "inference_tokens_generated"]
 			}
 			params: {
-				flow_label: "build_contracts"
+				flow_label: "build_structure_integrated"
 			}
 			resolver: {
 				type: "rule"
@@ -427,11 +458,11 @@ build_contracts: #FlowDefinition & {
 		}
 
 		report_success: #StepDefinition & _templates.return_success & {
-			description: "Return to mission_control_swarm — batch written and booked"
+			description: "Return to mission_control_integrated — batch written and booked"
 		}
 
 		report_failed: #StepDefinition & _templates.return_failed & {
-			description: "Return to mission_control_swarm — batch produced nothing usable"
+			description: "Return to mission_control_integrated — batch produced nothing usable"
 		}
 	}
 

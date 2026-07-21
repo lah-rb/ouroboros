@@ -20,6 +20,7 @@ Goals are never created or destroyed here — only reported on.
 
 from __future__ import annotations
 
+import ast as stdlib_ast
 import logging
 from typing import Any
 
@@ -51,6 +52,172 @@ def _declared_files(mission: Any) -> list[str]:
     if not arch:
         return []
     return _get_sweep_files(arch)
+
+
+def _declared_data_paths(mission: Any) -> list[str]:
+    """The architecture's declared data-file paths (data_shapes[].file)."""
+    arch = getattr(mission, "architecture", None) if mission else None
+    shapes = getattr(arch, "data_shapes", None) if arch else None
+    out: list[str] = []
+    for ds in shapes or []:
+        get = ds.get if isinstance(ds, dict) else (lambda k: getattr(ds, k, ""))
+        file = str(get("file") or "").strip().lstrip("./")
+        if file:
+            out.append(file)
+    return out
+
+
+# Directory names code plausibly invents for data files when the design
+# declared none (the seam that broke three 2026-07 structural runs: code
+# addressed `data/rooms.yaml` / joined `/ "data"` while the design declared
+# top-level paths). Deliberately small — the check must be loud and right.
+_INVENTED_DATA_DIRS = {"data", "assets", "resources", "config", "configs", "world"}
+
+
+def _data_boundary_violations(code_text: str, declared: list[str]) -> list[str]:
+    """Deterministic data-locus check: does this code address the declared
+    data files at their declared paths?
+
+    Two violation classes (see dev/serving_perf_reference.md §6 history):
+      (a) prefixed reference — a string literal whose basename matches a
+          declared data file but whose path differs ("data/rooms.yaml" when
+          the design declares "rooms.yaml");
+      (b) invented data dir — a directory-ish literal (_INVENTED_DATA_DIRS)
+          used as a path-join operand (``base / "data"``,
+          ``os.path.join(x, "data")``, ``Path("data")``) when no declared
+          data path carries that directory.
+
+    Returns human-actionable violation strings (empty when clean). A file
+    that does not parse returns [] — the syntax gate owns that failure.
+    """
+    declared_norm = [d.strip().lstrip("./") for d in declared if d and d.strip()]
+    if not declared_norm or not code_text:
+        return []
+    try:
+        tree = stdlib_ast.parse(code_text)
+    except SyntaxError:
+        return []
+
+    by_base: dict[str, set[str]] = {}
+    for d in declared_norm:
+        by_base.setdefault(d.rsplit("/", 1)[-1], set()).add(d)
+    declared_dirs = {
+        seg for d in declared_norm if "/" in d for seg in d.split("/")[:-1]
+    }
+    declared_list = ", ".join(sorted(declared_norm))
+
+    violations: list[str] = []
+    seen: set[str] = set()
+
+    def _flag(msg: str) -> None:
+        if msg not in seen:
+            seen.add(msg)
+            violations.append(msg)
+
+    def _dir_literal(node: Any) -> str | None:
+        if isinstance(node, stdlib_ast.Constant) and isinstance(node.value, str):
+            v = node.value.strip().strip("/")
+            if v.lower() in _INVENTED_DATA_DIRS and v not in declared_dirs:
+                return v
+        return None
+
+    for node in stdlib_ast.walk(tree):
+        # (a) any string literal referencing a declared basename off-path
+        if isinstance(node, stdlib_ast.Constant) and isinstance(node.value, str):
+            # Docstring-sized prose is scanned separately (prose helper);
+            # here only path-sized literals count.
+            if "\n" in node.value or len(node.value) > 200:
+                continue
+            ref = node.value.strip().lstrip("./")
+            base = ref.rsplit("/", 1)[-1]
+            if "/" in ref and base in by_base and ref not in by_base[base]:
+                _flag(
+                    f"references data file as '{node.value}' but the design "
+                    f"declares it at '{sorted(by_base[base])[0]}' — open it by "
+                    "EXACTLY the declared path"
+                )
+        # (b) invented directory as a join operand
+        if isinstance(node, stdlib_ast.BinOp) and isinstance(node.op, stdlib_ast.Div):
+            d = _dir_literal(node.right)
+            if d:
+                _flag(
+                    f"builds data paths under an undeclared '{d}/' directory "
+                    f"(path join); the design declares data files at: "
+                    f"{declared_list} — address those exact paths"
+                )
+        if isinstance(node, stdlib_ast.Call):
+            fn = node.func
+            fn_name = (
+                fn.attr
+                if isinstance(fn, stdlib_ast.Attribute)
+                else (fn.id if isinstance(fn, stdlib_ast.Name) else "")
+            )
+            if fn_name in ("join", "joinpath", "Path", "PurePath"):
+                for arg in node.args:
+                    d = _dir_literal(arg)
+                    if d:
+                        _flag(
+                            f"builds data paths under an undeclared '{d}/' "
+                            f"directory ({fn_name}(...)); the design declares "
+                            f"data files at: {declared_list} — address those "
+                            "exact paths"
+                        )
+    return violations
+
+
+def _data_boundary_prose_violations(text: str, declared: list[str]) -> list[str]:
+    """Prose-level data-locus check for CONTRACT stubs.
+
+    At contract time the bodies are ``...`` — the drift lives in docstring
+    PROSE (the 2026-07-21 case: main.py's contract said "Load world data
+    from the 'data' directory"), invisible to the AST join-scan. Two narrow
+    patterns:
+      (a') a path-like token whose basename matches a declared data file
+           under a different prefix ("data/rooms.yaml");
+      (b') an explicit "<dir> directory" phrase naming an undeclared
+           directory from _INVENTED_DATA_DIRS ("the 'data' directory").
+    """
+    import re
+
+    declared_norm = [d.strip().lstrip("./") for d in declared if d and d.strip()]
+    if not declared_norm or not text:
+        return []
+    by_base: dict[str, set[str]] = {}
+    for d in declared_norm:
+        by_base.setdefault(d.rsplit("/", 1)[-1], set()).add(d)
+    declared_dirs = {
+        seg for d in declared_norm if "/" in d for seg in d.split("/")[:-1]
+    }
+    declared_list = ", ".join(sorted(declared_norm))
+    violations: list[str] = []
+
+    for token in re.findall(r"[\w.\-/]+", text):
+        if "/" not in token:
+            continue
+        norm = token.lstrip("./")
+        base = norm.rsplit("/", 1)[-1]
+        if base in by_base and norm not in by_base[base]:
+            v = (
+                f"contract references data file as '{token}' but the design "
+                f"declares it at '{sorted(by_base[base])[0]}' — the contract "
+                "must state EXACTLY the declared path"
+            )
+            if v not in violations:
+                violations.append(v)
+
+    for m in re.finditer(
+        r"['\"]?(\w+)['\"]?\s+(?:sub)?director(?:y|ies)", text, re.IGNORECASE
+    ):
+        d = m.group(1).lower()
+        if d in _INVENTED_DATA_DIRS and d not in declared_dirs:
+            v = (
+                f"contract describes data files in a '{d}' directory the "
+                f"design never declared; the design declares data files at: "
+                f"{declared_list} — the contract must use those exact paths"
+            )
+            if v not in violations:
+                violations.append(v)
+    return violations
 
 
 async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
@@ -243,6 +410,10 @@ async def action_run_batch_file_checks(step_input: StepInput) -> StepOutput:
                 f"[SKIP] {f} — {_UNCHECKED_NOTE}",
             )
 
+    # Data-boundary gate inputs: the design's declared data-file paths.
+    # Empty (no data files, or mission absent from context) → gate inert.
+    declared_data = _declared_data_paths(step_input.context.get("mission"))
+
     for ext, group in code_by_ext.items():
         sub_input = StepInput(
             task=step_input.task,
@@ -256,6 +427,31 @@ async def action_run_batch_file_checks(step_input: StepInput) -> StepOutput:
         results = sub_out.context_updates.get("validation_results", []) or []
         for f in group:
             mine = [c for c in results if c.get("name", "").endswith(f": {f}")]
+            # Deterministic data-locus check: code must address declared
+            # data files at EXACTLY their declared paths (the seam that
+            # broke three 2026-07 structural runs — see
+            # _data_boundary_violations).
+            if declared_data:
+                try:
+                    fc = await effects.read_file(f)
+                    code_text = (
+                        getattr(fc, "content", "")
+                        if getattr(fc, "exists", False)
+                        else ""
+                    )
+                except Exception:  # noqa: BLE001 — unreadable → other gates report
+                    code_text = ""
+                for v in _data_boundary_violations(code_text, declared_data):
+                    mine.append(
+                        {
+                            "name": f"data_boundary: {f}",
+                            "passed": False,
+                            "tier": "data_boundary",
+                            "required": True,
+                            "stdout": "",
+                            "stderr": v[:500],
+                        }
+                    )
             file_output = "\n".join(
                 line
                 for c in mine

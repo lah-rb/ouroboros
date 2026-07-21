@@ -1,0 +1,39 @@
+# Prompt template: build_contracts/reconcile_instruction
+#
+# Instruction section for the single-integrator turn. Given the blueprint,
+# the authored contracts, and the whole assembled package (all preceding
+# context_files sections), re-emit the fileset reconciled — fixing ONLY
+# cross-file coherence, preserving each file's internal logic. Full
+# re-emission (every file) keeps the package complete so the downstream
+# gates see the whole reconciled artifact.
+
+id: build_contracts/reconcile_instruction
+content: |
+  You are given three things above: the PROJECT BLUEPRINT (the intended
+  design), the authored CONTRACTS (the agreed interfaces), and the
+  ASSEMBLED PACKAGE (every file's real, worker-written source). Reconcile
+  the assembled package into a single coherent program.
+
+  Fix ONLY cross-file coherence — the seams where independent workers
+  disagreed:
+    - imports that name a symbol or module path that does not exist as written;
+    - method / function / class names a caller uses that differ from the definition;
+    - data-file paths a module reads or writes that disagree across modules;
+    - entity ids / keys referenced inconsistently between files;
+    - call signatures (argument count, names, order) that do not match the callee;
+    - data shapes passed between modules, constructed differently than consumed.
+
+  When two files disagree, pick ONE spelling / path / shape — prefer what
+  the blueprint and contracts specify, else the choice that requires the
+  fewest edits — and make every file conform to it. Do NOT rewrite a file's
+  internal logic, restructure algorithms, or "improve" working code: change
+  only what is needed for the files to agree with each other.
+
+  Re-emit EVERY file in full, even files you did not change, so the package
+  stays complete. Each file is a fenced block whose first line is its FILE
+  marker:
+
+      # === FILE: relative/path.py ===
+      <full file contents>
+
+  Emit nothing outside the fenced file blocks.
