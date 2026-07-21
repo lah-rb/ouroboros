@@ -2991,7 +2991,9 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
     sc = get_step_context() or {}
     cycle = int(sc.get("cycle", 0) or 0)
     # Disarm the regression PhaseRule regardless of outcome (set before the save
-    # so it persists; the next file-affecting report re-arms via last_edit_cycle).
+    # so it persists; the next file-affecting report re-arms regression_dirty).
+    # The cycle field is telemetry only — restart-fragile, never load-bearing.
+    mission.regression_dirty = False
     mission.last_regression_cycle = cycle
 
     if effects is None:

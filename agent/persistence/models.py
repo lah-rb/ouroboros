@@ -899,14 +899,18 @@ class MissionState(BaseModel):
     # (test_suite) fires the gate until this is set. Failures harvest fix goals
     # instead of setting it, so the functional→fix loop runs first.
     tests_verified: bool = False
-    # Cross-goal regression suite: last_edit_cycle is set (in
-    # attach_directive_report) to the cycle of the most recent file-affecting
-    # report; last_regression_cycle to the cycle of the last sweep. The
-    # `regression_pending` PhaseRule fires when last_edit_cycle >
-    # last_regression_cycle AND a grounded completed goal exists — "a file
-    # changed since the last sweep AND there is verified behavior to protect".
-    # Additive defaults keep old mission.json loading. See
-    # action_regression_sweep + CODE_CORE_PHASES.
+    # Cross-goal regression suite arming: "a file changed since the last
+    # sweep". regression_dirty is the AUTHORITATIVE latch — set True by
+    # attach_directive_report on any file-affecting report, cleared by
+    # action_regression_sweep; the `regression_pending` PhaseRule fires on
+    # it (AND a grounded goal exists to act on). A boolean because the
+    # original cycle-comparison latch (last_edit_cycle >
+    # last_regression_cycle) was RESTART-FRAGILE: the loop cycle counter
+    # resets to 0 each process launch while these fields persist, so any
+    # pause/resume left the suite dormant until the new process out-cycled
+    # the old watermark (observed 2026-07-21: 36 vs 538 on the boss-A/B
+    # adaptive arm). The cycle fields remain as telemetry only.
+    regression_dirty: bool = False
     last_edit_cycle: int = -1
     last_regression_cycle: int = -1
     # How many times this mission has been reopened after reaching a terminal

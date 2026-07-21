@@ -263,21 +263,41 @@ def _grounded_complete_goal():
 
 @pytest.mark.asyncio
 async def test_regression_pending_phase():
-    # Grounded completed goal + an edit since the last sweep -> regression fires.
+    # Grounded completed goal + a dirty edit latch -> regression fires.
     g = _grounded_complete_goal()
     m = _mission(goals=[g], env_verified=True)
-    m.last_edit_cycle, m.last_regression_cycle = 5, 3
+    m.regression_dirty = True
     phase, _ = await _phase(m)
     assert phase == "regression"
 
     # No edit since the last sweep -> not regression (all complete -> quality).
-    m.last_regression_cycle = 5
+    m.regression_dirty = False
     phase, _ = await _phase(m)
     assert phase != "regression"
 
     # Edit since sweep but NO grounded check -> not regression (nothing to protect).
     g.acceptance_checks = []
-    m.last_regression_cycle = 3
+    m.regression_dirty = True
+    phase, _ = await _phase(m)
+    assert phase != "regression"
+
+
+@pytest.mark.asyncio
+async def test_regression_dirty_is_restart_proof():
+    # The 2026-07-21 adaptive shape: the persisted watermark (538) dwarfs the
+    # fresh process's cycle counter (36). The FLAG is authoritative — the
+    # cycle fields are telemetry and must not gate arming in either direction.
+    g = _grounded_complete_goal()
+    m = _mission(goals=[g], env_verified=True)
+    m.last_edit_cycle, m.last_regression_cycle = 36, 538  # restart signature
+    m.regression_dirty = True
+    phase, _ = await _phase(m)
+    assert phase == "regression"
+
+    # Conversely: stale cycle arithmetic that LOOKS armed must not fire
+    # when the flag says the sweep already ran.
+    m.last_edit_cycle, m.last_regression_cycle = 5, 3
+    m.regression_dirty = False
     phase, _ = await _phase(m)
     assert phase != "regression"
 
@@ -287,7 +307,7 @@ async def test_regression_preempts_functional_but_not_replan():
     g = _grounded_complete_goal()
     open_fn = _goal("functional", status="incomplete")
     m = _mission(goals=[g, open_fn], env_verified=True)
-    m.last_edit_cycle, m.last_regression_cycle = 5, 3
+    m.regression_dirty = True
     # An incomplete functional goal exists, but the armed regression preempts it.
     phase, _ = await _phase(m)
     assert phase == "regression"
@@ -317,7 +337,7 @@ async def test_regression_pending_fires_for_autocomplete_only_wave():
     # The widened guard must still fire so the auto-complete wave runs (else the
     # blast radius re-clears one interact cycle at a time).
     m = _mission(goals=[_sweep_reopened_goal()], env_verified=True)
-    m.last_edit_cycle, m.last_regression_cycle = 5, 3
+    m.regression_dirty = True
     phase, _ = await _phase(m)
     assert phase == "regression"
 
@@ -327,6 +347,6 @@ async def test_regression_pending_ignores_ungrounded_or_checkless_reopened():
     # regression_reopened but not grounded (or no checks) -> not regression.
     for kwargs in ({"grounded": False}, {"checks": False}):
         m = _mission(goals=[_sweep_reopened_goal(**kwargs)], env_verified=True)
-        m.last_edit_cycle, m.last_regression_cycle = 5, 3
+        m.regression_dirty = True
         phase, _ = await _phase(m)
         assert phase != "regression"

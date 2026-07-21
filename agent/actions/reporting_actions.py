@@ -581,11 +581,12 @@ async def action_attach_directive_report(step_input: StepInput) -> StepOutput:
                         report.flow,
                         report.status,
                     )
-                    # Cross-goal regression suite: record the cycle of this
-                    # file-affecting report so the regression PhaseRule fires
-                    # next cycle (last_edit_cycle > last_regression_cycle). The
-                    # single "a file changed since the last sweep" write.
+                    # Cross-goal regression suite: arm the sweep — "a file
+                    # changed since the last sweep". regression_dirty is the
+                    # authoritative (restart-proof) latch; the cycle field is
+                    # telemetry only (the loop counter resets per process).
                     if report.files_affected:
+                        mission.regression_dirty = True
                         mission.last_edit_cycle = int(sc.get("cycle", 0) or 0)
                     # ── Goal completion check ──
                     # Structural goals: complete when file_ops reports success

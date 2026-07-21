@@ -192,3 +192,19 @@ def test_wall_clock_parks_mission_as_paused():
     assert fx._state["mission"].status == "paused"
     bank = fx._files["databank/papers.jsonl"]
     assert "extracted" not in bank
+
+
+def test_paused_mission_drains_cleanly():
+    # A mission paused out-of-band exits at the next cycle boundary — a clean
+    # break, not 51 idle controller spins ending in the livelock RuntimeError
+    # (the old de-facto drain, ~5 min + pkill fallback in orchestrators).
+    mission, fx = _extractor_scenario()
+    mission.status = "paused"
+    fx._state["mission"] = mission
+    result = _run(mission, fx, max_cycles=None)  # returns without raising
+    # The CLI reads .status off the return — a None return crashed cmd_start
+    # ('NoneType' has no attribute 'status', live 2026-07-21).
+    assert result is not None and result.status == "paused_drain"
+    assert fx._state["mission"].status == "paused"  # untouched, resumable
+    bank = fx._files.get("databank/papers.jsonl", "")
+    assert "extracted" not in bank  # no work dispatched during the drain

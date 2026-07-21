@@ -108,14 +108,17 @@ async def test_sweep_catches_cross_goal_regression():
 async def test_sweep_all_pass_reopens_nothing_but_clears_trigger():
     beta = _goal("beta", [_check("echo ok")])
     m = _mission([beta])
-    m.last_edit_cycle = 4  # a prior edit armed the rule
+    m.regression_dirty = True  # a prior edit armed the rule
     fx = MockEffects(commands={_wrap("echo ok"): _cmd(0)})
 
     out = await action_regression_sweep(_si(m, fx))
 
     assert out.result["reopened"] == 0
     assert beta.status == "complete"
-    assert m.last_regression_cycle == 0  # trigger cleared (cycle=0 in unit ctx)
+    assert m.regression_dirty is False  # trigger cleared (restart-proof flag)
+    assert (
+        m.last_regression_cycle == 0
+    )  # telemetry still advances (cycle=0 in unit ctx)
 
 
 @pytest.mark.asyncio

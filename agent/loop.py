@@ -291,6 +291,34 @@ async def run_agent(
     max_consecutive_entry = (max_cycles + 3) if max_cycles is not None else 50
 
     while True:
+        # Clean pause drain: a mission paused out-of-band (`mission pause`
+        # while we run) exits here at the next cycle boundary — the
+        # in-flight dispatch finishes, then we stop — instead of the
+        # controller idling into the livelock guard below (the old drain:
+        # 51 no-work spins ending in a scary RuntimeError, ~5 min).
+        try:
+            _m = await effects.load_mission()
+        except Exception:  # noqa: BLE001 — status probe must never kill the loop
+            _m = None
+        if _m is not None and getattr(_m, "status", "") == "paused":
+            logger.info(
+                "Mission %s is paused — draining cleanly after %d cycle(s).",
+                mission_id,
+                cycle,
+            )
+            # Return a real FlowResult: callers (cmd_start, mission_runner)
+            # read .status/.steps_executed off the return value — a bare
+            # break fell off the function returning None and crashed the
+            # CLI's termination summary ('NoneType' has no attribute
+            # 'status', observed live 2026-07-21).
+            return FlowResult(
+                status="paused_drain",
+                observations=[
+                    f"Mission paused out-of-band — drained cleanly after "
+                    f"{cycle} work cycle(s)."
+                ],
+            )
+
         # Safety: catch entry flow self-loops
         if current_flow == entry_flow:
             consecutive_entry += 1
