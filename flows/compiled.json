@@ -519,13 +519,42 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "apply_results"
+              "transition": "run_type_check"
             }
           ]
         },
         "publishes": [
           "batch_check_results",
           "validation_results",
+          "validation_output"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_type_check": {
+        "action": "run_contract_typecheck",
+        "description": "Cross-module interface consistency over batch files",
+        "context": {
+          "required": [
+            "files_changed"
+          ],
+          "optional": [
+            "batch_check_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_check_results",
           "validation_output"
         ],
         "effects": [],
@@ -13581,13 +13610,42 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "apply_results"
+              "transition": "run_type_check"
             }
           ]
         },
         "publishes": [
           "batch_check_results",
           "validation_results",
+          "validation_output"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "run_type_check": {
+        "action": "run_contract_typecheck",
+        "description": "Cross-module interface consistency over batch files",
+        "context": {
+          "required": [
+            "files_changed"
+          ],
+          "optional": [
+            "batch_check_results"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_check_results",
           "validation_output"
         ],
         "effects": [],

@@ -281,10 +281,28 @@ build_structure_contracted: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "true", transition: "apply_results"},
+					{condition: "true", transition: "run_type_check"},
 				]
 			}
 			publishes: ["batch_check_results", "validation_results", "validation_output"]
+		}
+
+		// Cross-module interface check — same net as build_structure's tail
+		// (generalized 2026-07-21; the seam class is paradigm-neutral).
+		run_type_check: #StepDefinition & {
+			action:      "run_contract_typecheck"
+			description: "Cross-module interface consistency over batch files"
+			context: {
+				required: ["files_changed"]
+				optional: ["batch_check_results"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "apply_results"},
+				]
+			}
+			publishes: ["batch_check_results", "validation_output"]
 		}
 
 		apply_results: #StepDefinition & {

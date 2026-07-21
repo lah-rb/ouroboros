@@ -220,6 +220,234 @@ def _data_boundary_prose_violations(text: str, declared: list[str]) -> list[str]
     return violations
 
 
+# ── transfer-shape gate ────────────────────────────────────────────────
+# Producer→consumer dict-key agreement across modules. The seam class that
+# decided the 2026-07-21 fair ablation: combat.CombatEngine.run() only ever
+# returns {"outcome","message"} (every return site a dict literal) while
+# engine.py reads result.get("monster_defeated") — so victory never
+# registers. Statically checkable with high precision exactly when the
+# producer's returns are ALL dict literals; everything else is skipped
+# (conservative: unknown producers are never checked). Paradigm-neutral —
+# the same class broke the single-author batch (Player(**dict) key drift).
+
+
+def _producer_dict_keys(sources: dict[str, str]) -> dict[tuple[str, str], set[str]]:
+    """Pass 1: index (module_stem, qualname) -> union of returned dict keys.
+
+    A producer qualifies only when it has >=1 dict-literal return and EVERY
+    value-carrying return is a dict literal with all-string-constant keys
+    and no ** unpacking. Bare return / return None early-exits are allowed.
+    Qualnames: "fn" for top-level functions, "Class.method" for methods.
+    """
+    index: dict[tuple[str, str], set[str]] = {}
+
+    def _keys_of(fn: Any) -> set[str] | None:
+        returns = [
+            n
+            for n in stdlib_ast.walk(fn)
+            if isinstance(n, stdlib_ast.Return)
+            and not (isinstance(n.value, stdlib_ast.Constant) and n.value.value is None)
+            and n.value is not None
+        ]
+        dict_returns = [r for r in returns if isinstance(r.value, stdlib_ast.Dict)]
+        if not dict_returns or len(dict_returns) != len(returns):
+            return None
+        keys: set[str] = set()
+        for r in dict_returns:
+            for k in r.value.keys:
+                if not (
+                    isinstance(k, stdlib_ast.Constant) and isinstance(k.value, str)
+                ):
+                    return None  # dynamic key or ** unpacking (key=None)
+                keys.add(k.value)
+        return keys
+
+    for path, src in sources.items():
+        stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        try:
+            tree = stdlib_ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if isinstance(node, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)):
+                keys = _keys_of(node)
+                if keys is not None:
+                    index[(stem, node.name)] = keys
+            elif isinstance(node, stdlib_ast.ClassDef):
+                for m in node.body:
+                    if isinstance(
+                        m, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)
+                    ):
+                        keys = _keys_of(m)
+                        if keys is not None:
+                            index[(stem, f"{node.name}.{m.name}")] = keys
+    return index
+
+
+def _transfer_shape_violations(sources: dict[str, str]) -> dict[str, list[str]]:
+    """Cross-module transfer-dict check over the whole fileset.
+
+    Returns {consumer_path: [violation, ...]} — a violation is a .get("k")
+    or ["k"] access on a variable whose value came from a cross-module
+    producer that only ever returns dict literals, where k is not among the
+    produced keys. Membership tests ("k" in y) are defensive and never
+    flagged. Tracking is function-scope, single-assignment, invalidated on
+    reassignment; aliasing and attribute stores are not followed.
+    """
+    producers = _producer_dict_keys(sources)
+    if not producers:
+        return {}
+    stems = {p.rsplit("/", 1)[-1].rsplit(".", 1)[0] for p in sources}
+    out: dict[str, list[str]] = {}
+
+    def _imports(tree: Any) -> tuple[dict[str, str], dict[str, str]]:
+        """name->module for `from mod import Name`; alias->module for `import mod`."""
+        from_map: dict[str, str] = {}
+        mod_map: dict[str, str] = {}
+        for n in stdlib_ast.walk(tree):
+            if isinstance(n, stdlib_ast.ImportFrom) and n.module:
+                stem = n.module.split(".")[-1]
+                if stem in stems:
+                    for a in n.names:
+                        from_map[a.asname or a.name] = stem
+            elif isinstance(n, stdlib_ast.Import):
+                for a in n.names:
+                    stem = a.name.split(".")[-1]
+                    if stem in stems:
+                        mod_map[a.asname or a.name.split(".")[0]] = stem
+        return from_map, mod_map
+
+    def _scan_function(
+        fn: Any,
+        path: str,
+        from_map: dict[str, str],
+        mod_map: dict[str, str],
+        violations: list[str],
+    ) -> None:
+        instances: dict[str, tuple[str, str]] = {}  # var -> (mod, Class)
+        dicts: dict[str, tuple[str, str, set[str]]] = {}  # var -> (mod, qual, keys)
+
+        # Track ONLY names assigned exactly once in this function: ast.walk
+        # is breadth-first (not source order), so multi-assigned names could
+        # otherwise be checked against stale tracking (a reassignment inside
+        # a branch visits after a textually-later access). Single-assignment
+        # names are order-immune; everything else is skipped (conservative).
+        assign_counts: dict[str, int] = {}
+        for n in stdlib_ast.walk(fn):
+            if isinstance(n, stdlib_ast.Assign):
+                for t in n.targets:
+                    if isinstance(t, stdlib_ast.Name):
+                        assign_counts[t.id] = assign_counts.get(t.id, 0) + 1
+            elif isinstance(n, (stdlib_ast.AugAssign, stdlib_ast.AnnAssign)):
+                if isinstance(n.target, stdlib_ast.Name):
+                    assign_counts[n.target.id] = assign_counts.get(n.target.id, 0) + 1
+            elif isinstance(n, stdlib_ast.For) and isinstance(
+                n.target, stdlib_ast.Name
+            ):
+                assign_counts[n.target.id] = assign_counts.get(n.target.id, 0) + 2
+
+        def _producer_of(call: Any) -> tuple[str, str] | None:
+            """Resolve a Call node to an indexed (mod, qualname), if any."""
+            f = call.func
+            if isinstance(f, stdlib_ast.Name):
+                # fn(...) or Class(...) via from-import
+                mod = from_map.get(f.id)
+                if mod and (mod, f.id) in producers:
+                    return (mod, f.id)
+                return None
+            if isinstance(f, stdlib_ast.Attribute):
+                base = f.value
+                if isinstance(base, stdlib_ast.Name):
+                    # mod.fn(...)
+                    mod = mod_map.get(base.id)
+                    if mod and (mod, f.attr) in producers:
+                        return (mod, f.attr)
+                    # instance.method(...)
+                    inst = instances.get(base.id)
+                    if inst and (inst[0], f"{inst[1]}.{f.attr}") in producers:
+                        return (inst[0], f"{inst[1]}.{f.attr}")
+            return None
+
+        for node in stdlib_ast.walk(fn):
+            if isinstance(node, stdlib_ast.Assign) and len(node.targets) == 1:
+                tgt = node.targets[0]
+                if not isinstance(tgt, stdlib_ast.Name):
+                    continue
+                if assign_counts.get(tgt.id, 0) != 1:
+                    continue  # multi-assigned → never tracked
+                if isinstance(node.value, stdlib_ast.Call):
+                    call = node.value
+                    prod = _producer_of(call)
+                    if prod is not None:
+                        dicts[tgt.id] = (prod[0], prod[1], producers[prod])
+                        continue
+                    # instance construction: x = Name(...) via from-import
+                    f = call.func
+                    if isinstance(f, stdlib_ast.Name) and f.id in from_map:
+                        instances[tgt.id] = (from_map[f.id], f.id)
+                    elif (
+                        isinstance(f, stdlib_ast.Attribute)
+                        and isinstance(f.value, stdlib_ast.Name)
+                        and f.value.id in mod_map
+                    ):
+                        instances[tgt.id] = (mod_map[f.value.id], f.attr)
+            elif isinstance(node, stdlib_ast.Call):
+                # y.get("k"[, default])
+                f = node.func
+                if (
+                    isinstance(f, stdlib_ast.Attribute)
+                    and f.attr == "get"
+                    and isinstance(f.value, stdlib_ast.Name)
+                    and f.value.id in dicts
+                    and node.args
+                    and isinstance(node.args[0], stdlib_ast.Constant)
+                    and isinstance(node.args[0].value, str)
+                ):
+                    mod, qual, keys = dicts[f.value.id]
+                    k = node.args[0].value
+                    if k not in keys:
+                        violations.append(
+                            f"{path}: `{f.value.id}.get({k!r})` — "
+                            f"{mod}.{qual}() only ever returns keys "
+                            f"{{{', '.join(sorted(keys))}}}"
+                        )
+            elif isinstance(node, stdlib_ast.Subscript):
+                # y["k"]
+                if (
+                    isinstance(node.value, stdlib_ast.Name)
+                    and node.value.id in dicts
+                    and isinstance(node.slice, stdlib_ast.Constant)
+                    and isinstance(node.slice.value, str)
+                ):
+                    mod, qual, keys = dicts[node.value.id]
+                    k = node.slice.value
+                    if k not in keys:
+                        violations.append(
+                            f"{path}: `{node.value.id}[{k!r}]` — "
+                            f"{mod}.{qual}() only ever returns keys "
+                            f"{{{', '.join(sorted(keys))}}}"
+                        )
+
+    for path, src in sources.items():
+        try:
+            tree = stdlib_ast.parse(src)
+        except SyntaxError:
+            continue
+        from_map, mod_map = _imports(tree)
+        if not from_map and not mod_map:
+            continue
+        violations: list[str] = []
+        for node in stdlib_ast.walk(tree):
+            if isinstance(node, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)):
+                _scan_function(node, path, from_map, mod_map, violations)
+        # dedup, preserve order
+        seen: set[str] = set()
+        uniq = [v for v in violations if not (v in seen or seen.add(v))]
+        if uniq:
+            out[path] = uniq
+    return out
+
+
 async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
     """Slice a multi-file generation and write the declared files.
 
@@ -410,9 +638,26 @@ async def action_run_batch_file_checks(step_input: StepInput) -> StepOutput:
                 f"[SKIP] {f} — {_UNCHECKED_NOTE}",
             )
 
-    # Data-boundary gate inputs: the design's declared data-file paths.
-    # Empty (no data files, or mission absent from context) → gate inert.
+    # Deterministic cross-file gate inputs, read ONCE for both gates:
+    # data-boundary (code addresses declared data paths exactly) and
+    # transfer-shape (producer→consumer dict-key agreement — the seam class
+    # that decided the 2026-07-21 fair ablation). Boundary gate is inert
+    # without mission/data_shapes; transfer gate is inert with <2 code files.
     declared_data = _declared_data_paths(step_input.context.get("mission"))
+    code_sources: dict[str, str] = {}
+    for group in code_by_ext.values():
+        for f in group:
+            if not f.endswith(".py"):
+                continue
+            try:
+                fc = await effects.read_file(f)
+                if getattr(fc, "exists", False):
+                    code_sources[f] = getattr(fc, "content", "") or ""
+            except Exception:  # noqa: BLE001 — unreadable → other gates report
+                continue
+    transfer_violations = (
+        _transfer_shape_violations(code_sources) if len(code_sources) >= 2 else {}
+    )
 
     for ext, group in code_by_ext.items():
         sub_input = StepInput(
@@ -431,17 +676,8 @@ async def action_run_batch_file_checks(step_input: StepInput) -> StepOutput:
             # data files at EXACTLY their declared paths (the seam that
             # broke three 2026-07 structural runs — see
             # _data_boundary_violations).
-            if declared_data:
-                try:
-                    fc = await effects.read_file(f)
-                    code_text = (
-                        getattr(fc, "content", "")
-                        if getattr(fc, "exists", False)
-                        else ""
-                    )
-                except Exception:  # noqa: BLE001 — unreadable → other gates report
-                    code_text = ""
-                for v in _data_boundary_violations(code_text, declared_data):
+            if declared_data and f in code_sources:
+                for v in _data_boundary_violations(code_sources[f], declared_data):
                     mine.append(
                         {
                             "name": f"data_boundary: {f}",
@@ -452,6 +688,19 @@ async def action_run_batch_file_checks(step_input: StepInput) -> StepOutput:
                             "stderr": v[:500],
                         }
                     )
+            # Transfer-shape check: this file reads dict keys a cross-module
+            # producer never returns (victory-never-registers class).
+            for v in transfer_violations.get(f, []):
+                mine.append(
+                    {
+                        "name": f"transfer_shape: {f}",
+                        "passed": False,
+                        "tier": "transfer_shape",
+                        "required": True,
+                        "stdout": "",
+                        "stderr": v[:500],
+                    }
+                )
             file_output = "\n".join(
                 line
                 for c in mine

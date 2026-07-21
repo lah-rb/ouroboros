@@ -135,3 +135,28 @@ before content — the model does not budget; it truncates).
   each layer of upfront design removes a coarser seam class. NOTE: the
   frozen seed predates the design-prompt transfer-shape requirement, so
   that change is untested until a FRESH design_and_plan run.
+- **FAIR ABLATION (2026-07-21, frozab2 — fresh design under the new prompt,
+  control vs swarm from the same seed, blind Opus judge PINNED):** the
+  design authored transfer contracts unprompted (load_world→GameEngine,
+  parse_command→handle_input) and the swarm artifact BOOTED AND PLAYED for
+  the first time — every contracted seam held. Verdict: **control 18/25 >
+  swarm 9/25**, control 3.5× cheaper (13.1k vs 45.5k OUT), 4.8× faster
+  (3m56s vs 18m44s). Swarm's residual defects are seams the design did NOT
+  contract: CombatEngine.run returns {outcome,message} but the engine reads
+  monster_defeated/damage_taken (an unauthored transfer dict), item type
+  vocabulary 'potion' vs 'healing', raise-vs-catch error conventions.
+  KEY FINDING: the boundary stack lifted the BATCH baseline too (old
+  control 13 → new 18, zero crashes, working save/load) — upfront design
+  hardening is paradigm-neutral; the fan-out's coordination penalty is
+  paradigm-specific and reappears at whatever level the contracts don't
+  reach (the specification-gap "irreducible penalty," now replicated
+  in-house across 4 hardening generations). Single-context-scale verdict:
+  batch wins every axis. Fan-out's remaining case = artifacts too large
+  for one completion (untested regime).
+- **Transfer-shape gate SHIPPED (2026-07-21):** deterministic
+  producer→consumer dict-key agreement (`_transfer_shape_violations`) in the
+  shared `run_batch_file_checks` — retroactively flags BOTH fair-ablation
+  swarm defects with exact naming AND 4 latent seams in arm_swarm2's parser
+  handoff, zero false positives across 7 historical artifacts. Cross-module
+  typecheck (method/arity) generalized to the batch gate tail too — the
+  seam class is paradigm-neutral (old-control's Player(**dict) crash).

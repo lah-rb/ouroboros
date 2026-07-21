@@ -507,3 +507,159 @@ async def test_checks_boundary_inert_without_mission():
     )
     out = await action_run_batch_file_checks(_si(fx, {"files_changed": ["engine.py"]}))
     assert out.context_updates["batch_check_results"]["engine.py"]["passed"] is True
+
+
+# ── transfer-shape gate (producer→consumer dict-key agreement) ─────────
+
+from agent.actions.batch_structural_actions import (  # noqa: E402
+    _transfer_shape_violations,
+)
+
+_COMBAT_SRC = """
+class CombatEngine:
+    def __init__(self, player, monster):
+        self.player = player
+        self.monster = monster
+
+    def run(self):
+        if self.monster.hp <= 0:
+            return {"outcome": "victory", "message": "won"}
+        return {"outcome": "defeat", "message": "lost"}
+"""
+
+_ENGINE_SRC = """
+from combat import CombatEngine
+
+
+def handle_attack(player, monster):
+    combat = CombatEngine(player, monster)
+    result = combat.run()
+    if result.get("monster_defeated"):
+        return True
+    dmg = result.get("damage_taken", 0)
+    return dmg
+"""
+
+
+def test_transfer_gate_flags_combat_seam():
+    # The exact 2026-07-21 fair-ablation defect: consumer reads keys the
+    # producer never returns → victory never registers.
+    v = _transfer_shape_violations({"combat.py": _COMBAT_SRC, "engine.py": _ENGINE_SRC})
+    msgs = v.get("engine.py", [])
+    assert len(msgs) == 2
+    assert any("monster_defeated" in m for m in msgs)
+    assert any("damage_taken" in m for m in msgs)
+    assert all("combat.CombatEngine.run()" in m for m in msgs)
+    assert all("message, outcome" in m for m in msgs)
+
+
+def test_transfer_gate_clean_agreement_passes():
+    engine = (
+        "from combat import CombatEngine\n\n"
+        "def handle(p, m):\n"
+        "    c = CombatEngine(p, m)\n"
+        "    result = c.run()\n"
+        '    if result.get("outcome") == "victory":\n'
+        '        return result["message"]\n'
+        '    return result.get("message", "?")\n'
+    )
+    assert (
+        _transfer_shape_violations({"combat.py": _COMBAT_SRC, "engine.py": engine})
+        == {}
+    )
+
+
+def test_transfer_gate_skips_non_literal_producer():
+    combat = (
+        "class CombatEngine:\n"
+        "    def run(self):\n"
+        "        if True:\n"
+        '            return {"outcome": "victory"}\n'
+        "        return self._build()\n"  # non-literal path → not indexed
+    )
+    assert (
+        _transfer_shape_violations({"combat.py": combat, "engine.py": _ENGINE_SRC})
+        == {}
+    )
+
+
+def test_transfer_gate_membership_test_never_flagged():
+    engine = (
+        "from combat import CombatEngine\n\n"
+        "def handle(p, m):\n"
+        "    c = CombatEngine(p, m)\n"
+        "    result = c.run()\n"
+        '    if "monster_defeated" in result:\n'  # defensive probe — fine
+        "        return True\n"
+        "    return False\n"
+    )
+    assert (
+        _transfer_shape_violations({"combat.py": _COMBAT_SRC, "engine.py": engine})
+        == {}
+    )
+
+
+def test_transfer_gate_multi_assigned_names_never_tracked():
+    engine = (
+        "from combat import CombatEngine\n\n"
+        "def handle(p, m, flag):\n"
+        "    c = CombatEngine(p, m)\n"
+        "    result = c.run()\n"
+        "    if flag:\n"
+        "        result = {'monster_defeated': True}\n"  # reassignment
+        "    return result.get('monster_defeated')\n"
+    )
+    assert (
+        _transfer_shape_violations({"combat.py": _COMBAT_SRC, "engine.py": engine})
+        == {}
+    )
+
+
+def test_transfer_gate_module_call_and_subscript():
+    parser = (
+        "def parse_command(raw):\n"
+        '    return {"action": raw.split()[0], "raw": raw}\n'
+    )
+    engine = (
+        "import parser\n\n"
+        "def loop(raw):\n"
+        "    parsed = parser.parse_command(raw)\n"
+        '    return parsed["command"]\n'  # producer returns action/raw
+    )
+    v = _transfer_shape_violations({"parser.py": parser, "engine.py": engine})
+    assert len(v.get("engine.py", [])) == 1
+    assert "parser.parse_command()" in v["engine.py"][0]
+
+
+@pytest.mark.asyncio
+async def test_checks_transfer_gate_wired():
+    fx = MockEffects(
+        mission=_mission(),
+        files={
+            **_env_files(),
+            "combat.py": _COMBAT_SRC,
+            "engine.py": _ENGINE_SRC,
+        },
+        commands={
+            "python -m py_compile combat.py": _OK,
+            "python -m py_compile engine.py": _OK,
+        },
+    )
+    out = await action_run_batch_file_checks(
+        _si(fx, {"files_changed": ["combat.py", "engine.py"]})
+    )
+    per_file = out.context_updates["batch_check_results"]
+    assert per_file["engine.py"]["passed"] is False
+    assert "transfer_shape: engine.py" in per_file["engine.py"]["checks_failed"]
+    assert per_file["combat.py"]["passed"] is True  # producer is not at fault
+
+
+@pytest.mark.asyncio
+async def test_checks_transfer_gate_inert_single_file():
+    fx = MockEffects(
+        mission=_mission(),
+        files={**_env_files(), "engine.py": _ENGINE_SRC},
+        commands={"python -m py_compile engine.py": _OK},
+    )
+    out = await action_run_batch_file_checks(_si(fx, {"files_changed": ["engine.py"]}))
+    assert out.context_updates["batch_check_results"]["engine.py"]["passed"] is True

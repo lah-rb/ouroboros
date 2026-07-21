@@ -172,10 +172,32 @@ build_structure: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "true", transition: "apply_results"},
+					{condition: "true", transition: "run_type_check"},
 				]
 			}
 			publishes: ["batch_check_results", "validation_results", "validation_output"]
+		}
+
+		// Deterministic cross-module interface check (generalized from the
+		// swarm gate tail, 2026-07-21): undefined method/attribute on a typed
+		// receiver, constructor/function arity, unknown kwargs. The fair
+		// ablation showed this seam class is paradigm-NEUTRAL — the old
+		// single-author batch shipped Player(**dict) key drift — so the
+		// batch flow gets the same net the swarm always had.
+		run_type_check: #StepDefinition & {
+			action:      "run_contract_typecheck"
+			description: "Cross-module interface consistency over batch files"
+			context: {
+				required: ["files_changed"]
+				optional: ["batch_check_results"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "true", transition: "apply_results"},
+				]
+			}
+			publishes: ["batch_check_results", "validation_output"]
 		}
 
 		apply_results: #StepDefinition & {
