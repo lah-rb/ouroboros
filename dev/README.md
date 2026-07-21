@@ -24,6 +24,8 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
 - `batched_parity.py` — batched-decode determinism/isolation parity. `duo_soak.py` — multi-seat soak + latch-heal.
 - `snapshot_stress.py` — snapshot-tier acceptance. `cache_strategy_stress.py` / `cache_compat_matrix.{py,sh}` — KV strategy & per-model compat.
 - `decode_scaling_bench.py` / `swarm_3proc_bench.py` / `jit_exercise_131k.py` — throughput & pool-lifecycle benches.
+- `serving_perf_reference.md` — **measured failure edges & design rules** (2026-07-20/21): decode-vs-N, prefill-vs-size, shared-pool wedge zone, worker budget sizing. Read before sizing any fan-out experiment.
+- `plot_swarm_perf.py` — render a swarm fan-out's `.agent/swarm_perf.jsonl` (active streams, per-symbol gantt, aggregate tok/s over time) + per-symbol actuals summary.
 - `spec_bench.py` — speculative-decode A/B. `reasoning_headswap_spike.py` — per-request reasoning head-swap validation.
 - `replay_runaway.py` — repetition-guard regression. `refresh_efficacy.py` — in-process context-refresh efficacy.
 - `warm_flows.py` — pre-warm per-flow KV. `patch_cache_cfg.py` — idempotent config-field setter.
