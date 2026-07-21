@@ -13,11 +13,11 @@ items last. Update this file as items land or close.*
   torch, mlx, the editable ~/Repos/tau-bench install). `uv pip install`
   or `uv sync --inexact`.
 - llmvp tests run under llmvp's OWN venv: `cd llmvp && .venv/bin/python
-  -m pytest tests/`. Main suite: `uv run pytest tests/` (1390 green as of
-  writing; llmvp 228).
+  -m pytest tests/`. Main suite: `uv run pytest tests/` (1518 green as of
+  2026-07-21; llmvp 265).
 - Verification fence per change: both suites + `ouroboros.py lint-flows`
-  (0 errors / 1 standing advisory) + `smoke` (38/38) + `cli-smoke`
-  (16/16) + black/ruff clean. `flows/compiled.json` commits force all
+  (0 errors / 1 standing advisory) + `smoke` (44/44) + `cli-smoke`
+  (19/19) + black/ruff clean. `flows/compiled.json` commits force all
   touched .cue sources into the same commit.
 - After ANY benchmark/server work: restore the production LLMVP config
   (`llmvp/active_config.txt` → `gpt-oss-120b-a5`) and restart.
@@ -26,7 +26,21 @@ items last. Update this file as items land or close.*
   is burning hours (SIGSTOP mission processes → SIGTERM server →
   relaunch → SIGCONT; the agent retry loops ride through).
 
-## 1. Boss-game A/B analysis — ROUND 1 CALLED 2026-07-17, ROUND 2 RUNNING
+## 1. Boss-game A/B analysis — CLOSED 2026-07-21 (round 2 complete)
+
+Both arms COMPLETED (baseline 28/28 goals, adaptive 73/73). Blind
+pinned-Opus panel on the finished games: **adaptive 16/25 (judge completed
+a genuine winning run; robust, save/load + dialogue + equip all real) vs
+baseline 8/25 (unwinnable — boss subsystem disconnected from data; crashes
+on bad input)**. Router at scale: 33% of 11,085 calls routed low, high on
+14 deliberations only, mean decode/call 15.6s vs 17.6s on a harder
+mission; per-goal cost ~identical (75k vs 79k OUT/goal). VERDICT: adaptive
+does not cost quality vs flat medium → **adaptive is the default for
+further testing.** Full numbers in the reasoning-injection memory. a5
+production config restored + server restarted (tracker fix deployed)
+2026-07-21. Branch merge decision still open.
+
+## OLD-1 (superseded) — ROUND 1 CALLED 2026-07-17
 
 Round 1 (`/tmp/gameab/bossgame_{adaptive,baseline}`, 32.4h each, PARKED
 and preserved) is NOT a clean adaptive-thinking A/B: postmortem (see
@@ -48,7 +62,15 @@ sibling context kill the oscillation; did threaded gate output break the
 two-gate loops). Afterwards: restore production a5 config; update the
 adaptive-reasoning memory; consider merging this branch.
 
-## 2. Drain-refresh follow-through
+## 2. Drain-refresh follow-through — CLOSED 2026-07-21 (by evidence)
+
+Zero "refresh attempt failed" since the hardening; 27h+ uptime through the
+heaviest workload to date (n=symbols fan-outs, capacity benches, config
+swaps) with proactive-timed-drain cycling cleanly every ~30 min. Tier-2
+(session replay across refresh) SKIPPED per its own gate — phase-1 keeps
+clearing.
+
+## OLD-2 (superseded)
 
 Context: `llmvp` timed context auto-refresh with drain
 (`context_refresh_drain_s`, commit `8073353`; incident history in the
@@ -66,7 +88,15 @@ survive"). Work:
     refresh, rebuilding live sessions from token history onto fresh
     seats (the snapshot cold-tier pattern) instead of expiring them.
 
-## 3. Powered TB canary with the adaptive config (+ context-budget A/B)
+## 3. Powered TB canary with the adaptive config — LAUNCHED 2026-07-21
+
+Two-arm run in flight: `runs/canary-tb2-adaptive` (OURO_ADAPTIVE_REASONING=1,
+THR=0.4) vs `runs/canary-tb2-flat` (OURO_REASONING_OFF=1), sequential via
+dev/canary_tb2_gptoss.sh on production a5. The context-budget arm is
+DEFERRED to a follow-up pair once these two land (keep the matrix
+readable). Compare pass rate + decode tokens + prompt sizes when done.
+
+## OLD-3 (original brief)
 
 Run the 8-task TB2 canary (`dev/canary_tb2_gptoss.sh`) with
 `OURO_ADAPTIVE_REASONING=1` against the production a5 config
