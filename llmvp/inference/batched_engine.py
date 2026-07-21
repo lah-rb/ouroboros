@@ -749,6 +749,25 @@ class BatchedEngine:
         slot._last_prefill_s = max(0.0, prefill_end - s.t_submit)
         slot._last_decode_s = max(0.0, now - prefill_end)
 
+        # Truthful per-stream completion record: the wrapper's tracker
+        # finish() is quiet in batched mode (its shared status blends
+        # concurrent streams), so the engine — which has the exact spans
+        # and counts — owns the "Generation complete" log line, the
+        # post-mortem snapshot, and the health throughput-trend fold.
+        try:
+            from core.generation_tracker import get_tracker
+
+            get_tracker().report_completion(
+                request_id=str(getattr(s.req, "request_id", "") or ""),
+                prompt_tokens=int(s.req.kv_base) + len(s.req.prompt_tokens),
+                generated_tokens=len(s.completion_tokens),
+                eval_s=slot._last_prefill_s,
+                gen_s=slot._last_decode_s,
+                total_s=max(0.0, now - s.t_submit),
+            )
+        except Exception:  # noqa: BLE001 — telemetry must never break decode
+            pass
+
         if error is None:
             tail = s.pipeline.flush()
             if tail:

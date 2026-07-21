@@ -132,8 +132,19 @@ class GenerationTracker:
         with self._lock:
             self._status.thinking_complete = True
 
-    def finish(self) -> None:
-        """Mark generation as complete and log diagnostics."""
+    def finish(self, quiet: bool = False) -> None:
+        """Mark generation as complete and (unless quiet) log diagnostics.
+
+        The completion stats are derived from the SHARED status, which is
+        only per-request-accurate when one stream runs at a time (the pool
+        path). Batched-concurrency callers MUST pass ``quiet=True`` — every
+        interleaved ``start()`` resets the shared counters, so a blended
+        finish() here would log another stream's tokens as this request's
+        and poison the throughput trend (observed 2026-07-21: a 517-token
+        stream logged as generated=7361 @ 115.7 tok/s under a 14-stream
+        fan-out). In batched mode the ENGINE reports truthful per-stream
+        numbers via ``report_completion()`` at stream retirement instead.
+        """
         with self._lock:
             now = time.monotonic()
             s = self._status
@@ -143,38 +154,67 @@ class GenerationTracker:
             total = now - s.started_at if s.started_at else 0
             gen_time = now - s.first_token_at if s.first_token_at else 0
 
-            # Preserve for post-mortem
+            # Preserve for post-mortem (thinking capture is shared-status
+            # either way — see get_thinking).
             self._last_thinking = s.thinking_content
             self._last_request_id = s.request_id
-            self._last_status_snapshot = {
-                "request_id": s.request_id,
-                "prompt_tokens": s.prompt_tokens,
-                "tokens_generated": s.tokens_generated,
-                "eval_duration": round(s.eval_duration, 2),
-                "generation_duration": round(gen_time, 2),
-                "total_duration": round(total, 2),
-                "tok_per_sec": (
-                    round(s.tokens_generated / gen_time, 1) if gen_time > 0 else 0
-                ),
-            }
+            s.active = False
 
+            if quiet:
+                return
+
+        self.report_completion(
+            request_id=s.request_id,
+            prompt_tokens=s.prompt_tokens,
+            generated_tokens=s.tokens_generated,
+            eval_s=s.eval_duration,
+            gen_s=gen_time,
+            total_s=total,
+        )
+
+    def report_completion(
+        self,
+        request_id: str = "",
+        prompt_tokens: int = 0,
+        generated_tokens: int = 0,
+        eval_s: float = 0.0,
+        gen_s: float = 0.0,
+        total_s: float | None = None,
+    ) -> None:
+        """Record one COMPLETED generation with per-request-true numbers.
+
+        The authoritative completion path: updates the post-mortem
+        snapshot, folds the throughput trend (health drift baseline), and
+        emits the "Generation complete" log line. Called by finish() on
+        the single-stream pool path, and DIRECTLY by the batched engine at
+        stream retirement with per-stream spans (which the shared status
+        cannot provide under concurrency).
+        """
+        if total_s is None:
+            total_s = eval_s + gen_s
+        snap = {
+            "request_id": request_id,
+            "prompt_tokens": prompt_tokens,
+            "tokens_generated": generated_tokens,
+            "eval_duration": round(eval_s, 2),
+            "generation_duration": round(gen_s, 2),
+            "total_duration": round(total_s, 2),
+            "tok_per_sec": (round(generated_tokens / gen_s, 1) if gen_s > 0 else 0),
+        }
+        with self._lock:
+            self._last_status_snapshot = snap
             # Fold into the rolling trend — only non-trivial generations (real
             # decode time + tokens) so cache-hit/empty turns don't skew it.
-            if gen_time > 0.05 and s.tokens_generated >= 4:
-                decode_tps = s.tokens_generated / gen_time
-                prefill_tps = (
-                    s.prompt_tokens / s.eval_duration if s.eval_duration > 0.02 else 0.0
-                )
-                self._trend.append((prefill_tps, decode_tps, s.eval_duration))
+            if gen_s > 0.05 and generated_tokens >= 4:
+                decode_tps = generated_tokens / gen_s
+                prefill_tps = prompt_tokens / eval_s if eval_s > 0.02 else 0.0
+                self._trend.append((prefill_tps, decode_tps, eval_s))
                 # Establish the warm baseline once: median decode tps of an
                 # early window (skip the first 2 cold-start samples).
                 if self._baseline_decode_tps is None and len(self._trend) >= 10:
                     warm = [t[1] for t in list(self._trend)[2:]]
                     self._baseline_decode_tps = statistics.median(warm)
 
-            s.active = False
-
-        snap = self._last_status_snapshot
         log.info(
             "📊 Generation complete: request=%s, prompt=%d tok, "
             "generated=%d tok, eval=%.1fs, gen=%.1fs, total=%.1fs, "

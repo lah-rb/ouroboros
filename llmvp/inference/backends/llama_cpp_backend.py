@@ -3381,7 +3381,11 @@ class LlamaCppBackend(BaseBackend):
                     self._engine.install_head_sync(seat, _restore_head)
                 except Exception:  # noqa: BLE001 — restore is best-effort
                     log.warning("persona head restore failed (seat seq %d)", seat.seq)
-            tracker.finish()
+            # quiet: under batched concurrency the shared status blends
+            # streams — the ENGINE reports the truthful per-stream
+            # completion at retirement (batched_engine._retire →
+            # report_completion). This finish only closes the liveness meter.
+            tracker.finish(quiet=True)
 
     # ------------------------------------------------------------------
     # Health & tokenization
