@@ -24,6 +24,7 @@ from agent.models import FlowDefinition, FlowMeta, StepInput, TurnDefinition
 from agent.runtime import _execute_turn_inference, _resolve_turn_transition
 from agent.schema_registry import set_default_registry
 from agent.trace import InferenceCall, step_context
+from tests.conftest import ScriptedInferenceEffects
 from agent.turn_renderer import TurnRenderer
 
 
@@ -32,19 +33,6 @@ def reset_registry():
     set_default_registry(None)
     yield
     set_default_registry(None)
-
-
-class ScriptedInferenceEffects:
-    def __init__(self, responses):
-        self.responses = responses
-        self.calls_made = 0
-        self.prompts_seen: list[str] = []
-
-    async def run_inference(self, prompt, config_overrides=None):
-        self.prompts_seen.append(prompt)
-        r = self.responses[self.calls_made]
-        self.calls_made += 1
-        return r
 
 
 def _menu_turn_with_projection(publish_selection: str | None = "selected"):

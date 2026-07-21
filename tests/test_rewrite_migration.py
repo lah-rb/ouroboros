@@ -11,49 +11,13 @@ Exercises the real compiled rewrite flow and real templates. Covers:
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from agent.effects.protocol import InferenceResult
-from agent.models import FlowDefinition
 from agent.runtime import _execute_turn_inference, _resolve_turn_transition
-from agent.schema_registry import set_default_registry
-from agent.turn_renderer import TurnRenderer
+from tests.conftest import ScriptedInferenceEffects
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-@pytest.fixture(autouse=True)
-def real_schema_registry():
-    set_default_registry(None)
-    yield
-    set_default_registry(None)
-
-
-@pytest.fixture
-def compiled_rewrite_flow() -> FlowDefinition:
-    with open(REPO_ROOT / "flows" / "compiled.json") as f:
-        return FlowDefinition.model_validate(json.load(f)["rewrite"])
-
-
-@pytest.fixture
-def real_turn_renderer() -> TurnRenderer:
-    return TurnRenderer(REPO_ROOT / "prompts")
-
-
-class ScriptedInferenceEffects:
-    def __init__(self, responses):
-        self.responses = responses
-        self.calls_made = 0
-        self.prompts_seen: list[str] = []
-
-    async def run_inference(self, prompt, config_overrides=None):
-        self.prompts_seen.append(prompt)
-        r = self.responses[self.calls_made]
-        self.calls_made += 1
-        return r
+pytestmark = pytest.mark.usefixtures("real_schema_registry")
 
 
 def test_generate_rewrite_is_turn_based(compiled_rewrite_flow) -> None:

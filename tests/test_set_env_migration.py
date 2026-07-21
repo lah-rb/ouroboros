@@ -15,59 +15,13 @@ rather than fixture stubs. Confirms:
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from agent.effects.protocol import InferenceResult
-from agent.models import FlowDefinition
 from agent.runtime import _execute_turn_inference, _resolve_turn_transition
-from agent.schema_registry import set_default_registry
-from agent.turn_renderer import TurnRenderer
+from tests.conftest import ScriptedInferenceEffects
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-@pytest.fixture(autouse=True)
-def real_schema_registry():
-    """Point the schema registry at the real schemas/ directory so
-    validation_env_config resolves. Some earlier tests inject custom
-    registries; this fixture resets between tests."""
-    set_default_registry(None)  # forces reload from real schemas/
-    yield
-    set_default_registry(None)
-
-
-@pytest.fixture
-def compiled_set_env_flow() -> FlowDefinition:
-    """Load the real compiled set_env flow definition."""
-    with open(REPO_ROOT / "flows" / "compiled.json") as f:
-        data = json.load(f)
-    return FlowDefinition.model_validate(data["set_env"])
-
-
-@pytest.fixture
-def real_turn_renderer() -> TurnRenderer:
-    """TurnRenderer pointed at the real prompts/ directory."""
-    return TurnRenderer(REPO_ROOT / "prompts")
-
-
-class ScriptedInferenceEffects:
-    """Minimal effects double with scripted inference responses."""
-
-    def __init__(self, responses: list[InferenceResult]):
-        self.responses = responses
-        self.calls_made = 0
-        self.prompts_seen: list[str] = []
-
-    async def run_inference(self, prompt: str, config_overrides=None):
-        self.prompts_seen.append(prompt)
-        if self.calls_made >= len(self.responses):
-            raise RuntimeError("Scripted responses exhausted")
-        r = self.responses[self.calls_made]
-        self.calls_made += 1
-        return r
+pytestmark = pytest.mark.usefixtures("real_schema_registry")
 
 
 def test_set_env_detect_tooling_is_turn_based(compiled_set_env_flow) -> None:

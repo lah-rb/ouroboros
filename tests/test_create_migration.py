@@ -10,49 +10,13 @@ Exercises the real compiled create flow and real templates. Covers:
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from agent.effects.protocol import InferenceResult
-from agent.models import FlowDefinition
 from agent.runtime import _execute_turn_inference, _resolve_turn_transition
-from agent.schema_registry import set_default_registry
-from agent.turn_renderer import TurnRenderer
+from tests.conftest import ScriptedInferenceEffects
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-@pytest.fixture(autouse=True)
-def real_schema_registry():
-    set_default_registry(None)
-    yield
-    set_default_registry(None)
-
-
-@pytest.fixture
-def compiled_create_flow() -> FlowDefinition:
-    with open(REPO_ROOT / "flows" / "compiled.json") as f:
-        return FlowDefinition.model_validate(json.load(f)["create"])
-
-
-@pytest.fixture
-def real_turn_renderer() -> TurnRenderer:
-    return TurnRenderer(REPO_ROOT / "prompts")
-
-
-class ScriptedInferenceEffects:
-    def __init__(self, responses):
-        self.responses = responses
-        self.calls_made = 0
-        self.prompts_seen: list[str] = []
-
-    async def run_inference(self, prompt, config_overrides=None):
-        self.prompts_seen.append(prompt)
-        r = self.responses[self.calls_made]
-        self.calls_made += 1
-        return r
+pytestmark = pytest.mark.usefixtures("real_schema_registry")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -60,16 +24,9 @@ class ScriptedInferenceEffects:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def test_generate_content_is_turn_based(compiled_create_flow) -> None:
-    step = compiled_create_flow.steps["generate_content"]
-    assert step.turn is not None
-    assert step.prompt_template is None
-    assert step.turn.response_shape == "code"
-    assert step.turn.response.language == "python"
-
-
-def test_generate_tests_is_turn_based(compiled_create_flow) -> None:
-    step = compiled_create_flow.steps["generate_tests"]
+@pytest.mark.parametrize("step_name", ["generate_content", "generate_tests"])
+def test_step_is_turn_based(compiled_create_flow, step_name) -> None:
+    step = compiled_create_flow.steps[step_name]
     assert step.turn is not None
     assert step.prompt_template is None
     assert step.turn.response_shape == "code"

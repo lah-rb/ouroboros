@@ -17,18 +17,8 @@ import pytest
 from agent.effects.protocol import InferenceResult
 from agent.models import FlowDefinition, FlowMeta, StepInput, TurnDefinition
 from agent.runtime import _execute_turn_inference
+from tests.conftest import ScriptedInferenceEffects
 from agent.turn_renderer import TurnRenderer
-
-
-class ScriptedInferenceEffects:
-    def __init__(self, responses):
-        self.responses = responses
-        self.calls_made = 0
-
-    async def run_inference(self, prompt, config_overrides=None):
-        r = self.responses[self.calls_made]
-        self.calls_made += 1
-        return r
 
 
 def _code_turn_flow() -> FlowDefinition:
