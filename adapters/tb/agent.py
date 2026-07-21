@@ -49,7 +49,13 @@ from adapters.tb.base import (  # noqa: E402
     token_totals,
 )
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Repo root via the canonical helper — the old two-dirname derivation
+# silently became adapters/ when the flat *_adapter dirs moved under
+# adapters/<name>/ (found 2026-07-21: every TB2 run since the move
+# fast-failed on 'compiled.json not found in .../adapters/flows').
+from agent.paths import repo_root as _repo_root
+
+_REPO_ROOT = _repo_root()
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 

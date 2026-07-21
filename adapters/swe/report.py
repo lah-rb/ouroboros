@@ -21,6 +21,8 @@ Usage:
 
 from __future__ import annotations
 
+from agent.paths import repo_root as _swe_repo_root
+
 import argparse
 import json
 import logging
@@ -195,9 +197,7 @@ def main() -> None:
     ap.add_argument("--run-id", required=True)
     ap.add_argument(
         "--out-dir",
-        default=os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs", "swe"
-        ),
+        default=os.path.join(_swe_repo_root(), "runs", "swe"),
     )
     ap.add_argument(
         "--report",
