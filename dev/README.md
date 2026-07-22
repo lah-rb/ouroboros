@@ -26,6 +26,7 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
 - `decode_scaling_bench.py` / `swarm_3proc_bench.py` / `jit_exercise_131k.py` — throughput & pool-lifecycle benches.
 - `ctx_decode_probe.py` / `ctx_session_decode_probe.py` / `ctx_multiturn_probe.py` — pool-beyond-trained capacity probes (stateless needle matrix; session-cached clean decode at 200k; 430-round coordinator-interrogates-workers rehearsal — 215/215 recall, 1.1s round-trips).
 - `serving_perf_reference.md` — **measured failure edges & design rules** (2026-07-20/21): decode-vs-N, prefill-vs-size, shared-pool wedge zone, worker budget sizing. Read before sizing any fan-out experiment.
+- `qwen3_loop_research.md` — **why Qwen3-family models enter deliberation orbits** (2026-07-22, verified 5-angle research): model-level GDN-hybrid propensity + our sampling below every official profile + 64-token penalty window blind to 800-token cycles. Ranked mitigations (config, penalty window, DRY sampler, degen-retry recipe).
 - `plot_swarm_perf.py` — render a swarm fan-out's `.agent/swarm_perf.jsonl` (active streams, per-symbol gantt, aggregate tok/s over time) + per-symbol actuals summary.
 - `spec_bench.py` — speculative-decode A/B. `reasoning_headswap_spike.py` — per-request reasoning head-swap validation.
 - `replay_runaway.py` — repetition-guard regression. `refresh_efficacy.py` — in-process context-refresh efficacy.
