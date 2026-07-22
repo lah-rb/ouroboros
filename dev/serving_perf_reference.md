@@ -91,6 +91,17 @@ Economics at depth (dev/ctx_decode_probe.py, rerunnable):
   fan-out's generations SHORT (findings, ~150 tok — wall stays
   prefill-bound), and run long-form synthesis (merge/conclude) at SHALLOW
   context afterwards where decode is ~55 tok/s.
+- **Session-resident interrogation at 200k (the production-cache mirror,
+  both probes 2026-07-21):** turn-N prefill = 0.0s across 430+ turns (pay
+  each slice once); clean concurrent decode at 4×50k occupancy =
+  **12.5–12.8 tok/s/stream** (→26–28 as the fleet drains — pure depth×N
+  composition, NO extra pool tax); sustained one-at-a-time interrogation
+  runs **37→34 tok/s** with **1.1s median round-trips**. Recall from
+  resident KV: **215/215 scored probes over a 12-min, 430-round
+  coordinator-interrogates-3-workers session** (an early 2/4 wiggle
+  blemish did not reproduce — one-off render artifact). Coordinator
+  pattern (integrate→ask→answer) rehearsed live: sessions survived 70–215
+  turns each, wired flat 80.4G. Deep tracers can be CONVERSATIONAL.
 
 ## 4. Worker-shape feasibility (the swarm fan-out workload)
 
