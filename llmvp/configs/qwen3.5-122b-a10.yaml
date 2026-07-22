@@ -44,11 +44,9 @@ generation:
   presence_penalty: 1.5
   repeat_penalty: 1.0
   penalty_last_n: 2048
-  # DRY long-period repetition breaker (see qwen3-next config for rationale).
-  dry_multiplier: 0.8
-  dry_base: 1.75
-  dry_allowed_length: 2
-  dry_penalty_last_n: -1
+  # DRY REMOVED 2026-07-22 (isolation test — see qwen3-next-coder config):
+  # DRY converted the catchable coherent orbit into an uncatchable
+  # noise-slot structural loop that blinds the distinct-ratio guard.
   degen_retry_enabled: true
   degen_retry_temperature: 1.0
   degen_retry_presence_penalty: 1.5

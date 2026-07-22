@@ -49,22 +49,22 @@ generation:
   top_k: 40
   min_p: 0.01
   presence_penalty: 0.0
-  # 1.0 (was 1.1): DRY below replaces the blunt token-level penalty (which
-  # hurts code tokens); the old 1.1 also could not see the ~800-token orbit
-  # through the 64-token default window anyway. The prior comment blamed
-  # "unclamped Gated-DeltaNet decay, unfixed upstream" — research verdict:
-  # the clamp gap exists but was self-refuted as the loop cause; the orbit
-  # is a model-family propensity (see dev/qwen3_loop_research.md).
+  # 1.0: the vendor coder-next card disables repeat penalty; the old 1.1
+  # couldn't see the ~800-token orbit through the 64-token window anyway.
   repeat_penalty: 1.0
   # Widened penalty window (llama.cpp default 64 tok is blind to the
-  # ~800-token orbit) — mostly for the degen-retry recipe's presence bump.
+  # ~800-token orbit) — gives the degen-retry recipe's presence bump teeth.
   penalty_last_n: 2048
-  # DRY: purpose-built long-period repetition breaker; penalty grows
-  # exponentially in match length, whole-context window.
-  dry_multiplier: 0.8
-  dry_base: 1.75
-  dry_allowed_length: 2
-  dry_penalty_last_n: -1
+  # DRY REMOVED 2026-07-22 (isolation test): DRY broke the *verbatim* orbit
+  # but the model re-looped the STRUCTURE with a variable slot injecting
+  # random tokens (`quantum foam`, `mitochondrial disruptor sequencing`) to
+  # dodge DRY's penalty — high token diversity that BLINDS the distinct-ratio
+  # long-cycle guard, so it ran uncaught to the 33k watchdog ceiling (0/14
+  # goals; runaway_captures 20260722T205315/210745). DRY-off restores the
+  # coherent orbit that the guard CAN catch → degen retry can then fire.
+  # Parked prereq before re-enabling: does DRY's window even see replayed
+  # transcript tokens under session_full_replay, or start empty each turn?
+  # (dev/qwen3_loop_research.md open question — flagged, shipped past.)
   # On a degenerate turn abort (repetition/long-cycle guard), purge and
   # re-drive the turn once at the vendor recovery recipe.
   degen_retry_enabled: true

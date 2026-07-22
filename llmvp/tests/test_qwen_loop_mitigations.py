@@ -78,7 +78,10 @@ def test_qwen_configs_carry_loop_posture(name):
     path = Path(__file__).resolve().parents[1] / "configs" / f"{name}.yaml"
     cfg = Config.model_validate(yaml.safe_load(path.read_text()))
     gen = cfg.generation
-    assert gen.dry_multiplier and gen.dry_multiplier > 0
+    # DRY removed 2026-07-22 (isolation test): it converted the catchable
+    # coherent orbit into an uncatchable noise-slot loop. The rest of the
+    # posture stays — widened window, degen retry, vendor-floor temperature.
+    assert not gen.dry_multiplier  # DRY OFF on qwen configs pending isolation
     assert gen.penalty_last_n == 2048
     assert gen.degen_retry_enabled is True
     assert (gen.temperature_floor or 0) >= 0.7  # orbit survives 0.5
