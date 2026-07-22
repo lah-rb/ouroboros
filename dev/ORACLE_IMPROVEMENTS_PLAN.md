@@ -1,5 +1,29 @@
 # Oracle improvements — implementation plan
 
+> **STATUS 2026-07-22 — SHIPPED, plus canary residue.** Delta-audit against the
+> live tree: every tier below is implemented — Tier 1 statics (PERSISTENCE
+> clause in plan_interaction_rules, close-option rewording, charter solvability
+> line) + the gated exa probe; Tier 2 reground_criteria trio (the blind early
+> derivation was REMOVED — reground is the only pass); Tier 3 fabrication check
+> in verify_completion + action-JSON derive guards in BOTH parsers
+> (operations_actions._parse_completion_criteria / _parse_output_format_spec).
+> The 2026-07-21 canary (adaptive 2/8) ran WITH all of this live; its near
+> misses exposed two residual classes, both fixed 2026-07-22:
+> 1. **Answer-profile routing trap** (chess-best-move, reproduced on a clean
+>    rerun): the router chose code_core WITH profile=answer — a one-answer task
+>    decomposed into a 4-goal pipeline, burned its ~14-min task budget
+>    mid-build, and forfeited this entire oracle chain (which only runs in
+>    ops). Fix: deterministic answer+code_core → ops downgrade in
+>    conclude_route + rubric guidance (router_actions.py).
+> 2. **Selection-answer false-done** (mteb-retrieve, persistent 1/2): an
+>    honestly-computed-WRONG value ("5th highest cosine similarity" → wrong
+>    doc) sailed through the fabrication check (the value WAS in the
+>    transcript). Fix: verify_completion now requires the ordered candidates +
+>    the selection rule applied to be visible for rank/criterion answers.
+> Remaining known-unaddressed: path-tracing-class numeric-fidelity misses
+> (4/5 at 98% similarity — capability/iteration depth, no oracle rung helps)
+> and wall-bound builds that never reach close (pace, not gating).
+
 ## Evidence (what the runs showed)
 TB2 (87 fails) + the fix-canary tell a sharper story than "missing artifact":
 - **Give-up on solvable tasks.** `sqlite-db-truncate`: agent probed, declared *"recovery is impossible — no valid SQLite header,"* `close`d, never wrote `recover.json` → `FileNotFoundError`. 13/87 ended in `close`. The completion loop *did* re-engage, but the agent kept reaching the same dead end — **looping isn't enough; it must retry DIFFERENTLY.**

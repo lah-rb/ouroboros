@@ -88,13 +88,16 @@ survive"). Work:
     refresh, rebuilding live sessions from token history onto fresh
     seats (the snapshot cold-tier pattern) instead of expiring them.
 
-## 3. Powered TB canary with the adaptive config — LAUNCHED 2026-07-21
+## 3. Powered TB canary with the adaptive config — COMPLETE 2026-07-21
 
-Two-arm run in flight: `runs/canary-tb2-adaptive` (OURO_ADAPTIVE_REASONING=1,
-THR=0.4) vs `runs/canary-tb2-flat` (OURO_REASONING_OFF=1), sequential via
-dev/canary_tb2_gptoss.sh on production a5. The context-budget arm is
-DEFERRED to a follow-up pair once these two land (keep the matrix
-readable). Compare pass rate + decode tokens + prompt sizes when done.
+**Adaptive 2/8 (first-ever winning-avg-corewars pass) vs flat 1/8.**
+Near-miss autopsy 2026-07-22: path-tracing 4/5 (98%-similarity fingertip,
+capability), mteb 1/2 (wrong-value false-done → verify_completion
+sharpened), chess-best-move 0/1 ×2 (answer-profile routing trap → router
+override shipped, see item 5), portfolio 1/4 (wall-bound C-extension
+build). The context-budget arm remains DEFERRED. Next decision: full-89
+run (adaptive single-arm) vs the 18.7% Terminus baseline — worth doing
+after the routing/oracle fixes get a mini-canary.
 
 ## OLD-3 (original brief)
 
@@ -120,14 +123,20 @@ traces; `dev/swe_taxonomy.py` classifies failures. Success = localization
 time collapses on the pilot set; rerun the 12-instance pilot
 (`dev/swe_eval.sh`, predictions archive in `dev/archive/swe_reports/`).
 
-## 5. TB2 oracle improvements (chunkable)
+## 5. TB2 oracle improvements — CLOSED 2026-07-22 (shipped + canary residue fixed)
 
-`dev/ORACLE_IMPROVEMENTS_PLAN.md` — evidence-backed items from the 87
-TB2 failures: (a) retry-DIFFERENTLY on give-up loops (same dead end
-re-reached is the signature); (b) self-check for wrong-value-right-
-artifact; (c) blind-early derivation fixes (derive_output_format emits
-action JSON ~69% empty); (d) fabrication guard on the judge. Each is
-independent; good interleave work between item-4 milestones.
+Delta-audit found all four plan items (a-d) already implemented (see the
+STATUS block atop `dev/ORACLE_IMPROVEMENTS_PLAN.md`). The 2026-07-21
+canary near-misses exposed two residual classes, both fixed:
+**answer-profile routing trap** (chess-best-move ×2: profile=answer routed
+code_core → burned the ~14-min budget mid-pipeline, forfeited the ops-only
+oracle chain; now deterministically downgraded to ops in conclude_route)
+and **selection-answer false-done** (mteb: computed-wrong "5th highest"
+value passed the fabrication check; verify_completion now demands the
+visible ranking + selection rule). Validation still owed: rerun
+chess-best-move + mteb-retrieve once the server is free (expect chess to
+route ops now). Known-unaddressed: path-tracing numeric fidelity
+(capability), wall-bound builds (pace).
 
 ## 6. TRAP_BRIEF re-validation (cheap; do before any investment)
 

@@ -53,6 +53,14 @@ sections:
         value recomputed a different way and agreeing) is the strongest evidence —
         prefer it when present. But do NOT refute on a re-derivation MISMATCH alone:
         a slightly-wrong re-derivation would fail a correct answer.
+      - SELECTION answers deserve the cross-check most. When the task selects by
+        rank or criterion — the Nth highest, the closest, the latest, the best —
+        the transcript must show the ordered candidates AND the selection rule
+        applied to them (sort direction, index convention, whether the query item
+        itself was excluded). A bare final value with no visible ranking is the
+        classic off-by-one that reads as done; `"genuinely_done": false` with the
+        reason naming what must be shown (e.g. "print the top 6 with scores and
+        take the 5th").
 
       `"reason"` — one sentence; on a refutation, name what the next attempt must
       fix.

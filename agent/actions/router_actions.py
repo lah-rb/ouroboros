@@ -71,6 +71,11 @@ CONCLUDE_ROUTE_PROMPT = (
     "localization is not obvious from what you found.\n"
     "  profile — one of: service | data_transform | invertible | repair | answer "
     "| plain (the KIND of end state the task produces).\n"
+    "    When the end state is an ANSWER — a value or small file the task wants "
+    "written (an answer.txt, a move, a count) — route ops even if computing it "
+    "takes code: the code is a means there, and ops iterates in the terminal "
+    "with completion gates that drive at the required artifact. Reserve "
+    "code_core for tasks whose DELIVERABLE is the software itself.\n"
     "  findings — 2-4 sentences for the NEXT stage: what the task needs, the "
     "specific file(s)/symbol(s) you identified, and whether it is localized "
     "(single-file) or diffuse (multi-file). A head start, not a full plan.\n\n"
@@ -249,6 +254,23 @@ async def action_conclude_route(step_input: StepInput) -> StepOutput:
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("Router conclude attempt %d/3 failed (%s)", attempt + 1, e)
+
+    # Answer-profile override: an ANSWER end state routed to code_core is the
+    # chess-best-move trap (canary 2026-07-21, reproduced on rerun) — the build
+    # flow decomposes a one-answer task into a general pipeline, burns the
+    # task budget mid-build, and forfeits the ops completion gates that would
+    # have driven at the required artifact. Code is instrumental for answers;
+    # ops writes code in the terminal when needed.
+    if flow_set == "code_core" and profile == "answer":
+        flow_set, method = "ops", f"{method}+answer-override"
+        findings = (
+            "[router override: answer-profile task routed ops — produce the "
+            "required artifact; write code in the terminal as needed] " + findings
+        )[:1200]
+        logger.warning(
+            "Router: answer-profile task downgraded code_core → ops "
+            "(the deliverable is an answer, not software)"
+        )
 
     logger.info("Router: flow_set=%s profile=%s (%s)", flow_set, profile, method)
     return StepOutput(

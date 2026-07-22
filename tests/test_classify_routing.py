@@ -318,3 +318,65 @@ def test_router_findings_threaded_into_downstream_prompts():
     ):
         ck = flows[flow]["steps"][step]["prompt_template"]["context_keys"]
         assert "router_findings" in ck, f"{flow}.{step} missing router_findings"
+
+
+# ── answer-profile override (the chess-best-move trap) ────────────────
+
+
+@pytest.mark.asyncio
+async def test_conclude_route_answer_profile_downgrades_code_core_to_ops():
+    # Canary 2026-07-21 (reproduced on rerun): an ANSWER end state routed to
+    # code_core decomposes a one-answer task into a general pipeline, burns
+    # the task budget mid-build, and forfeits the ops completion gates. The
+    # override flips answer+code_core to ops and says so in the findings.
+    from agent.actions.router_actions import action_conclude_route
+
+    m = _mission()
+    fx = _SessionEffects(
+        conclude_texts=[
+            '```json\n{"flow_set":"code_core","profile":"answer",'
+            '"findings":"parse the board image, compute the mate"}\n```',
+        ],
+        mission=m,
+    )
+    out = await action_conclude_route(_si(m, fx, router_session_id="s1"))
+    assert out.context_updates["routed_flow_set"] == "ops"
+    assert out.context_updates["routed_profile"] == "answer"
+    assert out.result["method"] == "llm+answer-override"
+    assert "router override" in out.context_updates["router_findings"]
+    assert "parse the board image" in out.context_updates["router_findings"]
+
+
+@pytest.mark.asyncio
+async def test_conclude_route_answer_profile_ops_untouched():
+    from agent.actions.router_actions import action_conclude_route
+
+    m = _mission()
+    fx = _SessionEffects(
+        conclude_texts=[
+            '```json\n{"flow_set":"ops","profile":"answer","findings":"grep it"}\n```',
+        ],
+        mission=m,
+    )
+    out = await action_conclude_route(_si(m, fx, router_session_id="s1"))
+    assert out.context_updates["routed_flow_set"] == "ops"
+    assert out.result["method"] == "llm"  # no override fired
+    assert "router override" not in out.context_updates["router_findings"]
+
+
+@pytest.mark.asyncio
+async def test_conclude_route_non_answer_code_core_untouched():
+    # repair/diffuse work keeps its code_core routing — the override is
+    # narrow by design.
+    from agent.actions.router_actions import action_conclude_route
+
+    m = _mission()
+    fx = _SessionEffects(
+        conclude_texts=[
+            '```json\n{"flow_set":"code_core","profile":"repair","findings":"x"}\n```',
+        ],
+        mission=m,
+    )
+    out = await action_conclude_route(_si(m, fx, router_session_id="s1"))
+    assert out.context_updates["routed_flow_set"] == "code_core"
+    assert out.result["method"] == "llm"
