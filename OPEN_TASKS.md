@@ -158,6 +158,41 @@ that every session test currently disables (`LLMVP_THINK_STRIP=0`);
 then the parametrize tables (turn_renderer, turn_models, oracle files).
 One dedicated short session for the first two; the rest opportunistic.
 
+## 7b. Adaptive thinking beyond gpt-oss (partially landed 2026-07-22)
+
+**Landed (70554c3):** per-family `reasoning.levels` map in the format spec —
+canonical low/medium/high → family text, identity fallback so harmony is
+byte-identical, bimodal collapse supported, heads dedupe by rendered text.
+The agent-side router (and its trained artifact) stays model-agnostic.
+
+**Blocked on a pre-existing bug — `formats/gemma.yaml` models Gemma 3, not
+Gemma 4.** It declares `<start_of_turn>`/`<end_of_turn>` framing and "NO
+system role — system content folds into the first user turn", but Gemma 4's
+real chat template uses `<|turn>`/`<turn|>` and HAS a system turn. Only the
+thinking tags (`<|channel>thought` / `<channel|>`, confirmed correct) were
+updated. `gemma-4-31b.yaml` is this spec's ONLY consumer, so **we are serving
+Gemma 4 with the wrong turn framing today** — worth fixing on its own merits,
+independent of adaptive thinking. Fix = rewrite gemma.yaml against the real
+template (saved: `dev/gemma4_chat_template.jinja`), then re-validate serving.
+
+**Then, for Gemma adaptive** (research + live probe done 2026-07-22, see
+`dev/qwen3_loop_research.md` sibling notes and `dev/gemma_pad_probe.py`):
+Gemma-4 toggles thinking by INSERTING `<|think|>` in the system turn, which
+shifts downstream positions and would make the mid-session splice illegal.
+The fix is Luke's padding idea, **validated live**: pad the off-state to equal
+token length (`<|think|>\n` = [98,107]; `  \n` = [138,107] — a one-token
+substitution 98→138). 5-arm probe on gemma-4-31B confirmed the padded slot
+behaves as ABSENCE (empty thought channel, ~39 out-tokens) not as `<|think|>`
+(real reasoning, ~131), with answers matching the canonical off-branch.
+**Caveat found:** `renderer.py:150` does `system_content.strip()`, which EATS
+leading-whitespace padding — so the filler must be strip-proof (or the strip
+relaxed when a level map is active), else the padding silently collapses and
+the splice's length check quietly refuses every swap. Pick a non-whitespace
+inert token and re-run the probe arm for it before wiring.
+
+Mistral Small 4 (tekken, `[THINK]`/`reasoning_effort` none|high) remains the
+cleaner first target — its toggle position still needs the same check.
+
 ## 8. generate_stream_sync request-prep extraction (SOAK-GATED)
 
 The last "giants" item: shared `_prepare_stream_request()` for the
