@@ -329,3 +329,87 @@ def test_format_renderer_assistant_history():
     history = r.render_assistant_history("Answer")
     assert "<|channel|>final" in history
     assert "<|channel|>analysis" not in history
+
+
+# ── per-family reasoning level map (ReasoningSpec) ─────────────────────
+#
+# The agent-side router always speaks the CANONICAL levels (low/medium/high).
+# A family may declare how each maps to rendered text, so bimodal models
+# (thinking on/off) become expressible without touching the router or its
+# trained artifact. Absent block = identity, which is harmony's behavior.
+
+
+def test_reasoning_map_absent_is_identity():
+    """Families without a `reasoning:` block render the level name verbatim —
+    harmony must be byte-identical to its pre-generalization output."""
+    from formats.registry import get_renderer, clear_cache
+
+    clear_cache()
+    r = get_renderer("harmony")
+    assert r.s.reasoning.levels == {}
+    for level in ("low", "medium", "high"):
+        out = r.render_system(persona="P", reasoning=level, date="2026-01-01")
+        assert f"Reasoning: {level}" in out
+
+
+def test_reasoning_map_substitutes_family_text():
+    """A declared map replaces the canonical name with the family's text."""
+    from formats.schema import FormatSchema
+    from formats.renderer import FormatRenderer
+
+    spec = FormatSchema.model_validate(
+        {
+            "family": "probe",
+            "tokens": {
+                "msg_open": "<s>",
+                "msg_content": "\n",
+                "msg_close": "</s>",
+                "gen_stop": "</s>",
+                "history_close": "</s>",
+            },
+            "roles": {"system": "system", "user": "user", "assistant": "model"},
+            "thinking": {"style": "inline_tags"},
+            "system_block": {
+                "template": "{reasoning_prefix}{persona}",
+                "reasoning_prefix": "[{reasoning}]",
+                "reasoning_default": "medium",
+            },
+            "reasoning": {"levels": {"low": "OFF", "medium": "OFF", "high": "ON"}},
+        }
+    )
+    r = FormatRenderer(spec)
+    assert "[ON]" in r.render_system(persona="P", reasoning="high")
+    # bimodal collapse: two canonical levels render the SAME text, so the
+    # backend dedupes them to one pinned head rather than two.
+    assert "[OFF]" in r.render_system(persona="P", reasoning="low")
+    assert "[OFF]" in r.render_system(persona="P", reasoning="medium")
+
+
+def test_reasoning_map_passes_through_unknown_level():
+    """An unmapped level falls through unchanged rather than raising —
+    a bad/partial map degrades to the old behavior, never to a crash."""
+    from formats.schema import FormatSchema
+    from formats.renderer import FormatRenderer
+
+    spec = FormatSchema.model_validate(
+        {
+            "family": "probe2",
+            "tokens": {
+                "msg_open": "<s>",
+                "msg_content": "\n",
+                "msg_close": "</s>",
+                "gen_stop": "</s>",
+                "history_close": "</s>",
+            },
+            "roles": {"system": "system", "user": "user", "assistant": "model"},
+            "thinking": {"style": "inline_tags"},
+            "system_block": {
+                "template": "{reasoning_prefix}{persona}",
+                "reasoning_prefix": "[{reasoning}]",
+            },
+            "reasoning": {"levels": {"high": "ON"}},
+        }
+    )
+    r = FormatRenderer(spec)
+    assert "[ON]" in r.render_system(persona="P", reasoning="high")
+    assert "[low]" in r.render_system(persona="P", reasoning="low")

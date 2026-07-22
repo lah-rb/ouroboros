@@ -75,6 +75,37 @@ class SystemBlockSpec(BaseModel):
     template: str  # Python format string with {identity}, {cutoff}, etc.
 
 
+class ReasoningSpec(BaseModel):
+    """How a family expresses the CANONICAL reasoning levels.
+
+    The agent-side router always speaks the canonical names (low/medium/high —
+    see agent/reasoning_router.py). This map lets each family decide what text
+    each canonical level renders to, so the router, its trained artifact, and
+    the high-steps list stay model-agnostic.
+
+    ``levels`` maps canonical level -> the text substituted for {reasoning}.
+    Empty (the default) means IDENTITY: the level name is used verbatim, which
+    is harmony's behavior (``Reasoning: high``) — so omitting this block leaves
+    existing families byte-identical.
+
+    BIMODAL families collapse: a model with only thinking-on/off maps two
+    canonical levels onto the same text (e.g. low+medium -> off-text,
+    high -> on-text). Distinct pinned heads are deduped by rendered TEXT, so a
+    bimodal family costs one extra head, not two.
+
+    LENGTH INVARIANT: the mid-session head splice
+    (llama_cpp_backend._splice_reasoning_head) replaces only the head span and
+    is sound ONLY when the current and target heads tokenize to the SAME
+    length — otherwise the session body above it shifts. It verifies this per
+    call and refuses a mismatched splice, so a bad map degrades to "no swap",
+    never to corruption. Families whose native toggle is an insert/delete
+    (Gemma-4's `<|think|>`) must therefore PAD the off-state to equal token
+    length; see formats/gemma.yaml.
+    """
+
+    levels: dict[str, str] = Field(default_factory=dict)
+
+
 class TraitsSpec(BaseModel):
     """Structural traits that affect rendering logic."""
 
@@ -115,3 +146,4 @@ class FormatSchema(BaseModel):
     traits: TraitsSpec = Field(default_factory=TraitsSpec)
     generation: GenerationSpec = Field(default_factory=GenerationSpec)
     turn_transition: TurnTransitionSpec = Field(default_factory=TurnTransitionSpec)
+    reasoning: ReasoningSpec = Field(default_factory=ReasoningSpec)

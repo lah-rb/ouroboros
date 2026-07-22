@@ -111,8 +111,16 @@ class FormatRenderer:
         special-token-looking text inside them stays literal; only the role
         framing is special.
         """
-        # Build the system message content from the template
+        # Build the system message content from the template.
+        # Map the CANONICAL level (low/medium/high, what the agent-side router
+        # speaks) through this family's level map. Empty map = identity, i.e.
+        # harmony's inline `Reasoning: {level}` — so families without the block
+        # render byte-identically to before. Bimodal families collapse two
+        # canonical levels onto one text here (see ReasoningSpec).
         reasoning_value = reasoning or self.s.system_block.reasoning_default
+        _level_map = self.s.reasoning.levels
+        if _level_map and reasoning_value in _level_map:
+            reasoning_value = _level_map[reasoning_value]
         # Top-of-system reasoning prefix (Step/chatml). Only emit when both a
         # level and a prefix template exist — otherwise it collapses to "" so
         # generic chatml (Qwen, no thinking_mode) renders exactly as before.
