@@ -53,14 +53,18 @@ sections:
         value recomputed a different way and agreeing) is the strongest evidence —
         prefer it when present. But do NOT refute on a re-derivation MISMATCH alone:
         a slightly-wrong re-derivation would fail a correct answer.
-      - SELECTION answers deserve the cross-check most. When the task selects by
-        rank or criterion — the Nth highest, the closest, the latest, the best —
-        the transcript must show the ordered candidates AND the selection rule
-        applied to them (sort direction, index convention, whether the query item
-        itself was excluded). A bare final value with no visible ranking is the
-        classic off-by-one that reads as done; `"genuinely_done": false` with the
-        reason naming what must be shown (e.g. "print the top 6 with scores and
-        take the 5th").
+      - SELECTION answers are the ONE EXPLICIT EXCEPTION to the
+        absence-of-proof rule above. When the task selects by rank or criterion
+        — the Nth highest, the closest, the latest, the best — a shown ranking
+        is REQUIRED evidence, so its absence IS evidence of failure, not a
+        hunch. The transcript must show the ordered candidates AND the
+        selection rule applied to them (sort direction, index convention,
+        whether the query item itself was excluded). A bare final value with no
+        visible ranking is the classic off-by-one that reads as done: return
+        `"genuinely_done": false` and name what must be shown (e.g. "print the
+        top 6 with scores and take the 5th"). Do NOT reason "nothing shows it
+        is wrong" here — for a ranked selection, nothing showing it is RIGHT is
+        the refutation.
 
       `"reason"` — one sentence; on a refutation, name what the next attempt must
       fix.
