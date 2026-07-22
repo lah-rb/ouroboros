@@ -525,3 +525,177 @@ def test_resident_active_keeps_band():
         await teardown(backend)
 
     asyncio.run(main())
+
+
+# ── abandoned-stream retirement (the copy_logits race) ────────────────
+#
+# Live failure (qwen3-next, July 22): the agent watchdog cancelled a 33k-
+# token runaway; the sync generator's deferred GeneratorExit fired 1.1s
+# into the NEXT request on the same instance and tore down shared sampling
+# state under it → copy_logits(None) → no inference progress for 23 min.
+# The fix: generate_stream_async deterministically closes the sync
+# generator before the guard drops (finally, shielded), and retires any
+# still-registered prior stream before a new stream's first token.
+
+
+def test_close_stream_gen_suspended():
+    closed = []
+
+    def gen_fn():
+        try:
+            yield "a"
+            yield "b"
+        finally:
+            closed.append(True)
+
+    g = gen_fn()
+    assert next(g) == "a"  # suspended at a yield
+    assert LlamaCppBackend._close_stream_gen(g) is True
+    assert closed == [True]
+
+
+def test_close_stream_gen_waits_out_inflight_next():
+    import threading
+
+    release = threading.Event()
+    closed = []
+
+    def gen_fn():
+        try:
+            yield "a"
+            release.wait(5)  # simulates a slow llama_decode inside next()
+            yield "b"
+        finally:
+            closed.append(True)
+
+    g = gen_fn()
+    assert next(g) == "a"
+    t = threading.Thread(target=lambda: next(g))
+    t.start()
+    time.sleep(0.05)  # the worker is now blocked inside next()
+    threading.Timer(0.2, release.set).start()
+    assert LlamaCppBackend._close_stream_gen(g, timeout_s=5) is True
+    assert closed == [True]
+    t.join(5)
+
+
+def test_close_stream_gen_timeout_returns_false():
+    import threading
+
+    release = threading.Event()
+
+    def gen_fn():
+        yield "a"
+        release.wait(10)
+        yield "b"
+
+    g = gen_fn()
+    next(g)
+    t = threading.Thread(target=lambda: next(g))
+    t.start()
+    time.sleep(0.05)
+    assert LlamaCppBackend._close_stream_gen(g, timeout_s=0.3) is False
+    release.set()  # let the thread finish; retire the generator for real
+    t.join(5)
+    LlamaCppBackend._close_stream_gen(g, timeout_s=1)
+
+
+def test_abandoned_stream_closed_on_aclose():
+    # Consumer abandons mid-stream (the watchdog-cancel path drives
+    # aclose): the sync generator's finally must have run and the
+    # registration cleared by the time aclose returns.
+    async def main():
+        backend = make_backend()
+        await backend.initialize()
+        state = {"closed": False}
+
+        def fake_stream(instance, prompt_tokens, max_tokens, temperature, **kwargs):
+            try:
+                for i in range(1000):
+                    yield f"c{i}"
+            finally:
+                state["closed"] = True
+
+        backend.generate_stream_sync = fake_stream
+        inst = FakeLlama()
+        agen = backend.generate_stream_async(inst, [1], 16, 0.4)
+        assert await agen.__anext__() == "c0"
+        assert inst._active_stream_gen is not None
+        await agen.aclose()
+        assert state["closed"] is True
+        assert inst._active_stream_gen is None
+        await teardown(backend)
+
+    asyncio.run(main())
+
+
+def test_cancelled_consumer_closes_stream():
+    # End-to-end task cancellation: after the cancelled task settles (plus
+    # the loop draining asyncgen finalization), the stream must be retired.
+    async def main():
+        backend = make_backend()
+        await backend.initialize()
+        state = {"closed": False}
+
+        def fake_stream(instance, prompt_tokens, max_tokens, temperature, **kwargs):
+            try:
+                for i in range(1000):
+                    yield f"c{i}"
+            finally:
+                state["closed"] = True
+
+        backend.generate_stream_sync = fake_stream
+        inst = FakeLlama()
+        started = asyncio.Event()
+
+        async def consume():
+            async for _ in backend.generate_stream_async(inst, [1], 16, 0.4):
+                started.set()
+                await asyncio.sleep(3600)  # slow client, cancelled mid-stream
+
+        task = asyncio.create_task(consume())
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        for _ in range(40):  # asyncgen finalization is scheduled, not inline
+            if state["closed"]:
+                break
+            await asyncio.sleep(0.05)
+        assert state["closed"] is True
+        assert inst._active_stream_gen is None
+        await teardown(backend)
+
+    asyncio.run(main())
+
+
+def test_prior_abandoned_stream_retired_before_reuse():
+    # Lazy-finalization escape hatch: a prior stream still registered on
+    # the instance (its GC close never ran) is closed by the entry check
+    # before the new stream produces its first token.
+    async def main():
+        backend = make_backend()
+        await backend.initialize()
+        closed = []
+
+        def orphan_fn():
+            try:
+                yield "x"
+                yield "y"
+            finally:
+                closed.append(True)
+
+        orphan = orphan_fn()
+        next(orphan)  # suspended mid-stream, GeneratorExit pending forever
+        inst = FakeLlama()
+        inst._active_stream_gen = orphan
+        install_stream(backend, chunks=("a", "b"))
+        out = []
+        async for c in backend.generate_stream_async(inst, [1], 16, 0.4):
+            out.append(c)
+        assert out == ["a", "b"]
+        assert closed == [True]  # retired before the new stream ran
+        assert inst._active_stream_gen is None
+        await teardown(backend)
+
+    asyncio.run(main())

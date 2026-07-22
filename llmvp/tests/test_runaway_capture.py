@@ -32,6 +32,45 @@ def test_paragraph_loop_trips():
     assert "long-cycle repetition" in reason
 
 
+def test_paragraph_orbit_trips_second_tier():
+    # The July 22 conclude-turn failure shape (qwen3-next, live specimen):
+    # an ~8-paragraph / ~3.2KB deliberation cycle repeated ~47x near-
+    # verbatim. Period sits far above the 8KB tier's ~1KB horizon (its
+    # ratio plateaued at 0.29); the 32KB tier catches it.
+    # Eight mutually distinct paragraphs (the real loop had 108 unique
+    # paragraphs — plenty of within-cycle variety, so the 8KB window sees
+    # a high distinct ratio) repeated as one long cycle.
+    paras = [
+        (
+            "Paragraph %d analysis: " % i
+            + " ".join(f"tok{i}_{j}" for j in range(48))
+            + "\n\n"
+        ).encode()
+        for i in range(8)
+    ]
+    cycle = b"".join(paras)
+    assert 2500 < len(cycle) < 4500  # paragraph-scale period, >1KB horizon
+    text = cycle * (32768 // len(cycle) + 6)
+    reason = detect_long_cycle(text)
+    assert reason is not None
+    assert "32768B" in reason  # caught by the second tier, not the 8KB one
+
+
+def test_varied_prose_beyond_second_tier_does_not_trip():
+    # Legitimate long varied output filling the 32KB window — every
+    # block distinct content on a shared template (world-file shape).
+    rooms = [
+        (
+            f"room_{i}:\n  name: Chamber {i}\n  description: A room numbered {i} "
+            f"with its own distinct furnishings and lore.\n  exits:\n    north: room_{i + 1}\n"
+        ).encode()
+        for i in range(400)
+    ]
+    text = b"".join(rooms)
+    assert len(text) > 32768
+    assert detect_long_cycle(text) is None
+
+
 def test_varied_code_does_not_trip():
     # Legitimate long output: every line distinct (simulates a real file).
     lines = [

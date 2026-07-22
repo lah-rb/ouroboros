@@ -40,8 +40,8 @@ log = logging.getLogger("llm-mvp")
 # text between checks keeps the amortized cost negligible.
 CHECK_INTERVAL = 2048
 
-# Tail window the check operates on. Must be filled before any check
-# fires — short, legitimate generations (menus, patches) never qualify.
+# Tail window of the base tier. Must be filled before any check fires —
+# short, legitimate generations (menus, patches) never qualify.
 WINDOW_BYTES = 8192
 
 # n-gram size for the distinct-ratio measure. Counted at stride 1 so
@@ -50,11 +50,24 @@ WINDOW_BYTES = 8192
 # non-overlapping chunking misses any period not aligned to it).
 NGRAM_BYTES = 32
 
-# Trip when <= this fraction of the window's n-grams are distinct.
-# A loop of period P yields ratio ≈ P / WINDOW_BYTES, so 0.125 catches
-# periods up to ~1KB; varied code/prose sits far above (templated YAML
-# with shared field names still measures ~0.4 — see tests).
+# Trip when <= this fraction of a window's n-grams are distinct.
+# A loop of period P yields ratio ≈ P / window, so at 0.125 each tier
+# catches periods up to window/8; varied code/prose sits far above
+# (templated YAML with shared field names still measures ~0.4 — see
+# tests).
 MAX_DISTINCT_RATIO = 0.125
+
+# Detection tiers: (window_bytes, trip_ratio), checked smallest-first.
+# The 8KB tier catches periods up to ~1KB (the June 11 menu runaway:
+# 15-40 token cycles). The 32KB tier catches paragraph-scale orbits
+# that sail over it — live failure (qwen3-next conclude turn, July 22):
+# a ~3.2KB / ~800-token deliberation cycle repeated 47x, whose 8KB
+# ratio plateaued at 0.29 while the 32KB ratio fell to 0.036 (trips at
+# ~12k tokens, ~8 min before the agent watchdog's raw ceiling).
+WINDOW_TIERS = (
+    (WINDOW_BYTES, MAX_DISTINCT_RATIO),
+    (32768, MAX_DISTINCT_RATIO),
+)
 
 # Capture at most this much tail text per dump — enough to see the loop
 # and its onset without writing 130k-token files.
@@ -65,22 +78,25 @@ def detect_long_cycle(acc_bytes: bytes) -> Optional[str]:
     """Return a reason string if the tail of ``acc_bytes`` looks like a
     long-period repetition loop, else None.
 
-    Operates on the last ``WINDOW_BYTES``; returns None until the window
-    is full. Deliberately conservative: 87.5% of the window must consist
-    of repeated chunks before it trips.
+    Checks each tier in ``WINDOW_TIERS`` whose window has filled.
+    Deliberately conservative: 87.5% of a window must consist of
+    repeated chunks before it trips. A tier's window must be full
+    before it participates — short, legitimate generations never
+    qualify.
     """
-    if len(acc_bytes) < WINDOW_BYTES:
-        return None
-    window = acc_bytes[-WINDOW_BYTES:]
-    total = len(window) - NGRAM_BYTES + 1
-    distinct = len({window[i : i + NGRAM_BYTES] for i in range(total)})
-    ratio = distinct / total
-    if ratio <= MAX_DISTINCT_RATIO:
-        return (
-            f"long-cycle repetition: {distinct}/{total} distinct "
-            f"{NGRAM_BYTES}B n-grams (ratio {ratio:.4f}, est. period "
-            f"~{distinct}B) in the last {WINDOW_BYTES}B"
-        )
+    for window_bytes, trip_ratio in WINDOW_TIERS:
+        if len(acc_bytes) < window_bytes:
+            continue
+        window = acc_bytes[-window_bytes:]
+        total = len(window) - NGRAM_BYTES + 1
+        distinct = len({window[i : i + NGRAM_BYTES] for i in range(total)})
+        ratio = distinct / total
+        if ratio <= trip_ratio:
+            return (
+                f"long-cycle repetition: {distinct}/{total} distinct "
+                f"{NGRAM_BYTES}B n-grams (ratio {ratio:.4f}, est. period "
+                f"~{distinct}B) in the last {window_bytes}B"
+            )
     return None
 
 

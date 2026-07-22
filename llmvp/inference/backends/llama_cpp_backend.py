@@ -22,6 +22,7 @@ import time
 from collections import OrderedDict
 from typing import Any, AsyncGenerator, Dict, Iterator, List, Optional
 
+import anyio
 import numpy as np
 
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
@@ -3256,10 +3257,14 @@ class LlamaCppBackend(BaseBackend):
         """Asynchronous streaming text generation.
 
         Holds generation_guard for the stream's lifetime. If a consumer
-        abandons the stream, ``aclose()``/asyncgen finalization resumes
-        the generator and the guard's finally releases the counter —
-        bounded in the worst case by the drain timeout, which now aborts
-        scaling cleanly instead of crashing.
+        abandons the stream (agent-side watchdog cancel, disconnect), the
+        finally deterministically closes the sync generator — waiting out
+        any in-flight next() on a worker thread — BEFORE the guard drops,
+        so the instance is never re-acquired while the old stream can
+        still touch its sampling state. Lazy asyncgen finalization paths
+        (a cancelled caller that never runs our finally promptly) are
+        covered by the entry check, which retires a registered prior
+        stream before the new stream's first token.
 
         ``_nested_guard``: see generate_async.
         """
@@ -3272,12 +3277,76 @@ class LlamaCppBackend(BaseBackend):
                 ):
                     yield chunk
                 return
-            async for chunk in iterate_in_threadpool(
-                self.generate_stream_sync(
-                    instance, prompt_tokens, max_tokens, temperature, **kwargs
+            # An abandoned prior stream on this instance is a live hazard:
+            # its deferred GeneratorExit (the worker thread's in-flight
+            # next() keeps it alive past cancellation, GC closes it later)
+            # tears down shared sampling state mid-flight under whoever
+            # decodes next — live: a watchdog-cancelled 33k-token runaway's
+            # close fired 1.1s into the NEXT request on the same instance
+            # → copy_logits(None) → the mission made no inference progress
+            # for 23 minutes. Retire it before the new stream's first token.
+            prior = getattr(instance, "_active_stream_gen", None)
+            if prior is not None:
+                log.warning(
+                    "🧹 retiring abandoned stream on instance [%s] before reuse",
+                    getattr(instance, "_persona", "default"),
                 )
-            ):
-                yield chunk
+                if not await run_in_threadpool(self._close_stream_gen, prior):
+                    self._mark_decode_failure(
+                        instance,
+                        RuntimeError("abandoned stream would not close"),
+                    )
+                instance._active_stream_gen = None
+            sync_gen = self.generate_stream_sync(
+                instance, prompt_tokens, max_tokens, temperature, **kwargs
+            )
+            instance._active_stream_gen = sync_gen
+            try:
+                async for chunk in iterate_in_threadpool(sync_gen):
+                    yield chunk
+            finally:
+                # Close-before-release: whether the stream completed, errored,
+                # or the consumer abandoned it (watchdog cancel), the sync
+                # generator must be fully closed — its finally run, no thread
+                # still inside instance.generate — before the guard drops and
+                # the instance can serve again. Shielded: cancellation of the
+                # surrounding task must not skip this.
+                with anyio.CancelScope(shield=True):
+                    closed = await run_in_threadpool(self._close_stream_gen, sync_gen)
+                if getattr(instance, "_active_stream_gen", None) is sync_gen:
+                    instance._active_stream_gen = None
+                if not closed:
+                    self._mark_decode_failure(
+                        instance,
+                        RuntimeError("stream generator would not close after abandon"),
+                    )
+
+    @staticmethod
+    def _close_stream_gen(gen: Any, timeout_s: float = 30.0) -> bool:
+        """Deterministically close a sync stream generator, waiting out an
+        in-flight ``next()``.
+
+        A cancelled consumer leaves the generator in one of two states:
+        suspended at a yield (``close()`` succeeds immediately, running its
+        finally), or still EXECUTING inside ``next()`` on a threadpool
+        worker computing one more token (``close()`` raises ValueError —
+        generators are not thread-safe). Poll until the in-flight call
+        returns, then close. Returns False only if the generator never
+        stopped executing within ``timeout_s`` — the caller must then
+        flag the instance for a context refresh instead of reusing it.
+        """
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                gen.close()
+                return True
+            except ValueError:
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.05)
+            except Exception:  # noqa: BLE001 — the generator's finally raised
+                log.exception("stream generator close raised (state retired anyway)")
+                return True
 
     async def _batched_stream(
         self,
