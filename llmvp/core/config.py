@@ -227,6 +227,37 @@ class GenerationConfig(BaseModel):
     presence_penalty: Optional[float] = None
     repeat_penalty: Optional[float] = None
 
+    # Shared lookback window for repeat/frequency/presence penalties
+    # (llama.cpp penalty_last_n). The library default (64 tokens) is blind
+    # to paragraph-scale repetition — the live qwen3 deliberation orbits
+    # cycle at ~800 tokens (dev/qwen3_loop_research.md). Set ~2048 on
+    # GDN-hybrid configs so presence/repeat penalties actually see the
+    # cycle. None => library default (64).
+    penalty_last_n: Optional[int] = None
+
+    # DRY sampler (Don't Repeat Yourself) — the purpose-built long-period
+    # repetition breaker: penalizes continuing a sequence that would extend
+    # a match against earlier output, with penalty growing exponentially in
+    # match length (multiplier * base^(len - allowed_length)). An ~800-token
+    # verbatim cycle is astronomically penalized where classic penalties
+    # (windowed, per-token) never fire. Enable on Qwen3 GDN-hybrid configs
+    # (dry_multiplier ~0.8); 0/None => disabled (sampler untouched).
+    dry_multiplier: Optional[float] = None
+    dry_base: Optional[float] = None  # default 1.75 when DRY enabled
+    dry_allowed_length: Optional[int] = None  # default 2 when DRY enabled
+    dry_penalty_last_n: Optional[int] = None  # default -1 (whole context)
+
+    # Degeneration retry — when a SESSION turn aborts with
+    # DegenerateGenerationError (repetition guard or long-cycle guard), the
+    # purge machinery has already restored the pre-turn state; with this
+    # enabled the turn is re-driven ONCE at the recovery recipe below
+    # before the error surfaces. The recipe is Qwen's own recommendation
+    # for the endless-repetition failure (temp 1.0 + presence 1.5 — see
+    # dev/qwen3_loop_research.md). Off by default.
+    degen_retry_enabled: Optional[bool] = None  # None => disabled
+    degen_retry_temperature: Optional[float] = None  # default 1.0
+    degen_retry_presence_penalty: Optional[float] = None  # default 1.5
+
     # Degenerate-repetition guard (see llmvp/inference/repetition.py). Aborts a
     # turn that collapses into token-level repetition (e.g. the Gemma-4 defect)
     # instead of letting it fill max_tokens (~1h hang). On by default for every

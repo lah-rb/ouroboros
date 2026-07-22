@@ -441,6 +441,7 @@ class SessionManager:
         grammar: str | None = None,
         raw: bool = False,
         reasoning: str | None = None,
+        sampling_overrides: dict | None = None,
     ) -> AsyncGenerator[str, None]:
         """Execute a turn within a memoryful session (streaming).
 
@@ -677,6 +678,12 @@ class SessionManager:
             # own guard entry must only balance the counter, not re-wait
             # the scaling gate (deadlock against a draining scaler).
             gen_kwargs["_nested_guard"] = True
+
+            # Degeneration-retry recipe (session_turn_complete): per-request
+            # Llama.generate sampling overrides, merged over the config
+            # defaults in the backend.
+            if sampling_overrides:
+                gen_kwargs["sampling_overrides"] = dict(sampling_overrides)
 
             # Collect generated text for next turn's assistant prefix
             generated_parts: list[str] = []
@@ -920,15 +927,51 @@ class SessionManager:
             versions of this method returned.
         """
         raw_parts: list[str] = []
-        async for chunk in self.session_turn(
-            session_id,
-            prompt,
-            max_tokens,
-            temperature,
-            grammar,
-            reasoning=reasoning,
-        ):
-            raw_parts.append(chunk)
+        gen_cfg = self._backend.config.generation
+        attempt = 0
+        while True:
+            try:
+                overrides = None
+                turn_temp = temperature
+                if attempt == 1:
+                    # Recovery recipe: the vendor's own fix for the Qwen3
+                    # endless-repetition failure (temp 1.0 + presence 1.5),
+                    # with the penalty window widened so presence actually
+                    # sees a paragraph-scale cycle. The degenerate span was
+                    # already purged by session_turn's error path, so this
+                    # re-drives the SAME turn on clean pre-turn state.
+                    turn_temp = float(gen_cfg.degen_retry_temperature or 1.0)
+                    overrides = {
+                        "present_penalty": float(
+                            gen_cfg.degen_retry_presence_penalty or 1.5
+                        ),
+                        "penalty_last_n": int(gen_cfg.penalty_last_n or 2048),
+                    }
+                async for chunk in self.session_turn(
+                    session_id,
+                    prompt,
+                    max_tokens,
+                    turn_temp,
+                    grammar,
+                    reasoning=reasoning,
+                    sampling_overrides=overrides,
+                ):
+                    raw_parts.append(chunk)
+                break
+            except DegenerateGenerationError as e:
+                if attempt >= 1 or not gen_cfg.degen_retry_enabled:
+                    raise
+                attempt += 1
+                raw_parts.clear()
+                log.warning(
+                    "🔁 Session %s degenerate turn (%s) — retrying once at "
+                    "recovery recipe (temp=%.2f, presence=%.2f, window=%d)",
+                    session_id,
+                    e.reason,
+                    float(gen_cfg.degen_retry_temperature or 1.0),
+                    float(gen_cfg.degen_retry_presence_penalty or 1.5),
+                    int(gen_cfg.penalty_last_n or 2048),
+                )
 
         raw_text = "".join(raw_parts)
         generated_tokens = len(raw_parts)

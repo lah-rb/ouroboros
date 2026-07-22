@@ -2793,15 +2793,30 @@ class LlamaCppBackend(BaseBackend):
         ``temperature``).  It also does **not** accept ``max_tokens``,
         ``stream``, or ``stop`` — those are handled by our own loop.
         """
+        gen = self.config.generation
         kwargs: dict[str, Any] = {
             "temp": temperature,
-            "top_p": self.config.generation.top_p or 0.95,
-            "top_k": self.config.generation.top_k or 40,
-            "min_p": self.config.generation.min_p or 0.05,
-            "present_penalty": self.config.generation.presence_penalty or 0.0,
-            "repeat_penalty": self.config.generation.repeat_penalty or 1.0,
+            "top_p": gen.top_p or 0.95,
+            "top_k": gen.top_k or 40,
+            "min_p": gen.min_p or 0.05,
+            "present_penalty": gen.presence_penalty or 0.0,
+            "repeat_penalty": gen.repeat_penalty or 1.0,
             "reset": False,  # Preserve static state loaded by acquire_instance
         }
+        # Penalty lookback window — the library default (64 tokens) is blind
+        # to paragraph-scale cycles; GDN-hybrid configs widen it so the
+        # classic penalties can see an ~800-token orbit.
+        if gen.penalty_last_n:
+            kwargs["penalty_last_n"] = int(gen.penalty_last_n)
+        # DRY sampler — long-period repetition breaker; only touched when a
+        # config opts in, so every other model's sampler chain is unchanged.
+        if gen.dry_multiplier and gen.dry_multiplier > 0:
+            kwargs["dry_multiplier"] = float(gen.dry_multiplier)
+            kwargs["dry_base"] = float(gen.dry_base or 1.75)
+            kwargs["dry_allowed_length"] = int(gen.dry_allowed_length or 2)
+            kwargs["dry_penalty_last_n"] = int(
+                gen.dry_penalty_last_n if gen.dry_penalty_last_n is not None else -1
+            )
         return kwargs
 
     def generate_sync(
@@ -3022,6 +3037,13 @@ class LlamaCppBackend(BaseBackend):
         )
 
         gen_kwargs = self._build_generate_kwargs(temperature)
+        # Per-request sampling overrides (Llama.generate parameter names) —
+        # the degeneration-retry recipe uses this to re-drive a purged turn
+        # at temp 1.0 + presence_penalty with a widened window without
+        # touching the config-level defaults.
+        _sampling_overrides = kwargs.pop("sampling_overrides", None)
+        if _sampling_overrides:
+            gen_kwargs.update(_sampling_overrides)
         from formats.registry import get_renderer
 
         # Use caller-provided stops when given (session mode) — otherwise
@@ -3375,6 +3397,10 @@ class LlamaCppBackend(BaseBackend):
         kwargs.pop("flow_prefix_len", None)
         if flow_key:
             log.debug("flow_kv_cache is pool-only — ignoring flow_key %r", flow_key)
+        # Sampling overrides are pool-only in v1 (the degen-retry path); the
+        # batched engine's per-stream sampling doesn't take them yet.
+        if kwargs.pop("sampling_overrides", None):
+            log.debug("sampling_overrides is pool-only — ignored in batched mode")
 
         # Per-request reasoning level for STATELESS completions (batched
         # parity with generate_stream_sync). Session turns never carry the

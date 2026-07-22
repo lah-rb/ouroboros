@@ -26,12 +26,32 @@ prompt:
 
 generation:
   max_tokens_default: 262144
-  temperature_default: 0.9
-  top_p: 0.95
+  # Vendor instruct-general profile (2026-07-22, dev/qwen3_loop_research.md):
+  # the Qwen3.5 card's four official profiles are all temp >= 0.6, three of
+  # four with presence_penalty 1.5-2.0. Instruct-general = temp 0.7,
+  # top_p 0.8, top_k 20, presence 1.5. This model produced a 32.9k-token
+  # deliberation orbit (runaway capture 20260722T182421) at our old
+  # temp-0.5-band settings — same GDN-hybrid substrate as qwen3-next.
+  temperature_default: 0.7
+  temperature_floor: 0.7
+  session_temp_floor: 0.7
+  top_p: 0.8
   top_k: 20
   min_p: 0.00
-  presence_penalty: 0.0
+  # Vendor's documented "endless repetitions" mitigation. Only effective
+  # with the widened window below (llama.cpp windows presence at
+  # penalty_last_n, unlike vLLM's whole-sequence semantics).
+  presence_penalty: 1.5
   repeat_penalty: 1.0
+  penalty_last_n: 2048
+  # DRY long-period repetition breaker (see qwen3-next config for rationale).
+  dry_multiplier: 0.8
+  dry_base: 1.75
+  dry_allowed_length: 2
+  dry_penalty_last_n: -1
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
   streaming_default: true
 
 knowledge:

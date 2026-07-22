@@ -33,25 +33,43 @@ prompt:
 
 generation:
   max_tokens_default: 262144
-  # 0.8 base (raised from 0.6): flows scale temp DOWN per task via t*<1.0, so a
-  # higher base keeps task-scaled temps out of the low-temp regime that worsens
-  # this model's repetition looping (see repeat_penalty below).
-  temperature_default: 0.8
-  # This model hits the session repetition attractor earliest (sparse
-  # MoE). The floor targets deep session turns specifically — the
-  # surgical version of the global temperature bumps used before.
-  session_temp_floor: 0.5
-  # Refuse to sample below 0.4 for ANY request — every live runaway
-  # sat in the 0.24-0.32 band the flow multipliers produce.
-  temperature_floor: 0.4
+  # Vendor profile (2026-07-22, dev/qwen3_loop_research.md): the official
+  # Qwen3-Coder-Next card documents exactly temp=1.0, top_p=0.95, top_k=40
+  # (Unsloth adds min_p=0.01, repeat penalty disabled). We previously ran
+  # temp 0.8-scaled-down + top_k 20 — below every official profile, in the
+  # deliberation-orbit band (the 33k-token conclude-turn runaway sampled at
+  # 0.50). Flows still scale temp DOWN per task; the floors below keep the
+  # scaled values out of the danger basement.
+  temperature_default: 1.0
+  session_temp_floor: 0.7
+  # 0.7 (was 0.4): the paragraph-orbit failure survives 0.5 — every Qwen3
+  # official profile is temp >= 0.6, so 0.4 was someone else's basement.
+  temperature_floor: 0.7
   top_p: 0.95
-  top_k: 20
-  min_p: 0.00
+  top_k: 40
+  min_p: 0.01
   presence_penalty: 0.0
-  # 1.1 (from 1.0/off): Qwen's documented mitigation for Qwen3-Next's
-  # long-context repetition/endless-generation (unclamped Gated-DeltaNet decay,
-  # unfixed upstream in llama.cpp). Light touch — higher hurts coding quality.
-  repeat_penalty: 1.1
+  # 1.0 (was 1.1): DRY below replaces the blunt token-level penalty (which
+  # hurts code tokens); the old 1.1 also could not see the ~800-token orbit
+  # through the 64-token default window anyway. The prior comment blamed
+  # "unclamped Gated-DeltaNet decay, unfixed upstream" — research verdict:
+  # the clamp gap exists but was self-refuted as the loop cause; the orbit
+  # is a model-family propensity (see dev/qwen3_loop_research.md).
+  repeat_penalty: 1.0
+  # Widened penalty window (llama.cpp default 64 tok is blind to the
+  # ~800-token orbit) — mostly for the degen-retry recipe's presence bump.
+  penalty_last_n: 2048
+  # DRY: purpose-built long-period repetition breaker; penalty grows
+  # exponentially in match length, whole-context window.
+  dry_multiplier: 0.8
+  dry_base: 1.75
+  dry_allowed_length: 2
+  dry_penalty_last_n: -1
+  # On a degenerate turn abort (repetition/long-cycle guard), purge and
+  # re-drive the turn once at the vendor recovery recipe.
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
   streaming_default: true
 
 knowledge:

@@ -226,7 +226,37 @@ generation:
   # [O] Type: Optional[float] — global per-model floor for ANY request
   # (observed live runaways sat at effective temps 0.24-0.32; flow
   # multipliers drive temps as low as t*0.1). null => disabled.
+  # NOTE (2026-07-22): floors stop token-level collapse but NOT
+  # paragraph-scale deliberation orbits (those survive 0.5). For Qwen3
+  # GDN-hybrid models set floors >= 0.7 — every official Qwen3 profile is
+  # temp >= 0.6 (dev/qwen3_loop_research.md).
   temperature_floor: null
+
+  # ── Long-period repetition breakers (dev/qwen3_loop_research.md) ────────
+  # [O] Type: Optional[int] — shared lookback window for repeat/frequency/
+  # presence penalties (llama.cpp penalty_last_n). null => library default
+  # (64 tokens — blind to paragraph-scale cycles; the live qwen3 orbits
+  # repeat at ~800 tokens). Set ~2048 on GDN-hybrid configs.
+  penalty_last_n: null
+  # [O] Type: Optional[float] — DRY sampler multiplier (0/null = disabled,
+  # sampler chain untouched). Purpose-built long-period repetition breaker:
+  # penalty grows exponentially in matched-sequence length
+  # (multiplier * base^(len - allowed_length)), so paragraph-scale verbatim
+  # cycles are broken where windowed per-token penalties never fire.
+  # Enable (~0.8) on Qwen3 GDN-hybrid configs.
+  dry_multiplier: null
+  dry_base: null            # [O] null => 1.75 (when DRY enabled)
+  dry_allowed_length: null  # [O] null => 2 (when DRY enabled)
+  dry_penalty_last_n: null  # [O] null => -1 (whole context; when DRY enabled)
+
+  # ── Degeneration retry (core/session_manager.py) ────────────────────────
+  # [O] Type: Optional[bool] — when a SESSION turn aborts via
+  # DegenerateGenerationError, the purge machinery restores pre-turn state;
+  # with this enabled the turn is re-driven ONCE at the vendor recovery
+  # recipe below before the error surfaces. null => disabled.
+  degen_retry_enabled: null
+  degen_retry_temperature: null       # [O] null => 1.0
+  degen_retry_presence_penalty: null  # [O] null => 1.5
 
 # -----------------------------------------------------------------------------
 # KNOWLEDGE - compiled static token stream

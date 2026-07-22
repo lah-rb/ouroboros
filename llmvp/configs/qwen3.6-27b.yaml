@@ -26,12 +26,24 @@ prompt:
 
 generation:
   max_tokens_default: 262144
-  temperature_default: 0.6
+  # GDN-hybrid loop posture (2026-07-22, dev/qwen3_loop_research.md) —
+  # same substrate/paragraph-orbit risk as qwen3-next/3.5/3.6-35b.
+  temperature_default: 0.7
+  temperature_floor: 0.7
+  session_temp_floor: 0.7
   top_p: 0.95
   top_k: 20
   min_p: 0.00
   presence_penalty: 0.0
   repeat_penalty: 1.0
+  penalty_last_n: 2048
+  dry_multiplier: 0.8
+  dry_base: 1.75
+  dry_allowed_length: 2
+  dry_penalty_last_n: -1
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
   streaming_default: true
 
 knowledge:

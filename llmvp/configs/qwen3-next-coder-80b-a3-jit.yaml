@@ -49,17 +49,24 @@ prompt:
 
 generation:
   max_tokens_default: 262144
-  temperature_default: 0.9
-  # Session repetition-attractor floor — see qwen3-next-coder-80b-a3.yaml.
-  session_temp_floor: 0.5
-  # Refuse to sample below 0.4 for ANY request — every live runaway
-  # sat in the 0.24-0.32 band the flow multipliers produce.
-  temperature_floor: 0.4
+  # Vendor profile + GDN loop posture (2026-07-22) — mirrors
+  # qwen3-next-coder-80b-a3.yaml; see dev/qwen3_loop_research.md.
+  temperature_default: 1.0
+  session_temp_floor: 0.7
+  temperature_floor: 0.7
   top_p: 0.95
-  top_k: 20
-  min_p: 0.00
+  top_k: 40
+  min_p: 0.01
   presence_penalty: 0.0
-  repeat_penalty: 1.1
+  repeat_penalty: 1.0
+  penalty_last_n: 2048
+  dry_multiplier: 0.8
+  dry_base: 1.75
+  dry_allowed_length: 2
+  dry_penalty_last_n: -1
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
   streaming_default: true
 
 knowledge:

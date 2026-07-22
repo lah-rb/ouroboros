@@ -41,17 +41,30 @@ prompt:
 
 generation:
   max_tokens_default: 262144
-  # Higher base; flows scale temp DOWN per task (t*<1.0). Keeps task-scaled
-  # temps out of the low-temp regime that worsens sparse-MoE repetition.
+  # GDN-hybrid loop posture (2026-07-22, dev/qwen3_loop_research.md): same
+  # substrate as qwen3-next/qwen3.5, same paragraph-orbit risk. Qwen's
+  # thinking-mode profiles bracket temp 0.6 (precise coding) to 1.0
+  # (general); base 0.8 sits between, floors keep flow-scaled temps out of
+  # the orbit band (every profile is >= 0.6; the orbit survives 0.5).
   temperature_default: 0.8
-  # Sparse-MoE repetition mitigations (same posture as qwen3-next-coder).
-  session_temp_floor: 0.5
-  temperature_floor: 0.4
+  session_temp_floor: 0.7
+  temperature_floor: 0.7
   top_p: 0.95
   top_k: 20
   min_p: 0.00
+  # Presence 0.0 = the vendor "precise coding" posture; DRY below is the
+  # surgical orbit-breaker, and the degen retry escalates to the vendor
+  # recovery recipe (temp 1.0 + presence 1.5) only on an actual abort.
   presence_penalty: 0.0
-  repeat_penalty: 1.1
+  repeat_penalty: 1.0
+  penalty_last_n: 2048
+  dry_multiplier: 0.8
+  dry_base: 1.75
+  dry_allowed_length: 2
+  dry_penalty_last_n: -1
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
   streaming_default: true
 
 knowledge:
