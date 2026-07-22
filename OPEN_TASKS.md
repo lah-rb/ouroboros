@@ -165,8 +165,14 @@ canonical low/medium/high → family text, identity fallback so harmony is
 byte-identical, bimodal collapse supported, heads dedupe by rendered text.
 The agent-side router (and its trained artifact) stays model-agnostic.
 
-**Blocked on a pre-existing bug — `formats/gemma.yaml` models Gemma 3, not
-Gemma 4.** It declares `<start_of_turn>`/`<end_of_turn>` framing and "NO
+**Gemma 4 framing bug: FIXED 2026-07-22 (5125ba3).** gemma.yaml rewritten
+against the official template with a byte-equality golden test; the edge-trim
+that ate whitespace padding is fixed too. Remaining for Gemma adaptive: pick a
+strip-proof filler and re-run the probe arm for it, then wire `reasoning.levels`.
+NOTE the overnight sweep's gemma4 10/16 used the WRONG framing — re-run it.
+
+~~Blocked on a pre-existing bug — `formats/gemma.yaml` models Gemma 3, not
+Gemma 4.~~ (historical detail below) It declares `<start_of_turn>`/`<end_of_turn>` framing and "NO
 system role — system content folds into the first user turn", but Gemma 4's
 real chat template uses `<|turn>`/`<turn|>` and HAS a system turn. Only the
 thinking tags (`<|channel>thought` / `<channel|>`, confirmed correct) were
