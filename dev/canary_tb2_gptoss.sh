@@ -29,9 +29,16 @@ export OURO_TRACE=1
 export OURO_LLMVP=http://localhost:8008/graphql
 export OURO_TIMEOUT_MULTIPLIER=1.0
 
-# The 8 canary tasks (same subset as the prior canary).
-TASKS=(chess-best-move compile-compcert mteb-retrieve multi-source-data-merger \
-       path-tracing portfolio-optimization regex-chess winning-avg-corewars)
+# The 8 canary tasks (same subset as the prior canary). TASKS_OVERRIDE
+# (space-separated) runs a subset — the pause/resume pattern: a canary
+# stopped at a task boundary resumes with only the remaining tasks under a
+# fresh run id (results merged across partial runs at analysis time).
+if [ -n "${TASKS_OVERRIDE:-}" ]; then
+  read -ra TASKS <<< "$TASKS_OVERRIDE"
+else
+  TASKS=(chess-best-move compile-compcert mteb-retrieve multi-source-data-merger \
+         path-tracing portfolio-optimization regex-chess winning-avg-corewars)
+fi
 
 log(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 health(){ curl -s -m5 -X POST http://localhost:8008/graphql -H 'Content-Type: application/json' \

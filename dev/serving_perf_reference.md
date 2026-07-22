@@ -70,6 +70,28 @@ evictions).
 - `backend_timeout` (180 s) bounds **seat-queue wait**, not generation — long
   generations are never killed by it; queued requests behind a wedge are.
 
+## 3b. Pool-beyond-trained-context: PROVEN (2026-07-21, ctx probe)
+
+**The trained 131k window binds each SEQUENCE, not the pool.** On a 224k
+shared pool (`gpt-oss-120b-a5-ctxprobe.yaml`, W=8; KV pre-allocated → wired
+FLAT at ~80.3G regardless of load): needle retrieval + cross-position
+arithmetic **17/17 perfect** across 1×50k / 4×25k / 2×50k / 6×25k /
+**4×50k = 200k live cells (153% of the trained window)** — zero errors, no
+wedge, no RoPE degradation. Pool sizing is a CONFIG-time capacity plan
+(memory is paid at allocation), not a per-request risk.
+
+Economics at depth (dev/ctx_decode_probe.py, rerunnable):
+- Concurrent big prefills SERIALIZE (~1.2–1.4k tok/s on a clean context —
+  faster than §2's residue-laden numbers): 4×50k total prefill ≈ 155 s ≈
+  90% of the burst wall (169.5 s).
+- Decode during the mixed phase is prefill-starved (1–3.5 tok/s while
+  sibling prefills run); solo decode at 50k depth = **31 tok/s** (the depth
+  penalty vs 56 shallow, now measured).
+- Design rule for divide-and-conquer reads (diagnose swarm): keep the
+  fan-out's generations SHORT (findings, ~150 tok — wall stays
+  prefill-bound), and run long-form synthesis (merge/conclude) at SHALLOW
+  context afterwards where decode is ~55 tok/s.
+
 ## 4. Worker-shape feasibility (the swarm fan-out workload)
 
 | quantity | value |
