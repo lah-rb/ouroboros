@@ -59,6 +59,16 @@ class ThinkingSpec(BaseModel):
     open_tag: str = ""  # e.g. "<think>"
     close_tag: str = ""  # e.g. "</think>"
 
+    # Gemma-4: when thinking is DISABLED the official template pre-supplies an
+    # already-CLOSED empty thought channel in the generation prompt
+    # (`<|channel>thought\n<channel|>`), structurally foreclosing reasoning
+    # rather than relying on post-hoc stripping. Without it the model emits
+    # that empty channel itself (verified live, dev/gemma_pad_probe.py), so
+    # this only saves the decode tokens — but it matches the trained shape.
+    # Inverse of the usual inline_tags behavior, which injects the OPEN tag
+    # when thinking is ENABLED; hence its own flag.
+    prefill_closed_when_disabled: bool = False
+
 
 class SystemBlockSpec(BaseModel):
     """Template and defaults for the system message."""

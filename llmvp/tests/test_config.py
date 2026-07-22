@@ -413,3 +413,102 @@ def test_reasoning_map_passes_through_unknown_level():
     r = FormatRenderer(spec)
     assert "[ON]" in r.render_system(persona="P", reasoning="high")
     assert "[low]" in r.render_system(persona="P", reasoning="low")
+
+
+# ── Gemma 4 golden test vs the official chat template ─────────────────
+#
+# formats/gemma.yaml previously modelled Gemma 3 (<start_of_turn> framing,
+# "no system role") while gemma-4-31b.yaml was its only consumer — so Gemma 4
+# was served with the wrong framing entirely. This pins our rendering against
+# the REAL template (dev/gemma4_chat_template.jinja, pulled from
+# google/gemma-4-26B-A4B-it) so it cannot silently drift again.
+
+
+def test_gemma4_rendering_matches_official_template():
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    jinja2 = pytest.importorskip("jinja2")
+    tpl_path = (
+        Path(__file__).resolve().parents[2] / "dev" / "gemma4_chat_template.jinja"
+    )
+    if not tpl_path.is_file():
+        pytest.skip("official gemma-4 template not banked")
+
+    from formats.registry import get_renderer, clear_cache
+
+    env = jinja2.Environment()
+    env.globals["raise_exception"] = lambda m: (_ for _ in ()).throw(Exception(m))
+    tpl = env.from_string(tpl_path.read_text())
+
+    messages = [
+        {"role": "system", "content": "PERSONA"},
+        {"role": "user", "content": "Hello"},
+    ]
+    official = tpl.render(
+        messages=messages,
+        bos_token="<bos>",
+        add_generation_prompt=True,
+        enable_thinking=False,
+        tools=None,
+    )
+
+    clear_cache()
+    r = get_renderer("gemma")
+    # Production serves Gemma 4 with thinking disabled, which is the branch
+    # that pre-supplies the already-closed empty thought channel.
+    cfg = SimpleNamespace(model=SimpleNamespace(thinking=False))
+    with patch("core.config.get_config", return_value=cfg):
+        segs = r.render_system_segments(persona="PERSONA")
+        system = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
+        ours = "<bos>" + system + r.render_user("Hello") + r.render_generation_prompt()
+
+    assert ours == official, f"\nofficial: {official!r}\nours    : {ours!r}"
+
+
+def test_gemma4_uses_turn_framing_not_gemma3():
+    """Guard against a regression to the Gemma-3 spec."""
+    from formats.registry import get_renderer, clear_cache
+
+    clear_cache()
+    r = get_renderer("gemma")
+    assert r.s.tokens.msg_open == "<|turn>"
+    assert "start_of_turn" not in r.s.tokens.msg_open
+    assert r.s.roles.get("system") == "system"  # Gemma 4 HAS a system role
+    assert r.s.traits.fold_system_into_first_user is False
+
+
+def test_reasoning_prefix_survives_edge_trim():
+    """A whitespace-padded reasoning prefix must NOT be eaten by the cosmetic
+    edge-trim — otherwise the head-splice's equal-length check silently
+    refuses every swap (fail-safe, but invisibly broken)."""
+    from formats.schema import FormatSchema
+    from formats.renderer import FormatRenderer
+
+    spec = FormatSchema.model_validate(
+        {
+            "family": "probe3",
+            "tokens": {
+                "msg_open": "<s>",
+                "msg_content": "\n",
+                "msg_close": "</s>",
+                "gen_stop": "</s>",
+                "history_close": "</s>",
+            },
+            "roles": {"system": "system", "user": "user", "assistant": "model"},
+            "thinking": {"style": "inline_tags"},
+            "system_block": {
+                "template": "{reasoning_prefix}{persona}",
+                "reasoning_prefix": "{reasoning}\n",
+                "reasoning_default": "medium",
+            },
+            # bimodal: the off-state is PADDED to keep both heads equal length
+            "reasoning": {"levels": {"medium": "  ", "high": "<|think|>"}},
+        }
+    )
+    r = FormatRenderer(spec)
+    on = r.render_system(persona="P", reasoning="high")
+    off = r.render_system(persona="P", reasoning="medium")
+    assert "<|think|>\n" in on
+    assert "  \n" in off, f"padding was stripped: {off!r}"

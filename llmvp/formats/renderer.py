@@ -144,10 +144,23 @@ class FormatRenderer:
             template_vars["persona"] = persona
 
         system_content = self.s.system_block.template.format(**template_vars)
-        # Collapse runs of 3+ newlines to 2, then strip trailing whitespace
+        # Collapse runs of 3+ newlines to 2, then trim the edges.
         while "\n\n\n" in system_content:
             system_content = system_content.replace("\n\n\n", "\n\n")
-        system_content = system_content.strip()
+        # The edge-trim is COSMETIC tidying of authored template/persona text.
+        # It must not touch the reasoning prefix, which is STRUCTURAL: it can
+        # carry a control token (Gemma-4's `<|think|>`) whose exact token
+        # length matters, and a whitespace-padded off-state would otherwise be
+        # eaten here — silently collapsing the padding so the head-splice's
+        # equal-length check refuses every swap (fail-safe, but invisibly
+        # broken). The prefix renders ABOVE the system content by contract, so
+        # trim only what follows it.
+        if reasoning_prefix and system_content.startswith(reasoning_prefix):
+            system_content = (
+                reasoning_prefix + system_content[len(reasoning_prefix) :].strip()
+            )
+        else:
+            system_content = system_content.strip()
 
         # Families without a system role (e.g. Gemma) fold the system content
         # into a first user turn. persona is already in system_content here
@@ -266,6 +279,20 @@ class FormatRenderer:
             ):
                 parts.append(self.s.thinking.open_tag)
                 parts.append("\n")
+            # Gemma-4 inverse: with thinking DISABLED, pre-supply an already
+            # CLOSED empty thought channel so reasoning is structurally
+            # foreclosed (what the official template does) instead of letting
+            # the model emit the empty channel itself.
+            elif (
+                self.s.thinking.style == "inline_tags"
+                and not thinking_enabled
+                and self.s.thinking.prefill_closed_when_disabled
+                and self.s.thinking.open_tag
+                and self.s.thinking.close_tag
+            ):
+                parts.append(self.s.thinking.open_tag)
+                parts.append("\n")
+                parts.append(self.s.thinking.close_tag)
 
         return "".join(parts)
 

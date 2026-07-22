@@ -1,44 +1,66 @@
-# Gemma format schema — Google Gemma model family
+# Gemma format schema — Google Gemma 4
 #
-# Gemma uses <start_of_turn>/<end_of_turn> framing with the role token
-# "model" (not "assistant"), and has NO system role — system content is
-# folded into the first user turn. Distinct from ChatML: Gemma's real
-# special tokens are <start_of_turn>/<end_of_turn>, so configuring a Gemma
-# model as family=chatml feeds it the wrong (text-spelled) framing.
+# REWRITTEN 2026-07-22 for Gemma 4. The previous version modelled Gemma 3
+# (<start_of_turn>/<end_of_turn> framing, "no system role — fold into the
+# first user turn"), but gemma-4-31b.yaml was its ONLY consumer, so Gemma 4
+# was being served with the wrong turn framing and no system turn at all.
+# Gemma 3 is intentionally NOT carried forward (Gemma 4 supersedes it under
+# Apache-2.0).
 #
-# Template:
-#   <start_of_turn>user\n{system + user message}<end_of_turn>\n
-#   <start_of_turn>model\n{response}<end_of_turn>\n
+# Gemma 4 uses <|turn>/<turn|> framing, has a REAL system role, and expresses
+# reasoning through a `thought` channel. Verified against the official
+# chat_template.jinja + tokenizer_config.json for google/gemma-4-26B-A4B-it
+# (banked at dev/gemma4_chat_template.jinja); a golden test in
+# tests/test_config.py pins our rendering against that template.
 #
-# Reference: https://ai.google.dev/gemma/docs/core/prompt-structure
+# Official special tokens (tokenizer_config.json):
+#   sot_token   "<|turn>"     eot_token "<turn|>"
+#   soc_token   "<|channel>"  eoc_token "<channel|>"
+#   think_token "<|think|>"   (input-side thinking ACTIVATION; see below)
+#
+# Template shape:
+#   <bos><|turn>system\n[<|think|>\n]{system}<turn|>\n
+#        <|turn>user\n{message}<turn|>\n
+#        <|turn>model\n[<|channel>thought\n<channel|>]
+#
+# THINKING is activated by the presence of `<|think|>` at the top of the
+# system turn (the official `enable_thinking` chat-template kwarg) — it is
+# BINARY, with no graded levels. We currently serve with thinking disabled
+# (gemma-4-31b.yaml sets `thinking: false`), so no opener is injected and the
+# model's self-emitted `<|channel>thought\n<channel|>` preamble is stripped
+# via the close_tag below. Wiring `<|think|>` to the adaptive-reasoning
+# head-swap needs the padding trick + a strip-proof filler — see
+# OPEN_TASKS 7b and dev/gemma_pad_probe.py.
 
 family: gemma
-display_name: "Google Gemma"
+display_name: "Google Gemma 4"
 
 tokens:
-  msg_open: "<start_of_turn>"
+  msg_open: "<|turn>"
   msg_content: "\n"
-  msg_close: "<end_of_turn>"
-  gen_stop: "<end_of_turn>"
-  history_close: "<end_of_turn>"
+  # Trailing newline matches the official template's "<turn|>\n<|turn>"
+  # boundary; gen_stop stays the bare token (it is a stop SEQUENCE).
+  msg_close: "<turn|>\n"
+  gen_stop: "<turn|>"
+  history_close: "<turn|>\n"
 
 roles:
+  system: "system"
   user: "user"
   assistant: "model"
 
-# No system role — system content folds into the first user turn
-# (traits.fold_system_into_first_user below).
-
 thinking:
-  # Gemma-4 emits a channel reasoning preamble it produces itself:
-  #   <|channel>thought\n<channel|>{content}
-  # We do NOT inject the opener (the model config sets thinking: false), but we
-  # declare <channel|> as the content delimiter so the preamble is stripped
-  # from extracted content. NOTE: this is a minimal handling of Gemma-4's
-  # channel format — full multi-channel / tool-calling support is a follow-up.
+  # Gemma-4 emits its reasoning in a dedicated channel:
+  #   <|channel>thought\n{content}<channel|>
+  # With thinking disabled the model still emits the channel EMPTY (verified
+  # live, dev/gemma_pad_probe.py), so declaring the close tag as the content
+  # delimiter strips the preamble either way. NOTE: this is minimal handling
+  # of Gemma-4's channel format — full multi-channel / tool-calling is a
+  # follow-up.
   style: inline_tags
   open_tag: "<|channel>thought"
   close_tag: "<channel|>"
+  prefill_closed_when_disabled: true
 
 system_block:
   identity: ""
@@ -48,7 +70,9 @@ system_block:
   template: "{persona}"
 
 traits:
-  fold_system_into_first_user: true
+  # Gemma 4 HAS a real system role (unlike Gemma 3, which folded system
+  # content into the first user turn).
+  fold_system_into_first_user: false
   supports_developer_role: false
 
 generation:
@@ -60,7 +84,7 @@ generation:
 
 turn_transition:
   needs_close: true
-  # Close the previous model turn before the next user turn. <end_of_turn>
-  # is a single special token, so the trailing newline matches Gemma's
-  # canonical "<end_of_turn>\n<start_of_turn>" boundary cleanly.
-  after_generation: "<end_of_turn>\n"
+  # Close the previous model turn before the next user turn. <turn|> is a
+  # single special token, so the trailing newline matches Gemma-4's canonical
+  # "<turn|>\n<|turn>" boundary cleanly.
+  after_generation: "<turn|>\n"
