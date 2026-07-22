@@ -25,7 +25,8 @@ model:
   n_gpu_layers: -1
   seed: -1
   verbose: false
-  flow_kv_cache: true
+  flow_kv_cache: false
+  session_full_replay: true
   kv_unified: true
   swa_full: true
 

@@ -19,6 +19,10 @@ model:
   n_gpu_layers: -1
   seed: -1
   verbose: false
+  resident_seq_cache: true
+  kv_unified: true
+  swa_full: true
+  session_full_replay: true
   thinking: true
 
 prompt:

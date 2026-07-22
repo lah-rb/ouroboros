@@ -19,6 +19,7 @@ model:
   n_gpu_layers: -1   
   seed: -1
   verbose: false
+  session_full_replay: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

@@ -421,8 +421,11 @@ class LlamaCppBackend(BaseBackend):
             kv_unified=bool(getattr(self.config.model, "kv_unified", False)),
             # Resident cache needs SEQ_STATIC alongside the working seq; the flow
             # hot-set adds one resident seq per cached flow prefix; the snapshot
-            # band adds one per pinnable session snapshot. Harmless if the
-            # can_shift gate later disables the resident path. Batched mode
+            # band adds one per pinnable session snapshot. NOT harmless when the
+            # can_shift gate later disables the resident path: without
+            # kv_unified, llama.cpp splits n_ctx per sequence, so the band
+            # fragments the window — the gate un-fragments by rebuilding the
+            # context single-seq on fallback (see initialize()). Batched mode
             # uses its own layout: W working seats + persona heads +
             # reasoning heads (see inference/batched_engine.plan_seq_map).
             n_seq_max=(
@@ -2153,9 +2156,16 @@ class LlamaCppBackend(BaseBackend):
                 )
 
         # Resident-seq gate: the seq ops (memory_seq_cp/rm) require memory_can_shift()
-        # — true on SWA models with swa_full and on can-shift hybrids (Qwen3-Next),
-        # FALSE on pure-recurrent state. When false, force the resident path off and
-        # fall back to the legacy save_state/full_replay path.
+        # — true on SWA models with swa_full (+ kv_unified) and on can-shift
+        # hybrids (Qwen3-Next); FALSE on interleaved-SWA models WITHOUT
+        # swa_full (gpt-oss/OLMo 3/Gemma class) and on pure-recurrent state.
+        # When false, force the resident path off and fall back to the legacy
+        # save_state/full_replay path — AND un-fragment the context: it was
+        # allocated with the resident seq-band n_seq_max, and llama.cpp splits
+        # n_ctx per sequence (n_ctx_seq = n_ctx / n_seq_max), so the fallback
+        # would otherwise run on a fraction of the configured window (observed
+        # 2026-07-22: OLMo's 65k became 5,632/seq — the first design prompt
+        # failed to decode at all; qwen3.5's 264k became 22k/seq).
         if self._resident_requested:
             can_shift = bool(self._primary_instance._ctx.memory_can_shift())
             self._resident_active = can_shift
@@ -2164,8 +2174,24 @@ class LlamaCppBackend(BaseBackend):
             else:
                 log.warning(
                     "🧩 resident_seq_cache requested but memory_can_shift=False "
-                    "(pure-recurrent) — falling back to legacy save_state path"
+                    "(interleaved-SWA without swa_full, or recurrent memory) — "
+                    "falling back to the legacy save_state path. For iSWA "
+                    "models (gpt-oss / OLMo 3 / Gemma class) set swa_full: "
+                    "true + kv_unified: true to enable the resident cache."
                 )
+                _params = self._primary_instance.context_params
+                _nsm = int(getattr(_params, "n_seq_max", 1) or 1)
+                if _nsm > 1 and self._decode_mode != "batched":
+                    log.warning(
+                        "🧩 un-fragmenting: context was allocated with the "
+                        "resident seq band (n_seq_max=%d) — rebuilding "
+                        "single-seq to restore the full per-sequence window",
+                        _nsm,
+                    )
+                    _params.n_seq_max = 1
+                    await run_in_threadpool(
+                        self._refresh_context_sync, self._primary_instance
+                    )
 
         # Resolve the persona-per-slot assignment (multi-persona pooling).
         # Falls back to all-default for configs without slot_personas and for

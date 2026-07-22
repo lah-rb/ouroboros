@@ -469,3 +469,59 @@ def test_rewarm_only_when_pool_returns_to_one_and_health_fields_stable():
         await teardown(backend)
 
     asyncio.run(main())
+
+
+# ── resident-seq fallback: un-fragmentation gate ──────────────────────
+
+
+class ShiftyCtx:
+    def __init__(self, can_shift: bool):
+        self._can = can_shift
+
+    def memory_can_shift(self):
+        return self._can
+
+
+def test_resident_fallback_unfragments_context():
+    # A model that cannot shift (iSWA without swa_full — the OLMo 2026-07-22
+    # incident) must not keep the resident seq-band context: without
+    # kv_unified, llama.cpp splits n_ctx per sequence, so n_seq_max=12 left
+    # the fallback with a twelfth of the window (5,632 cells — smaller than
+    # the first design prompt). The gate must force single-seq and rebuild.
+    async def main():
+        backend = make_backend(jit_limit=None, max_concurrent=1)
+        primary = FakeLlama()
+        primary._ctx = ShiftyCtx(False)
+        primary.context_params = SimpleNamespace(n_seq_max=12)
+        backend._create_primary_instance = lambda: primary
+        backend._resident_requested = True
+        rebuilds = []
+        backend._refresh_context_sync = lambda inst: rebuilds.append(
+            inst.context_params.n_seq_max
+        )
+        await backend.initialize()
+        assert backend._resident_active is False
+        assert rebuilds == [1]  # rebuilt after forcing single-seq
+        await teardown(backend)
+
+    asyncio.run(main())
+
+
+def test_resident_active_keeps_band():
+    # Shift-capable model: resident stays active, no rebuild happens.
+    async def main():
+        backend = make_backend(jit_limit=None, max_concurrent=1)
+        primary = FakeLlama()
+        primary._ctx = ShiftyCtx(True)
+        primary.context_params = SimpleNamespace(n_seq_max=12)
+        backend._create_primary_instance = lambda: primary
+        backend._resident_requested = True
+        rebuilds = []
+        backend._refresh_context_sync = lambda inst: rebuilds.append(1)
+        await backend.initialize()
+        assert backend._resident_active is True
+        assert rebuilds == []
+        assert primary.context_params.n_seq_max == 12
+        await teardown(backend)
+
+    asyncio.run(main())
