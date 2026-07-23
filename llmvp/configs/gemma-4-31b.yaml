@@ -21,9 +21,16 @@ model:
   # -> a token-length-MATCHED padding, so the mid-session splice stays legal
   # (it refuses unequal heads). Requires resident_seq_cache, above.
   reasoning_head_swap: true
-  # Gemma-4 produces its own <|channel>thought reasoning preamble; do NOT
-  # inject a thinking opener into the generation prompt.
-  thinking: false
+  # TRUE is load-bearing for the reasoning toggle: formats/gemma.yaml maps
+  # medium/high -> <|think|> (thinking-ON default; router's low pads it out).
+  # thinking:false would prefill the already-CLOSED empty thought channel in
+  # every generation prompt (prefill_closed_when_disabled), structurally
+  # foreclosing reasoning and cancelling the <|think|> head — so the flag must
+  # track the DEFAULT level's state. With true we prefill the OPEN
+  # `<|channel>thought\n` opener; in the padded-off state the model just
+  # closes it immediately (it self-emits the empty channel anyway —
+  # dev/gemma_pad_probe.py).
+  thinking: true
   path: /Users/lah-rb/.lmstudio/models/lmstudio-community/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf
   # Curator bake-off ingests whole papers (long reviews ~35k tokens) plus
   # prompt + generation headroom; 32768 could not hold one.

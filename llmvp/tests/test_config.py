@@ -446,32 +446,59 @@ def test_gemma4_rendering_matches_official_template():
         {"role": "system", "content": "PERSONA"},
         {"role": "user", "content": "Hello"},
     ]
-    official = tpl.render(
-        messages=messages,
-        bos_token="<bos>",
-        add_generation_prompt=True,
-        enable_thinking=False,
-        tools=None,
-    )
 
-    clear_cache()
-    r = get_renderer("gemma")
-    # Production serves Gemma 4 with thinking disabled, which is the branch
-    # that pre-supplies the already-closed empty thought channel.
-    cfg = SimpleNamespace(model=SimpleNamespace(thinking=False))
-    with patch("core.config.get_config", return_value=cfg):
-        segs = r.render_system_segments(persona="PERSONA")
-        system = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
-        ours = "<bos>" + system + r.render_user("Hello") + r.render_generation_prompt()
+    def render_ours(reasoning=None):
+        clear_cache()
+        r = get_renderer("gemma")
+        # Production serves thinking: true (gemma-4-31b.yaml) — load-bearing:
+        # false would prefill the CLOSED empty thought channel and cancel the
+        # <|think|> head. The per-turn on/off toggle lives in the reasoning
+        # LEVEL (medium/high -> <|think|>, low -> padding), not this flag.
+        cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+        with patch("core.config.get_config", return_value=cfg):
+            kw = {"reasoning": reasoning} if reasoning else {}
+            segs = r.render_system_segments(persona="PERSONA", **kw)
+            system = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
+            return (
+                "<bos>" + system + r.render_user("Hello") + r.render_generation_prompt()
+            )
 
-    # We deliberately DEVIATE from the official template in exactly one way:
-    # the thinking-off state is PADDED to keep both reasoning heads the same
-    # token length, so the mid-session head splice stays legal. Official emits
-    # nothing in that slot; we emit "  \n" (token-length-matched to
-    # "<|think|>\n" — see formats/gemma.yaml). Pin the deviation precisely so
-    # any OTHER divergence still fails.
-    expected = official.replace("<|turn>system\n", "<|turn>system\n  \n", 1)
-    assert ours == expected, f"\nexpected: {expected!r}\nours    : {ours!r}"
+    def render_official(enable_thinking):
+        return tpl.render(
+            messages=messages,
+            bos_token="<bos>",
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking,
+            tools=None,
+        )
+
+    # Known deviation, BOTH branches: we prefill the OPEN thought channel
+    # opener in the generation prompt (the inline_tags convention the FSM
+    # keys on); official lets the model emit it. Behaviorally equivalent —
+    # the model's next tokens are exactly these either way (verified live,
+    # dev/gemma_pad_probe.py) — but pinned so any OTHER drift still fails.
+    opener = "<|channel>thought\n"
+
+    # ── Thinking ON — the DEFAULT (reasoning_default medium -> <|think|>).
+    # System turn must match the official enable_thinking branch EXACTLY.
+    expected_on = render_official(True) + opener
+    ours_on = render_ours()
+    assert ours_on == expected_on, f"\nexpected: {expected_on!r}\nours    : {ours_on!r}"
+
+    # ── Thinking OFF — the router's "low" level. Second known deviation: the
+    # off-state is PADDED ("  \n", token-length-matched to "<|think|>\n") so
+    # the mid-session head splice stays legal; official emits nothing in that
+    # slot. And the opener replaces official's closed-channel prefill (the
+    # model closes it immediately in the off state).
+    official_off = render_official(False)
+    assert official_off.endswith(opener + "<channel|>")
+    expected_off = official_off.replace("<|turn>system\n", "<|turn>system\n  \n", 1)[
+        : -len("<channel|>")
+    ]
+    ours_off = render_ours(reasoning="low")
+    assert (
+        ours_off == expected_off
+    ), f"\nexpected: {expected_off!r}\nours    : {ours_off!r}"
 
 
 def test_gemma4_uses_turn_framing_not_gemma3():

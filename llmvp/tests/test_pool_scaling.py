@@ -725,12 +725,13 @@ def test_head_swap_enabled_for_family_declaring_levels():
     """A non-harmony family qualifies by declaring reasoning.levels — that map
     is what makes its levels renderable into the cached system head."""
     b = _backend_with_family(
-        "gemma", {"low": "  ", "medium": "  ", "high": "<|think|>"}
+        "gemma", {"low": "  ", "medium": "<|think|>", "high": "<|think|>"}
     )
     assert b._reasoning_head_swap is True
-    # BIMODAL collapse: low renders identically to the medium default, so only
-    # ONE extra head is pinned, not two.
-    assert b._reasoning_pin_levels == ["high"]
+    # BIMODAL collapse (production gemma map: thinking-ON default, low = the
+    # padded off-state): high renders identically to the medium default, so
+    # only ONE extra head is pinned, not two.
+    assert b._reasoning_pin_levels == ["low"]
 
 
 def test_head_swap_still_enabled_for_harmony_without_map():

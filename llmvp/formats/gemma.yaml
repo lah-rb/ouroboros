@@ -25,12 +25,10 @@
 #
 # THINKING is activated by the presence of `<|think|>` at the top of the
 # system turn (the official `enable_thinking` chat-template kwarg) — it is
-# BINARY, with no graded levels. We currently serve with thinking disabled
-# (gemma-4-31b.yaml sets `thinking: false`), so no opener is injected and the
-# model's self-emitted `<|channel>thought\n<channel|>` preamble is stripped
-# via the close_tag below. Wiring `<|think|>` to the adaptive-reasoning
-# head-swap needs the padding trick + a strip-proof filler — see
-# OPEN_TASKS 7b and dev/gemma_pad_probe.py.
+# BINARY, with no graded levels. The reasoning.levels map at the bottom wires
+# this to the adaptive head-swap via the padding trick (dev/gemma_pad_probe.py);
+# gemma-4-31b.yaml serves `thinking: true`, so the default state is
+# thinking-ON and the adaptive router's low level is the OFF toggle.
 
 family: gemma
 display_name: "Google Gemma 4"
@@ -65,7 +63,8 @@ thinking:
 system_block:
   identity: ""
   cutoff: ""
-  # Canonical default -> the ReasoningSpec map turns it into the PADDING.
+  # Canonical default -> the ReasoningSpec map renders it as <|think|>, so
+  # non-adaptive serving is thinking-ON. Only the router's "low" pads it out.
   reasoning_default: "medium"
   channel_directive: ""
   # The reasoning slot renders ABOVE the persona: Gemma-4 activates thinking
@@ -95,7 +94,14 @@ turn_transition:
 
 # Gemma-4 is BIMODAL: thinking is activated by the PRESENCE of `<|think|>` in
 # the system turn (official `enable_thinking` kwarg); there are no graded
-# levels, so low+medium collapse onto "off".
+# levels, so two canonical levels must collapse. The collapse STRADDLES the
+# router's operating range: the trained router emits low/medium and (in
+# practice) never high, so the original low+medium -> "off" mapping made
+# adaptive a structural no-op — every routed turn rendered the same padding
+# (discovered on the 2026-07-23 greenfield A/B, where both gemma arms were
+# byte-identical thinking-OFF). medium+high -> `<|think|>` puts the toggle on
+# the boundary the router actually exercises: low = off, medium/high = think.
+# Default (reasoning_default: medium) is therefore thinking-ON.
 #
 # THE PADDING: Gemma's native toggle is an INSERT/DELETE, which would shift
 # every downstream token and make the mid-session head splice illegal (it
@@ -118,5 +124,5 @@ turn_transition:
 reasoning:
   levels:
     low: "  "
-    medium: "  "
+    medium: "<|think|>"
     high: "<|think|>"
