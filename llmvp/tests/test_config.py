@@ -512,3 +512,40 @@ def test_reasoning_prefix_survives_edge_trim():
     off = r.render_system(persona="P", reasoning="medium")
     assert "<|think|>\n" in on
     assert "  \n" in off, f"padding was stripped: {off!r}"
+
+
+# ── template-supplied BOS (tokens.bos) ────────────────────────────────
+#
+# Mistral GGUFs set tokenizer.ggml.add_bos_token=false, so llama.cpp does NOT
+# prepend BOS — the chat template owns it. Our format layer had no BOS concept
+# at all, so every Mistral prompt went out WITHOUT its sequence-start token.
+# Live 2026-07-22: Mistral Medium 3.5 answered "What is 2+2?" with
+# " the number of a$)bz20)b$n)5 ..." (character salad) BOS-less, and "4" once
+# the BOS was restored — same model, same server, same prompt.
+
+
+def test_tekken_declares_template_bos():
+    from formats.registry import get_renderer, clear_cache
+
+    clear_cache()
+    r = get_renderer("tekken")
+    assert r.s.tokens.bos == "<s>"
+    segs = r.render_system_segments(persona="P")
+    rendered = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
+    assert rendered.startswith("<s>[SYSTEM_PROMPT]"), rendered[:60]
+    # exactly once — a duplicated BOS is its own corruption
+    assert rendered.count("<s>") == 1
+
+
+@pytest.mark.parametrize("family", ["harmony", "chatml", "gemma"])
+def test_other_families_emit_no_bos(family):
+    """bos is opt-in: families whose tokenizer adds BOS itself must not get a
+    duplicate, and their rendering must be unchanged by this feature."""
+    from formats.registry import get_renderer, clear_cache
+
+    clear_cache()
+    r = get_renderer(family)
+    assert r.s.tokens.bos == ""
+    segs = r.render_system_segments(persona="P", date="2026-01-01")
+    rendered = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
+    assert not rendered.startswith("<s>")

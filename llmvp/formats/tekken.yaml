@@ -32,6 +32,11 @@ tokens:
   msg_content: ""
   msg_close: "[/INST]"
   gen_stop: "</s>"
+  # Mistral GGUFs set add_bos_token=false, so llama.cpp does NOT prepend BOS —
+  # the template must. The official template starts with <s>; omitting it fed
+  # the model a BOS-less prompt and Mistral Medium 3.5 degenerated into
+  # character salad (2026-07-22).
+  bos: "<s>"
   history_close: "</s>"
 
 roles:

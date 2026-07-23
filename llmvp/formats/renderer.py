@@ -169,9 +169,18 @@ class FormatRenderer:
             body = system_content
             if tools:
                 body = f"{body}\n\n{tools}" if body else tools
-            return self.render_message_segments("user", body)
+            segs = self.render_message_segments("user", body)
+            if self.s.tokens.bos:
+                segs = [(self.s.tokens.bos, True)] + segs
+            return segs
 
         segments = self.render_message_segments("system", system_content)
+
+        # Template-supplied BOS (families whose GGUF sets add_bos_token=false,
+        # so llama.cpp does NOT prepend it — the template owns it). Emitted
+        # ONCE at the very front of the static prefix.
+        if self.s.tokens.bos:
+            segments = [(self.s.tokens.bos, True)] + segments
 
         # Developer block (Harmony): persona + tools
         if self.s.traits.supports_developer_role and (persona or tools):

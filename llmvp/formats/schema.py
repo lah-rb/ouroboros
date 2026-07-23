@@ -24,6 +24,18 @@ class TokenSpec(BaseModel):
     msg_content: str  # e.g. "<|message|>"
     msg_close: str  # e.g. "<|end|>"
     gen_stop: str  # what the model emits to end generation, e.g. "<|return|>"
+    # Sequence-start token the TEMPLATE must supply, emitted once at the very
+    # front of the static prefix. Only set this for families whose GGUF has
+    # tokenizer.ggml.add_bos_token=false — llama.cpp then does NOT prepend BOS,
+    # so the template owns it (Mistral/tekken: "<s>"). Leave empty when the
+    # tokenizer adds BOS itself, or it would be duplicated.
+    #
+    # Omitting it is not cosmetic: a Mistral-family model fed a prompt with no
+    # BOS degenerates into character salad (live 2026-07-22 — Mistral Medium
+    # 3.5 produced "the number of a$)bz20)b$n)5..." for "What is 2+2?" while
+    # the same GGUF answered competently in LM Studio, which applies the
+    # model's own template including <s>).
+    bos: str = ""
     history_close: (
         str  # what replaces gen_stop when re-rendering history, e.g. "<|end|>"
     )
