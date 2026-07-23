@@ -653,6 +653,18 @@ class LlamaCppBackend(BaseBackend):
                 )
                 llm_inst.reset()
                 llm_inst.eval(list(static_tokens))
+                # Seed the tracker's cold-prefill rate with this genuine
+                # cache-free eval — the basis for health's advisory
+                # expectedEvalSeconds (timed BEFORE save_state so the blob
+                # write doesn't dilute the rate).
+                try:
+                    from core.generation_tracker import get_tracker
+
+                    get_tracker().seed_prefill_rate(
+                        n_tokens, time.perf_counter() - started
+                    )
+                except Exception:  # advisory only — never block boot
+                    pass
                 # save_state ONLY on the primary. Live finding (duo spike):
                 # save_state() on a copy.copy'd shared instance corrupts its
                 # context — the next decode dies with llama_decode -3 ("Graph

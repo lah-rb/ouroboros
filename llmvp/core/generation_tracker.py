@@ -68,6 +68,14 @@ class GenerationTracker:
         # the Apple-Silicon memory-eviction signature) without any per-token cost.
         self._trend: "collections.deque" = collections.deque(maxlen=64)
         self._baseline_decode_tps: float | None = None
+        # Cold prefill rate seeded from the boot static eval (tok/s). This is
+        # the model's HONEST worst-case prefill speed on this hardware —
+        # trend samples measure effective rate (cache-assisted turns look
+        # 10-20x faster), so the seed anchors expected_eval_seconds against
+        # the cold case. Server-side model knowledge, exposed via health so
+        # clients can size their watchdog timeouts without hardcoding
+        # per-model numbers (the 300s-vs-334.9s doom loop of 2026-07-23).
+        self._prefill_seed_tps: float | None = None
 
     def start(self, request_id: str = "", prompt_tokens: int = 0) -> None:
         """Mark the beginning of a new generation (entering eval phase)."""
@@ -259,6 +267,31 @@ class GenerationTracker:
             self._status.thinking_content = thinking_text
             self._status.thinking_complete = True
 
+    def seed_prefill_rate(self, tokens: int, seconds: float) -> None:
+        """Seed the cold prefill rate from the boot static eval.
+
+        Called once per boot by the backend after timing the static-prefix
+        eval — a genuine cold, cache-free prefill sample. Keeps the SLOWEST
+        seed seen (multi-slot pools may eval more than once; later evals can
+        be page-cache-warmed and flatter the estimate).
+        """
+        if tokens <= 0 or seconds <= 0.2:
+            return
+        rate = tokens / seconds
+        with self._lock:
+            if self._prefill_seed_tps is None or rate < self._prefill_seed_tps:
+                self._prefill_seed_tps = rate
+
+    def _cold_prefill_tps_locked(self) -> float | None:
+        """Conservative (worst-case) prefill rate: min of the boot seed and
+        observed per-request rates. Effective rates from cache-assisted turns
+        are optimistic — using the minimum keeps expected_eval_seconds an
+        UPPER estimate, which is the direction a timeout consumer needs."""
+        candidates = [tps for tps, _, _ in self._trend if tps and tps > 0]
+        if self._prefill_seed_tps:
+            candidates.append(self._prefill_seed_tps)
+        return min(candidates) if candidates else None
+
     def get_status(self) -> dict:
         """Get current generation status (for health endpoint)."""
         with self._lock:
@@ -276,6 +309,12 @@ class GenerationTracker:
                 result["seconds_since_last_token"] = round(now - s.last_token_at, 1)
                 result["eval_duration"] = round(s.eval_duration, 2)
                 result["thinking_complete"] = s.thinking_complete
+                # Worst-case eval estimate for the IN-FLIGHT prompt, from
+                # server-side measured rates. Advisory: clients may use it to
+                # size their stuck-eval timeout instead of hardcoding one.
+                rate = self._cold_prefill_tps_locked()
+                if rate and s.prompt_tokens > 0:
+                    result["expected_eval_seconds"] = round(s.prompt_tokens / rate, 1)
             return result
 
     def get_last_diagnostics(self) -> dict:

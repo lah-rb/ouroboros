@@ -68,6 +68,11 @@ class HealthStatus:
     generation_phase: str = "idle"  # idle, eval, generating, complete
     prompt_tokens: int = 0
     eval_duration: Optional[float] = None
+    # Advisory worst-case eval estimate for the in-flight prompt, from
+    # server-side measured cold-prefill rate (boot static eval seed + observed
+    # minimums). Lets clients size stuck-eval timeouts without hardcoding
+    # per-model speed knowledge; honoring it is the client's choice.
+    expected_eval_seconds: Optional[float] = None
     # Deep-health: long-run degradation signals (pass 1). Memory residency
     # catches the Apple-Silicon unified-memory KV/weight eviction mode; the
     # flow-cache churn/fallback counters catch KV-cache instability under
@@ -387,6 +392,7 @@ class Query:
             generation_phase=tracker_status.get("phase", "idle"),
             prompt_tokens=tracker_status.get("prompt_tokens", 0),
             eval_duration=tracker_status.get("eval_duration"),
+            expected_eval_seconds=tracker_status.get("expected_eval_seconds"),
             mem_process_rss_mb=status.get("mem_process_rss_mb"),
             mem_system_used_percent=status.get("mem_system_used_percent"),
             mem_system_available_mb=status.get("mem_system_available_mb"),

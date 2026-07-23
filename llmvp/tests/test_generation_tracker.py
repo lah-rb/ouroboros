@@ -84,3 +84,50 @@ def test_report_completion_folds_trend_with_guard():
         request_id="y", prompt_tokens=10, generated_tokens=2, eval_s=0.0, gen_s=0.01
     )
     assert t.get_trend()["trend_samples"] == 1
+
+
+def test_expected_eval_seconds_from_cold_seed():
+    """The boot static-eval seed drives an UPPER eval estimate for the
+    in-flight prompt — the field a timeout consumer needs (the 300s-vs-334.9s
+    doom loop class)."""
+    t = GenerationTracker()
+    # No basis yet: no field.
+    t.start("r0", prompt_tokens=14951)
+    assert "expected_eval_seconds" not in t.get_status()
+    t.finish(quiet=True)
+
+    # Seed from a cold static eval: 1818 tokens in 39.46s ≈ 46 tok/s.
+    t.seed_prefill_rate(1818, 39.46)
+    t.start("r1", prompt_tokens=14951)
+    st = t.get_status()
+    expected = st["expected_eval_seconds"]
+    assert abs(expected - 14951 / (1818 / 39.46)) < 1.0  # ~324s
+    t.finish(quiet=True)
+
+    # Degenerate seeds are ignored.
+    t2 = GenerationTracker()
+    t2.seed_prefill_rate(0, 10.0)
+    t2.seed_prefill_rate(100, 0.05)
+    t2.start("r2", prompt_tokens=5000)
+    assert "expected_eval_seconds" not in t2.get_status()
+
+
+def test_expected_eval_uses_conservative_minimum_rate():
+    """Cache-assisted turns report optimistic effective prefill rates; the
+    estimate must stay anchored to the slowest (cold) observation, and the
+    slowest of multiple seeds wins (later boot evals can be cache-warmed)."""
+    t = GenerationTracker()
+    t.seed_prefill_rate(1800, 40.0)  # cold: 45 tok/s
+    t.seed_prefill_rate(1800, 4.0)  # warmed second slot: 450 tok/s — ignored
+    # A cache-assisted completion with a wildly optimistic effective rate.
+    t.report_completion(
+        request_id="warm",
+        prompt_tokens=20000,
+        generated_tokens=500,
+        eval_s=20.0,  # effective 1000 tok/s
+        gen_s=10.0,
+    )
+    t.start("r", prompt_tokens=9000)
+    st = t.get_status()
+    # 9000 / 45 = 200s (cold), NOT 9000 / 1000 = 9s.
+    assert abs(st["expected_eval_seconds"] - 200.0) < 2.0

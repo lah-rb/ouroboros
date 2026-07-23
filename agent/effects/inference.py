@@ -71,6 +71,29 @@ query Health {
 }
 """
 
+# Watchdog variant: adds the server's advisory expectedEvalSeconds (worst-case
+# prefill estimate for the in-flight prompt). Kept SEPARATE from HEALTH_QUERY
+# because an older server rejects unknown fields with an empty ``data`` — the
+# watchdog detects that and downgrades to HEALTH_QUERY; other health consumers
+# never need the field and stay on the legacy query.
+HEALTH_QUERY_WATCHDOG = """
+query Health {
+    health {
+        status
+        poolSize
+        availableInstances
+        generationActive
+        tokensGenerated
+        elapsedSeconds
+        secondsSinceLastToken
+        generationPhase
+        promptTokens
+        evalDuration
+        expectedEvalSeconds
+    }
+}
+"""
+
 # Session mutations and queries
 START_SESSION_MUTATION = """
 mutation StartSession($config: SessionConfig!) {
@@ -550,17 +573,34 @@ class InferenceEffect:
 
             last_token_count = -1
 
+            # Prefer the expectedEvalSeconds-enriched health query (the
+            # server's advisory worst-case eval estimate for the in-flight
+            # prompt — model speed knowledge stays server-side). An older
+            # server rejects the unknown field, which surfaces as an empty
+            # ``data`` — downgrade to the legacy query ONCE rather than
+            # silently polling a dead query for the whole run.
+            watchdog_query = HEALTH_QUERY_WATCHDOG
+
             while not request_task.done():
                 try:
                     # Use a short-timeout client for health checks
                     health_client = httpx.AsyncClient(timeout=10.0)
                     try:
                         resp = await health_client.post(
-                            self._endpoint, json={"query": HEALTH_QUERY}
+                            self._endpoint, json={"query": watchdog_query}
                         )
-                        health = resp.json().get("data", {}).get("health", {})
+                        body = resp.json()
+                        health = (body.get("data") or {}).get("health") or {}
                     finally:
                         await health_client.aclose()
+
+                    if not health and watchdog_query is not HEALTH_QUERY:
+                        logger.info(
+                            "Health watchdog: server lacks expectedEvalSeconds "
+                            "— falling back to legacy health query"
+                        )
+                        watchdog_query = HEALTH_QUERY
+                        continue
 
                     gen_active = health.get("generationActive", False)
                     tokens = health.get("tokensGenerated", 0)
@@ -569,6 +609,7 @@ class InferenceEffect:
                     prompt_toks = health.get("promptTokens", 0)
                     elapsed = health.get("elapsedSeconds", 0)
                     eval_dur = health.get("evalDuration")
+                    expected_eval = health.get("expectedEvalSeconds")
 
                     if gen_active:
                         if runaway_token_ceiling and tokens > runaway_token_ceiling:
@@ -604,18 +645,25 @@ class InferenceEffect:
                                 prompt_toks,
                                 eval_dur,
                             )
-                            # Cancel if eval takes unreasonably long. Default
-                            # 300s; OURO_EVAL_STUCK_S overrides for models
-                            # whose HONEST cold prefill exceeds it — dense
-                            # mistral-medium-3.5 prefills ~45 tok/s, so a 15k
-                            # mission prompt needs ~333s and the fixed limit
-                            # produced a cancel/retry-from-scratch doom loop
-                            # (2026-07-23: 8 identical attempts, ~8 min each,
-                            # zero progress; a cancelled prefill loses all
-                            # work AND briefly wedges the single instance).
+                            # Cancel if eval takes unreasonably long. The
+                            # floor is 300s (OURO_EVAL_STUCK_S overrides);
+                            # when the server advertises expectedEvalSeconds
+                            # (its measured worst-case prefill estimate for
+                            # THIS prompt), honor it with 2x headroom — the
+                            # server owns model-speed knowledge, we just
+                            # consume it. Guards against the fixed-limit doom
+                            # loop of 2026-07-23: dense mistral prefills
+                            # ~45 tok/s, so a 15k prompt needs ~335s and a
+                            # hardcoded 300s cancel discarded nine COMPLETED
+                            # generations at 90%+ (each cancel also briefly
+                            # wedges the single instance for the retry).
                             _eval_limit = float(
                                 os.environ.get("OURO_EVAL_STUCK_S", "300")
                             )
+                            if expected_eval:
+                                _eval_limit = max(
+                                    _eval_limit, 2.0 * float(expected_eval)
+                                )
                             if elapsed and elapsed > _eval_limit:
                                 logger.warning(
                                     "Health watchdog: eval phase stuck for %.0fs "
