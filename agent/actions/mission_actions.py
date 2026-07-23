@@ -1667,13 +1667,159 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             context_updates={"dispatch_config": dispatch_config},
         )
 
-    # All structural goals are complete
+    # All structural goals are complete — phase-exit seam gate.
+    #
+    # The cross-module gates (transfer-shape + typecheck, 671ee57) run only
+    # inside build_structure, so a SERIAL-mode mission (game_challenge_boss
+    # pins serial) never executes them: per-file checks all pass while the
+    # assembled modules disagree at their seams. Live cost of the gap: the
+    # 2026-07-23 dense-mistral artifact carried three cross-module shape
+    # bugs (constructor arity, required-kwarg, raw-string-vs-Command), each
+    # only discoverable at ~7 min/diagnose in the functional phase. Run the
+    # deterministic gates once here, over the assembled fileset, before the
+    # phase may close.
+    #
+    # Failure dispatches a fix WITHOUT reopening the goal — reopening would
+    # ping-pong with the verify-only rung above (single-file checks cannot
+    # see seams, so it would blindly re-certify). The gate itself blocks
+    # phase exit until the seams clear, bounded by _SEAM_GATE_MAX_ATTEMPTS
+    # (then fail-open with a note: a stubborn false positive must not wedge
+    # the mission; the gates are conservative so this should be rare).
+    seam_dispatch = await _phase_exit_seam_gate(mission, effects)
+    if seam_dispatch is not None:
+        return seam_dispatch
+
     if effects:
         await effects.save_mission(mission)
 
     return StepOutput(
         result={"sweep_complete": True},
         observations="Structural sweep complete — all files created and validated",
+    )
+
+
+_SEAM_GATE_MAX_ATTEMPTS = 3
+
+
+async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None:
+    """Cross-module seam gate at serial structural-phase exit.
+
+    Runs the deterministic transfer-shape and typecheck analyses over the
+    assembled structural fileset. Returns a fixing-dispatch StepOutput when
+    seams are found (goals stay COMPLETE — the gate itself blocks phase
+    exit), or None when clean, inert (<2 py files), or attempt-bounded.
+    """
+    from agent.actions.batch_structural_actions import _transfer_shape_violations
+    from agent.actions.contract_swarm_actions import action_run_contract_typecheck
+    from agent.models import FlowMeta as _FlowMeta
+    from agent.models import StepInput as _StepInput
+    from agent.persistence.models import NoteRecord
+
+    if effects is None or mission is None:
+        return None
+    files: list[str] = []
+    for g in getattr(mission, "goals", []) or []:
+        if getattr(g, "type", "") == "structural":
+            files.extend(
+                f for f in (g.associated_files or []) if str(f).endswith(".py")
+            )
+    files = sorted(set(files))
+    if len(files) < 2:
+        return None
+
+    attempts = sum(
+        1
+        for n in (getattr(mission, "notes", []) or [])
+        if "seam_gate" in (getattr(n, "tags", None) or [])
+    )
+    if attempts >= _SEAM_GATE_MAX_ATTEMPTS:
+        return None  # fail-open: earlier notes carry the unresolved seams
+
+    sources: dict[str, str] = {}
+    for f in files:
+        try:
+            fc = await effects.read_file(f)
+            if getattr(fc, "exists", False):
+                sources[f] = getattr(fc, "content", "") or ""
+        except Exception:  # noqa: BLE001 — unreadable file simply isn't gated
+            continue
+    if len(sources) < 2:
+        return None
+
+    problems: dict[str, list[str]] = {}
+    for f, vs in _transfer_shape_violations(sources).items():
+        problems.setdefault(f, []).extend(vs)
+
+    tc_out = await action_run_contract_typecheck(
+        _StepInput(
+            context={"files_changed": list(sources)},
+            effects=effects,
+            meta=_FlowMeta(
+                flow_name="mission_control", step_id="structural_sweep_next"
+            ),
+        )
+    )
+    for f, entry in (
+        (tc_out.context_updates or {}).get("batch_check_results", {}) or {}
+    ).items():
+        if not entry.get("passed", True):
+            out = entry.get("output") or "typecheck failed"
+            problems.setdefault(f, []).append(out[:500])
+
+    if not problems:
+        return None
+
+    target = sorted(problems)[0]
+    seams = "\n".join(v for vs in problems.values() for v in vs)[:800]
+    goal = next(
+        (
+            g
+            for g in mission.goals
+            if getattr(g, "type", "") == "structural"
+            and target in (g.associated_files or [])
+        ),
+        None,
+    )
+    mission.notes.append(
+        NoteRecord(
+            content=(
+                f"seam gate: cross-module interface check failed at structural "
+                f"phase exit (attempt {attempts + 1}/{_SEAM_GATE_MAX_ATTEMPTS}): "
+                f"{seams[:300]}"
+            ),
+            category="failure_analysis",
+            tags=["seam_gate"],
+            source_flow="structural_sweep",
+        )
+    )
+    await effects.save_mission(mission)
+    dispatch_config = {
+        "goal_id": goal.id if goal else "",
+        "goal_description": (
+            goal.description if goal else "cross-module interface consistency"
+        ),
+        "goal_type": "structural",
+        "goal_files": [target],
+        "flow": "file_ops",
+        "target_file_path": target,
+        "flow_directive": (
+            f"Cross-module interface check failed at structural phase exit. "
+            f"Fix {target} so its cross-module calls match what the other "
+            f"modules actually define and return:\n{seams}"
+        ),
+        "error_output": seams,
+        "recent_reports": [],
+    }
+    logger.info(
+        "Structural sweep: seam gate failed — fixing %s (attempt %d/%d)",
+        target,
+        attempts + 1,
+        _SEAM_GATE_MAX_ATTEMPTS,
+    )
+    return StepOutput(
+        result={"sweep_complete": False, "needs_fix": True},
+        observations=f"Seam gate: cross-module mismatch — fixing {target}",
+        context_updates={"dispatch_config": dispatch_config},
     )
 
 
