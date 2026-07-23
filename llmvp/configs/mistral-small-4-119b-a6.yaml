@@ -14,11 +14,10 @@ graphql:
 model:
   name: "mistral-small-4-119b-a6"
   family: "tekken"
-  # 2026-07-22: repointed — the unsloth MXFP4 build is no longer on disk
-  # (whole directory absent); bartowski Q5_K_L is what is actually present.
-  # NOTE this is a DIFFERENT quant from the one prior runs used, so
-  # quant-specific behaviour may differ. ~85GB across 3 shards.
-  path: /Users/lah-rb/.lmstudio/models/bartowski/mistralai_Mistral-Small-4-119B-2603-GGUF/mistralai_Mistral-Small-4-119B-2603-Q5_K_L-00001-of-00003.gguf
+  # 2026-07-22: back on the unsloth MXFP4_MOE build (re-downloaded). ~71.8GB
+  # across 3 shards (shard 1 is a ~7.9MB metadata-only split). The bartowski
+  # Q5_K_L detour (~85GB) is no longer used.
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Mistral-Small-4-119B-2603-GGUF/Mistral-Small-4-119B-2603-MXFP4_MOE-00001-of-00003.gguf
   n_ctx: 131072
   n_gpu_layers: -1   
   seed: -1
