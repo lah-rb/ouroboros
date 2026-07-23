@@ -604,8 +604,19 @@ class InferenceEffect:
                                 prompt_toks,
                                 eval_dur,
                             )
-                            # Cancel if eval takes unreasonably long (>300s)
-                            if elapsed and elapsed > 300:
+                            # Cancel if eval takes unreasonably long. Default
+                            # 300s; OURO_EVAL_STUCK_S overrides for models
+                            # whose HONEST cold prefill exceeds it — dense
+                            # mistral-medium-3.5 prefills ~45 tok/s, so a 15k
+                            # mission prompt needs ~333s and the fixed limit
+                            # produced a cancel/retry-from-scratch doom loop
+                            # (2026-07-23: 8 identical attempts, ~8 min each,
+                            # zero progress; a cancelled prefill loses all
+                            # work AND briefly wedges the single instance).
+                            _eval_limit = float(
+                                os.environ.get("OURO_EVAL_STUCK_S", "300")
+                            )
+                            if elapsed and elapsed > _eval_limit:
                                 logger.warning(
                                     "Health watchdog: eval phase stuck for %.0fs "
                                     "— cancelling request",
