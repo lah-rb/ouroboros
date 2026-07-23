@@ -104,13 +104,29 @@ def test_code_file_with_named_symbol_routes_to_patch():
     )
 
 
-def test_code_file_without_named_symbol_routes_to_rewrite():
+def test_code_file_without_named_symbol_routes_to_localize():
     # Patch structurally requires a target_symbol (begin_rewrite bails
     # without one — cfe3a21a run looped patch-bail for 44 cycles on a
     # symbol-less structural fix). Symbol-less dispatches on parseable
-    # files go to rewrite, whose turn sees the flow_directive.
+    # files now take the localization rung first (one cheap eval of the
+    # error evidence → patch/module/rewrite); the action itself falls
+    # through to rewrite instantly when there is no evidence to read.
     assert (
-        _route("file_ops", "extract_symbols", {"symbols_extracted": 5}) == "run_rewrite"
+        _route("file_ops", "extract_symbols", {"symbols_extracted": 5})
+        == "run_localize"
+    )
+    # The rung's own fail-safe floor is rewrite.
+    assert (
+        _route(
+            "file_ops",
+            "run_localize",
+            {"localized_symbol_in_ast": False, "localized_module_fix": False},
+        )
+        == "run_rewrite"
+    )
+    assert (
+        _route("file_ops", "run_localize", {"localized_symbol_in_ast": True})
+        == "run_patch"
     )
 
 
