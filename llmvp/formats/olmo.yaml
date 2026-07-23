@@ -1,0 +1,76 @@
+# OLMo format schema — AI2 OLMo 3 / 3.1 (Think variants)
+#
+# ChatML framing (<|im_start|>/<|im_end|>, inline <think> tags) — verified
+# against the GGUF-embedded template for Olmo-3.1-32B-Think (banked at
+# dev/olmo31_chat_template.jinja; golden test in tests/test_config.py).
+#
+# WHY A SEPARATE FAMILY (vs plain chatml): OLMo is function-calling-trained
+# and its template appends an explicit capability declaration to EVERY
+# system message when no functions are supplied:
+#     " You do not currently have access to any functions. <functions></functions>"
+# Omitting it leaves the system block off-distribution (risk: hallucinated
+# tool availability / spurious <function_calls> tags). We serve with tools
+# disabled, so the no-functions declaration is always correct.
+#
+# Template facts (2026-07-23 audit):
+#   - No BOS anywhere in the template; add_bos_token absent from metadata
+#     (reader runs add_bos=False). bos == eos == <|endoftext|> (100257).
+#   - History assistant turns close with <|im_end|>; only the FINAL one ends
+#     with eos_token. llama.cpp treats 100257 as EOG natively, so both
+#     endings terminate generation; our stop stays <|im_end|>.
+#   - Generation prompt is '<|im_start|>assistant\n<think>' — the standard
+#     inline-tags opener injection with thinking enabled.
+#   - AI2 model-card sampling: temperature 0.6, top_p 0.95 (matches below).
+#
+# Pinned deviations from the official template (see golden test):
+#   - Message boundaries use bare <|im_end|> (no trailing newline) — the
+#     chatml tokenization-boundary rationale (see chatml.yaml
+#     turn_transition); the official template writes '<|im_end|>\n'.
+#   - The default Olmo identity/cutoff line is replaced by our persona
+#     (standard across all families).
+
+family: olmo
+display_name: "AI2 OLMo 3 (chatml + functions declaration)"
+
+tokens:
+  msg_open: "<|im_start|>"
+  msg_content: "\n"
+  msg_close: "<|im_end|>"
+  gen_stop: "<|im_end|>"
+  history_close: "<|im_end|>"
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: "assistant"
+
+thinking:
+  style: inline_tags
+  open_tag: "<think>"
+  close_tag: "</think>"
+
+system_block:
+  identity: "You are a helpful assistant."
+  reasoning_default: ""
+  reasoning_prefix: ""
+  channel_directive: ""
+  # The trailing declaration (leading space included) mirrors the official
+  # template's no-functions branch byte-for-byte.
+  template: "{identity}\n{persona} You do not currently have access to any functions. <functions></functions>"
+
+traits:
+  fold_system_into_first_user: false
+  supports_developer_role: false
+
+generation:
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+turn_transition:
+  needs_close: true
+  # Same rationale as chatml: re-insert the close broken on EOG, canonical
+  # "<|im_end|><|im_start|>" boundary without a trailing newline.
+  after_generation: "<|im_end|>"

@@ -13,7 +13,10 @@ graphql:
 
 model:
   name: "olmo-3.1-32b-think"
-  family: "chatml"
+  # Dedicated family (2026-07-23 template audit): chatml framing PLUS the
+  # no-functions capability declaration OLMo's template appends to every
+  # system message — plain chatml served it slightly off-distribution.
+  family: "olmo"
   path: /Users/lah-rb/.lmstudio/models/unsloth/Olmo-3.1-32B-Think-GGUF/Olmo-3.1-32B-Think-Q6_K.gguf
   n_ctx: 65536
   n_gpu_layers: -1

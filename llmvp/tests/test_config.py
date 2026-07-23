@@ -615,3 +615,67 @@ def test_tekken_post_system_emits_valid_reasoning_effort():
         segs = r.render_system_segments(persona="P", reasoning=level)
         j = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
         assert f'{{"reasoning_effort": "{expected}"}}' in j, (level, j[-90:])
+
+
+# ── OLMo 3.1 golden test vs the GGUF-embedded template ────────────────
+#
+# OLMo is function-calling-trained: its template appends a no-functions
+# capability declaration to every system message. Plain chatml omitted it
+# (off-distribution system block) — formats/olmo.yaml adds it. Pin our
+# rendering against the REAL template (dev/olmo31_chat_template.jinja,
+# extracted from the GGUF) so it cannot drift.
+
+
+def test_olmo_rendering_matches_gguf_template():
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    jinja2 = pytest.importorskip("jinja2")
+    tpl_path = (
+        Path(__file__).resolve().parents[2] / "dev" / "olmo31_chat_template.jinja"
+    )
+    if not tpl_path.is_file():
+        pytest.skip("olmo GGUF template not banked")
+
+    from formats.registry import get_renderer, clear_cache
+
+    env = jinja2.Environment()
+    tpl = env.from_string(tpl_path.read_text())
+    official = tpl.render(
+        messages=[
+            {"role": "system", "content": "PERSONA"},
+            {"role": "user", "content": "Hello"},
+        ],
+        add_generation_prompt=True,
+        eos_token="<|endoftext|>",
+    )
+
+    clear_cache()
+    r = get_renderer("olmo")
+    cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+    with patch("core.config.get_config", return_value=cfg):
+        segs = r.render_system_segments(persona="PERSONA")
+        system = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
+        ours = system + r.render_user("Hello") + r.render_generation_prompt()
+
+    # Three pinned deviations (see formats/olmo.yaml header):
+    #  1. identity line — our system template prefixes the generic identity
+    #     before the persona; official passes system content through as-is.
+    #  2. message boundaries — bare <|im_end|> without the trailing newline
+    #     (chatml tokenization-boundary rationale).
+    #  3. "<think>\n" — the shared inline-tags renderer appends a newline
+    #     after the injected opener (production-proven on qwen); official
+    #     ends the generation prompt at bare "<think>".
+    expected = (
+        official.replace(
+            "<|im_start|>system\nPERSONA",
+            "<|im_start|>system\nYou are a helpful assistant.\nPERSONA",
+            1,
+        ).replace("<|im_end|>\n", "<|im_end|>")
+        + "\n"
+    )
+    assert ours == expected, f"\nexpected: {expected!r}\nours    : {ours!r}"
+    # The load-bearing details, asserted directly so a template rewrite
+    # cannot silently drop them:
+    assert "You do not currently have access to any functions. <functions></functions>" in ours
