@@ -14,12 +14,27 @@ graphql:
 model:
   name: "mistral-small-4-119b-a6"
   family: "tekken"
-  path: /Users/lah-rb/.lmstudio/models/unsloth/Mistral-Small-4-119B-2603-GGUF/Mistral-Small-4-119B-2603-MXFP4_MOE-00001-of-00003.gguf
+  # 2026-07-22: repointed — the unsloth MXFP4 build is no longer on disk
+  # (whole directory absent); bartowski Q5_K_L is what is actually present.
+  # NOTE this is a DIFFERENT quant from the one prior runs used, so
+  # quant-specific behaviour may differ. ~85GB across 3 shards.
+  path: /Users/lah-rb/.lmstudio/models/bartowski/mistralai_Mistral-Small-4-119B-2603-GGUF/mistralai_Mistral-Small-4-119B-2603-Q5_K_L-00001-of-00003.gguf
   n_ctx: 131072
   n_gpu_layers: -1   
   seed: -1
   verbose: false
   thinking: true   # true is implicitly high
+  # 2026-07-22: this was the ONLY fleet config without session_full_replay, so
+  # its sessions ran the legacy save_state/load_state KV-surgery path — the
+  # same path session_full_replay was introduced to bypass for qwen's
+  # degeneration, and where a gpt-oss control hit a save_state SystemError at
+  # deep context. It also uniquely explains "never recovers": a corrupted
+  # saved state is RELOADED every subsequent turn, so once poisoned the
+  # session stays poisoned. Enabled here to match the rest of the fleet.
+  # NOTE: applied by INFERENCE, not demonstration — a 20-turn deep-context
+  # probe (dev/tekken_deep_context_probe.py) did NOT reproduce the empty-turn
+  # glitch on the old path (it only reached ~12k of a 131k window).
+  session_full_replay: true
                    # tekken is binary — no [THINK] injected when false
 
 prompt:
@@ -28,6 +43,14 @@ prompt:
 generation:
   max_tokens_default: 131072
   temperature_default: 0.5
+  # Precautionary, NOT the diagnosed cause: this is a thinking model and was
+  # the only one in the fleet with no floors, while Ouroboros scales temps
+  # down per step (judge t*0.1, probe/provision t*0.2). Measured live at 0.1
+  # it produced clean, correct output — so the step37 low-temp collapse was
+  # REFUTED here — but the floors remain standard practice for thinking
+  # models at onboarding.
+  temperature_floor: 0.4
+  session_temp_floor: 0.5
   top_p: 0.95
   top_k: 0
   min_p: 0.00

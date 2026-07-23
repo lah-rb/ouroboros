@@ -199,6 +199,51 @@ inert token and re-run the probe arm for it before wiring.
 Mistral Small 4 (tekken, `[THINK]`/`reasoning_effort` none|high) remains the
 cleaner first target — its toggle position still needs the same check.
 
+## 7c. Retire the legacy save_state session path (flagged 2026-07-22)
+
+Every served config now uses a SAFE session path — `session_full_replay: true`
+or `resident_seq_cache: true`. The last two exposures were closed today:
+`mistral-small-4-119b-a6` (the only config with neither, and the model behind
+the reported "turn produces zero tokens and never recovers" glitch) and
+`qwen3.6-27b` (thinking, 262k ctx, also neither).
+
+That makes the legacy save_state/load_state per-turn KV-surgery path
+effectively dead in production. It has a long rap sheet: it is what
+`session_full_replay` was introduced to bypass for qwen's degeneration; a
+gpt-oss control hit `SystemError: Negative size passed to
+PyBytes_FromStringAndSize` inside save_state at deep context; and save_state
+churn is what corrupts the static KV over a run (the flow_kv_cache finding).
+Its failure mode also uniquely explains "never recovers" — a corrupted saved
+state is RELOADED every subsequent turn.
+
+**Retire it**: delete the save_state session branch in
+`core/session_manager.session_turn` (the `else` arm after resident/full_replay)
+plus its purge path, and make one of the two safe strategies mandatory at
+config validation so a new model cannot be onboarded onto the dead path by
+omission — which is exactly how mistral ended up there.
+
+HONESTY NOTE on the evidence: the glitch was NOT reproduced on demand. A
+20-turn deep-context probe (`dev/tekken_deep_context_probe.py`) run BEFORE and
+AFTER the mistral fix was clean in BOTH arms (0/20 empty) — but it only reached
+~12k of a 131k window, so it is a weak negative, not exoneration. The config
+changes were made by inference plus fleet-consistency, not demonstration. If
+the glitch recurs after this, save_state is exonerated and the next suspects
+are the tekken FSM think-swallow (real but latent — see below) and quant.
+
+Also found while investigating (both open, neither is the glitch):
+- `formats/tekken.yaml` declares `[THINK]`/`[/THINK]` inline-tag thinking and
+  the FSM will swallow an UNCLOSED `[THINK]` — flipping to THINKING and
+  stripping the whole response to empty. Real trap, currently latent: Mistral
+  emits no `[THINK]` at all (0/6 in runs, 0/4 in probes).
+- `mistral-small-4` sets `thinking: true` but we never send a reasoning
+  directive, so the model never thinks — the flag is lying. Mistral's native
+  reasoning is activated by a system-prompt directive we do not render.
+- Mistral fails `design_gate_ground` DETERMINISTICALLY (2/2 runs, 6 inference
+  calls each) on game_challenge_boss: it emits `run_command: python main.py`
+  assuming flat imports while nesting modules under `src/`. The critique
+  correctly catches it all three attempts; `design_reconcile` never fixes it.
+  Same src-layout-vs-top-level class as `dev/TRAP_BRIEF.md`.
+
 ## 8. generate_stream_sync request-prep extraction (SOAK-GATED)
 
 The last "giants" item: shared `_prepare_stream_request()` for the

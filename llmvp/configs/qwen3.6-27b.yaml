@@ -20,6 +20,11 @@ model:
   seed: -1
   verbose: false
   thinking: true
+  # 2026-07-22: was on the legacy save_state/load_state session path (no
+  # replay, no resident_seq_cache) — the same exposure found on
+  # mistral-small-4, where a corrupted saved state is reloaded every turn and
+  # so never recovers. Every other served config uses replay or resident.
+  session_full_replay: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
