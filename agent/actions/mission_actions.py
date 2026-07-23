@@ -1324,8 +1324,10 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
         str(getattr(getattr(mission, "config", None), "structural_mode", "") or "")
         or "serial"
     )
+    if mode == "parallel":  # legacy alias, renamed 2026-07-23 (true
+        mode = "batch"  # parallelism now means the swarm/batched paths)
 
-    # ── Parallel mode: one-shot batch creation ────────────────────
+    # ── Batch mode: one-shot batch creation ───────────────────────
     # Dispatch build_structure exactly once, on a virgin structural
     # phase: no goal has any report, no sweep file exists, and no prior
     # batch attempt is on record (the batch summary note doubles as the
@@ -1333,7 +1335,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
     # the flag the sweep would re-dispatch the batch forever). After the
     # batch, this sweep resumes per-file: missing files → serial create,
     # gate-failed files → diagnose-first repair below.
-    if mode == "parallel":
+    if mode == "batch":
         structural_goals = [g for g in mission.goals if g.type == "structural"]
         batch_attempted = any(
             g.reports or getattr(g, "reports_archived", 0) for g in structural_goals
@@ -1516,7 +1518,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
         # quality sweep uses. The import fix-or-defer DECISION pass
         # stays on the shared file_ops path below (it's a judgment
         # call, not a defect investigation).
-        if mode == "parallel" and goal.reports and block_reason != "import":
+        if mode == "batch" and goal.reports and block_reason != "import":
             last = goal.reports[-1]
             last_flow = getattr(last, "flow", "")
             if last_flow == "diagnose_issue":

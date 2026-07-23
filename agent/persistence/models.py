@@ -44,15 +44,18 @@ class MissionConfig(BaseModel):
     # invertible | repair | answer | plain. Gates which completion oracle rung
     # fires (agent/actions/oracle_actions). "" disables profile-gated rungs.
     task_profile: str = ""
-    # How the structural phase creates files. "parallel": one batch
-    # generation produces every file in shared context (cross-file
-    # coherence), sliced and gated per-file, failures diagnosed
-    # individually. "serial": the original one-file-per-dispatch sweep,
-    # kept as the testing mode and the patch engine. Missions persisted
-    # before this field existed default to parallel on next load, which
-    # is inert for them — batch creation only dispatches when no
+    # How the structural phase creates files. "batch" (named "parallel"
+    # until 2026-07-23 — renamed because true parallelism now means the
+    # swarm/batched-engine paths): one batch generation produces every file
+    # in shared context (cross-file coherence), sliced and gated per-file,
+    # failures diagnosed individually. "serial": the original
+    # one-file-per-dispatch sweep, kept as the patch engine (its
+    # stress-tester role is superseded by swarm). Legacy "parallel" is
+    # accepted from persisted mission.json and normalized at the read site.
+    # Missions persisted before this field existed default to batch on next
+    # load, which is inert for them — batch creation only dispatches when no
     # structural goal has run yet.
-    structural_mode: Literal["parallel", "serial"] = "parallel"
+    structural_mode: Literal["batch", "parallel", "serial"] = "batch"
     # Whether flows may reach the web for proactive grounding (the
     # `research` sub-flow — EXA-backed). Default on: greenfield design and
     # workspace ingest research the domain to stay grounded. Set False to

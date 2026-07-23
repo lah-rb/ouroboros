@@ -74,7 +74,7 @@ def _si(mission, effects=None) -> StepInput:
 
 @pytest.mark.asyncio
 async def test_parallel_virgin_phase_dispatches_batch(tmp_path):
-    mission = _mission(tmp_path, "parallel")
+    mission = _mission(tmp_path, "batch")
     out = await action_structural_sweep_next(_si(mission))
     assert out.result.get("needs_batch_create") is True
     cfg = out.context_updates["dispatch_config"]
@@ -100,7 +100,7 @@ async def test_parallel_no_rebatch_after_attempt_note(tmp_path):
     # the attempted-flag that prevents an endless re-dispatch loop.
     mission = _mission(
         tmp_path,
-        "parallel",
+        "batch",
         notes=[
             NoteRecord(
                 content="batch attempt",
@@ -118,7 +118,7 @@ async def test_parallel_no_rebatch_after_attempt_note(tmp_path):
 @pytest.mark.asyncio
 async def test_parallel_no_rebatch_when_files_exist(tmp_path):
     (tmp_path / "models.py").write_text("class A: pass\n")
-    mission = _mission(tmp_path, "parallel")
+    mission = _mission(tmp_path, "batch")
     out = await action_structural_sweep_next(_si(mission))
     assert "needs_batch_create" not in out.result
 
@@ -155,7 +155,7 @@ async def test_parallel_gate_failure_dispatches_diagnose(tmp_path):
             status="complete",
         ),
     ]
-    mission = _mission(tmp_path, "parallel", goals=goals)
+    mission = _mission(tmp_path, "batch", goals=goals)
     out = await action_structural_sweep_next(_si(mission))
     assert out.result.get("needs_fix") is True
     cfg = out.context_updates["dispatch_config"]
@@ -186,7 +186,7 @@ async def test_parallel_diagnosed_goal_dispatches_fileops_patch(tmp_path):
             reports=[_failed_report("models.py"), diagnosis],
         ),
     ]
-    mission = _mission(tmp_path, "parallel", goals=goals)
+    mission = _mission(tmp_path, "batch", goals=goals)
     out = await action_structural_sweep_next(_si(mission))
     assert out.result.get("needs_fix") is True
     cfg = out.context_updates["dispatch_config"]
@@ -244,7 +244,7 @@ async def test_parallel_import_block_stays_on_fileops_review(tmp_path):
             ],
         ),
     ]
-    mission = _mission(tmp_path, "parallel", goals=goals)
+    mission = _mission(tmp_path, "batch", goals=goals)
     out = await action_structural_sweep_next(_si(mission))
     cfg = out.context_updates["dispatch_config"]
     assert cfg["flow"] == "file_ops"
@@ -273,7 +273,7 @@ async def test_batch_success_report_auto_completes(tmp_path):
             status="complete",
         ),
     ]
-    mission = _mission(tmp_path, "parallel", goals=goals)
+    mission = _mission(tmp_path, "batch", goals=goals)
     out = await action_structural_sweep_next(_si(mission))
     assert out.result.get("sweep_complete") is True
     assert goals[0].status == "complete"
@@ -300,7 +300,7 @@ async def test_diagnose_dispatch_writes_repair_econ_note(tmp_path):
             status="complete",
         ),
     ]
-    mission = _mission(tmp_path, "parallel", goals=goals)
+    mission = _mission(tmp_path, "batch", goals=goals)
     fx = MockEffects(mission=mission)
     await action_structural_sweep_next(_si(mission, fx))
     note = next(n for n in mission.notes if "repair_econ" in n.tags)
@@ -331,7 +331,7 @@ async def test_patch_dispatch_writes_repair_econ_note(tmp_path):
             reports=[_failed_report("models.py"), diagnosis],
         ),
     ]
-    mission = _mission(tmp_path, "parallel", goals=goals)
+    mission = _mission(tmp_path, "batch", goals=goals)
     await action_structural_sweep_next(_si(mission))
     note = next(n for n in mission.notes if "repair_econ" in n.tags)
     assert "stage=patch" in note.content

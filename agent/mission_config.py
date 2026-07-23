@@ -86,7 +86,11 @@ class MissionYAMLConfig(BaseModel):
     effects_profile: Literal["local", "git_managed", "dry_run"] = "local"
     llmvp_endpoint: str = "http://localhost:8008/graphql"
     flow_set: str = "code_core"
-    structural_mode: Literal["parallel", "serial"] = "parallel"
+    # "batch" was named "parallel" until 2026-07-23 — renamed because true
+    # parallelism now means the swarm/batched-engine paths; this mode is one
+    # batched GENERATION, not concurrent workers. Legacy value accepted and
+    # normalized at the read site (structural_sweep_next).
+    structural_mode: Literal["batch", "parallel", "serial"] = "batch"
     principles: list[str] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
 

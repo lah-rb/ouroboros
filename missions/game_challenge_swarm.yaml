@@ -40,5 +40,5 @@ objective: >
 working_dir: "/tmp/swarmab"
 effects_profile: local
 llmvp_endpoint: "http://localhost:8008/graphql"
-structural_mode: parallel
+structural_mode: batch
 run_until: completed

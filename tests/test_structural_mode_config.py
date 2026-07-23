@@ -22,8 +22,17 @@ def test_yaml_accepts_serial():
     assert cfg.structural_mode == "serial"
 
 
-def test_yaml_defaults_to_parallel():
-    assert MissionYAMLConfig(objective="x").structural_mode == "parallel"
+def test_yaml_defaults_to_batch():
+    assert MissionYAMLConfig(objective="x").structural_mode == "batch"
+
+
+def test_yaml_accepts_legacy_parallel_alias():
+    # "parallel" was the mode's name until 2026-07-23; persisted configs
+    # still carry it. It must load (normalization happens at the sweep).
+    assert (
+        MissionYAMLConfig(objective="x", structural_mode="parallel").structural_mode
+        == "parallel"
+    )
 
 
 def test_yaml_rejects_unknown_mode():
@@ -31,8 +40,8 @@ def test_yaml_rejects_unknown_mode():
         MissionYAMLConfig(objective="x", structural_mode="batched")
 
 
-def test_mission_config_defaults_to_parallel():
-    assert MissionConfig(working_directory="/tmp/x").structural_mode == "parallel"
+def test_mission_config_defaults_to_batch():
+    assert MissionConfig(working_directory="/tmp/x").structural_mode == "batch"
 
 
 def test_pre_field_mission_json_loads_with_default():
@@ -42,8 +51,8 @@ def test_pre_field_mission_json_loads_with_default():
         "config": {"working_directory": "/tmp/x"},
     }
     mission = MissionState.model_validate(legacy)
-    assert mission.config.structural_mode == "parallel"
-    assert mission.model_dump()["config"]["structural_mode"] == "parallel"
+    assert mission.config.structural_mode == "batch"
+    assert mission.model_dump()["config"]["structural_mode"] == "batch"
 
 
 def test_overnight_benchmark_config_pins_serial():
