@@ -2,9 +2,15 @@
 # a combat mechanic and a final boss, run UNTIL COMPLETION (no cycle budget,
 # no wall clock — run_until: completed). Built for the adaptive-reasoning A/B
 # overnight pair (dev/ab_boss_game.sh); working_dir is overridden per arm at
-# create time. Serial structural mode pinned like the overnight baseline so
-# arm-vs-arm comparisons stay apples-to-apples with prior game runs.
-# version: 1
+# create time. Structural mode is PARALLEL (the model default) as of
+# 2026-07-23: the old serial pin was an oversight carried from the overnight
+# baseline — serial bypasses build_structure and therefore the deterministic
+# cross-module gates (transfer-shape + typecheck, 671ee57), which is how the
+# 2026-07-23 greenfield sweep shipped artifacts with statically-catchable
+# seam bugs. Serial's stress-tester role is superseded by the swarm config;
+# the phase-exit seam gate (b50e5f1) still covers any config that pins
+# serial deliberately.
+# version: 2
 
 objective: >
   Build a text adventure game in Python that is genuinely fun to play.
@@ -32,5 +38,5 @@ objective: >
 working_dir: "/tmp/ouroboros-challenge"
 effects_profile: local
 llmvp_endpoint: "http://localhost:8008/graphql"
-structural_mode: serial
+structural_mode: parallel
 run_until: completed

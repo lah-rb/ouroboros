@@ -171,6 +171,15 @@ that ate whitespace padding is fixed too. Remaining for Gemma adaptive: pick a
 strip-proof filler and re-run the probe arm for it, then wire `reasoning.levels`.
 NOTE the overnight sweep's gemma4 10/16 used the WRONG framing — re-run it.
 
+**2026-07-23 addendum:** the bimodal collapse was low+medium→off, making
+adaptive a structural no-op (the router never emits high) — discovered on the
+greenfield A/B where both gemma arms were byte-identical thinking-OFF. Fixed
+(cd08be5): medium→`<|think|>` puts the toggle on the low/medium boundary the
+router actually exercises; gemma-4-31b.yaml now `thinking: true` (load-bearing
+— false prefills the CLOSED channel and cancels the head). Unvalidated live:
+the padded-off state with the OPEN opener prefilled — probe before the next
+gemma adaptive run.
+
 ~~Blocked on a pre-existing bug — `formats/gemma.yaml` models Gemma 3, not
 Gemma 4.~~ (historical detail below) It declares `<start_of_turn>`/`<end_of_turn>` framing and "NO
 system role — system content folds into the first user turn", but Gemma 4's
@@ -268,6 +277,47 @@ four surgeries in one week.
 - mission.json archival (memory: memory-hardening-audit, still open).
 - Qwen3-Next resident-cache validation + windowing follow-ups (memory:
   resident-seq-cache-implemented).
+
+## 9b. Escalation economy + seam-gate coverage — LANDED 2026-07-23 (validation open)
+
+**The finding (read this even if skipping the rest):** the deterministic
+cross-module gates (transfer-shape + typecheck, 671ee57) only ran inside
+`build_structure` — and every game_challenge greenfield run pinned
+`structural_mode: serial` (0 batch-creates across all six 2026-07-23 sweep
+logs), so NO comparison artifact ever passed through them. The dense-mistral
+run shipped three statically-catchable cross-module bugs (constructor arity,
+required-kwarg, string-vs-Command) and paid ~7-min diagnose cycles each at
+42 tok/s. Separately, the bossgame2_adaptive long run showed the archive
+sweep defeats the sweep's cheap auto-complete (reports stripped at
+completion → 541 fixing dispatches, 0 cheap re-certs, 486 rewrites ≈
+2.5-3h/day rewriting healthy files).
+
+**Landed (all suites green, 1533):**
+- 787e2c1 verify-only re-cert rung — regression-reopened goals with archived
+  completion evidence re-run deterministic checks; pass = re-certify, no LLM.
+- b50e5f1 phase-exit seam gate — transfer/typecheck once at serial
+  structural-phase exit; blocks phase (goals stay complete — reopening would
+  ping-pong with the re-cert rung), 3-attempt fail-open. Retroactive proof:
+  flags mistral's pre-fix `GameEngine()` arity + five latent render.py seams.
+- 10f4add+ba7580e localization rung — symbol-less file_ops dispatches get
+  one traceback eval (conclude-style contract) → patch/module-frame; rewrite
+  is now the floor, not the fallback. LLM eval BY DESIGN (deterministic pick
+  would loop on a wrong symbol — Luke's call).
+- game_challenge_boss.yaml → structural_mode: parallel (serial pin was an
+  oversight; swarm supersedes serial as the stress tester).
+- Same-day siblings: regression-reopen provenance + last_completed_at
+  (6ce3df1), OURO_EVAL_STUCK_S (b3fe0ee), server-advertised
+  expectedEvalSeconds honored by the watchdog (9db5259), trace `rates`
+  block + gguf in llmvp venv (6b41ecf).
+
+**Open validation:** all three rungs are unit-tested but not yet observed in
+a live run — next greenfield/boss run should show: re-cert log lines
+("re-certified deterministically"), seam-gate catches at phase exit, and
+localization ("Localization: <file> → symbol ...") displacing rewrites.
+Watch rewrites≈regressions stop tracking 1:1 in the run logs. Also open:
+resident_seq_cache for mistral-family (biggest slow-model lever, ~13 of 34
+min measured) and a prefill-rate-scaled context-diet knob (server now
+advertises the rate via health).
 
 ## 10. Parked until triggered (do NOT start unprompted)
 
