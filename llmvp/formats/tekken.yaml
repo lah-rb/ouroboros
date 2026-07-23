@@ -73,7 +73,14 @@ thinking:
 system_block:
   identity: "You are a helpful assistant."
   cutoff: ""
-  reasoning_default: ""
+  # Canonical default; the ReasoningSpec map turns it into "none".
+  # MUST resolve to none|high — the official template raises on anything else.
+  reasoning_default: "medium"
+  # Always emitted by the official template, between [/SYSTEM_PROMPT] and
+  # the first [INST]. reasoning_effort is BINARY (none|high) and both values
+  # tokenize to 12 tokens, so the ReasoningSpec map below is a same-width
+  # value swap — head-swap ready with no padding.
+  post_system: '[MODEL_SETTINGS]{{"reasoning_effort": "{reasoning}"}}[/MODEL_SETTINGS]'
   channel_directive: ""
   template: "{identity}\n{persona}"
 
@@ -96,3 +103,11 @@ turn_transition:
   # turns run straight into [INST] with no close and the model loses the
   # turn boundary (devstral degraded at turn 2 without this).
   after_generation: "</s>"
+
+# Canonical level -> Mistral's reasoning_effort. Bimodal: the model has only
+# none|high, so low+medium collapse onto "none".
+reasoning:
+  levels:
+    low: "none"
+    medium: "none"
+    high: "high"

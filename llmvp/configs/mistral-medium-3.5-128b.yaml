@@ -42,6 +42,9 @@ model:
   # the default (config.py session_full_replay: bool = True) — stated
   # explicitly so the strategy is visible at a glance.
   session_full_replay: true
+  # Verified live 2026-07-22 on a trivial prompt. REQUIRES BOS: character salad without it, correct with it.
+  # Both official templates specify <s>; this follows the evidence.
+  template_bos: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

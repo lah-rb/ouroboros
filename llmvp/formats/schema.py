@@ -95,6 +95,14 @@ class SystemBlockSpec(BaseModel):
     reasoning_prefix: str = ""
     channel_directive: str = ""
     template: str  # Python format string with {identity}, {cutoff}, etc.
+    # Text emitted AFTER the closed system block and BEFORE the first user
+    # turn — for families whose template puts a control block outside the
+    # system message. Mistral/tekken always emits
+    #   [MODEL_SETTINGS]{"reasoning_effort": "none"|"high"}[/MODEL_SETTINGS]
+    # there; it is both required for template fidelity and the model's
+    # reasoning toggle. Consumes {reasoning}, which the ReasoningSpec level
+    # map resolves, so it doubles as the adaptive-thinking actuator.
+    post_system: str = ""
 
 
 class ReasoningSpec(BaseModel):

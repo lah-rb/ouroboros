@@ -549,3 +549,35 @@ def test_other_families_emit_no_bos(family):
     segs = r.render_system_segments(persona="P", date="2026-01-01")
     rendered = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
     assert not rendered.startswith("<s>")
+
+
+def test_template_bos_per_model_override():
+    """BOS is per-MODEL, not per-family: the two Mistral builds disagree
+    despite identical tokenizer metadata (add_bos_token absent from both,
+    same bos_id). Small-4 breaks WITH <s>, Medium-3.5 breaks WITHOUT it."""
+    from formats.registry import get_renderer, clear_cache
+
+    clear_cache()
+    r = get_renderer("tekken")
+
+    def head(emit_bos):
+        segs = r.render_system_segments(persona="P", emit_bos=emit_bos)
+        return "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
+
+    assert head(None).startswith("<s>")  # family default
+    assert head(True).startswith("<s>")  # explicit on
+    assert not head(False).startswith("<s>")  # explicit off wins
+    assert head(False).startswith("[SYSTEM_PROMPT]")
+
+
+def test_tekken_post_system_emits_valid_reasoning_effort():
+    """The official template raises on any reasoning_effort outside
+    none|high, so an unmapped/empty level would emit a malformed block."""
+    from formats.registry import get_renderer, clear_cache
+
+    clear_cache()
+    r = get_renderer("tekken")
+    for level, expected in ((None, "none"), ("low", "none"), ("high", "high")):
+        segs = r.render_system_segments(persona="P", reasoning=level)
+        j = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
+        assert f'{{"reasoning_effort": "{expected}"}}' in j, (level, j[-90:])

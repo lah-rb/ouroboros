@@ -82,6 +82,17 @@ class ModelConfig(BaseModel):
     # where the minor speed gain matters and the model is a plain
     # transformer running shallow sessions.
     session_full_replay: bool = True
+    # Emit the family's template BOS for THIS model? None = follow the family
+    # spec (formats/*.yaml tokens.bos). Exists because the two Mistral builds
+    # disagree despite IDENTICAL tokenizer metadata (add_bos_token absent from
+    # both, same bos_id): Medium-3.5 (arch mistral3) REQUIRES the <s> and
+    # produces character salad without it, while Small-4 (arch mistral4) breaks
+    # WITH it (spams a control token / returns empty) and is correct without.
+    # Both official templates specify <s>, so this deviates from the template
+    # on evidence — suspected llama.cpp arch-level BOS handling difference.
+    # Verify per model with a trivial prompt; do not assume.
+    template_bos: Optional[bool] = None
+
     # Per-flow static-prefix KV cache (OPT-IN, default off — unproven). A
     # request carrying a flow_cache_key + its static prefix (persona + fixed
     # instructions) gets that prefix's KV pinned via save_state() on first use

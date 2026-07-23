@@ -171,6 +171,9 @@ def build_static_tokens(
         persona=persona_text,
         reasoning=_reasoning,
         tools=tools,
+        # Per-model BOS override (config.model.template_bos); None defers to
+        # the family spec. Mistral builds disagree — see ModelConfig.
+        emit_bos=getattr(config.model, "template_bos", None),
     )
     emit(f"📝 Static prefix: {len(join_segments(static_segments))} chars")
 

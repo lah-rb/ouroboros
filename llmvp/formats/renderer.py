@@ -104,6 +104,7 @@ class FormatRenderer:
         reasoning: str | None = None,
         date: str | None = None,
         tools: str = "",
+        emit_bos: bool | None = None,
     ) -> list:
         """Segments for the full static prefix (system block + developer block).
 
@@ -170,7 +171,8 @@ class FormatRenderer:
             if tools:
                 body = f"{body}\n\n{tools}" if body else tools
             segs = self.render_message_segments("user", body)
-            if self.s.tokens.bos:
+            _fold_bos = bool(self.s.tokens.bos) if emit_bos is None else bool(emit_bos)
+            if _fold_bos and self.s.tokens.bos:
                 segs = [(self.s.tokens.bos, True)] + segs
             return segs
 
@@ -179,8 +181,19 @@ class FormatRenderer:
         # Template-supplied BOS (families whose GGUF sets add_bos_token=false,
         # so llama.cpp does NOT prepend it — the template owns it). Emitted
         # ONCE at the very front of the static prefix.
-        if self.s.tokens.bos:
+        _bos_on = bool(self.s.tokens.bos) if emit_bos is None else bool(emit_bos)
+        if _bos_on and self.s.tokens.bos:
             segments = [(self.s.tokens.bos, True)] + segments
+
+        # Post-system control block (tekken's [MODEL_SETTINGS]) — outside the
+        # system message, before the first user turn.
+        if self.s.system_block.post_system:
+            segments = segments + [
+                (
+                    self.s.system_block.post_system.format(reasoning=reasoning_value),
+                    True,
+                )
+            ]
 
         # Developer block (Harmony): persona + tools
         if self.s.traits.supports_developer_role and (persona or tools):

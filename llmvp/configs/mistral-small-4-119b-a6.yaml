@@ -34,6 +34,9 @@ model:
   # probe (dev/tekken_deep_context_probe.py) did NOT reproduce the empty-turn
   # glitch on the old path (it only reached ~12k of a 131k window).
   session_full_replay: true
+  # Verified live 2026-07-22 on a trivial prompt. BREAKS with BOS: spams a control token / returns empty. Correct without.
+  # Both official templates specify <s>; this follows the evidence.
+  template_bos: false
                    # tekken is binary — no [THINK] injected when false
 
 prompt:
