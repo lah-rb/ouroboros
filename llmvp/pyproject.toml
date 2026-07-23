@@ -24,6 +24,9 @@ dependencies = [
     "websockets>=14.0",
     "llama-cpp-python",
     "numpy>=1.26.0",
+    # GGUF metadata/tensor inspection (offline model forensics — arch, BOS
+    # flags, chat-template tags — without hand-parsing the binary header).
+    "gguf>=0.10.0",
 ]
 
 [tool.uv.sources]

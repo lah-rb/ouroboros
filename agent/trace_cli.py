@@ -105,6 +105,13 @@ def render_finite_breakdown(summary: dict) -> list[str]:
         fresh_io, ctx_io = io.get("fresh"), io.get("context")
         if fresh_io is not None:
             lines.append(f"  in:out  {fresh_io} fresh:gen   |   {ctx_io} context:gen")
+        rates = summary.get("rates", {})
+        ptps, dtps = rates.get("prefill_tps"), rates.get("decode_tps")
+        if ptps is not None or dtps is not None:
+            lines.append(
+                f"  true rates: prefill {ptps or '?'} tok/s (fresh only)"
+                f"   |   decode {dtps or '?'} tok/s"
+            )
     ws_calls = tok.get("whitespace_calls", 0)
     if ws_calls:
         lines.append(

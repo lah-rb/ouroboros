@@ -668,6 +668,25 @@ def finalize_ledger(ledger: dict, total_wall_ms: float) -> dict:
             "fresh": ratio(tok["fresh_prefill"], tok["generated"]),
             "context": ratio(real_in, tok["generated"]),
         },
+        # Derived throughput from the REAL registers (fresh tokens / phase
+        # time) — the figures otherwise hand-computed from server logs every
+        # time a run is analyzed. prefill_tps uses fresh_prefill only:
+        # cached-prefix tokens were skipped, so counting them would report
+        # effective (cache-flattered) rather than true prefill speed.
+        "rates": {
+            "prefill_tps": (
+                round(
+                    tok["fresh_prefill"] / (ledger["inf_phase"]["prefill_ms"] / 1000), 1
+                )
+                if ledger["inf_phase"]["prefill_ms"] > 0
+                else None
+            ),
+            "decode_tps": (
+                round(tok["generated"] / (ledger["inf_phase"]["decode_ms"] / 1000), 1)
+                if ledger["inf_phase"]["decode_ms"] > 0
+                else None
+            ),
+        },
         "flows": ledger["flows"],
     }
 
