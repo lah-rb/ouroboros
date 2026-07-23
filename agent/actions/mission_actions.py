@@ -1428,6 +1428,59 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                 context_updates={"dispatch_config": dispatch_config},
             )
 
+        # ── Verify-only rung (cheapest): deterministic re-certification ──
+        # A regression-reopened goal whose reports were archived at its
+        # earlier completion arrives here EVIDENCE-LESS, so the report-based
+        # auto-complete below can never fire — and before this rung existed,
+        # every such goal fell through to a generic fixing dispatch
+        # (bossgame2_adaptive long run: 541 fixing dispatches, 0 cheap
+        # auto-completes, 486 whole-file rewrites of files that were almost
+        # always fine — ~2.5-3h/day of avoidable LLM work). The goal DID
+        # pass its gate once (reports_archived / last_completed_at prove
+        # it); re-run the deterministic checks and re-certify on pass. On
+        # fail, fall through to the normal repair paths with real evidence.
+        if (
+            not goal.reports
+            and getattr(goal, "regression_reopened", False)
+            and (
+                getattr(goal, "reports_archived", 0)
+                or getattr(goal, "last_completed_at", "")
+            )
+        ):
+            from agent.actions.batch_structural_actions import (
+                action_run_batch_file_checks,
+            )
+            from agent.models import StepInput as _StepInput
+
+            check_out = await action_run_batch_file_checks(
+                _StepInput(context={"files_changed": [file_path]}, effects=effects)
+            )
+            per_file = (
+                (check_out.context_updates or {})
+                .get("batch_check_results", {})
+                .get(file_path, {})
+            )
+            if per_file.get("passed"):
+                goal.status = "complete"
+                goal.regression_reopened = False
+                logger.info(
+                    "Structural sweep: %s re-certified deterministically "
+                    "(verify-only rung — checks pass, no LLM dispatch)",
+                    file_path,
+                )
+                if effects:
+                    await effects.save_mission(mission)
+                continue
+            logger.info(
+                "Structural sweep: %s failed deterministic re-cert (%s) — "
+                "routing to repair with gate output",
+                file_path,
+                ", ".join(per_file.get("checks_failed", []) or []) or "?",
+            )
+            recert_gate_output = (per_file.get("output") or "")[:800]
+        else:
+            recert_gate_output = ""
+
         # File exists but goal is incomplete — check if we can auto-complete
         # based on the latest report, or if it needs fixing
         block_reason = None
@@ -1579,6 +1632,15 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             ):
                 gate_output = str(rep.terminal_output)[:800]
                 break
+        # A failed verify-only re-cert produced FRESH gate output moments ago
+        # (and such goals have no reports to scan) — it wins over stale finds.
+        if recert_gate_output:
+            gate_output = recert_gate_output
+            fix_directive = (
+                f"{file_path} was previously complete but fails its "
+                f"deterministic re-certification after a related edit. "
+                f"{fix_directive}"
+            )
 
         # Sibling constraints ride the directive itself — the one carrier
         # every fix sub-flow (module fix, add-symbol, data edit, rewrite)
