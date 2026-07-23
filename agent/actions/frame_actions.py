@@ -426,3 +426,154 @@ async def action_splice_frame(step_input: StepInput) -> StepOutput:
             "edit_summary": f"Edited module frame of {file_path} (bodies preserved)",
         },
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Traceback-eval fix localization (the pre-rewrite rung)
+# ══════════════════════════════════════════════════════════════════════
+#
+# file_ops' symbol-routing ladder ends in a whole-file-rewrite catch-all:
+# any dispatch without a diagnosis-named symbol regenerates the entire
+# file. That fallback predates symbol-scoped patching ("models are
+# reliable at full rewrites if the file fits") and is the expensive
+# hammer of the escalation ladder — the single costliest call of the
+# 2026-07-23 dense-mistral functional leg (9.4 min, 28% of the window)
+# and the shape behind rewrites≈regressions across every greenfield run.
+#
+# This rung asks the model to READ the dispatch's error evidence (usually
+# a traceback) and name the most likely target inside the current file,
+# reusing the conclude-style structured contract file_ops already routes
+# on. Deliberately an LLM eval, NOT a deterministic line→symbol lookup: a
+# wrong deterministic pick would repeat identically forever, while an
+# eval varies with the evidence and the diagnose flow still catches
+# persistent misses. Fail-safe: no evidence, no parse, or a symbol the
+# AST doesn't contain → whole-file rewrite exactly as before.
+
+LOCALIZE_PROMPT = """A fix was dispatched for `{file}` without a named \
+target symbol. Using the error evidence, name the most likely place in \
+THIS file to make the fix.
+
+## Fix directive
+{directive}
+
+## Error evidence
+{evidence}
+
+## Symbols in {file}
+{symbols}
+
+Return a JSON object in a fenced code block:
+  target_symbol — the ONE symbol from the list above most likely to need \
+the change (qualified name exactly as listed). Empty string if the fix is \
+not inside any listed symbol.
+  scope — "symbol" (fix lives inside target_symbol), "module" (fix is a \
+top-level line: import, constant, module statement), or "file" (genuinely \
+needs whole-file restructuring).
+  module_statement — when scope is "module": the exact top-level line to \
+add or correct. Otherwise empty.
+  change_spec — one or two sentences: what must be true after the change.
+"""
+
+
+async def action_localize_fix_target(step_input: StepInput) -> StepOutput:
+    """Evaluate error evidence → most likely in-file fix target.
+
+    Context: symbol_table (from extract_symbol_bodies).
+    Params: target_file_path, error_output, flow_directive.
+    Publishes: localized_symbol, localized_change_spec, module_statement,
+    module_directive (when module-scope).
+
+    Result flags drive file_ops routing: localized_symbol_in_ast → patch,
+    localized_module_fix → module-frame edit, neither → rewrite (the old
+    behavior, now the floor instead of the fallback).
+    """
+    from agent.llm_json import parse_llm_json
+
+    effects = step_input.effects
+    params = step_input.params or {}
+    file_path = str(params.get("target_file_path") or "")
+    error_output = str(params.get("error_output") or "").strip()
+    directive = str(params.get("flow_directive") or "")
+    symbol_table = step_input.context.get("symbol_table") or []
+    names = {s.get("name") for s in symbol_table if s.get("name")}
+
+    fallthrough = StepOutput(
+        result={
+            "localized_symbol_in_ast": False,
+            "localized_module_fix": False,
+        },
+        observations="Localization: no basis — whole-file path",
+    )
+    if not effects or not error_output or not names:
+        return fallthrough
+
+    sigs = "\n".join(
+        f"  - {s['name']}  ({s.get('kind', '')})  "
+        f"{str(s.get('signature', ''))[:90]}"
+        for s in symbol_table[:60]
+        if s.get("name")
+    )
+    prompt = LOCALIZE_PROMPT.format(
+        file=file_path,
+        directive=directive[:600] or "(none)",
+        evidence=error_output[:1600],
+        symbols=sigs,
+    )
+    parsed: dict = {}
+    for attempt in (1, 2):
+        try:
+            res = await effects.run_inference(prompt)
+            got = parse_llm_json(getattr(res, "text", "") or "")
+            if isinstance(got, dict) and (got.get("target_symbol") or got.get("scope")):
+                parsed = got
+                break
+        except Exception as e:  # noqa: BLE001 — eval is advisory
+            logger.warning("Localization attempt %d failed: %s", attempt, e)
+    if not parsed:
+        return fallthrough
+
+    scope = str(parsed.get("scope") or "").strip().lower()
+    symbol = str(parsed.get("target_symbol") or "").strip()
+    change_spec = str(parsed.get("change_spec") or "")[:600]
+    module_statement = str(parsed.get("module_statement") or "").strip()
+
+    if scope == "module" and module_statement:
+        logger.info(
+            "Localization: %s → module-frame fix (%s)",
+            file_path,
+            module_statement[:60],
+        )
+        return StepOutput(
+            result={
+                "localized_symbol_in_ast": False,
+                "localized_module_fix": True,
+            },
+            observations=f"Localized to module frame: {module_statement[:60]}",
+            context_updates={
+                "module_statement": module_statement,
+                "module_directive": change_spec or directive[:300],
+                "localized_change_spec": change_spec,
+            },
+        )
+    # Validate against the REAL AST — an invented symbol must not send the
+    # patch flow into its bail loop.
+    if symbol and symbol in names:
+        logger.info("Localization: %s → symbol %s", file_path, symbol)
+        return StepOutput(
+            result={
+                "localized_symbol_in_ast": True,
+                "localized_module_fix": False,
+            },
+            observations=f"Localized to symbol {symbol}",
+            context_updates={
+                "localized_symbol": symbol,
+                "localized_change_spec": change_spec,
+            },
+        )
+    logger.info(
+        "Localization: %s → no in-AST target (scope=%s, symbol=%r) — rewrite",
+        file_path,
+        scope,
+        symbol[:40],
+    )
+    return fallthrough

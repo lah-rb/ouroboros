@@ -221,14 +221,48 @@ file_ops: #FlowDefinition & {
 					// patch instead of regenerating the whole file. Falls
 					// back to run_rewrite on any miss, so this is additive.
 					{condition: "result.data_patch_eligible == true", transition: "run_data_patch"},
-					// No named symbol, AST unavailable, or no editable
-					// symbols → rewrite. The whole-file turn sees the
-					// flow_directive, so fix-or-defer decisions (e.g.
-					// structural import review) reach a flow that can
-					// act on them.
+					// No named symbol but the file HAS editable symbols →
+					// the localization rung: one cheap eval of the error
+					// evidence picks the most likely in-file target, so a
+					// symbol-less dispatch lands as a PATCH instead of the
+					// whole-file rewrite (the ladder's 5x-cost hammer —
+					// 9.4 min/call on dense mistral). Deliberately an LLM
+					// eval, not a deterministic line→symbol map: a wrong
+					// deterministic pick would repeat forever. The action
+					// falls through instantly (no inference) when there is
+					// no error evidence to localize from.
+					{condition: "result.symbols_extracted > 0", transition: "run_localize"},
+					// AST unavailable or no editable symbols → rewrite.
+					// The whole-file turn sees the flow_directive, so
+					// fix-or-defer decisions (e.g. structural import
+					// review) reach a flow that can act on them.
 					{condition: "true", transition: "run_rewrite"},
 				]
 			}
+		}
+
+		run_localize: #StepDefinition & {
+			action:      "localize_fix_target"
+			description: "Eval error evidence → most likely in-file target (pre-rewrite rung)"
+			context: {
+				required: ["symbol_table"]
+			}
+			params: {
+				target_file_path: {$ref: "input.target_file_path"}
+				error_output:     {$ref: "input.error_output", default: ""}
+				flow_directive:   {$ref: "input.flow_directive", default: ""}
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.localized_symbol_in_ast == true", transition: "run_patch"},
+					{condition: "result.localized_module_fix == true", transition: "run_module_frame_edit"},
+					// No evidence / no parse / invented symbol → the old
+					// behavior: whole-file rewrite as the floor.
+					{condition: "true", transition: "run_rewrite"},
+				]
+			}
+			publishes: ["localized_symbol", "localized_change_spec", "module_statement", "module_directive"]
 		}
 
 		run_patch: #StepDefinition & {
@@ -239,8 +273,11 @@ file_ops: #FlowDefinition & {
 				file_path:         {$ref: "input.target_file_path"}
 				file_content:      {$ref: "context.target_file.content"}
 				symbol_table:      {$ref: "context.symbol_table"}
-				target_symbol:     {$ref: "input.target_symbol"}
-				change_spec:       {$ref: "input.change_spec", default: ""}
+				// The localization rung's pick wins when it ran (the
+				// symbol-less path); diagnosis-named dispatches arrive
+				// here directly with the input field populated.
+				target_symbol:     {$ref: "context.localized_symbol", fallback: [{$ref: "input.target_symbol"}, ""]}
+				change_spec:       {$ref: "context.localized_change_spec", fallback: [{$ref: "input.change_spec"}, ""]}
 				// Multi-symbol patching (505 round). prepare_next_rewrite
 				// reads this and seeds the rewrite queue with
 				// target_symbol followed by these related symbols, so

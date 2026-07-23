@@ -4268,12 +4268,65 @@
               "transition": "run_data_patch"
             },
             {
+              "condition": "result.symbols_extracted > 0",
+              "transition": "run_localize"
+            },
+            {
               "condition": "true",
               "transition": "run_rewrite"
             }
           ]
         },
         "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "run_localize": {
+        "action": "localize_fix_target",
+        "description": "Eval error evidence \u2192 most likely in-file target (pre-rewrite rung)",
+        "context": {
+          "required": [
+            "symbol_table"
+          ],
+          "optional": []
+        },
+        "params": {
+          "target_file_path": {
+            "$ref": "input.target_file_path"
+          },
+          "error_output": {
+            "$ref": "input.error_output",
+            "default": ""
+          },
+          "flow_directive": {
+            "$ref": "input.flow_directive",
+            "default": ""
+          }
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.localized_symbol_in_ast == true",
+              "transition": "run_patch"
+            },
+            {
+              "condition": "result.localized_module_fix == true",
+              "transition": "run_module_frame_edit"
+            },
+            {
+              "condition": "true",
+              "transition": "run_rewrite"
+            }
+          ]
+        },
+        "publishes": [
+          "localized_symbol",
+          "localized_change_spec",
+          "module_statement",
+          "module_directive"
+        ],
         "effects": [],
         "terminal": false
       },
@@ -4299,11 +4352,22 @@
             "$ref": "context.symbol_table"
           },
           "target_symbol": {
-            "$ref": "input.target_symbol"
+            "$ref": "context.localized_symbol",
+            "fallback": [
+              {
+                "$ref": "input.target_symbol"
+              },
+              ""
+            ]
           },
           "change_spec": {
-            "$ref": "input.change_spec",
-            "default": ""
+            "$ref": "context.localized_change_spec",
+            "fallback": [
+              {
+                "$ref": "input.change_spec"
+              },
+              ""
+            ]
           },
           "related_symbols": {
             "$ref": "input.related_symbols",
