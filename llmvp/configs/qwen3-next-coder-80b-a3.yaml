@@ -1,3 +1,8 @@
+# ── GREENFIELD TIER 3 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# Respectable, largely compatible. Artifact died at boot (Monster missing its
+# @dataclass decorator — one smoke run catches it) atop a world wired
+# unwinnable. Family note: GDN-hybrid deliberation-orbit propensity — token
+# guards + vendor sampling hold within generations, but plan for orbit risk.
 app:
   host: "0.0.0.0"
   port: 8008

@@ -1,3 +1,8 @@
+# ── GREENFIELD TIER 2 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# 4th of 8 (finalist): best engineering, persistence, and dialogue of the
+# final four; eliminated by a single arity seam (combat called load_world()
+# without its path arg → softlock on every combat action). The production
+# flagship's loss is one statically-catchable line, not a capability gap.
 app:
   host: "0.0.0.0"
   port: 8008

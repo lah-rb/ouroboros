@@ -1,3 +1,9 @@
+# ── GREENFIELD TIER 3 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# Respectable, largely compatible — but SLOW (42 tok/s cold prefill, ~6-7
+# tok/s decode; ~5 min per functional exchange at mission-scale prompts).
+# Diagnosis quality was 2-for-2 verbatim-correct; eliminated on the one seam
+# bug (str vs Command) it never got clock to diagnose. Effective window was
+# ~55 min of its 2h (watchdog doom loop, since fixed: expectedEvalSeconds).
 app:
   host: "0.0.0.0"
   port: 8008

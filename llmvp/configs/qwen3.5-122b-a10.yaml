@@ -1,3 +1,8 @@
+# ── GREENFIELD TIER 2 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# 3rd of 8: the most polished shell of the finals with genuinely working
+# save/load — but unwinnable (dead dialogue, inert weakness, unbeatable boss
+# math). NOTE: first run caught DEGENERATION (family paragraph-orbit); this
+# standing is from the clean r2 rerun under the vendor-sampling stack.
 app:
   host: "0.0.0.0"
   port: 8008

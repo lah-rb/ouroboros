@@ -1,3 +1,9 @@
+# ── GREENFIELD TIER 3 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# Respectable, largely compatible. Completed 8/8 structural goals but the
+# artifact was unplayable by design (can't enter monster rooms + must be in
+# room to attack) and the functional phase was consumed by a plan_interaction
+# ORBIT (turn-level deliberation loop, 132k-token prompts — the family
+# propensity above the token-level guards).
 app:
   host: "0.0.0.0"
   port: 8008

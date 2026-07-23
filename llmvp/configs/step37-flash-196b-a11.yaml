@@ -1,3 +1,9 @@
+# ── GREENFIELD TIER 1 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# UNANIMOUS CHAMPION of the 8-model blind panel: the only fully playable AND
+# winnable artifact (both win paths verified live; real two-phase boss; honest
+# defeat screen). Achieved with almost NO functional-phase checks — its run
+# counter read 8/15, worst-looking of the finalists. Lone artifact flaw: save
+# unwired (get_state undefined). Promotion candidate for boss/worker roles.
 app:
   host: "0.0.0.0"
   port: 8008

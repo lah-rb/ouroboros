@@ -1,3 +1,9 @@
+# ── GREENFIELD TIER 1 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# 2nd of 8, winnable end-to-end (weakness 2x + phase-rage verified live) — and
+# achieved with thinking effectively OFF (the run predates the medium→<|think|>
+# remap; both adaptive arms rendered padding). Artifact flaws: mid-fight heal
+# attacked instead, persistence import fell back to a silent no-op + degraded
+# parser. Expect headroom with thinking ON.
 app:
   host: "0.0.0.0"
   port: 8008

@@ -1,3 +1,9 @@
+# ── GREENFIELD TIER 3 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# Respectable, largely compatible — the sweep's most PROLIFIC run (412
+# inferences, 216/31 tok/s prefill/decode, 11/18 goals incl. 4 verified
+# functional: the field's most). But throughput concentrated on the easy
+# cluster: attack crashed the process (Room.monsters undefined), NPC rooms
+# unreachable (one-way links), persistence never wired. Fast hands, weak seams.
 app:
   host: "0.0.0.0"
   port: 8008
