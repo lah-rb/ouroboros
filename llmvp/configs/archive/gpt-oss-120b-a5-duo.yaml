@@ -1,6 +1,13 @@
-# JIT exercise config: gpt-oss-120b-a5 POOL mode at FULL 131k n_ctx with
-# JIT scaling (limit 3). Companion to the batched 131k capacity sweep —
-# measures what "more instances" costs when instances are CONTEXTS.
+# ── ARCHIVED 2026-07-23 ── the multi-CONTEXT alternating duo experiment: a
+# documented closed dead end (one shared MTLCommandQueue + unwired-weights CB
+# race → negative scaling + errors). Superseded by the accepted batched
+# single-context engine (gpt-oss-120b-a5-duo-batched.yaml).
+# DUO config: gpt-oss-120b-a5 with TWO pool slots carrying different personas
+# ("SOUL per slot") — slot 0 = the agent SOUL, slot 1 = a simulated-user SOUL.
+# The tau-bench dual-LLM substrate: one weight set, two independent contexts,
+# two static heads, persona-routed acquisition. Identical to gpt-oss-120b-a5
+# except: max_concurrent_requests 2, slot_personas, the personas map, and the
+# user_sim slot's smaller n_ctx (a simulated user doesn't need 131k).
 
 app:
   host: "0.0.0.0"
@@ -27,10 +34,7 @@ model:
   # → Metal error latch kills the context (llama_decode -3 until rebuilt).
   # At 32k per-context KV is ~2.3G → ~66G floor, comfortable headroom.
   # τ conversations are short; raise only alongside iogpu.wired_limit_mb.
-  # FULL context on the batched engine: ONE 131k unified cell pool shared by
-  # all working seats (seats are seq ids — no per-seat KV duplication; the
-  # static heads share cells via seq_cp). swa_full KV @131k ~= 9.2G once.
-  n_ctx: 131072
+  n_ctx: 32768
   n_gpu_layers: -1
   seed: -1
   verbose: false
@@ -67,16 +71,21 @@ knowledge:
 
 resources:
   cpu_threads: 15
-  max_concurrent_requests: 3
-  # JIT: start with the primary only; spawn shared contexts on demand up to
-  # 3, reap after 60s idle (test-observable timings). At 131k each spawned
-  # context is a REAL ~9.2G swa_full KV allocation — the memory contrast
-  # with batched seats (seq ids, ~free) is the point of this exercise.
-  jit_concurrency_limit: 3
-  instance_idle_ttl: 60
-  scale_down_cooldown: 30
+  max_concurrent_requests: 2
+  jit_concurrency_limit: null
   # slot 0 = agent (default SOUL), slot 1 = simulated user
+  slot_personas: ["default", "user_sim"]
 
+personas:
+  user_sim:
+    persona_file: "./knowledge/USER_SIM.md"
+    tokens_bin: "./data/gpt-oss-120b-a5-user_sim.tokens.bin"
+    # n_ctx override DISABLED: a 32k slot beside the 131k primary dies with
+    # llama_decode code -3 (Metal graph failure) mid-generation under
+    # swa_full+kv_unified — the smaller-context slot is a KNOWN ISSUE, under
+    # investigation. Full-size context works; the marginal KV cost is the
+    # price until the interplay is understood.
+    # n_ctx: 32768
 
 tools:
   enabled: false

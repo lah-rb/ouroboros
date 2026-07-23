@@ -339,3 +339,21 @@ tools:
 logging:
   enabled: true            # [O] bool, default false
   directory: "./logs"      # [O] path — interactions.jsonl etc., default ./logs
+
+
+# ══════════════════════════════════════════════════════════════════════
+# REMOTE PROVIDER ENTRIES (documentation only — live entries are STANDALONE
+# top-level configs/*.yaml files by design: model_registry scans that glob
+# and detects provider entries by shape, so they cannot live inside this
+# reference file. Current live entries: boss-claude.yaml, boss-sonnet.yaml,
+# boss-lmstudio.yaml.)
+#
+# Shape (MULTI_MODEL_PLAN Phase 3):
+#   provider: claude_cli | openai_compat   # adapter selection
+#   model: <provider-side model id>        # addressed per-request via the
+#                                          # completion `model` field
+#   claude_bin / base_url: ...             # transport knobs per adapter
+#   temperature_default / max_tokens_default / timeout_s: request defaults
+# Provider entries are ALWAYS available and never swapModel targets; auth
+# lives with the provider (claude CLI login / server-side key).
+# ══════════════════════════════════════════════════════════════════════
