@@ -88,7 +88,16 @@ def test_unknown_slot_persona_raises():
 
 
 def test_duo_yaml_loads():
-    duo = Path(__file__).parent.parent / "configs" / "gpt-oss-120b-a5-duo.yaml"
+    # The multi-context duo config is ARCHIVED (2026-07-23, dead end —
+    # superseded by duo-batched, which has no slot_personas: every persona
+    # is warmed). It remains the canonical slot_personas exemplar, so the
+    # persona-resolution machinery is still validated against it in place.
+    duo = (
+        Path(__file__).parent.parent
+        / "configs"
+        / "archive"
+        / "gpt-oss-120b-a5-duo.yaml"
+    )
     from core.config import load_config
 
     c = load_config(duo)
