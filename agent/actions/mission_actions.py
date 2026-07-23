@@ -48,6 +48,56 @@ def _regress_startup_goal(mission) -> bool:
     return False
 
 
+def _reopen_structural_goal(
+    mission, file_path: str, triggering_goal_id: str, source_flow: str
+) -> bool:
+    """Reopen the complete structural goal owning ``file_path`` ahead of a
+    diagnosis-driven fix edit — WITH regression provenance.
+
+    A bare ``status = "incomplete"`` flip here leaves the final mission.json
+    indistinguishable from a never-verified goal (regression_reopened False,
+    no note; and once the archive sweep has relocated the goal's reports, no
+    on-goal evidence at all — observed on the gemma-4 greenfield run,
+    2026-07-23). It also hides the goal from the bidirectional sweep's
+    auto-complete direction (flow_sets ``regression_pending``), which keys on
+    ``regression_reopened``. So: set the same flag the regression sweep sets
+    (honoring the flip-flop guard) and drop a note naming the trigger.
+    Returns True if a complete goal was reopened.
+    """
+    from agent.persistence.models import NoteRecord
+
+    for sg in mission.goals:
+        if sg.type == "structural" and file_path in (sg.associated_files or []):
+            if sg.status == "complete":
+                sg.status = "incomplete"
+                sg.regression_reopened = not getattr(
+                    sg, "regression_autocompleted", False
+                )
+                mission.notes.append(
+                    NoteRecord(
+                        content=(
+                            f"regression: structural goal '{sg.description[:80]}' "
+                            f"reopened — a diagnosis for goal_id="
+                            f"{triggering_goal_id or 'n/a'} named its file "
+                            f"{file_path} for a fix edit."
+                        ),
+                        category="failure_analysis",
+                        tags=[
+                            t for t in ["regression", sg.id, triggering_goal_id] if t
+                        ],
+                        source_flow=source_flow,
+                    )
+                )
+                logger.info(
+                    "Regressed structural goal for %s (via %s)",
+                    file_path,
+                    source_flow,
+                )
+                return True
+            break
+    return False
+
+
 # ══════════════════════════════════════════════════════════════════════
 # State Loading & Event Handling (kept from v1, lightly cleaned)
 # ══════════════════════════════════════════════════════════════════════
@@ -2263,16 +2313,9 @@ async def _sweep_after_diagnose(
     fix_target = struct_target_file or (diag_files[0] if diag_files else "")
 
     if fix_target:
-        # Diagnosis explicitly named a file — use it directly
-        for sg in mission.goals:
-            if sg.type == "structural" and fix_target in (sg.associated_files or []):
-                if sg.status == "complete":
-                    sg.status = "incomplete"
-                    logger.info(
-                        "Functional sweep: regressed structural goal for %s",
-                        fix_target,
-                    )
-                break
+        # Diagnosis explicitly named a file — reopen its structural goal with
+        # full regression provenance (flag + note), not a bare status flip.
+        _reopen_structural_goal(mission, fix_target, goal.id, "functional_sweep")
 
         # Editing a file can break (or fix) the program's startup —
         # re-open the startup goal so the startup check re-runs.
@@ -3569,16 +3612,13 @@ async def action_apply_fix_target(step_input: StepInput) -> StepOutput:
         f"Diagnosis: {diagnosis[:500]}"
     )
 
-    # Regress the structural goal for the selected file
-    for sg in mission.goals:
-        if sg.type == "structural" and selected_file in (sg.associated_files or []):
-            if sg.status == "complete":
-                sg.status = "incomplete"
-                logger.info(
-                    "Fix target resolution: regressed structural goal for %s",
-                    selected_file,
-                )
-            break
+    # Regress the structural goal for the selected file (with provenance)
+    _reopen_structural_goal(
+        mission,
+        selected_file,
+        dispatch_config.get("goal_id", ""),
+        "fix_target_resolution",
+    )
 
     # Re-open the startup goal too, so the startup check re-verifies after the edit.
     _regress_startup_goal(mission)

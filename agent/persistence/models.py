@@ -205,6 +205,14 @@ class GoalRecord(BaseModel):
     # counter (see batch_attempted).
     reports_archived: int = 0
     attempts_archived: int = 0
+    # Stamped by the archive sweep each time it relocates this goal's records
+    # (which only happens while status == "complete") — i.e. approximately the
+    # goal's most recent completion. Forensics field: a later reopen empties
+    # reports and flips status, and without this stamp the final mission.json
+    # of a wall-clock-cut run is indistinguishable from a never-verified goal
+    # (gemma-4 greenfield run, 2026-07-23: 5 full fix-and-pass cycles read as
+    # "never touched").
+    last_completed_at: str = ""
     # "quality" goals are discovered by the quality gate (origin="quality_gate")
     # for issues with no clean interact re-test — they complete on a successful
     # patch (action_quality_sweep_next). functional/structural goals keep their
@@ -279,13 +287,15 @@ class GoalRecord(BaseModel):
     # goal_met=false → this never increments, so real-break detection is
     # preserved. See action_reconcile_acceptance / action_regression_sweep.
     acceptance_conflicts: dict[str, int] = Field(default_factory=dict)
-    # Bidirectional regression sweep (auto-complete the blast radius). Set True
-    # ONLY by action_regression_sweep when it reopens a goal — marks it
-    # auto-complete-eligible: a deterministic check (not the harvester/test-gate/
-    # design) de-certified an already-grounded goal, so a later PASSING check
-    # RE-certifies a known-good state (not a fresh certification). Cleared on any
-    # completion (auto-complete, or interact success — so a later reopen by
-    # another provenance can't inherit stale eligibility).
+    # Bidirectional regression sweep (auto-complete the blast radius). Set when
+    # a goal is reopened WITH regression provenance: by action_regression_sweep
+    # (a deterministic check de-certified an already-grounded goal) and by
+    # _reopen_structural_goal (a diagnosis named the goal's file for a fix
+    # edit — functional sweep / fix-target resolution). Marks the goal
+    # auto-complete-eligible: a later PASSING check RE-certifies a known-good
+    # state (not a fresh certification). Cleared on any completion
+    # (auto-complete, or interact success — so a later reopen by another
+    # provenance can't inherit stale eligibility).
     regression_reopened: bool = False
     # Flip-flop guard: set True on auto-complete. On the next reopen the sweep
     # sets regression_reopened = not regression_autocompleted, so a goal that

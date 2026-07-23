@@ -158,6 +158,10 @@ def archive_mission_overflow(agent_dir: str, mission: Any) -> bool:
         )
         goal.reports = []
         goal.failed_attempts = []
+        # This branch only runs while the goal is complete, so this stamp is
+        # (approximately) its most recent completion time — the surviving
+        # evidence after a later reopen empties the lists above.
+        goal.last_completed_at = _now_iso()
         changed = True
         logger.info(
             "🗄️ archived goal %s: %d report(s), %d attempt(s)",
