@@ -699,3 +699,46 @@ def test_prior_abandoned_stream_retired_before_reuse():
         await teardown(backend)
 
     asyncio.run(main())
+
+
+# ── adaptive head-swap beyond harmony ─────────────────────────────────
+
+
+def _backend_with_family(family, levels, *, head_swap=True, resident=True):
+    from unittest.mock import patch
+    from types import SimpleNamespace
+
+    backend = make_backend(jit_limit=None, max_concurrent=1)
+    backend.config.model = SimpleNamespace(
+        family=family,
+        reasoning_head_swap=head_swap,
+        thinking_mode="medium",
+        resident_seq_cache=resident,
+    )
+    spec = SimpleNamespace(reasoning=SimpleNamespace(levels=levels))
+    with patch("formats.registry.get_renderer", return_value=SimpleNamespace(s=spec)):
+        LlamaCppBackend.__init__(backend, backend.config)
+    return backend
+
+
+def test_head_swap_enabled_for_family_declaring_levels():
+    """A non-harmony family qualifies by declaring reasoning.levels — that map
+    is what makes its levels renderable into the cached system head."""
+    b = _backend_with_family(
+        "gemma", {"low": "  ", "medium": "  ", "high": "<|think|>"}
+    )
+    assert b._reasoning_head_swap is True
+    # BIMODAL collapse: low renders identically to the medium default, so only
+    # ONE extra head is pinned, not two.
+    assert b._reasoning_pin_levels == ["high"]
+
+
+def test_head_swap_still_enabled_for_harmony_without_map():
+    b = _backend_with_family("harmony", {})
+    assert b._reasoning_head_swap is True
+    assert b._reasoning_pin_levels == ["low", "high"]
+
+
+def test_head_swap_disabled_for_family_without_map():
+    b = _backend_with_family("chatml", {})
+    assert b._reasoning_head_swap is False

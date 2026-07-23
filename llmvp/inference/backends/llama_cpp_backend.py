@@ -255,13 +255,41 @@ class LlamaCppBackend(BaseBackend):
         _model_cfg = getattr(config, "model", None)
         self._reasoning_levels = ["low", "medium", "high"]
         self._reasoning_default_level = getattr(_model_cfg, "thinking_mode", None)
-        self._reasoning_pin_levels = [
-            lv for lv in self._reasoning_levels if lv != self._reasoning_default_level
-        ]
+        # Distinct pinned heads are keyed by RENDERED TEXT, not level name: a
+        # BIMODAL family collapses two canonical levels onto one text (Gemma-4:
+        # low+medium -> the padding, high -> <|think|>), so it costs ONE extra
+        # head, not two.
+        _fam = getattr(_model_cfg, "family", "") or ""
+        _level_map: dict = {}
+        try:
+            from formats.registry import get_renderer as _get_renderer
+
+            _level_map = dict(_get_renderer(_fam).s.reasoning.levels or {})
+        except Exception:  # noqa: BLE001 — a missing/invalid spec just means no map
+            _level_map = {}
+        _default_text = _level_map.get(
+            self._reasoning_default_level, self._reasoning_default_level
+        )
+        _seen: set = set()
+        self._reasoning_pin_levels = []
+        for lv in self._reasoning_levels:
+            if lv == self._reasoning_default_level:
+                continue
+            text = _level_map.get(lv, lv)
+            if text == _default_text or text in _seen:
+                continue  # renders identically to the default / an earlier head
+            _seen.add(text)
+            self._reasoning_pin_levels.append(lv)
+        # Head-swap needs the reasoning steer to live in the CACHED system head.
+        # harmony expresses it inline ("Reasoning: <level>"); any other family
+        # qualifies by declaring a reasoning.levels map (formats/*.yaml), which
+        # is what makes its levels renderable into that head. The mid-session
+        # splice independently verifies equal head length and refuses a
+        # mismatched swap, so a badly-padded map degrades to "no swap".
         self._reasoning_head_swap = (
             self._resident_requested
             and bool(getattr(_model_cfg, "reasoning_head_swap", False))
-            and getattr(_model_cfg, "family", "") == "harmony"
+            and (_fam == "harmony" or bool(_level_map))
         )
         self._h_reasoning_swaps = 0
         self._h_refresh_deferred = 0

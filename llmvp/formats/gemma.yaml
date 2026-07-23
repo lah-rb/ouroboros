@@ -65,9 +65,13 @@ thinking:
 system_block:
   identity: ""
   cutoff: ""
-  reasoning_default: ""
+  # Canonical default -> the ReasoningSpec map turns it into the PADDING.
+  reasoning_default: "medium"
   channel_directive: ""
-  template: "{persona}"
+  # The reasoning slot renders ABOVE the persona: Gemma-4 activates thinking
+  # with `<|think|>` at the top of the system turn.
+  template: "{reasoning_prefix}{persona}"
+  reasoning_prefix: "{reasoning}\n"
 
 traits:
   # Gemma 4 HAS a real system role (unlike Gemma 3, which folded system
@@ -88,3 +92,31 @@ turn_transition:
   # single special token, so the trailing newline matches Gemma-4's canonical
   # "<turn|>\n<|turn>" boundary cleanly.
   after_generation: "<turn|>\n"
+
+# Gemma-4 is BIMODAL: thinking is activated by the PRESENCE of `<|think|>` in
+# the system turn (official `enable_thinking` kwarg); there are no graded
+# levels, so low+medium collapse onto "off".
+#
+# THE PADDING: Gemma's native toggle is an INSERT/DELETE, which would shift
+# every downstream token and make the mid-session head splice illegal (it
+# requires equal head lengths and refuses otherwise). So the off-state is
+# PADDED to the same token length rather than being empty:
+#
+#     '<|think|>\n' -> [98, 107]      (2 tokens)
+#     '  \n'        -> [138, 107]     (2 tokens)   <- padding
+#
+# The trailing newline is shared, so it is a ONE-token substitution: 98 -> 138.
+# Two spaces (138) is deliberate — it sits in the same low-ID whitespace region
+# as \n (107) and \n\n (108), i.e. a frequent, well-conditioned token, unlike a
+# reserved/unused token whose near-random embedding is the classic glitch-token
+# hazard. NOTE '\n\n' MERGES to ONE token (108) and would silently break parity.
+#
+# Validated live 2026-07-22 on gemma-4-31B-it-QAT (dev/gemma_pad_probe.py,
+# 5 arms x 5 prompts): with the padding in the slot the model behaves as
+# ABSENCE (empty thought channel, ~39 out-tokens) and NOT as `<|think|>` (real
+# reasoning, ~131), with answers matching the canonical off-branch.
+reasoning:
+  levels:
+    low: "  "
+    medium: "  "
+    high: "<|think|>"

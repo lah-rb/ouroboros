@@ -16,6 +16,11 @@ model:
   family: "gemma"
   # RESIDENT cache economics (dev/CACHE_STATE.md matrix): SWA dense — measured full-stack 2026-07-02 (resident-live 37/46 tok turns, hot snapshot forks 1.2s).
   resident_seq_cache: true
+  # Per-turn adaptive reasoning via the head swap. Gemma-4 is BIMODAL — the
+  # levels map in formats/gemma.yaml renders high -> <|think|> and low/medium
+  # -> a token-length-MATCHED padding, so the mid-session splice stays legal
+  # (it refuses unequal heads). Requires resident_seq_cache, above.
+  reasoning_head_swap: true
   # Gemma-4 produces its own <|channel>thought reasoning preamble; do NOT
   # inject a thinking opener into the generation prompt.
   thinking: false

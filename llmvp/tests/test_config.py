@@ -464,7 +464,14 @@ def test_gemma4_rendering_matches_official_template():
         system = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
         ours = "<bos>" + system + r.render_user("Hello") + r.render_generation_prompt()
 
-    assert ours == official, f"\nofficial: {official!r}\nours    : {ours!r}"
+    # We deliberately DEVIATE from the official template in exactly one way:
+    # the thinking-off state is PADDED to keep both reasoning heads the same
+    # token length, so the mid-session head splice stays legal. Official emits
+    # nothing in that slot; we emit "  \n" (token-length-matched to
+    # "<|think|>\n" — see formats/gemma.yaml). Pin the deviation precisely so
+    # any OTHER divergence still fails.
+    expected = official.replace("<|turn>system\n", "<|turn>system\n  \n", 1)
+    assert ours == expected, f"\nexpected: {expected!r}\nours    : {ours!r}"
 
 
 def test_gemma4_uses_turn_framing_not_gemma3():
