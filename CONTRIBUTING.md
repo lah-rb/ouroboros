@@ -225,8 +225,11 @@ seam-free and parallel end-to-end — evidence-ledger merges (research,
 scraping, verification panels), not structural assembly. On this hardware
 the class penalty for swarm code work off gpt-oss measured 4-15x.
 
-**4. Known sharp edges** (open fix-items as of 2026-07-24): the batched
-engine leaks seats when a client cancels mid-generation (30 phantom seats
-wedged the engine terminally — drain seats on disconnect); the pool-fit
-admission gate under-waves against small pools (built against 131k gpt-oss
-geometry). Check OPEN_TASKS.md before relying on either behavior.
+**4. Formerly sharp edges** (both FIXED 2026-07-24, same day they were
+found): the batched engine leaked seats when a client cancelled
+mid-generation (30 phantom seats wedged the engine terminally) — fixed by
+shielded asyncgen close + cancel-proof acquire/release + a 60s seat reaper
+(llmvp/tests/test_batched_seat_release.py pins all four paths). The
+pool-fit admission gate under-waved against small pools (hardcoded 131k
+gpt-oss geometry) — the gate now sizes against the server's reported
+`kvPoolTokens` health field, with the flow param as loud fallback.

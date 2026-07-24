@@ -264,9 +264,11 @@ four surgeries in one week.
 
 ## 9. Small items (grab-bag)
 
-- Batched-engine watchdog-cancel seat leak (memory: debate-vs-cot,
-  "watchdog cancel leaks server-side seats") — reproduce via a cancelled
-  session turn, check seat accounting.
+- ~~Batched-engine watchdog-cancel seat leak~~ FIXED 2026-07-24
+  (shielded asyncgen close + cancel-proof acquire/release + seat reaper;
+  llmvp/tests/test_batched_seat_release.py). Residual follow-up: a live
+  batched-mode leak drill (cancel a session turn under the a5-swarm
+  config, watch checkedOut/engineActiveStreams in health).
 - Agent-side identical-retry backoff: the KV-eviction and anti-gut loops
   both retried the same dispatch unchanged for hours. Auto-refresh bounds
   the souring case; a dispatch-level "same goal+flow failed N× in a row →
