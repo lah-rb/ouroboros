@@ -201,6 +201,9 @@ FLOW_INPUTS = {
     "deep_search": {
         "brief": "What is the standard library way to parse TOML in Python 3.11+?",
     },
+    "deep_research": {
+        "brief": "Survey the current approaches to structured output in LLMs.",
+    },
     "patch": {
         "file_path": "main.py",
         "file_content": "class Todo:\n    def save(self):\n        pass\n",

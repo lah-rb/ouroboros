@@ -1539,6 +1539,259 @@
       "fallback": "reorganize"
     }
   },
+  "deep_research": {
+    "flow": "deep_research",
+    "version": 1,
+    "description": "Parallel stateless research sweep: decompose the brief into independent\nangles, fan them out (search+condense per angle) on the batched engine,\nreflect on the merged ledger between waves, synthesize with citations.",
+    "context_tier": "session_task",
+    "returns": {
+      "research_summary": {
+        "type": "string",
+        "from": "context.research_summary",
+        "optional": true
+      },
+      "sufficient": {
+        "type": "string",
+        "from": "context.research_sufficient",
+        "optional": true
+      },
+      "queries_run": {
+        "type": "list",
+        "from": "context.research_queries_run",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "brief"
+      ],
+      "optional": [
+        "mission_id",
+        "working_directory"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.4"
+      }
+    },
+    "steps": {
+      "decompose": {
+        "action": "research_decompose",
+        "description": "One inference: brief \u2192 independent searchable angles",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.research_started == true",
+              "transition": "wave"
+            },
+            {
+              "condition": "true",
+              "transition": "unavailable"
+            }
+          ]
+        },
+        "publishes": [
+          "research_brief",
+          "research_angles",
+          "research_ledger",
+          "research_wave_n",
+          "research_queries_run",
+          "research_summary",
+          "research_sufficient"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "wave": {
+        "action": "research_wave",
+        "description": "Fan out all open angles: per-angle search + condense",
+        "context": {
+          "required": [
+            "research_angles"
+          ],
+          "optional": [
+            "research_ledger",
+            "research_wave_n",
+            "research_queries_run"
+          ]
+        },
+        "params": {
+          "max_workers": 32,
+          "pool_budget": 131072
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "merge_reflect"
+            }
+          ]
+        },
+        "publishes": [
+          "research_ledger",
+          "research_wave_n",
+          "research_queries_run"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "merge_reflect": {
+        "action": "research_merge_reflect",
+        "description": "Ledger audit \u2192 sufficient, or the next wave's gaps",
+        "context": {
+          "required": [
+            "research_ledger"
+          ],
+          "optional": [
+            "research_brief",
+            "research_wave_n"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.sufficient == true",
+              "transition": "synthesize"
+            },
+            {
+              "condition": "result.n_gaps == 0",
+              "transition": "synthesize"
+            },
+            {
+              "condition": "true",
+              "transition": "check_budget"
+            }
+          ]
+        },
+        "publishes": [
+          "research_angles",
+          "research_sufficient"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "check_budget": {
+        "action": "noop",
+        "description": "Wave budget gate (3 research waves)",
+        "context": {
+          "required": [],
+          "optional": [
+            "research_wave_n"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "context.research_wave_n >= 3",
+              "transition": "synthesize"
+            },
+            {
+              "condition": "true",
+              "transition": "wave"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "synthesize": {
+        "action": "research_synthesize",
+        "description": "One inference: ledger \u2192 grounded summary + citations",
+        "context": {
+          "required": [
+            "research_ledger"
+          ],
+          "optional": [
+            "research_brief",
+            "research_queries_run"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "done"
+            }
+          ]
+        },
+        "publishes": [
+          "research_summary",
+          "research_sufficient",
+          "queries_run"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "done": {
+        "action": "noop",
+        "description": "Research complete \u2014 caller consumes research_summary",
+        "context": {
+          "required": [],
+          "optional": [
+            "research_summary",
+            "research_sufficient",
+            "queries_run"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "effects": [],
+        "publishes": [
+          "research_summary",
+          "research_sufficient",
+          "queries_run"
+        ],
+        "status": "success",
+        "terminal": true
+      },
+      "unavailable": {
+        "action": "noop",
+        "description": "Declined (web_research off / no brief) \u2014 empty summary",
+        "context": {
+          "required": [],
+          "optional": [
+            "research_summary",
+            "research_sufficient"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "effects": [],
+        "publishes": [
+          "research_summary",
+          "research_sufficient"
+        ],
+        "status": "deferred",
+        "terminal": true
+      }
+    },
+    "entry": "decompose",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "deep_search": {
     "flow": "deep_search",
     "version": 1,

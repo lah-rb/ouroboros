@@ -662,4 +662,16 @@ def build_action_registry() -> ActionRegistry:
     registry.register("condense_results", action_condense_results)
     registry.register("conclude_search", action_conclude_search)
 
+    from agent.actions.deep_research_actions import (
+        action_research_decompose,
+        action_research_merge_reflect,
+        action_research_synthesize,
+        action_research_wave,
+    )
+
+    registry.register("research_decompose", action_research_decompose)
+    registry.register("research_wave", action_research_wave)
+    registry.register("research_merge_reflect", action_research_merge_reflect)
+    registry.register("research_synthesize", action_research_synthesize)
+
     return registry
