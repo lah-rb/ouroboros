@@ -38,9 +38,11 @@ model:
   # dev/gemma_pad_probe.py).
   thinking: true
   path: /Users/lah-rb/.lmstudio/models/lmstudio-community/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf
-  # Curator bake-off ingests whole papers (long reviews ~35k tokens) plus
-  # prompt + generation headroom; 32768 could not hold one.
-  n_ctx: 65536
+  # Full native context (Luke 2026-07-24): the old 65536 cap guarded a
+  # semi-broken early release that blew up memory at full context without
+  # warning — not observed with the QAT GGUF on the current llama-cpp bin,
+  # so corrected to the model max.
+  n_ctx: 262144
   n_gpu_layers: -1
   seed: -1
   verbose: false

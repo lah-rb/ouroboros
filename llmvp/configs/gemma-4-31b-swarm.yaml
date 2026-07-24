@@ -40,7 +40,7 @@ model:
   path: /Users/lah-rb/.lmstudio/models/lmstudio-community/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf
   # Curator bake-off ingests whole papers (long reviews ~35k tokens) plus
   # prompt + generation headroom; 32768 could not hold one.
-  n_ctx: 65536
+  n_ctx: 262144
   n_gpu_layers: -1
   seed: -1
   verbose: false
