@@ -1,3 +1,7 @@
+# CONTEXT-LADDER PROBE VARIANT (262k): a5-swarm with the shared cell
+# pool raised to 262144. Geometry: 72KB/token swa_full → KV ≈ 18GB.
+# Per-STREAM positions stay ≤ 131072 (trained range); n_ctx here is the
+# unified CELL POOL across streams, not a positional limit.
 # CONTRACT-SWARM config (BATCHED): gpt-oss-120b-a5 for the contract-swarm
 # structural runs — n=symbols concurrent worker completions
 # (swarm_generate_symbols fans out one stateless completion per symbol,
@@ -34,7 +38,7 @@ model:
   name: "gpt-oss-120b-a5"
   family: "harmony"
   path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
-  n_ctx: 131072
+  n_ctx: 262144
   # model max context (trained per-stream range) vs n_ctx (the swarm
   # max context: the shared KV cell pool). No single stream may exceed
   # this, however large the pool. (2026-07-24 context-ladder split.)

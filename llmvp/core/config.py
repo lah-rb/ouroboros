@@ -24,10 +24,35 @@ class ModelConfig(BaseModel):
     name: str
     family: str  # Format schema family: "harmony", "chatml", "tekken"
     path: Path
+    # THE TWO CONTEXT LIMITS (2026-07-24 context-ladder finding — they are
+    # physically distinct and conflating them caused both the gemma reboot
+    # and the gpt-oss under-provisioning):
+    #   n_ctx             = the SWARM max context: the KV cell allocation.
+    #                       In batched mode (kv_unified) it is the SHARED
+    #                       pool across all streams and is bounded only by
+    #                       wired memory (bytes/tok from the GGUF header).
+    #                       In pool mode it is per-instance.
+    #   model_max_context = the MODEL max context: the trained per-stream
+    #                       positional range (n_ctx_train). No single
+    #                       stream — prompt, session, or window — may
+    #                       exceed it, regardless of how large the pool
+    #                       is. None => n_ctx (single-stream convention,
+    #                       correct whenever n_ctx <= n_ctx_train).
     n_ctx: int
+    model_max_context: Optional[int] = None
     n_gpu_layers: int
     seed: int
     verbose: bool
+
+    @property
+    def stream_context_limit(self) -> int:
+        """The per-STREAM token ceiling: min(pool allocation, trained range).
+        Every prompt-length guard and session-window threshold keys off
+        this — never off n_ctx directly (a 393k pool must not admit a
+        200k single-stream prompt into a 131k-trained model)."""
+        if self.model_max_context and self.model_max_context > 0:
+            return min(int(self.n_ctx), int(self.model_max_context))
+        return int(self.n_ctx)
     # Keep the FULL KV for sliding-window-attention layers instead of a 128-token
     # window. Required to make save_state/load_state (and flow_kv_cache) sound on
     # SWA models like gpt-oss-120b: without it the static prefix (~1809 tok) far

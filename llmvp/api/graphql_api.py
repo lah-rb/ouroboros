@@ -107,6 +107,10 @@ class HealthStatus:
     # "seats held" from "GPU busy" (a leaked seat shows here); default-safe
     # for backends that omit them.
     kv_pool_tokens: Optional[int] = None
+    # The OTHER context limit (the swarm/model split, 2026-07-24):
+    # kv_pool_tokens is the SHARED cell allocation; model_max_context is the
+    # trained per-stream ceiling no single prompt/session may exceed.
+    model_max_context: Optional[int] = None
     decode_mode: str = ""
     checked_out: int = 0
     engine_active_streams: Optional[int] = None
@@ -417,6 +421,7 @@ class Query:
             context_refreshes=status.get("context_refreshes", 0),
             requests_since_refresh=status.get("requests_since_refresh", 0),
             kv_pool_tokens=status.get("kv_pool_tokens"),
+            model_max_context=status.get("model_max_context"),
             decode_mode=status.get("decode_mode", ""),
             checked_out=status.get("checked_out", 0),
             engine_active_streams=(status.get("batched_engine") or {}).get(

@@ -520,7 +520,12 @@ class LlamaCppBackend(BaseBackend):
             verbose=False,
         )
         inst._ctx = ctx
-        inst._n_ctx = int(n_ctx_override) if n_ctx_override else primary._n_ctx
+        # Per-STREAM ceiling, not the allocation: session windowing keys off
+        # _n_ctx, and a pool larger than the trained range (the swarm/model
+        # context split) must not let a session grow past n_ctx_train.
+        _base_ctx = int(n_ctx_override) if n_ctx_override else primary._n_ctx
+        _lim = self._stream_ctx_limit()
+        inst._n_ctx = min(_base_ctx, _lim) if _lim else _base_ctx
         inst._persona_n_ctx = int(n_ctx_override) if n_ctx_override else None
 
         # New batch
@@ -915,8 +920,13 @@ class LlamaCppBackend(BaseBackend):
             )
         self._session_flow_fork = False
 
+        # Seats carry the per-STREAM ceiling (min of pool allocation and
+        # trained range) — the pool may be far larger than any one stream
+        # is allowed to grow (the swarm/model context split).
+        _seat_ctx = self._stream_ctx_limit() or primary._n_ctx
         self._engine_seats = [
-            SeqSlot(seq=i, _n_ctx=primary._n_ctx) for i in range(self._pool_size)
+            SeqSlot(seq=i, _n_ctx=min(int(primary._n_ctx), int(_seat_ctx)))
+            for i in range(self._pool_size)
         ]
 
         gen_cfg = self.config.generation
@@ -2652,6 +2662,16 @@ class LlamaCppBackend(BaseBackend):
                 queue.put_nowait(inst)
             raise
 
+    def _stream_ctx_limit(self) -> int:
+        """The per-STREAM token ceiling (the swarm/model context split):
+        min(pool allocation n_ctx, trained range model_max_context). 0 when
+        the config doesn't carry either (bare test doubles)."""
+        m = getattr(self.config, "model", None)
+        lim = getattr(m, "stream_context_limit", None)
+        if lim:
+            return int(lim)
+        return int(getattr(m, "n_ctx", 0) or 0)
+
     async def _release_seat(self, seat: Any) -> None:
         """Batched seat return: clear its seq (control op) and requeue. A
         dead seat (engine fatal) still requeues — the next prepare_seat
@@ -3778,6 +3798,11 @@ class LlamaCppBackend(BaseBackend):
         n_ctx = getattr(getattr(self.config, "model", None), "n_ctx", None)
         if n_ctx:
             info["kv_pool_tokens"] = int(n_ctx)
+        # The OTHER context limit (the swarm/model split): the per-stream
+        # trained ceiling every single stream is bounded by.
+        stream_lim = self._stream_ctx_limit()
+        if stream_lim:
+            info["model_max_context"] = stream_lim
         if self._engine is not None:
             # Batched engine internals; a fatal latch flips overall status
             # so dashboards/soaks see the outage without new fields.

@@ -304,10 +304,10 @@ async def run_completion(
         dynamic_ids = build_full_prompt((static_prefix or "") + prompt, tokenizer)
     total_len = len(static_tokens) + len(dynamic_ids)
 
-    if total_len > config.model.n_ctx:
+    if total_len > config.model.stream_context_limit:
         raise ValueError(
             f"Combined prompt length ({total_len}) exceeds the model's "
-            f"context window of {config.model.n_ctx} tokens."
+            f"per-stream context limit of {config.model.stream_context_limit} tokens."
         )
 
     full_prompt = list(static_tokens) + dynamic_ids
@@ -458,10 +458,10 @@ async def run_raw_completion(
     dynamic_ids = build_full_prompt(prompt, tokenizer)
     total_len = len(static_tokens) + len(dynamic_ids)
 
-    if total_len > config.model.n_ctx:
+    if total_len > config.model.stream_context_limit:
         raise ValueError(
             f"Combined prompt length ({total_len}) exceeds the model's "
-            f"context window of {config.model.n_ctx} tokens."
+            f"per-stream context limit of {config.model.stream_context_limit} tokens."
         )
 
     full_prompt = list(static_tokens) + dynamic_ids
@@ -530,10 +530,10 @@ async def stream_completion(
     dynamic_ids = build_full_prompt(prompt, tokenizer)
     total_len = len(static_tokens) + len(dynamic_ids)
 
-    if total_len > config.model.n_ctx:
+    if total_len > config.model.stream_context_limit:
         raise ValueError(
             f"Combined prompt length ({total_len}) exceeds the model's "
-            f"context window of {config.model.n_ctx} tokens."
+            f"per-stream context limit of {config.model.stream_context_limit} tokens."
         )
 
     full_prompt = list(static_tokens) + dynamic_ids
@@ -693,10 +693,10 @@ async def run_chat_completion(
     tokenizer = get_cached_tokenizer()
     dynamic_ids = _build_messages_tokens(messages, tokenizer)
     full_prompt = list(static_tokens) + dynamic_ids
-    if len(full_prompt) > config.model.n_ctx:
+    if len(full_prompt) > config.model.stream_context_limit:
         raise ValueError(
             f"Combined prompt length ({len(full_prompt)}) exceeds the model's "
-            f"context window of {config.model.n_ctx} tokens."
+            f"per-stream context limit of {config.model.stream_context_limit} tokens."
         )
 
     backend = await _get_backend()
@@ -758,10 +758,10 @@ async def run_tool_completion(
         dynamic_ids = _build_messages_tokens(messages, tokenizer)
         full_prompt = list(static_tokens) + dynamic_ids
 
-        if len(full_prompt) > config.model.n_ctx:
+        if len(full_prompt) > config.model.stream_context_limit:
             raise ValueError(
                 f"Combined prompt length ({len(full_prompt)}) exceeds "
-                f"context window ({config.model.n_ctx})."
+                f"per-stream context limit ({config.model.stream_context_limit})."
             )
 
         backend = await _get_backend()
@@ -880,10 +880,10 @@ async def stream_tool_completion(
         dynamic_ids = _build_messages_tokens(messages, tokenizer)
         full_prompt = list(static_tokens) + dynamic_ids
 
-        if len(full_prompt) > config.model.n_ctx:
+        if len(full_prompt) > config.model.stream_context_limit:
             raise ValueError(
                 f"Combined prompt length ({len(full_prompt)}) exceeds "
-                f"context window ({config.model.n_ctx})."
+                f"per-stream context limit ({config.model.stream_context_limit})."
             )
 
         backend = await _get_backend()
