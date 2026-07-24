@@ -183,3 +183,50 @@ directly. See `AGENT.md` for the full `uv` command reference.
 **Never run bare `uv sync`.** It prunes out-of-band packages (terminal_bench, torch,
 transformers, mlx, the editable tau-bench install). Use `uv pip install <pkg>` or
 `uv sync --inexact`.
+
+## Designing Swarm-Type Workflows
+
+Hard-won guidance from the swarm-class economics study (2026-07-24; full
+data: ~/ouroboros_artifacts/swarmclass/SWARMCLASS_ANALYSIS.md). Two system
+reboots taught the first rule; measured throughput taught the rest.
+
+**1. Work the KV geometry BEFORE writing any serving config.** From the
+GGUF header (`gguf` package, header-only read):
+`bytes/token/layer = 2 (K+V) x kv_heads x key_length x 2 (f16)` — kv_heads
+may be a per-layer array (iSWA patterns). `swa_full: true` inflates every
+SWA layer to full context. Print the @target-ctx totals into the config as
+a comment. Anchors: gpt-oss ~2KB/tok/layer (KV-lean by design); gemma-4
+~32KB/tok/layer on its 50 SWA layers (262k swa_full ~= 480GB — precomputable
+death on 128GB). Boot any NEW serving shape under a memguard probe
+(wired-memory sampler + kill ceiling), never bare.
+
+**2. Substrate decision tree (measured, 2026-07-24):**
+- *Plain transformer, KV-lean* (gpt-oss): `decode_mode: batched` — the only
+  arrangement with real aggregate scaling (60→93 tok/s at 1→4 streams,
+  32-slot admission). This is the special case, not the norm.
+- *Everything else*: **batched @ n=1 is the default** (single shared
+  context, no alternation tax). Hybrids (GDN/recurrent — qwen3.6 line) are
+  REFUSED by the batched engine and get the plain single context. Do NOT
+  reach for the alternating pool for throughput: it time-slices one GPU —
+  decode floors at single-stream rate (~20 tok/s for the 27-31B dense
+  class) while per-call effective throughput craters to ~2.5 tok/s under
+  queueing + full-replay re-prefill on every slot switch (visible as a
+  20↔120W power sawtooth). The pool buys admission concurrency only, and a
+  load-time guard refuses pool with max_concurrent > 4.
+- *KV-fat transformers* (gemma-4): batched only at the swa_full-legal
+  context ceiling — and check the fan-out fits the pool budget (a 30-worker
+  fan-out starved a 48k pool into a terminal wedge). Full native context
+  requires pool mode with default (pruned) SWA — which forfeits batching.
+
+**3. Match the workload to the substrate.** Swarm code-assembly pays twice:
+seams at merge (every blind-panel decisive defect) and a serial repair tail
+that dominates wall-clock on slow decoders. Swarm-shaped work should be
+seam-free and parallel end-to-end — evidence-ledger merges (research,
+scraping, verification panels), not structural assembly. On this hardware
+the class penalty for swarm code work off gpt-oss measured 4-15x.
+
+**4. Known sharp edges** (open fix-items as of 2026-07-24): the batched
+engine leaks seats when a client cancels mid-generation (30 phantom seats
+wedged the engine terminally — drain seats on disconnect); the pool-fit
+admission gate under-waves against small pools (built against 131k gpt-oss
+geometry). Check OPEN_TASKS.md before relying on either behavior.
