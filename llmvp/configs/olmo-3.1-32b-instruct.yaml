@@ -1,3 +1,12 @@
+# ── DISPOSITION (2026-07-24): GATE-BLOCKED, kept for family reference ──
+# Failed the design coherence gate 2/2 (8 min per attempt, zero artifacts) —
+# same terminal class as archived mistral-small-4, different character:
+# attempt 1 was a REAL blueprint API inconsistency (gate correct); attempt 2
+# was an apparent FALSE-POSITIVE self-rejection (judged its own valid
+# flat-layout blueprint incoherent — the grounding judge is the serving
+# model). Contrast with Think (artifacts both windows): the thinking RL does
+# real work on this lineage. Before any retry: serve the design gate's
+# grounding from a stronger judge (e.g. a5) — see MORNING_REPORT 2026-07-24.
 # OLMo 3.1 32B INSTRUCT — the no-think sibling, added 2026-07-23 for the
 # family A/B vs the Think variant. GGUF template verified: same olmo2 arch,
 # same functions declaration (family: olmo covers it), NO <think> opener —

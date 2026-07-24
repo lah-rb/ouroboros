@@ -1,14 +1,12 @@
-# ── GREENFIELD TIER: provisional sub-Tier-3, VERDICT DEFERRED (2026-07-23) ──
-# Placement round (vs one member of each tier): 4th of 4 — but incomplete
-# rather than incompetent: ~75 min of its 2h window went to design
-# deliberation (competitive blueprint, finest data decomposition of the
-# fleet), and its one substantive file was corrupted by OUR fsm_labeller
-# gap (olmo family unmapped → "think>" residue = SyntaxError; fixed same
-# day) on top of a model-authored try/except defect. Constant maximal
-# thinking (no effort selector exists — template hardcodes <think>);
-# think:answer ratios 5:1-30:1 on ALL steps. Rerun merited post-fix with an
-# extended window; consider a DESIGN-SPECIALIST role (architect in a
-# heterogeneous fleet) rather than full-build worker.
+# ── DISPOSITION (Luke, 2026-07-24): KEEP — long-horizon/tuning-gated ──
+# The thinking RL does real work (competitive blueprint from a clean-parse
+# design; healthy terminating CoT; churn is decisional, not verbal). But the
+# deliberation tax is STRUCTURAL at mission scale: tuned rerun still
+# hard-capped at 1/14 (rp1.05 helped probes 55-83%, not missions). Produced
+# an artifact in BOTH standard windows (unlike Instruct). Use only with:
+# (a) much longer windows than the 2h standard, or (b) significant tuning
+# investment if interest becomes serious. Best-fit role: DESIGN SPECIALIST
+# (architect in a heterogeneous fleet). Lever sweep + rp1.05 details below.
 app:
   host: "0.0.0.0"
   port: 8008
