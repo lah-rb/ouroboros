@@ -2785,7 +2785,7 @@
       },
       "domain_research": {
         "action": "flow",
-        "description": "Search for domain knowledge to inform the project",
+        "description": "Parallel verified research sweep to inform the project",
         "config": {},
         "context": {
           "required": [
@@ -2794,12 +2794,17 @@
           "optional": []
         },
         "effects": [],
-        "flow": "research",
+        "flow": "deep_research",
         "input_map": {
-          "research_query": {
+          "brief": {
             "$ref": "context.mission.objective"
           },
-          "max_results": 3
+          "mission_id": {
+            "$ref": "input.mission_id"
+          },
+          "working_directory": {
+            "$ref": "context.mission.config.working_directory"
+          }
         },
         "params": {},
         "publishes": [

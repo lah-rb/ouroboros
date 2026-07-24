@@ -316,14 +316,21 @@ design_and_plan: #FlowDefinition & {
 
 		// ── Phase 3b: Proactive domain research ─────────────────────
 
+		// deep_research replaced the one-shot `research` flow here
+		// (2026-07-24): the parallel sweep — select panel within a search
+		// budget, per-hit extract burst, adversarial verify — produces a
+		// verified multi-angle summary for the same research_summary
+		// contract. Comparison baseline: the gptoss_393k_retest artifact
+		// ran the old one-shot search on the identical mission.
 		domain_research: #StepDefinition & {
 			action:      "flow"
-			description: "Search for domain knowledge to inform the project"
-			flow:        "research"
+			description: "Parallel verified research sweep to inform the project"
+			flow:        "deep_research"
 			context: required: ["mission"]
 			input_map: {
-				research_query: {$ref: "context.mission.objective"}
-				max_results:    3
+				brief:             {$ref: "context.mission.objective"}
+				mission_id:        {$ref: "input.mission_id"}
+				working_directory: {$ref: "context.mission.config.working_directory"}
 			}
 			resolver: {
 				type: "rule"
