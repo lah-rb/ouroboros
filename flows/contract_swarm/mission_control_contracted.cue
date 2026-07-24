@@ -180,6 +180,7 @@ mission_control_contracted: #FlowDefinition & {
 					{condition: "result.sweep_complete == true", transition: "check_phase"},
 					{condition: "result.needs_batch_create == true", transition: "dispatch_batch_create"},
 					{condition: "result.needs_content_batch == true", transition: "dispatch_content_batch"},
+					{condition: "result.needs_diagnose_batch == true", transition: "dispatch_diagnose_batch"},
 					{condition: "result.needs_create == true", transition: "dispatch_structural_create"},
 					{condition: "result.needs_fix == true", transition: "dispatch_structural_fix"},
 					{condition: "true", transition: "check_phase"},
@@ -215,6 +216,24 @@ mission_control_contracted: #FlowDefinition & {
 			context: required: ["dispatch_config", "mission"]
 			tail_call: {
 				flow: "create_content_batch"
+				input_map: {
+					mission_id:        {$ref: "input.mission_id"}
+					goal_id:           {$ref: "context.dispatch_config.goal_id", default: ""}
+					flow_directive:    {$ref: "context.dispatch_config.flow_directive"}
+					working_directory: {$ref: "context.mission.config.working_directory"}
+				}
+			}
+		}
+
+		// Batch mode: triage ALL gate-failed goals in one burst.
+		// last_goal_id stays empty — swarm_diagnose_batch books per-goal
+		// diagnosis reports itself (confidence-gated).
+		dispatch_diagnose_batch: #StepDefinition & {
+			action:      "noop"
+			description: "Triage all gate-failed goals in one burst"
+			context: required: ["dispatch_config", "mission"]
+			tail_call: {
+				flow: "diagnose_batch"
 				input_map: {
 					mission_id:        {$ref: "input.mission_id"}
 					goal_id:           {$ref: "context.dispatch_config.goal_id", default: ""}

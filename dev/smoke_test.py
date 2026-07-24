@@ -208,6 +208,10 @@ FLOW_INPUTS = {
         "mission_id": "test-mission-001",
         "flow_directive": "Generate every missing data file concurrently.",
     },
+    "diagnose_batch": {
+        "mission_id": "test-mission-001",
+        "flow_directive": "Triage every gate-failed goal concurrently.",
+    },
     "patch": {
         "file_path": "main.py",
         "file_content": "class Todo:\n    def save(self):\n        pass\n",

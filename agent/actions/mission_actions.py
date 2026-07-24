@@ -1486,6 +1486,45 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                     context_updates={"dispatch_config": dispatch_config},
                 )
 
+    # ── Batch mode: failed-goal diagnosis fan-out ─────────────────
+    # When ≥2 gate-failed goals would each take a full serial
+    # diagnose_issue cycle, dispatch ONE diagnose_batch triage burst
+    # first. Confidence-gated per goal (an unconfident triage books
+    # nothing and the goal takes the interactive flow as today);
+    # re-triage is prevented per goal id via the diagnose_batch notes.
+    if mode == "batch":
+        from agent.actions.contract_swarm_actions import (
+            _diagnose_batch_candidates,
+        )
+
+        diag_candidates = _diagnose_batch_candidates(mission, working_dir)
+        if len(diag_candidates) >= 2:
+            dispatch_config = {
+                "goal_id": "",
+                "goal_description": "Triage all gate-failed goals in one batch",
+                "goal_type": "structural",
+                "goal_files": [p for _, p, _ in diag_candidates],
+                "flow": "diagnose_batch",
+                "target_file_path": "",
+                "flow_directive": (
+                    "Triage every gate-failed structural goal concurrently "
+                    "with one-shot diagnoses."
+                ),
+                "recent_reports": [],
+            }
+            logger.info(
+                "Structural sweep: diagnose-batching %d gate-failed goals",
+                len(diag_candidates),
+            )
+            return StepOutput(
+                result={"sweep_complete": False, "needs_diagnose_batch": True},
+                observations=(
+                    f"Structural sweep: batch mode — triaging all "
+                    f"{len(diag_candidates)} gate-failed goals in one burst"
+                ),
+                context_updates={"dispatch_config": dispatch_config},
+            )
+
     # Walk files in order, find the first incomplete structural goal
     for file_path in sweep_files:
         # Find the goal for this file
@@ -1637,7 +1676,10 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
         if mode == "batch" and goal.reports and block_reason != "import":
             last = goal.reports[-1]
             last_flow = getattr(last, "flow", "")
-            if last_flow == "diagnose_issue":
+            # diagnose_batch books the same structured diagnosis contract
+            # as diagnose_issue (one-shot triage burst) — both map to a
+            # file_ops patch here.
+            if last_flow in ("diagnose_issue", "diagnose_batch"):
                 fileops = _fileops_dispatch_from_quality_diagnosis(
                     last, goal_id=goal.id, goal_description=goal.description
                 )

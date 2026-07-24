@@ -2028,3 +2028,252 @@ async def action_swarm_generate_content(step_input: StepInput) -> StepOutput:
             },
         },
     )
+
+
+# ── Failed-goal diagnosis fan-out (diagnose_batch) ───────────────────
+# The other measured serial segment: gate-failed goals route through the
+# full interactive diagnose_issue flow one-per-controller-cycle (3.9–24.9
+# min across the class study). Most fresh-file gate failures are locally
+# diagnosable (the failing file + gate output suffice), so a burst of
+# stateless one-shot triage completions pre-fills the diagnosis for every
+# candidate at once; the sweep then routes each straight to the file_ops
+# patch. CONFIDENCE-GATED: a worker that cannot diagnose locally books
+# nothing and its goal falls to the full interactive diagnosis unchanged.
+
+_DIAGNOSE_WORKER_PROMPT = (
+    "You are diagnosing ONE failed validation gate on a freshly generated "
+    "file. Work only from the evidence below — if the root cause needs "
+    "cross-file investigation you cannot see here, say so via "
+    '"confident": false.\n\n'
+    "GOAL:\n{directive}\n\n"
+    "FILE: {path}\n"
+    "GATE FAILURES: {checks}\n"
+    "GATE OUTPUT:\n{output}\n\n"
+    "FILE CONTENT:\n{content}\n\n"
+    "Return ONLY a fenced JSON object:\n"
+    '{{"confident": true|false, "root_cause": "one-paragraph diagnosis", '
+    '"target_symbol": "symbol to change or empty", '
+    '"change_spec": "the specific change to make", '
+    '"diagnosis_kind": "fix"|"module_fix", '
+    '"module_statement": "exact module-level line when module_fix, else empty", '
+    '"related_symbols": []}}'
+)
+
+
+def _diagnose_batch_candidates(mission: Any, working_directory: str) -> list[tuple]:
+    """Gate-failed structural goals eligible for one-shot triage: file on
+    disk, last report failed and is not already a diagnosis, not an
+    import-decision case, and not already triaged by a prior burst."""
+    import os
+
+    from agent.actions.mission_actions import structural_block_reason
+
+    triaged: set[str] = set()
+    for n in mission.notes:
+        if "diagnose_batch" in (getattr(n, "tags", None) or []):
+            triaged.update(
+                t.strip() for t in (getattr(n, "content", "") or "").split(",")
+            )
+    out: list[tuple] = []
+    for goal in mission.goals:
+        if goal.type != "structural" or goal.status == "complete":
+            continue
+        if not goal.reports or goal.id in triaged:
+            continue
+        last = goal.reports[-1]
+        if getattr(last, "status", "") != "failed":
+            continue
+        if getattr(last, "flow", "") in ("diagnose_issue", "diagnose_batch"):
+            continue
+        checks_failed = getattr(last, "checks_failed", []) or []
+        if structural_block_reason(goal, checks_failed) == "import":
+            continue
+        files = [f for f in (goal.associated_files or []) if f]
+        if len(files) != 1:
+            continue
+        if not working_directory or not os.path.isfile(
+            os.path.join(working_directory, files[0])
+        ):
+            continue
+        out.append((goal, files[0], last))
+    return out
+
+
+async def action_swarm_diagnose_batch(step_input: StepInput) -> StepOutput:
+    """Fan out one stateless triage completion per gate-failed goal.
+
+    Context required: mission
+    Params: max_workers (default 32), pool_budget (default 131072 —
+        FALLBACK only; the pool-fit gate asks the server for kvPoolTokens)
+    Publishes: directive_report
+
+    Confident workers book a diagnose-family DirectiveReport (the exact
+    field contract _fileops_dispatch_from_quality_diagnosis maps to a
+    patch dispatch) so the next sweep routes the goal straight to
+    file_ops. Unconfident workers book NOTHING — the goal takes the full
+    interactive diagnose_issue flow as today. Every targeted goal id is
+    recorded in the "diagnose_batch"-tagged note so no goal is triaged
+    twice (mission mutation is serial post-hoc, the apply_batch_results
+    discipline).
+    """
+    import os
+
+    from agent.actions.fanout import FanoutPerf, estimate_draw, pool_fit_width
+    from agent.persistence.models import DirectiveReport, NoteRecord
+
+    effects = step_input.effects
+    ctx = step_input.context
+    mission = ctx.get("mission")
+    working_directory = str(step_input.inputs.get("working_directory", "") or "")
+    max_workers = int(step_input.params.get("max_workers", 32) or 32)
+    pool_budget = int(step_input.params.get("pool_budget", 131072) or 131072)
+
+    targets = _diagnose_batch_candidates(mission, working_directory) if mission else []
+    if not effects or not mission or not targets:
+        return StepOutput(
+            result={"any_ok": False, "n_targets": 0},
+            observations="Diagnose batch: no gate-failed goals to triage",
+            context_updates={"directive_report": {}},
+        )
+
+    prompts: dict[str, str] = {}
+    for goal, path, last in targets:
+        content = ""
+        try:
+            fc = await effects.read_file(os.path.join(working_directory, path))
+            content = (getattr(fc, "content", "") or "")[:6000]
+        except Exception:  # noqa: BLE001 — diagnose from gate output alone
+            pass
+        prompts[goal.id] = _DIAGNOSE_WORKER_PROMPT.format(
+            directive=(goal.description or "")[:1500],
+            path=path,
+            checks=", ".join(getattr(last, "checks_failed", []) or []) or "?",
+            output=(getattr(last, "terminal_output", "") or "")[:1200],
+            content=content or "(unreadable)",
+        )
+
+    decision = await pool_fit_width(
+        effects,
+        [estimate_draw(p, gen_margin=1024) for p in prompts.values()],
+        max_workers=max_workers,
+        pool_budget_fallback=pool_budget,
+        label="diagnose_batch",
+    )
+    sem = asyncio.Semaphore(max(decision.width, 1))
+    perf = FanoutPerf(working_directory)
+    burst_t0 = time.monotonic()
+    perf.row(
+        {
+            "event": "burst",
+            "kind": "diagnose_batch",
+            "t0_epoch": round(time.time(), 3),
+            "goals": len(targets),
+            "max_workers": max_workers,
+            **decision.perf_fields(),
+        }
+    )
+
+    async def run_worker(goal: Any, path: str) -> tuple[Any, str, dict]:
+        parsed: dict = {}
+        tokens = 0
+        try:
+            async with sem:
+                res = await effects.run_inference(
+                    prompts[goal.id],
+                    {"temperature": "t*0.3", "max_tokens": 2048},
+                )
+            tokens = int(getattr(res, "tokens_generated", 0) or 0)
+            if not getattr(res, "error", None):
+                p = parse_llm_json(getattr(res, "text", "") or "")
+                if isinstance(p, dict):
+                    parsed = p
+        except Exception as e:  # noqa: BLE001 — unconfident, serial fallback
+            logger.warning("diagnose_batch worker failed for %s: %s", path, e)
+        confident = bool(parsed.get("confident")) and bool(
+            str(parsed.get("change_spec", "") or "").strip()
+        )
+        perf.row(
+            {
+                "event": "worker",
+                "kind": "diagnose_goal",
+                "path": path,
+                "ok": confident,
+                "generated_tokens": tokens,
+                "t_done": round(time.monotonic() - burst_t0, 2),
+            }
+        )
+        return goal, path, {"confident": confident, "parsed": parsed}
+
+    results = await asyncio.gather(*(run_worker(g, p) for g, p, _ in targets))
+
+    # Serial post-hoc booking.
+    diagnosed: list[str] = []
+    deferred: list[str] = []
+    for goal, path, outcome in results:
+        if not outcome["confident"]:
+            deferred.append(path)
+            continue
+        parsed = outcome["parsed"]
+        kind = str(parsed.get("diagnosis_kind", "") or "fix")
+        if kind not in ("fix", "module_fix"):
+            kind = "fix"
+        goal.reports.append(
+            DirectiveReport(
+                flow="diagnose_batch",
+                status="success",
+                summary=str(parsed.get("root_cause", "") or "")[:800]
+                + "\nChange: "
+                + str(parsed.get("change_spec", "") or "")[:500],
+                headline=f"Batch triage: {path}",
+                files_affected=[path],
+                recommended_flow="file_ops",
+                target_file=path,
+                target_symbol=str(parsed.get("target_symbol", "") or ""),
+                change_spec=str(parsed.get("change_spec", "") or ""),
+                diagnosis_kind=kind,
+                module_statement=str(parsed.get("module_statement", "") or ""),
+                related_symbols=[str(s) for s in (parsed.get("related_symbols") or [])],
+            )
+        )
+        diagnosed.append(path)
+
+    mission.notes.append(
+        NoteRecord(
+            # Content = the triaged goal-id ledger the candidate filter reads.
+            content=", ".join(g.id for g, _, _ in targets),
+            category="codebase_observation",
+            tags=["diagnose_batch"],
+            source_flow="diagnose_batch",
+        )
+    )
+    await effects.save_mission(mission)
+
+    wall_s = time.monotonic() - burst_t0
+    perf.row(
+        {
+            "event": "burst_done",
+            "kind": "diagnose_batch",
+            "t_done": round(wall_s, 2),
+            "ok": len(diagnosed),
+            "failed": len(deferred),
+        }
+    )
+    obs = (
+        f"Diagnose batch: {len(diagnosed)}/{len(targets)} goals triaged "
+        f"confidently in {wall_s:.0f}s ({decision.width} concurrent "
+        f"[{decision.gate}], budget={decision.budget_source})"
+        + (f"; deferred to interactive: {', '.join(deferred)}" if deferred else "")
+    )
+    logger.info(obs)
+    return StepOutput(
+        result={"any_ok": bool(diagnosed), "n_targets": len(targets)},
+        observations=obs,
+        context_updates={
+            "directive_report": {
+                "flow": "diagnose_batch",
+                "status": "success" if diagnosed else "failed",
+                "summary": obs,
+                "files_affected": diagnosed,
+            }
+        },
+    )
