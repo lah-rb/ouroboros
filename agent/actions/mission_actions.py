@@ -654,6 +654,11 @@ async def action_finalize_mission(step_input: StepInput) -> StepOutput:
         mission.status = "aborted"
     else:
         mission.status = "completed"
+        # Record the ceiling this completion was earned at — the stacking
+        # continuance key (resume reopens when top_phase is later raised).
+        mission.completed_at_phase = str(
+            getattr(getattr(mission, "config", None), "top_phase", "") or "quality"
+        )
 
     # Terminal archive sweep: the per-cycle sweep (attach_directive_report)
     # never runs AFTER the final goal completes — this catches the last

@@ -91,6 +91,11 @@ class MissionYAMLConfig(BaseModel):
     # batched GENERATION, not concurrent workers. Legacy value accepted and
     # normalized at the read site (structural_sweep_next).
     structural_mode: Literal["batch", "parallel", "serial"] = "batch"
+    # Stackable-phase ceiling (flow_sets.PHASE_RANKS keys): highest phase to
+    # pursue before 'complete'. Default = the full pipeline through quality.
+    top_phase: Literal[
+        "structural", "environment", "functional", "test_suite", "quality", "polish"
+    ] = "quality"
     principles: list[str] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
 

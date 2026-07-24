@@ -154,12 +154,19 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         or "parallel"
     )
 
+    top_phase = (
+        getattr(args, "top_phase", None)
+        or (yaml_config.top_phase if yaml_config else None)
+        or "quality"
+    )
+
     config = MissionConfig(
         working_directory=working_dir,
         # `mission create` builds projects: greenfield by definition. The
         # ingest/adoption path stamps "ingest" via its own flow; legacy
         # missions carry "" and keep the old inference behavior.
         origin=("ingest" if flow_set == "ingest_workspace" else "greenfield"),
+        top_phase=top_phase,
         effects_profile=effects_profile,
         llmvp_endpoint=llmvp_endpoint,
         flow_set=flow_set,
@@ -281,9 +288,59 @@ def cmd_mission_resume(args: argparse.Namespace) -> None:
         print("▶  Mission resumed.")
     elif mission.status == "active":
         print("Mission is already active.")
+    elif mission.status == "completed":
+        # Phase stacking: a completed mission reopens when its ceiling has
+        # been RAISED above the phase it completed at (set-top-phase, or an
+        # edited config). Equal-or-below keeps the terminal state.
+        from agent.flow_sets import PHASE_RANKS
+
+        top = str(getattr(mission.config, "top_phase", "") or "quality")
+        done_at = str(getattr(mission, "completed_at_phase", "") or "quality")
+        if PHASE_RANKS.get(top, 0) > PHASE_RANKS.get(done_at, 0):
+            mission.status = "active"
+            pm.save_mission(mission)
+            event = Event(
+                type="resume",
+                payload={
+                    "reason": (
+                        f"Ceiling raised {done_at} -> {top} — resuming the "
+                        f"phase ladder"
+                    )
+                },
+            )
+            pm.push_event(event)
+            print(f"▶  Mission reopened: ceiling {done_at} -> {top}.")
+        else:
+            print(
+                f"Mission completed at top_phase '{done_at}' and the ceiling "
+                f"is not higher ('{top}'). Raise it first: "
+                f"mission set-top-phase <phase>"
+            )
     else:
         print(f"Mission is '{mission.status}'. Cannot resume.")
         sys.exit(1)
+
+
+def cmd_mission_set_top_phase(args: argparse.Namespace) -> None:
+    """Set the mission's phase ceiling (see flow_sets.PHASE_RANKS)."""
+    from agent.flow_sets import PHASE_RANKS
+
+    pm, mission = _load_mission_or_exit(args)
+    phase = args.phase
+    if phase not in PHASE_RANKS:
+        print(f"Unknown phase {phase!r}. Choose from: {', '.join(PHASE_RANKS)}")
+        sys.exit(1)
+    old = getattr(mission.config, "top_phase", "quality")
+    mission.config.top_phase = phase
+    pm.save_mission(mission)
+    print(
+        f"top_phase: {old} -> {phase}. "
+        + (
+            "Run `mission resume` to reopen and continue the ladder."
+            if mission.status == "completed"
+            else "Takes effect at the next phase check."
+        )
+    )
 
 
 def cmd_mission_abort(args: argparse.Namespace) -> None:
@@ -889,6 +946,21 @@ def main() -> None:
         "ops vs code_core in-graph; name a set to skip routing)",
     )
     create_p.add_argument("--tasks", nargs="*", help="Initial task descriptions")
+    create_p.add_argument(
+        "--top-phase",
+        dest="top_phase",
+        choices=[
+            "structural",
+            "environment",
+            "functional",
+            "test_suite",
+            "quality",
+            "polish",
+        ],
+        help="Stackable-phase ceiling: highest phase to pursue before "
+        "'complete' (default quality — the full pipeline). Experiments use "
+        "structural/functional for clean phase-boundary stops.",
+    )
 
     # mission status
     status_p = mission_sub.add_parser("status", help="Show mission status")
@@ -901,6 +973,16 @@ def main() -> None:
     # mission resume
     resume_p = mission_sub.add_parser("resume", help="Resume a paused mission")
     resume_p.add_argument("--working-dir", help="Working directory (default: cwd)")
+
+    # mission set-top-phase
+    stp_p = mission_sub.add_parser(
+        "set-top-phase",
+        help="Raise/lower the mission's phase ceiling (stackable phases)",
+    )
+    stp_p.add_argument(
+        "phase", help="structural|environment|functional|test_suite|quality|polish"
+    )
+    stp_p.add_argument("--working-dir", help="Working directory (default: cwd)")
 
     # mission abort
     abort_p = mission_sub.add_parser("abort", help="Abort the mission")
@@ -985,6 +1067,7 @@ def main() -> None:
             "pause": cmd_mission_pause,
             "resume": cmd_mission_resume,
             "abort": cmd_mission_abort,
+            "set-top-phase": cmd_mission_set_top_phase,
             "reopen": cmd_mission_reopen,
             "message": cmd_mission_message,
             "history": cmd_mission_history,

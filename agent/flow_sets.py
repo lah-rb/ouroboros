@@ -69,6 +69,28 @@ class PhaseRule:
     # object — "architecture" for the code pipeline, "research_plan"
     # for the scraper.
     attr: str = "architecture"
+    # Stackable-phase ladder position (see PHASE_RANKS). 0 = always applies
+    # (planning preconditions, regression protection, pending directives).
+    # A ranked rule is SKIPPED when its rank exceeds the mission's
+    # config.top_phase ceiling — evaluate_phases then returns 'complete'
+    # once every applicable rule is satisfied, so a mission can be run "up
+    # to structural" / "up to functional" etc. Default 0 keeps every
+    # existing rule set (scraper, ingest) byte-identical in behavior.
+    rank: int = 0
+
+
+# Canonical phase ladder for the code pipeline: config.top_phase names one of
+# these; rules ranked above it are skipped. "quality" is today's terminal, so
+# the default ceiling reproduces existing behavior exactly. (The polish tier
+# reserves 60 — the gate itself lands in a later change.)
+PHASE_RANKS: dict[str, int] = {
+    "structural": 10,
+    "environment": 20,
+    "functional": 30,
+    "test_suite": 40,
+    "quality": 50,
+    "polish": 60,
+}
 
 
 @dataclass(frozen=True)
@@ -113,18 +135,21 @@ CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
         phase="structural",
         goal_type="structural",
         observation="Structural phase: {incomplete}/{total} incomplete",
+        rank=PHASE_RANKS["structural"],
     ),
     PhaseRule(
         kind="flag_unset",
         phase="environment",
         flag="environment_verified",
         observation="All structural goals complete — environment needs verification",
+        rank=PHASE_RANKS["environment"],
     ),
     PhaseRule(
         kind="goal_type_incomplete",
         phase="functional",
         goal_type="functional",
         observation="Functional phase: {incomplete}/{total} incomplete",
+        rank=PHASE_RANKS["functional"],
     ),
     # Test-suite gate (Phase B.5): after functional goals complete, run the
     # repo's OWN suite before the quality gate. Fires until tests_verified is
@@ -137,6 +162,7 @@ CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
         phase="test_suite",
         flag="tests_verified",
         observation="Functional complete — running the repo's test suite",
+        rank=PHASE_RANKS["test_suite"],
     ),
     # Quality goals are harvested from gate findings (origin="quality_gate")
     # for issues with no clean interact re-test; they're worked AFTER
@@ -148,11 +174,13 @@ CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
         phase="quality_fix",
         goal_type="quality",
         observation="Quality-fix phase: {incomplete}/{total} incomplete",
+        rank=PHASE_RANKS["quality"],
     ),
     PhaseRule(
         kind="terminal",
         phase="quality",
         observation="All goals complete — ready for quality gate",
+        rank=PHASE_RANKS["quality"],
     ),
 )
 
@@ -336,8 +364,24 @@ def get_flow_set(name: str) -> FlowSetSpec:
 
 
 def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, str]:
-    """Evaluate a phase spec against mission state -> (phase, observation)."""
+    """Evaluate a phase spec against mission state -> (phase, observation).
+
+    Stackable ceiling: ``mission.config.top_phase`` names the highest ladder
+    phase to pursue (PHASE_RANKS; default "quality" = the full pipeline).
+    Ranked rules above the ceiling are skipped; when the walk then exhausts,
+    the mission is 'complete' AT THAT CEILING — mission_control's existing
+    ``phase == 'complete'`` route finalizes it. Rule sets with no ranked
+    rules (scraper, ingest) never skip and keep the legacy exhaustion path.
+    """
+    top_phase = str(
+        getattr(getattr(mission, "config", None), "top_phase", "") or "quality"
+    )
+    ceiling = PHASE_RANKS.get(top_phase, max(PHASE_RANKS.values()))
+    skipped_above_ceiling = False
     for rule in phases:
+        if rule.rank > ceiling:
+            skipped_above_ceiling = True
+            continue
         if rule.kind == "requires_planning":
             if not mission:
                 return rule.phase, "No mission — needs planning"
@@ -432,5 +476,12 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
 
     # A spec without a terminal rule is a registration bug; fail safe to
     # planning rather than raising mid-loop.
+    if skipped_above_ceiling:
+        # Every applicable rule is satisfied and the only unmet ones sit
+        # above the mission's declared ceiling — complete AT the ceiling.
+        return (
+            "complete",
+            f"top_phase '{top_phase}' satisfied — mission complete at ceiling",
+        )
     logger.error("Phase spec exhausted without a terminal rule")
     return "plan", "Phase spec exhausted — re-planning"

@@ -40,6 +40,13 @@ class MissionConfig(BaseModel):
     # (OLMo 2026-07-23: the inference misread a greenfield arch-parse failure
     # as brownfield and functional-tested an empty repo for 80 minutes).
     origin: str = ""
+    # Stackable-phase ceiling (flow_sets.PHASE_RANKS): the highest ladder
+    # phase to pursue before the mission earns 'complete'. Default "quality"
+    # = today's full pipeline. Experiments set "structural"/"functional" to
+    # stop cleanly at a phase boundary (replaces poll-and-pause orchestrator
+    # hacks); raising it on a completed mission + `mission resume` reopens
+    # and continues the ladder (see completed_at_phase).
+    top_phase: str = "quality"
     effects_profile: Literal["local", "git_managed", "dry_run"] = "local"
     escalation_budget_usd: float | None = None
     escalation_tokens_used: int = 0
@@ -919,6 +926,12 @@ class MissionState(BaseModel):
     # seeds. Additive default keeps old mission.json files loading.
     workspace_ledger: list[WorkspaceLedgerEntry] = Field(default_factory=list)
     environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
+    # The phase ceiling this mission COMPLETED at (config.top_phase at
+    # finalize time; "" for deadlocked/aborted/legacy). The continuance key
+    # for phase stacking: `mission resume` reopens a completed mission when
+    # its config.top_phase now ranks ABOVE this — run to structural today,
+    # raise the ceiling and resume tomorrow.
+    completed_at_phase: str = ""
     # Smoke-command result on the UNTOUCHED repo, captured once when
     # environment_verified flips (None = no smoke command / not measured).
     # The post-write smoke check stands down when this is False: a check that
