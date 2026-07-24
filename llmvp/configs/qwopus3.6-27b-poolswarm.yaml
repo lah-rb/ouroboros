@@ -1,0 +1,82 @@
+# QWOPUS MTP PROBE VARIANT (2026-07-24 night runs): Jackrong Qwopus3.6-27B-
+# Coder-MTP Q6_K on the qwen3.6-27b pool-swarm arrangement. Same arch class
+# (qwen35, 4kvh x 256d = 4KB/tok/attn-layer; pool x4 @65k ≈ 4GB KV) plus a
+# blk.64 nextn (MTP) layer our binding has no draft loop for — expect load-
+# with-no-speedup or clean rejection; this run characterizes which.
+# qwen3.6-27b POOL-swarm variant (2026-07-24): the hybrid-legal swarm
+# substrate after the batched engine refused the architecture.
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 262144
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "qwopus3.6-27b-poolswarm"
+  family: "chatml"
+  path: /Users/lah-rb/.lmstudio/models/Jackrong/Qwopus3.6-27B-Coder-MTP-GGUF/Qwopus3.6-27B-Coder-MTP-Q6_K.gguf
+  n_ctx: 65536
+  n_gpu_layers: -1   
+  seed: -1
+  verbose: false
+  thinking: true
+  # 2026-07-22: was on the legacy save_state/load_state session path (no
+  # replay, no resident_seq_cache) — the same exposure found on
+  # mistral-small-4, where a corrupted saved state is reloaded every turn and
+  # so never recovers. Every other served config uses replay or resident.
+  session_full_replay: true
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 32768
+  # GDN-hybrid loop posture (2026-07-22, dev/qwen3_loop_research.md) —
+  # same substrate/paragraph-orbit risk as qwen3-next/3.5/3.6-35b.
+  temperature_default: 0.7
+  temperature_floor: 0.7
+  session_temp_floor: 0.7
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  penalty_last_n: 2048
+  # DRY REMOVED 2026-07-22 (isolation test — see qwen3-next-coder config):
+  # DRY converted the catchable coherent orbit into an uncatchable
+  # noise-slot structural loop that blinds the distinct-ratio guard.
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/qwopus3.6-27b.tokens.bin"
+  token_limit: 32768
+
+resources:
+  # POOL, not batched: qwen3.6-27b is dense-FFN but HYBRID-attention (GDN
+  # recurrent layers) — the batched engine rejects hybrids at init (multi-seq
+  # recurrent state unsupported). 4 alternating contexts x 65k = ~16GB KV.
+  # Expect admission concurrency only, ~no aggregate decode scaling (Metal
+  # multi-context simultaneous decode is the documented dead end) — that
+  # measurement IS the swarm-class finding for hybrids.
+  decode_mode: "pool"
+  cpu_threads: 15
+  max_concurrent_requests: 4
+  jit_concurrency_limit: null  
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"

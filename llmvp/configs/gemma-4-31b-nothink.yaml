@@ -1,0 +1,94 @@
+# NON-THINKING VARIANT (2026-07-24 night runs): gemma-4 default no-think
+# mode — thinking:false prefills the CLOSED thought channel every turn
+# (structurally forecloses reasoning; see base config's comment). The
+# fixed-off arm of the gemma thinking A/B (adaptive arm = base config +
+# OURO_ADAPTIVE_REASONING=1).
+# ── GREENFIELD TIER 1 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# 2nd of 8, winnable end-to-end (weakness 2x + phase-rage verified live) — and
+# achieved with thinking effectively OFF (the run predates the medium→<|think|>
+# remap; both adaptive arms rendered padding). Artifact flaws: mid-fight heal
+# attacked instead, persistence import fell back to a silent no-op + degraded
+# parser. Expect headroom with thinking ON.
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 65536
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "gemma-4-31b-nothink"
+  family: "gemma"
+  # RESIDENT cache economics (dev/CACHE_STATE.md matrix): SWA dense — measured full-stack 2026-07-02 (resident-live 37/46 tok turns, hot snapshot forks 1.2s).
+  resident_seq_cache: true
+  # Per-turn adaptive reasoning via the head swap. Gemma-4 is BIMODAL — the
+  # levels map in formats/gemma.yaml renders high -> <|think|> and low/medium
+  # -> a token-length-MATCHED padding, so the mid-session splice stays legal
+  # (it refuses unequal heads). Requires resident_seq_cache, above.
+  reasoning_head_swap: true
+  # TRUE is load-bearing for the reasoning toggle: formats/gemma.yaml maps
+  # medium/high -> <|think|> (thinking-ON default; router's low pads it out).
+  # thinking:false would prefill the already-CLOSED empty thought channel in
+  # every generation prompt (prefill_closed_when_disabled), structurally
+  # foreclosing reasoning and cancelling the <|think|> head — so the flag must
+  # track the DEFAULT level's state. With true we prefill the OPEN
+  # `<|channel>thought\n` opener; in the padded-off state the model just
+  # closes it immediately (it self-emits the empty channel anyway —
+  # dev/gemma_pad_probe.py).
+  thinking: false
+  path: /Users/lah-rb/.lmstudio/models/lmstudio-community/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf
+  # Full native context (Luke 2026-07-24): the old 65536 cap guarded a
+  # semi-broken early release that blew up memory at full context without
+  # warning — not observed with the QAT GGUF on the current llama-cpp bin,
+  # so corrected to the model max.
+  n_ctx: 262144
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto   # REAL knob (old flash_attention: true was a silent no-op)
+  n_batch: 2048           # REAL knob (old batch_size: 512 was a silent no-op)
+  swa_full: true
+  kv_unified: true
+  # save_state churn corrupts deep-session KV (the gpt-oss `code -3` class);
+  # this config predated that finding with flow_kv_cache: true — now off.
+  flow_kv_cache: false
+  # Full re-prefill per turn from the pristine static snapshot — the safe
+  # session path on every model until resident is validated per-model.
+  session_full_replay: true
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 65536
+  temperature_default: 1.0
+  top_p: 0.95
+  top_k: 64
+  repeat_penalty: 1.0
+  # Deep session turns are repetition attractors (gemma-4 token loops are
+  # the documented degenerate-purge case); floor sampling from turn 3 on.
+  session_temp_floor: 0.35
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/gemma-4-31b.tokens.bin"
+  token_limit: 32768
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 1
+  jit_concurrency_limit: null
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
