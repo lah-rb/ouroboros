@@ -1,3 +1,11 @@
+# ── GREENFIELD FAMILY-BLIND WINNER (2026-07-24; /tmp/greenfield_night/MORNING_REPORT.md) ──
+# Won the qwen family blind OUTRIGHT (vs 3.5-122B-MoE and 3.6-35B-MoE): the
+# only winnable game the family has produced — judge live-completed the full
+# arc (hints, equipment, two-phase boss, weakness item, mid-fight heal).
+# 12/15 goals in a clean full window, ZERO orbit/degeneration signatures —
+# the dense variant lacks the GDN-hybrid deliberation pathology. Tier-1
+# adjacent pending Luke's review (only step37 and gemma have also produced
+# winnable artifacts). Residual defects: defeat not terminal, load unwired.
 app:
   host: "0.0.0.0"
   port: 8008
