@@ -307,3 +307,26 @@ def test_seat_reaper_strike_resets_when_stream_appears():
         assert be._checked_out == 1  # back to strike one, not reclaimed
 
     asyncio.run(scenario())
+
+
+# ── health: KV budget + seat accounting surfaced ──────────────────────
+
+
+def test_health_reports_kv_pool_tokens_and_seat_accounting():
+    be = _backend()
+    be.config.model.n_ctx = 131072
+
+    class HealthyEngine(FakeEngine):
+        def health(self):
+            return {"decode_mode": "batched", "active_streams": 3}
+
+    async def scenario():
+        _wire(be, HealthyEngine())
+        be._checked_out = 2
+        info = be.get_health_status()
+        assert info["kv_pool_tokens"] == 131072
+        assert info["decode_mode"] == "batched"
+        assert info["checked_out"] == 2
+        assert info["batched_engine"]["active_streams"] == 3
+
+    asyncio.run(scenario())

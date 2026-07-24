@@ -3769,6 +3769,15 @@ class LlamaCppBackend(BaseBackend):
             info["static_state_tokens"] = self._static_state.n_tokens
             info["static_state_bytes"] = self._static_state.llama_state_size
         info["decode_mode"] = self._decode_mode
+        # Real KV token budget for client-side admission gates (the swarm
+        # pool-fit gate): the SHARED pool in batched mode, the per-instance
+        # context in pool mode — a client treating it as shared under-admits
+        # there, which is the safe direction. pool_size is the SEAT count;
+        # without this field clients had to hardcode the geometry (the 48k
+        # gemma pool was gated against gpt-oss's 131k).
+        n_ctx = getattr(getattr(self.config, "model", None), "n_ctx", None)
+        if n_ctx:
+            info["kv_pool_tokens"] = int(n_ctx)
         if self._engine is not None:
             # Batched engine internals; a fatal latch flips overall status
             # so dashboards/soaks see the outage without new fields.

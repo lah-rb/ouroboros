@@ -100,6 +100,16 @@ class HealthStatus:
     ttft_recent_s: Optional[float] = None
     decode_tps_baseline: Optional[float] = None
     throughput_drift: Optional[float] = None
+    # KV-budget + seat accounting. kv_pool_tokens is the real token budget
+    # (model n_ctx: shared pool in batched mode, per-instance in pool mode)
+    # — the field the swarm pool-fit gate sizes admission against; pool_size
+    # above is only the SEAT count. checked_out vs in_flight separates
+    # "seats held" from "GPU busy" (a leaked seat shows here); default-safe
+    # for backends that omit them.
+    kv_pool_tokens: Optional[int] = None
+    decode_mode: str = ""
+    checked_out: int = 0
+    engine_active_streams: Optional[int] = None
 
 
 @strawberry.type
@@ -406,6 +416,12 @@ class Query:
             runaway_captures=status.get("runaway_captures", 0),
             context_refreshes=status.get("context_refreshes", 0),
             requests_since_refresh=status.get("requests_since_refresh", 0),
+            kv_pool_tokens=status.get("kv_pool_tokens"),
+            decode_mode=status.get("decode_mode", ""),
+            checked_out=status.get("checked_out", 0),
+            engine_active_streams=(status.get("batched_engine") or {}).get(
+                "active_streams"
+            ),
             **{
                 k: trend_status.get(k)
                 for k in (
