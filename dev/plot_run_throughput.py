@@ -157,24 +157,29 @@ def plot(spans: list[dict], out: Path, title: str) -> None:
         if s["prefill_s"] > 0:
             _spread(s["prefill_tok"], d_start - s["prefill_s"], d_start, prefill_rate)
 
-    fig, (ax_total, ax_lanes) = plt.subplots(
-        2, 1, figsize=(14, 9), sharex=True, height_ratios=[1, 1.4]
+    # Decode and prefill get SEPARATE panels: prefill peaks (thousands of
+    # tok/s at burst admission) are 50x the decode scale and flatten it to
+    # the floor on a shared axis.
+    fig, (ax_decode, ax_prefill, ax_lanes) = plt.subplots(
+        3, 1, figsize=(14, 11), sharex=True, height_ratios=[1, 0.7, 1.4]
     )
     xs = [(t0 + (i + 0.5) * BIN_S - t0) / 60.0 for i in range(n_bins)]
-    ax_total.plot(xs, decode_rate, label="aggregate decode tok/s", lw=1.6)
-    ax_total.plot(xs, prefill_rate, label="aggregate prefill tok/s", lw=1.0, alpha=0.6)
-    for s in spans:
-        if s["kind"] == "swarm":
-            ax_total.axvspan(
-                (s["start"] - t0) / 60.0,
-                (s["end"] - t0) / 60.0,
-                color="tab:green",
-                alpha=0.03,
-                lw=0,
-            )
-    ax_total.set_ylabel("tok/s (total)")
-    ax_total.legend(loc="upper right", fontsize=8)
-    ax_total.set_title(title)
+    ax_decode.plot(xs, decode_rate, color="tab:blue", lw=1.6)
+    ax_prefill.plot(xs, prefill_rate, color="tab:orange", lw=1.2)
+    for ax, label in ((ax_decode, "decode tok/s"), (ax_prefill, "prefill tok/s")):
+        for s in spans:
+            if s["kind"] == "swarm":
+                ax.axvspan(
+                    (s["start"] - t0) / 60.0,
+                    (s["end"] - t0) / 60.0,
+                    color="tab:green",
+                    alpha=0.03,
+                    lw=0,
+                )
+        ax.set_ylabel(f"aggregate {label}")
+        ax.grid(True, axis="y", lw=0.5, alpha=0.4)
+        ax.set_ylim(bottom=0)
+    ax_decode.set_title(title)
 
     # Greedy lane packing: lane = a concurrent stream slot.
     lanes: list[float] = []
@@ -198,6 +203,7 @@ def plot(spans: list[dict], out: Path, title: str) -> None:
     fig.colorbar(sm, ax=ax_lanes, label="per-stream decode tok/s", pad=0.01)
     ax_lanes.set_ylabel(f"concurrent stream lanes (peak {len(lanes)})")
     ax_lanes.set_xlabel("run time (min)")
+    ax_lanes.grid(True, axis="y", lw=0.5, alpha=0.3)
     fig.tight_layout()
     fig.savefig(out, dpi=130)
     print(f"wrote {out} ({len(spans)} spans, peak {len(lanes)} lanes)")
