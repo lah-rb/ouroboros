@@ -77,6 +77,15 @@ _FAMILY_STRUCTURAL_CATS: dict[str, set] = {
     "chatml": {
         ObsCategory.MARKER_THINK,
     },
+    # OLMo is chatml-framed with inline <think> tags (formats/olmo.yaml —
+    # chatml + the functions declaration). It MUST alias chatml here and in
+    # the phase dispatch: the unknown-family default (DELIM, no think-marker
+    # handling) mis-split OLMo output, leaving a "think>" residue at the head
+    # of extracted CONTENT (a SyntaxError as combat.py line 1, 2026-07-23)
+    # and capturing NO thinking at all (thinking_content=0 on every call).
+    "olmo": {
+        ObsCategory.MARKER_THINK,
+    },
     "mistral": {
         ObsCategory.MARKER_INST,
         ObsCategory.MARKER_END_TAG,
@@ -268,7 +277,7 @@ def label_atoms(
     #   See _bracket_think_start_phase.
     if family == "harmony":
         phase = Phase.DELIM
-    elif family == "chatml":
+    elif family in ("chatml", "olmo"):
         phase = _chatml_start_phase(atoms)
     elif family in ("tekken", "mistral"):
         phase = _bracket_think_start_phase(atoms)

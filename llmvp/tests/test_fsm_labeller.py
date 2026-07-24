@@ -898,3 +898,21 @@ def test_seal_chatml_im_end():
     out = fsm_extract_content(raw, family="chatml")
     assert "answer" in out
     assert "fake ramble" not in out
+
+
+def test_olmo_family_aliases_chatml_think_handling():
+    """OLMo is chatml-framed with inline <think> tags; before the alias, the
+    unknown-family default mis-split its output — "think>" residue at the
+    head of CONTENT (a SyntaxError as combat.py line 1, 2026-07-23) and no
+    thinking captured. OLMo's real shape has NO opening tag (the opener is
+    prompt-side), so both shapes are pinned."""
+    from core.fsm_labeller import fsm_extract_phases
+
+    # Real OLMo shape: reasoning starts immediately, closes with </think>.
+    ph = fsm_extract_phases("We reason.\n</think>\ncontent here", family="olmo")
+    assert ph.get("T") == "We reason."
+    assert ph.get("C") == "content here"
+    assert not (ph.get("C") or "").startswith("think>")
+    # Fully-tagged shape.
+    ph2 = fsm_extract_phases("<think>\nr\n</think>\nc", family="olmo")
+    assert ph2.get("T") == "r" and ph2.get("C") == "c"
