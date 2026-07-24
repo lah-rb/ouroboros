@@ -1,8 +1,10 @@
-# gemma-4-31b SWARM variant (2026-07-24): Tier-1 SWA-dense under batched
-# multi-stream decode for the swarm-economics class study. Deltas from base:
-# decode_mode batched, max_concurrent 32, max_tokens_default 32768. n_ctx
-# 65536 SHARED pool — smaller than gpt-oss's 131k, so expect more waving by
-# the pool-fit gate; that behavior is part of the measurement.
+# gemma-4-31b POOL-swarm variant (2026-07-24): FULL 262k native context via
+# default (pruned) SWA windows — the LM Studio arrangement. KV geometry: only
+# the 10 full-attention layers pay full ctx (~21GB/context @262k), so POOL x2
+# fits (~42GB + 18GB weights); x4 would not. No swa_full/resident (pool +
+# session_full_replay path). The batched-economy arm lives in
+# gemma-4-31b-swarm.yaml at its 48k swa_full ceiling — running BOTH arms is
+# the within-model batched-vs-pool comparison.
 app:
   host: "0.0.0.0"
   port: 8008
@@ -17,10 +19,10 @@ graphql:
   introspection_enabled: true
 
 model:
-  name: "gemma-4-31b-swarm"
+  name: "gemma-4-31b-poolswarm"
   family: "gemma"
   # RESIDENT cache economics (dev/CACHE_STATE.md matrix): SWA dense — measured full-stack 2026-07-02 (resident-live 37/46 tok turns, hot snapshot forks 1.2s).
-  resident_seq_cache: true
+  resident_seq_cache: false
   # Per-turn adaptive reasoning via the head swap. Gemma-4 is BIMODAL — the
   # levels map in formats/gemma.yaml renders high -> <|think|> and low/medium
   # -> a token-length-MATCHED padding, so the mid-session splice stays legal
@@ -39,13 +41,13 @@ model:
   path: /Users/lah-rb/.lmstudio/models/lmstudio-community/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf
   # Curator bake-off ingests whole papers (long reviews ~35k tokens) plus
   # prompt + generation headroom; 32768 could not hold one.
-  n_ctx: 49152
+  n_ctx: 262144
   n_gpu_layers: -1
   seed: -1
   verbose: false
   flash_attn_type: auto   # REAL knob (old flash_attention: true was a silent no-op)
   n_batch: 2048           # REAL knob (old batch_size: 512 was a silent no-op)
-  swa_full: true
+  swa_full: false
   kv_unified: true
   # save_state churn corrupts deep-session KV (the gpt-oss `code -3` class);
   # this config predated that finding with flow_kv_cache: true — now off.
@@ -76,9 +78,9 @@ resources:
   # In RESOURCES, not model: — the 2026-07-24 crash put this under model:,
   # the unknown key was ignored, decode_mode stayed "pool", and the pool built
   # 32 instances x 16GB KV contexts until the system died.
-  decode_mode: "batched"
+  decode_mode: "pool"
   cpu_threads: 15
-  max_concurrent_requests: 32
+  max_concurrent_requests: 2
   jit_concurrency_limit: null
 
 tools:
