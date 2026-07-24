@@ -338,15 +338,45 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
         execution = data.get("execution", {})
         if not isinstance(execution, dict):
             execution = {}
+        # Per-module SALVAGE: one malformed module must not nuke the whole
+        # blueprint (before this, any single ValidationError discarded a
+        # complete architecture → the zombie no-architecture mission). The
+        # before-validators on ModuleSpec absorb the known shape misses;
+        # anything still invalid drops alone, with a note.
         modules = []
+        dropped_modules: list[str] = []
         for m in data.get("modules", []):
-            modules.append(
-                ModuleSpec(
-                    file=m.get("file", ""),
-                    responsibility=m.get("responsibility", ""),
-                    defines=m.get("defines", []),
-                    imports_from=m.get("imports_from", {}),
+            if not isinstance(m, dict):
+                dropped_modules.append(f"{str(m)[:40]!r} (not an object)")
+                continue
+            try:
+                modules.append(
+                    ModuleSpec(
+                        file=m.get("file", ""),
+                        responsibility=m.get("responsibility", ""),
+                        defines=m.get("defines", []),
+                        imports_from=m.get("imports_from", {}),
+                    )
                 )
+            except Exception as me:  # noqa: BLE001 — salvage the rest
+                dropped_modules.append(
+                    f"{m.get('file', '?')} ({str(me).splitlines()[0][:120]})"
+                )
+        if dropped_modules:
+            logger.warning(
+                "Architecture salvage: dropped %d invalid module(s): %s",
+                len(dropped_modules),
+                "; ".join(dropped_modules)[:400],
+            )
+        if not modules and dropped_modules:
+            # Nothing salvageable — treat as a parse failure so the flow
+            # takes its failure branch (greenfield: back to design).
+            return StepOutput(
+                result={"architecture_parsed": False},
+                observations=(
+                    f"Architecture failed validation: all "
+                    f"{len(dropped_modules)} modules invalid"
+                ),
             )
 
         interfaces = []
@@ -1291,6 +1321,30 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
 
     arch = getattr(mission, "architecture", None)
     if not arch:
+        # SUSPENDERS (the origin-stamp phase fix is the belt): incomplete
+        # structural goals with NO architecture are unaddressable by this
+        # sweep — its walk is creation_order-derived, and the 2026-07-18
+        # goal-file union below never runs on this early exit. Returning
+        # "complete" here spun check_phase↔sweep to the 51x guard (OLMo
+        # 2026-07-23). Escalate to replan instead; genuinely goal-less
+        # missions still exit vacuously complete.
+        pending = [
+            g
+            for g in getattr(mission, "goals", []) or []
+            if getattr(g, "type", "") == "structural" and g.status != "complete"
+        ]
+        if pending:
+            logger.warning(
+                "Structural sweep: %d incomplete structural goal(s) but no "
+                "architecture — unaddressable, escalating to replan",
+                len(pending),
+            )
+            return StepOutput(
+                result={"sweep_complete": False, "needs_replan": True},
+                observations=(
+                    "Structural goals exist but no architecture — re-planning"
+                ),
+            )
         return StepOutput(
             result={"sweep_complete": True},
             observations="No architecture — skip sweep",

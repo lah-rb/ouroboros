@@ -32,6 +32,14 @@ class MissionConfig(BaseModel):
     """Configuration for a mission."""
 
     working_directory: str
+    # How this mission came to exist. "greenfield": created via `mission
+    # create` to BUILD a project — an absent architecture always means design
+    # is incomplete, never brownfield. "ingest": adopted a pre-existing repo.
+    # "" (legacy missions): unknown — phase logic falls back to inference.
+    # Stamped at creation; the requires_planning brownfield-skip consults it
+    # (OLMo 2026-07-23: the inference misread a greenfield arch-parse failure
+    # as brownfield and functional-tested an empty repo for 80 minutes).
+    origin: str = ""
     effects_profile: Literal["local", "git_managed", "dry_run"] = "local"
     escalation_budget_usd: float | None = None
     escalation_tokens_used: int = 0
@@ -573,8 +581,6 @@ class ModuleSpec(BaseModel):
         """
         if v is None:
             return {}
-        if isinstance(v, dict):
-            return v
         if isinstance(v, str):
             return {v: []}
         if isinstance(v, (list, tuple)):
@@ -584,7 +590,21 @@ class ModuleSpec(BaseModel):
                     out[item] = []
                 elif isinstance(item, dict):
                     out.update(item)
-            return out
+            v = out
+        if isinstance(v, dict):
+            # Value-shape coercion: models routinely emit a single symbol as
+            # a bare string ({"game.items": "Item"}) where list[str] is
+            # declared. Strict validation rejected the ENTIRE architecture
+            # over exactly this (OLMo 2026-07-23: three such values nuked a
+            # well-formed 6k blueprint → the zombie no-architecture mission).
+            return {
+                k: (
+                    list(val)
+                    if isinstance(val, (list, tuple))
+                    else ([] if val is None else [str(val)])
+                )
+                for k, val in v.items()
+            }
         return {}
 
 

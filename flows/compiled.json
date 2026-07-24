@@ -7137,6 +7137,10 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "result.needs_replan == true",
+              "transition": "dispatch_replan"
+            },
+            {
               "condition": "result.sweep_complete == true",
               "transition": "check_phase"
             },
@@ -14982,6 +14986,10 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "result.needs_replan == true",
+              "transition": "dispatch_replan"
+            },
+            {
               "condition": "result.sweep_complete == true",
               "transition": "check_phase"
             },
@@ -17215,6 +17223,10 @@
         "resolver": {
           "type": "rule",
           "rules": [
+            {
+              "condition": "result.needs_replan == true",
+              "transition": "dispatch_replan"
+            },
             {
               "condition": "result.sweep_complete == true",
               "transition": "check_phase"

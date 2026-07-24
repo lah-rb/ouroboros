@@ -156,6 +156,10 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
 
     config = MissionConfig(
         working_directory=working_dir,
+        # `mission create` builds projects: greenfield by definition. The
+        # ingest/adoption path stamps "ingest" via its own flow; legacy
+        # missions carry "" and keep the old inference behavior.
+        origin=("ingest" if flow_set == "ingest_workspace" else "greenfield"),
         effects_profile=effects_profile,
         llmvp_endpoint=llmvp_endpoint,
         flow_set=flow_set,

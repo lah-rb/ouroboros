@@ -354,6 +354,23 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
                     return rule.phase, f"No {rule.attr} — needs planning"
                 return rule.phase, "No goals — needs planning"
             if not getattr(mission, rule.attr, None):
+                # Goals exist but the plan object is missing. For a stamped
+                # GREENFIELD mission this is never brownfield — it is a
+                # failed/discarded design (OLMo 2026-07-23: arch parse
+                # rejected → this skip functional-tested an empty repo for
+                # 80 min, then spun on an unaddressable structural goal).
+                # Route back to planning. Ingest and legacy ("") missions
+                # keep the inference: brownfield goals legitimately outlive
+                # a rejected blueprint (swe-bench-langcodes).
+                origin = str(
+                    getattr(getattr(mission, "config", None), "origin", "") or ""
+                )
+                if origin == "greenfield":
+                    return (
+                        rule.phase,
+                        f"Greenfield mission with goals but no {rule.attr} — "
+                        f"design incomplete, re-planning",
+                    )
                 logger.info(
                     "No %s but goals exist — skipping plan phase (brownfield)",
                     rule.attr,

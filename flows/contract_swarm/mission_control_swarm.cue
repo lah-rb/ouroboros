@@ -173,6 +173,10 @@ mission_control_swarm: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
+					// Mirrors code_core mission_control: unaddressable structural
+					// goals (no architecture) escalate to replan instead of
+					// signalling completion (the check_phase↔sweep ping-pong).
+					{condition: "result.needs_replan == true", transition: "dispatch_replan"},
 					{condition: "result.sweep_complete == true", transition: "check_phase"},
 					{condition: "result.needs_batch_create == true", transition: "dispatch_batch_create"},
 					{condition: "result.needs_create == true", transition: "dispatch_structural_create"},

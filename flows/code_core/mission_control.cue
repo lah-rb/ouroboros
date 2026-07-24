@@ -182,6 +182,12 @@ mission_control: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
+					// Incomplete structural goals but NO architecture: the sweep
+					// cannot address them (creation_order-derived walk) — route to
+					// replan instead of signalling completion, which ping-ponged
+					// check_phase↔sweep to the 51x no-dispatch guard (OLMo
+					// 2026-07-23, zombie no-architecture mission).
+					{condition: "result.needs_replan == true", transition: "dispatch_replan"},
 					{condition: "result.sweep_complete == true", transition: "check_phase"},
 					{condition: "result.needs_batch_create == true", transition: "dispatch_batch_create"},
 					{condition: "result.needs_create == true", transition: "dispatch_structural_create"},
