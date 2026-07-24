@@ -179,6 +179,7 @@ mission_control_contracted: #FlowDefinition & {
 					{condition: "result.needs_replan == true", transition: "dispatch_replan"},
 					{condition: "result.sweep_complete == true", transition: "check_phase"},
 					{condition: "result.needs_batch_create == true", transition: "dispatch_batch_create"},
+					{condition: "result.needs_content_batch == true", transition: "dispatch_content_batch"},
 					{condition: "result.needs_create == true", transition: "dispatch_structural_create"},
 					{condition: "result.needs_fix == true", transition: "dispatch_structural_fix"},
 					{condition: "true", transition: "check_phase"},
@@ -196,6 +197,24 @@ mission_control_contracted: #FlowDefinition & {
 			context: required: ["dispatch_config", "mission"]
 			tail_call: {
 				flow: "build_structure_contracted"
+				input_map: {
+					mission_id:        {$ref: "input.mission_id"}
+					goal_id:           {$ref: "context.dispatch_config.goal_id", default: ""}
+					flow_directive:    {$ref: "context.dispatch_config.flow_directive"}
+					working_directory: {$ref: "context.mission.config.working_directory"}
+				}
+			}
+		}
+
+		// Batch mode, post-symbol-swarm: fan out ALL missing data files in
+		// one burst. last_goal_id stays empty — swarm_generate_content books
+		// per-goal reports itself (the apply_batch_results discipline).
+		dispatch_content_batch: #StepDefinition & {
+			action:      "noop"
+			description: "Fan out all missing data-file goals in one burst"
+			context: required: ["dispatch_config", "mission"]
+			tail_call: {
+				flow: "create_content_batch"
 				input_map: {
 					mission_id:        {$ref: "input.mission_id"}
 					goal_id:           {$ref: "context.dispatch_config.goal_id", default: ""}

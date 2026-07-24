@@ -204,6 +204,10 @@ FLOW_INPUTS = {
     "deep_research": {
         "brief": "Survey the current approaches to structured output in LLMs.",
     },
+    "create_content_batch": {
+        "mission_id": "test-mission-001",
+        "flow_directive": "Generate every missing data file concurrently.",
+    },
     "patch": {
         "file_path": "main.py",
         "file_content": "class Todo:\n    def save(self):\n        pass\n",

@@ -1429,6 +1429,63 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                 context_updates={"dispatch_config": dispatch_config},
             )
 
+    # ── Batch mode: content-goal fan-out ──────────────────────────
+    # After the code-symbol swarm, the data files remain as independent
+    # structural goals generated one-per-cycle through the serial create
+    # path — the measured serial residue. When ≥2 are still missing,
+    # dispatch ONE create_content_batch burst (stateless completion per
+    # file). One-shot via the "content_batch"-tagged note; any file the
+    # burst fails falls back to the serial walk below unchanged.
+    if mode == "batch":
+        content_attempted = any(
+            "content_batch" in (getattr(n, "tags", None) or []) for n in mission.notes
+        )
+        if not content_attempted:
+            _data_exts = (".yaml", ".yml", ".json", ".toml")
+            missing_data = []
+            for _f in sweep_files:
+                if not _f.lower().endswith(_data_exts):
+                    continue
+                _g = next(
+                    (
+                        g
+                        for g in mission.goals
+                        if g.type == "structural"
+                        and _f in (g.associated_files or [])
+                        and g.status != "complete"
+                        and getattr(g, "origin", "") != "create_backfill"
+                    ),
+                    None,
+                )
+                if _g is not None and not os.path.isfile(os.path.join(working_dir, _f)):
+                    missing_data.append(_f)
+            if len(missing_data) >= 2:
+                dispatch_config = {
+                    "goal_id": "",
+                    "goal_description": "Generate all missing data files in one batch",
+                    "goal_type": "structural",
+                    "goal_files": missing_data,
+                    "flow": "create_content_batch",
+                    "target_file_path": "",
+                    "flow_directive": (
+                        "Generate every missing data file concurrently from its "
+                        "registry-enriched content goal."
+                    ),
+                    "recent_reports": [],
+                }
+                logger.info(
+                    "Structural sweep: content-batching %d data files",
+                    len(missing_data),
+                )
+                return StepOutput(
+                    result={"sweep_complete": False, "needs_content_batch": True},
+                    observations=(
+                        f"Structural sweep: batch mode — fanning out all "
+                        f"{len(missing_data)} missing data files in one burst"
+                    ),
+                    context_updates={"dispatch_config": dispatch_config},
+                )
+
     # Walk files in order, find the first incomplete structural goal
     for file_path in sweep_files:
         # Find the goal for this file

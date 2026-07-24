@@ -1781,3 +1781,250 @@ async def action_run_contract_typecheck(step_input: StepInput) -> StepOutput:
             "validation_output": "\n".join(lines),
         },
     )
+
+
+# ── Content-goal fan-out (create_content_batch) ──────────────────────
+# The measured serial residue after the code-symbol swarm: each data file
+# (rooms.yaml, items.yaml, …) is an independent structural goal generated
+# one-per-controller-cycle through the serial create flow (3.3–38.7 min
+# across the class study). The goals are seam-free by construction —
+# _enrich_data_goals has already pushed the authoritative shape+exemplar
+# AND the shared entity-id registry slice into each goal's description —
+# so one burst of stateless completions replaces N create cycles. Built
+# on the shared fan-out skeleton (agent/actions/fanout.py).
+
+_DATA_EXTS = (".yaml", ".yml", ".json", ".toml")
+
+_CONTENT_WORKER_PROMPT = (
+    "You are generating ONE complete data file for a project.\n"
+    "The goal below carries the mandatory data contract (exact key names), "
+    "the exemplar shape, and the shared entity-id registry slice — bind to "
+    "them exactly; every id you reference must come from the registry.\n\n"
+    "GOAL:\n{directive}\n\n"
+    "Output ONLY the raw contents of {file_path} — no markdown fences, no "
+    "commentary, no FILE markers. The output must be valid {ext}."
+)
+
+
+def _strip_content_fences(text: str) -> str:
+    """Drop a wrapping markdown fence if the model added one anyway."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        lines = t.splitlines()[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        t = "\n".join(lines).strip()
+    return t
+
+
+async def action_swarm_generate_content(step_input: StepInput) -> StepOutput:
+    """Fan out one stateless completion per missing data-file goal.
+
+    Context required: mission
+    Params: max_workers (default 32), pool_budget (default 131072 —
+        FALLBACK only; the pool-fit gate asks the server for kvPoolTokens)
+    Publishes: directive_report, files_changed
+
+    Per worker: the goal's (registry-enriched) description → one completion
+    at the serial create flow's temperature → fence-strip → parse gate
+    (_parse_data_file, the same gate the serial path applies) with ONE
+    error-threaded retry → guarded write → book a DirectiveReport and
+    complete the goal (mirroring the batch_structural booking discipline).
+    A goal whose worker fails books a failed report and stays incomplete —
+    the sweep's serial create path picks it up exactly as today. The
+    "content_batch"-tagged note is the one-shot attempted flag the sweep
+    checks, so this burst never re-dispatches.
+    """
+    import os
+
+    from agent.actions.fanout import FanoutPerf, estimate_draw, pool_fit_width
+    from agent.actions.pipeline_actions import _parse_data_file
+    from agent.persistence.models import DirectiveReport, NoteRecord
+
+    effects = step_input.effects
+    ctx = step_input.context
+    mission = ctx.get("mission")
+    working_directory = str(step_input.inputs.get("working_directory", "") or "")
+    max_workers = int(step_input.params.get("max_workers", 32) or 32)
+    pool_budget = int(step_input.params.get("pool_budget", 131072) or 131072)
+
+    targets: list[tuple[Any, str]] = []
+    if mission is not None:
+        for goal in mission.goals:
+            if goal.type != "structural" or goal.status == "complete":
+                continue
+            files = [
+                f
+                for f in (goal.associated_files or [])
+                if f.lower().endswith(_DATA_EXTS)
+            ]
+            if len(files) != 1:
+                continue
+            if working_directory and os.path.isfile(
+                os.path.join(working_directory, files[0])
+            ):
+                continue
+            targets.append((goal, files[0]))
+
+    if not effects or not mission or not targets:
+        return StepOutput(
+            result={"any_ok": False, "n_targets": 0},
+            observations="Content batch: no missing data-file goals to generate",
+            context_updates={"files_changed": [], "directive_report": {}},
+        )
+
+    prompts = {
+        path: _CONTENT_WORKER_PROMPT.format(
+            directive=goal.description,
+            file_path=path,
+            ext=path.rsplit(".", 1)[-1],
+        )
+        for goal, path in targets
+    }
+    decision = await pool_fit_width(
+        effects,
+        [estimate_draw(p) for p in prompts.values()],
+        max_workers=max_workers,
+        pool_budget_fallback=pool_budget,
+        label="content_batch",
+    )
+    sem = asyncio.Semaphore(max(decision.width, 1))
+    perf = FanoutPerf(working_directory)
+    burst_t0 = time.monotonic()
+    perf.row(
+        {
+            "event": "burst",
+            "kind": "content_batch",
+            "t0_epoch": round(time.time(), 3),
+            "files": len(targets),
+            "max_workers": max_workers,
+            **decision.perf_fields(),
+        }
+    )
+
+    async def run_worker(goal: Any, path: str) -> tuple[Any, str, dict]:
+        ext = path.rsplit(".", 1)[-1].lower()
+        prompt = prompts[path]
+        outcome: dict = {"ok": False, "error": "", "tokens": 0, "attempts": 0}
+        content = ""
+        for attempt in (1, 2):
+            outcome["attempts"] = attempt
+            try:
+                async with sem:
+                    res = await effects.run_inference(prompt, {"temperature": "t*0.6"})
+            except Exception as e:  # noqa: BLE001 — book the failure, never raise
+                outcome["error"] = f"inference failed: {e}"
+                break
+            if getattr(res, "error", None):
+                outcome["error"] = str(res.error)
+                break
+            outcome["tokens"] += int(getattr(res, "tokens_generated", 0) or 0)
+            content = _strip_content_fences(getattr(res, "text", "") or "")
+            ok, detail = _parse_data_file(ext, content)
+            if ok:
+                outcome["ok"] = True
+                outcome["content"] = content
+                break
+            outcome["error"] = f"parse failure ({detail})"
+            # Error-threaded retry: the validator's verdict verbatim.
+            prompt = (
+                prompts[path]
+                + f"\n\nYour previous output failed validation: {detail}\n"
+                + "Regenerate the COMPLETE file, fixing that issue."
+            )
+        perf.row(
+            {
+                "event": "worker",
+                "kind": "content_file",
+                "path": path,
+                "ok": outcome["ok"],
+                "attempts": outcome["attempts"],
+                "generated_tokens": outcome["tokens"],
+                "t_done": round(time.monotonic() - burst_t0, 2),
+            }
+        )
+        return goal, path, outcome
+
+    results = await asyncio.gather(*(run_worker(g, p) for g, p in targets))
+
+    # Serial post-hoc booking (the apply_batch_results discipline): writes,
+    # reports, goal completion, and the one-shot note — no concurrent
+    # mission mutation.
+    files_changed: list[str] = []
+    failed: list[str] = []
+    total_tokens = 0
+    for goal, path, outcome in results:
+        total_tokens += outcome["tokens"]
+        written = False
+        write_err: str | None = None
+        if outcome["ok"]:
+            written, write_err = await guarded_write_file(
+                effects, path, outcome["content"]
+            )
+        passed = outcome["ok"] and written
+        detail = outcome["error"] or (write_err or "")
+        goal.reports.append(
+            DirectiveReport(
+                flow="create_content_batch",
+                status="success" if passed else "failed",
+                summary=(
+                    f"Generated {path} in the content batch"
+                    + ("; parse gate passes." if passed else f"; {detail}")
+                ),
+                headline=f"Content batch: {path}" + ("" if passed else " (failed)"),
+                files_affected=[path],
+                checks_failed=[] if passed else [f"syntax: {path}"],
+                terminal_output=detail[:1000],
+            )
+        )
+        if passed:
+            goal.status = "complete"
+            files_changed.append(path)
+        else:
+            failed.append(path)
+
+    mission.notes.append(
+        NoteRecord(
+            content=(
+                f"Content batch generated {len(files_changed)}/{len(targets)} "
+                f"data files concurrently ({decision.width} wide "
+                f"[{decision.gate}], budget={decision.budget_source}, "
+                f"{total_tokens} tokens)"
+                + (f". Failed: {', '.join(failed)}." if failed else ".")
+            ),
+            category="codebase_observation",
+            tags=["content_batch"],
+            source_flow="create_content_batch",
+        )
+    )
+    await effects.save_mission(mission)
+
+    wall_s = time.monotonic() - burst_t0
+    perf.row(
+        {
+            "event": "burst_done",
+            "kind": "content_batch",
+            "t_done": round(wall_s, 2),
+            "ok": len(files_changed),
+            "failed": len(failed),
+        }
+    )
+    obs = (
+        f"Content batch: {len(files_changed)}/{len(targets)} data files in "
+        f"{wall_s:.0f}s ({decision.width} concurrent [{decision.gate}], "
+        f"budget={decision.budget_source})"
+    )
+    logger.info(obs)
+    return StepOutput(
+        result={"any_ok": bool(files_changed), "n_targets": len(targets)},
+        observations=obs,
+        context_updates={
+            "files_changed": files_changed,
+            "directive_report": {
+                "flow": "create_content_batch",
+                "status": "success" if files_changed else "failed",
+                "summary": obs,
+                "files_affected": files_changed,
+            },
+        },
+    )
