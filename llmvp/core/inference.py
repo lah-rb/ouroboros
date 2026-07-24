@@ -377,8 +377,17 @@ async def run_completion(
 
         _diag = get_tracker().get_last_diagnostics()
 
-        # Log interaction (non-streaming)
-        log_interaction(prompt=prompt, response=answer, mode="non-stream")
+        # Log interaction (non-streaming). Attach the FSM-extracted thinking
+        # (promoted to the tracker moments ago) — the stripped `answer` alone
+        # lost every long CoT (OLMo's 21k-token design think, 2026-07-23).
+        # Capped to bound file growth on marathon thinks.
+        _think = (get_tracker().get_thinking() or {}).get("content", "") or ""
+        log_interaction(
+            prompt=prompt,
+            response=answer,
+            mode="non-stream",
+            extra={"thinking": _think[:200_000]} if _think else None,
+        )
         return CompletionOutcome(
             text=answer,
             tokens_generated=tokens_generated,
@@ -605,12 +614,18 @@ async def stream_completion(
                 prompt_text=prompt,
             )
 
-        # Signal completion
+        # Signal completion. Thinking attached for the same reason as the
+        # non-stream site: the joined chunks are post-strip, and the raw
+        # capture lives in a separate file most analyses never open.
         if captured_chunks:
+            from core.generation_tracker import get_tracker as _get_tracker
+
+            _think = (_get_tracker().get_thinking() or {}).get("content", "") or ""
             log_interaction(
                 prompt=prompt,
                 response="".join(captured_chunks),
                 mode="stream",
+                extra={"thinking": _think[:200_000]} if _think else None,
             )
         yield ("", True)
 
