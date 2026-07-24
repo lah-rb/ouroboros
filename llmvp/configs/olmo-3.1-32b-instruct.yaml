@@ -1,0 +1,75 @@
+# OLMo 3.1 32B INSTRUCT — the no-think sibling, added 2026-07-23 for the
+# family A/B vs the Think variant. GGUF template verified: same olmo2 arch,
+# same functions declaration (family: olmo covers it), NO <think> opener —
+# thinking: false, and the labeller's chatml start-phase handles pure
+# content. All other settings mirror the Think config deliberately (Luke:
+# "same config to keep it even"), including the lever-sweep repeat_penalty
+# 1.05.
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 65536
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "olmo-3.1-32b-instruct"
+  # Dedicated family (2026-07-23 template audit): chatml framing PLUS the
+  # no-functions capability declaration OLMo's template appends to every
+  # system message — plain chatml served it slightly off-distribution.
+  family: "olmo"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Olmo-3.1-32B-Instruct-GGUF/Olmo-3.1-32B-Instruct-Q6_K.gguf
+  n_ctx: 65536
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  resident_seq_cache: true
+  kv_unified: true
+  swa_full: true
+  session_full_replay: true
+  thinking: false
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 65536
+  temperature_default: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.00
+  presence_penalty: 0.0
+  # 1.05, NOT the model-card 1.0 — lever sweep 2026-07-23 (dev/
+  # olmo_think_levers.py, results.jsonl): at rp 1.0 the decisional churn
+  # ("Alternatively" x20 per think) ran 761-5,489 think-words per task and a
+  # moderate coding task exhausted 8k tokens WITHOUT terminating; at 1.05
+  # thinking dropped 55-83%, wall time halved, and all tasks terminated
+  # correct (3/3 vs 2/3). Firmer 1.15+window was better still on decisions
+  # but noisier on code; presence penalty INVERTED the difficulty-length
+  # relationship (erratic). 1.05 preserves the right shape: tiny think on
+  # trivial tasks, real think on hard ones.
+  repeat_penalty: 1.05
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/olmo-3.1-32b-instruct.tokens.bin"
+  token_limit: 32768
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 1
+  jit_concurrency_limit: null
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
