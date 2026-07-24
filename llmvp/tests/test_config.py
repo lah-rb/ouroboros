@@ -130,7 +130,7 @@ def test_config_integration():
             "tokens_bin": "/tmp/tokens.bin",
             "token_limit": 31000,
         },
-        "resources": {"cpu_threads": 4, "max_concurrent_requests": 8},
+        "resources": {"cpu_threads": 4, "max_concurrent_requests": 4},
         "logging": {"enabled": False, "directory": "./logs"},
     }
 
@@ -679,3 +679,28 @@ def test_olmo_rendering_matches_gguf_template():
     # The load-bearing details, asserted directly so a template rewrite
     # cannot silently drop them:
     assert "You do not currently have access to any functions. <functions></functions>" in ours
+
+
+def test_pool_mode_rejects_high_concurrency():
+    """The alternating pool allocates a full KV context per slot; the
+    2026-07-24 crash was decode_mode silently defaulting to 'pool' with
+    max_concurrent 32 (32 x 16GB contexts). Must fail at load."""
+    import pytest as _pytest
+
+    from core.config import load_config
+    from pathlib import Path
+    import tempfile, yaml as _yaml
+
+    base = _yaml.safe_load(
+        (Path(__file__).parent.parent / "configs" / "gpt-oss-120b-a5.yaml").read_text()
+    )
+    base["resources"]["max_concurrent_requests"] = 32
+    base["resources"]["decode_mode"] = "pool"
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        _yaml.dump(base, f)
+        p = Path(f.name)
+    try:
+        with _pytest.raises(ValueError, match="PER SLOT"):
+            load_config(p)
+    finally:
+        p.unlink()

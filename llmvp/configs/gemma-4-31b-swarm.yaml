@@ -19,7 +19,6 @@ graphql:
 model:
   name: "gemma-4-31b-swarm"
   family: "gemma"
-  decode_mode: "batched"
   # RESIDENT cache economics (dev/CACHE_STATE.md matrix): SWA dense — measured full-stack 2026-07-02 (resident-live 37/46 tok turns, hot snapshot forks 1.2s).
   resident_seq_cache: true
   # Per-turn adaptive reasoning via the head swap. Gemma-4 is BIMODAL — the
@@ -40,7 +39,7 @@ model:
   path: /Users/lah-rb/.lmstudio/models/lmstudio-community/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf
   # Curator bake-off ingests whole papers (long reviews ~35k tokens) plus
   # prompt + generation headroom; 32768 could not hold one.
-  n_ctx: 262144
+  n_ctx: 131072
   n_gpu_layers: -1
   seed: -1
   verbose: false
@@ -74,6 +73,10 @@ knowledge:
   token_limit: 32768
 
 resources:
+  # In RESOURCES, not model: — the 2026-07-24 crash put this under model:,
+  # the unknown key was ignored, decode_mode stayed "pool", and the pool built
+  # 32 instances x 16GB KV contexts until the system died.
+  decode_mode: "batched"
   cpu_threads: 15
   max_concurrent_requests: 32
   jit_concurrency_limit: null

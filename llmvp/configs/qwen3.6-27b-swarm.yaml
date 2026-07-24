@@ -19,10 +19,15 @@ graphql:
 model:
   name: "qwen3.6-27b-swarm"
   family: "chatml"
-  decode_mode: "batched"
   path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q6_K.gguf
   n_ctx: 262144
-  n_gpu_layers: -1   
+  n_gpu_layers: -1
+  # Batched-engine preconditions (validator-enforced): resident single-context
+  # seq machinery. swa_full is moot on full-attention dense but required by
+  # the invariant set; kv_unified makes n_ctx the shared stream pool.
+  resident_seq_cache: true
+  swa_full: true
+  kv_unified: true   
   seed: -1
   verbose: false
   thinking: true
@@ -61,6 +66,10 @@ knowledge:
   token_limit: 32768
 
 resources:
+  # In RESOURCES, not model: — the 2026-07-24 crash put this under model:,
+  # the unknown key was ignored, decode_mode stayed "pool", and the pool built
+  # 32 instances x 16GB KV contexts until the system died.
+  decode_mode: "batched"
   cpu_threads: 15
   max_concurrent_requests: 32
   jit_concurrency_limit: null  

@@ -449,6 +449,21 @@ class Config(BaseModel):
             raise ValueError(
                 f"resources.decode_mode must be 'pool' or 'batched', got {mode!r}"
             )
+        if mode == "pool" and self.resources.max_concurrent_requests > 4:
+            # The alternating pool allocates ONE FULL llama context (weights-
+            # shared, KV-independent) per concurrent slot. High concurrency is
+            # the batched engine's job; a big pool is a memory bomb — the
+            # 2026-07-24 system crash was decode_mode silently defaulting to
+            # "pool" (key misplaced under model:) with max_concurrent 32:
+            # 32 x 16GB KV contexts at n_ctx 262144 wired the machine to
+            # death mid-allocation. Fail at load, name the fix.
+            raise ValueError(
+                f"decode_mode 'pool' with max_concurrent_requests="
+                f"{self.resources.max_concurrent_requests}: the alternating "
+                f"pool allocates a full KV context PER SLOT (> 4 is almost "
+                f"certainly a misconfiguration — use decode_mode 'batched' "
+                f"for high concurrency, or drop max_concurrent_requests)"
+            )
         if mode == "batched":
             missing = [
                 flag
