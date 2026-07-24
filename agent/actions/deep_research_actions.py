@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 MAX_RESEARCH_WAVES = 3
 MAX_ANGLES_PER_WAVE = 8  # hard cap on selected queries per wave
 SEARCH_BUDGET_DEFAULT = 6  # API calls per wave (the panel selects within this)
-N_PROPOSERS = 2  # query-derivation workers per select stage
+N_PROPOSERS = 3  # query-derivation workers per select stage (one per lens)
 PANEL_VOTERS = 3  # stateless voters picking the wave's searches
 NUM_RESULTS = 5  # Exa hits per query
 _EXA_CONCURRENCY = 3  # politeness bound on the search API (not the GPU)
@@ -102,6 +102,11 @@ _PROPOSER_LENSES = (
     "mechanisms, definitions, and primary sources (specs, official docs, "
     "original papers)",
     "comparisons, failure modes, counter-evidence, and recent developments",
+    # The soft lens (Luke 2026-07-24): gpt-oss is the engineer of our
+    # models, not the content curator — without an explicit lens it
+    # under-proposes the human side of a question.
+    "community experience, popular usage, UX and ergonomics, adoption "
+    "stories, practitioner opinions (forums, reviews, real-world reports)",
 )
 
 VOTE_PROMPT = (

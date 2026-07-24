@@ -100,6 +100,7 @@ async def test_select_panel_votes_within_budget():
         inference_responses=[
             '```json\n{"queries": []}\n```',
             '```json\n{"queries": []}\n```',
+            '```json\n{"queries": []}\n```',
             '```json\n{"picks": [1, 3]}\n```',
             '```json\n{"picks": [1, 3]}\n```',
             '```json\n{"picks": [3, 1]}\n```',
@@ -126,6 +127,7 @@ async def test_select_proposers_fill_empty_pool_and_dedup():
         inference_responses=[
             '```json\n{"queries": ["fresh one", "already ran"]}\n```',
             '```json\n{"queries": ["fresh two"]}\n```',
+            '```json\n{"queries": []}\n```',
         ]
     )
     out = await action_research_select(
