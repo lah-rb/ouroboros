@@ -1,17 +1,5 @@
-# ── GREENFIELD TIER 1 (promotion blind 2026-07-24, UNANIMOUS) ──
-# Dense 27b vs both Tier-1 incumbents (step37, gemma4), two independent
-# Opus judges, identical rankings: 27b FIRST both times — it didn't score
-# close to Tier 1, it beat it. Aggregate 48.0 vs step37 43.0 vs gemma 30.5;
-# both judges called the 27b-vs-step37 gap "a clear step, not a gulf",
-# driven by the panel's only working end-to-end persistence plus the richest
-# world (staged dialogue, locked-room key progression). Also the qwen family
-# blind winner (only winnable qwen artifact ever) and a clean 2h window with
-# zero degeneration. NOTE (2026-07-24 correction): the 27b is dense-FFN
-# but HYBRID-attention (GDN layers — llama.cpp detects hybrid/recurrent),
-# so the no-orbit result is empirical about this checkpoint, not an
-# architectural dense-vs-GDN split; it also cannot host the batched swarm
-# substrate (pool x4 only). Residual defects: monster-turn death not synced
-# (immortal re-fight), double defense subtraction, flee unreachable.
+# qwen3.6-27b POOL-swarm variant (2026-07-24): the hybrid-legal swarm
+# substrate after the batched engine refused the architecture.
 app:
   host: "0.0.0.0"
   port: 8008
@@ -26,10 +14,10 @@ graphql:
   introspection_enabled: true
 
 model:
-  name: "qwen3.6-27b"
+  name: "qwen3.6-27b-poolswarm"
   family: "chatml"
   path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q6_K.gguf
-  n_ctx: 262144
+  n_ctx: 65536
   n_gpu_layers: -1   
   seed: -1
   verbose: false
@@ -44,7 +32,7 @@ prompt:
   persona_file: "./knowledge/SOUL.md"
 
 generation:
-  max_tokens_default: 262144
+  max_tokens_default: 32768
   # GDN-hybrid loop posture (2026-07-22, dev/qwen3_loop_research.md) —
   # same substrate/paragraph-orbit risk as qwen3-next/3.5/3.6-35b.
   temperature_default: 0.7
@@ -69,8 +57,15 @@ knowledge:
   token_limit: 32768
 
 resources:
+  # POOL, not batched: qwen3.6-27b is dense-FFN but HYBRID-attention (GDN
+  # recurrent layers) — the batched engine rejects hybrids at init (multi-seq
+  # recurrent state unsupported). 4 alternating contexts x 65k = ~16GB KV.
+  # Expect admission concurrency only, ~no aggregate decode scaling (Metal
+  # multi-context simultaneous decode is the documented dead end) — that
+  # measurement IS the swarm-class finding for hybrids.
+  decode_mode: "pool"
   cpu_threads: 15
-  max_concurrent_requests: 1
+  max_concurrent_requests: 4
   jit_concurrency_limit: null  
 
 tools:
