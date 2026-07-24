@@ -303,6 +303,12 @@ class LlamaCppBackend(BaseBackend):
         # LLMVP-process rot — BOTH stub-emission AND no-task-confusion thrashing —
         # before it spoils a run; a premature ~0.85s refresh beats a spoiled mission.
         self._refresh_loop_task: Optional[asyncio.Task] = None
+        # Batched seat reaper (see _seat_reaper_loop): backstop that reclaims
+        # seats whose consumer vanished without releasing. _reaper_reclaimed
+        # holds seat ids reclaimed by the reaper so a late duplicate release
+        # (GC-finalized consumer) is ignored instead of double-requeueing.
+        self._seat_reaper_task: Optional[asyncio.Task] = None
+        self._reaper_reclaimed: set = set()
         self._refresh_interval = int(
             getattr(getattr(config, "model", None), "context_refresh_interval", 75)
             or 75
@@ -1282,6 +1288,87 @@ class LlamaCppBackend(BaseBackend):
                 return None
             return "proactive-timed"
         return None
+
+    async def _seat_reaper_loop(self) -> None:
+        """Backstop for leaked batched seats: a consumer that vanishes
+        without releasing (lazily-finalized asyncgen chain after a watchdog
+        cancel) strands its seat checked out forever — reproduced live as 30
+        phantom seats / zero decode / terminal wedge. The deterministic
+        drains (shielded aclose + cancel-proof release/acquire) make the
+        common paths leak-free; this loop reclaims whatever still slips
+        through.
+
+        Every 60s: any LEASED, unpinned seat with no live engine stream
+        accrues a strike; two consecutive strikes (>60s idle-while-leased,
+        comfortably past the acquire→submit gap) → loud warning + reclaim
+        through the normal release path. Deliberately NOT gated on
+        _active_generations — the session orphan reaper self-disabled on
+        exactly that counter when the leak inflated it. Counter drift is
+        reported log-only: a GC-finalized guard still decrements later, so
+        auto-correcting _active_generations here would double-count.
+        """
+        strikes: Dict[int, int] = {}
+        while True:
+            try:
+                await asyncio.sleep(60)
+                await self._seat_reaper_sweep(strikes)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                log.exception("💥 seat reaper sweep failed — loop continues")
+                await asyncio.sleep(60)
+
+    async def _seat_reaper_sweep(self, strikes: Dict[int, int]) -> None:
+        """One reaper pass (see _seat_reaper_loop). ``strikes`` carries the
+        per-seat consecutive-miss count across sweeps."""
+        engine = self._engine
+        if engine is None:
+            return
+        from inference.batched_engine import StreamPhase
+
+        try:
+            live = await asyncio.wrap_future(
+                engine.control(
+                    lambda: {
+                        id(s.slot)
+                        for s in engine._streams.values()
+                        if s.phase is not StreamPhase.DONE
+                    }
+                )
+            )
+        except Exception:  # noqa: BLE001 — engine busy/parked, try next sweep
+            return
+        now = time.monotonic()
+        for seat in list(self._engine_seats):
+            leased = getattr(seat, "_leased_at", None)
+            if leased is None or seat.pinned or id(seat) in live:
+                strikes.pop(id(seat), None)
+                continue
+            strikes[id(seat)] = strikes.get(id(seat), 0) + 1
+            if strikes[id(seat)] < 2:
+                continue
+            strikes.pop(id(seat), None)
+            log.warning(
+                "🧹 seat reaper: seat seq %d leased %.0fs with no live "
+                "stream — reclaiming (consumer cancelled without releasing?)",
+                seat.seq,
+                now - leased,
+            )
+            # Mark BEFORE releasing: a late duplicate release from the
+            # leaked consumer (however it interleaves) hits the
+            # _reaper_reclaimed guard in release_instance and is ignored;
+            # acquire clears the mark on the next lease.
+            self._reaper_reclaimed.add(id(seat))
+            await self._release_seat(seat)
+        if self._active_generations > len(live) + len(strikes):
+            log.warning(
+                "⚠️ counter drift: _active_generations=%d vs engine "
+                "active_streams=%d — a generation guard likely awaits GC "
+                "finalization (log-only, self-corrects when the guard "
+                "finalizes)",
+                self._active_generations,
+                len(live),
+            )
 
     def _mark_decode_failure(self, inst: Any, exc: Exception) -> None:
         """Record a fatal decode failure and flag the instance for a context
@@ -2283,6 +2370,9 @@ class LlamaCppBackend(BaseBackend):
             # pause -> rebuild + re-pin -> resume, idle-gated by the same
             # _refresh_decision counters the pool uses.
             self._refresh_loop_task = asyncio.create_task(self._refresh_loop())
+            # Seat reaper: reclaims seats leaked by cancelled consumers
+            # (batched-only — pool instances release deterministically).
+            self._seat_reaper_task = asyncio.create_task(self._seat_reaper_loop())
             return
 
         # Warm-up primary instance: evaluate static tokens & save snapshot.
@@ -2368,6 +2458,11 @@ class LlamaCppBackend(BaseBackend):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._refresh_loop_task
             self._refresh_loop_task = None
+        if self._seat_reaper_task is not None:
+            self._seat_reaper_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._seat_reaper_task
+            self._seat_reaper_task = None
 
         if self._engine is not None:
             # Stop the decode thread first: it owns all context operations,
@@ -2489,55 +2584,105 @@ class LlamaCppBackend(BaseBackend):
                     f"again later (active={active}, limit={self._jit_limit})"
                 )
 
-        # Belt over the release-side heal: a flagged instance must never
-        # serve (its Metal latch fails every decode) — heal before handout.
-        # (Batched seats carry the flag too, but their heal is the engine
-        # rebuild, not the per-context refresh.)
-        if self._decode_mode != "batched" and getattr(
-            inst, "_needs_context_refresh", False
-        ):
-            await self._heal_instance(inst)
+        # From here the instance is off its queue: any exception — including
+        # a consumer CancelledError landing in the heal/restore awaits below
+        # — must put it back, or the slot is lost with no release ever
+        # scheduled (every entry point acquires OUTSIDE its try).
+        counted = False
+        try:
+            # Belt over the release-side heal: a flagged instance must never
+            # serve (its Metal latch fails every decode) — heal before handout.
+            # (Batched seats carry the flag too, but their heal is the engine
+            # rebuild, not the per-context refresh.)
+            if self._decode_mode != "batched" and getattr(
+                inst, "_needs_context_refresh", False
+            ):
+                await self._heal_instance(inst)
 
-        # Pool-membership accounting only. GPU-busy tracking lives in
-        # generation_guard — a checkout (e.g. a session pinned between
-        # turns) is not GPU work and must not block scaling drains.
-        self._checked_out += 1
+            # Pool-membership accounting only. GPU-busy tracking lives in
+            # generation_guard — a checkout (e.g. a session pinned between
+            # turns) is not GPU work and must not block scaling drains.
+            self._checked_out += 1
+            counted = True
 
-        # Restore seq 0 to the pristine post-static-tokens state. Guard it like
-        # any other GPU work. Resident: fork SEQ_STATIC → seq 0 (intra-context
-        # copy). Legacy: load_state the (multi-GB) snapshot blob. Batched:
-        # fork the persona head onto the seat's seq via a control op (the
-        # decode thread owns all KV surgery, applied between steps).
-        if self._decode_mode == "batched":
-            seat, engine = inst, self._engine
-            async with self.generation_guard():
-                await asyncio.wrap_future(
-                    engine.control(lambda: engine.prepare_seat(seat, persona_key))
-                )
-            log.debug(
-                "🧩 Forked persona head [%s] → seat seq %d (batched)",
-                persona_key,
-                seat.seq,
-            )
-        elif self._resident_active:
-            async with self.generation_guard():
-                await run_in_threadpool(self._resident_restore_static, inst)
-            log.debug("🧩 Forked SEQ_STATIC → seq 0 before request (resident)")
-        else:
-            state = self._static_states.get(getattr(inst, "_persona", "default"))
-            if state is not None:
+            # Restore seq 0 to the pristine post-static-tokens state. Guard it
+            # like any other GPU work. Resident: fork SEQ_STATIC → seq 0
+            # (intra-context copy). Legacy: load_state the (multi-GB) snapshot
+            # blob. Batched: fork the persona head onto the seat's seq via a
+            # control op (the decode thread owns all KV surgery, applied
+            # between steps).
+            if self._decode_mode == "batched":
+                seat, engine = inst, self._engine
                 async with self.generation_guard():
-                    await run_in_threadpool(inst.load_state, state)
-                log.debug("🔄 Restored static state snapshot before request")
+                    await asyncio.wrap_future(
+                        engine.control(lambda: engine.prepare_seat(seat, persona_key))
+                    )
+                self._reaper_reclaimed.discard(id(seat))
+                seat._leased_at = time.monotonic()
+                log.debug(
+                    "🧩 Forked persona head [%s] → seat seq %d (batched)",
+                    persona_key,
+                    seat.seq,
+                )
+            elif self._resident_active:
+                async with self.generation_guard():
+                    await run_in_threadpool(self._resident_restore_static, inst)
+                log.debug("🧩 Forked SEQ_STATIC → seq 0 before request (resident)")
+            else:
+                state = self._static_states.get(getattr(inst, "_persona", "default"))
+                if state is not None:
+                    async with self.generation_guard():
+                        await run_in_threadpool(inst.load_state, state)
+                    log.debug("🔄 Restored static state snapshot before request")
 
-        log.debug(
-            "🔧 Acquired instance [%s] (idle=%d, total=%d, checked_out=%d)",
-            persona_key,
-            queue.qsize(),
-            len(self._all_instances),
-            self._checked_out,
-        )
-        return inst
+            log.debug(
+                "🔧 Acquired instance [%s] (idle=%d, total=%d, checked_out=%d)",
+                persona_key,
+                queue.qsize(),
+                len(self._all_instances),
+                self._checked_out,
+            )
+            return inst
+        except BaseException:
+            if counted:
+                self._checked_out = max(0, self._checked_out - 1)
+            if self._decode_mode == "batched":
+                inst._leased_at = None
+            with contextlib.suppress(Exception):
+                queue.put_nowait(inst)
+            raise
+
+    async def _release_seat(self, seat: Any) -> None:
+        """Batched seat return: clear its seq (control op) and requeue. A
+        dead seat (engine fatal) still requeues — the next prepare_seat
+        re-forks onto a rebuilt context or errors loudly.
+
+        Cancellation-proof by design: the clear is shielded (a pending
+        consumer CancelledError is a BaseException that would sail past
+        ``except Exception`` and skip the requeue — the reproduced
+        30-phantom-seat wedge), and the requeue + counter decrement run in a
+        ``finally`` so they happen even when the clear fails — a dirty seat
+        is safe to hand out again (prepare_seat starts with memory_seq_rm).
+        """
+        engine = self._engine
+        seat._leased_at = None
+        try:
+            with anyio.CancelScope(shield=True):
+                await asyncio.wrap_future(
+                    engine.control(lambda: engine.clear_seat(seat))
+                )
+        except Exception as exc:  # noqa: BLE001 — return the seat regardless
+            log.warning("⚠️ seat clear failed on release: %s", exc)
+        finally:
+            if self._pool_queue is not None:
+                self._pool_queue.put_nowait(seat)
+            self._checked_out = max(0, self._checked_out - 1)
+            log.debug(
+                "🔧 Released seat seq %d (idle=%d, checked_out=%d)",
+                seat.seq,
+                self._pool_queue.qsize() if self._pool_queue else 0,
+                self._checked_out,
+            )
 
     async def release_instance(self, inst: Any) -> None:
         """Return a used instance back to the pool (async-safe).
@@ -2552,25 +2697,19 @@ class LlamaCppBackend(BaseBackend):
         fatal decode costs one turn, not the slot.
         """
         if self._decode_mode == "batched":
-            # Seat return: clear its seq (control op) and requeue. A dead
-            # seat (engine fatal) still requeues — the next prepare_seat
-            # re-forks onto a rebuilt context or errors loudly.
-            seat, engine = inst, self._engine
-            try:
-                await asyncio.wrap_future(
-                    engine.control(lambda: engine.clear_seat(seat))
+            seat = inst
+            if id(seat) in self._reaper_reclaimed:
+                # The seat reaper already reclaimed this lease (leaked by a
+                # GC-deferred consumer whose finally fired late) — a second
+                # requeue would seat two streams on one seq.
+                self._reaper_reclaimed.discard(id(seat))
+                log.debug(
+                    "🔧 Seat seq %d already reclaimed by reaper — duplicate "
+                    "release ignored",
+                    seat.seq,
                 )
-            except Exception as exc:  # noqa: BLE001 — return the seat regardless
-                log.warning("⚠️ seat clear failed on release: %s", exc)
-            if self._pool_queue is not None:
-                await self._pool_queue.put(seat)
-            self._checked_out = max(0, self._checked_out - 1)
-            log.debug(
-                "🔧 Released seat seq %d (idle=%d, checked_out=%d)",
-                seat.seq,
-                self._pool_queue.qsize() if self._pool_queue else 0,
-                self._checked_out,
-            )
+                return
+            await self._release_seat(seat)
             return
         if getattr(inst, "_needs_context_refresh", False):
             await self._heal_instance(inst)
@@ -3294,10 +3433,22 @@ class LlamaCppBackend(BaseBackend):
             self._h_requests_since_refresh += 1  # drives the periodic context refresh
             if self._decode_mode == "batched":
                 parts: List[str] = []
-                async for chunk in self._batched_stream(
+                agen = self._batched_stream(
                     instance, prompt_tokens, max_tokens, temperature, **kwargs
-                ):
-                    parts.append(chunk)
+                )
+                try:
+                    async for chunk in agen:
+                        parts.append(chunk)
+                finally:
+                    # Deterministic finalization: a consumer cancel (agent
+                    # watchdog) abandons the delegated asyncgen mid-yield and
+                    # its finally (bridge.closed + engine.cancel) would defer
+                    # to GC — the engine keeps decoding into a dead bridge and
+                    # this guard never exits (the phantom in_flight wedge).
+                    # aclose() runs it NOW; shielded so a pending cancel can't
+                    # skip it (the pool branch's close-before-release pattern).
+                    with anyio.CancelScope(shield=True):
+                        await agen.aclose()
                 return "".join(parts)
             return await run_in_threadpool(
                 self.generate_sync,
@@ -3334,10 +3485,19 @@ class LlamaCppBackend(BaseBackend):
         async with self.generation_guard(nested=nested):
             self._h_requests_since_refresh += 1  # drives the periodic context refresh
             if self._decode_mode == "batched":
-                async for chunk in self._batched_stream(
+                agen = self._batched_stream(
                     instance, prompt_tokens, max_tokens, temperature, **kwargs
-                ):
-                    yield chunk
+                )
+                try:
+                    async for chunk in agen:
+                        yield chunk
+                finally:
+                    # See generate_async: run _batched_stream's finally NOW,
+                    # shielded, instead of at GC. (If OUR consumer abandons
+                    # this generator lazily too, this still fires at its
+                    # finalization — the seat reaper backstops the gap.)
+                    with anyio.CancelScope(shield=True):
+                        await agen.aclose()
                 return
             # An abandoned prior stream on this instance is a live hazard:
             # its deferred GeneratorExit (the worker thread's in-flight

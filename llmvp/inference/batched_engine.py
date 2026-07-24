@@ -176,6 +176,10 @@ class SeqSlot:
     input_ids: List[int] = field(default_factory=list)
     pinned: bool = False  # held by a session between turns
     dead: bool = False  # context rebuilt underneath this seat
+    # Lease stamp (monotonic) set at acquire, cleared at release — read by
+    # the backend's seat reaper to reclaim seats leaked by cancelled
+    # consumers whose release never ran.
+    _leased_at: Optional[float] = None
     _n_ctx: int = 0
     _needs_context_refresh: bool = False
     # Per-request telemetry contract (read by core/inference.py and
