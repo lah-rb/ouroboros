@@ -387,6 +387,76 @@ async def test_fanout_pool_fit_gate_waves_when_pool_small():
     assert eff.max_in_flight <= 1
 
 
+class _HealthFanoutEffects(_FanoutEffects):
+    """Fan-out double that also reports pool health (the server-derived
+    budget path); the base class stays bare to pin the getattr guard."""
+
+    def __init__(self, responses, health):
+        super().__init__(responses)
+        self.health = dict(health)
+        self.health_calls = 0
+
+    async def inference_pool_health(self):
+        self.health_calls += 1
+        return dict(self.health)
+
+
+@pytest.mark.asyncio
+async def test_fanout_pool_fit_gate_midrange_waves():
+    # The untested 48k regime that wedged the gemma study: a mid-size pool
+    # must produce an INTERMEDIATE wave width (1 < width < n_symbols), not
+    # full fan-out (the 131k assumption) and not the collapse-to-1 extreme
+    # the original test pinned.
+    eff = _FanoutEffects([])
+    out = await action_swarm_generate_symbols(
+        _si(
+            {"contract_set": _contract_set_n_symbols(30)},
+            params={"pool_budget": 49152},
+            effects=eff,
+        )
+    )
+    stats = out.context_updates["swarm_stats"]
+    assert stats["gate"] == "waved"
+    assert 1 < stats["workers"] < 30
+    assert eff.max_in_flight <= stats["workers"]
+    assert stats["pool_budget"] == 49152
+    assert stats["budget_source"] == "flow"
+
+
+@pytest.mark.asyncio
+async def test_fanout_budget_from_server_health():
+    # A server reporting kvPoolTokens overrides the flow param entirely:
+    # 4096 real tokens vs the 131072 default collapses the fan-out to
+    # 1-wide waves.
+    eff = _HealthFanoutEffects(
+        [], health={"kvPoolTokens": 4096, "decodeMode": "batched"}
+    )
+    out = await action_swarm_generate_symbols(
+        _si({"contract_set": _contract_set_n_symbols(5)}, effects=eff)
+    )
+    stats = out.context_updates["swarm_stats"]
+    assert eff.health_calls == 1
+    assert stats["budget_source"] == "server"
+    assert stats["pool_budget"] == 4096
+    assert stats["gate"] == "waved" and stats["workers"] == 1
+    assert eff.max_in_flight <= 1
+
+
+@pytest.mark.asyncio
+async def test_fanout_budget_fallback_when_health_absent():
+    # {} = old server / unreachable: the flow param stays authoritative
+    # and the burst records the fallback source.
+    eff = _HealthFanoutEffects([], health={})
+    out = await action_swarm_generate_symbols(
+        _si({"contract_set": _contract_set_n_symbols(5)}, effects=eff)
+    )
+    stats = out.context_updates["swarm_stats"]
+    assert eff.health_calls == 1
+    assert stats["budget_source"] == "flow"
+    assert stats["pool_budget"] == 131072
+    assert stats["gate"] == "full" and stats["workers"] == 5
+
+
 @pytest.mark.asyncio
 async def test_fanout_truncated_fails_fast_no_retry():
     # A generation that hit the server ceiling is a ramble: the attempt

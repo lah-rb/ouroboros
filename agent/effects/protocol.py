@@ -371,6 +371,15 @@ class Effects(Protocol):
         """
         ...
 
+    async def inference_pool_health(self) -> dict:
+        """Pool-sizing facts from the inference server's health endpoint
+        (kvPoolTokens, decodeMode, poolSize).
+
+        Returns {} when the server is unreachable or predates the fields —
+        callers (the swarm pool-fit gate) fall back to their static budget.
+        """
+        ...
+
     # ── Memoryful inference sessions ──────────────────────────────
 
     async def start_inference_session(

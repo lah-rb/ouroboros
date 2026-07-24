@@ -59,6 +59,7 @@ class MockEffects:
         http_responses: dict[str, Any] | None = None,
         http_downloads: dict[str, Any] | None = None,
         supports_host_tools: bool = True,
+        pool_health: dict[str, Any] | None = None,
     ) -> None:
         # Host-tool capability flag (mirrors LocalEffects/ContainerEffects) —
         # tests flip it to False to exercise the container-skip path.
@@ -68,6 +69,9 @@ class MockEffects:
         # Inference responses — popped in order; if exhausted, returns a default
         self._inference_responses: list[str] = list(inference_responses or [])
         self._inference_index: int = 0
+        # Canned pool-health facts ({} = "server doesn't report", the
+        # old-server downgrade the pool-fit gate falls back on).
+        self._pool_health: dict[str, Any] = dict(pool_health or {})
         # Canned HTTP: URL -> HttpResult or list[HttpResult] (lists pop in
         # order). Lookup: exact URL, else longest registered prefix match.
         self._http_responses: dict[str, Any] = dict(http_responses or {})
@@ -382,6 +386,12 @@ class MockEffects:
             result,
         )
         return result
+
+    async def inference_pool_health(self) -> dict:
+        """Return the canned pool-health facts ({} by default)."""
+        health = dict(self._pool_health)
+        self._record("inference_pool_health", {}, health)
+        return health
 
     # ── Memoryful inference sessions ──────────────────────────────
 

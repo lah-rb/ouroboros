@@ -961,8 +961,9 @@ async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:
     Context optional: swarm_token_base
     Params: max_workers (default 32 — the server admission ceiling; match
         the serving config's max_concurrent_requests), pool_budget
-        (default 131072 — the serving config's n_ctx, the SHARED KV cell
-        pool across all streams)
+        (default 131072 — FALLBACK only: the gate asks the server for its
+        real KV budget (health kvPoolTokens) at fan-out time and uses the
+        param only when the server doesn't report it)
     Publishes: worker_results, swarm_stats, inference_tokens_generated,
         batch_manifest, files_changed, primary_code_file (failure-path
         defaults; assemble_files overwrites them on success)
@@ -1020,6 +1021,39 @@ async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:
             },
         )
 
+    # The server's own KV budget beats the flow param: the param is a
+    # per-model constant baked into the compiled flow (131072 = gpt-oss
+    # geometry) and mis-sizes every other serving config — the 48k gemma
+    # pool was gated against it and starved into a terminal wedge
+    # (2026-07-24 swarm-class study). getattr-guarded: bare test doubles
+    # and older effect bundles simply keep the fallback.
+    budget_source = "flow"
+    pool_health_fn = getattr(effects, "inference_pool_health", None)
+    server_health: dict = {}
+    if pool_health_fn is not None:
+        try:
+            server_health = await pool_health_fn() or {}
+        except Exception:  # noqa: BLE001 — a sizing hint must never fail the burst
+            server_health = {}
+    kv_pool_tokens = int(server_health.get("kvPoolTokens") or 0)
+    if kv_pool_tokens > 0:
+        pool_budget = kv_pool_tokens
+        budget_source = "server"
+        logger.info(
+            "Swarm pool-fit gate: server reports kvPoolTokens=%d "
+            "(decodeMode=%s) — sizing admission against it",
+            kv_pool_tokens,
+            server_health.get("decodeMode") or "?",
+        )
+    else:
+        logger.warning(
+            "Swarm pool-fit gate: server does not report kvPoolTokens — "
+            "falling back to flow pool_budget=%d; VERIFY it matches the "
+            "serving config's n_ctx (a mismatched budget starved a 48k "
+            "pool into a wedge)",
+            pool_budget,
+        )
+
     # Pool-fit gate: prebuild every prompt, estimate the total read context
     # (chars/4 × 1.3 code calibration — no tokenize endpoint; actuals are
     # recorded post-hoc from InferenceResult.prompt_tokens), and fan out
@@ -1044,6 +1078,15 @@ async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:
             est_total,
             pool_budget,
             sem_n,
+        )
+    if draws and max(draws.values()) > budget80:
+        logger.warning(
+            "Swarm pool-fit gate: largest worker draw (%d tok est) exceeds "
+            "80%% of the pool (%d) — even one worker may starve; admitting "
+            "1-wide waves anyway (the estimate is a chars heuristic and the "
+            "server recovers via KV-pressure eviction)",
+            max(draws.values()),
+            budget80,
         )
     sem = asyncio.Semaphore(sem_n)
 
@@ -1075,6 +1118,7 @@ async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:
             "gate": gate,
             "max_workers": max_workers,
             "pool_budget": pool_budget,
+            "budget_source": budget_source,
             "est_prompt_tok_sum": est_total,
         }
     )
@@ -1206,6 +1250,8 @@ async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:
         "workers": sem_n,
         "gate": gate,
         "est_prompt_tok_sum": est_total,
+        "pool_budget": pool_budget,
+        "budget_source": budget_source,
     }
     obs = (
         f"Swarm: {ok_count}/{len(tasks)} symbols implemented in {wall_s:.0f}s "

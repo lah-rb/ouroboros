@@ -94,6 +94,24 @@ query Health {
 }
 """
 
+# Pool-sizing variant: the facts the swarm admission gate needs
+# (kvPoolTokens = the server's real KV token budget; decodeMode tells
+# shared-pool from per-instance semantics). Kept SEPARATE from HEALTH_QUERY
+# for the same reason as HEALTH_QUERY_WATCHDOG: an older server rejects
+# unknown fields with GraphQL errors — pool_health() treats that as "server
+# doesn't report" and callers fall back to their static budget.
+POOL_HEALTH_QUERY = """
+query Health {
+    health {
+        status
+        decodeMode
+        kvPoolTokens
+        poolSize
+        availableInstances
+    }
+}
+"""
+
 # Session mutations and queries
 START_SESSION_MUTATION = """
 mutation StartSession($config: SessionConfig!) {
@@ -317,6 +335,30 @@ class InferenceEffect:
             ) from e
         except httpx.HTTPStatusError as e:
             raise InferenceError(f"LLMVP health check HTTP error: {e}") from e
+
+    async def pool_health(self) -> dict:
+        """Fetch the pool-sizing health facts (kvPoolTokens, decodeMode,
+        poolSize).
+
+        Returns {} on ANY failure — connection error, GraphQL errors (an
+        older server rejects the unknown fields with errors), or empty
+        data — so callers fall back to their static budget without
+        exception handling. A sizing hint must never fail a fan-out.
+        """
+        try:
+            client = await self._get_client()
+            response = await client.post(
+                self._endpoint,
+                json={"query": POOL_HEALTH_QUERY},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if "errors" in data:
+                return {}
+            return (data.get("data") or {}).get("health") or {}
+        except Exception:  # noqa: BLE001 — downgrade to "not reported"
+            return {}
 
     async def fetch_thinking(self, request_id: str = "") -> str:
         """Fetch chain-of-thought content from the last inference call.

@@ -1154,6 +1154,24 @@ class LocalEffects:
 
         return result
 
+    async def inference_pool_health(self) -> dict:
+        """Pool-sizing facts from the LLMVP health endpoint ({} when the
+        server is unreachable or predates the fields)."""
+        start = time.monotonic()
+        health = await self._get_inference().pool_health()
+        self._log_entry(
+            "inference_pool_health",
+            "",
+            (
+                f"kvPoolTokens={health.get('kvPoolTokens')} "
+                f"decodeMode={health.get('decodeMode')}"
+                if health
+                else "unavailable"
+            ),
+            start,
+        )
+        return health
+
     async def fetch_thinking(self, request_id: str = "") -> str:
         """Fetch chain-of-thought content from the last inference call.
 
