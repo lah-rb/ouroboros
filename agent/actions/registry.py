@@ -669,12 +669,16 @@ def build_action_registry() -> ActionRegistry:
     from agent.actions.deep_research_actions import (
         action_research_decompose,
         action_research_merge_reflect,
+        action_research_select,
         action_research_synthesize,
+        action_research_verify,
         action_research_wave,
     )
 
     registry.register("research_decompose", action_research_decompose)
+    registry.register("research_select", action_research_select)
     registry.register("research_wave", action_research_wave)
+    registry.register("research_verify", action_research_verify)
     registry.register("research_merge_reflect", action_research_merge_reflect)
     registry.register("research_synthesize", action_research_synthesize)
 

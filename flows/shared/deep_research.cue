@@ -7,14 +7,21 @@
 // built for — so every inference here is a STATELESS completion and the
 // evidence ledger is explicit context data:
 //
-//     decompose → [ wave (fan-out all angles) → merge_reflect ]* → synthesize
+//     decompose → [ select → wave → verify → merge_reflect ]* → synthesize
 //
-//   - decompose: one inference — brief → independent searchable questions;
-//   - wave: ALL open angles concurrently (per-angle Exa search + a stateless
-//     low-reasoning condense), sized by the shared pool-fit gate
-//     (agent/actions/fanout.py — server kvPoolTokens beats any static value);
-//   - merge_reflect: ONE inference per wave — ledger audit → sufficiency or
-//     the next wave's gap questions (reflect-and-refine, batched);
+//   - decompose: one inference — brief → candidate searchable questions;
+//   - select: proposer burst (distinct lenses) + a small stateless panel
+//     voting the best B candidates within the search budget — cheap GPU
+//     work spent to make each API call count;
+//   - wave: the B respectful searches, then one extract completion PER HIT
+//     (single-source attribution; 5x GPU parallelism per API call), sized
+//     by the shared pool-fit gate (agent/actions/fanout.py);
+//   - verify: adversarial per-finding skeptic burst — grounded refutation
+//     against the source text (never persona debate; the debate-AB
+//     lesson), three-way verdict, contradicted findings excluded from
+//     synthesis, unsupported flagged, vacuous-skip on uncheckable ones;
+//   - merge_reflect: ONE inference per wave — verdict-annotated ledger
+//     audit → sufficiency or the next select's candidate pool;
 //   - synthesize: grounded summary with inline citations.
 //
 // Contract parity with deep_search: takes `brief`, returns research_summary
@@ -53,27 +60,52 @@ deep_research: #FlowDefinition & {
 
 		decompose: #StepDefinition & {
 			action:      "research_decompose"
-			description: "One inference: brief → independent searchable angles"
+			description: "One inference: brief → candidate searchable angles"
 			context: required: []
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.research_started == true", transition: "wave"},
+					{condition: "result.research_started == true", transition: "select"},
 					{condition: "true", transition: "unavailable"},
 				]
 			}
 			publishes: [
-				"research_brief", "research_angles", "research_ledger",
-				"research_wave_n", "research_queries_run",
+				"research_brief", "research_candidates", "research_angles",
+				"research_ledger", "research_wave_n", "research_queries_run",
 				"research_summary", "research_sufficient",
 			]
 		}
 
-		// One wave = fan out EVERY open angle concurrently (search + stateless
-		// condense per angle; pool-fit-gated inference concurrency).
+		// Proposer burst + panel vote: pick the B searches worth their API
+		// calls from the carried candidate pool + fresh proposals.
+		select: #StepDefinition & {
+			action:      "research_select"
+			description: "Proposers derive queries; a panel votes the budget's worth"
+			context: {
+				required: []
+				optional: [
+					"research_brief", "research_candidates", "research_ledger",
+					"research_queries_run",
+				]
+			}
+			params: {
+				search_budget: 6
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.n_selected > 0", transition: "wave"},
+					{condition: "true", transition: "synthesize"},
+				]
+			}
+			publishes: ["research_angles", "research_candidates"]
+		}
+
+		// One wave = the selected searches (politeness-bound), then one
+		// extract completion PER HIT (pool-fit-gated GPU burst).
 		wave: #StepDefinition & {
 			action:      "research_wave"
-			description: "Fan out all open angles: per-angle search + condense"
+			description: "Respectful searches, then per-hit extract fan-out"
 			context: {
 				required: ["research_angles"]
 				optional: ["research_ledger", "research_wave_n", "research_queries_run"]
@@ -86,16 +118,40 @@ deep_research: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "merge_reflect"}]
+				rules: [{condition: "true", transition: "verify"}]
 			}
-			publishes: ["research_ledger", "research_wave_n", "research_queries_run"]
+			publishes: [
+				"research_ledger", "research_wave_n", "research_queries_run",
+				"research_wave_hits",
+			]
 		}
 
-		// ONE inference per wave: audit the merged ledger, emit sufficiency
-		// or the next wave's gap questions.
+		// Adversarial pass: one grounded skeptic per fresh finding (claim +
+		// its source text, refute-minded, three-way verdict). Raw hit text
+		// is consumed here and never travels further.
+		verify: #StepDefinition & {
+			action:      "research_verify"
+			description: "Grounded per-finding refutation over the wave's sources"
+			context: {
+				required: ["research_ledger"]
+				optional: ["research_wave_n", "research_wave_hits"]
+			}
+			params: {
+				max_workers: 32
+				pool_budget: 131072
+			}
+			resolver: {
+				type: "rule"
+				rules: [{condition: "true", transition: "merge_reflect"}]
+			}
+			publishes: ["research_ledger", "research_wave_hits"]
+		}
+
+		// ONE inference per wave: audit the verdict-annotated ledger, emit
+		// sufficiency or the next select stage's candidate pool.
 		merge_reflect: #StepDefinition & {
 			action:      "research_merge_reflect"
-			description: "Ledger audit → sufficient, or the next wave's gaps"
+			description: "Ledger audit → sufficient, or the next candidate pool"
 			context: {
 				required: ["research_ledger"]
 				optional: ["research_brief", "research_wave_n"]
@@ -108,7 +164,7 @@ deep_research: #FlowDefinition & {
 					{condition: "true", transition: "check_budget"},
 				]
 			}
-			publishes: ["research_angles", "research_sufficient"]
+			publishes: ["research_candidates", "research_angles", "research_sufficient"]
 		}
 
 		// Wave budget: MAX_RESEARCH_WAVES = 3 (keep this rule and the Python
@@ -121,7 +177,7 @@ deep_research: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "context.research_wave_n >= 3", transition: "synthesize"},
-					{condition: "true", transition: "wave"},
+					{condition: "true", transition: "select"},
 				]
 			}
 		}

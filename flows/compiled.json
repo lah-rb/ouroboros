@@ -1579,7 +1579,7 @@
     "steps": {
       "decompose": {
         "action": "research_decompose",
-        "description": "One inference: brief \u2192 independent searchable angles",
+        "description": "One inference: brief \u2192 candidate searchable angles",
         "context": {
           "required": [],
           "optional": []
@@ -1591,7 +1591,7 @@
           "rules": [
             {
               "condition": "result.research_started == true",
-              "transition": "wave"
+              "transition": "select"
             },
             {
               "condition": "true",
@@ -1601,6 +1601,7 @@
         },
         "publishes": [
           "research_brief",
+          "research_candidates",
           "research_angles",
           "research_ledger",
           "research_wave_n",
@@ -1611,9 +1612,45 @@
         "effects": [],
         "terminal": false
       },
+      "select": {
+        "action": "research_select",
+        "description": "Proposers derive queries; a panel votes the budget's worth",
+        "context": {
+          "required": [],
+          "optional": [
+            "research_brief",
+            "research_candidates",
+            "research_ledger",
+            "research_queries_run"
+          ]
+        },
+        "params": {
+          "search_budget": 6
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.n_selected > 0",
+              "transition": "wave"
+            },
+            {
+              "condition": "true",
+              "transition": "synthesize"
+            }
+          ]
+        },
+        "publishes": [
+          "research_angles",
+          "research_candidates"
+        ],
+        "effects": [],
+        "terminal": false
+      },
       "wave": {
         "action": "research_wave",
-        "description": "Fan out all open angles: per-angle search + condense",
+        "description": "Respectful searches, then per-hit extract fan-out",
         "context": {
           "required": [
             "research_angles"
@@ -1634,21 +1671,55 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "merge_reflect"
+              "transition": "verify"
             }
           ]
         },
         "publishes": [
           "research_ledger",
           "research_wave_n",
-          "research_queries_run"
+          "research_queries_run",
+          "research_wave_hits"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "verify": {
+        "action": "research_verify",
+        "description": "Grounded per-finding refutation over the wave's sources",
+        "context": {
+          "required": [
+            "research_ledger"
+          ],
+          "optional": [
+            "research_wave_n",
+            "research_wave_hits"
+          ]
+        },
+        "params": {
+          "max_workers": 32,
+          "pool_budget": 131072
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "merge_reflect"
+            }
+          ]
+        },
+        "publishes": [
+          "research_ledger",
+          "research_wave_hits"
         ],
         "effects": [],
         "terminal": false
       },
       "merge_reflect": {
         "action": "research_merge_reflect",
-        "description": "Ledger audit \u2192 sufficient, or the next wave's gaps",
+        "description": "Ledger audit \u2192 sufficient, or the next candidate pool",
         "context": {
           "required": [
             "research_ledger"
@@ -1678,6 +1749,7 @@
           ]
         },
         "publishes": [
+          "research_candidates",
           "research_angles",
           "research_sufficient"
         ],
@@ -1704,7 +1776,7 @@
             },
             {
               "condition": "true",
-              "transition": "wave"
+              "transition": "select"
             }
           ]
         },
