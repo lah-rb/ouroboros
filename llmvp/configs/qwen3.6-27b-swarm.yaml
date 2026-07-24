@@ -1,0 +1,74 @@
+# qwen3.6-27b SWARM variant (2026-07-24): the Tier-1 dense under batched
+# multi-stream decode for the swarm-economics class study (vs gpt-oss batch
+# control). Deltas from base: decode_mode batched, max_concurrent 32,
+# max_tokens_default 32768. n_ctx 262144 is the SHARED cell pool across all
+# streams (kv_unified) — the pool-fit admission gate waves streams to fit.
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 262144
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "qwen3.6-27b-swarm"
+  family: "chatml"
+  decode_mode: "batched"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q6_K.gguf
+  n_ctx: 262144
+  n_gpu_layers: -1   
+  seed: -1
+  verbose: false
+  thinking: true
+  # 2026-07-22: was on the legacy save_state/load_state session path (no
+  # replay, no resident_seq_cache) — the same exposure found on
+  # mistral-small-4, where a corrupted saved state is reloaded every turn and
+  # so never recovers. Every other served config uses replay or resident.
+  session_full_replay: true
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 32768
+  # GDN-hybrid loop posture (2026-07-22, dev/qwen3_loop_research.md) —
+  # same substrate/paragraph-orbit risk as qwen3-next/3.5/3.6-35b.
+  temperature_default: 0.7
+  temperature_floor: 0.7
+  session_temp_floor: 0.7
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  penalty_last_n: 2048
+  # DRY REMOVED 2026-07-22 (isolation test — see qwen3-next-coder config):
+  # DRY converted the catchable coherent orbit into an uncatchable
+  # noise-slot structural loop that blinds the distinct-ratio guard.
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/qwen3.6-27b.tokens.bin"
+  token_limit: 32768
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 32
+  jit_concurrency_limit: null  
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
