@@ -11,6 +11,7 @@ parsed and resolved against a configured model default temperature.
 from __future__ import annotations
 
 import logging
+import asyncio
 import os
 import re
 from typing import Any
@@ -288,6 +289,19 @@ class InferenceEffect:
         self._model_default_temperature = model_default_temperature
         self._model = model
         self._client: httpx.AsyncClient | None = None
+        # Health-watchdog timing. INSTANCE attributes, not function-local
+        # constants, so tests can shrink them (TESTING.md: "timing knobs used
+        # by drains/settles should be instance attributes"). The watchdog is
+        # the ONLY bound on a request — inference runs with httpx
+        # timeout=None — so its decisions have to be exercisable, and with
+        # 60s/30s baked in nothing could reach them in a test.
+        self._watchdog_grace_s: float = 60  # don't poll during the first 60s
+        self._watchdog_poll_s: float = 30  # health check interval
+        self._watchdog_stall_s: float = 60  # cancel after this long with no tokens
+        # Explicit override for the eval-phase ceiling. None keeps the shipped
+        # behavior: OURO_EVAL_STUCK_S (default 300s), raised to 2x the
+        # server-advertised expectedEvalSeconds when it offers one.
+        self._watchdog_eval_stuck_s: float | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Lazy-initialize the HTTP client.
@@ -599,162 +613,13 @@ class InferenceEffect:
                     error=f"HTTP error: {e}",
                 )
 
-        async def _health_watchdog(request_task: asyncio.Task) -> None:
-            """Monitor generation health and cancel if stalled.
-
-            Starts polling after an initial grace period (60s).
-            Cancels the request if tokens stop advancing for 60s.
-            """
-            import asyncio as _asyncio
-
-            grace_period = 60  # Don't poll during the first 60s
-            poll_interval = 30  # Check health every 30s
-            stall_threshold = 60  # Cancel after 60s of no new tokens
-
-            await _asyncio.sleep(grace_period)
-
-            last_token_count = -1
-
-            # Prefer the expectedEvalSeconds-enriched health query (the
-            # server's advisory worst-case eval estimate for the in-flight
-            # prompt — model speed knowledge stays server-side). An older
-            # server rejects the unknown field, which surfaces as an empty
-            # ``data`` — downgrade to the legacy query ONCE rather than
-            # silently polling a dead query for the whole run.
-            watchdog_query = HEALTH_QUERY_WATCHDOG
-
-            while not request_task.done():
-                try:
-                    # Use a short-timeout client for health checks
-                    health_client = httpx.AsyncClient(timeout=10.0)
-                    try:
-                        resp = await health_client.post(
-                            self._endpoint, json={"query": watchdog_query}
-                        )
-                        body = resp.json()
-                        health = (body.get("data") or {}).get("health") or {}
-                    finally:
-                        await health_client.aclose()
-
-                    if not health and watchdog_query is not HEALTH_QUERY:
-                        logger.info(
-                            "Health watchdog: server lacks expectedEvalSeconds "
-                            "— falling back to legacy health query"
-                        )
-                        watchdog_query = HEALTH_QUERY
-                        continue
-
-                    gen_active = health.get("generationActive", False)
-                    tokens = health.get("tokensGenerated", 0)
-                    stall_secs = health.get("secondsSinceLastToken")
-                    phase = health.get("generationPhase", "unknown")
-                    prompt_toks = health.get("promptTokens", 0)
-                    elapsed = health.get("elapsedSeconds", 0)
-                    eval_dur = health.get("evalDuration")
-                    expected_eval = health.get("expectedEvalSeconds")
-
-                    if gen_active:
-                        if runaway_token_ceiling and tokens > runaway_token_ceiling:
-                            # Tokens still advancing, but past the sane ceiling
-                            # for this request type — a runaway/repetition loop
-                            # (stall detection alone never fires on these).
-                            logger.warning(
-                                "Health watchdog: runaway generation — %d tokens "
-                                "exceeds ceiling %d (phase=%s) — cancelling request",
-                                tokens,
-                                runaway_token_ceiling,
-                                phase,
-                            )
-                            request_task.cancel()
-                            return
-                        if tokens > last_token_count:
-                            # Model is actively generating — reset stall tracking
-                            last_token_count = tokens
-                            logger.info(
-                                "Health watchdog: phase=%s, %d tokens generated, "
-                                "%.0fs elapsed, prompt=%d tok",
-                                phase,
-                                tokens,
-                                elapsed or 0,
-                                prompt_toks,
-                            )
-                        elif phase == "eval":
-                            # Still evaluating prompt — log but don't cancel yet
-                            logger.info(
-                                "Health watchdog: still in eval phase, "
-                                "%.0fs elapsed, prompt=%d tok, eval_dur=%s",
-                                elapsed or 0,
-                                prompt_toks,
-                                eval_dur,
-                            )
-                            # Cancel if eval takes unreasonably long. The
-                            # floor is 300s (OURO_EVAL_STUCK_S overrides);
-                            # when the server advertises expectedEvalSeconds
-                            # (its measured worst-case prefill estimate for
-                            # THIS prompt), honor it with 2x headroom — the
-                            # server owns model-speed knowledge, we just
-                            # consume it. Guards against the fixed-limit doom
-                            # loop of 2026-07-23: dense mistral prefills
-                            # ~45 tok/s, so a 15k prompt needs ~335s and a
-                            # hardcoded 300s cancel discarded nine COMPLETED
-                            # generations at 90%+ (each cancel also briefly
-                            # wedges the single instance for the retry).
-                            _eval_limit = float(
-                                os.environ.get("OURO_EVAL_STUCK_S", "300")
-                            )
-                            if expected_eval:
-                                _eval_limit = max(
-                                    _eval_limit, 2.0 * float(expected_eval)
-                                )
-                            if elapsed and elapsed > _eval_limit:
-                                logger.warning(
-                                    "Health watchdog: eval phase stuck for %.0fs "
-                                    "— cancelling request",
-                                    elapsed,
-                                )
-                                request_task.cancel()
-                                return
-                        elif stall_secs is not None and stall_secs > stall_threshold:
-                            # Tokens haven't advanced and LLMVP confirms stall
-                            logger.warning(
-                                "Health watchdog: generation stalled for %.0fs "
-                                "at %d tokens (phase=%s) — cancelling request",
-                                stall_secs,
-                                tokens,
-                                phase,
-                            )
-                            request_task.cancel()
-                            return
-                        elif (
-                            tokens == 0
-                            and stall_secs is not None
-                            and stall_secs > stall_threshold
-                        ):
-                            # 0 tokens generated and stalled — model never started
-                            logger.warning(
-                                "Health watchdog: 0 tokens after %.0fs "
-                                "(phase=%s) — cancelling request",
-                                elapsed or 0,
-                                phase,
-                            )
-                            request_task.cancel()
-                            return
-                    elif not gen_active and last_token_count > 0:
-                        # Generation ended — request should complete soon
-                        logger.info("Health watchdog: generation finished")
-                        return
-
-                except Exception as e:
-                    # Health check failed — don't kill the request over a health check error
-                    logger.debug("Health watchdog poll failed: %s", e)
-
-                await _asyncio.sleep(poll_interval)
-
         import asyncio
 
         # Run the request with the watchdog
         request_task = asyncio.create_task(_do_request())
-        watchdog_task = asyncio.create_task(_health_watchdog(request_task))
+        watchdog_task = asyncio.create_task(
+            self._health_watchdog(request_task, runaway_token_ceiling)
+        )
 
         try:
             result = await request_task
@@ -775,6 +640,158 @@ class InferenceEffect:
                 pass
 
         return result
+
+    async def _poll_health(self, query: str) -> dict:
+        """One health poll. Its own method so tests can drive the watchdog's
+        DECISIONS with scripted payloads instead of standing up an HTTP
+        server — the health JSON is the only input the loop reads."""
+        health_client = httpx.AsyncClient(timeout=10.0)
+        try:
+            resp = await health_client.post(self._endpoint, json={"query": query})
+            body = resp.json()
+            return (body.get("data") or {}).get("health") or {}
+        finally:
+            await health_client.aclose()
+
+    async def _health_watchdog(
+        self, request_task: asyncio.Task, runaway_token_ceiling: int | None = None
+    ) -> None:
+        """Monitor generation health and cancel if stalled.
+
+        Starts polling after an initial grace period (60s).
+        Cancels the request if tokens stop advancing for 60s.
+        """
+        import asyncio as _asyncio
+
+        grace_period = self._watchdog_grace_s
+        poll_interval = self._watchdog_poll_s
+        stall_threshold = self._watchdog_stall_s
+
+        await _asyncio.sleep(grace_period)
+
+        last_token_count = -1
+
+        # Prefer the expectedEvalSeconds-enriched health query (the
+        # server's advisory worst-case eval estimate for the in-flight
+        # prompt — model speed knowledge stays server-side). An older
+        # server rejects the unknown field, which surfaces as an empty
+        # ``data`` — downgrade to the legacy query ONCE rather than
+        # silently polling a dead query for the whole run.
+        watchdog_query = HEALTH_QUERY_WATCHDOG
+
+        while not request_task.done():
+            try:
+                health = await self._poll_health(watchdog_query)
+
+                if not health and watchdog_query is not HEALTH_QUERY:
+                    logger.info(
+                        "Health watchdog: server lacks expectedEvalSeconds "
+                        "— falling back to legacy health query"
+                    )
+                    watchdog_query = HEALTH_QUERY
+                    continue
+
+                gen_active = health.get("generationActive", False)
+                tokens = health.get("tokensGenerated", 0)
+                stall_secs = health.get("secondsSinceLastToken")
+                phase = health.get("generationPhase", "unknown")
+                prompt_toks = health.get("promptTokens", 0)
+                elapsed = health.get("elapsedSeconds", 0)
+                eval_dur = health.get("evalDuration")
+                expected_eval = health.get("expectedEvalSeconds")
+
+                if gen_active:
+                    if runaway_token_ceiling and tokens > runaway_token_ceiling:
+                        # Tokens still advancing, but past the sane ceiling
+                        # for this request type — a runaway/repetition loop
+                        # (stall detection alone never fires on these).
+                        logger.warning(
+                            "Health watchdog: runaway generation — %d tokens "
+                            "exceeds ceiling %d (phase=%s) — cancelling request",
+                            tokens,
+                            runaway_token_ceiling,
+                            phase,
+                        )
+                        request_task.cancel()
+                        return
+                    if tokens > last_token_count:
+                        # Model is actively generating — reset stall tracking
+                        last_token_count = tokens
+                        logger.info(
+                            "Health watchdog: phase=%s, %d tokens generated, "
+                            "%.0fs elapsed, prompt=%d tok",
+                            phase,
+                            tokens,
+                            elapsed or 0,
+                            prompt_toks,
+                        )
+                    elif phase == "eval":
+                        # Still evaluating prompt — log but don't cancel yet
+                        logger.info(
+                            "Health watchdog: still in eval phase, "
+                            "%.0fs elapsed, prompt=%d tok, eval_dur=%s",
+                            elapsed or 0,
+                            prompt_toks,
+                            eval_dur,
+                        )
+                        # Cancel if eval takes unreasonably long. The
+                        # floor is 300s (OURO_EVAL_STUCK_S overrides);
+                        # when the server advertises expectedEvalSeconds
+                        # (its measured worst-case prefill estimate for
+                        # THIS prompt), honor it with 2x headroom — the
+                        # server owns model-speed knowledge, we just
+                        # consume it. Guards against the fixed-limit doom
+                        # loop of 2026-07-23: dense mistral prefills
+                        # ~45 tok/s, so a 15k prompt needs ~335s and a
+                        # hardcoded 300s cancel discarded nine COMPLETED
+                        # generations at 90%+ (each cancel also briefly
+                        # wedges the single instance for the retry).
+                        _eval_limit = float(os.environ.get("OURO_EVAL_STUCK_S", "300"))
+                        if expected_eval:
+                            _eval_limit = max(_eval_limit, 2.0 * float(expected_eval))
+                        if elapsed and elapsed > _eval_limit:
+                            logger.warning(
+                                "Health watchdog: eval phase stuck for %.0fs "
+                                "— cancelling request",
+                                elapsed,
+                            )
+                            request_task.cancel()
+                            return
+                    elif stall_secs is not None and stall_secs > stall_threshold:
+                        # Tokens haven't advanced and LLMVP confirms stall
+                        logger.warning(
+                            "Health watchdog: generation stalled for %.0fs "
+                            "at %d tokens (phase=%s) — cancelling request",
+                            stall_secs,
+                            tokens,
+                            phase,
+                        )
+                        request_task.cancel()
+                        return
+                    elif (
+                        tokens == 0
+                        and stall_secs is not None
+                        and stall_secs > stall_threshold
+                    ):
+                        # 0 tokens generated and stalled — model never started
+                        logger.warning(
+                            "Health watchdog: 0 tokens after %.0fs "
+                            "(phase=%s) — cancelling request",
+                            elapsed or 0,
+                            phase,
+                        )
+                        request_task.cancel()
+                        return
+                elif not gen_active and last_token_count > 0:
+                    # Generation ended — request should complete soon
+                    logger.info("Health watchdog: generation finished")
+                    return
+
+            except Exception as e:
+                # Health check failed — don't kill the request over a health check error
+                logger.debug("Health watchdog poll failed: %s", e)
+
+            await _asyncio.sleep(poll_interval)
 
     # ── Memoryful session methods ─────────────────────────────────
 
