@@ -122,16 +122,398 @@ def _make_turn(**overrides) -> TurnDefinition:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def test_banner_for_json_document(renderer: TurnRenderer) -> None:
-    turn = _make_turn()
-    prompt = renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-    assert prompt.startswith("=== JSON DOCUMENT ===\n")
+# ── Table helpers ─────────────────────────────────────────────────────
+#
+# C7 (2026-07-25) is PARAMETRIZATION ONLY. Every assertion below is the one
+# the pre-table function made, moved verbatim into a row — no claim was
+# strengthened, weakened, or re-specified. That separation is deliberate:
+# parametrizing and re-specifying are different changes, and mixing them
+# means a green suite proves neither. Converting these prose pins to
+# structural assertions is a SEPARATE commit (C7b) if it happens at all.
+#
+# HONESTY NOTE on which side of the TESTING.md line these sit: the code /
+# ref / literal / banner tables are largely PROSE PINS — they assert exact
+# rendered strings. For a prompt renderer some of that genuinely is the
+# contract (the model must see exactly these markers and fence tags), but a
+# table makes prose pins cheaper to maintain and therefore more entrenched.
+# They are honest about being prose pins rather than dressed up as
+# structural ones.
 
 
-def test_banner_override(renderer: TurnRenderer) -> None:
-    turn = _make_turn(mode_banner="=== TEST EVALUATION ===")
-    prompt = renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-    assert prompt.startswith("=== TEST EVALUATION ===\n")
+def _render(renderer, turn, ns=None):
+    return renderer.render(
+        turn, namespaces=ns or {"input": {}, "context": {}, "meta": {}}
+    )
+
+
+def _assert_text(
+    prompt, must_contain=(), must_not_contain=(), starts_with="", must_contain_ci=()
+):
+    assert (
+        must_contain or must_not_contain or starts_with or must_contain_ci
+    ), "row must assert something about the rendered prompt"
+    if starts_with:
+        assert prompt.startswith(starts_with), f"prompt starts {prompt[:60]!r}"
+    for s in must_contain:
+        assert s in prompt, f"missing {s!r}"
+    for s in must_not_contain:
+        assert s not in prompt, f"unexpectedly present: {s!r}"
+    for s in must_contain_ci:
+        assert s.lower() in prompt.lower(), f"missing (ci) {s!r}"
+
+
+_BANNERS = [
+    pytest.param({}, "=== JSON DOCUMENT ===\n", id="json_document_default"),
+    pytest.param(
+        {"mode_banner": "=== TEST EVALUATION ==="},
+        "=== TEST EVALUATION ===\n",
+        id="explicit_mode_banner_override",
+    ),
+]
+
+
+@pytest.mark.parametrize("overrides,expected_prefix", _BANNERS)
+def test_banner(renderer: TurnRenderer, overrides, expected_prefix) -> None:
+    assert _render(renderer, _make_turn(**overrides)).startswith(expected_prefix)
+
+
+_ENVELOPE = {"type": "envelope"}
+
+_REF_SECTIONS = [
+    pytest.param(
+        [{"type": "problem", "ref": {"$ref": "input.target_file_path"}}, _ENVELOPE],
+        {"input": {"target_file_path": "models.py"}, "context": {}, "meta": {}},
+        ["models.py"],
+        [],
+        id="ref_resolves_value",
+    ),
+    # Site #19's conditional problem section — target_file_path is optional and
+    # the section disappears when absent. The title's absence IS the omission
+    # signal (it would only render if the section did).
+    pytest.param(
+        [
+            {"type": "role", "template": "personas/env_detector"},
+            {
+                "type": "problem",
+                "ref": {"$ref": "input.target_file_path"},
+                "title": "Target",
+            },
+            {"type": "instruction", "literal": "Always present."},
+            _ENVELOPE,
+        ],
+        {"input": {}, "context": {}, "meta": {}},
+        ["Always present."],
+        ["## Target"],
+        id="ref_omitted_when_source_absent",
+    ),
+    pytest.param(
+        [
+            {
+                "type": "problem",
+                "ref": {"$ref": "input.missing"},
+                "required": True,
+                "title": "Problem",
+            },
+            _ENVELOPE,
+        ],
+        {"input": {}, "context": {}, "meta": {}},
+        ["## Problem"],
+        [],
+        id="ref_required_renders_header_even_when_empty",
+    ),
+    # An empty string is functionally equivalent to missing for omission.
+    pytest.param(
+        [
+            {
+                "type": "problem",
+                "ref": {"$ref": "input.target_file_path"},
+                "title": "Target",
+            },
+            {"type": "instruction", "literal": "Only instruction."},
+            _ENVELOPE,
+        ],
+        {"input": {"target_file_path": ""}, "context": {}, "meta": {}},
+        ["Only instruction."],
+        ["## Target"],
+        id="ref_empty_string_treated_as_absent",
+    ),
+]
+
+
+@pytest.mark.parametrize("sections,ns,must_contain,must_not_contain", _REF_SECTIONS)
+def test_ref_sections(renderer, sections, ns, must_contain, must_not_contain) -> None:
+    _assert_text(
+        _render(renderer, _make_turn(sections=sections), ns),
+        must_contain,
+        must_not_contain,
+    )
+
+
+# Site #10's kind-aware instruction — a context var holds the template id.
+_DYNAMIC_TEMPLATE = [
+    pytest.param(
+        "context.kind_instruction_template",
+        {"kind_instruction_template": "patch/rewrite_class_instruction"},
+        ["Rewrite this class."],
+        [],
+        id="dynamic_template_class_case",
+    ),
+    pytest.param(
+        "context.kind_instruction_template",
+        {"kind_instruction_template": "patch/rewrite_function_instruction"},
+        ["Rewrite this function."],
+        [],
+        id="dynamic_template_function_case",
+    ),
+    # Ref resolves to nothing -> section omitted, but the envelope survives.
+    pytest.param(
+        "context.not_set",
+        {},
+        ["```json"],
+        ["Rewrite this"],
+        id="dynamic_template_empty_omits_section",
+    ),
+]
+
+
+@pytest.mark.parametrize("ref,context,must_contain,must_not_contain", _DYNAMIC_TEMPLATE)
+def test_dynamic_template_ref(
+    renderer, ref, context, must_contain, must_not_contain
+) -> None:
+    turn = _make_turn(
+        sections=[{"type": "instruction", "template": {"$ref": ref}}, _ENVELOPE]
+    )
+    _assert_text(
+        _render(renderer, turn, {"input": {}, "context": context, "meta": {}}),
+        must_contain,
+        must_not_contain,
+    )
+
+
+_LITERALS = [
+    pytest.param(
+        "What would you do next?",
+        {},
+        ["What would you do next?"],
+        id="literal_renders_verbatim",
+    ),
+    pytest.param(
+        "Working directory: {input.working_directory}",
+        {"working_directory": "/tmp/proj"},
+        ["Working directory: /tmp/proj"],
+        id="literal_substitutes_namespace_ref",
+    ),
+    pytest.param(
+        "Path: [{input.missing}]",
+        {},
+        ["Path: []"],
+        id="literal_missing_value_substitutes_empty",
+    ),
+    # JSON-like braces must NOT be substituted — the regex requires a
+    # namespace prefix followed by a dot.
+    pytest.param(
+        'Emit JSON like: {"choice": "x"}',
+        {},
+        ['{"choice": "x"}'],
+        id="literal_passes_json_braces_through",
+    ),
+]
+
+
+@pytest.mark.parametrize("literal,input_ns,must_contain", _LITERALS)
+def test_literal_sections(renderer, literal, input_ns, must_contain) -> None:
+    turn = _make_turn(sections=[{"type": "instruction", "literal": literal}, _ENVELOPE])
+    _assert_text(
+        _render(renderer, turn, {"input": input_ns, "context": {}, "meta": {}}),
+        must_contain,
+    )
+
+
+def _code_turn(language: str):
+    return TurnDefinition.model_validate(
+        {
+            "response_shape": "code",
+            "sections": [{"type": "instruction", "literal": "x"}, _ENVELOPE],
+            "transitions": {"default": "write", "no_answer": "failed"},
+            "response": {"language": language},
+        }
+    )
+
+
+_CODE_ENVELOPE = [
+    # Single-language: one fenced example, python tag, `# === FILE:` marker.
+    pytest.param(
+        "python",
+        "",
+        ["```python", "# === FILE:", "file.py"],
+        ["one fenced code block per file"],
+        "=== CODE EDITOR ===",
+        [],
+        id="python_single_language",
+    ),
+    # Known languages get their conventional extension. These three were one
+    # function with an internal loop; as rows they are individually reported.
+    pytest.param("rust", "", ["file.rs"], [], "", [], id="ext_mapping_rust"),
+    pytest.param(
+        "typescript", "", ["file.ts"], [], "", [], id="ext_mapping_typescript"
+    ),
+    pytest.param("go", "", ["file.go"], [], "", [], id="ext_mapping_go"),
+    # Unknown language: the name itself is the fallback extension.
+    pytest.param(
+        "esoteric-lang",
+        "",
+        ["file.esoteric-lang"],
+        [],
+        "",
+        [],
+        id="unknown_language_falls_back_to_name",
+    ),
+    # A whole-file JSON write gets the dedicated MARKER-FREE envelope: a
+    # ```json fence with no `# === FILE:` line (it is a comment, invalid in
+    # JSON). Detected from the target extension even though response.language
+    # is the coarse 'python' default the create flow sets. This row is not an
+    # `expect_marker=False` variant of the others — it asserts a different
+    # envelope literal AND the absence of the marker REQUIREMENT text.
+    pytest.param(
+        "python",
+        "save_data.json",
+        ["```json", "```json\n<complete file content>\n```"],
+        ["first line inside the fence must be"],
+        "",
+        ["no comments"],
+        id="json_target_marker_free_envelope",
+    ),
+    # The fence tag follows the ACTUAL target, not the coarse default — and
+    # the marker STAYS for YAML, which has comments.
+    pytest.param(
+        "python",
+        "world_data.yaml",
+        ["```yaml", "file.yaml", "# === FILE:"],
+        ["```python"],
+        "",
+        [],
+        id="target_extension_beats_coarse_language",
+    ),
+    # No target: fall back to response.language (prior behavior preserved).
+    pytest.param(
+        "rust",
+        "",
+        ["```rust", "file.rs"],
+        [],
+        "",
+        [],
+        id="no_target_falls_back_to_language",
+    ),
+    # A non-JSON target flows through the unchanged full-file envelope.
+    pytest.param(
+        "python",
+        "engine.py",
+        ["# === FILE:", "```python"],
+        [],
+        "",
+        [],
+        id="non_json_target_unchanged",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "language,target,must_contain,must_not_contain,starts_with,must_contain_ci",
+    _CODE_ENVELOPE,
+)
+def test_code_envelope(
+    renderer,
+    language,
+    target,
+    must_contain,
+    must_not_contain,
+    starts_with,
+    must_contain_ci,
+) -> None:
+    ns = {
+        "input": {"target_file_path": target} if target else {},
+        "context": {},
+        "meta": {},
+    }
+    _assert_text(
+        _render(renderer, _code_turn(language), ns),
+        must_contain,
+        must_not_contain,
+        starts_with,
+        must_contain_ci,
+    )
+
+
+# ── Render errors ─────────────────────────────────────────────────────
+#
+# Collected from several clusters because they share one shape: build a turn,
+# render it, expect TurnRenderError matching a message fragment. These match
+# OUR OWN error strings (not a third party's), which is the case TESTING.md
+# tolerates — the message is the diagnostic contract.
+
+_RENDER_ERRORS = [
+    pytest.param(
+        {
+            "sections": [
+                {
+                    "type": "instruction",
+                    "template": {"$ref": "context.must_be_set"},
+                    "required": True,
+                },
+                _ENVELOPE,
+            ]
+        },
+        {"input": {}, "context": {}, "meta": {}},
+        "resolved to empty",
+        id="dynamic_template_empty_but_required",
+    ),
+    pytest.param(
+        {"response": {"schema_id": "no_example_schema"}},
+        {"input": {}, "context": {}, "meta": {}},
+        "x-example",
+        id="json_envelope_schema_missing_example",
+    ),
+    pytest.param(
+        {"response": {"schema_id": "not_registered"}},
+        {"input": {}, "context": {}, "meta": {}},
+        "not_registered|not in the registry",
+        id="json_envelope_unknown_schema",
+    ),
+]
+
+
+@pytest.mark.parametrize("overrides,ns,match", _RENDER_ERRORS)
+def test_render_errors(renderer, overrides, ns, match) -> None:
+    with pytest.raises((TurnRenderError, Exception), match=match):
+        renderer.render(_make_turn(**overrides), namespaces=ns)
+
+
+_MENU_ERRORS = [
+    # A menu with no options anywhere is a configuration error — surfaced
+    # immediately rather than emitting a list the model cannot choose from.
+    pytest.param(
+        "empty_menu", {"empty_menu": []}, "no options", id="menu_empty_options"
+    ),
+    pytest.param(
+        "nowhere", {}, "not found in namespaces", id="menu_projection_missing"
+    ),
+]
+
+
+@pytest.mark.parametrize("projection,input_ns,match", _MENU_ERRORS)
+def test_menu_option_errors(renderer, projection, input_ns, match) -> None:
+    turn = TurnDefinition.model_validate(
+        {
+            "response_shape": "menu_single",
+            "sections": [{"type": "options"}, _ENVELOPE],
+            "transitions": {"default": "a", "no_answer": "b"},
+            "response": {
+                "options_from": {"source": "projection", "projection": projection}
+            },
+        }
+    )
+    with pytest.raises(TurnRenderError, match=match):
+        renderer.render(turn, namespaces={"input": input_ns, "context": {}, "meta": {}})
 
 
 def test_banner_unknown_shape_raises(renderer: TurnRenderer) -> None:
@@ -150,101 +532,6 @@ def test_banner_unknown_shape_raises(renderer: TurnRenderer) -> None:
 # ──────────────────────────────────────────────────────────────────────
 # Content sections — ref
 # ──────────────────────────────────────────────────────────────────────
-
-
-def test_ref_section_resolves_value(renderer: TurnRenderer) -> None:
-    turn = _make_turn(
-        sections=[
-            {"type": "problem", "ref": {"$ref": "input.target_file_path"}},
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(
-        turn,
-        namespaces={
-            "input": {"target_file_path": "models.py"},
-            "context": {},
-            "meta": {},
-        },
-    )
-    assert "models.py" in prompt
-
-
-def test_ref_section_omitted_when_empty(renderer: TurnRenderer) -> None:
-    """Site #19's conditional problem section — target_file_path is
-    optional, section disappears when absent."""
-    turn = _make_turn(
-        sections=[
-            {"type": "role", "template": "personas/env_detector"},
-            {
-                "type": "problem",
-                "ref": {"$ref": "input.target_file_path"},
-                "title": "Target",
-            },
-            {"type": "instruction", "literal": "Always present."},
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(
-        turn,
-        namespaces={"input": {}, "context": {}, "meta": {}},
-    )
-    assert "Always present." in prompt
-    # Section omitted when ref source absent and not required.
-    # Title would only appear if the section rendered — its absence
-    # is the omission signal.
-    assert "## Target" not in prompt
-
-
-def test_ref_section_required_renders_even_when_empty(
-    renderer: TurnRenderer,
-) -> None:
-    turn = _make_turn(
-        sections=[
-            {
-                "type": "problem",
-                "ref": {"$ref": "input.missing"},
-                "required": True,
-                "title": "Problem",
-            },
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(
-        turn,
-        namespaces={"input": {}, "context": {}, "meta": {}},
-    )
-    # Required + title → header renders even with empty content
-    assert "## Problem" in prompt
-
-
-def test_ref_section_empty_string_treated_as_empty(
-    renderer: TurnRenderer,
-) -> None:
-    """Empty string is functionally equivalent to missing for omission
-    purposes."""
-    turn = _make_turn(
-        sections=[
-            {
-                "type": "problem",
-                "ref": {"$ref": "input.target_file_path"},
-                "title": "Target",
-            },
-            {"type": "instruction", "literal": "Only instruction."},
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(
-        turn,
-        namespaces={
-            "input": {"target_file_path": ""},
-            "context": {},
-            "meta": {},
-        },
-    )
-    assert "Only instruction." in prompt
-    # If the problem section had rendered, we'd see "## Target".
-    assert "## Target" not in prompt
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -354,160 +641,9 @@ def test_template_missing_content_field_raises(
 # ──────────────────────────────────────────────────────────────────────
 
 
-def test_dynamic_template_ref_resolves_class_case(
-    renderer: TurnRenderer,
-) -> None:
-    """Site #10's kind-aware instruction — context var holds the
-    template id."""
-    turn = _make_turn(
-        sections=[
-            {
-                "type": "instruction",
-                "template": {"$ref": "context.kind_instruction_template"},
-            },
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(
-        turn,
-        namespaces={
-            "input": {},
-            "context": {"kind_instruction_template": "patch/rewrite_class_instruction"},
-            "meta": {},
-        },
-    )
-    assert "Rewrite this class." in prompt
-
-
-def test_dynamic_template_ref_resolves_function_case(
-    renderer: TurnRenderer,
-) -> None:
-    turn = _make_turn(
-        sections=[
-            {
-                "type": "instruction",
-                "template": {"$ref": "context.kind_instruction_template"},
-            },
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(
-        turn,
-        namespaces={
-            "input": {},
-            "context": {
-                "kind_instruction_template": "patch/rewrite_function_instruction"
-            },
-            "meta": {},
-        },
-    )
-    assert "Rewrite this function." in prompt
-
-
-def test_dynamic_template_ref_empty_omits_section(
-    renderer: TurnRenderer,
-) -> None:
-    turn = _make_turn(
-        sections=[
-            {
-                "type": "instruction",
-                "template": {"$ref": "context.not_set"},
-            },
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-    # The instruction templates produce "Rewrite this class." or
-    # "Rewrite this function." — neither should appear since the
-    # dynamic ref resolved to empty and the section was omitted.
-    assert "Rewrite this" not in prompt
-    # Envelope still present
-    assert "```json" in prompt
-
-
-def test_dynamic_template_ref_empty_required_raises(
-    renderer: TurnRenderer,
-) -> None:
-    turn = _make_turn(
-        sections=[
-            {
-                "type": "instruction",
-                "template": {"$ref": "context.must_be_set"},
-                "required": True,
-            },
-            {"type": "envelope"},
-        ]
-    )
-    with pytest.raises(TurnRenderError, match="resolved to empty"):
-        renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Content sections — literal
 # ──────────────────────────────────────────────────────────────────────
-
-
-def test_literal_section_renders(renderer: TurnRenderer) -> None:
-    turn = _make_turn(
-        sections=[
-            {"type": "instruction", "literal": "What would you do next?"},
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-    assert "What would you do next?" in prompt
-
-
-def test_literal_with_substitution(renderer: TurnRenderer) -> None:
-    turn = _make_turn(
-        sections=[
-            {
-                "type": "instruction",
-                "literal": "Working directory: {input.working_directory}",
-            },
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(
-        turn,
-        namespaces={
-            "input": {"working_directory": "/tmp/proj"},
-            "context": {},
-            "meta": {},
-        },
-    )
-    assert "Working directory: /tmp/proj" in prompt
-
-
-def test_literal_substitution_missing_value_empty(
-    renderer: TurnRenderer,
-) -> None:
-    turn = _make_turn(
-        sections=[
-            {"type": "instruction", "literal": "Path: [{input.missing}]"},
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-    assert "Path: []" in prompt
-
-
-def test_literal_passes_json_braces_through(
-    renderer: TurnRenderer,
-) -> None:
-    """JSON-like braces in instruction literals must not be substituted
-    — the regex requires a namespace prefix followed by a dot."""
-    turn = _make_turn(
-        sections=[
-            {
-                "type": "instruction",
-                "literal": 'Emit JSON like: {"choice": "x"}',
-            },
-            {"type": "envelope"},
-        ]
-    )
-    prompt = renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-    assert '{"choice": "x"}' in prompt
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -588,23 +724,6 @@ def test_json_document_envelope_includes_fenced_example(
     assert '"py":' in prompt
 
 
-def test_json_document_envelope_missing_example_raises(
-    prompts_dir: Path, schema_registry: SchemaRegistry
-) -> None:
-    renderer = TurnRenderer(prompts_dir, schema_registry)
-    turn = _make_turn(response={"schema_id": "no_example_schema"})
-    with pytest.raises(TurnRenderError, match="x-example"):
-        renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-
-
-def test_json_document_envelope_unknown_schema_raises(
-    renderer: TurnRenderer,
-) -> None:
-    turn = _make_turn(response={"schema_id": "not_registered"})
-    with pytest.raises(Exception, match="not_registered|not in the registry"):
-        renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Envelope — other shapes raise (Phase 3 placeholder)
 # ──────────────────────────────────────────────────────────────────────
@@ -638,195 +757,6 @@ def test_prose_envelope_omitted_cleanly(renderer: TurnRenderer) -> None:
 # ──────────────────────────────────────────────────────────────────────
 # Code envelope
 # ──────────────────────────────────────────────────────────────────────
-
-
-def test_code_envelope_single_language_python(renderer: TurnRenderer) -> None:
-    """Single-language code shape: one fenced example with python tag
-    and `# === FILE: path ===` as first line inside."""
-    turn = TurnDefinition.model_validate(
-        {
-            "response_shape": "code",
-            "sections": [
-                {"type": "instruction", "literal": "write the code"},
-                {"type": "envelope"},
-            ],
-            "transitions": {"default": "write", "no_answer": "failed"},
-            "response": {"language": "python"},
-        }
-    )
-    prompt = renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-
-    assert prompt.startswith("=== CODE EDITOR ===")
-    # One fence block with the python tag
-    assert "```python" in prompt
-    # Fence-with-path-comment protocol is shown
-    assert "# === FILE:" in prompt
-    # Extension matches the mapping
-    assert "file.py" in prompt
-    # Single-file envelope should not mention multiple fences
-    assert "one fenced code block per file" not in prompt
-
-
-def test_code_envelope_language_mapping(renderer: TurnRenderer) -> None:
-    """Known languages get their conventional extension in the example.
-    Unknown languages fall back to the language name."""
-    for language, expected_ext in [
-        ("rust", "rs"),
-        ("typescript", "ts"),
-        ("go", "go"),
-    ]:
-        turn = TurnDefinition.model_validate(
-            {
-                "response_shape": "code",
-                "sections": [
-                    {"type": "instruction", "literal": "x"},
-                    {"type": "envelope"},
-                ],
-                "transitions": {"default": "w", "no_answer": "f"},
-                "response": {"language": language},
-            }
-        )
-        prompt = renderer.render(
-            turn, namespaces={"input": {}, "context": {}, "meta": {}}
-        )
-        assert (
-            f"file.{expected_ext}" in prompt
-        ), f"Language {language!r}: expected file.{expected_ext} in envelope"
-
-
-def test_code_envelope_unknown_language_falls_back_to_name(
-    renderer: TurnRenderer,
-) -> None:
-    """An unknown language has no extension mapping — the envelope
-    uses the language name itself as a reasonable fallback."""
-    turn = TurnDefinition.model_validate(
-        {
-            "response_shape": "code",
-            "sections": [
-                {"type": "instruction", "literal": "x"},
-                {"type": "envelope"},
-            ],
-            "transitions": {"default": "w", "no_answer": "f"},
-            "response": {"language": "esoteric-lang"},
-        }
-    )
-    prompt = renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-    # Fallback: language name as extension
-    assert "file.esoteric-lang" in prompt
-
-
-def test_code_envelope_json_target_uses_marker_free_envelope(
-    renderer: TurnRenderer,
-) -> None:
-    """A whole-file JSON write gets the dedicated marker-free envelope:
-    a ```json fence with NO `# === FILE:` marker (it's a comment, invalid
-    in JSON). Detected from the target extension even though response.language
-    is the coarse 'python' default the create flow sets."""
-    turn = TurnDefinition.model_validate(
-        {
-            "response_shape": "code",
-            "sections": [
-                {"type": "instruction", "literal": "write the save file"},
-                {"type": "envelope"},
-            ],
-            "transitions": {"default": "write", "no_answer": "failed"},
-            "response": {"language": "python"},  # coarse default; target wins
-        }
-    )
-    prompt = renderer.render(
-        turn,
-        namespaces={
-            "input": {"target_file_path": "save_data.json"},
-            "context": {},
-            "meta": {},
-        },
-    )
-    assert "```json" in prompt
-    # The example fence is marker-free — no `# === FILE:` line INSIDE it.
-    assert "```json\n<complete file content>\n```" in prompt
-    # And the code envelope's marker REQUIREMENT is not imposed.
-    assert "first line inside the fence must be" not in prompt
-    assert "no comments" in prompt.lower()
-
-
-def test_code_envelope_fence_tag_follows_target_extension(
-    renderer: TurnRenderer,
-) -> None:
-    """The example fence tag + extension follow the ACTUAL target file, not the
-    create turn's coarse response.language default. A `.yaml` target renders
-    ```yaml / file.yaml even though response.language is 'python' — and the
-    `# === FILE:` marker stays (YAML has comments, unlike JSON)."""
-    turn = TurnDefinition.model_validate(
-        {
-            "response_shape": "code",
-            "sections": [
-                {"type": "instruction", "literal": "write the world data"},
-                {"type": "envelope"},
-            ],
-            "transitions": {"default": "write", "no_answer": "failed"},
-            "response": {"language": "python"},  # coarse default; target wins
-        }
-    )
-    prompt = renderer.render(
-        turn,
-        namespaces={
-            "input": {"target_file_path": "world_data.yaml"},
-            "context": {},
-            "meta": {},
-        },
-    )
-    assert "```yaml" in prompt
-    assert "file.yaml" in prompt
-    assert "```python" not in prompt  # the coarse default did NOT leak
-    assert "# === FILE:" in prompt  # YAML has comments, so marker stays
-
-
-def test_code_envelope_no_target_falls_back_to_language(
-    renderer: TurnRenderer,
-) -> None:
-    """With no target_file_path, the envelope falls back to response.language —
-    preserving the prior behavior for callers that don't set a target."""
-    turn = TurnDefinition.model_validate(
-        {
-            "response_shape": "code",
-            "sections": [
-                {"type": "instruction", "literal": "x"},
-                {"type": "envelope"},
-            ],
-            "transitions": {"default": "w", "no_answer": "f"},
-            "response": {"language": "rust"},
-        }
-    )
-    prompt = renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
-    assert "```rust" in prompt
-    assert "file.rs" in prompt
-
-
-def test_code_envelope_non_json_target_unchanged(renderer: TurnRenderer) -> None:
-    """A non-JSON target (even with target_file_path set) flows through the
-    unchanged full-file envelope with the `# === FILE:` marker — the existing
-    path is byte-for-byte preserved."""
-    turn = TurnDefinition.model_validate(
-        {
-            "response_shape": "code",
-            "sections": [
-                {"type": "instruction", "literal": "write the engine"},
-                {"type": "envelope"},
-            ],
-            "transitions": {"default": "write", "no_answer": "failed"},
-            "response": {"language": "python"},
-        }
-    )
-    prompt = renderer.render(
-        turn,
-        namespaces={
-            "input": {"target_file_path": "engine.py"},
-            "context": {},
-            "meta": {},
-        },
-    )
-    assert "# === FILE:" in prompt  # existing protocol preserved
-    assert "```python" in prompt
 
 
 def test_menu_options_resolve_from_context_key(renderer: TurnRenderer) -> None:
@@ -885,48 +815,6 @@ def test_menu_options_embedded_with_stock_merge(renderer: TurnRenderer) -> None:
     revise_idx = prompt.find("**revise**")
     conclude_idx = prompt.find("**__conclude__**")
     assert proceed_idx < revise_idx < conclude_idx
-
-
-def test_menu_empty_options_raises(renderer: TurnRenderer) -> None:
-    """A menu with no options anywhere is a configuration error — the
-    renderer surfaces it immediately rather than emitting an empty list
-    that the model can't choose from."""
-    turn = TurnDefinition.model_validate(
-        {
-            "response_shape": "menu_single",
-            "sections": [{"type": "options"}, {"type": "envelope"}],
-            "transitions": {"default": "a", "no_answer": "b"},
-            "response": {
-                "options_from": {
-                    "source": "projection",
-                    "projection": "empty_menu",
-                },
-            },
-        }
-    )
-    with pytest.raises(TurnRenderError, match="no options"):
-        renderer.render(
-            turn,
-            namespaces={"input": {"empty_menu": []}, "context": {}, "meta": {}},
-        )
-
-
-def test_menu_projection_missing_raises(renderer: TurnRenderer) -> None:
-    turn = TurnDefinition.model_validate(
-        {
-            "response_shape": "menu_single",
-            "sections": [{"type": "options"}, {"type": "envelope"}],
-            "transitions": {"default": "a", "no_answer": "b"},
-            "response": {
-                "options_from": {
-                    "source": "projection",
-                    "projection": "nowhere",
-                },
-            },
-        }
-    )
-    with pytest.raises(TurnRenderError, match="not found in namespaces"):
-        renderer.render(turn, namespaces={"input": {}, "context": {}, "meta": {}})
 
 
 def test_menu_compound_arg_shown_in_options_and_envelope(
