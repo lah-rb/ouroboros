@@ -254,10 +254,16 @@ class PersistenceManager:
                     # Append new event
                     data["events"].append(event.model_dump())
 
-                    # Write back
+                    # SERIALIZE BEFORE TRUNCATING. The destructive step must
+                    # be unreachable if encoding fails: the old order was
+                    # seek/truncate/json.dump, so a non-serializable event
+                    # emptied the entire events history and handed the caller
+                    # a `False` it may well ignore. json.dumps raising here
+                    # leaves the file byte-for-byte intact.
+                    payload = json.dumps(data, indent=2)
                     f.seek(0)
                     f.truncate()
-                    json.dump(data, f, indent=2)
+                    f.write(payload)
                 finally:
                     self._unlock_events_file(f.fileno())
 
