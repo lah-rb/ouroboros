@@ -19,6 +19,17 @@ main argmax). Loop per iteration:
   4. roll BOTH contexts' KV back past the divergence (memory_seq_rm) and
      decode the correction into each.
 
+v2 (post-crash): qwen3.6's GDN-HYBRID recurrent layers cannot rewind —
+mid-sequence memory_seq_rm is invalid on this arch (llama_decode -1; the
+same property that excludes hybrids from the batched engine). The loop
+therefore uses STATE CHECKPOINTING instead of KV rollback: snapshot the
+main sequence state (llama_state_seq_*) before each verify round;
+full-accept rounds continue free, mismatch rounds restore the checkpoint
+and decode accepted+correction in one clean batch. The draft context is
+never rolled back — the nextn layer is 1/65th of the model, so a full
+history re-feed on mismatch is nearly free. Checkpoint overhead is
+measured and reported (it is part of the verdict).
+
 Run standalone with the LLMVP server DOWN (22GB weights + two contexts).
 Usage: llmvp/.venv/bin/python dev/mtp_spike.py [gen_tokens]
 """
@@ -93,6 +104,39 @@ class Ctx:
         self.ctx.memory_seq_rm(0, pos, -1)
         self.pos = pos
 
+    # ── recurrent-safe state checkpointing (GDN hybrids can't rewind) ──
+
+    def checkpoint(self):
+        import ctypes
+
+        import llama_cpp.llama_cpp as C
+
+        size = C.llama_state_seq_get_size(self.ctx.ctx, 0)
+        if size <= 0:
+            raise RuntimeError(
+                "llama_state_seq_get_size returned 0 — "
+                "per-seq state unsupported on this arch"
+            )
+        buf = (ctypes.c_uint8 * size)()
+        written = C.llama_state_seq_get_data(self.ctx.ctx, buf, size, 0)
+        if written <= 0:
+            raise RuntimeError("llama_state_seq_get_data failed")
+        return (buf, written, self.pos)
+
+    def restore(self, ck) -> None:
+        import llama_cpp.llama_cpp as C
+
+        buf, size, pos = ck
+        self.ctx.memory_seq_rm(0, 0, -1)  # whole-seq clear IS hybrid-legal
+        ok = C.llama_state_seq_set_data(self.ctx.ctx, buf, size, 0)
+        if ok <= 0:
+            raise RuntimeError("llama_state_seq_set_data failed")
+        self.pos = pos
+
+    def clear(self) -> None:
+        self.ctx.memory_seq_rm(0, 0, -1)
+        self.pos = 0
+
 
 def baseline(m, internals, prompt_toks: list[int], n: int) -> tuple[float, list[int]]:
     main = Ctx(m._ctx, m.n_vocab(), internals)
@@ -109,15 +153,16 @@ def baseline(m, internals, prompt_toks: list[int], n: int) -> tuple[float, list[
 
 def speculative(
     m, mtp_ctx, internals, prompt_toks: list[int], n: int, k: int
-) -> tuple[float, float, list[int]]:
+) -> tuple[float, float, float, list[int]]:
     main = Ctx(m._ctx, m.n_vocab(), internals)
     draft = Ctx(mtp_ctx, m.n_vocab(), internals)
-    main.rollback_to(0)
-    draft.rollback_to(0)
+    main.clear()
+    draft.clear()
     first = main.feed(prompt_toks)[0]
     draft.feed(prompt_toks)
     out = [first]
     drafted = accepted = 0
+    ck_s = 0.0
     t0 = time.time()
     while len(out) < n:
         # 1. draft K autoregressively with the nextn layer
@@ -127,8 +172,11 @@ def speculative(
             cur = draft.feed([cur])[0]
             drafts.append(cur)
         drafted += k
-        # 2. verify: feed last accepted + drafts[:-1]; row i's argmax is the
-        #    main model's prediction FOR drafts[i]
+        # 2. checkpoint main (hybrids can't rewind), then batch-verify:
+        #    row i's argmax is the main model's prediction FOR drafts[i]
+        tc = time.time()
+        ck = main.checkpoint()
+        ck_s += time.time() - tc
         verify_in = [out[-1]] + drafts[:-1]
         preds = main.feed(verify_in, want_logits="all")
         # 3. longest matching prefix
@@ -138,22 +186,23 @@ def speculative(
         if L == k:
             out.extend(drafts)
             accepted += k
-            # draft ctx already holds the drafts' KV; main holds them too
+            # both ctxs hold the drafts legitimately — free continue
             continue
         correction = preds[L]
         out.extend(drafts[:L] + [correction])
         accepted += L
-        # 4. rollback both past the divergence, decode the correction.
-        # Each ctx advanced k rows (verify_in[0]=last ACCEPTED token +
-        # drafts[:-1]); valid rows = 1 + L, so discard k - L - 1.
-        base = main.pos - (k - L - 1)
-        main.rollback_to(base)
-        main.feed([correction], want_logits="last")
-        dbase = draft.pos - (k - L - 1)
-        draft.rollback_to(dbase)
-        draft.feed([correction])
+        # 4. mismatch: restore main to pre-verify, decode accepted prefix
+        #    + correction in ONE batch; draft ctx re-feeds full history
+        #    (1/65th-model cost — no rewind needed).
+        tc = time.time()
+        main.restore(ck)
+        ck_s += time.time() - tc
+        main.feed([verify_in[0]] + drafts[:L] + [correction], want_logits="last")
+        hist = prompt_toks + out[:-1]
+        draft.clear()
+        draft.feed(hist)
     dt = time.time() - t0
-    return (len(out) - 1) / dt, accepted / max(drafted, 1), out
+    return (len(out) - 1) / dt, accepted / max(drafted, 1), ck_s, out
 
 
 def main() -> None:
@@ -164,13 +213,14 @@ def main() -> None:
         base_tps, base_out = baseline(m, internals, toks, GEN_TOKENS)
         print(f"\nprompt {pi}: baseline {base_tps:.1f} tok/s")
         for k in (2, 3, 4):
-            tps, acc, spec_out = speculative(
+            tps, acc, ck_s, spec_out = speculative(
                 m, mtp_ctx, internals, toks, GEN_TOKENS, k
             )
             match = spec_out[: len(base_out)] == base_out
             print(
-                f"  K={k}: {tps:.1f} tok/s ({tps / base_tps:+.0%} vs base), "
-                f"acceptance {acc:.0%}, output-match={match}",
+                f"  K={k}: {tps:.1f} tok/s ({tps / base_tps - 1:+.0%} vs base), "
+                f"acceptance {acc:.0%}, checkpoint_overhead={ck_s:.1f}s, "
+                f"output-match={match}",
                 flush=True,
             )
     print("\ndone")
