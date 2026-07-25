@@ -56,59 +56,129 @@ def _si(mission, effects=None, response=None) -> StepInput:
 
 # ── _apply_format_checks: per type ───────────────────────────────────────────
 
+_CHESS = "^[a-h][1-8][a-h][1-8][qrbn]?$"
 
-def test_line_count_exact_and_max():
-    assert _apply_format_checks("a\nb\nc", [{"type": "line_count", "value": 1}])
-    assert not _apply_format_checks("only one", [{"type": "line_count", "value": 1}])
-    assert not _apply_format_checks(
-        "a\nb", [{"type": "line_count", "value": 3, "op": "<="}]
-    )
-    assert _apply_format_checks(
-        "a\nb\nc\nd", [{"type": "line_count", "value": 3, "op": "<="}]
-    )
-
-
-def test_regex_and_no_wrapping():
-    pat = "^[a-h][1-8][a-h][1-8][qrbn]?$"
-    assert not _apply_format_checks("e2e4", [{"type": "regex", "pattern": pat}])
-    assert _apply_format_checks("nope", [{"type": "regex", "pattern": pat}])
-    for wrapped in ("[e2e4]", '"e2e4"', "(e2e4)", "{e2e4}"):
-        assert _apply_format_checks(wrapped, [{"type": "no_wrapping"}]), wrapped
-    assert not _apply_format_checks("e2e4", [{"type": "no_wrapping"}])
-
-
-def test_required_keys_json_and_non_json():
-    assert not _apply_format_checks(
+# (content, checks, n_findings, must_contain)
+#
+# The expectation is a COUNT, not a bool. `_apply_format_checks` returns a
+# LIST of finding strings, and at least one case here turns on the exact
+# length: the fail-safe row's whole claim is that a broken check is SKIPPED
+# while the remaining checks still fire — one finding, not "some". A boolean
+# column would silently accept two.
+#
+# `must_contain` is set only where the original test asserted on message
+# content; the count carries the rest. Adding substring pins to every row
+# would trade a real contract for prose (TESTING.md).
+_FORMAT_CASES = [
+    # line_count — exact, then the `op: <=` maximum form
+    pytest.param(
+        "a\nb\nc",
+        [{"type": "line_count", "value": 1}],
+        1,
+        "",
+        id="line_count_exact_mismatch",
+    ),
+    pytest.param(
+        "only one",
+        [{"type": "line_count", "value": 1}],
+        0,
+        "",
+        id="line_count_exact_ok",
+    ),
+    pytest.param(
+        "a\nb",
+        [{"type": "line_count", "value": 3, "op": "<="}],
+        0,
+        "",
+        id="line_count_max_ok",
+    ),
+    # BOUNDARY (added with the table): at-most where actual == n. The
+    # pre-table tests never covered it, and it is exactly where an off-by-one
+    # in the `>` comparison would live.
+    pytest.param(
+        "a\nb\nc",
+        [{"type": "line_count", "value": 3, "op": "<="}],
+        0,
+        "",
+        id="line_count_max_at_boundary",
+    ),
+    pytest.param(
+        "a\nb\nc\nd",
+        [{"type": "line_count", "value": 3, "op": "<="}],
+        1,
+        "",
+        id="line_count_max_exceeded",
+    ),
+    # regex
+    pytest.param("e2e4", [{"type": "regex", "pattern": _CHESS}], 0, "", id="regex_ok"),
+    pytest.param(
+        "nope", [{"type": "regex", "pattern": _CHESS}], 1, "", id="regex_mismatch"
+    ),
+    # no_wrapping — every wrapper form the v3 canary produced
+    pytest.param("[e2e4]", [{"type": "no_wrapping"}], 1, "wrapped", id="wrap_square"),
+    pytest.param(
+        '"e2e4"', [{"type": "no_wrapping"}], 1, "wrapped", id="wrap_double_quote"
+    ),
+    pytest.param("(e2e4)", [{"type": "no_wrapping"}], 1, "wrapped", id="wrap_paren"),
+    pytest.param("{e2e4}", [{"type": "no_wrapping"}], 1, "wrapped", id="wrap_brace"),
+    pytest.param("e2e4", [{"type": "no_wrapping"}], 0, "", id="wrap_none"),
+    # required_keys — present, missing, and non-JSON (a FINDING, not a skip)
+    pytest.param(
         '{"total_conflicts": 3, "merged": 5}',
         [{"type": "required_keys", "keys": ["total_conflicts"]}],
-    )
-    assert _apply_format_checks(
-        '{"merged": 5}', [{"type": "required_keys", "keys": ["total_conflicts"]}]
-    )
-    # non-JSON when keys are required is itself a shape miss (a finding, not a skip)
-    assert _apply_format_checks(
-        "not json at all", [{"type": "required_keys", "keys": ["x"]}]
-    )
-
-
-def test_columns_csv_header():
-    assert not _apply_format_checks(
-        "a,b,c\n1,2,3", [{"type": "columns", "columns": ["a", "c"]}]
-    )
-    assert _apply_format_checks(
-        "a,b\n1,2", [{"type": "columns", "columns": ["a", "d"]}]
-    )
-
-
-def test_fail_safe_skips_broken_check_applies_others():
-    # An invalid regex is the rung's own error → skip THAT check, still apply the rest.
-    out = _apply_format_checks(
+        0,
+        "",
+        id="keys_present",
+    ),
+    pytest.param(
+        '{"merged": 5}',
+        [{"type": "required_keys", "keys": ["total_conflicts"]}],
+        1,
+        "",
+        id="keys_missing",
+    ),
+    pytest.param(
+        "not json at all",
+        [{"type": "required_keys", "keys": ["x"]}],
+        1,
+        "",
+        id="keys_non_json",
+    ),
+    # columns — CSV header
+    pytest.param(
+        "a,b,c\n1,2,3",
+        [{"type": "columns", "columns": ["a", "c"]}],
+        0,
+        "",
+        id="columns_present",
+    ),
+    pytest.param(
+        "a,b\n1,2",
+        [{"type": "columns", "columns": ["a", "d"]}],
+        1,
+        "",
+        id="columns_missing",
+    ),
+    # fail-safe: the rung's OWN error (an invalid regex) is skipped, and the
+    # other checks in the same list still apply.
+    pytest.param(
         "[e2e4]",
         [{"type": "regex", "pattern": "[unterminated"}, {"type": "no_wrapping"}],
-    )
-    assert len(out) == 1 and "wrapped" in out[0]
-    # Unknown check type → skipped, no crash.
-    assert _apply_format_checks("x", [{"type": "made_up"}]) == []
+        1,
+        "wrapped",
+        id="failsafe_bad_regex_others_apply",
+    ),
+    pytest.param("x", [{"type": "made_up"}], 0, "", id="unknown_check_skipped"),
+]
+
+
+@pytest.mark.parametrize("content,checks,n_findings,must_contain", _FORMAT_CASES)
+def test_apply_format_checks(content, checks, n_findings, must_contain):
+    out = _apply_format_checks(content, checks)
+    assert isinstance(out, list), f"expected a list of findings, got {type(out)}"
+    assert len(out) == n_findings, f"expected {n_findings} finding(s), got {out}"
+    if must_contain:
+        assert any(must_contain in f for f in out), f"{must_contain!r} not in {out}"
 
 
 # ── The rung: GATE / CHECK / APPEND / FAIL-SAFE ──────────────────────────────
