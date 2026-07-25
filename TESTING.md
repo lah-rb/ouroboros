@@ -67,10 +67,26 @@ highest-risk effect had none. Value density beats count.
   each case stays individually reported and individually extendable.
   Exemplar: `tests/test_markdown_fence_parser.py` (16 functions → 1 table
   + 2 specials, same cases, −40% code).
-- **Shared doubles live in `conftest.py`** (currently being introduced —
-  neither suite had one, which is why `ScriptedInferenceEffects` existed
-  in six copies and every llmvp file re-invented `FakeLlama`). New shared
-  fixtures: add to conftest, not to your file.
+- **Shared doubles live in `conftest.py`** — both suites now have one
+  (`tests/conftest.py` 920f28f, `llmvp/tests/conftest.py` a3e0f28); that is
+  why `ScriptedInferenceEffects` no longer exists in six copies. New shared
+  fixtures: add to conftest, not to your file. **But a double's ABSENT
+  methods can be load-bearing**: `agent/trace.py:19` gates all emission on
+  `hasattr(effects, "emit_trace")`, so a double without it deliberately
+  exercises the no-trace branch. Adding a method to a shared double to
+  absorb one more call site can silently move every existing user onto a
+  different production path, suite fully green. Widen by SUBCLASS, not by
+  editing the base.
+- **A table row must assert something.** Subset-comparison columns
+  (`expected.items() <= out.result.items()`) are the right way to let rows
+  name different result keys — but `{}.items() <= anything` is `True`, so a
+  row that forgets its expectation passes vacuously. Guard in the body:
+  `assert expected_result, f"{case_id}: row must name at least one key"`.
+  Same rule as the production gates: fail on zero checkable items.
+- **Incident narrative survives parametrization, or the test stays a
+  function.** If a docstring's "why" (the run it came from, the failure it
+  pins) cannot be carried by a case id plus a table comment, that test is
+  not a row. Losing the narrative costs more than the duplication saved.
 - **Builders over inline literals** for domain records: `goal_record()`,
   `make_config()`, `make_backend()` with keyword overrides. Six files
   hand-build `GoalRecord(...)` a dozen times each today.
@@ -86,25 +102,86 @@ highest-risk effect had none. Value density beats count.
   existing test file; 130 files exist partly because behaviors were
   re-pinned in new files instead of extended in place.
 
-## Reduce-while-broadening roadmap (from the 2026-07-16 eval)
+## Reduce-while-broadening roadmap
 
-Executed: markdown_fence consolidation (exemplar), module-import smoke,
+### Measuring it — the unit is FUNCTIONS and LINES, not reported tests
+
+The original roadmap promised a "~140-test reduction". **That number was
+never reachable by the means it prescribed, and its own exemplar disproves
+it**: `test_markdown_fence_parser.py` is now **3 functions reporting 18
+tests** — function count fell 16→3 while the reported count ROSE 16→18.
+pytest reports every parametrized case, so table-driving trades functions
+and lines for cases, and a faithful execution of this roadmap ends with
+MORE reported tests than it started with.
+
+Measure the thing that actually moves. Baseline (2026-07-25):
+
+| Suite | functions | reported | lines | files |
+|---|---|---|---|---|
+| `tests/` | 1440 | 1591 | 33,072 | 146 |
+| `llmvp/tests/` | 311 | 330 | 7,002 | 24 |
+
+A consolidation pass is going well when functions and lines fall, reported
+cases hold or rise, and coverage does not regress. Anyone reporting
+"−140 tests" is reporting the wrong number.
+
+### Proving a consolidation did not weaken a test
+
+Green is not evidence here — a table that dropped an assertion is green,
+and so is one whose rows assert nothing. Three mechanics, in cost order:
+
+1. **Assertion ledger.** Count `assert` statements before. Every one maps
+   to a table column, a retained in-body assert, or a deletion you justify
+   in the commit message. The ledger goes IN the commit message.
+2. **Coverage missing-line subset.** `--cov=<module> --cov-branch
+   --cov-report=term-missing` before and after; the after missing-set must
+   be a SUBSET of the before set. A percentage that holds while different
+   lines go dark is a regression wearing a good number.
+3. **Mutation spot-check** (~60s per table). Break the one production line
+   the table pins, run only that file, confirm exactly the expected rows
+   fail, then `git checkout --` the production file. This is the only
+   mechanic that catches a row that lost its teeth without changing which
+   lines execute.
+
+### Status
+
+**Executed:** markdown_fence consolidation (exemplar), module-import smoke,
 `run_command` timeout/group-kill tests, drain-refresh state-machine tests,
-`test_mock.py` deleted.
-
-Remaining, ranked (est. ~140-test / thousands-of-lines reduction while
-adding coverage):
+`test_mock.py` deleted, both conftests introduced (920f28f, a3e0f28).
 
 | Target | Now | Move |
 |---|---|---|
-| migration family (create/rewrite/set_env/research) | 40 tests, 4 copies of ScriptedInferenceEffects + 12 dup fixtures | conftest fixtures + per-file render tables; replace prose asserts with structure asserts |
-| test_turn_renderer.py | 44 tests, 71 prose asserts | parametrize the 4 literal clusters; structure-assert the rest |
-| test_turn_models.py | 31 | validate-table by shape |
-| test_oracle_rung.py / test_output_format_oracle.py | 24 / 23 | (rung, artifact, verdict) tables |
-| test_data_ops.py / test_schema_registry.py / test_frame_editor.py | 28 / 26 / 22 | format/loader/declaration tables |
-| llmvp: API layer (graphql_api, rest_api) | 0 tests | resolver-shaping + error-mapping units with fake manager |
-| llmvp: reasoning-strip orchestration | disabled in every session test via LLMVP_THINK_STRIP=0 | one enabled-path test with the recording-ctx fake |
-| llmvp conftest | fakes duplicated ×4-5 | make_config / make_backend / RecordingCtx / FakeLlama |
+| test_turn_renderer.py | 44 fns, ~70 prose asserts | 7 tables → ~25 fns. Do LAST — biggest file, 3 fns already hide internal loops. Parametrize and prose→structure are SEPARATE commits |
+| test_turn_models.py | 31 fns | validate-table by shape → ~9. Reject-table needs a model column (3 models); assert `errors()[0]["loc"]/["type"]`, never pydantic's rendered message |
+| test_oracle_rung.py / test_output_format_oracle.py | 24 / 23 fns | (rung, artifact, verdict) tables → ~8 / ~11. `_apply_format_checks` block is the cleanest target in the suite — start there. Its gate/store pairs are cross-action SEQUENCES, not rows |
+| test_data_ops.py / test_schema_registry.py / test_frame_editor.py | 28 / 26 / 22 | format/loader/declaration tables. Deferred until the four above land — seven parametrization files in one pass is where quality drops |
+| llmvp: API layer | graphql_api 65%, rest_api 61%, `api/main.py` **0%** | The 65% is INFLATED — ~20 strawberry dataclass decls (lines 52-338) execute at import; resolver bodies are the gap. Highest value: `rest_api` `/chat/completions` (118-148, the Terminus path, entirely uncovered) and `Mutation.swap_model` (mutates the `_session_manager` global, 3 outcomes, tested nowhere — `test_model_swap.py` tests `core/model_swap.py`, not the resolver) |
+| llmvp: reasoning-strip orchestration | `_maybe_strip_reasoning` (session_manager.py:849-908) — 4 untested guards | Direct guard tests + one enabled-path e2e. The empty-content guard at :859-865 is the prize: its comment records a real incident (stripping there writes an answerless assistant turn into the KV, compounding across turns) |
+
+**Declined, with reasons** (a declined row is worth more than a permanent todo):
+
+- **migration family render-tables** (39 tests / 4 files). The conftest half
+  shipped; the rest is declined. These are the suite's highest-value
+  integration tests (the only place runtime + compiled flows + renderer +
+  actions run end to end), the available reduction is ~9 functions, and
+  prose→structure here is RE-SPECIFICATION, not refactoring — the natural
+  bad outcome (`assert prompt` replacing `assert "X" in prompt`) is
+  invisible to all three mechanics above. The `emit_trace` trap lives here.
+- **`_si` / `_mission` builders** (48 files each, ~94 definitions). Biggest
+  raw count, worst payoff: they are helpers, so merging them reduces test
+  functions by exactly ZERO. Only ~10 are byte-identical; `flow_name` takes
+  33 distinct values and `effects=` is load-bearing (`MockEffects()` vs
+  `MockEffects(mission=mission)` decides whether mission persistence is
+  wired — `agent/effects/mock.py:53,634,639`). The moment a shared builder
+  gives `flow_name` a default, ~40 tests silently assert against a flow
+  they don't belong to, with nothing going red.
+- **The two `CountingEffects`** (`test_runtime_turn_integration.py:795,865`)
+  — identical except one implements `session_inference` and the other
+  `run_inference`. That difference IS the test (`runtime.py:1239` +
+  `:1070`); they assert opposite emit counts.
+- **`prompts_dir`** — same fixture name in two files, disjoint template
+  sets, one monkeypatches the runtime singleton. Hoisting either under the
+  shared name swaps templates under the other file.
 
 Deliberately untested: `agent/blueprint/*` (documentation tooling, ~1.5k
 stmts at 0% — accepted), anything requiring a live model (that is what the
