@@ -33,6 +33,7 @@ from agent.persistence.models import (
     NoteRecord,
     ResearchPlanState,
 )
+from tests.conftest import papers_bank as _bank
 
 
 def _mission(aspects=None):
@@ -52,10 +53,6 @@ def _si(mission, effects=None, **ctx) -> StepInput:
         meta=FlowMeta(flow_name="research_control", step_id="x"),
         effects=effects or MockEffects(),
     )
-
-
-def _bank(records):
-    return {"databank/papers.jsonl": "\n".join(json.dumps(r) for r in records) + "\n"}
 
 
 @pytest.mark.asyncio

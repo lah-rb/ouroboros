@@ -25,6 +25,7 @@ from agent.persistence.models import (
     MissionConfig,
     MissionState,
 )
+from tests.conftest import quality_gate_result as _qg
 
 
 def _mission(goals=None) -> MissionState:
@@ -43,10 +44,6 @@ def _si(mission, **ctx) -> StepInput:
         meta=FlowMeta(flow_name="mission_control", step_id="x"),
         effects=MockEffects(),
     )
-
-
-def _qg(*tasks) -> dict:
-    return {"quality_results": {"all_passing": False, "fix_tasks": list(tasks)}}
 
 
 # ── Harvester ────────────────────────────────────────────────────────────

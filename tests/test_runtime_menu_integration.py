@@ -22,17 +22,11 @@ import pytest
 from agent.effects.protocol import InferenceResult
 from agent.models import FlowDefinition, FlowMeta, StepInput, TurnDefinition
 from agent.runtime import _execute_turn_inference, _resolve_turn_transition
-from agent.schema_registry import set_default_registry
 from agent.trace import InferenceCall, step_context
 from tests.conftest import ScriptedInferenceEffects
 from agent.turn_renderer import TurnRenderer
 
-
-@pytest.fixture(autouse=True)
-def reset_registry():
-    set_default_registry(None)
-    yield
-    set_default_registry(None)
+pytestmark = pytest.mark.usefixtures("real_schema_registry")
 
 
 def _menu_turn_with_projection(publish_selection: str | None = "selected"):

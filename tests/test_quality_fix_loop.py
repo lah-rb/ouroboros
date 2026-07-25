@@ -15,11 +15,7 @@ import json
 from pathlib import Path
 
 from agent.resolvers.rule import resolve_rule
-
-
-class _Out:
-    def __init__(self, result: dict) -> None:
-        self.result = result
+from tests.conftest import StubStepOutput as _Out
 
 
 def _steps() -> dict:

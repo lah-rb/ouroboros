@@ -23,6 +23,7 @@ from agent.effects.mock import MockEffects
 from agent.effects.protocol import CommandResult
 from agent.models import FlowMeta, StepInput
 from agent.persistence.models import GoalRecord, MissionConfig, MissionState
+from tests.conftest import ScriptedCommandEffects as _SeqEffects
 
 
 def _mission(profile="repair", goals=None) -> MissionState:
@@ -411,19 +412,6 @@ async def test_derive_repair_tests_finds_nested_test_dirs_local_glob():
 # ── The witness rule + tiered term search (corrected-retest regressions) ──
 
 
-class _SeqEffects(MockEffects):
-    """MockEffects whose /bin/sh results are a per-call sequence."""
-
-    def __init__(self, results, **kw):
-        super().__init__(**kw)
-        self._seq = list(results)
-
-    async def run_command(self, command, **kw):
-        if command and command[0] == "/bin/sh" and self._seq:
-            return self._seq.pop(0)
-        return await super().run_command(command, **kw)
-
-
 @pytest.mark.asyncio
 async def test_witness_rule_rejects_green_suite_tries_next():
     # First-ranked pick is green at baseline (the fsspec trap: test_local/
@@ -651,18 +639,8 @@ async def test_gate_stale_baseline_recheck():
     )
     m = _mission(goals=[goal])
 
-    class _Seq(MockEffects):
-        def __init__(self, results, **kw):
-            super().__init__(**kw)
-            self._seq = list(results)
-
-        async def run_command(self, command, **kw):
-            if command and command[0] == "/bin/sh" and self._seq:
-                return self._seq.pop(0)
-            return await super().run_command(command, **kw)
-
     # collect-only now CLEAN, then the suite run FAILS a node → harvest.
-    fx = _Seq(
+    fx = _SeqEffects(
         [
             CommandResult(
                 return_code=0, stdout="3 tests collected", stderr="", command="c"

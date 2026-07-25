@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 
 from agent.resolvers.rule import resolve_rule
+from tests.conftest import StubStepOutput as _Out
 
 
 def _startup_resolver() -> dict:
@@ -30,11 +31,6 @@ def _startup_resolver() -> dict:
         (Path(__file__).resolve().parent.parent / "flows" / "compiled.json").read_text()
     )
     return compiled["quality_gate"]["steps"]["run_startup_check"]["resolver"]
-
-
-class _Out:
-    def __init__(self, result: dict) -> None:
-        self.result = result
 
 
 def test_successful_startup_routes_through_boot_liveness_floor():

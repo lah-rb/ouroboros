@@ -29,6 +29,7 @@ from agent.persistence.models import (
     MissionState,
     ResearchPlanState,
 )
+from tests.conftest import papers_bank as _bank
 
 
 def _mission(aspects):
@@ -46,10 +47,6 @@ def _si(effects, context=None) -> StepInput:
         meta=FlowMeta(flow_name="research_gate", step_id="x"),
         effects=effects,
     )
-
-
-def _bank(records):
-    return {"databank/papers.jsonl": "\n".join(json.dumps(r) for r in records) + "\n"}
 
 
 def _paper(key, tags, status="cataloged", **extra):

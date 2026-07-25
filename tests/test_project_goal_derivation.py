@@ -66,7 +66,9 @@ class _CapturingEffects(MockEffects):
         return await super().run_inference(prompt, config_overrides)
 
 
-def _mission(objective: str = "Build a thing that does several things.") -> MissionState:
+def _mission(
+    objective: str = "Build a thing that does several things.",
+) -> MissionState:
     return MissionState(
         objective=objective,
         status="active",
@@ -106,9 +108,9 @@ async def test_derivation_prompt_does_not_dictate_a_goal_count():
         "The objective's scope decides the count — see this module's docstring."
     )
     fixed = FIXED_COUNT.search(prompt)
-    assert fixed is None, (
-        f"derivation prompt reintroduced a fixed goal count: {fixed.group(0)!r}."
-    )
+    assert (
+        fixed is None
+    ), f"derivation prompt reintroduced a fixed goal count: {fixed.group(0)!r}."
 
 
 @pytest.mark.asyncio

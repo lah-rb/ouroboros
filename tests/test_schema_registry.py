@@ -18,14 +18,7 @@ from agent.schema_registry import (
     set_default_registry,
 )
 
-
-@pytest.fixture(autouse=True)
-def reset_default_registry():
-    """Each test starts with the default registry cleared, re-resolves
-    at end. Prevents cross-test state leakage through the singleton."""
-    set_default_registry(None)
-    yield
-    set_default_registry(None)
+pytestmark = pytest.mark.usefixtures("real_schema_registry")
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 from agent.resolvers.rule import resolve_rule
+from tests.conftest import StubStepOutput as _Out
 
 _COMPILED = json.loads(
     (Path(__file__).resolve().parent.parent / "flows" / "compiled.json").read_text()
@@ -22,11 +23,6 @@ _COMPILED = json.loads(
 
 def _resolver(step: str) -> dict:
     return _COMPILED["quality_gate"]["steps"][step]["resolver"]
-
-
-class _Out:
-    def __init__(self, result: dict) -> None:
-        self.result = result
 
 
 def _route(step: str, result: dict, context: dict | None = None) -> str:

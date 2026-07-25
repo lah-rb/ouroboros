@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from agent.effects.mock import MockEffects
 from agent.models import FlowDefinition
 from agent.schema_registry import set_default_registry
 from agent.turn_renderer import TurnRenderer
@@ -48,6 +49,55 @@ class ScriptedInferenceEffects:
         r = self.responses[self.calls_made]
         self.calls_made += 1
         return r
+
+
+class StubStepOutput:
+    """One-attribute stand-in for ``StepOutput`` fed to ``resolve_rule``.
+
+    Rule resolution reads only ``.result``, so the tests that exercise routing
+    never needed the real model. Previously four byte-identical copies
+    (test_data_patch, test_quality_fix_loop, test_quality_gate_ux_gate,
+    test_verify_before_harvest_routing).
+    """
+
+    def __init__(self, result: dict) -> None:
+        self.result = result
+
+
+class ScriptedCommandEffects(MockEffects):
+    """MockEffects that pops scripted results for shell invocations.
+
+    Anything dispatched through ``/bin/sh`` consumes the next queued
+    ``CommandResult``; every other command falls through to MockEffects'
+    normal handling. Previously three identical copies (test_repair_scope,
+    test_repair_test_loop, plus a nested ``_Seq`` inside a test function in
+    the file that already defined it).
+    """
+
+    def __init__(self, results, **kw) -> None:
+        super().__init__(**kw)
+        self._seq = list(results)
+
+    async def run_command(self, command, **kw):
+        if command and command[0] == "/bin/sh" and self._seq:
+            return self._seq.pop(0)
+        return await super().run_command(command, **kw)
+
+
+def quality_gate_result(*tasks) -> dict:
+    """A failing quality-gate result carrying ``tasks`` as its fix list."""
+    return {"quality_results": {"all_passing": False, "fix_tasks": list(tasks)}}
+
+
+def papers_bank(records) -> dict:
+    """A ``databank/papers.jsonl`` file map from record dicts (JSONL text).
+
+    Shared by the research gate/plan tests ONLY. Other suites define their own
+    ``_bank`` with genuinely different shapes — test_flow_set_extractor returns
+    the raw JSONL string rather than a file map, and test_curation_actions
+    builds different records — so those stay local on purpose.
+    """
+    return {"databank/papers.jsonl": "\n".join(json.dumps(r) for r in records) + "\n"}
 
 
 @functools.lru_cache(maxsize=1)

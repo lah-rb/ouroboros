@@ -20,6 +20,7 @@ from agent.effects.mock import MockEffects
 from agent.effects.protocol import CommandResult
 from agent.models import FlowMeta, StepInput
 from agent.persistence.models import MissionConfig, MissionState
+from tests.conftest import ScriptedCommandEffects as _SeqEffects
 
 
 def _mission(profile="repair", **cfg) -> MissionState:
@@ -387,14 +388,3 @@ async def test_selection_prefers_module_matching_test():
         fx, "`Point.distance` in sympy/geometry/point.py drops a dimension"
     )
     assert rt["test_files"][0] == "tests/test_point.py"
-
-
-class _SeqEffects(MockEffects):
-    def __init__(self, results, **kw):
-        super().__init__(**kw)
-        self._seq = list(results)
-
-    async def run_command(self, command, **kw):
-        if command and command[0] == "/bin/sh" and self._seq:
-            return self._seq.pop(0)
-        return await super().run_command(command, **kw)

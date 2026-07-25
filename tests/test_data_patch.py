@@ -21,6 +21,7 @@ from agent.actions.data_ops_actions import (
 from agent.effects.mock import MockEffects
 from agent.models import FlowMeta, StepInput
 from agent.resolvers.rule import resolve_rule
+from tests.conftest import StubStepOutput as _Out
 
 WORLD = """\
 # Blackwood Hall
@@ -46,11 +47,6 @@ GOOD_OPS = json.dumps(
 
 
 # ── helpers ────────────────────────────────────────────────────────────
-
-
-class _Out:
-    def __init__(self, result: dict) -> None:
-        self.result = result
 
 
 def _resolver(flow: str, step: str) -> dict:
