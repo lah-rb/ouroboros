@@ -42,15 +42,16 @@ model:
   # semi-broken early release that blew up memory at full context without
   # warning — not observed with the QAT GGUF on the current llama-cpp bin,
   # so corrected to the model max.
-  # GEOMETRY (reboot #3, 2026-07-24 19:30): with swa_full below, KV costs
-  # 1.68MB/token (60 layers, kvh [16,16,16,16,16,4]x10, 512+512d f16) —
-  # n_ctx 262144 would allocate 451GB and hard-reboots the machine before
-  # any tripwire can react. swa_full is LOAD-BEARING here (resident
-  # sessions + reasoning_head_swap splice legality), so the pool must
-  # shrink instead: 32768 = 56GB KV + ~17GB weights ~= 73GB, comfortable.
-  # Full-native-context serving requires swa_full: false (the poolswarm
-  # config's LM-Studio-style arrangement — no resident sessions).
-  n_ctx: 32768
+  # GEOMETRY — MEASURED (2026-07-25 pressure ladder, dev/context_pressure_probe.py):
+  # loaded peak ≈ 24GB + 0.87MB/token of n_ctx (linear across 32k/48k/64k
+  # rungs; fill rides free inside the boot commitment; stable decode at 84%%
+  # fill every rung). That is HALF the swa_full formula — the theory-based
+  # KV preflight over-predicts ~2x for gemma-4, so boots need
+  # OURO_KV_PREFLIGHT_GB=112 above 49152. Sweet spot 65536 = 81GB peak
+  # (~32GB margin); tight ceiling ~81920; 98304+ breaches; 262144 = the
+  # reboot-#3 death either way. Window-boundary session canary still
+  # pending before deep-session workloads at this size.
+  n_ctx: 65536
   # The trained per-stream range (the swarm/model context split): the
   # stream limit is min(n_ctx, this) = 32768 here.
   model_max_context: 262144
