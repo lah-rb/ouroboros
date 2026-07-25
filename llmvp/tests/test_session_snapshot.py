@@ -334,7 +334,6 @@ def test_windowing_forbid_on_snapshot_linked_sessions(monkeypatch):
     monkeypatch.setattr(sm, "_get_format_renderer", lambda family: _Renderer())
     monkeypatch.setattr(sm, "get_cached_tokenizer", lambda: object())
     monkeypatch.setattr(sm, "tokenize_segments", lambda tok, segs: [1] * 50)
-    monkeypatch.setenv("LLMVP_THINK_STRIP", "0")
 
     windowed = []
 

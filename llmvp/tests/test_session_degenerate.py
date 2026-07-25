@@ -79,8 +79,6 @@ def _stub_session_deps(monkeypatch):
     monkeypatch.setattr(sm, "_get_format_renderer", lambda family: _FakeRenderer())
     monkeypatch.setattr(sm, "get_cached_tokenizer", lambda: object())
     monkeypatch.setattr(sm, "tokenize_segments", lambda tok, segs: [1, 2, 3])
-    # Skip the Factor-4 reasoning strip (irrelevant here; needs a real tokenizer).
-    monkeypatch.setenv("LLMVP_THINK_STRIP", "0")
 
 
 def _make_session(mgr):
