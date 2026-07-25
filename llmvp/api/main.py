@@ -103,13 +103,51 @@ def _wait_for_pool_ready(host: str, port: int, timeout: int = 120) -> dict:
     )
 
 
+# The command marker that identifies OUR server process. A pid alone is not
+# identity: after a reboot or pid wraparound the number in PID_FILE can belong
+# to an unrelated process, and the stop path used to SIGTERM (then SIGKILL) it
+# on the strength of `is_running()` alone. Verify what we are about to signal.
+_SERVER_CMD_MARKER = "api/main.py"
+
+
+def _owning_server_process(pid: int):
+    """Return the psutil.Process ONLY if `pid` is live AND is actually our
+    server; None when it is dead, inaccessible, or has been RECYCLED to some
+    other program (the dangerous case — signalling it would kill a bystander).
+    """
+    try:
+        proc = psutil.Process(pid)
+        if not proc.is_running():
+            return None
+        cmdline = " ".join(proc.cmdline() or [])
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
+    except Exception:  # noqa: BLE001 — an unreadable cmdline is not ours to kill
+        return None
+    if _SERVER_CMD_MARKER not in cmdline:
+        return None
+    return proc
+
+
 def start_background_server():
     """
     Start server as background daemon process.
     Waits for the pool to be fully ready before returning.
     """
     if os.path.exists(PID_FILE):
-        raise RuntimeError("❌ Server is already running in background")
+        # File existence alone is not "running": a crashed server (or a
+        # reboot) leaves the file behind, and refusing to start on a stale
+        # file means the only recovery is deleting it by hand. Verify the pid
+        # actually belongs to our server — the same check `stop` uses.
+        try:
+            with open(PID_FILE, "r") as f:
+                _stale_pid = int(f.read().strip())
+        except (ValueError, OSError):
+            _stale_pid = None
+        if _stale_pid is not None and _owning_server_process(_stale_pid) is not None:
+            raise RuntimeError("❌ Server is already running in background")
+        print("ℹ️ Removing stale PID file (no live server owns it)")
+        os.remove(PID_FILE)
 
     # Get config for host/port before starting background process
     config = get_config()
@@ -161,7 +199,17 @@ def start_background_server():
 
 
 def stop_background_server():
-    """Gracefully stop background server"""
+    """Gracefully stop the background server.
+
+    Two hazards this guards, both previously live:
+    * PID REUSE — the pid in PID_FILE is only signalled after confirming the
+      process is actually our server. Before, any live process holding that
+      number was SIGTERMed and then SIGKILLed.
+    * UNSTOPPABLE ORPHAN — PID_FILE is removed only when the process is
+      confirmed gone (or was never ours). Before, a blanket `finally` removed
+      it even on the error path, leaving a running server holding the GPU that
+      the CLI would forever report as "not running".
+    """
     if not os.path.exists(PID_FILE):
         print("ℹ️ No background server is running")
         return False
@@ -169,45 +217,43 @@ def stop_background_server():
     try:
         with open(PID_FILE, "r") as f:
             pid = int(f.read().strip())
+    except (ValueError, OSError) as exc:
+        print(f"ℹ️ Unreadable PID file ({exc}) — cleaning up")
+        os.remove(PID_FILE)
+        return True
 
-        # Cross-platform process checking
-        try:
-            proc = psutil.Process(pid)
-            if not proc.is_running():
-                print("ℹ️ Stale PID file found, cleaning up")
-                os.remove(PID_FILE)
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            print("ℹ️ Stale PID file found, cleaning up")
-            os.remove(PID_FILE)
-            return True
+    proc = _owning_server_process(pid)
+    if proc is None:
+        print("ℹ️ Stale PID file found (process gone or pid reused) — cleaning up")
+        os.remove(PID_FILE)
+        return True
 
-        # Send SIGTERM for graceful shutdown
+    try:
         os.kill(pid, signal.SIGTERM)
         print(f"🛑 Sending stop signal to background server (PID: {pid})")
 
-        # Wait for shutdown
         timeout = 10
         start_time = time.time()
         while time.time() - start_time < timeout:
-            try:
-                proc = psutil.Process(pid)
-                if not proc.is_running():
-                    break
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            if _owning_server_process(pid) is None:
                 break
             time.sleep(0.5)
 
-        try:
-            proc = psutil.Process(pid)
-            if proc.is_running():
-                print("⚠️ Server did not stop gracefully, forcing termination")
-                os.kill(pid, signal.SIGKILL)
-            else:
-                print(f"✅ Background server (PID: {pid}) stopped gracefully")
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            print(f"✅ Background server (PID: {pid}) stopped gracefully")
+        if _owning_server_process(pid) is not None:
+            print("⚠️ Server did not stop gracefully, forcing termination")
+            os.kill(pid, signal.SIGKILL)
+            # Give the kill a moment to land before deciding it worked.
+            time.sleep(0.5)
 
+        if _owning_server_process(pid) is not None:
+            print(
+                f"❌ Background server (PID: {pid}) is STILL RUNNING after "
+                f"SIGKILL — keeping the PID file so it stays reachable"
+            )
+            return False
+
+        print(f"✅ Background server (PID: {pid}) stopped")
+        os.remove(PID_FILE)
         return True
 
     except ProcessLookupError:
@@ -216,11 +262,10 @@ def stop_background_server():
             os.remove(PID_FILE)
         return True
     except Exception as exc:
+        # PID_FILE deliberately RETAINED: the server may still be alive, and
+        # dropping the file would make it unreachable by this CLI.
         print(f"❌ Error stopping background server: {exc}")
         return False
-    finally:
-        if os.path.exists(PID_FILE):
-            os.remove(PID_FILE)
 
 
 def run_server(host: str, port: int, log_level: str, skip_knowledge: bool = False):
