@@ -1,9 +1,11 @@
 # Open Tasks — Delegation Brief
 
-*Deferred work with enough context to pick up any item cold. Written
-2026-07-16 at the end of the great cleanup week. Ordering reflects the
-agreed timing: gates first, score levers next, soak-gated and background
-items last. Update this file as items land or close.*
+*Deferred work with enough context to pick up any item cold.*
+
+**This is a LIVING doc.** When an item completes and needs no follow-up,
+**delete it** — don't leave a "CLOSED" tombstone. When an item completes but
+leaves residue, replace it with the residue only. Findings worth keeping past
+the task belong in the memory files, `dev/` docs, or a config comment, not here.
 
 ## Standing constraints (read before touching anything)
 
@@ -13,105 +15,29 @@ items last. Update this file as items land or close.*
   torch, mlx, the editable ~/Repos/tau-bench install). `uv pip install`
   or `uv sync --inexact`.
 - llmvp tests run under llmvp's OWN venv: `cd llmvp && .venv/bin/python
-  -m pytest tests/`. Main suite: `uv run pytest tests/` (1518 green as of
-  2026-07-21; llmvp 265).
+  -m pytest tests/`. Main suite: `uv run pytest tests/`. (2026-07-25:
+  1590 main / 330 llmvp collected — run them, don't trust the number.)
 - Verification fence per change: both suites + `ouroboros.py lint-flows`
   (0 errors / 1 standing advisory) + `smoke` (44/44) + `cli-smoke`
   (19/19) + black/ruff clean. `flows/compiled.json` commits force all
   touched .cue sources into the same commit.
-- After ANY benchmark/server work: restore the production LLMVP config
-  (`llmvp/active_config.txt` → `gpt-oss-120b-a5`) and restart.
+- **Config hygiene:** the last-served config may stay resident between runs —
+  the work is varied enough that snapping back to a "production" default has
+  no value. What matters is that the active config AND the mission parameters
+  are verified correct *before* a run starts. Repoint only when the next run
+  needs a different model.
 - Test-writing rules: `TESTING.md`. Repo layout: `CONTRIBUTING.md`.
 - Server restarts are cheap and pre-approved when a soured/wedged server
   is burning hours (SIGSTOP mission processes → SIGTERM server →
   relaunch → SIGCONT; the agent retry loops ride through).
+- **Serving geometry is measured, not guessed.** KV per-token laws, the
+  swa_full ceilings, and the preflight guard live in the config headers
+  (`llmvp/configs/*.yaml`) and the `kv-geometry-before-swarm` memory. Compute
+  before allocating — three reboots were precomputable.
 
-## 1. Boss-game A/B analysis — CLOSED 2026-07-21 (round 2 complete)
+---
 
-Both arms COMPLETED (baseline 28/28 goals, adaptive 73/73). Blind
-pinned-Opus panel on the finished games: **adaptive 16/25 (judge completed
-a genuine winning run; robust, save/load + dialogue + equip all real) vs
-baseline 8/25 (unwinnable — boss subsystem disconnected from data; crashes
-on bad input)**. Router at scale: 33% of 11,085 calls routed low, high on
-14 deliberations only, mean decode/call 15.6s vs 17.6s on a harder
-mission; per-goal cost ~identical (75k vs 79k OUT/goal). VERDICT: adaptive
-does not cost quality vs flat medium → **adaptive is the default for
-further testing.** Full numbers in the reasoning-injection memory. a5
-production config restored + server restarted (tracker fix deployed)
-2026-07-21. Branch merge decision still open.
-
-## OLD-1 (superseded) — ROUND 1 CALLED 2026-07-17
-
-Round 1 (`/tmp/gameab/bossgame_{adaptive,baseline}`, 32.4h each, PARKED
-and preserved) is NOT a clean adaptive-thinking A/B: postmortem (see
-commit 73084a6) found both arms ran the entire time on pre-fix code
-(process start predates 351092e/3f2686f; 854/854 fix prompts had empty
-error slots) and each wedged in a structural trap — adaptive on the
-lint-E402 vs fossil-import two-gate conflict on engine.py (433 reports),
-baseline on world.yaml exit-reciprocity whack-a-mole (one defect visible
-per prompt). Round-1 data remains useful for TOKEN accounting only
-(adaptive 1.63M gen / 3,071 cycles vs baseline 1.33M / 3,528 — same
-outage-window caveats as before).
-
-Round 2 launched 2026-07-17 ~08:20 in `/tmp/gameab/bossgame2_*` on code
-73084a6 (gate-output threading, sibling-goal context, create-loophole
-backfill all live; cmd_start now logs the code SHA). Deliverable when it
-finishes: prototype quality head-to-head, tokens by arm/step/reasoning
-level, cycles, wall; plus the round-1 vs round-2 wedge comparison (did
-sibling context kill the oscillation; did threaded gate output break the
-two-gate loops). Afterwards: restore production a5 config; update the
-adaptive-reasoning memory; consider merging this branch.
-
-## 2. Drain-refresh follow-through — CLOSED 2026-07-21 (by evidence)
-
-Zero "refresh attempt failed" since the hardening; 27h+ uptime through the
-heaviest workload to date (n=symbols fan-outs, capacity benches, config
-swaps) with proactive-timed-drain cycling cleanly every ~30 min. Tier-2
-(session replay across refresh) SKIPPED per its own gate — phase-1 keeps
-clearing.
-
-## OLD-2 (superseded)
-
-Context: `llmvp` timed context auto-refresh with drain
-(`context_refresh_drain_s`, commit `8073353`; incident history in the
-staleness memory). The FIRST drain firing (2026-07-16 18:12) threw
-somewhere after phase-1 and died silently; the loop is now hardened to
-log the traceback and continue (commit "proactive-refresh loop must
-survive"). Work:
-(a) When the traceback appears in `llmvp/logs/server_stdout.log`
-    (grep "refresh attempt failed"), diagnose and fix the root cause.
-    Prime suspects: `engine.pause()` timeout on the parked decode
-    thread, or `_rebuild_batched_context` under the new seq/token
-    refactors.
-(b) Tier-2 (ONLY if telemetry shows drains force-expiring sessions —
-    if phase-1 keeps clearing, skip): server-side session replay across
-    refresh, rebuilding live sessions from token history onto fresh
-    seats (the snapshot cold-tier pattern) instead of expiring them.
-
-## 3. Powered TB canary with the adaptive config — COMPLETE 2026-07-21
-
-**Adaptive 2/8 (first-ever winning-avg-corewars pass) vs flat 1/8.**
-Near-miss autopsy 2026-07-22: path-tracing 4/5 (98%-similarity fingertip,
-capability), mteb 1/2 (wrong-value false-done → verify_completion
-sharpened), chess-best-move 0/1 ×2 (answer-profile routing trap → router
-override shipped, see item 5), portfolio 1/4 (wall-bound C-extension
-build). The context-budget arm remains DEFERRED. Next decision: full-89
-run (adaptive single-arm) vs the 18.7% Terminus baseline — worth doing
-after the routing/oracle fixes get a mini-canary.
-
-## OLD-3 (original brief)
-
-Run the 8-task TB2 canary (`dev/canary_tb2_gptoss.sh`) with
-`OURO_ADAPTIVE_REASONING=1` against the production a5 config
-(reasoning_head_swap is enabled there) vs a kill-switch baseline arm.
-This is the shipped router's first benchmark measurement. Fold in the
-deferred context-budget experiment: a third arm (or follow-up pair) with
-`prepare_context` budgets reduced for fix-mode rewrites — the 26k-token
-rewrite prompts (19k file + 112k chars packed context) were the KV-
-collision trigger; Luke wants budget reduction validated carefully, not
-assumed. Compare pass rate + decode tokens + prompt sizes.
-
-## 4. SWE-bench: issue-guided retrieval (the big score lever)
+## 1. SWE-bench: issue-guided retrieval (the big score lever)
 
 Pilot verdict (memory: swe-bench-verified-pilot): 1/12, with 10/12
 failures wall-bound on repo-scale localization — the agent burns its
@@ -123,22 +49,9 @@ traces; `dev/swe_taxonomy.py` classifies failures. Success = localization
 time collapses on the pilot set; rerun the 12-instance pilot
 (`dev/swe_eval.sh`, predictions archive in `dev/archive/swe_reports/`).
 
-## 5. TB2 oracle improvements — CLOSED 2026-07-22 (shipped + canary residue fixed)
+*Build + unit tests need no server; evaluation does.*
 
-Delta-audit found all four plan items (a-d) already implemented (see the
-STATUS block atop `dev/ORACLE_IMPROVEMENTS_PLAN.md`). The 2026-07-21
-canary near-misses exposed two residual classes, both fixed:
-**answer-profile routing trap** (chess-best-move ×2: profile=answer routed
-code_core → burned the ~14-min budget mid-pipeline, forfeited the ops-only
-oracle chain; now deterministically downgraded to ops in conclude_route)
-and **selection-answer false-done** (mteb: computed-wrong "5th highest"
-value passed the fabrication check; verify_completion now demands the
-visible ranking + selection rule). Validation still owed: rerun
-chess-best-move + mteb-retrieve once the server is free (expect chess to
-route ops now). Known-unaddressed: path-tracing numeric fidelity
-(capability), wall-bound builds (pace).
-
-## 6. TRAP_BRIEF re-validation (cheap; do before any investment)
+## 2. TRAP_BRIEF re-validation (cheap; do before any investment)
 
 `dev/TRAP_BRIEF.md` documents the deterministic-startup-fail
 blind-diagnose trap. ALL its evidence predates the featurizer bare-<
@@ -148,7 +61,122 @@ greenfield mission) post-fix. If the trap no longer reproduces, stamp
 the doc CLOSED and archive it; if it does, the fix is wiring the stalled
 fix-loop detector to the (now shipped) escalate flow.
 
-## 7. Test-suite consolidation roadmap (background)
+## 3. TB2: the next measurement
+
+Canary complete — **adaptive 2/8 (first-ever winning-avg-corewars pass) vs
+flat 1/8**. The oracle fixes shipped and were retested: **chess-best-move and
+mteb-retrieve were rerun on gpt-oss and did NOT flip**, which leans capability
+ceiling rather than framework adjustment. No retake is owed on those two
+unless new work changes the substrate (a stronger daily model, a retrieval
+lever, a routing change that touches answer-profile tasks) — then they are the
+canonical pair to re-probe.
+
+Open decision: **full-89 single-arm adaptive run** against the 18.7% Terminus
+baseline. Also still deferred: the context-budget arm (reduced `prepare_context`
+budgets for fix-mode rewrites — the 26k-token rewrite prompts were the KV-
+collision trigger; Luke wants this validated carefully, not assumed).
+
+## 4. Retire the legacy save_state session path
+
+Every served config now uses a SAFE session path (`session_full_replay: true`
+or `resident_seq_cache: true`), so the legacy save_state/load_state per-turn
+KV-surgery path is effectively dead in production. Its rap sheet: it is what
+`session_full_replay` was introduced to bypass for qwen's degeneration; a
+gpt-oss control hit `SystemError: Negative size passed to
+PyBytes_FromStringAndSize` inside save_state at deep context; save_state churn
+corrupts the static KV over a run (the flow_kv_cache finding); and a corrupted
+saved state is RELOADED every subsequent turn, which uniquely explains "never
+recovers".
+
+**Retire it**: delete the save_state branch in `core/session_manager.session_turn`
+(the `else` arm after resident/full_replay) plus its purge path, and make a safe
+strategy mandatory at config validation so a new model cannot be onboarded onto
+the dead path by omission.
+
+**NEW WRINKLE (2026-07-25, must be handled):** step35-arch models report
+`memory_can_shift=False`, so `resident_seq_cache: true` **silently falls back to
+the legacy path** — `step37-flash-196b-a11.yaml` is in exactly that state today.
+Validation therefore needs three branches, not two: resident (shiftable arch),
+full_replay, and *resident-requested-but-unsupported* → must hard-require
+full_replay rather than pass validation while running legacy.
+
+Related open trap (latent, not the above): `formats/tekken.yaml` declares
+`[THINK]`/`[/THINK]` inline-tag thinking and the FSM will swallow an UNCLOSED
+`[THINK]`, stripping the response to empty. Mistral emits no `[THINK]` today
+(0/6 runs, 0/4 probes) — real, currently unreachable.
+
+## 5. Adaptive thinking beyond gpt-oss
+
+Landed: per-family `reasoning.levels` map (70554c3), and **Step-3.7 / chatml**
+(68737a3, 0bad7a3) — per-level think GATE (`gate_levels`), since Step only
+thinks when the opener is PREFILLED. Live-validated: routed low → 1 token /
+0 thinking chars; routed medium → real think span.
+
+Remaining:
+
+- **Gate membership is an open dial.** Today `gate_levels: ["medium","high"]`
+  with levels collapsed low→off / medium→step-low / high→step-high. Luke's
+  proposal is gemma-style: **low = off, medium = off-or-high decided by
+  evidence, high = high** — i.e. possibly `gate_levels: ["high"]` alone. Decide
+  from the boss A/B: if routed-medium turns don't earn their thinking tokens,
+  medium joins the closed set. One-line change in `llmvp/formats/chatml.yaml`.
+- **Head-swap is INERT on step35** (`memory_can_shift=False` → resident
+  fallback), so routed medium and high are currently identical in DEPTH — the
+  gate is the only real dial. The flags are kept as intent; the depth dial
+  self-activates if upstream makes step35 shiftable.
+- **Gemma**: pick a strip-proof filler (`renderer.py:150` does
+  `system_content.strip()`, which EATS the whitespace padding the equal-length
+  splice needs), re-run the probe arm, then wire `reasoning.levels`. Also
+  unvalidated live: the padded-off state with the OPEN opener prefilled.
+- **Mistral Small 4** (tekken, `[THINK]`/`reasoning_effort` none|high) — its
+  toggle position needs the same equal-length check. Note `thinking: true` is
+  currently *lying*: we never render the system directive that activates
+  Mistral's native reasoning.
+
+## 6. Escalation-economy rungs — live validation (partial)
+
+The three rungs from 2026-07-23 are unit-tested; live observation status:
+
+- **Verify-only re-cert rung: CONFIRMED LIVE** (25 firings in the step37 boss
+  baseline run). Nothing further owed.
+- **Localization rung: NOT OBSERVED** — 0 firings in the same run
+  ("Localization: <file> → symbol ..."). Either no symbol-less `file_ops`
+  dispatches occurred, or it isn't reachable on this mission shape. Determine
+  which; it should be displacing whole-file rewrites.
+- **Phase-exit seam gate: UNOBSERVABLE BY CONSTRUCTION** —
+  `_phase_exit_seam_gate` (`agent/actions/mission_actions.py:1864`) returns
+  `None` silently on every pass path, so "0 hits in the log" cannot distinguish
+  *ran and passed* from *never ran*. **Fix first**: add one `logger.info` on
+  the clean path (files checked + result), then the item becomes closable by
+  log evidence.
+
+Also open from that batch: `resident_seq_cache` for mistral-family (biggest
+slow-model lever, ~13 of 34 min measured) and a prefill-rate-scaled
+context-diet knob (server advertises the rate via health).
+
+## 7. Swarm / research arc residue
+
+The swarm-class arc landed (seat-leak fix, server-derived pool-fit gate,
+deep_research v2 opt-in, content + diagnosis fan-outs, KV preflight guard).
+What it left behind:
+
+- **Live batched leak drill** — cancel a session turn under a swarm config and
+  watch `checkedOut`/`engineActiveStreams` return to 0 within a reaper sweep.
+  The fix is unit-tested and behaved in the wild; this is the deliberate drill.
+- **gemma@65536 window-boundary session canary** — the measured pressure law
+  raised n_ctx; probe for the -3 corruption class at the boundary before
+  trusting it with a deep-session workload.
+- **deep_research calibration** — extract-step INSUFFICIENT rate was high, and
+  the single skeptic returned 26/28 unsupported on the first live run. Run the
+  verify panel against a factual brief with known-good answers to calibrate the
+  three-way verdict before trusting the [UNVERIFIED] flags.
+- **Substrate-aware research budget** — scale wave count by measured decode
+  rate so the same flow isn't ruinous on a 35 tok/s model.
+- **Richer doctest-failure capture in gate reports** — the diagnosis triage
+  fan-out correctly DEFERRED on impoverished doctest output; the fix is
+  capturing more of the failure, not loosening the gate.
+
+## 8. Test-suite consolidation roadmap (background)
 
 `TESTING.md` bottom table (~140-test reduction while broadening).
 Priority order: introduce `tests/conftest.py` + collapse the migration
@@ -158,117 +186,18 @@ that every session test currently disables (`LLMVP_THINK_STRIP=0`);
 then the parametrize tables (turn_renderer, turn_models, oracle files).
 One dedicated short session for the first two; the rest opportunistic.
 
-## 7b. Adaptive thinking beyond gpt-oss (partially landed 2026-07-22)
-
-**Landed (70554c3):** per-family `reasoning.levels` map in the format spec —
-canonical low/medium/high → family text, identity fallback so harmony is
-byte-identical, bimodal collapse supported, heads dedupe by rendered text.
-The agent-side router (and its trained artifact) stays model-agnostic.
-
-**Gemma 4 framing bug: FIXED 2026-07-22 (5125ba3).** gemma.yaml rewritten
-against the official template with a byte-equality golden test; the edge-trim
-that ate whitespace padding is fixed too. Remaining for Gemma adaptive: pick a
-strip-proof filler and re-run the probe arm for it, then wire `reasoning.levels`.
-NOTE the overnight sweep's gemma4 10/16 used the WRONG framing — re-run it.
-
-**2026-07-23 addendum:** the bimodal collapse was low+medium→off, making
-adaptive a structural no-op (the router never emits high) — discovered on the
-greenfield A/B where both gemma arms were byte-identical thinking-OFF. Fixed
-(cd08be5): medium→`<|think|>` puts the toggle on the low/medium boundary the
-router actually exercises; gemma-4-31b.yaml now `thinking: true` (load-bearing
-— false prefills the CLOSED channel and cancels the head). Unvalidated live:
-the padded-off state with the OPEN opener prefilled — probe before the next
-gemma adaptive run.
-
-~~Blocked on a pre-existing bug — `formats/gemma.yaml` models Gemma 3, not
-Gemma 4.~~ (historical detail below) It declares `<start_of_turn>`/`<end_of_turn>` framing and "NO
-system role — system content folds into the first user turn", but Gemma 4's
-real chat template uses `<|turn>`/`<turn|>` and HAS a system turn. Only the
-thinking tags (`<|channel>thought` / `<channel|>`, confirmed correct) were
-updated. `gemma-4-31b.yaml` is this spec's ONLY consumer, so **we are serving
-Gemma 4 with the wrong turn framing today** — worth fixing on its own merits,
-independent of adaptive thinking. Fix = rewrite gemma.yaml against the real
-template (saved: `dev/gemma4_chat_template.jinja`), then re-validate serving.
-
-**Then, for Gemma adaptive** (research + live probe done 2026-07-22, see
-`dev/qwen3_loop_research.md` sibling notes and `dev/gemma_pad_probe.py`):
-Gemma-4 toggles thinking by INSERTING `<|think|>` in the system turn, which
-shifts downstream positions and would make the mid-session splice illegal.
-The fix is Luke's padding idea, **validated live**: pad the off-state to equal
-token length (`<|think|>\n` = [98,107]; `  \n` = [138,107] — a one-token
-substitution 98→138). 5-arm probe on gemma-4-31B confirmed the padded slot
-behaves as ABSENCE (empty thought channel, ~39 out-tokens) not as `<|think|>`
-(real reasoning, ~131), with answers matching the canonical off-branch.
-**Caveat found:** `renderer.py:150` does `system_content.strip()`, which EATS
-leading-whitespace padding — so the filler must be strip-proof (or the strip
-relaxed when a level map is active), else the padding silently collapses and
-the splice's length check quietly refuses every swap. Pick a non-whitespace
-inert token and re-run the probe arm for it before wiring.
-
-Mistral Small 4 (tekken, `[THINK]`/`reasoning_effort` none|high) remains the
-cleaner first target — its toggle position still needs the same check.
-
-## 7c. Retire the legacy save_state session path (flagged 2026-07-22)
-
-Every served config now uses a SAFE session path — `session_full_replay: true`
-or `resident_seq_cache: true`. The last two exposures were closed today:
-`mistral-small-4-119b-a6` (the only config with neither, and the model behind
-the reported "turn produces zero tokens and never recovers" glitch) and
-`qwen3.6-27b` (thinking, 262k ctx, also neither).
-
-That makes the legacy save_state/load_state per-turn KV-surgery path
-effectively dead in production. It has a long rap sheet: it is what
-`session_full_replay` was introduced to bypass for qwen's degeneration; a
-gpt-oss control hit `SystemError: Negative size passed to
-PyBytes_FromStringAndSize` inside save_state at deep context; and save_state
-churn is what corrupts the static KV over a run (the flow_kv_cache finding).
-Its failure mode also uniquely explains "never recovers" — a corrupted saved
-state is RELOADED every subsequent turn.
-
-**Retire it**: delete the save_state session branch in
-`core/session_manager.session_turn` (the `else` arm after resident/full_replay)
-plus its purge path, and make one of the two safe strategies mandatory at
-config validation so a new model cannot be onboarded onto the dead path by
-omission — which is exactly how mistral ended up there.
-
-HONESTY NOTE on the evidence: the glitch was NOT reproduced on demand. A
-20-turn deep-context probe (`dev/tekken_deep_context_probe.py`) run BEFORE and
-AFTER the mistral fix was clean in BOTH arms (0/20 empty) — but it only reached
-~12k of a 131k window, so it is a weak negative, not exoneration. The config
-changes were made by inference plus fleet-consistency, not demonstration. If
-the glitch recurs after this, save_state is exonerated and the next suspects
-are the tekken FSM think-swallow (real but latent — see below) and quant.
-
-Also found while investigating (both open, neither is the glitch):
-- `formats/tekken.yaml` declares `[THINK]`/`[/THINK]` inline-tag thinking and
-  the FSM will swallow an UNCLOSED `[THINK]` — flipping to THINKING and
-  stripping the whole response to empty. Real trap, currently latent: Mistral
-  emits no `[THINK]` at all (0/6 in runs, 0/4 in probes).
-- `mistral-small-4` sets `thinking: true` but we never send a reasoning
-  directive, so the model never thinks — the flag is lying. Mistral's native
-  reasoning is activated by a system-prompt directive we do not render.
-- Mistral fails `design_gate_ground` DETERMINISTICALLY (2/2 runs, 6 inference
-  calls each) on game_challenge_boss: it emits `run_command: python main.py`
-  assuming flat imports while nesting modules under `src/`. The critique
-  correctly catches it all three attempts; `design_reconcile` never fixes it.
-  Same src-layout-vs-top-level class as `dev/TRAP_BRIEF.md`.
-
-## 8. generate_stream_sync request-prep extraction (SOAK-GATED)
+## 9. generate_stream_sync request-prep extraction (SOAK-GATED)
 
 The last "giants" item: shared `_prepare_stream_request()` for the
 static/dynamic split + stop defaulting + kv_base + tracker.start that
-`generate_stream_sync` and `_batched_stream` both do. DO NOT start until
-the token-pipeline + seq-layout + drain-refresh changes have soaked
-under real load for several days without incident — that file absorbed
-four surgeries in one week.
+`generate_stream_sync` and `_batched_stream` both do.
 
-## 9. Small items (grab-bag)
+**Soak clock reset 2026-07-25** — `llama_cpp_backend.py` took three more
+surgeries this week (seat-leak drain, health fields, KV preflight guard). Do
+not start until those have soaked under real load for several days.
 
-- ~~Batched-engine watchdog-cancel seat leak~~ FIXED 2026-07-24
-  (shielded asyncgen close + cancel-proof acquire/release + seat reaper;
-  llmvp/tests/test_batched_seat_release.py). Residual follow-up: a live
-  batched-mode leak drill (cancel a session turn under the a5-swarm
-  config, watch checkedOut/engineActiveStreams in health).
+## 10. Small items (grab-bag)
+
 - Agent-side identical-retry backoff: the KV-eviction and anti-gut loops
   both retried the same dispatch unchanged for hours. Auto-refresh bounds
   the souring case; a dispatch-level "same goal+flow failed N× in a row →
@@ -276,56 +205,28 @@ four surgeries in one week.
 - Standing lint advisory: `add_symbol.generate_new_symbol` string-match
   condition (arguably a linter over-trigger — either exempt emptiness
   checks in flow_lint or convert the step).
-- mission.json archival (memory: memory-hardening-audit, still open).
+- mission.json archival (memory: memory-hardening-audit).
 - Qwen3-Next resident-cache validation + windowing follow-ups (memory:
   resident-seq-cache-implemented).
+- Branch `ingest-workspace-and-tb-comparison` merge decision.
 
-## 9b. Escalation economy + seam-gate coverage — LANDED 2026-07-23 (validation open)
+## 11. Parked until triggered (do NOT start unprompted)
 
-**The finding (read this even if skipping the rest):** the deterministic
-cross-module gates (transfer-shape + typecheck, 671ee57) only ran inside
-`build_structure` — and every game_challenge greenfield run pinned
-`structural_mode: serial` (0 batch-creates across all six 2026-07-23 sweep
-logs), so NO comparison artifact ever passed through them. The dense-mistral
-run shipped three statically-catchable cross-module bugs (constructor arity,
-required-kwarg, string-vs-Command) and paid ~7-min diagnose cycles each at
-42 tok/s. Separately, the bossgame2_adaptive long run showed the archive
-sweep defeats the sweep's cheap auto-complete (reports stripped at
-completion → 541 fixing dispatches, 0 cheap re-certs, 486 rewrites ≈
-2.5-3h/day rewriting healthy files).
-
-**Landed (all suites green, 1533):**
-- 787e2c1 verify-only re-cert rung — regression-reopened goals with archived
-  completion evidence re-run deterministic checks; pass = re-certify, no LLM.
-- b50e5f1 phase-exit seam gate — transfer/typecheck once at serial
-  structural-phase exit; blocks phase (goals stay complete — reopening would
-  ping-pong with the re-cert rung), 3-attempt fail-open. Retroactive proof:
-  flags mistral's pre-fix `GameEngine()` arity + five latent render.py seams.
-- 10f4add+ba7580e localization rung — symbol-less file_ops dispatches get
-  one traceback eval (conclude-style contract) → patch/module-frame; rewrite
-  is now the floor, not the fallback. LLM eval BY DESIGN (deterministic pick
-  would loop on a wrong symbol — Luke's call).
-- game_challenge_boss.yaml → structural_mode: parallel (serial pin was an
-  oversight; swarm supersedes serial as the stress tester).
-- Same-day siblings: regression-reopen provenance + last_completed_at
-  (6ce3df1), OURO_EVAL_STUCK_S (b3fe0ee), server-advertised
-  expectedEvalSeconds honored by the watchdog (9db5259), trace `rates`
-  block + gguf in llmvp venv (6b41ecf).
-
-**Open validation:** all three rungs are unit-tested but not yet observed in
-a live run — next greenfield/boss run should show: re-cert log lines
-("re-certified deterministically"), seam-gate catches at phase exit, and
-localization ("Localization: <file> → symbol ...") displacing rewrites.
-Watch rewrites≈regressions stop tracking 1:1 in the run logs. Also open:
-resident_seq_cache for mistral-family (biggest slow-model lever, ~13 of 34
-min measured) and a prefill-rate-scaled context-diet knob (server now
-advertises the rate via health).
-
-## 10. Parked until triggered (do NOT start unprompted)
-
+- **Polish/creativity gate** (rank 60 reserved in PHASE_RANKS): a
+  `flows/code_core/polish_gate.cue` modeled on quality_gate.cue (review →
+  structured findings → harvest `type="polish"` goals → `polish_verified`
+  flag); dimensions = player-facing prose, creative richness, UX affordances,
+  thematic consistency. Quality-gate pass would switch to setting
+  `quality_verified` with the terminal moving to rank 60; mirror rules in both
+  swarm controllers; prompts under `prompts/code_core/polish_gate/`; MUST fail
+  on zero checkable items (the vacuous-verification trap); opt-in via
+  `top_phase: polish`.
 - 615-turn quarantine panel (K=7 highs + splits) under
   `dev/JUDGE_STANDARD.md` + the 250-turn post-featurizer-fix
   regeneration calibration. Trigger: wanting to grow/re-train the
   reasoning router (provenance chain preserved in dev/ for exactly this).
 - Context-refresh stub-rate auto-trigger (the timed cap + drain covers
   the operational need; a signal-based trigger is a refinement).
+- MTP / speculative decode: NO-GO recorded — the fork exposes the nextn layer
+  but hidden-state handoff is absent (0–1% acceptance). Wait for upstream; do
+  not re-spike without an upstream change.
