@@ -12,15 +12,9 @@ MissionConfig.web_research flag the tb adapter turns off for hermetic runs.
 
 from __future__ import annotations
 
-import json
-import os
 
 from agent.persistence.models import ArchitectureState, MissionConfig
-
-
-def _compiled():
-    with open(os.path.join("flows", "compiled.json")) as f:
-        return json.load(f)
+from tests.conftest import compiled_flows as _compiled
 
 
 def test_ingest_workspace_compiled_wiring():

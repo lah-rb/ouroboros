@@ -9,8 +9,6 @@ themselves stay deterministic.
 
 from __future__ import annotations
 
-import json
-import os
 
 import pytest
 
@@ -18,6 +16,7 @@ from agent.actions.mission_actions import action_check_pipeline_phase
 from agent.flow_sets import FLOW_SETS, get_flow_set
 from agent.models import FlowMeta, StepInput
 from agent.persistence.models import GoalRecord, MissionConfig, MissionState
+from tests.conftest import compiled_flows as _compiled
 
 
 def _mission(goals=None) -> MissionState:
@@ -58,11 +57,6 @@ async def test_phase_order_fig_review_then_curate_then_gate():
     cur2 = GoalRecord(description="c", type="curate", status="complete")
     out = await action_check_pipeline_phase(_si(_mission([fig2, cur2])))
     assert out.result["phase"] == "curate_gate"
-
-
-def _compiled():
-    with open(os.path.join("flows", "compiled.json")) as f:
-        return json.load(f)
 
 
 def test_compiled_control_routing_matches_phases():

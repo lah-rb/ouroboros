@@ -17,6 +17,7 @@ Conventions (TESTING.md):
 
 from __future__ import annotations
 
+import copy
 import functools
 import json
 from pathlib import Path
@@ -51,13 +52,47 @@ class ScriptedInferenceEffects:
 
 @functools.lru_cache(maxsize=1)
 def _compiled_flows() -> dict:
+    # REPO_ROOT-anchored, not cwd-relative: ten test files used to do
+    # open(os.path.join("flows", "compiled.json")) and passed only because
+    # we always invoke pytest from the repo root. `cd tests && pytest
+    # test_ingest_workspace.py` failed 6/8 with FileNotFoundError. pytest's
+    # rootdir is already correct and does NOT fix this (it never chdirs),
+    # so anchoring the path is the only fix — no ini setting substitutes.
     with open(REPO_ROOT / "flows" / "compiled.json") as f:
         return json.load(f)
 
 
 def load_compiled_flow(name: str) -> FlowDefinition:
-    """The real compiled flow by name (compiled.json parsed once per run)."""
+    """The real compiled flow by name, VALIDATED (parsed once per run)."""
     return FlowDefinition.model_validate(_compiled_flows()[name])
+
+
+def compiled_flow(name: str) -> dict:
+    """One flow's RAW compiled dict — what the compiler actually emitted.
+
+    Deliberately NOT ``load_compiled_flow``. Validation is not a no-op: it
+    DEFAULTS every optional field, so a step dict goes from 9 keys raw to
+    17 validated (gaining flow, input_map, param_schema, pre_compute,
+    prompt_template, status, tail_call, turn). Any test asserting on the
+    compiler's output — key presence, key sets, ``"tail_call" not in step``,
+    rule ordering — must see the raw form, or it silently starts testing
+    the model layer's defaults instead of the compiler.
+
+    Use this for compiler-output assertions; use ``load_compiled_flow``
+    when you want a real ``FlowDefinition`` to drive. Both exist on
+    purpose; collapsing them into one is a behavior change, not a cleanup.
+
+    Returns a fresh deep copy — the underlying parse is ``lru_cache``d and
+    handing out the live dict would make it cross-test shared state.
+    """
+    return copy.deepcopy(_compiled_flows()[name])
+
+
+def compiled_flows() -> dict:
+    """The whole RAW compiled.json (fresh copy). See ``compiled_flow`` for
+    why raw. Prefer ``compiled_flow(name)`` unless a test genuinely spans
+    flows (e.g. asserting a flow is registered at all)."""
+    return copy.deepcopy(_compiled_flows())
 
 
 @pytest.fixture

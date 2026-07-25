@@ -9,7 +9,6 @@ edge (→ failed) — the user's decision that no incoherent build ever proceeds
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -23,6 +22,7 @@ from agent.persistence.models import (
     MissionState,
     ModuleSpec,
 )
+from tests.conftest import compiled_flows as _compiled
 
 
 def _incoherent_arch() -> ArchitectureState:
@@ -176,11 +176,6 @@ async def test_no_architecture_passes():
 
 
 # ── compiled wiring ───────────────────────────────────────────────────
-
-
-def _compiled():
-    with open(os.path.join("flows", "compiled.json")) as f:
-        return json.load(f)
 
 
 def _rules(steps, step):

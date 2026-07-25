@@ -17,6 +17,7 @@ from agent.actions.mission_actions import action_check_pipeline_phase
 from agent.effects.mock import MockEffects
 from agent.effects.protocol import CommandResult
 from agent.flow_sets import FLOW_SETS, get_flow_set
+from tests.conftest import compiled_flows as _compiled
 from agent.models import FlowMeta, StepInput
 from agent.persistence.models import GoalRecord, MissionConfig, MissionState
 
@@ -66,11 +67,6 @@ async def test_phase_terminal_is_extract_gate():
 
 
 # ── compiled wiring ───────────────────────────────────────────────────
-
-
-def _compiled():
-    with open(os.path.join("flows", "compiled.json")) as f:
-        return json.load(f)
 
 
 def test_compiled_control_routing_matches_phases():

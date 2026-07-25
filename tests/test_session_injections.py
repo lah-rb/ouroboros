@@ -8,6 +8,7 @@ agent/session_injections.py for rationale.
 from __future__ import annotations
 
 from agent.session_injections import consume, peek, queue
+from tests.conftest import compiled_flows
 
 
 def test_consume_on_empty_context_returns_prompt_unchanged():
@@ -377,11 +378,7 @@ def test_start_session_queues_persona_then_charter():
 def test_plan_interaction_turn_has_no_persona_section():
     """The compiled per-turn plan_interaction prompt must NOT re-render the
     persona (no `role`/run_session_operator section) — it lives in the charter."""
-    import json as _json
-
-    compiled = _json.load(
-        open("flows/compiled.json")  # noqa: SIM115 - small read in a test
-    )
+    compiled = compiled_flows()
 
     def menu_turn_sections(o):
         if isinstance(o, dict):

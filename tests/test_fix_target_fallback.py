@@ -11,13 +11,12 @@ deterministically.
 
 from __future__ import annotations
 
-import json
-import os
 
 import pytest
 
 from agent.actions.mission_actions import action_fallback_fix_target
 from agent.models import FlowMeta, StepInput
+from tests.conftest import compiled_flows
 
 
 def _si(options) -> StepInput:
@@ -51,8 +50,7 @@ async def test_fallback_empty_menu_reports_no_target():
 
 
 def test_compiled_menu_is_capped_and_falls_back():
-    with open(os.path.join("flows", "compiled.json")) as f:
-        compiled = json.load(f)
+    compiled = compiled_flows()
     steps = compiled["mission_control"]["steps"]
     turn = steps["resolve_fix_target"]["turn"]
     assert turn["config"]["max_tokens"] == 4096

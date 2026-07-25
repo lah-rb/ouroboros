@@ -9,7 +9,6 @@ identical to before the mode existed.
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -17,6 +16,7 @@ import pytest
 
 from agent.actions.mission_actions import action_structural_sweep_next
 from agent.effects.mock import MockEffects
+from tests.conftest import REPO_ROOT, compiled_flows
 from agent.models import FlowMeta, StepInput
 from agent.persistence.models import (
     ArchitectureState,
@@ -340,7 +340,11 @@ async def test_patch_dispatch_writes_repair_econ_note(tmp_path):
 def test_repair_econ_note_parses_in_join_script(tmp_path):
     import sys
 
-    sys.path.insert(0, "dev")
+    # REPO_ROOT-anchored: a bare "dev" is cwd-relative and this test failed
+    # from any directory but the repo root (same class as the compiled.json
+    # loaders this file used to carry).
+    dev_dir = str(REPO_ROOT / "dev")
+    sys.path.insert(0, dev_dir)
     try:
         from repair_econ import _NOTE_RE
 
@@ -349,15 +353,14 @@ def test_repair_econ_note_parses_in_join_script(tmp_path):
         )
         assert m and m.group("cls") == "syntax" and m.group("file") == "engine.py"
     finally:
-        sys.path.remove("dev")
+        sys.path.remove(dev_dir)
 
 
 # ── Compiled wiring ───────────────────────────────────────────────────
 
 
 def test_compiled_mission_control_routes_batch_create():
-    with open(os.path.join("flows", "compiled.json")) as f:
-        compiled = json.load(f)
+    compiled = compiled_flows()
     mc = compiled["mission_control"]["steps"]
     rules = mc["structural_sweep_next"]["resolver"]["rules"]
     assert any(
@@ -374,8 +377,7 @@ def test_compiled_mission_control_routes_batch_create():
 
 
 def test_compiled_build_structure_wiring():
-    with open(os.path.join("flows", "compiled.json")) as f:
-        compiled = json.load(f)
+    compiled = compiled_flows()
     bs = compiled["build_structure"]
     assert bs["entry"] == "load_state"
     steps = bs["steps"]

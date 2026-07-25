@@ -8,7 +8,6 @@ verbatim, and the intake → phase → judge → complete handoff composes.
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -22,6 +21,7 @@ from agent.effects.mock import MockEffects
 from agent.flow_sets import FLOW_SETS, get_flow_set
 from agent.models import FlowMeta, StepInput
 from agent.persistence.models import MissionConfig, MissionState
+from tests.conftest import compiled_flows as _compiled
 
 
 def _mission() -> MissionState:
@@ -62,11 +62,6 @@ async def test_phase_task_exec_while_incomplete_then_complete():
 
 
 # ── compiled wiring ───────────────────────────────────────────────────
-
-
-def _compiled():
-    with open(os.path.join("flows", "compiled.json")) as f:
-        return json.load(f)
 
 
 def test_compiled_ops_wiring():

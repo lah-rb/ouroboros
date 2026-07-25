@@ -16,6 +16,7 @@ import pytest
 
 from agent.actions.mission_actions import action_derive_directive_goals
 from agent.effects.mock import MockEffects
+from tests.conftest import compiled_flows
 from agent.models import FlowMeta, StepInput
 from agent.persistence.models import (
     ArchitectureState,
@@ -168,10 +169,7 @@ async def test_undecomposable_directive_still_clears():
 
 
 def test_compiled_replan_wiring():
-    import os
-
-    with open(os.path.join("flows", "compiled.json")) as f:
-        compiled = json.load(f)
+    compiled = compiled_flows()
     # mission_control routes the replan phase to dispatch_replan -> replan flow.
     rules = compiled["mission_control"]["steps"]["check_phase"]["resolver"]["rules"]
     transitions = {r["condition"]: r["transition"] for r in rules}
