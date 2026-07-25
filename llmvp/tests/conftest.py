@@ -48,6 +48,79 @@ def make_config(
     )
 
 
+class FakeTok:
+    """Minimal tokenizer: maps a few marker strings to single ids.
+
+    Promoted from test_session_framing (2026-07-25). It is the standing
+    answer to "that test needs a real tokenizer" — it does not; it needs
+    these four markers to resolve to stable ids.
+    """
+
+    _IDS = {
+        "</think>": [99],
+        "<think>\n": [88, 10],
+        "<channel|>": [101],
+        "<|channel|>": [200005],
+    }
+
+    def tokenize(self, b, add_bos=False, special=False):
+        return self._IDS.get(b.decode("utf-8"), [1, 2, 3])
+
+
+class RecordingCtx:
+    """llama context double that records the seq ops performed on it.
+
+    ``memory_can_shift`` is constructor-controlled: the reasoning strip and
+    the snapshot machinery both branch on it, and a hybrid/recurrent model
+    (Qwen3.5/Qwen3-Next) reports False, which must read as "skip" rather
+    than "corrupt the recurrent state".
+    """
+
+    def __init__(self, can_shift: bool = True) -> None:
+        self.ops: list[tuple] = []
+        self._can_shift = can_shift
+
+    def memory_can_shift(self) -> bool:
+        return self._can_shift
+
+    def memory_seq_rm(self, seq, p0, p1):
+        self.ops.append(("rm", seq, p0, p1))
+
+    def memory_seq_cp(self, src, dst, p0, p1):
+        self.ops.append(("cp", src, dst, p0, p1))
+
+    def memory_seq_add(self, seq, p0, p1, delta):
+        self.ops.append(("add", seq, p0, p1, delta))
+
+
+def make_instance(n_tokens: int = 8, n_ctx: int = 4096, can_shift: bool = True):
+    """A llama-instance double with a recording ctx and a working ``eval``.
+
+    ``eval`` appends to ``eval_calls`` and advances ``n_tokens`` the way the
+    real one does, so truncate-and-replay arithmetic is observable.
+    """
+    import numpy as np
+    from collections import OrderedDict
+    from types import SimpleNamespace
+
+    inst = SimpleNamespace(
+        _ctx=RecordingCtx(can_shift=can_shift),
+        input_ids=np.zeros(n_ctx, dtype=np.intc),
+        n_tokens=n_tokens,
+        _n_ctx=n_ctx,
+        _snap_seqs=OrderedDict(),
+        _flow_seqs=OrderedDict(),
+    )
+    seed = [11, 12, 13, 40, 41, 42, 43, 44][:n_tokens]
+    inst.input_ids[: len(seed)] = np.array(seed, dtype=np.intc)
+    inst.eval_calls = []
+    inst.eval = lambda toks: (
+        inst.eval_calls.append(list(toks)),
+        setattr(inst, "n_tokens", inst.n_tokens + len(toks)),
+    )
+    return inst
+
+
 @pytest.fixture
 def installed_config():
     """Install a make_config() as the process config; restore afterwards."""
