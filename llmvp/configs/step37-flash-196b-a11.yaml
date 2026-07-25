@@ -41,11 +41,16 @@ model:
   # GEOMETRY (2026-07-24 header math): 180KB/token full-KV (45L x 8kvh x
   # 256d) on 105GB IQ4_XS weights — with swa_full the ABSOLUTE ceiling is
   # ~43k n_ctx at the 113.3GB wired limit. 32768 = 111GB total: nearly
-  # right-sized, lives above the 100GB tripwire convention by design
-  # (boot with OURO_KV_PREFLIGHT_GB=112). Full trained context (262144)
-  # is reachable only with swa_full: false (window 512), at the cost of
-  # resident-session soundness.
+  # right-sized, lives above the 100GB tripwire convention by design.
+  # Full trained context (262144) is reachable only with swa_full: false
+  # (window 512), at the cost of resident-session soundness.
   n_ctx: 32768
+  # Declared, not left to a launch-time env var. Until 2026-07-25 the
+  # preflight measured only shard 1 of this 3-shard GGUF (46.5GB of 105GB),
+  # so it computed 52.5GB and waved the config through — it passed the 100GB
+  # default by ACCIDENT, not by fitting. With the shard sum fixed the real
+  # 111.0GB is visible and needs a budget that admits it.
+  kv_preflight_gb: 112
   # Trained per-stream range (the swarm/model context split).
   model_max_context: 262144
   n_gpu_layers: -1

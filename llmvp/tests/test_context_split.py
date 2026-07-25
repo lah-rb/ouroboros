@@ -138,3 +138,159 @@ def test_kv_preflight_refuses_oversize_and_passes_safe(tmp_path, monkeypatch):
     be.config.model.n_ctx = 262144
     be.config.model.swa_full = False
     be._kv_preflight()
+
+
+def test_weights_bytes_total_sums_every_shard(tmp_path):
+    """A split GGUF must be measured whole.
+
+    INCIDENT (2026-07-25): the preflight used os.path.getsize(path), which
+    sees only the shard it was handed. Step-3.7-Flash ships as
+    ...-00001-of-00003.gguf at 43+44+11GB, so the guard measured 46.5GB of a
+    real 105GB and computed 52.5GB total — it cleared the 100GB default by
+    ACCIDENT rather than by fitting. Under-counting weights by 55GB in the
+    one calculation whose job is refusing a machine-rebooting allocation is
+    the exact failure the guard exists to prevent.
+    """
+    stem = tmp_path / "model"
+    for i, size in ((1, 3000), (2, 4000), (3, 1000)):
+        (tmp_path / f"model-{i:05d}-of-00003.gguf").write_bytes(b"x" * size)
+    first = str(tmp_path / "model-00001-of-00003.gguf")
+
+    # header split.count and the filename fallback must agree
+    assert LlamaCppBackend.weights_bytes_total(first, 3) == 8000
+    assert LlamaCppBackend.weights_bytes_total(first, None) == 8000
+    # and neither may collapse to the single-shard answer
+    assert LlamaCppBackend.weights_bytes_total(first, 3) != 3000
+
+    # a non-split model is unaffected
+    solo = tmp_path / "solo.gguf"
+    solo.write_bytes(b"x" * 777)
+    assert LlamaCppBackend.weights_bytes_total(str(solo)) == 777
+    assert str(stem)  # keep the stem reference meaningful for readers
+
+
+def test_weights_bytes_total_falls_back_when_shards_are_missing(tmp_path):
+    """A declared shard count that does not match the files on disk must not
+    silently under-count: glob what IS there rather than trusting the name."""
+    (tmp_path / "m-00001-of-00005.gguf").write_bytes(b"x" * 100)
+    (tmp_path / "m-00002-of-00005.gguf").write_bytes(b"x" * 250)
+    first = str(tmp_path / "m-00001-of-00005.gguf")
+    # split.count says 5, only 2 exist -> count the 2 present, not just the 1
+    assert LlamaCppBackend.weights_bytes_total(first, 5) == 350
+
+
+def test_kv_preflight_budget_precedence(tmp_path, monkeypatch):
+    """Drives the REAL preflight: env override beats the config's declared
+    budget, which beats the 100GB default. A model that legitimately needs
+    more declares it in config so no launch-time env ritual can be forgotten.
+
+    Geometry here is gemma-4 @262144 = ~451GB KV, far above every budget, so
+    the only thing deciding refusal-vs-pass is the budget resolution itself.
+    """
+    import pytest
+
+    gguf_path = tmp_path / "m.gguf"
+    gguf_path.write_bytes(b"x" * 1024)
+
+    class _StubField:
+        def __init__(self, v):
+            self._v = v
+
+        def contents(self):
+            return self._v
+
+    class _StubReader:
+        def __init__(self, path):
+            pass
+
+        def get_field(self, key):
+            vals = {
+                "general.architecture": "gemma4",
+                "gemma4.block_count": 60,
+                "gemma4.attention.head_count_kv": ([16] * 5 + [4]) * 10,
+                "gemma4.attention.key_length": 512,
+                "gemma4.attention.value_length": 512,
+            }
+            return _StubField(vals[key]) if key in vals else None
+
+    import gguf
+
+    monkeypatch.setattr(gguf, "GGUFReader", _StubReader)
+    monkeypatch.delenv("OURO_KV_PREFLIGHT_GB", raising=False)
+
+    be = _backend(_model_cfg(262144, 262144))
+    be.config.model.swa_full = True
+    be.config.model.path = gguf_path
+
+    # 1. default 100GB -> ~451GB refused
+    with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
+        be._kv_preflight()
+
+    # 2. a config-declared budget above the requirement admits it, with no
+    #    env var involved — this is the launch-ritual landmine being removed
+    be.config.model.kv_preflight_gb = 500
+    be._kv_preflight()
+
+    # 3. the operator env override WINS over the config's declaration, so a
+    #    too-generous config can still be reined in from the launch line
+    monkeypatch.setenv("OURO_KV_PREFLIGHT_GB", "100")
+    with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
+        be._kv_preflight()
+
+
+def test_kv_preflight_counts_every_shard_not_just_the_first(tmp_path, monkeypatch):
+    """The preflight must SUM the shards, not merely be able to.
+
+    A helper test alone does not pin this: reverting the call site to
+    os.path.getsize leaves the helper green and unused, which is how the bug
+    survived in the first place. This drives _kv_preflight over a real
+    3-shard layout sized so the two answers straddle the budget —
+    40GB (shard 1) passes, 105GB (all shards) refuses — so only correct
+    wiring can produce the refusal.
+
+    Shards are sparse files: real reported sizes, no disk consumed.
+    """
+    import pytest
+
+    sizes = {1: 40, 2: 40, 3: 25}  # GB -> 105GB total, 40GB if only shard 1
+    for i, gb in sizes.items():
+        with open(tmp_path / f"w-{i:05d}-of-00003.gguf", "wb") as f:
+            f.truncate(gb * 10**9)
+    first = tmp_path / "w-00001-of-00003.gguf"
+
+    class _StubField:
+        def __init__(self, v):
+            self._v = v
+
+        def contents(self):
+            return self._v
+
+    class _StubReader:
+        def __init__(self, path):
+            pass
+
+        def get_field(self, key):
+            vals = {
+                "general.architecture": "tiny",
+                "tiny.block_count": 1,
+                "tiny.attention.head_count_kv": [1],
+                "tiny.attention.key_length": 1,
+                "tiny.attention.value_length": 1,
+                "split.count": 3,
+            }
+            return _StubField(vals[key]) if key in vals else None
+
+    import gguf
+
+    monkeypatch.setattr(gguf, "GGUFReader", _StubReader)
+    monkeypatch.delenv("OURO_KV_PREFLIGHT_GB", raising=False)
+
+    be = _backend(_model_cfg(1024, 1024))
+    be.config.model.swa_full = True
+    be.config.model.path = first
+    be.config.model.kv_preflight_gb = 100  # between 40 and 105
+
+    with pytest.raises(RuntimeError, match="KV preflight REFUSED") as exc:
+        be._kv_preflight()
+    # and the refusal must REPORT the summed figure, not the first shard's
+    assert "105.0GB weights" in str(exc.value).replace(" GB", "GB")

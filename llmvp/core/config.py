@@ -64,6 +64,14 @@ class ModelConfig(BaseModel):
     # Single unified KV cache cell allocation (vs per-sequence) — pairs with
     # swa_full to bound the memory cost on unified-memory (Metal) hardware.
     kv_unified: bool = False
+    # Per-config ceiling (GB) for the swa_full KV preflight: weights + KV must
+    # fit under it or the load is refused BEFORE touching Metal. Default 100
+    # (see _kv_preflight). A model that legitimately sits above the default
+    # declares its own budget HERE rather than relying on an operator
+    # remembering OURO_KV_PREFLIGHT_GB at launch — a launch-time ritual is a
+    # landmine, and the requirement belongs with the config that has it.
+    # Precedence: OURO_KV_PREFLIGHT_GB (operator override) > this > 100.
+    kv_preflight_gb: Optional[float] = None
     flash_attention: bool = False  # DEAD no-op (wrong kwarg name); see flash_attn_type
     batch_size: int = 64  # DEAD no-op (wrong kwarg name); see n_batch
     # The two fields above were silently swallowed by Llama()'s **kwargs (the binding

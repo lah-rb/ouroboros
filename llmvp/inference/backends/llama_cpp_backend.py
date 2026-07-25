@@ -2668,6 +2668,47 @@ class LlamaCppBackend(BaseBackend):
             raise
 
     @staticmethod
+    def weights_bytes_total(path: str, split_count: Any = None) -> int:
+        """Total on-disk weight bytes, summing EVERY shard of a split GGUF.
+
+        ``os.path.getsize(path)`` sees only the shard it was handed, and large
+        models ship split: Step-3.7-Flash is
+        ``...-00001-of-00003.gguf`` at 43GB + 44GB + 11GB. Measuring shard 1
+        alone reported 46.5GB against ~98GB actual — a 55GB under-count, in
+        the one calculation whose entire job is refusing an allocation that
+        would hard-reboot the machine. It passed the default 100GB budget by
+        accident rather than by fitting.
+
+        ``split.count`` comes from the GGUF header when available; the
+        filename pattern is the fallback, since a header read that failed
+        upstream still leaves the naming convention intact. Both paths verify
+        each sibling exists before counting it, and a single-file model simply
+        returns its own size.
+        """
+        import glob as _glob
+        import re as _re
+
+        total = os.path.getsize(path)
+        m = _re.search(r"-(\d{5})-of-(\d{5})\.gguf$", path)
+        if not m:
+            return total  # not a split model
+
+        try:
+            n = int(split_count) if split_count else int(m.group(2))
+        except (TypeError, ValueError):
+            n = int(m.group(2))
+
+        stem = path[: m.start()]
+        suffix = m.group(2)
+        shards = [f"{stem}-{i:05d}-of-{suffix}.gguf" for i in range(1, n + 1)]
+        found = [s for s in shards if os.path.exists(s)]
+        if len(found) < n:
+            # Naming drifted from the convention — fall back to a glob so an
+            # unusual layout still counts more than one shard.
+            found = _glob.glob(f"{stem}-*-of-{suffix}.gguf") or [path]
+        return sum(os.path.getsize(s) for s in found)
+
+    @staticmethod
     def kv_bytes_from_header(
         n_ctx: int, kvh_per_layer: list, key_len: int, value_len: int
     ) -> int:
@@ -2723,10 +2764,13 @@ class LlamaCppBackend(BaseBackend):
             kv_bytes = self.kv_bytes_from_header(
                 m.n_ctx, kvh_list, int(key_len), int(value_len)
             )
-            weights_bytes = os.path.getsize(path)
+            split_count = _field("split.count")
+            weights_bytes = self.weights_bytes_total(path, split_count)
         except Exception:  # noqa: BLE001 — preflight must never block a load
             return
-        budget_gb = float(os.environ.get("OURO_KV_PREFLIGHT_GB", "100") or 100)
+        env_budget = os.environ.get("OURO_KV_PREFLIGHT_GB")
+        cfg_budget = getattr(m, "kv_preflight_gb", None)
+        budget_gb = float(env_budget or cfg_budget or 100)
         total_gb = (kv_bytes + weights_bytes) / 1e9
         if total_gb > budget_gb:
             raise RuntimeError(
