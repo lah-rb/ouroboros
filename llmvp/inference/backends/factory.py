@@ -23,6 +23,43 @@ log = logging.getLogger("llm-mvp")
 # Global backend instance
 _backend_instance: Optional[LlamaCppBackend] = None
 
+# Set when a backend teardown raised. The C-level contexts (and their WIRED
+# GPU memory) may still be allocated, and the global reference is the only
+# handle that can reach them — so teardown deliberately does NOT clear it on
+# failure, and initialization refuses to build a second pool on top.
+#
+# The prior code nulled the global in a `finally`, so a shutdown that threw
+# partway (scaler task, refresh loop, seat reaper, decode thread, N llama
+# contexts, then the primary — any one of them) orphaned everything it had not
+# yet freed and let the next initialize allocate a FULL second pool. On a
+# 128GB unified-memory machine that is the reboot class this codebase has
+# already paid for three times, and it would happen once per model swap.
+_teardown_failed: bool = False
+
+
+def _mark_teardown_failed(exc: BaseException) -> None:
+    global _teardown_failed
+    _teardown_failed = True
+    log.error(
+        "❌ Backend shutdown FAILED (%s) — keeping the global reference so a "
+        "second pool is not allocated over orphaned contexts. This process "
+        "cannot safely re-initialize; restart it.",
+        exc,
+    )
+
+
+def teardown_failed() -> bool:
+    """True when a previous shutdown raised and resources may be orphaned."""
+    return _teardown_failed
+
+
+def _reset_teardown_state() -> None:
+    """Clear the failure latch and the stale reference. For tests, and for an
+    operator who has independently confirmed the resources were reclaimed."""
+    global _teardown_failed, _backend_instance
+    _teardown_failed = False
+    _backend_instance = None
+
 
 def create_backend(config: Any) -> LlamaCppBackend:
     """
@@ -77,6 +114,13 @@ async def initialize_backend_async(config: Any) -> LlamaCppBackend:
     """
     global _backend_instance
 
+    if _teardown_failed:
+        raise RuntimeError(
+            "backend teardown previously FAILED — C contexts and their wired "
+            "GPU memory may still be allocated. Initializing now would stack a "
+            "second full pool on top of them. Restart the process."
+        )
+
     # If backend already initialized, reuse it
     if _backend_instance is not None:
         log.info("✅ Backend already initialized, reusing existing instance")
@@ -108,6 +152,13 @@ def initialize_backend(config: Any) -> LlamaCppBackend:
         The initialized backend instance
     """
     global _backend_instance
+
+    if _teardown_failed:
+        raise RuntimeError(
+            "backend teardown previously FAILED — C contexts and their wired "
+            "GPU memory may still be allocated. Initializing now would stack a "
+            "second full pool on top of them. Restart the process."
+        )
 
     # If backend already initialized, reuse it
     if _backend_instance is not None:
@@ -150,9 +201,9 @@ async def shutdown_backend_async() -> None:
         try:
             await _backend_instance.shutdown()
         except Exception as exc:
-            log.error(f"❌ Error during backend shutdown: {exc}")
-        finally:
-            _backend_instance = None
+            _mark_teardown_failed(exc)
+            return  # keep the reference — see _mark_teardown_failed
+        _backend_instance = None
 
 
 def shutdown_backend() -> None:
@@ -177,8 +228,9 @@ def shutdown_backend() -> None:
             if "no current event loop" in str(exc).lower():
                 asyncio.run(_backend_instance.shutdown())
             else:
-                log.error(f"❌ Error during backend shutdown: {exc}")
+                _mark_teardown_failed(exc)
+                return  # keep the reference — see _mark_teardown_failed
         except Exception as exc:
-            log.error(f"❌ Error during backend shutdown: {exc}")
-        finally:
-            _backend_instance = None
+            _mark_teardown_failed(exc)
+            return  # keep the reference — see _mark_teardown_failed
+        _backend_instance = None
