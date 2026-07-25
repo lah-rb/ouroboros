@@ -1868,6 +1868,13 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
     assembled structural fileset. Returns a fixing-dispatch StepOutput when
     seams are found (goals stay COMPLETE — the gate itself blocks phase
     exit), or None when clean, inert (<2 py files), or attempt-bounded.
+
+    EVERY outcome logs. The gate originally returned None silently on all
+    three pass paths, which made it unobservable in run logs: "no seam-gate
+    lines" could not distinguish *ran and passed* from *never ran*, so its
+    live validation could never be closed by evidence. Clean and inert log
+    INFO; the fail-open bound logs WARNING (a silent fail-open is exactly
+    the state an operator must not miss).
     """
     from agent.actions.batch_structural_actions import _transfer_shape_violations
     from agent.actions.contract_swarm_actions import action_run_contract_typecheck
@@ -1885,6 +1892,11 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
             )
     files = sorted(set(files))
     if len(files) < 2:
+        logger.info(
+            "Seam gate: inert — %d python file(s) in the structural set "
+            "(cross-module checks need 2+)",
+            len(files),
+        )
         return None
 
     attempts = sum(
@@ -1893,6 +1905,12 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
         if "seam_gate" in (getattr(n, "tags", None) or [])
     )
     if attempts >= _SEAM_GATE_MAX_ATTEMPTS:
+        logger.warning(
+            "Seam gate: attempt bound reached (%d/%d) — failing OPEN, phase "
+            "exits with UNRESOLVED seams (evidence in the seam_gate notes)",
+            attempts,
+            _SEAM_GATE_MAX_ATTEMPTS,
+        )
         return None  # fail-open: earlier notes carry the unresolved seams
 
     sources: dict[str, str] = {}
@@ -1904,6 +1922,11 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
         except Exception:  # noqa: BLE001 — unreadable file simply isn't gated
             continue
     if len(sources) < 2:
+        logger.info(
+            "Seam gate: inert — %d of %d structural file(s) readable",
+            len(sources),
+            len(files),
+        )
         return None
 
     problems: dict[str, list[str]] = {}
@@ -1927,6 +1950,11 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
             problems.setdefault(f, []).append(out[:500])
 
     if not problems:
+        logger.info(
+            "Seam gate: clean — %d file(s) checked (transfer-shape + typecheck), "
+            "no cross-module mismatches",
+            len(sources),
+        )
         return None
 
     target = sorted(problems)[0]

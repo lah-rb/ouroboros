@@ -143,12 +143,17 @@ The three rungs from 2026-07-23 are unit-tested; live observation status:
   ("Localization: <file> → symbol ..."). Either no symbol-less `file_ops`
   dispatches occurred, or it isn't reachable on this mission shape. Determine
   which; it should be displacing whole-file rewrites.
-- **Phase-exit seam gate: UNOBSERVABLE BY CONSTRUCTION** —
-  `_phase_exit_seam_gate` (`agent/actions/mission_actions.py:1864`) returns
-  `None` silently on every pass path, so "0 hits in the log" cannot distinguish
-  *ran and passed* from *never ran*. **Fix first**: add one `logger.info` on
-  the clean path (files checked + result), then the item becomes closable by
-  log evidence.
+- **Phase-exit seam gate: observability SHIPPED 2026-07-25**, live observation still
+  owed. `_phase_exit_seam_gate` used to return `None` silently on all three
+  pass paths, so "0 hits in the log" could not distinguish *ran and passed*
+  from *never ran*. Now every outcome logs: `Seam gate: clean — N file(s)
+  checked` (INFO), `Seam gate: inert — ...` (INFO, <2 py files or unreadable),
+  and `Seam gate: attempt bound reached (3/3) — failing OPEN` (WARNING — the
+  phase exits with KNOWN-BAD seams; that line is a defect signal, not noise).
+  The next structural run closes this item by log evidence: `clean` = gate
+  validated live; `inert` = the mission shape never gives it 2+ files (a
+  coverage question, not a gate bug); the WARNING = a real seam that survived
+  three fix attempts.
 
 Also open from that batch: `resident_seq_cache` for mistral-family (biggest
 slow-model lever, ~13 of 34 min measured) and a prefill-rate-scaled

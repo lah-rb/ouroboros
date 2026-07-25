@@ -11,6 +11,7 @@ sweep's all-complete exit, dispatching a fix WITHOUT reopening goals
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -122,26 +123,56 @@ async def test_seam_gate_blocks_phase_and_dispatches_consumer_fix(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_seam_gate_clean_fileset_completes_phase(tmp_path):
+async def test_seam_gate_clean_fileset_completes_phase(tmp_path, caplog):
     _touch(tmp_path, ["combat.py", "engine.py"])
     mission = _mission(tmp_path)
-    out = await action_structural_sweep_next(
-        _si(mission, {"combat.py": COMBAT_SRC, "engine.py": ENGINE_CLEAN_SRC})
-    )
+    with caplog.at_level(logging.INFO, logger="agent.actions.mission_actions"):
+        out = await action_structural_sweep_next(
+            _si(mission, {"combat.py": COMBAT_SRC, "engine.py": ENGINE_CLEAN_SRC})
+        )
     assert out.result.get("sweep_complete") is True
+    # The clean path must SAY it ran. Silence here is what made the gate
+    # unobservable in run logs — "no seam-gate lines" could not distinguish
+    # a clean pass from a gate that never executed.
+    assert "Seam gate: clean" in caplog.text
+    assert "2 file(s) checked" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_seam_gate_fails_open_after_attempt_bound(tmp_path):
+async def test_seam_gate_inert_below_two_files_says_so(tmp_path, caplog):
+    """A single-file structural set can't have cross-module seams — but the
+    gate must log the inert outcome, or its absence reads as a clean pass."""
+    _touch(tmp_path, ["solo.py"])
+    mission = _mission(tmp_path)
+    mission.goals = [
+        GoalRecord(
+            description="solo",
+            type="structural",
+            associated_files=["solo.py"],
+            status="complete",
+        )
+    ]
+    with caplog.at_level(logging.INFO, logger="agent.actions.mission_actions"):
+        out = await action_structural_sweep_next(_si(mission, {"solo.py": COMBAT_SRC}))
+    assert out.result.get("sweep_complete") is True
+    assert "Seam gate: inert" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_seam_gate_fails_open_after_attempt_bound(tmp_path, caplog):
     _touch(tmp_path, ["combat.py", "engine.py"])
     notes = [
         NoteRecord(content=f"seam gate attempt {i}", tags=["seam_gate"])
         for i in range(3)
     ]
     mission = _mission(tmp_path, notes=notes)
-    out = await action_structural_sweep_next(
-        _si(mission, {"combat.py": COMBAT_SRC, "engine.py": ENGINE_SRC})
-    )
+    with caplog.at_level(logging.WARNING, logger="agent.actions.mission_actions"):
+        out = await action_structural_sweep_next(
+            _si(mission, {"combat.py": COMBAT_SRC, "engine.py": ENGINE_SRC})
+        )
     # Bounded: a stubborn seam (or false positive) must not wedge the
     # mission — the phase completes and the notes carry the evidence.
     assert out.result.get("sweep_complete") is True
+    # ...but it must be LOUD: the phase is exiting with known-bad seams.
+    assert "failing OPEN" in caplog.text
+    assert "3/3" in caplog.text
