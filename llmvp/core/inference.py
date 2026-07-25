@@ -284,7 +284,7 @@ async def run_completion(
         # by static_prefix (not by what follows) via two probes with different
         # tails — robust to tokenizer boundary merges. That prefix (after the
         # global static buffer) is what the backend pins per flow_key.
-        dynamic_ids = build_full_prompt(static_prefix + prompt, tokenizer)
+        dynamic_ids = build_full_prompt(static_prefix + prompt, tokenizer, reasoning=reasoning)
         n = len(flow_head_tokens(static_prefix, tokenizer, confirm_with=dynamic_ids))
         if n > 0:
             flow_kwargs = {
@@ -301,7 +301,7 @@ async def run_completion(
         # schema because "there is no output format in the prompt"). Prepending it
         # uncached makes the token sequence identical to the cached path; only the
         # KV-reuse differs. (Regression introduced with the static-prefix split.)
-        dynamic_ids = build_full_prompt((static_prefix or "") + prompt, tokenizer)
+        dynamic_ids = build_full_prompt((static_prefix or "") + prompt, tokenizer, reasoning=reasoning)
     total_len = len(static_tokens) + len(dynamic_ids)
 
     if total_len > config.model.stream_context_limit:
