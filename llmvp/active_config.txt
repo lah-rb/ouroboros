@@ -1,1 +1,1 @@
-gpt-oss-120b-a5-gameab
+gpt-oss-120b-a5-swarm-393k

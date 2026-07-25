@@ -42,7 +42,18 @@ model:
   # semi-broken early release that blew up memory at full context without
   # warning — not observed with the QAT GGUF on the current llama-cpp bin,
   # so corrected to the model max.
-  n_ctx: 262144
+  # GEOMETRY (reboot #3, 2026-07-24 19:30): with swa_full below, KV costs
+  # 1.68MB/token (60 layers, kvh [16,16,16,16,16,4]x10, 512+512d f16) —
+  # n_ctx 262144 would allocate 451GB and hard-reboots the machine before
+  # any tripwire can react. swa_full is LOAD-BEARING here (resident
+  # sessions + reasoning_head_swap splice legality), so the pool must
+  # shrink instead: 32768 = 56GB KV + ~17GB weights ~= 73GB, comfortable.
+  # Full-native-context serving requires swa_full: false (the poolswarm
+  # config's LM-Studio-style arrangement — no resident sessions).
+  n_ctx: 32768
+  # The trained per-stream range (the swarm/model context split): the
+  # stream limit is min(n_ctx, this) = 32768 here.
+  model_max_context: 262144
   n_gpu_layers: -1
   seed: -1
   verbose: false

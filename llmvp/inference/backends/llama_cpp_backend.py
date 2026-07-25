@@ -2236,6 +2236,11 @@ class LlamaCppBackend(BaseBackend):
         if self._primary_instance is not None:
             return  # Already initialized
 
+        # Refuse arithmetically-impossible swa_full KV allocations BEFORE
+        # any Metal work (reboot #3: no tripwire outraces a 451GB wiring
+        # burst; the header math must gate the load).
+        self._kv_preflight()
+
         # MULTI-INSTANCE METAL FIX (found 2026-07-12, duo n_ctx sweep): with
         # per-buffer MTLResidencySets (llama.cpp PR#11427, on by default),
         # TWO live contexts on one Metal device fail command buffers with a
@@ -2661,6 +2666,86 @@ class LlamaCppBackend(BaseBackend):
             with contextlib.suppress(Exception):
                 queue.put_nowait(inst)
             raise
+
+    @staticmethod
+    def kv_bytes_from_header(
+        n_ctx: int, kvh_per_layer: list, key_len: int, value_len: int
+    ) -> int:
+        """Full-KV (swa_full) byte cost for ``n_ctx`` cells from GGUF header
+        facts: Σ_layers kv_heads_i × (key_len + value_len) × 2 bytes (f16 K+V)
+        × n_ctx. Validated against measurement 2026-07-24: gpt-oss 72KB/tok
+        (predicted wired to within ~3GB at every ladder rung), gemma-4
+        1.68MB/tok (451GB @262k — reboot #3's arithmetic)."""
+        per_tok = sum(
+            int(h) * (int(key_len) + int(value_len)) * 2 for h in kvh_per_layer
+        )
+        return per_tok * int(n_ctx)
+
+    def _kv_preflight(self) -> None:
+        """Refuse an arithmetically-impossible swa_full KV allocation BEFORE
+        touching Metal. Three hard reboots (2026-07-24) were precomputable
+        from the GGUF header; the memguard tripwire cannot outrace a
+        hundreds-of-GB wiring burst, so the guard must run pre-allocation.
+        Best-effort on header reads (never blocks a load on a read failure —
+        only refuses on a CONFIRMED oversize); swa_full-only (windowed-SWA
+        allocations are small by construction)."""
+        import os
+
+        m = getattr(self.config, "model", None)
+        if not getattr(m, "swa_full", False):
+            return
+        try:
+            from gguf import GGUFReader
+
+            path = str(m.path)
+            r = GGUFReader(path)
+
+            def _field(key: str):
+                f = r.get_field(key)
+                return f.contents() if f is not None else None
+
+            arch = _field("general.architecture")
+            n_layer = int(_field(f"{arch}.block_count") or 0)
+            kvh = _field(f"{arch}.attention.head_count_kv")
+            key_len = _field(f"{arch}.attention.key_length")
+            value_len = _field(f"{arch}.attention.value_length") or key_len
+            if key_len is None:
+                emb = _field(f"{arch}.embedding_length")
+                heads = _field(f"{arch}.attention.head_count")
+                key_len = value_len = int(emb) // int(heads)
+            kvh_list = (
+                [int(h) for h in kvh]
+                if hasattr(kvh, "__len__")
+                else [int(kvh)] * n_layer
+            )
+            if not kvh_list or not key_len:
+                return
+            kv_bytes = self.kv_bytes_from_header(
+                m.n_ctx, kvh_list, int(key_len), int(value_len)
+            )
+            weights_bytes = os.path.getsize(path)
+        except Exception:  # noqa: BLE001 — preflight must never block a load
+            return
+        budget_gb = float(os.environ.get("OURO_KV_PREFLIGHT_GB", "100") or 100)
+        total_gb = (kv_bytes + weights_bytes) / 1e9
+        if total_gb > budget_gb:
+            raise RuntimeError(
+                f"KV preflight REFUSED: swa_full at n_ctx={m.n_ctx} needs "
+                f"{kv_bytes / 1e9:.1f}GB KV + {weights_bytes / 1e9:.1f}GB "
+                f"weights = {total_gb:.1f}GB > {budget_gb:.0f}GB budget "
+                f"(OURO_KV_PREFLIGHT_GB). This allocation would hard-reboot "
+                f"the machine before any tripwire reacts — shrink n_ctx or "
+                f"set swa_full: false (windowed SWA)."
+            )
+        log.info(
+            "🧮 KV preflight: swa_full n_ctx=%d → %.1fGB KV + %.1fGB weights "
+            "= %.1fGB (budget %.0fGB) — OK",
+            m.n_ctx,
+            kv_bytes / 1e9,
+            weights_bytes / 1e9,
+            total_gb,
+            budget_gb,
+        )
 
     def _stream_ctx_limit(self) -> int:
         """The per-STREAM token ceiling (the swarm/model context split):
