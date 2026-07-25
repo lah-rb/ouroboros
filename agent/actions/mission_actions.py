@@ -871,6 +871,23 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
         goals.append(goal)
 
     # ── Pass 2: Inference-derived functional goals ──
+    #
+    # NO FIXED COUNT (2026-07-25). This asked for "4-7 functional goals" and
+    # got 8/8/8/8/9/9/9/10/10 across ten runs — models sat at or above the
+    # ceiling, and the band compressed goal counts into a near-constant that
+    # had nothing to do with any objective's actual scope. The count was the
+    # ONE confirmed place the framework dictated mission shape: the
+    # architecture prompt was cleared on all three charges (filenames,
+    # granularity, downstream reconcile — see the anchoring trilogy in dev/),
+    # leaving this f-string as the real anchor. It now asks for coverage:
+    # the goals define "done", so the objective's scope sets the count.
+    # Regression guard: tests/test_project_goal_derivation.py.
+    #
+    # COST NOTE: every functional goal drives its own interact session, so
+    # goal count multiplies the functional phase's wall clock. An objective
+    # promising fifteen capabilities will now produce fifteen goals and take
+    # correspondingly longer — the intended trade (honest completeness over a
+    # fixed budget), but the first thing to look at if phases run long.
     if effects and objective:
         structural_summary = "\n".join(
             f"- {g.description} ({', '.join(g.associated_files)})" for g in goals
@@ -894,8 +911,17 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
             f"depend on must come first. Goals that require multiple systems "
             f"working together (integration tests, end-to-end scenarios) "
             f"must come last.\n\n"
-            f"Produce 4-7 functional goals as a JSON array of strings.\n\n"
-            f"\u2705 CORRECT — for a calculator app:\n"
+            f"COVERAGE: the goals together define what 'done' means, so a "
+            f"program that passes all of them must be a COMPLETE, working "
+            f"implementation of the objective. Every user-facing capability "
+            f"the objective promises gets a goal. Do not drop a promised "
+            f"capability to keep the list short, and do not pad the list with "
+            f"work the objective never asked for. Let the objective's own "
+            f"scope decide how many goals that is.\n\n"
+            f"Return the goals as a JSON array of strings.\n\n"
+            f"\u2705 CORRECT — for a calculator app (five capabilities because "
+            f"that is what THIS objective promises; a larger objective "
+            f"needs more, a smaller one fewer):\n"
             f"```json\n"
             f"[\n"
             f'  "User can enter numbers and see them displayed",\n'
