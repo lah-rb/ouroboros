@@ -181,15 +181,43 @@ What it left behind:
   fan-out correctly DEFERRED on impoverished doctest output; the fix is
   capturing more of the failure, not loosening the gate.
 
-## 8. Test-suite consolidation roadmap (background)
+## 8. Test-suite work — what's left after the 2026-07-25 pass
 
-`TESTING.md` bottom table (~140-test reduction while broadening).
-Priority order: introduce `tests/conftest.py` + collapse the migration
-family (4 files, 6 copies of ScriptedInferenceEffects, 12 dup fixtures);
-llmvp API-layer tests (graphql/rest at 0%); the reasoning-strip test
-that every session test currently disables (`LLMVP_THINK_STRIP=0`);
-then the parametrize tables (turn_renderer, turn_models, oracle files).
-One dedicated short session for the first two; the rest opportunistic.
+The consolidation roadmap ran to completion (C0-C9) and a follow-on hardening
+pass acted on two agent surveys. Landed: the parametrize tables, the
+byte-identical merges, compiled.json anchoring, the reasoning-strip coverage,
+six unfailable guard tests given teeth, and eight risk items from the
+uncovered-code survey — including three production bugs (backend teardown
+orphaning the pool, `push_event` truncating the event history before it
+serialized, `stop_background_server` SIGKILLing any process holding the pid).
+Root 1611 -> 1643, llmvp 330 -> 390. Details in the commit messages;
+`TESTING.md` carries the durable rules.
+
+**Deliberately deferred rows** (`TESTING.md` says why): `test_data_ops.py` /
+`test_schema_registry.py` / `test_frame_editor.py` parametrization — seven
+parametrization files in one pass is where quality drops, and the mechanics
+are now proven, so these are cheap whenever wanted.
+
+**Not done, and the reason matters:**
+
+- `Mutation.swap_model` (llmvp graphql resolver) — it mutates the
+  `_session_manager` module global with three outcomes and is tested nowhere;
+  `test_model_swap.py` covers `core/model_swap.py` beneath it, not the
+  resolver. Skipped only because it is net-new test design against the API
+  layer, not because it is low value.
+- **Runtime error-publication semantics — an OPEN QUESTION, not a gap.**
+  `agent/runtime.py:1095-1104`: when an inference returns `result.error`, the
+  runtime publishes `result.text` (empty on error) under EVERY key in
+  `step_def.publishes`. Downstream steps then run on `""` rather than seeing a
+  failure. That may be intended fail-soft or may be a bug; nothing pins it
+  either way, and pinning the wrong one as "the contract" is worse than
+  leaving it unpinned. **Decide the intent first, then test it.**
+
+**Method note worth keeping** (now in `TESTING.md`): the mutation
+spot-check earned its place four times in one day, twice by catching a test
+the author had just written and believed. Its `assert count == 1` on the
+pattern match is load-bearing — a mutation that silently fails to apply
+reports "all green" and reads as confirmation.
 
 ## 9. generate_stream_sync request-prep extraction (SOAK-GATED)
 

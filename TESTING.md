@@ -137,11 +137,37 @@ and so is one whose rows assert nothing. Three mechanics, in cost order:
    --cov-report=term-missing` before and after; the after missing-set must
    be a SUBSET of the before set. A percentage that holds while different
    lines go dark is a regression wearing a good number.
-3. **Mutation spot-check** (~60s per table). Break the one production line
-   the table pins, run only that file, confirm exactly the expected rows
-   fail, then `git checkout --` the production file. This is the only
-   mechanic that catches a row that lost its teeth without changing which
-   lines execute.
+3. **Mutation spot-check** (~60s each). Break the one production line the
+   test pins, run only that file, confirm exactly the expected tests fail,
+   then restore. This is the only mechanic that catches a test that lost its
+   teeth without changing which lines execute.
+
+   Three rules learned the hard way on 2026-07-25, when this caught four real
+   problems — twice in tests the author had just written and believed:
+
+   - **`assert` that the pattern matched** (`assert src.count(old) == 1`)
+     before writing the mutant. A mutation that silently fails to apply
+     reports "all green", which reads exactly like confirmation. This
+     produced five false confirmations in one run before the guard was added.
+   - **Restore from a COPY, never `git checkout --`.** Checkout discards
+     uncommitted work — including the fix you are validating. `cp` the file
+     aside first and `cp` it back.
+   - **Verify the tree is clean between mutations.** One restore that did not
+     land left two mutations stacked, and the second one's result was
+     attributed to the wrong guard.
+
+   When a mutation fails NOTHING, that is a finding, not a dull result: the
+   test cannot prove its own name. Usually the fixture never reaches the
+   branch (see the anti-pattern below).
+
+- **A test whose fixture never reaches the branch.** The commonest way a
+  guard test is unfailable, and it looks perfectly reasonable on the page.
+  Real examples, all fixed 2026-07-25: patterns that match nothing in the
+  listing they filter; a tool left unconfigured so the guarded call never
+  runs; a step name never passed, so the router cannot match any rule; a
+  double so permissive the function returns at its first precondition. Before
+  trusting a guard test, ask what the fixture makes REACHABLE — not what the
+  assertion says.
 
 ### Status
 
