@@ -79,6 +79,13 @@ class MissionConfig(BaseModel):
     # gracefully when on but unreachable — the research step's failure
     # branch proceeds without a summary.
     web_research: bool = True
+    # OPT-IN (Luke 2026-07-24): route the design phase's domain research
+    # through the deep_research sweep (select panel → per-hit extract burst
+    # → adversarial verify) instead of the one-shot research flow. The
+    # sweep costs ~66 completions/wave — nearly free on batched gpt-oss,
+    # punishing on pooled 20 tok/s substrates — so it must be chosen, not
+    # inherited. Default False = the one-shot search.
+    deep_research: bool = False
     # Whether the mission may consult the local vision tool (vl_inspect —
     # an isolated one-shot mlx_vlm process; LLMVP itself stays text-only by
     # design). Set CONFIG-TIME by the overseer/adapter — deterministically

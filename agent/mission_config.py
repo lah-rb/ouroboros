@@ -96,6 +96,10 @@ class MissionYAMLConfig(BaseModel):
     top_phase: Literal[
         "structural", "environment", "functional", "test_suite", "quality", "polish"
     ] = "quality"
+    # OPT-IN: design-phase domain research runs the deep_research sweep
+    # instead of the one-shot search. Feasible as a daily only on batched
+    # gpt-oss; punishing on pooled substrates. Default off.
+    deep_research: bool = False
     principles: list[str] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
 

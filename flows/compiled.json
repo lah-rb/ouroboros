@@ -2784,8 +2784,73 @@
         "terminal": false
       },
       "domain_research": {
+        "action": "noop",
+        "description": "Route domain research: deep sweep (opt-in) or one-shot",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "context.mission.config.deep_research == true",
+              "transition": "deep_domain_research"
+            },
+            {
+              "condition": "true",
+              "transition": "quick_domain_research"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "quick_domain_research": {
         "action": "flow",
-        "description": "Parallel verified research sweep to inform the project",
+        "description": "Search for domain knowledge to inform the project",
+        "config": {},
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "effects": [],
+        "flow": "research",
+        "input_map": {
+          "research_query": {
+            "$ref": "context.mission.objective"
+          },
+          "max_results": 3
+        },
+        "params": {},
+        "publishes": [
+          "research_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.status == 'success'",
+              "transition": "save_research"
+            },
+            {
+              "condition": "true",
+              "transition": "derive_goals"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "deep_domain_research": {
+        "action": "flow",
+        "description": "Parallel verified research sweep (opt-in)",
         "config": {},
         "context": {
           "required": [

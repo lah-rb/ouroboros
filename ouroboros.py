@@ -171,6 +171,7 @@ def cmd_mission_create(args: argparse.Namespace) -> None:
         llmvp_endpoint=llmvp_endpoint,
         flow_set=flow_set,
         structural_mode=structural_mode,
+        deep_research=(yaml_config.deep_research if yaml_config else False),
         run_until=(yaml_config.run_until if yaml_config else "cycle_budget"),
         max_cycles=(yaml_config.max_cycles if yaml_config else None),
         max_wall_clock_s=(yaml_config.max_wall_clock if yaml_config else None),
