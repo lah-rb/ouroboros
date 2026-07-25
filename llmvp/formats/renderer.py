@@ -256,7 +256,7 @@ class FormatRenderer:
         """
         return join_segments(self.render_developer_segments(content))
 
-    def render_generation_prompt(self) -> str:
+    def render_generation_prompt(self, reasoning: str | None = None) -> str:
         """Tokens that prompt the model to start generating.
 
         For Harmony: <|start|>assistant
@@ -267,6 +267,12 @@ class FormatRenderer:
         The <think> tag is only injected when the model config has
         thinking=True. Non-thinking models (e.g. Qwen3-Coder-Next)
         don't understand <think> tags and produce garbage if forced.
+
+        ``reasoning`` is the per-turn level: for families declaring
+        ``thinking.gate_levels`` (Step-3.7), an explicit level outside
+        that list closes the think gate for THIS turn by omitting the
+        prefill — the adaptive router's ``low``. None keeps the config
+        flag's behavior (families without gate_levels ignore it).
         """
         # If assistant has per-role tokens with no msg_open, the model
         # generates immediately after the user's [/INST] close.
@@ -286,6 +292,14 @@ class FormatRenderer:
                 thinking_enabled = config.model.thinking
         except Exception:
             pass  # Config not initialized — default to enabled
+
+        # Per-level think gate: the turn's level decides the prefill when
+        # the family declares gate_levels (thinking is prefill-GATED on
+        # these models — no opener, no thought; measured Step-3.7
+        # mechanics, dev/step37_reasoning_probe.py).
+        gate = self.s.thinking.gate_levels
+        if gate and reasoning:
+            thinking_enabled = thinking_enabled and (reasoning in gate)
 
         # Non-channel families (ChatML inline-tags, Gemma none) need the
         # content separator after the role to match the template pattern.
@@ -318,9 +332,9 @@ class FormatRenderer:
 
         return "".join(parts)
 
-    def render_generation_prompt_segments(self) -> list:
+    def render_generation_prompt_segments(self, reasoning: str | None = None) -> list:
         """Generation-prompt as a single framing segment (empty if none)."""
-        s = self.render_generation_prompt()
+        s = self.render_generation_prompt(reasoning=reasoning)
         return [(s, True)] if s else []
 
     def render_assistant_history_segments(

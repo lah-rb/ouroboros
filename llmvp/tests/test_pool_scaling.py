@@ -743,3 +743,12 @@ def test_head_swap_still_enabled_for_harmony_without_map():
 def test_head_swap_disabled_for_family_without_map():
     b = _backend_with_family("chatml", {})
     assert b._reasoning_head_swap is False
+
+
+def test_head_swap_chatml_level_collapse_pins_only_high():
+    """The production chatml map (Step-3.7 wiring): low/medium both render
+    "low" — medium IS the default head's text (thinking_mode: medium), so
+    the dedup leaves exactly one extra pinned head: high."""
+    b = _backend_with_family("chatml", {"low": "low", "medium": "low", "high": "high"})
+    assert b._reasoning_head_swap is True
+    assert b._reasoning_pin_levels == ["high"]

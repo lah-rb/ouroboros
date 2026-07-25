@@ -55,7 +55,7 @@ class _FakeRenderer:
     def render_user_segments(self, prompt):
         return [(prompt, False)]
 
-    def render_generation_prompt_segments(self):
+    def render_generation_prompt_segments(self, reasoning=None):
         return []
 
     def stop_tokens(self, mode=None):

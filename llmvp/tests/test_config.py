@@ -226,10 +226,17 @@ def test_format_renderer_chatml():
     # User
     assert r.render_user("Hi") == "<|im_start|>user\nHi<|im_end|>"
 
-    # Generation prompt includes <think> tag
+    # Generation prompt includes <think> tag (no level = legacy flag path)
     gen = r.render_generation_prompt()
     assert "<|im_start|>assistant" in gen
     assert "<think>" in gen
+
+    # Per-level think GATE (Step-3.7 mechanics): chatml declares
+    # gate_levels [medium, high] — an explicit low OMITS the prefill for
+    # the turn; medium/high keep it; None keeps the config-flag behavior.
+    assert "<think>" not in r.render_generation_prompt(reasoning="low")
+    assert "<think>" in r.render_generation_prompt(reasoning="medium")
+    assert "<think>" in r.render_generation_prompt(reasoning="high")
 
     # Stop tokens — completion mode stops on im_end plus fake user turn
     assert r.stop_tokens() == ["<|im_end|>", "<|im_start|>user"]
@@ -291,10 +298,15 @@ def test_chatml_reasoning_prefix_gated():
     clear_cache()
     r = get_renderer("chatml")
 
+    # The Ouroboros->step level COLLAPSE (2026-07-25): medium renders as
+    # step-low (the shallow dial — measured low/medium dials nearly equal),
+    # high as step-high; low is inert (the gate closes its turn anyway)
+    # but stays equal-length.
     with_level = r.render_system(persona="P", reasoning="medium")
-    assert "Reasoning: medium" in with_level
+    assert "Reasoning: low" in with_level
+    assert "Reasoning: high" in r.render_system(persona="P", reasoning="high")
     # prefix sits at the very top of the system content (before identity)
-    assert with_level.index("Reasoning: medium") < with_level.index("helpful assistant")
+    assert with_level.index("Reasoning: low") < with_level.index("helpful assistant")
 
     # Qwen path: no thinking_mode → no Reasoning line at all
     without = r.render_system(persona="P", reasoning=None)
@@ -678,7 +690,10 @@ def test_olmo_rendering_matches_gguf_template():
     assert ours == expected, f"\nexpected: {expected!r}\nours    : {ours!r}"
     # The load-bearing details, asserted directly so a template rewrite
     # cannot silently drop them:
-    assert "You do not currently have access to any functions. <functions></functions>" in ours
+    assert (
+        "You do not currently have access to any functions. <functions></functions>"
+        in ours
+    )
 
 
 def test_pool_mode_rejects_high_concurrency():

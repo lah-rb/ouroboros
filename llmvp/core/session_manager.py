@@ -78,6 +78,12 @@ def reasoning_span(
             return None
         if sid("</think>") not in gen_tokens:
             return None  # no </think> (no thinking or truncated) → skip
+        if sid("<think>") in gen_tokens:
+            # The model SELF-emitted the opener — the gen-prompt did not
+            # prefill it (a per-turn gate-closed level; gate_levels
+            # families). Subtracting open_len would cut role framing out
+            # of the KV; skip the strip for this rare turn instead.
+            return None
         # Drop the injected "<think>\n" (last tokens of the gen-prompt) + all
         # generated; keep "<|im_start|>assistant\n". Replay = the clean answer.
         open_len = len(tokenize_text(tokenizer, "<think>\n", special=True))
@@ -602,7 +608,11 @@ class SessionManager:
                 if session.turn_count > 0:
                     segments += renderer.render_turn_transition_segments()
                 segments += renderer.render_user_segments(prompt)
-                segments += renderer.render_generation_prompt_segments()
+                # Per-turn level reaches the think GATE here (gate_levels
+                # families: router low omits the prefill for this turn).
+                segments += renderer.render_generation_prompt_segments(
+                    reasoning=reasoning
+                )
 
                 tokenizer = get_cached_tokenizer()
                 turn_tokens = tokenize_segments(tokenizer, segments)

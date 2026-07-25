@@ -277,7 +277,9 @@ def detokenize(tokenizer: Any, ids: List[int]) -> str:
         raise ValueError(f"Unknown tokenizer type: {type(tokenizer)}")
 
 
-def build_full_prompt(user_prompt: str, tokenizer: Any) -> List[int]:
+def build_full_prompt(
+    user_prompt: str, tokenizer: Any, reasoning: str | None = None
+) -> List[int]:
     """
     Build the dynamic portion of a prompt (user turn + generation prompt).
 
@@ -288,6 +290,8 @@ def build_full_prompt(user_prompt: str, tokenizer: Any) -> List[int]:
     Args:
         user_prompt: User's input text
         tokenizer: Tokenizer instance for tokenization
+        reasoning: Per-request level — reaches the think GATE for
+            gate_levels families (Step-3.7: low omits the <think> prefill)
 
     Returns:
         List[int]: Tokenized dynamic prompt
@@ -296,10 +300,9 @@ def build_full_prompt(user_prompt: str, tokenizer: Any) -> List[int]:
     from formats.registry import get_renderer
 
     renderer = get_renderer(get_config().model.family)
-    segments = (
-        renderer.render_user_segments(user_prompt)
-        + renderer.render_generation_prompt_segments()
-    )
+    segments = renderer.render_user_segments(
+        user_prompt
+    ) + renderer.render_generation_prompt_segments(reasoning=reasoning)
 
     return tokenize_segments(tokenizer, segments)
 

@@ -81,6 +81,16 @@ class ThinkingSpec(BaseModel):
     # when thinking is ENABLED; hence its own flag.
     prefill_closed_when_disabled: bool = False
 
+    # Per-level think GATE (Step-3.7 mechanics, 2026-07-25): for families
+    # where thinking only happens when the opener is PREFILLED, the
+    # per-turn reasoning level decides the prefill — levels listed here
+    # get the open tag; any other explicit level (the router's `low`)
+    # closes the gate by omitting it. Empty list = legacy behavior (the
+    # config `thinking` flag alone decides), so families/configs that
+    # don't declare it are untouched. Requests without a level always
+    # follow the config flag.
+    gate_levels: list[str] = Field(default_factory=list)
+
 
 class SystemBlockSpec(BaseModel):
     """Template and defaults for the system message."""

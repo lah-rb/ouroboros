@@ -25,6 +25,14 @@ thinking:
   style: inline_tags
   open_tag: "<think>"
   close_tag: "</think>"
+  # Per-level think GATE (measured Step-3.7 mechanics, 2026-07-25,
+  # dev/step37_reasoning_probe.py): thinking happens ONLY when the opener
+  # is prefilled — so the adaptive router's `low` closes the gate by
+  # omitting the prefill, and medium/high open it (the Reasoning line
+  # then works as the depth dial inside the opened block). Levels listed
+  # here get the prefill; a request WITHOUT a level keeps the legacy
+  # config-flag behavior, so generic Qwen configs are unchanged.
+  gate_levels: ["medium", "high"]
 
 system_block:
   identity: "You are a helpful assistant."
@@ -63,3 +71,23 @@ turn_transition:
   # which the model cannot cleanly reproduce/stop on, causing it to emit
   # "<|im_end|" forever (runaway). Match the canonical boundary exactly.
   after_generation: "<|im_end|>"
+
+# Reasoning-level map (head-swap eligibility + the dial): identity — the
+# rendered head text is the level name itself inside reasoning_prefix.
+# Verified equal-length under Step-3.7's tokenizer (2026-07-25):
+# "Reasoning: low|medium|high\n\n" all tokenize to exactly 5 tokens
+# (single-token level words), so the mid-session head splice's
+# equal-length invariant holds with no padding. Generic Qwen configs
+# never set thinking_mode -> reasoning_value "" -> the prefix collapses
+# and this map is inert for them.
+# Level COLLAPSE (Luke 2026-07-25): step's measured low/medium dials are
+# nearly identical (961 vs 1,143 mean think chars), so Ouroboros levels
+# map as low=gate OFF (no prefill; the text below is inert but must stay
+# equal-length), medium=step-low (shallow dial), high=step-high (deep).
+# Bonus: medium renders the same text as the default head (thinking_mode:
+# medium) so only `high` needs an extra pinned head.
+reasoning:
+  levels:
+    low: "low"
+    medium: "low"
+    high: "high"
