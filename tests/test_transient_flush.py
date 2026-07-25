@@ -90,8 +90,13 @@ async def test_flush_protects_declared_files_even_when_glob_matches():
 
 @pytest.mark.asyncio
 async def test_flush_rejects_unsafe_patterns():
+    # The unsafe patterns must MATCH something in the listing, or this test
+    # cannot fail: with only state.json present, fnmatch never matches
+    # "/etc/passwd" and deleting the safe_patterns filter outright leaves
+    # flushed == 0 either way (verified 2026-07-25). Seed the victims so the
+    # filter is the ONLY thing standing between them and rm.
     effects = MockEffects(
-        files={"state.json": "{}"},
+        files={"state.json": "{}", "/etc/passwd": "root:x:0:0", "../outside": "x"},
         commands={"rm": _RM_OK},
         mission=_mission(transient=["/etc/passwd", "../outside", "~/x"]),
     )

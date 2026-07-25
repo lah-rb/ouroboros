@@ -199,12 +199,27 @@ def test_count_gate_skips_with_note():
 
 
 def test_vision_off_and_container_effects_skip():
+    """Guard G2, both arms — and both need the VL tool CONFIGURED.
+
+    Without `cmds`, MockEffects returns 127 "command not configured" for the
+    VL invocation, so no .vltext is written whatever the guards do: deleting
+    either guard left this green (verified 2026-07-25). With the tool wired,
+    a missing guard actually produces a sidecar and the assertion bites.
+    """
     files = {"chart.png": "x"}
-    m_off = _vision_mission(vision=False)
-    si = _si_m(files, m_off)
+    cmds = {
+        _VL_KEY: CommandResult(
+            return_code=0, stdout="Red squares: 4, blue: 2", stderr="", command="vl"
+        )
+    }
+    # audio=True deliberately: it opens the OUTER (vision or audio) gate so
+    # the per-modality `enabled` flag is the SOLE thing suppressing image
+    # digestion. With audio also off the arm is double-guarded and no single
+    # mutation can prove either gate works.
+    si = _si_m(files, _vision_mission(vision=False, audio=True), cmds)
     _run(si)
     assert not [k for k in si.effects.written_files if k.endswith(".vltext")]
-    si2 = _si_m(files, _vision_mission(), host_tools=False)
+    si2 = _si_m(files, _vision_mission(), cmds, host_tools=False)
     _run(si2)
     assert not [k for k in si2.effects.written_files if k.endswith(".vltext")]
 

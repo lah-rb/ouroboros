@@ -313,7 +313,12 @@ def test_ambient_key_does_not_satisfy_required_declaration():
             "need_something": StepDefinition(
                 action="noop_step",
                 description="Requires a key nothing produces",
-                context={"required": ["nonexistent_required_key"], "optional": []},
+                # MUST be an ambient key. With an arbitrary name this only
+                # proved the generic missing-required path, and the mutation
+                # that would break the stated invariant (exempting ambient
+                # keys in runtime._build_step_input) left it green — verified
+                # 2026-07-25.
+                context={"required": ["session_injections"], "optional": []},
                 terminal=True,
                 status="success",
             ),

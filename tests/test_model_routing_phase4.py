@@ -73,7 +73,13 @@ def _escalate_flow():
 
 @pytest.mark.asyncio
 async def test_do_consult_routes_stateless_with_model(monkeypatch):
-    monkeypatch.setenv("OURO_ADAPTIVE_REASONING", "1")  # would add reasoning if buggy
+    monkeypatch.setenv("OURO_ADAPTIVE_REASONING", "1")
+    # The flag ALONE routes nothing here (do_consult is not in the default
+    # router steps), so it could not have added reasoning whether the guard
+    # existed or not — deleting the guard left this green (verified
+    # 2026-07-25). Naming the step makes the rule fire, so only the
+    # model_override guard can keep `reasoning` out of the overrides.
+    monkeypatch.setenv("OURO_REASONING_HIGH_STEPS", "do_consult")
     flow = _escalate_flow()
     step_def = flow.steps["do_consult"]
     effects = _ScriptedEffects()
@@ -98,6 +104,10 @@ async def test_do_consult_routes_stateless_with_model(monkeypatch):
             "failure_evidence": "lint E402 fails every fix attempt",
             "expected_outcome": "engine.py passes its gates",
         },
+        # Without _step_name the router sees "" and can never match a step
+        # rule, so `reasoning` could not appear whatever the guard did — the
+        # assertion below was unfailable (verified 2026-07-25).
+        _step_name="do_consult",
         effects=effects,
     )
 

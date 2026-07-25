@@ -98,13 +98,24 @@ async def test_smoke_skipped_during_structural_phase():
 
 @pytest.mark.asyncio
 async def test_smoke_skipped_when_syntax_already_failed():
+    # /bin/sh must FAIL here. With _OK, "skipped" and "ran and passed" produce
+    # the identical smoke_failed=False, so deleting the `if not syntax_failed`
+    # guard changed nothing (verified 2026-07-25). With _BOOM, a smoke that
+    # runs flips smoke_failed to True — so False can only mean it was skipped.
     fx = MockEffects(
         mission=_mission(),
-        commands={"python -m py_compile main.py": _BOOM, "/bin/sh": _OK},
+        commands={"python -m py_compile main.py": _BOOM, "/bin/sh": _BOOM},
     )
     out = await action_run_validation_checks_from_env(_si(fx))
     assert out.result["syntax_failed"] is True
     assert out.result["smoke_failed"] is False
+    # ...and the syntax failure is not masked by a smoke that never ran.
+    sh_calls = [
+        c
+        for c in fx.calls
+        if c.method == "run_command" and c.args.get("command", [""])[0] == "/bin/sh"
+    ]
+    assert sh_calls == [], "smoke must not run once syntax has already failed"
 
 
 def test_compiled_routing_smoke_to_retry():

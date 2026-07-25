@@ -251,13 +251,38 @@ async def test_held_out_test_gate_passes_without_harvest():
     m.config.held_out_tests = True
     m.config.test_gate = "auto"
     m.goals = [
-        GoalRecord(description="fix the bug", type="functional", origin="directive")
+        GoalRecord(
+            description="fix the bug",
+            type="functional",
+            origin="directive",
+            # The goal must already carry repair_tests, or the gate never
+            # reaches the suite: with none, derive_repair_tests finds nothing
+            # and returns the SAME {tests_verified: True, harvested: 0} as the
+            # held-out pass. That is why the original version of this test
+            # stayed green with the guard deleted outright (verified
+            # 2026-07-25) — and why a bare MockEffects was not enough either.
+            repair_tests={"test_files": ["tests/test_models.py"], "collect_ok": True},
+        )
     ]
-    # SeqEffects would report failing nodes; the gate must not even run the suite
-    out = await action_run_test_suite_gate(_si(m, MockEffects(mission=m)))
+    # A RED suite, so only the guard can explain a clean pass.
+    fx = _SeqEffects(
+        [
+            CommandResult(
+                return_code=1,
+                stdout="FAILED tests/test_models.py::test_separability - E",
+                stderr="",
+                command="p",
+            )
+        ],
+        files={"tests/test_models.py": "def test_separability(): assert False\n"},
+        mission=m,
+    )
+    out = await action_run_test_suite_gate(_si(m, fx))
     assert out.result["tests_verified"] is True
-    assert out.result.get("harvested", 0) == 0
+    assert out.result["harvested"] == 0  # no default: an absent key is a bug
     assert not [g for g in m.goals if g.origin == "test_gate"]  # no phantom goals
+    # The whole point: the repo suite is never even run.
+    assert fx._seq, "held-out gate must stand down WITHOUT running the suite"
 
 
 @pytest.mark.asyncio
