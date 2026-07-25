@@ -36,12 +36,19 @@ TASKS = {
         "PostgreSQL with minimal downtime. Be concise."
     ),
 }
+# --prefill-think appends the opener: v1 found step37 does NOT think at
+# all without it (zero <think> spans at every level — thinking is
+# prefill-gated, the gemma pad mechanism). v2 asks whether the Reasoning
+# line modulates length INSIDE an opened think block.
+import sys as _sys
+
+PREFILL = "<think>" if "--prefill-think" in _sys.argv else ""
 TEMPLATE = (
     "<|im_start|>system\n"
     "Reasoning: {level}\n\n"
     "You are a helpful assistant.<|im_end|>"
     "<|im_start|>user\n{task}<|im_end|>"
-    "<|im_start|>assistant\n"
+    "<|im_start|>assistant\n" + PREFILL
 )
 
 
@@ -56,6 +63,9 @@ def gql(query: str, variables: dict, timeout: float = 900):
 
 def think_split(text: str) -> tuple[int, int]:
     """(thinking_chars, answer_chars) from inline <think> tags."""
+    if PREFILL and "</think>" in text:
+        thought, _, answer = text.partition("</think>")
+        return len(thought), len(answer)
     if "<think>" in text:
         pre, _, rest = text.partition("<think>")
         thought, _, answer = rest.partition("</think>")
