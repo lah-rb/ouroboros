@@ -298,15 +298,19 @@ def test_chatml_reasoning_prefix_gated():
     clear_cache()
     r = get_renderer("chatml")
 
-    # The Ouroboros->step level COLLAPSE (2026-07-25): medium renders as
-    # step-low (the shallow dial — measured low/medium dials nearly equal),
-    # high as step-high; low is inert (the gate closes its turn anyway)
-    # but stays equal-length.
+    # IDENTITY mapping as of 2026-07-25 (revised after the blind boss panel):
+    # each canonical level renders Step's own dial. The earlier collapse sent
+    # medium -> "low", which left the router able to do nothing but open or
+    # close the gate — every thinking turn thought at the floor. `low` is
+    # inert in practice (its turn has the gate closed anyway) but still
+    # renders, and all three MUST stay equal-length so the mid-session head
+    # splice remains legal.
     with_level = r.render_system(persona="P", reasoning="medium")
-    assert "Reasoning: low" in with_level
+    assert "Reasoning: medium" in with_level
     assert "Reasoning: high" in r.render_system(persona="P", reasoning="high")
+    assert "Reasoning: low" in r.render_system(persona="P", reasoning="low")
     # prefix sits at the very top of the system content (before identity)
-    assert with_level.index("Reasoning: low") < with_level.index("helpful assistant")
+    assert with_level.index("Reasoning: medium") < with_level.index("helpful assistant")
 
     # Qwen path: no thinking_mode → no Reasoning line at all
     without = r.render_system(persona="P", reasoning=None)
@@ -704,7 +708,8 @@ def test_pool_mode_rejects_high_concurrency():
 
     from core.config import load_config
     from pathlib import Path
-    import tempfile, yaml as _yaml
+    import tempfile
+    import yaml as _yaml
 
     base = _yaml.safe_load(
         (Path(__file__).parent.parent / "configs" / "gpt-oss-120b-a5.yaml").read_text()

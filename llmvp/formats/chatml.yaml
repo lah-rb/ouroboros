@@ -86,8 +86,32 @@ turn_transition:
 # equal-length), medium=step-low (shallow dial), high=step-high (deep).
 # Bonus: medium renders the same text as the default head (thinking_mode:
 # medium) so only `high` needs an extra pinned head.
+# Canonical level -> Step's own depth dial. Revised 2026-07-25 after the
+# blind boss panel (3 Opus judges, unanimous: baseline 31.7/50 vs adaptive
+# 24.7/50 on artifacts built by the two arms).
+#
+# The first collapse mapped medium -> "low", so the ONLY thing the router
+# could do was open or close the gate — every routed turn that did think
+# thought at the shallowest depth. Measured on step-3.7 that is 961 chars
+# of reasoning (dev/step37_reasoning_probe.py: low 961 / medium 1143 /
+# high 2131 mean). The arm running that map produced an artifact the panel
+# scored 7 points lower, and its failures were UNBUILT rather than
+# misconfigured — weakness_item, phase2_health, NPC.hints and Monster.behavior
+# all declared in models and referenced nowhere in the engine. That is the
+# signature of a run that stopped deliberating about how the pieces connect.
+#
+# So: low still closes the gate (that is where the savings are — 199 of 201
+# routed turns, and plan_interaction fell from 1024 to 253 mean tokens), but
+# a turn the router judges worth thinking about now gets a real depth rather
+# than the floor.
+#
+# LENGTH INVARIANT: "low"/"medium"/"high" are each a single token in Step's
+# vocabulary, so "Reasoning: X\n\n" is 5 tokens for every level and the
+# mid-session head splice stays legal (llama_cpp_backend._splice_reasoning_head
+# verifies this per call and refuses a mismatched swap, so a bad map degrades
+# to "no swap" rather than corrupting the session).
 reasoning:
   levels:
     low: "low"
-    medium: "low"
+    medium: "medium"
     high: "high"
