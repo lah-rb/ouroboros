@@ -110,6 +110,15 @@ def _wait_for_pool_ready(host: str, port: int, timeout: int = 120) -> dict:
 _SERVER_CMD_MARKER = "api/main.py"
 
 
+def _read_pid_file() -> "int | None":
+    """The pid recorded in PID_FILE, or None when absent/unreadable."""
+    try:
+        with open(PID_FILE, "r") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _owning_server_process(pid: int):
     """Return the psutil.Process ONLY if `pid` is live AND is actually our
     server; None when it is dead, inaccessible, or has been RECYCLED to some
@@ -139,11 +148,7 @@ def start_background_server():
         # reboot) leaves the file behind, and refusing to start on a stale
         # file means the only recovery is deleting it by hand. Verify the pid
         # actually belongs to our server — the same check `stop` uses.
-        try:
-            with open(PID_FILE, "r") as f:
-                _stale_pid = int(f.read().strip())
-        except (ValueError, OSError):
-            _stale_pid = None
+        _stale_pid = _read_pid_file()
         if _stale_pid is not None and _owning_server_process(_stale_pid) is not None:
             raise RuntimeError("❌ Server is already running in background")
         print("ℹ️ Removing stale PID file (no live server owns it)")
@@ -214,11 +219,9 @@ def stop_background_server():
         print("ℹ️ No background server is running")
         return False
 
-    try:
-        with open(PID_FILE, "r") as f:
-            pid = int(f.read().strip())
-    except (ValueError, OSError) as exc:
-        print(f"ℹ️ Unreadable PID file ({exc}) — cleaning up")
+    pid = _read_pid_file()
+    if pid is None:
+        print("ℹ️ Unreadable PID file — cleaning up")
         os.remove(PID_FILE)
         return True
 
@@ -415,15 +418,51 @@ def main():
         start_background_server()
         return 0
 
-    # Start the GraphQL server
-    run_server(
-        host=config.app.host,
-        port=config.app.port,
-        log_level=config.app.log_level,
-        skip_knowledge=args.skip_knowledge,
-    )
+    # FOREGROUND servers register in PID_FILE too. `--stop` used to know only
+    # about --backend servers, so a foreground one was unstoppable by the CLI:
+    # on 2026-07-25 a foreground server held port 8008 for seven hours while
+    # every --stop in an overnight chain reported success against a different
+    # pid, and the config switches those stops were meant to perform silently
+    # never happened. A server is a server; if it owns the port it must be
+    # reachable by the tool that stops servers.
+    _register_foreground_pid()
+    try:
+        run_server(
+            host=config.app.host,
+            port=config.app.port,
+            log_level=config.app.log_level,
+            skip_knowledge=args.skip_knowledge,
+        )
+    finally:
+        _release_foreground_pid()
 
     return 0
+
+
+def _register_foreground_pid() -> None:
+    """Claim PID_FILE for this foreground server, refusing if one is live."""
+    existing = _read_pid_file()
+    if existing is not None and _owning_server_process(existing) is not None:
+        raise RuntimeError(
+            f"❌ A server is already running (PID: {existing}) — stop it first"
+        )
+    if existing is not None:
+        print("ℹ️ Removing stale PID file (no live server owns it)")
+    try:
+        with open(PID_FILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError as exc:  # noqa: BLE001 — never block serving over bookkeeping
+        print(f"⚠️ Could not write PID file ({exc}); --stop will not find me")
+
+
+def _release_foreground_pid() -> None:
+    """Drop PID_FILE on clean exit, but only if it is still OURS — a later
+    server may legitimately own it by now."""
+    try:
+        if _read_pid_file() == os.getpid():
+            os.remove(PID_FILE)
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

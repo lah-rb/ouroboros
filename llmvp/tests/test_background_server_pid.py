@@ -185,3 +185,93 @@ def _fake_clock():
             return 1e6
 
     return _t
+
+
+# ── foreground registration (2026-07-26) ──────────────────────────────────
+
+
+def test_foreground_server_registers_so_stop_can_find_it(pid_file, monkeypatch):
+    """A foreground server used to be INVISIBLE to --stop, because only
+    --backend wrote PID_FILE. On 2026-07-25 one held port 8008 for seven
+    hours while an overnight chain's --stop calls all reported success
+    against a different pid, and the config switches they were meant to
+    perform silently never happened."""
+    monkeypatch.setattr(main.os, "getpid", lambda: 4321)
+    main._register_foreground_pid()
+    assert pid_file.read_text().strip() == "4321"
+
+
+def test_foreground_refuses_when_a_live_server_already_owns_the_pid(
+    pid_file, monkeypatch
+):
+    pid_file.write_text("999")
+    monkeypatch.setattr(
+        main.psutil, "Process", lambda pid: _FakeProc(["python", "api/main.py"])
+    )
+    with pytest.raises(RuntimeError, match="already running"):
+        main._register_foreground_pid()
+
+
+def test_foreground_claims_over_a_stale_pid(pid_file, monkeypatch):
+    pid_file.write_text("999")
+    monkeypatch.setattr(
+        main.psutil, "Process", lambda pid: _FakeProc(["/usr/bin/ssh", "prod"])
+    )
+    monkeypatch.setattr(main.os, "getpid", lambda: 4321)
+    main._register_foreground_pid()
+    assert pid_file.read_text().strip() == "4321"
+
+
+def test_release_only_removes_our_own_pid_file(pid_file, monkeypatch):
+    """A later server may legitimately own PID_FILE by the time we exit;
+    removing it then would make THAT server unstoppable."""
+    pid_file.write_text("5555")  # someone else's
+    monkeypatch.setattr(main.os, "getpid", lambda: 4321)
+    main._release_foreground_pid()
+    assert pid_file.exists(), "clobbered another server's PID file"
+
+    pid_file.write_text("4321")  # ours
+    main._release_foreground_pid()
+    assert not pid_file.exists()
+
+
+def test_main_registers_and_releases_around_the_foreground_server(
+    pid_file, monkeypatch
+):
+    """WIRING test, not a unit test. The helpers above can all pass while
+    main() never calls them — verified by mutation 2026-07-26: deleting the
+    _register_foreground_pid() call site broke nothing. That is precisely the
+    bug this work fixes (a foreground server that never registers), so the
+    call site itself has to be pinned.
+    """
+    seen = {}
+
+    def _fake_run_server(**kwargs):
+        # mid-serve: the pid file must exist and be ours
+        seen["pid_during_serve"] = pid_file.read_text().strip()
+
+    monkeypatch.setattr(main, "run_server", _fake_run_server)
+    monkeypatch.setattr(main.os, "getpid", lambda: 4321)
+    monkeypatch.setattr(main.sys, "argv", ["api/main.py"])
+
+    class _Cfg:
+        class app:
+            host, port, log_level, backend_timeout = "0.0.0.0", 8008, "info", 180
+
+        class logging:
+            directory = "logs"
+
+        class model:
+            path = "/tmp/none.gguf"
+
+    monkeypatch.setattr(main, "get_config", lambda: _Cfg())
+    monkeypatch.setattr(main, "init_config", lambda *a, **k: _Cfg())
+
+    rc = main.main()
+
+    assert rc == 0
+    assert seen.get("pid_during_serve") == "4321", (
+        "foreground server did not register in PID_FILE — --stop cannot find "
+        "it, which is how one held port 8008 for seven hours"
+    )
+    assert not pid_file.exists(), "PID file not released on clean exit"
