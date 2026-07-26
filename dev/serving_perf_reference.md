@@ -19,8 +19,61 @@ frozen-design ablation arms.
 | 4 | 83 | 22.5 | swarm (W=6) |
 | 6 | 89 | 17.3 | swarm (W=6) |
 
-- Config-independent (same engine); aggregate saturates toward ~90 tok/s,
-  per-stream divides. **Rule: per-stream decode ≈ 56/N + batching bonus.**
+- Config-independent (same engine); per-stream divides.
+  **Rule: per-stream decode ≈ 56/N + batching bonus.**
+
+> **CORRECTION 2026-07-26 — "saturates toward ~90 tok/s" was WRONG.** That
+> word was an extrapolation from N≤6, the only widths measured above. It does
+> not saturate there; it keeps climbing, roughly TRIPLING by N=128. Measured
+> end to end with `dev/decode_ceiling/` (256-tok gens, small prompts, 2
+> repeats, zero errors at every rung):
+>
+> | N | aggregate tok/s | per-stream | p50 latency |
+> |---|---|---|---|
+> | 1 | 50.3 | 50.4 | 5.1s |
+> | 2 | 72.6 | 36.9 | 7.0s |
+> | 4 | 94.4 | 23.9 | 10.8s |
+> | 8 | 105.8 | 13.4 | 19.3s |
+> | 16 | 136.1 | 8.6 | 30.0s |
+> | 32 | 144.7 | 4.6 | 56.6s |
+> | 48 | 173.0 | 3.6 | 71.0s |
+> | **64** | **202.5** | **3.19** | 80.9s |
+> | 96 | 232.4 | 2.5 | 105.5s |
+> | 128 | **271.7** | 2.2 | 120.2s |
+>
+> **Batching gain 5.41x over single-stream, still rising at 128** — that is
+> where the ladder stopped, not where the engine did. 128 is also the highest
+> width tested for ALLOCATION; seats proved essentially free (128 x ~84 tokens
+> is 2.7% of a 393k pool), so seat count is not the constraint. See the
+> "practical ceiling" note below.
+>
+> This vindicates the `~200 at N=64` line in the swarm config headers, which
+> had been uncited and which I incorrectly argued was a `per_instance_tps x N`
+> artifact. There is NO artifact: `sum_of_rates` tracks true aggregate within
+> 1-2% at every rung. That inflation mechanism is real only when N EXCEEDS
+> available seats (queued requests get credited a decodeMs that never counted
+> their wait) — it was never what produced the original figure.
+
+### Practical ceiling: cells, not seats (2026-07-26)
+
+Seats are nearly free, so the binding constraint is the shared KV pool:
+
+```
+N_practical ≈ (n_ctx × 0.8) / (mean tokens per stream)
+```
+
+| workload | tokens/stream | N at 80% of 393k |
+|---|---|---|
+| tiny probe (this table) | ~84 | ~3,700 (hits LLAMA_MAX_SEQ 256 first) |
+| swarm worker (5k read + 4k gen) | ~9,000 | **~35** |
+| big rewrite (15k prompt + 8k gen) | ~23,000 | **~13** |
+
+Three ceilings, in the order they bind: **pool cells** (the real one for
+production work), **latency** (32→128 buys 1.88x aggregate for 2.1x p50), and
+`LLAMA_MAX_SEQ = 256` (only reachable with trivially small streams).
+
+Sizing rule: seats generous (64+), the swarm pool-fit gate does the actual
+limiting from estimated context, and the latency budget picks the width.
 - Real-workload anchor: flow calls decode at 51–58 tok/s single-stream;
   the 2026-07-20 swarm fan-outs achieved only **59–63 tok/s effective
   aggregate** (staggered short tasks + prefill interleave waste most of the

@@ -128,3 +128,51 @@ experiment fixture, not a production shape.
 Watch the error column at high N regardless — the batched seat-leak on
 watchdog cancel (OPEN_TASKS) is a known sharp edge, and a 128-way wave is the
 most aggressive thing we have ever pointed at this engine.
+
+
+---
+
+# RESULT (2026-07-26) — the claim was TRUE and I was wrong about it
+
+**Measured: 202.5 tok/s aggregate at N=64, 3.19 tok/s per stream.** The
+recalled figure was "64 streams stable at ~3 tok/sec" ≈ 200 aggregate. Both
+numbers, exactly.
+
+Max allocatable seats: **128** — the top of the ladder, so not a discovered
+ceiling. Zero errors at every rung, monotonic throughout, 5.41x batching gain,
+still climbing where the ladder stopped. Full curve is in
+`serving_perf_reference.md` §1 and `results.json`; graph in `ceiling.png`.
+
+## What this document got wrong, and why it matters
+
+**1. There is no `sum_of_rates` artifact here.** The hypothesis above — that
+"~200" came from `mean(per-request decode) × N` rather than a true throughput —
+is refuted: the two track within 1-2% at EVERY rung. The mechanism is real, but
+only when N exceeds available seats, because queued requests are credited a
+`decodeMs` that never counted their wait. It was never what produced the
+original number. I constructed a tidy explanation for a figure that simply did
+not need explaining.
+
+**2. "128 seats were never structurally possible."** Reasoned from the absence
+of any config or commit setting `max_concurrent_requests` above 32. Nobody
+having configured it is not the same as it not working. 128 allocates and
+decodes clean.
+
+**3. "Idle seats are ~free" — this one was right, and more so than expected.**
+128 streams × ~84 tokens is 2.7% of a 393,216-cell pool. Seat count is not a
+constraint at all; the pool is.
+
+## The methodological lesson
+
+The uncited number was correct and the archaeology was wrong. An undocumented
+measurement is not the same as a false one, and "I cannot find where this came
+from" does not license "it must be an artifact." The cheap experiment should
+have come first — it took 20 minutes and would have saved a long, confident,
+incorrect argument.
+
+## Follow-up experiment, on the other axis
+
+This ladder answers "how many seats", which we now know is the wrong question.
+The one that matters for sizing: hold N fixed and grow PER-STREAM CONTEXT until
+the pool binds, to find the real admission boundary and test whether the swarm
+gate's 80%-of-pool rule is right, conservative, or optimistic.
