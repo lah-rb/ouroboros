@@ -46,7 +46,14 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
 - `redownload_unresolved.py` — alternate-repository OA PDF retry.
 - `repair_econ.py` — regenerate-vs-diagnose economics from production notes.
 
-## Adaptive-reasoning provenance (shipped router)
+## Adaptive-reasoning provenance (router DEMOTED to experimental 2026-07-25)
+
+**`ADAPTIVE_THINKING_STATUS.md` is the current status doc** — failure shape
+(3 clamps), live results (blind boss panel 31.7 vs 24.7; router inert since
+~07-17), web research (behavior cloning / performative prediction / routing
+collapse / Math-Shepherd), and the tree-walk gold-label plan. The archived
+decision-layer doc below is the BUILD LOG, not current belief.
+
 Rebuild chain: `build_trusted_set.py` (legacy labels → trusted manifest) →
 `build_trusted_trainset.py` (→ train_dataset_trusted_v1.jsonl) →
 `train_reasoning_router.py` (→ models/reasoning_router_v1.joblib, gitignored).

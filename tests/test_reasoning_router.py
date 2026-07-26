@@ -179,3 +179,34 @@ def test_bad_threshold_falls_back(tiny_artifact, monkeypatch):
         )
         == "medium"
     )
+
+
+def test_activation_rate_is_logged_so_a_dead_router_is_visible(
+    monkeypatch, tiny_artifact, caplog
+):
+    """The monitoring the 2026-07-25 demotion rests on.
+
+    "Decided low" and "cannot decide anything" log identically per call — only
+    the RATE separates them, which is why the router going inert around
+    2026-07-17 went unnoticed for nine days (dev/ADAPTIVE_THINKING_STATUS.md
+    §4.1). Every decision must carry the running activation tally.
+    """
+    import logging
+
+    import agent.reasoning_router as rr
+
+    rr._decisions.update({"low": 0, "medium": 0})
+    _on(monkeypatch, tiny_artifact)
+    with caplog.at_level(logging.INFO):
+        for _ in range(4):
+            rr.resolve_reasoning("plan_interaction", None, "some turn prompt", True)
+
+    lines = [
+        r.message for r in caplog.records if "reasoning_router: step=" in r.message
+    ]
+    assert lines, "router logged no decisions at all"
+    assert "activation" in lines[-1], (
+        "no activation rate in the decision log — an inert router is then "
+        "indistinguishable from a decisive one"
+    )
+    assert rr._decisions["low"] + rr._decisions["medium"] == 4

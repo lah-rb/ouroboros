@@ -1,5 +1,40 @@
 """Per-turn reasoning-level routing (adaptive_thinking).
 
+┌─ THE LEARNED ROUTER (rule 3) IS **EXPERIMENTAL** — demoted 2026-07-25 ──────┐
+│ Do not enable it for production runs or treat its output as a quality win.  │
+│ Rules 1-2 (cue-authored levels, high-steps list) are NOT demoted and stay   │
+│ default-on: they RAISE thinking at known-hard steps and their evidence is   │
+│ independent (fibonacci 5/6->6/6; judge deliberating 807 tok vs a 24-tok     │
+│ rubber stamp).                                                              │
+│                                                                            │
+│ Three findings behind the demotion (full writeup + the tree-walk plan that  │
+│ replaces this: dev/ADAPTIVE_THINKING_STATUS.md):                            │
+│                                                                            │
+│ 1. The shipped artifact has classes ['low','medium'] ONLY. The pilot DID    │
+│    find highs (87/20/13) but JUDGE_STANDARD v1.0's pairwise gate            │
+│    quarantined them pending panels that never ran, so training went binary. │
+│    THE ROUTER CANNOT ESCALATE TO HIGH — no threshold or gate_levels change  │
+│    can fix that, the class does not exist.                                  │
+│ 2. It has been effectively INERT since ~2026-07-17. Replaying the fixed     │
+│    artifact over 61k historical prompts: 25-70% activation through early    │
+│    July, 0-3% after. The 2026-07-25 boss run measured 199 low / 1 medium    │
+│    out of 200 live. (Confound: contract_swarm landed 07-17, so workload     │
+│    mix moved too; not resolved.)                                            │
+│ 3. The -42% decode/turn canary that justified shipping is WITHDRAWN. It was │
+│    measured 07-15, right before the flattening, and "always routes low" is  │
+│    observationally identical to a fixed low policy — i.e. gpt-oss being     │
+│    FASTER at low, not smarter when adaptive. Nothing in the record          │
+│    separates those hypotheses.                                              │
+│                                                                            │
+│ Blast radius differs by format: only chatml declares `gate_levels`, so      │
+│ routed-low means "shallower" on harmony/gemma but "NO reasoning at all" on  │
+│ step-3.7 — where a blind 3-judge panel priced it at 31.7/50 vs 24.7/50.     │
+│                                                                            │
+│ IF YOU ENABLE THIS: log the activation rate. An inert router and a          │
+│ decisive one produce identical logs today, which is why 2 above went        │
+│ unnoticed for nine days.                                                    │
+└────────────────────────────────────────────────────────────────────────────┘
+
 Chooses the gpt-oss reasoning effort (low/medium/high) per inference step, so
 mechanical turns stop paying for long CoT. The server applies the level via
 the validated reasoning head-swap (``config.model.reasoning_head_swap``):
@@ -32,6 +67,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# Running tally of router decisions for the activation-rate log line. Process
+# -local and best-effort — it answers "is this router alive?", not accounting.
+_decisions: dict[str, int] = {"low": 0, "medium": 0}
 
 VALID_LEVELS = ("low", "medium", "high")
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -137,8 +176,23 @@ def resolve_reasoning(
             ][artifact["medium_idx"]]
         )
         level = "medium" if p_medium >= _threshold() else "low"
+        # ACTIVATION RATE is the one number that tells a working router from a
+        # dead one. Its absence is why the 2026-07-17 flattening went unnoticed
+        # for nine days: "decided low" and "cannot decide anything" log
+        # identically per call, and only the RATE separates them. Emitted as a
+        # running tally so a single grep of any run answers "was the router
+        # actually routing?" — see dev/ADAPTIVE_THINKING_STATUS.md §9.
+        _decisions[level] += 1
+        total = _decisions["low"] + _decisions["medium"]
         logger.info(
-            "reasoning_router: step=%s p_medium=%.3f -> %s", step_name, p_medium, level
+            "reasoning_router: step=%s p_medium=%.3f -> %s "
+            "[activation %d/%d = %.1f%%]",
+            step_name,
+            p_medium,
+            level,
+            _decisions["medium"],
+            total,
+            100.0 * _decisions["medium"] / total,
         )
         return level
 

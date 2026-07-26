@@ -105,21 +105,32 @@ Related open trap (latent, not the above): `formats/tekken.yaml` declares
 `[THINK]`, stripping the response to empty. Mistral emits no `[THINK]` today
 (0/6 runs, 0/4 probes) — real, currently unreachable.
 
-## 5. Adaptive thinking beyond gpt-oss
+## 5. Adaptive thinking — router DEMOTED to experimental (2026-07-25)
 
-Landed: per-family `reasoning.levels` map (70554c3), and **Step-3.7 / chatml**
-(68737a3, 0bad7a3) — per-level think GATE (`gate_levels`), since Step only
-thinks when the opener is PREFILLED. Live-validated: routed low → 1 token /
-0 thinking chars; routed medium → real think span.
+**Read `dev/ADAPTIVE_THINKING_STATUS.md` first.** It carries the methodology
+of record, the failure shape, the live results, the web research, and the
+tree-walk plan that replaces the current collection method.
 
-Remaining:
+The **learned router is EXPERIMENTAL**; the cue-authored static highs are NOT
+demoted (they raise thinking at known-hard steps, independent positive
+evidence). Headlines: the shipped artifact has classes `['low','medium']` only
+— highs were quarantined by JUDGE_STANDARD's pairwise gate and never
+certified, so it **cannot escalate to high at all**; it has been effectively
+inert since ~07-17 (0–3% activation vs 25–70% in early July); and the −42%
+canary is **withdrawn** — "always low" is indistinguishable from a fixed low
+policy, i.e. gpt-oss faster at low, not smarter when adaptive.
 
-- **Gate membership is an open dial.** Today `gate_levels: ["medium","high"]`
-  with levels collapsed low→off / medium→step-low / high→step-high. Luke's
-  proposal is gemma-style: **low = off, medium = off-or-high decided by
-  evidence, high = high** — i.e. possibly `gate_levels: ["high"]` alone. Decide
-  from the boss A/B: if routed-medium turns don't earn their thinking tokens,
-  medium joins the closed set. One-line change in `llmvp/formats/chatml.yaml`.
+Next actions live in that file's §8. Cheapest first rung: **run the owed
+pairwise panels on the 13 quarantined highs** — a handful certified breaks the
+two-class ceiling before any new collection.
+
+Remaining format work (unchanged, still useful):
+
+- **Gate membership dial.** Today `gate_levels: ["medium","high"]`; levels are
+  now identity (low→low, medium→medium, high→high) after the blind boss panel
+  — the earlier collapse mapped medium→step-low, so the router could only open
+  or close the gate and every thinking turn thought at the floor. NOTE this is
+  nearly inert in practice while the router activates 0.5% of the time.
 - **Head-swap is INERT on step35** (`memory_can_shift=False` → resident
   fallback), so routed medium and high are currently identical in DEPTH — the
   gate is the only real dial. The flags are kept as intent; the depth dial

@@ -1,5 +1,13 @@
 # Adaptive Reasoning Decision Layer — design & build map
 
+> **SUPERSEDED 2026-07-25.** This is the BUILD LOG for how the machinery
+> was constructed, not current belief. The learned router is now
+> EXPERIMENTAL and its -42% result is WITHDRAWN; the shipped artifact
+> cannot emit `high` at all (the 13 pilot highs were quarantined by
+> JUDGE_STANDARD's pairwise gate and never certified). Current status,
+> failure shape and the replacement plan: `dev/ADAPTIVE_THINKING_STATUS.md`.
+
+
 > **STATUS: SHIPPED 2026-07-15; log ARCHIVED 2026-07-16 — see CLOSING STATUS at the end.**
 
 Spans several sessions. Goal: a per-turn policy that picks the gpt-oss reasoning
