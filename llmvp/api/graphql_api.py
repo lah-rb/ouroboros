@@ -601,11 +601,21 @@ class Query:
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             grammar=request.grammar,
+            # Was silently DROPPED until 2026-07-26. The request type
+            # advertises `reasoning`, so callers reasonably believed a level
+            # was being applied; the raw path ignored it and returned
+            # default-head output. Level A/Bs driven through rawCompletion
+            # were comparing identical generations.
+            reasoning=request.reasoning,
         )
         return RawCompletionResponse(
             raw_text=raw_text,
             tokens_generated=tokens_generated,
-            finished=True,
+            # `finished` was hardcoded True, which made it worse than useless:
+            # consumers used it as a truncation flag (a generation that hit the
+            # token budget must read False), and a constant True reports "never
+            # truncated" for every request ever made. Derive it.
+            finished=tokens_generated < resolve_max_tokens(request.max_tokens),
         )
 
     @strawberry.field

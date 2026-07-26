@@ -284,7 +284,9 @@ async def run_completion(
         # by static_prefix (not by what follows) via two probes with different
         # tails — robust to tokenizer boundary merges. That prefix (after the
         # global static buffer) is what the backend pins per flow_key.
-        dynamic_ids = build_full_prompt(static_prefix + prompt, tokenizer, reasoning=reasoning)
+        dynamic_ids = build_full_prompt(
+            static_prefix + prompt, tokenizer, reasoning=reasoning
+        )
         n = len(flow_head_tokens(static_prefix, tokenizer, confirm_with=dynamic_ids))
         if n > 0:
             flow_kwargs = {
@@ -301,7 +303,9 @@ async def run_completion(
         # schema because "there is no output format in the prompt"). Prepending it
         # uncached makes the token sequence identical to the cached path; only the
         # KV-reuse differs. (Regression introduced with the static-prefix split.)
-        dynamic_ids = build_full_prompt((static_prefix or "") + prompt, tokenizer, reasoning=reasoning)
+        dynamic_ids = build_full_prompt(
+            (static_prefix or "") + prompt, tokenizer, reasoning=reasoning
+        )
     total_len = len(static_tokens) + len(dynamic_ids)
 
     if total_len > config.model.stream_context_limit:
@@ -430,6 +434,7 @@ async def run_raw_completion(
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     grammar: Optional[str] = None,
+    reasoning: Optional[str] = None,
 ) -> Tuple[str, int]:
     """
     Run a non-streaming completion that returns raw model output.
@@ -438,10 +443,21 @@ async def run_raw_completion(
     Returns the full model output including channel markers, thinking
     text, and delimiter tokens. Used for training data collection.
 
+    ``reasoning`` applies the same per-request head-swap run_completion does.
+    It was MISSING here until 2026-07-26, and the omission was silent: the
+    GraphQL CompletionRequest advertises a `reasoning` field, the raw resolver
+    accepted it, and then dropped it on the floor. Anything driving level
+    comparisons through rawCompletion therefore got N identical copies while
+    believing it had N levels — which is exactly what happened to the
+    adaptive_thinking counterfactual corpus regeneration (4,107 requests, three
+    "levels", CoT lengths 764/779/781 = noise).
+
     Args:
         prompt: User prompt text
         max_tokens: Maximum tokens to generate
         temperature: Sampling temperature
+        grammar: Optional grammar constraint
+        reasoning: Reasoning level for the per-request head-swap
 
     Returns:
         Tuple of (raw_text, approximate_token_count)
@@ -476,6 +492,10 @@ async def run_raw_completion(
         gen_kwargs = {}
         if grammar:
             gen_kwargs["grammar"] = grammar
+        # Per-request reasoning HEAD-SWAP, mirroring run_completion. There is
+        # no flow-prefix case on the raw path, so no pinned-KV guard is needed.
+        if reasoning:
+            gen_kwargs["reasoning"] = str(reasoning)
 
         answer = await backend.generate_async(
             instance=instance or backend,
