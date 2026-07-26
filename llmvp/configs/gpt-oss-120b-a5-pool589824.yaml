@@ -1,15 +1,4 @@
-# DECODE-CEILING EXPERIMENT CONFIG (dev/decode_ceiling/) — not for production.
-#
-# Identical to gpt-oss-120b-a5-swarm-393k EXCEPT max_concurrent_requests: 128.
-# Purpose: allocate enough working seats that CLIENT concurrency, not server
-# admission, is the independent variable across the whole N ladder (1..128).
-# The production configs cap at 32, which is why every prior sweep stopped
-# there and why the "~200 tok/s at N=64" claim was never testable.
-#
-# Seat legality: n_seq_max = n_working + personas + reasoning_levels, and
-# llama.cpp's LLAMA_MAX_SEQ is 256, so 128 working seats + bands fits.
-# KV: cells are shared (kv_unified) and consumed per ACTUAL token, so idle
-# seats cost nothing — 128 x ~300 tokens is ~38k of the 393,216-cell pool.
+# POOL-CEILING PROBE (589824 cells). Transient experiment fixture.
 # CONTEXT-LADDER PROBE VARIANT (393k): a5-swarm with the shared cell
 # pool raised to 393216. Geometry: 72KB/token swa_full → KV ≈ 27GB.
 # Per-STREAM positions stay ≤ 131072 (trained range); n_ctx here is the
@@ -50,7 +39,8 @@ model:
   name: "gpt-oss-120b-a5"
   family: "harmony"
   path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
-  n_ctx: 393216
+  n_ctx: 589824
+  kv_preflight_gb: 110
   # model max context (trained per-stream range) vs n_ctx (the swarm
   # max context: the shared KV cell pool). No single stream may exceed
   # this, however large the pool. (2026-07-24 context-ladder split.)
@@ -100,7 +90,7 @@ resources:
   cpu_threads: 15
   # W: admission ceiling for the n=symbols fan-out (engine proven to 64
   # streams). The client-side pool-fit gate is the real load governor.
-  max_concurrent_requests: 128
+  max_concurrent_requests: 32
   jit_concurrency_limit: null
 
 tools:

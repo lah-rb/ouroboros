@@ -54,6 +54,43 @@ frozen-design ablation arms.
 > available seats (queued requests get credited a decodeMs that never counted
 > their wait) — it was never what produced the original figure.
 
+### KV pool ceiling — measured, and the limit is 113 GB not 116 (2026-07-26)
+
+**`sysctl iogpu.wired_limit_mb` = 113.** Several configs and docs assumed 116;
+nobody had checked. Everything below is measured steady wired via
+`dev/memguard_boot_probe.sh`, with nothing else running:
+
+| n_ctx | predicted | measured | under 113 | verdict |
+|---|---|---|---|---|
+| 393216 | 94.4 | **91.1** | 21.9 GB | the old production value — conservative by ~33% |
+| **524288** | 104.0 | **100.6** | 12.4 GB | **production default** |
+| 589824 | 108.7 | **105.2** | 7.8 GB | READY; batch-only (`gpt-oss-120b-a5-pool589824`) |
+| 655360 | 113.7 | **109.9** | 3.1 GB | boots, leaves **0.8 GB free** — not viable |
+| 720896 | ~118 | — | — | above the limit |
+
+Marginal cost measured at **71.7 KB/token against 72.0 predicted** — the KV
+model is exact. The −3.4 GB gap between predicted and measured is a fixed
+offset at every rung, not drift, so the arithmetic predicts new rungs reliably
+(655360 was called at 109.9 before the probe and measured 109.9).
+
+**Boot-time wired is the steady cost for gpt-oss** (it wires KV essentially at
+load), which makes this cheap to test — seconds per rung, no long fill needed.
+That is NOT true of every model: mistral-medium pre-allocates and measures
+*above* prediction, and gemma wires lazily and measured half of theory. Check
+the direction per family before trusting a single rung.
+
+**Why 524288 and not 655360.** Wired is not the only budget. At 655360 the box
+reads 109.9 wired + 6.4 active + 8.6 inactive + 1.4 compressor = **127.1 of
+128 GB, 0.8 GB free, with only the server running** — no room for the agent
+process, Python, an editor, or a Docker VM. 589824 leaves 7.8 GB and is fine
+for a dedicated batch run; 524288 leaves 12.4 GB and is the safe default.
+
+**The old "BREACH" verdict on 524k was an artifact of the probe, not the box.**
+The swarmclass ladder ran `memguard_boot_probe.sh` with its default 100 GB
+ceiling; 524k measured 100.6 and was killed for missing by 0.6 GB against a
+guard sitting 12 GB below the real limit. A conservative tripwire silently
+became a capacity decision.
+
 ### Practical ceiling: cells, not seats (2026-07-26)
 
 Seats are nearly free, so the binding constraint is the shared KV pool:

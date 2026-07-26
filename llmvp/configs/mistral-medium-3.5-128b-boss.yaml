@@ -8,7 +8,7 @@
 #   weights across 3 shards = 67.1 GB
 #     n_ctx  65536 -> KV 23.6 GB -> 90.7 GB total
 #     n_ctx  98304 -> KV 35.4 GB -> 102.6 GB total
-#     n_ctx 131072 -> KV 47.2 GB -> 114.4 GB total  <- vs ~116 GB hard limit
+#     n_ctx 131072 -> KV 47.2 GB -> 114.4 GB total  <- vs the REAL 113 GB wired limit (sysctl iogpu.wired_limit_mb) — UNLOADABLE
 #
 # The shipped mistral-medium-3.5-128b.yaml carries n_ctx 131072, i.e. 114.4 GB
 # with a ~1.6 GB margin. It LOADS (KV wiring is lazy) but a run that actually
@@ -46,7 +46,7 @@ model:
   # Native context is 262144. Held at 131072 to match small-4 for
   # comparability AND because this is DENSE with 88 blocks, so its KV is far
   # heavier per token than the MoE — 67GB of weights plus a deep-layer KV has
-  # to stay under the 116GB wired limit. Raise only with memory headroom
+  # to stay under the REAL 113GB wired limit (iogpu.wired_limit_mb; 116 was an unchecked assumption). Raise only with memory headroom
   # measured, not assumed.
   n_ctx: 65536
   kv_preflight_gb: 104

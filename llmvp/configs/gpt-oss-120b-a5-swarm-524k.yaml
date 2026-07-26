@@ -1,7 +1,31 @@
-# CONTEXT-LADDER PROBE VARIANT (524k): a5-swarm with the shared cell
-# pool raised to 524288. Geometry: 72KB/token swa_full → KV ≈ 36GB.
-# Per-STREAM positions stay ≤ 131072 (trained range); n_ctx here is the
-# unified CELL POOL across streams, not a positional limit.
+# PRODUCTION SWARM CONFIG — gpt-oss-120b-a5, shared cell pool 524288.
+#
+# MEASURED CEILING LADDER (2026-07-26, dev/memguard_boot_probe.sh, steady
+# wired with nothing else running). The REAL wired limit on this box is
+# `sysctl iogpu.wired_limit_mb` = **113 GB**, not the 116 that several docs
+# and configs assumed:
+#
+#     n_ctx    predicted   measured   under 113
+#     393216      94.4       91.1      21.9 GB   (the old production value)
+#     524288     104.0      100.6      12.4 GB   <- THIS CONFIG
+#     589824     108.7      105.2       7.8 GB   tested READY, reasonable for
+#                                                batch work where nothing else
+#                                                runs; 5% more pool, 4.6 GB
+#                                                less headroom
+#     655360     113.7      109.9       3.1 GB   boots, but leaves 0.8 GB FREE
+#                                                on a 128 GB box — not viable
+#
+# Marginal cost measured at 71.7 KB/token against 72.0 predicted — the model
+# is exact; the constant -3.4 GB offset is fixed, not drift. 720896 would land
+# ~114.6 and is above the limit.
+#
+# WHY 524288 AND NOT HIGHER: 393216 was conservative by ~33%, and the earlier
+# "BREACH" verdict on 524k was an artifact of a probe ceiling set at 100 GB —
+# it measured 100.6, missing by 0.6 GB against a guard 12 GB below the real
+# limit. 589824 is genuinely fine for a dedicated batch run; it is not the
+# default because 7.8 GB of headroom has to absorb the agent process, Python,
+# editors and any Docker VM, and at 655360 that budget is already spent.
+#
 # CONTRACT-SWARM config (BATCHED): gpt-oss-120b-a5 for the contract-swarm
 # structural runs — n=symbols concurrent worker completions
 # (swarm_generate_symbols fans out one stateless completion per symbol,
@@ -39,6 +63,10 @@ model:
   family: "harmony"
   path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
   n_ctx: 524288
+  # Refuse arithmetically-impossible loads before Metal allocates. Set from
+  # the REAL wired limit (113 GB) minus working headroom, not the 116 that
+  # was assumed before it was checked.
+  kv_preflight_gb: 106
   # model max context (trained per-stream range) vs n_ctx (the swarm
   # max context: the shared KV cell pool). No single stream may exceed
   # this, however large the pool. (2026-07-24 context-ladder split.)

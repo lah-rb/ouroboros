@@ -30,7 +30,7 @@ model:
   # Native context is 262144. Held at 131072 to match small-4 for
   # comparability AND because this is DENSE with 88 blocks, so its KV is far
   # heavier per token than the MoE — 67GB of weights plus a deep-layer KV has
-  # to stay under the 116GB wired limit. Raise only with memory headroom
+  # to stay under the REAL 113GB wired limit (iogpu.wired_limit_mb; 116 was an unchecked assumption). Raise only with memory headroom
   # measured, not assumed.
   n_ctx: 131072
   n_gpu_layers: -1
