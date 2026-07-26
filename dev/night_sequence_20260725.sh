@@ -49,11 +49,11 @@ tail -14 /private/tmp/claude-501/-Users-lah-rb-Repos-ouroboros/dcb3e0ab-de34-4f5
 # ── 1. decode ceiling ────────────────────────────────────────────────────
 log "=== stage 1: decode-ceiling experiment (128 seats) ==="
 if restart_server gpt-oss-120b-a5-decodeceiling; then
-  (cd "$ROOT" && timeout 5400 uv run python dev/decode_ceiling/bench.py \
+  (cd "$ROOT" && timeout 5400 uv run python dev/swarm_performance/decode_ladder.py \
       --ladder 1,2,4,8,16,32,48,64,96,128 --repeats 2 \
       >> "$BASE/decode_ceiling.log" 2>&1)
   log "  bench exit=$?"
-  (cd "$ROOT" && uv run python dev/decode_ceiling/plot.py >> "$BASE/decode_ceiling.log" 2>&1)
+  (cd "$ROOT" && uv run python dev/swarm_performance/plot.py >> "$BASE/decode_ceiling.log" 2>&1)
   log "  graph written"
   grep -E "^PEAK|^batching|^sum-of-rates" "$BASE/decode_ceiling.log" | tee -a "$LOG"
 else

@@ -1,0 +1,442 @@
+{
+  "server": {
+    "poolSize": 128,
+    "availableInstances": 128,
+    "inFlight": 0,
+    "kvPoolTokens": 393216,
+    "decodeMode": "batched"
+  },
+  "gen": 256,
+  "rows": [
+    {
+      "n": 1,
+      "gen": 256,
+      "repeats": [
+        {
+          "aggregate_tok_s": 49.74,
+          "per_stream_decode_tok_s": 49.87,
+          "sum_of_rates": 49.87,
+          "total_tokens": 256,
+          "wall_s": 5.1,
+          "prefill_ms_mean": 0.1,
+          "decode_ms_mean": 5133.1,
+          "latency_p50_s": 5.1,
+          "latency_p95_s": 5.1,
+          "errors": 0,
+          "error_samples": []
+        },
+        {
+          "aggregate_tok_s": 50.26,
+          "per_stream_decode_tok_s": 50.43,
+          "sum_of_rates": 50.43,
+          "total_tokens": 256,
+          "wall_s": 5.1,
+          "prefill_ms_mean": 0.1,
+          "decode_ms_mean": 5076.3,
+          "latency_p50_s": 5.1,
+          "latency_p95_s": 5.1,
+          "errors": 0,
+          "error_samples": []
+        }
+      ],
+      "aggregate_tok_s": 50.26,
+      "per_stream_decode_tok_s": 50.43,
+      "sum_of_rates": 50.43,
+      "total_tokens": 256,
+      "wall_s": 5.1,
+      "prefill_ms_mean": 0.1,
+      "decode_ms_mean": 5076.3,
+      "latency_p50_s": 5.1,
+      "latency_p95_s": 5.1,
+      "errors": 0,
+      "error_samples": []
+    },
+    {
+      "n": 2,
+      "gen": 256,
+      "repeats": [
+        {
+          "aggregate_tok_s": 71.95,
+          "per_stream_decode_tok_s": 36.58,
+          "sum_of_rates": 73.16,
+          "total_tokens": 512,
+          "wall_s": 7.1,
+          "prefill_ms_mean": 0.2,
+          "decode_ms_mean": 6998.9,
+          "latency_p50_s": 7.1,
+          "latency_p95_s": 7.1,
+          "errors": 0,
+          "error_samples": []
+        },
+        {
+          "aggregate_tok_s": 72.64,
+          "per_stream_decode_tok_s": 36.86,
+          "sum_of_rates": 73.72,
+          "total_tokens": 512,
+          "wall_s": 7.0,
+          "prefill_ms_mean": 0.2,
+          "decode_ms_mean": 6945.6,
+          "latency_p50_s": 7.0,
+          "latency_p95_s": 7.0,
+          "errors": 0,
+          "error_samples": []
+        }
+      ],
+      "aggregate_tok_s": 72.64,
+      "per_stream_decode_tok_s": 36.86,
+      "sum_of_rates": 73.72,
+      "total_tokens": 512,
+      "wall_s": 7.0,
+      "prefill_ms_mean": 0.2,
+      "decode_ms_mean": 6945.6,
+      "latency_p50_s": 7.0,
+      "latency_p95_s": 7.0,
+      "errors": 0,
+      "error_samples": []
+    },
+    {
+      "n": 4,
+      "gen": 256,
+      "repeats": [
+        {
+          "aggregate_tok_s": 93.06,
+          "per_stream_decode_tok_s": 23.6,
+          "sum_of_rates": 94.41,
+          "total_tokens": 1024,
+          "wall_s": 11.0,
+          "prefill_ms_mean": 0.7,
+          "decode_ms_mean": 10847.8,
+          "latency_p50_s": 11.0,
+          "latency_p95_s": 11.0,
+          "errors": 0,
+          "error_samples": []
+        },
+        {
+          "aggregate_tok_s": 94.39,
+          "per_stream_decode_tok_s": 23.92,
+          "sum_of_rates": 95.68,
+          "total_tokens": 1024,
+          "wall_s": 10.8,
+          "prefill_ms_mean": 0.2,
+          "decode_ms_mean": 10702.9,
+          "latency_p50_s": 10.8,
+          "latency_p95_s": 10.8,
+          "errors": 0,
+          "error_samples": []
+        }
+      ],
+      "aggregate_tok_s": 94.39,
+      "per_stream_decode_tok_s": 23.92,
+      "sum_of_rates": 95.68,
+      "total_tokens": 1024,
+      "wall_s": 10.8,
+      "prefill_ms_mean": 0.2,
+      "decode_ms_mean": 10702.9,
+      "latency_p50_s": 10.8,
+      "latency_p95_s": 10.8,
+      "errors": 0,
+      "error_samples": []
+    },
+    {
+      "n": 8,
+      "gen": 256,
+      "repeats": [
+        {
+          "aggregate_tok_s": 105.81,
+          "per_stream_decode_tok_s": 13.41,
+          "sum_of_rates": 107.24,
+          "total_tokens": 2048,
+          "wall_s": 19.4,
+          "prefill_ms_mean": 0.7,
+          "decode_ms_mean": 19097.3,
+          "latency_p50_s": 19.3,
+          "latency_p95_s": 19.4,
+          "errors": 0,
+          "error_samples": []
+        },
+        {
+          "aggregate_tok_s": 105.58,
+          "per_stream_decode_tok_s": 13.41,
+          "sum_of_rates": 107.31,
+          "total_tokens": 2048,
+          "wall_s": 19.4,
+          "prefill_ms_mean": 0.3,
+          "decode_ms_mean": 19086.0,
+          "latency_p50_s": 19.4,
+          "latency_p95_s": 19.4,
+          "errors": 0,
+          "error_samples": []
+        }
+      ],
+      "aggregate_tok_s": 105.81,
+      "per_stream_decode_tok_s": 13.41,
+      "sum_of_rates": 107.24,
+      "total_tokens": 2048,
+      "wall_s": 19.4,
+      "prefill_ms_mean": 0.7,
+      "decode_ms_mean": 19097.3,
+      "latency_p50_s": 19.3,
+      "latency_p95_s": 19.4,
+      "errors": 0,
+      "error_samples": []
+    },
+    {
+      "n": 16,
+      "gen": 256,
+      "repeats": [
+        {
+          "aggregate_tok_s": 135.82,
+          "per_stream_decode_tok_s": 8.62,
+          "sum_of_rates": 137.89,
+          "total_tokens": 4096,
+          "wall_s": 30.2,
+          "prefill_ms_mean": 1.1,
+          "decode_ms_mean": 29706.1,
+          "latency_p50_s": 30.1,
+          "latency_p95_s": 30.2,
+          "errors": 0,
+          "error_samples": []
+        },
+        {
+          "aggregate_tok_s": 136.06,
+          "per_stream_decode_tok_s": 8.62,
+          "sum_of_rates": 137.96,
+          "total_tokens": 4096,
+          "wall_s": 30.1,
+          "prefill_ms_mean": 0.7,
+          "decode_ms_mean": 29689.4,
+          "latency_p50_s": 30.0,
+          "latency_p95_s": 30.1,
+          "errors": 0,
+          "error_samples": []
+        }
+      ],
+      "aggregate_tok_s": 136.06,
+      "per_stream_decode_tok_s": 8.62,
+      "sum_of_rates": 137.96,
+      "total_tokens": 4096,
+      "wall_s": 30.1,
+      "prefill_ms_mean": 0.7,
+      "decode_ms_mean": 29689.4,
+      "latency_p50_s": 30.0,
+      "latency_p95_s": 30.1,
+      "errors": 0,
+      "error_samples": []
+    },
+    {
+      "n": 32,
+      "gen": 256,
+      "repeats": [
+        {
+          "aggregate_tok_s": 144.71,
+          "per_stream_decode_tok_s": 4.55,
+          "sum_of_rates": 145.46,
+          "total_tokens": 8192,
+          "wall_s": 56.6,
+          "prefill_ms_mean": 5.5,
+          "decode_ms_mean": 56318.0,
+          "latency_p50_s": 56.6,
+          "latency_p95_s": 56.6,
+          "errors": 0,
+          "error_samples": []
+        },
+        {
+          "aggregate_tok_s": 144.36,
+          "per_stream_decode_tok_s": 4.55,
+          "sum_of_rates": 145.63,
+          "total_tokens": 8192,
+          "wall_s": 56.7,
+          "prefill_ms_mean": 3.3,
+          "decode_ms_mean": 56251.7,
+          "latency_p50_s": 56.7,
+          "latency_p95_s": 56.7,
+          "errors": 0,
+          "error_samples": []
+        }
+      ],
+      "aggregate_tok_s": 144.71,
+      "per_stream_decode_tok_s": 4.55,
+      "sum_of_rates": 145.46,
+      "total_tokens": 8192,
+      "wall_s": 56.6,
+      "prefill_ms_mean": 5.5,
+      "decode_ms_mean": 56318.0,
+      "latency_p50_s": 56.6,
+      "latency_p95_s": 56.6,
+      "errors": 0,
+      "error_samples": []
+    },
+    {
+      "n": 48,
+      "gen": 256,
+      "repeats": [
+        {
+          "aggregate_tok_s": 173.04,
+          "per_stream_decode_tok_s": 3.64,
+          "sum_of_rates": 174.72,
+          "total_tokens": 12288,
+          "wall_s": 71.0,
+          "prefill_ms_mean": 5.9,
+          "decode_ms_mean": 70330.2,
+          "latency_p50_s": 71.0,
+          "latency_p95_s": 71.0,
+          "errors": 0,
+          "error_samples": []
+        },
+        {
+          "aggregate_tok_s": 171.92,
+          "per_stream_decode_tok_s": 3.61,
+          "sum_of_rates": 173.47,
+          "total_tokens": 12288,
+          "wall_s": 71.5,
+          "prefill_ms_mean": 3.7,
+          "decode_ms_mean": 70834.7,
+          "latency_p50_s": 71.5,
+          "latency_p95_s": 71.5,
+          "errors": 0,
+          "error_samples": []
+        }
+      ],
+      "aggregate_tok_s": 173.04,
+      "per_stream_decode_tok_s": 3.64,
+      "sum_of_rates": 174.72,
+      "total_tokens": 12288,
+      "wall_s": 71.0,
+      "prefill_ms_mean": 5.9,
+      "decode_ms_mean": 70330.2,
+      "latency_p50_s": 71.0,
+      "latency_p95_s": 71.0,
+      "errors": 0,
+      "error_samples": []
+    },
+    {
+      "n": 64,
+      "gen": 256,
+      "repeats": [
+        {
+          "aggregate_tok_s": 196.88,
+          "per_stream_decode_tok_s": 3.1,
+          "sum_of_rates": 198.45,
+          "total_tokens": 16384,
+          "wall_s": 83.2,
+          "prefill_ms_mean": 7.5,
+          "decode_ms_mean": 82561.1,
+          "latency_p50_s": 83.2,
+          "latency_p95_s": 83.2,
+          "errors": 0,
+          "error_samples": []
+        },
+        {
+          "aggregate_tok_s": 202.51,
+          "per_stream_decode_tok_s": 3.19,
+          "sum_of_rates": 204.12,
+          "total_tokens": 16384,
+          "wall_s": 80.9,
+          "prefill_ms_mean": 4.9,
+          "decode_ms_mean": 80267.6,
+          "latency_p50_s": 80.9,
+          "latency_p95_s": 80.9,
+          "errors": 0,
+          "error_samples": []
+        }
+      ],
+      "aggregate_tok_s": 202.51,
+      "per_stream_decode_tok_s": 3.19,
+      "sum_of_rates": 204.12,
+      "total_tokens": 16384,
+      "wall_s": 80.9,
+      "prefill_ms_mean": 4.9,
+      "decode_ms_mean": 80267.6,
+      "latency_p50_s": 80.9,
+      "latency_p95_s": 80.9,
+      "errors": 0,
+      "error_samples": []
+    },
+    {
+      "n": 96,
+      "gen": 256,
+      "repeats": [
+        {
+          "aggregate_tok_s": 232.37,
+          "per_stream_decode_tok_s": 2.45,
+          "sum_of_rates": 235.37,
+          "total_tokens": 24576,
+          "wall_s": 105.8,
+          "prefill_ms_mean": 480.0,
+          "decode_ms_mean": 104419.8,
+          "latency_p50_s": 105.5,
+          "latency_p95_s": 105.7,
+          "errors": 0,
+          "error_samples": []
+        },
+        {
+          "aggregate_tok_s": 227.04,
+          "per_stream_decode_tok_s": 2.39,
+          "sum_of_rates": 229.88,
+          "total_tokens": 24576,
+          "wall_s": 108.2,
+          "prefill_ms_mean": 519.2,
+          "decode_ms_mean": 106911.5,
+          "latency_p50_s": 107.9,
+          "latency_p95_s": 108.2,
+          "errors": 0,
+          "error_samples": []
+        }
+      ],
+      "aggregate_tok_s": 232.37,
+      "per_stream_decode_tok_s": 2.45,
+      "sum_of_rates": 235.37,
+      "total_tokens": 24576,
+      "wall_s": 105.8,
+      "prefill_ms_mean": 480.0,
+      "decode_ms_mean": 104419.8,
+      "latency_p50_s": 105.5,
+      "latency_p95_s": 105.7,
+      "errors": 0,
+      "error_samples": []
+    },
+    {
+      "n": 128,
+      "gen": 256,
+      "repeats": [
+        {
+          "aggregate_tok_s": 271.69,
+          "per_stream_decode_tok_s": 2.16,
+          "sum_of_rates": 275.93,
+          "total_tokens": 32768,
+          "wall_s": 120.6,
+          "prefill_ms_mean": 132.0,
+          "decode_ms_mean": 118761.1,
+          "latency_p50_s": 120.2,
+          "latency_p95_s": 120.6,
+          "errors": 0,
+          "error_samples": []
+        },
+        {
+          "aggregate_tok_s": 249.21,
+          "per_stream_decode_tok_s": 1.98,
+          "sum_of_rates": 253.25,
+          "total_tokens": 32716,
+          "wall_s": 131.3,
+          "prefill_ms_mean": 455.8,
+          "decode_ms_mean": 129203.7,
+          "latency_p50_s": 130.9,
+          "latency_p95_s": 131.3,
+          "errors": 0,
+          "error_samples": []
+        }
+      ],
+      "aggregate_tok_s": 271.69,
+      "per_stream_decode_tok_s": 2.16,
+      "sum_of_rates": 275.93,
+      "total_tokens": 32768,
+      "wall_s": 120.6,
+      "prefill_ms_mean": 132.0,
+      "decode_ms_mean": 118761.1,
+      "latency_p50_s": 120.2,
+      "latency_p95_s": 120.6,
+      "errors": 0,
+      "error_samples": []
+    }
+  ]
+}

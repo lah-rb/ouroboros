@@ -326,7 +326,7 @@ the machinery exists, it is just not reachable per-workload.
 prompts, then A/B a pinned-shared-prefix wave against the current cold-prefill
 wave at matched N. Report prefill tokens saved, wall-clock delta, and whether
 the forked KV stays correct across workers (the correctness bar, not just the
-speed one). `dev/prefill_ceiling/bench.py` already measures cold prefill and
+speed one). `dev/swarm_performance/prefill_grid.py` already measures cold prefill and
 asserts `cachedPrefixTokens ~= 0`, so it is the natural base to extend.
 
 ### 11b. Revisit flow_kv_cache — built before we understood seq shifting

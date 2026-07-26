@@ -25,7 +25,7 @@ frozen-design ablation arms.
 > **CORRECTION 2026-07-26 — "saturates toward ~90 tok/s" was WRONG.** That
 > word was an extrapolation from N≤6, the only widths measured above. It does
 > not saturate there; it keeps climbing, roughly TRIPLING by N=128. Measured
-> end to end with `dev/decode_ceiling/` (256-tok gens, small prompts, 2
+> end to end with `dev/swarm_performance/` (256-tok gens, small prompts, 2
 > repeats, zero errors at every rung):
 >
 > | N | aggregate tok/s | per-stream | p50 latency |

@@ -1,0 +1,191 @@
+{
+  "server": {
+    "status": "ok",
+    "poolSize": 128,
+    "kvPoolTokens": 524288
+  },
+  "rows": [
+    {
+      "size": 1000,
+      "n": 1,
+      "prompt_tokens_total": 2489,
+      "cached_tokens": 1809,
+      "wall_s": 1.2,
+      "aggregate_prefill_tok_s": 2074.4,
+      "per_request_prefill_tok_s": 2765555.6,
+      "mean_prefill_s": 0.0,
+      "ttft_p50_s": 0.0,
+      "errors": 0
+    },
+    {
+      "size": 1000,
+      "n": 4,
+      "prompt_tokens_total": 9956,
+      "cached_tokens": 7236,
+      "wall_s": 4.0,
+      "aggregate_prefill_tok_s": 2486.2,
+      "per_request_prefill_tok_s": 1727562.5,
+      "mean_prefill_s": 0.0,
+      "ttft_p50_s": 0.0,
+      "errors": 0
+    },
+    {
+      "size": 1000,
+      "n": 16,
+      "prompt_tokens_total": 39824,
+      "cached_tokens": 28944,
+      "wall_s": 14.2,
+      "aggregate_prefill_tok_s": 2810.2,
+      "per_request_prefill_tok_s": 406481.0,
+      "mean_prefill_s": 3.71,
+      "ttft_p50_s": 3.4,
+      "errors": 0
+    },
+    {
+      "size": 1000,
+      "n": 48,
+      "prompt_tokens_total": 119472,
+      "cached_tokens": 86832,
+      "wall_s": 41.4,
+      "aggregate_prefill_tok_s": 2883.8,
+      "per_request_prefill_tok_s": 139048.2,
+      "mean_prefill_s": 16.55,
+      "ttft_p50_s": 16.18,
+      "errors": 0
+    },
+    {
+      "size": 4000,
+      "n": 1,
+      "prompt_tokens_total": 4469,
+      "cached_tokens": 1809,
+      "wall_s": 3.3,
+      "aggregate_prefill_tok_s": 1362.0,
+      "per_request_prefill_tok_s": 2743.2,
+      "mean_prefill_s": 1.63,
+      "ttft_p50_s": 1.63,
+      "errors": 0,
+      "serialization_x": 1.0
+    },
+    {
+      "size": 4000,
+      "n": 4,
+      "prompt_tokens_total": 17876,
+      "cached_tokens": 7236,
+      "wall_s": 12.3,
+      "aggregate_prefill_tok_s": 1449.4,
+      "per_request_prefill_tok_s": 1760.7,
+      "mean_prefill_s": 3.34,
+      "ttft_p50_s": 2.49,
+      "errors": 0,
+      "serialization_x": 0.53
+    },
+    {
+      "size": 4000,
+      "n": 16,
+      "prompt_tokens_total": 71504,
+      "cached_tokens": 28944,
+      "wall_s": 50.5,
+      "aggregate_prefill_tok_s": 1414.6,
+      "per_request_prefill_tok_s": 597.4,
+      "mean_prefill_s": 20.44,
+      "ttft_p50_s": 19.6,
+      "errors": 0,
+      "serialization_x": 0.52
+    },
+    {
+      "size": 4000,
+      "n": 48,
+      "prompt_tokens_total": 214512,
+      "cached_tokens": 86832,
+      "wall_s": 151.9,
+      "aggregate_prefill_tok_s": 1412.5,
+      "per_request_prefill_tok_s": 210.0,
+      "mean_prefill_s": 71.16,
+      "ttft_p50_s": 71.53,
+      "errors": 0,
+      "serialization_x": 0.52
+    },
+    {
+      "size": 16000,
+      "n": 1,
+      "prompt_tokens_total": 12389,
+      "cached_tokens": 1809,
+      "wall_s": 12.9,
+      "aggregate_prefill_tok_s": 963.2,
+      "per_request_prefill_tok_s": 1092.6,
+      "mean_prefill_s": 11.34,
+      "ttft_p50_s": 11.34,
+      "errors": 0,
+      "serialization_x": 1.0
+    },
+    {
+      "size": 16000,
+      "n": 4,
+      "prompt_tokens_total": 49556,
+      "cached_tokens": 7236,
+      "wall_s": 53.4,
+      "aggregate_prefill_tok_s": 928.1,
+      "per_request_prefill_tok_s": 565.4,
+      "mean_prefill_s": 28.73,
+      "ttft_p50_s": 28.33,
+      "errors": 0,
+      "serialization_x": 0.85
+    },
+    {
+      "size": 16000,
+      "n": 16,
+      "prompt_tokens_total": 198224,
+      "cached_tokens": 28944,
+      "wall_s": 217.8,
+      "aggregate_prefill_tok_s": 910.3,
+      "per_request_prefill_tok_s": 220.8,
+      "mean_prefill_s": 109.52,
+      "ttft_p50_s": 109.25,
+      "errors": 0,
+      "serialization_x": 0.83
+    },
+    {
+      "size": 48000,
+      "n": 1,
+      "prompt_tokens_total": 33479,
+      "cached_tokens": 1809,
+      "wall_s": 49.6,
+      "aggregate_prefill_tok_s": 675.5,
+      "per_request_prefill_tok_s": 728.3,
+      "mean_prefill_s": 45.97,
+      "ttft_p50_s": 45.97,
+      "errors": 0,
+      "serialization_x": 1.0
+    },
+    {
+      "size": 48000,
+      "n": 4,
+      "prompt_tokens_total": 133916,
+      "cached_tokens": 7236,
+      "wall_s": 209.9,
+      "aggregate_prefill_tok_s": 638.1,
+      "per_request_prefill_tok_s": 366.5,
+      "mean_prefill_s": 123.64,
+      "ttft_p50_s": 123.67,
+      "errors": 0,
+      "serialization_x": 0.88
+    }
+  ],
+  "skipped": [
+    [
+      16000,
+      48,
+      768000
+    ],
+    [
+      48000,
+      16,
+      768000
+    ],
+    [
+      48000,
+      48,
+      2304000
+    ]
+  ]
+}

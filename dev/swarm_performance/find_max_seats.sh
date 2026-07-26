@@ -61,7 +61,7 @@ try_seats(){
   log "  server up with $N seats — now proving it DECODES at that width"
   # (c) a real concurrent wave. A healthy-looking server that dies on first
   # decode is not an allocated server.
-  if (cd "$ROOT" && timeout 900 uv run python dev/decode_ceiling/bench.py \
+  if (cd "$ROOT" && timeout 900 uv run python dev/swarm_performance/decode_ladder.py \
         --ladder "$N" --repeats 1 --gen 64 --out "$OUT/seatprobe_$N.json" \
         >> "$LOG" 2>&1); then
     local ERRS; ERRS=$(python3 -c "
@@ -95,10 +95,10 @@ if lo not in rungs: rungs.append(lo)
 print(','.join(str(n) for n in sorted(set(rungs))))")
 log "=== throughput ladder at $LO seats: $LADDER ==="
 if try_seats "$LO"; then
-  (cd "$ROOT" && timeout 5400 uv run python dev/decode_ceiling/bench.py \
+  (cd "$ROOT" && timeout 5400 uv run python dev/swarm_performance/decode_ladder.py \
       --ladder "$LADDER" --repeats 2 >> "$OUT/decode_ceiling3.log" 2>&1)
   log "  bench exit=$?"
-  (cd "$ROOT" && uv run python dev/decode_ceiling/plot.py >> "$OUT/decode_ceiling3.log" 2>&1)
+  (cd "$ROOT" && uv run python dev/swarm_performance/plot.py >> "$OUT/decode_ceiling3.log" 2>&1)
   grep -E "^ *[0-9]+ |^PEAK|^batching|^sum-of-rates" "$OUT/decode_ceiling3.log" | tail -18 | tee -a "$LOG"
 else
   log "!! could not re-establish $LO seats for the ladder"

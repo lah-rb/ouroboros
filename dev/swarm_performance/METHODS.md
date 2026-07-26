@@ -1,3 +1,7 @@
+> Part of dev/swarm_performance/ — see **FINDINGS.md** for the consolidated
+> capacity model across all four experiments. This file is the decode-ladder
+> protocol and its retraction record.
+
 # Decode ceiling — experimental methods
 
 **Question.** What is the maximum aggregate decode throughput of the batched
@@ -100,10 +104,10 @@ cd llmvp && echo gpt-oss-120b-a5-decodeceiling > active_config.txt
 #    (stop/start per your normal server procedure; confirm health poolSize=128)
 
 # 2. run the ladder
-python dev/decode_ceiling/bench.py --repeats 2
+python dev/swarm_performance/decode_ladder.py --repeats 2
 
 # 3. graph it
-python dev/decode_ceiling/plot.py
+python dev/swarm_performance/plot.py
 ```
 
 Outputs `results.json` and `ceiling.png` beside the script.

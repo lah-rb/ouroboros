@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prefill ceiling: does concurrent prefill parallelize, and how far?
 
-The decode ladder (dev/decode_ceiling/) answered "how many seats" and found
+The decode ladder (dev/swarm_performance/) answered "how many seats" and found
 seats nearly free — but every real workload we run is PREFILL-dominated, and
 that axis has never been measured across a grid. The 2026-07-26 corpus regen
 made the gap obvious: 48 concurrent streams delivered ~100 tok/s effective
