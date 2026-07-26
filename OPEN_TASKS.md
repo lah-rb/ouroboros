@@ -240,7 +240,48 @@ static/dynamic split + stop defaulting + kv_base + tracker.start that
 surgeries this week (seat-leak drain, health fields, KV preflight guard). Do
 not start until those have soaked under real load for several days.
 
-## 10. Small items (grab-bag)
+## 10. Transient inference errors kill missions at step one (COST A 7h RUN)
+
+**2026-07-26, diagnosed from a live failure.** The mistral boss run terminated
+after 5 minutes with zero goals:
+
+```
+[design_initial] Inference error: All inference instances are busy (active=1, limit=1)
+[failed] Failed to design architecture and derive goals
+```
+
+A pressure probe had leaked a server-side prefill (its client timed out at
+1802s but never CANCELLED, so a 57k-token eval kept the single seat). The boss
+asked for that seat, got "busy", and died. "Busy" is definitionally transient —
+the server raises it only after `backend_timeout` — so the seat was free
+minutes later. The relaunch ran fine.
+
+**Mechanism.** `design_initial`'s resolver cannot tell a substantive failure
+from an infrastructure one:
+
+```cue
+{condition: "result.tokens_generated > 0", transition: "parse_architecture"},
+{condition: "true",                        transition: "failed"},   // terminal
+```
+
+"The model generated nothing" and "we never got an instance" both land on
+`failed`. **5 steps share this shape** (design_and_plan ×2, replan ×2,
+plan_research ×1) — all PLANNING steps, i.e. exactly the ones whose failure is
+terminal for the whole mission.
+
+**Recommended fix — the effect layer, not the flows.** Retry-with-backoff on
+transient inference errors belongs in `agent/effects/inference.py`, where it
+fixes all five (and every future) call site at once; making each flow author
+handle "busy" is how one gets missed. Distinguish transient (busy / no
+instance / connection reset) from substantive (a real empty generation) and
+retry only the former, bounded, with the existing watchdog as the outer bound.
+Flow-level retries are the fallback if per-step policy turns out to differ.
+
+**Also fix:** `dev/context_pressure_probe.py` must cancel server-side on client
+timeout. An abandoned socket leaves the server working, which is what
+manufactured the "busy" in the first place.
+
+## 11. Small items (grab-bag)
 
 - Agent-side identical-retry backoff: the KV-eviction and anti-gut loops
   both retried the same dispatch unchanged for hours. Auto-refresh bounds
@@ -254,7 +295,7 @@ not start until those have soaked under real load for several days.
   resident-seq-cache-implemented).
 - Branch `ingest-workspace-and-tb-comparison` merge decision.
 
-## 11. Parked until triggered (do NOT start unprompted)
+## 12. Parked until triggered (do NOT start unprompted)
 
 - **Polish/creativity gate** (rank 60 reserved in PHASE_RANKS): a
   `flows/code_core/polish_gate.cue` modeled on quality_gate.cue (review →
