@@ -291,7 +291,67 @@ Flow-level retries are the fallback if per-step policy turns out to differ.
 timeout. An abandoned socket leaves the server working, which is what
 manufactured the "busy" in the first place.
 
-## 11. Small items (grab-bag)
+## 11. Shared prefix cache — the biggest untapped serving lever
+
+**Finding (2026-07-26).** There is NO opportunistic prefix cache. Reuse is
+entirely via explicitly pinned seq bands:
+
+    seq 0            SEQ_WORKING  live generation
+    seq 1            SEQ_STATIC   static prefix, forked per seat (memory_seq_cp)
+    [2, 2+flow)      flow band, caller must pass flow_key + static_prefix
+    [snap_base, ..)  session snapshots
+    [reason_base,..) pinned reasoning heads
+
+`prepare_seat` CLEARS a seat (`memory_seq_rm(seq, 0, -1)`) before reuse, so no
+request ever hits another request's KV. Two consequences:
+
+- **Seat count cannot raise the hit rate.** The static prefix is forked to
+  every seat regardless of width; there is no cross-seat sharing to accelerate.
+  (This refutes the intuition that 48 seats would reuse a common prefix faster
+  than 16 — worth recording because it is a reasonable guess.)
+- **Repeated prompts prefill cold every time.** Measured on the counterfactual
+  corpus, where each turn is sent 3x at different reasoning levels:
+  **1.03M of 1.54M prompt tokens (67%) are redundant re-reads.**
+
+### 11a. The swarm case — where this is worth the most
+
+A contract-swarm fan-out runs N independent workers that share a large common
+context (blueprint, contracts, interface vocabulary) and differ only in their
+symbol. Today each worker prefills that shared context independently, so a
+20-worker wave pays for it 20 times. Pinning it ONCE and forking to each worker
+seat is exactly what `SEQ_STATIC` already does for the global static prefix —
+the machinery exists, it is just not reachable per-workload.
+
+**Experiment to queue:** measure the shared fraction of a real fan-out's worker
+prompts, then A/B a pinned-shared-prefix wave against the current cold-prefill
+wave at matched N. Report prefill tokens saved, wall-clock delta, and whether
+the forked KV stays correct across workers (the correctness bar, not just the
+speed one). `dev/prefill_ceiling/bench.py` already measures cold prefill and
+asserts `cachedPrefixTokens ~= 0`, so it is the natural base to extend.
+
+### 11b. Revisit flow_kv_cache — built before we understood seq shifting
+
+`flow_kv_cache: false` everywhere today because **save_state churn corrupts the
+120B static KV over a run** (decode -3 at Pos 1809), and the 2026-06 swa_full
+re-enable REGRESSED under game_challenge and was reverted.
+
+But that verdict is about the MECHANISM, not the idea. flow_kv_cache was built
+on `save_state`/`load_state`; everything learned since — the resident-seq cache,
+`memory_seq_cp`/`memory_seq_rm` forking, the seq-band planner — says per-sequence
+ops are the safe primitive and full-context save_state is the fragile one
+(§4 retires the legacy save_state session path for exactly this reason).
+
+**So: flow_kv_cache v2 on seq ops.** Same goal (pin a reusable prefix per flow),
+different primitive (fork from a pinned seq rather than save/restore a whole
+context). If that holds up it is a general framework lever, not a per-workload
+hack — every fan-out, every repeated-prompt batch, and the stateless-completion
+gap in 11 all get it at once.
+
+**Prerequisite:** stateless completions currently have NO safe reuse path on
+gpt-oss (flow_kv_cache unsafe, resident_seq_cache is session-scoped). That gap
+is the thing 11b would close.
+
+## 12. Small items (grab-bag)
 
 - Agent-side identical-retry backoff: the KV-eviction and anti-gut loops
   both retried the same dispatch unchanged for hours. Auto-refresh bounds
@@ -305,7 +365,7 @@ manufactured the "busy" in the first place.
   resident-seq-cache-implemented).
 - Branch `ingest-workspace-and-tb-comparison` merge decision.
 
-## 12. Parked until triggered (do NOT start unprompted)
+## 13. Parked until triggered (do NOT start unprompted)
 
 - **Polish/creativity gate** (rank 60 reserved in PHASE_RANKS): a
   `flows/code_core/polish_gate.cue` modeled on quality_gate.cue (review →
