@@ -1,0 +1,112 @@
+# DECODE-CEILING EXPERIMENT CONFIG (dev/decode_ceiling/) — not for production.
+#
+# Identical to gpt-oss-120b-a5-swarm-393k EXCEPT max_concurrent_requests: 128.
+# Purpose: allocate enough working seats that CLIENT concurrency, not server
+# admission, is the independent variable across the whole N ladder (1..128).
+# The production configs cap at 32, which is why every prior sweep stopped
+# there and why the "~200 tok/s at N=64" claim was never testable.
+#
+# Seat legality: n_seq_max = n_working + personas + reasoning_levels, and
+# llama.cpp's LLAMA_MAX_SEQ is 256, so 128 working seats + bands fits.
+# KV: cells are shared (kv_unified) and consumed per ACTUAL token, so idle
+# seats cost nothing — 128 x ~300 tokens is ~38k of the 393,216-cell pool.
+# CONTEXT-LADDER PROBE VARIANT (393k): a5-swarm with the shared cell
+# pool raised to 393216. Geometry: 72KB/token swa_full → KV ≈ 27GB.
+# Per-STREAM positions stay ≤ 131072 (trained range); n_ctx here is the
+# unified CELL POOL across streams, not a positional limit.
+# CONTRACT-SWARM config (BATCHED): gpt-oss-120b-a5 for the contract-swarm
+# structural runs — n=symbols concurrent worker completions
+# (swarm_generate_symbols fans out one stateless completion per symbol,
+# uncapped: EOS ends generation, max_tokens_default is the ramble
+# ceiling) plus the mission's own session traffic.
+#
+# Budget math (kv_unified: n_ctx is the SHARED cell pool across ALL
+# working seats; cells are consumed per ACTUAL token — max_tokens never
+# reserves anything — measured 2026-07-20, dev/serving_perf_reference.md):
+# the client-side pool-fit gate in swarm_generate_symbols admits the full
+# n=symbols fan-out only when estimated read context + generation margin
+# fits 80% of n_ctx, and waves otherwise, so W=32 is an admission
+# ceiling, not a promise of 32 huge streams. n_ctx 131072 = the
+# known-good single-context footprint on this box (swa_full KV ≈ 9.2G;
+# see the gameab config's wired-ceiling math). Aggregate decode rises
+# monotonically with stream count (56→89 tok/s at N=1→6; ~200 at N=64);
+# early-EOS workers release cells + decode share back to the big ones.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 131072
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "gpt-oss-120b-a5"
+  family: "harmony"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
+  n_ctx: 393216
+  # model max context (trained per-stream range) vs n_ctx (the swarm
+  # max context: the shared KV cell pool). No single stream may exceed
+  # this, however large the pool. (2026-07-24 context-ladder split.)
+  model_max_context: 131072
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: true
+  thinking_mode: medium
+  swa_full: true
+  kv_unified: true
+  flow_kv_cache: false
+  session_full_replay: true
+  resident_seq_cache: true
+  context_refresh_drain_s: 300
+  reasoning_head_swap: true
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  # Ample default — design_and_plan and the contract author run at high/
+  # medium reasoning and must not be starved (a low default silently cut
+  # the architecture generation to an EMPTY response: gpt-oss burns the
+  # budget on CoT before emitting content). Swarm WORKERS carry no
+  # override, so this default is also their ceiling — it only binds on a
+  # ramble (EOS ends honest work), and the worker layer names that
+  # failure honestly instead of retrying it.
+  max_tokens_default: 32768
+  temperature_default: 1.0
+  top_p: 1.0
+  top_k: 0
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.05
+  session_temp_floor: 0.35
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/gpt-oss-120b-a5.tokens.bin"
+  token_limit: 32768
+
+resources:
+  decode_mode: "batched"
+  cpu_threads: 15
+  # W: admission ceiling for the n=symbols fan-out (engine proven to 64
+  # streams). The client-side pool-fit gate is the real load governor.
+  max_concurrent_requests: 128
+  jit_concurrency_limit: null
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
