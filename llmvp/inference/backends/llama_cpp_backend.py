@@ -17,6 +17,7 @@ import contextlib
 import ctypes
 import dataclasses
 import logging
+from core.config import resolve_working_seats
 import os
 import time
 from collections import OrderedDict
@@ -149,7 +150,7 @@ class LlamaCppBackend(BaseBackend):
     def __init__(self, config: Any):
         self._primary_instance: Any = None  # Owns the model weights
         self._pool_queue: Optional[asyncio.Queue] = None
-        self._pool_size = config.resources.max_concurrent_requests
+        self._pool_size = resolve_working_seats(config.resources)
         # Concurrency architecture: "pool" (N contexts) vs "batched" (ONE
         # context, N working seqs, one llama_decode per step — the
         # llama-server slot pattern). Config-gated; the pool path is not

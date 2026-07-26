@@ -53,6 +53,7 @@ class ModelConfig(BaseModel):
         if self.model_max_context and self.model_max_context > 0:
             return min(int(self.n_ctx), int(self.model_max_context))
         return int(self.n_ctx)
+
     # Keep the FULL KV for sliding-window-attention layers instead of a 128-token
     # window. Required to make save_state/load_state (and flow_kv_cache) sound on
     # SWA models like gpt-oss-120b: without it the static prefix (~1809 tok) far
@@ -393,7 +394,18 @@ class ResourcesConfig(BaseModel):
     """Configuration for system resources."""
 
     cpu_threads: int
-    max_concurrent_requests: int
+    # OPTIONAL as of 2026-07-26 — omit it to run uncapped. Seats were measured
+    # to be nearly free (128 concurrent streams consume ~2.7% of a 393k cell
+    # pool; the ladder ran 1->128 with zero errors and aggregate still rising
+    # at 271.7 tok/s), so a fixed admission cap does no useful work: the REAL
+    # limiter is pool cells, enforced by the swarm pool-fit gate against
+    # estimated context. The old default of 32 was costing ~40% of achievable
+    # throughput (144.7 tok/s at 32 vs 202.5 at 64).
+    #
+    # The machinery is kept, not deleted: setting an explicit value still
+    # pins the seat count, which is what you want for a controlled A/B, a
+    # latency-bounded workload, or pool mode.
+    max_concurrent_requests: Optional[int] = None
     # Concurrency architecture. "pool" (default) = N independent contexts,
     # one per slot — the proven production shape, but decode across contexts
     # NEVER overlaps usefully on Metal (one shared MTLCommandQueue) and
@@ -446,6 +458,29 @@ class LoggingConfig(BaseModel):
     directory: Path = Path("./logs")
 
 
+# Uncapped default for batched mode: the highest width MEASURED to allocate
+# and decode clean (2026-07-26 ladder, 1->128, zero errors). NOT
+# LLAMA_MAX_SEQ-minus-bands — an untested width is not a default.
+DEFAULT_BATCHED_SEATS = 128
+# Pool mode allocates a FULL KV context per slot, so "uncapped" there would be
+# a memory bomb. Its safe default is a single slot.
+DEFAULT_POOL_SLOTS = 1
+
+
+def resolve_working_seats(resources) -> int:
+    """Effective concurrent-request width from a resources object.
+
+    Takes the resources object rather than the Config so it works with the
+    lightweight namespace doubles the backend tests build — they set
+    ``max_concurrent_requests`` explicitly, which is all this needs.
+    """
+    n = getattr(resources, "max_concurrent_requests", None)
+    if n is not None:
+        return n
+    mode = getattr(resources, "decode_mode", "pool")
+    return DEFAULT_BATCHED_SEATS if mode == "batched" else DEFAULT_POOL_SLOTS
+
+
 class Config(BaseModel):
     """Root configuration object containing all settings."""
 
@@ -482,7 +517,7 @@ class Config(BaseModel):
             raise ValueError(
                 f"resources.decode_mode must be 'pool' or 'batched', got {mode!r}"
             )
-        if mode == "pool" and self.resources.max_concurrent_requests > 4:
+        if mode == "pool" and self.working_seats > 4:
             # The alternating pool allocates ONE FULL llama context (weights-
             # shared, KV-independent) per concurrent slot. High concurrency is
             # the batched engine's job; a big pool is a memory bomb — the
@@ -492,7 +527,7 @@ class Config(BaseModel):
             # death mid-allocation. Fail at load, name the fix.
             raise ValueError(
                 f"decode_mode 'pool' with max_concurrent_requests="
-                f"{self.resources.max_concurrent_requests}: the alternating "
+                f"{self.working_seats}: the alternating "
                 f"pool allocates a full KV context PER SLOT (> 4 is almost "
                 f"certainly a misconfiguration — use decode_mode 'batched' "
                 f"for high concurrency, or drop max_concurrent_requests)"
@@ -535,10 +570,21 @@ class Config(BaseModel):
             )
         raise KeyError(f"unknown persona '{key}' (declared: {sorted(self.personas)})")
 
+    # Uncapped default for batched mode: the highest width MEASURED to
+    # allocate and decode clean (2026-07-26). Not LLAMA_MAX_SEQ (256) minus
+    # bands — untested widths are not defaults.
+    # Pool mode allocates a FULL KV context per slot, so "uncapped" there
+    # would be a memory bomb; its safe default is a single slot.
+
+    @property
+    def working_seats(self) -> int:
+        """Effective concurrent-request width, resolving the optional cap."""
+        return resolve_working_seats(self.resources)
+
     def slot_persona_names(self) -> List[str]:
         """Persona name per pool slot, validated. Absent slot_personas =>
         every slot is "default" (pre-persona behavior)."""
-        n = self.resources.max_concurrent_requests
+        n = self.working_seats
         names = self.resources.slot_personas
         if names is None:
             return ["default"] * n

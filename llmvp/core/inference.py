@@ -1023,7 +1023,7 @@ def get_health_status() -> dict:
     if backend is None:
         return {
             "status": "initializing",
-            "pool_size": config.resources.max_concurrent_requests,
+            "pool_size": config.working_seats,
             "available_instances": 0,
         }
 

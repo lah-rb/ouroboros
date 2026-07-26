@@ -116,7 +116,13 @@ resources:
   cpu_threads: 15
   # W: admission ceiling for the n=symbols fan-out (engine proven to 64
   # streams). The client-side pool-fit gate is the real load governor.
-  max_concurrent_requests: 32
+  # UNCAPPED (field omitted) as of 2026-07-26 — resolves to the measured-safe
+  # default of 128 working seats. The old explicit 32 was costing ~40% of
+  # achievable throughput (144.7 tok/s at N=32 vs 202.5 at N=64, ladder in
+  # dev/decode_ceiling/). Seats are nearly free; the REAL limiter is pool
+  # cells, enforced by the swarm pool-fit gate against estimated context.
+  # Set an explicit value to pin the width for a controlled A/B or a
+  # latency-bounded workload.
   jit_concurrency_limit: null
 
 tools:

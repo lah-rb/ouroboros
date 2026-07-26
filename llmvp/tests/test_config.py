@@ -724,3 +724,31 @@ def test_pool_mode_rejects_high_concurrency():
             load_config(p)
     finally:
         p.unlink()
+
+
+def test_max_concurrent_requests_is_optional_and_defaults_by_mode():
+    """Uncapped by default as of 2026-07-26. Seats were measured nearly free
+    (128 streams = ~2.7% of a 393k pool, ladder clean 1->128), so a fixed
+    admission cap does no useful work — the real limiter is pool cells. The
+    old default of 32 cost ~40% of achievable throughput.
+
+    Pool mode is NOT uncapped: it allocates a full KV context per slot, which
+    is how the 2026-07-24 machine crash happened.
+    """
+    from types import SimpleNamespace
+
+    from core.config import (
+        DEFAULT_BATCHED_SEATS,
+        DEFAULT_POOL_SLOTS,
+        resolve_working_seats,
+    )
+
+    batched = SimpleNamespace(max_concurrent_requests=None, decode_mode="batched")
+    assert resolve_working_seats(batched) == DEFAULT_BATCHED_SEATS == 128
+
+    pool = SimpleNamespace(max_concurrent_requests=None, decode_mode="pool")
+    assert resolve_working_seats(pool) == DEFAULT_POOL_SLOTS == 1
+
+    # an explicit value still pins the width — the machinery is kept
+    pinned = SimpleNamespace(max_concurrent_requests=3, decode_mode="batched")
+    assert resolve_working_seats(pinned) == 3
