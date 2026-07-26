@@ -1,0 +1,1969 @@
+{
+  "id": "ce755d613751",
+  "status": "paused",
+  "objective": "Build a text adventure game in Python that is genuinely fun to play. The engine loads world data from YAML files defining rooms, items, NPCs, monsters, and connections. Implement a command parser handling movement (go north/south/east/west), inventory management (take, drop, use, examine), NPC interaction (talk to), combat commands (attack, flee), and look/status/help/quit. Add a turn-based combat system: the player has health and attack power, weapons and armor found in the world change combat stats when equipped, healing items can be used mid-fight, and monsters guard specific rooms and fight back with simple distinct behaviors. Include a final boss with two phases and a weakness to a special item hidden in the world — beating the boss wins the game, and dying ends the run with an honest defeat screen and the option to restart. Manage game state including player location, stats, equipment, inventory, room state changes, NPC dialogue progression, and defeated monsters. Support save and load of full game state to JSON. Create a playable demo world with at least 8 rooms, 5 items (including at least one weapon, one armor piece, one healing item, and the boss-weakness item), 2 NPCs with branching dialogue that hints at the boss weakness, 3 regular monsters, and the final boss. The game must be runnable from the command line, produce engaging descriptive text with clear combat narration, and be winnable in a reasonable playthrough by following the NPC hints.\n",
+  "principles": [],
+  "goals": [
+    {
+      "id": "38aeb4a601ce",
+      "description": "Data classes for game entities: Room, Item, Weapon, Armor, HealingItem, NPC, Monster, Boss, Player, GameState",
+      "reports_archived": 1,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T09:11:31.122005+00:00",
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "models.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "d6b80e17a310",
+      "description": "Load world data from YAML files into game entities. Validates structure and builds object graph.",
+      "reports_archived": 1,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T09:11:31.122151+00:00",
+      "type": "structural",
+      "status": "incomplete",
+      "associated_files": [
+        "data_loader.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": true,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "2e4ee789ebae",
+      "description": "Parse user input into structured commands. Handles movement, inventory, interaction, combat, and system commands.",
+      "reports_archived": 2,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T12:16:02.388438+00:00",
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "parser.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "dff4ef23d82b",
+      "description": "Turn-based combat system: attack resolution, damage calculation, monster behaviors, boss phases, and weakness mechanics.",
+      "reports_archived": 2,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T09:12:29.720567+00:00",
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "combat.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": true,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "56bdf83525ea",
+      "description": "Manage mutable game state: player location, inventory, equipment, room state, NPC dialogue progress, defeated monsters. Serialization for save/load.",
+      "reports_archived": 1,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T09:11:31.122371+00:00",
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "game_state.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "505fd3b13068",
+      "description": "Core game loop: process commands, update state, render descriptions, handle movement, item interactions, NPC dialogue, and combat initiation.",
+      "reports_archived": 2,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T09:14:17.059044+00:00",
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "engine.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": true,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "87276c481427",
+      "description": "YAML definition of the demo world: rooms, connections, items, NPCs, monsters, boss, and starting state.",
+      "reports_archived": 1,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T09:11:31.122474+00:00",
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "world.yaml"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "aada8010a5df",
+      "description": "Entry point: initialize game, load world, start engine loop, handle save/load menu.",
+      "reports_archived": 2,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T09:13:15.162624+00:00",
+      "type": "structural",
+      "status": "complete",
+      "associated_files": [
+        "main.py"
+      ],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": true,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "9a607bb28d4a",
+      "description": "Program starts cleanly and exits without errors",
+      "reports_archived": 12,
+      "attempts_archived": 2,
+      "last_completed_at": "2026-07-26T15:13:53.524462+00:00",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": "deterministic",
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "3acad39042b7",
+      "description": "YAML world data loads without errors and creates valid game entities",
+      "reports_archived": 1,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T09:52:02.150930+00:00",
+      "type": "functional",
+      "status": "complete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": true,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "46d8e3ad42a9",
+      "description": "Player can move between connected rooms using directional commands (go north/south/east/west)",
+      "reports_archived": 1,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T09:59:07.712434+00:00",
+      "type": "functional",
+      "status": "complete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": true,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "b95269a9e43e",
+      "description": "Player can examine current room to see description and available exits",
+      "reports_archived": 1,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T10:07:55.355543+00:00",
+      "type": "functional",
+      "status": "complete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": true,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "b960e0f9d9ac",
+      "description": "Player can look at items in the room and examine them for details",
+      "reports_archived": 1,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T10:21:04.220703+00:00",
+      "type": "functional",
+      "status": "complete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": true,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "55bf7b952ac1",
+      "description": "Player can take items from rooms and drop items from inventory",
+      "reports_archived": 1,
+      "attempts_archived": 0,
+      "last_completed_at": "2026-07-26T10:28:54.801558+00:00",
+      "type": "functional",
+      "status": "complete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": true,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "5ed04e128a95",
+      "description": "Player can view their inventory with use command for usable items",
+      "reports_archived": 4,
+      "attempts_archived": 1,
+      "last_completed_at": "2026-07-26T11:53:02.494561+00:00",
+      "type": "functional",
+      "status": "complete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": true,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "81ef4167908f",
+      "description": "Player can equip weapons and armor which modify combat stats",
+      "reports_archived": 7,
+      "attempts_archived": 2,
+      "last_completed_at": "2026-07-26T13:37:23.466616+00:00",
+      "type": "functional",
+      "status": "complete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": true,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "efd3197b6c4f",
+      "description": "Player can use healing items to restore health during combat",
+      "reports_archived": 7,
+      "attempts_archived": 2,
+      "last_completed_at": "2026-07-26T15:21:45.992352+00:00",
+      "type": "functional",
+      "status": "complete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": true,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "34b72597aed0",
+      "description": "Player can talk to NPCs and receive branching dialogue responses",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [
+        {
+          "flow": "interact",
+          "status": "failed",
+          "summary": "The program executed successfully: the player started in the Entrance Hall, moved east to the Overgrown Garden, and initiated a conversation with the Old Gardener who began revealing information about the dark knight's weakness. The interaction completed without errors, leaving the player in the Overgrown Garden with the dialogue partially delivered.",
+          "headline": "NPC dialogue does not advance; only one line observed.",
+          "files_affected": [],
+          "checks_passed": [],
+          "checks_failed": [],
+          "terminal_output": "[Turn 0] (shell_command)\n  > python main.py\nWelcome to the Dungeon Adventure!\nType 'help' for a list of commands.\n\nEntrance Hall\n-------------\nA dimly lit hall with flickering torches on the walls. The air is musty with age. A large wooden door stands to the north, and a narrow passage leads east.\n\nYou see:\n  - Rusty Sword\n\nExits:\n  - North to Armory\n  - East to Overgrown Garden\n\n>\n[Turn 1] (send_input)\n  > go east\nYou move east to the Overgrown Garden.\n\nOvergrown Garden\n----------------\nOnce a beautiful garden, now overrun with weeds. A stone path leads west back to the entrance, and a dark corridor heads south.\n\nYou see:\n  - Health Potion\n\nPresent:\n  - Old Gardener\n\nExits:\n  - West to Entrance Hall\n  - South to Ancient Library\n\n>\n[Turn 2] (send_input)\n  > talk to old_gardener\nOld Gardener says: The dark knight who rules this place has one weakness...\n\n>",
+          "recommended_flow": "",
+          "target_file": "",
+          "target_symbol": "",
+          "related_symbols": [],
+          "change_spec": "",
+          "diagnosis_kind": "",
+          "module_statement": "",
+          "timestamp": "2026-07-26T15:21:45.989090+00:00"
+        },
+        {
+          "flow": "diagnose_issue",
+          "status": "diagnosed",
+          "summary": "The diagnose_issue execution identified a structural mismatch: world.yaml stores NPC dialogue as a list of dicts with 'text' and 'next' keys, but the NPC model's type hints imply it expects a simpler list of str/int/None values. The code currently works by accident because raw YAML dicts are preserved, but this creates a latent type inconsistency that could break if the data handling changes. Current state: functional but fragile due to the mismatch between implementation and type expectations.",
+          "headline": "",
+          "files_affected": [],
+          "checks_passed": [],
+          "checks_failed": [],
+          "terminal_output": "",
+          "recommended_flow": "file_ops",
+          "target_file": "data_loader.py",
+          "target_symbol": "load_world",
+          "related_symbols": [
+            "models.py:NPC",
+            "engine.py:GameEngine.handle_talk"
+          ],
+          "change_spec": "Update load_world to transform the raw YAML dialogue entries (dicts with 'text' and 'next' keys) into the expected format for NPC.dialogue. The current code works because the raw dicts are passed through, but this is implicit and fragile. The dialogue should be a list of dicts where each dict has at least a 'text' key, matching how handle_talk consumes it.",
+          "diagnosis_kind": "fix",
+          "module_statement": "",
+          "timestamp": "2026-07-26T15:37:48.967723+00:00"
+        }
+      ],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "ecda942be135",
+      "description": "NPC dialogue provides hints about boss weakness",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "c3ae6af1ff34",
+      "description": "Player can initiate combat with monsters by entering their room",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "e9fd19ec05bb",
+      "description": "Combat system resolves attacks with damage calculation based on equipped gear",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "bd43ae02827a",
+      "description": "Monsters attack back with distinct behaviors during combat",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "99ab3defb778",
+      "description": "Player can flee from combat with a chance of success",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "8fc14b183480",
+      "description": "Player can view their current health and equipment status",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "0f11a79d693c",
+      "description": "Boss has two phases with different behaviors",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "b5c155102c01",
+      "description": "Boss has a weakness to a special item that increases damage significantly",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "7f70c64463b0",
+      "description": "Defeated monsters remain dead and do not respawn",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "0b7712160dcb",
+      "description": "Player can save game state to JSON file",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "c7051da3afc8",
+      "description": "Player can load game state from JSON file and continue playing",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "997ff604f407",
+      "description": "Game displays defeat screen when player health reaches zero",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "b0c5f477a6c1",
+      "description": "Game displays victory screen when boss is defeated",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "4dfc892e249d",
+      "description": "Player can restart the game after defeat or victory",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "5b75eb3cc472",
+      "description": "Help command displays available commands and basic instructions",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    },
+    {
+      "id": "21f2d148171e",
+      "description": "Quit command exits the game cleanly",
+      "reports_archived": 0,
+      "attempts_archived": 0,
+      "last_completed_at": "",
+      "type": "functional",
+      "status": "incomplete",
+      "associated_files": [],
+      "reports": [],
+      "failed_attempts": [],
+      "interaction_mode": null,
+      "origin": "design",
+      "finding_signature": "",
+      "shape_refutes": 0,
+      "repro_commands": [],
+      "verification_evidence": "",
+      "import_reviewed": false,
+      "capability_absent": false,
+      "acceptance_checks": [],
+      "acceptance_grounded": false,
+      "acceptance_conflicts": {},
+      "regression_reopened": false,
+      "regression_autocompleted": false,
+      "search_findings": "",
+      "repair_tests": {},
+      "expected_error": ""
+    }
+  ],
+  "notes": [
+    {
+      "id": "aa36aca0",
+      "content": "Import scheme: flat. Run: python main.py. Smoke: echo quit | python main.py. Files: models.py, data_loader.py, parser.py, combat.py, game_state.py, world.yaml, main.py.\nData shapes:\n  world.yaml → data_loader.py: Mapping with top-level keys: rooms, items, npcs, monsters, boss, start_room_id. Rooms reference items/NPCs/monsters by id.\nState contracts:\n  GameState (owner models.py, consumers engine.py, game_state.py, combat.py): {player: Player, current_room_id: str, inventory: list of item_ids, equipped: {slot: item_id}, room_states: {room_id: {items: [item_id], npcs: [npc_id], monster: monster_id | null}}, npc_dialogue_progress: {npc_id: int}, defeated_monsters: set of monster_ids, boss_defeated: bool}\n  Player (owner models.py, consumers engine.py, combat.py, game_state.py): {health: int, max_health: int, attack: int, defense: int, inventory: list of item_ids, equipped: {slot: item_id}}\n  load_world() return / GameEngine.__init__ input (owner data_loader.py, consumers engine.py, main.py): {rooms: {room_id: Room}, items: {item_id: Item}, npcs: {npc_id: NPC}, monsters: {monster_id: Monster}, boss: Boss, start_room_id: str} — exactly these top-level keys\n  save file JSON (owner game_state.py, consumers game_state.py): {player: {health: int, max_health: int, attack: int, defense: int, inventory: [item_id], equipped: {slot: item_id}}, current_room_id: str, room_states: {room_id: {items: [item_id], npcs: [npc_id], monster: monster_id | null}}, npc_dialogue_progress: {npc_id: int}, defeated_monsters: [monster_id], boss_defeated: bool}\n  Command (owner parser.py, consumers engine.py): {type: CommandType, direction: Direction | null, item_id: str | null, npc_id: str | null, monster_id: str | null}",
+      "category": "architecture_blueprint",
+      "tags": [],
+      "source_flow": "design_and_plan",
+      "timestamp": "2026-07-26T08:35:23.253958+00:00"
+    },
+    {
+      "id": "7a5cdbb4",
+      "content": "Use `yaml.safe_load()` exclusively to avoid arbitrary code execution vulnerabilities when loading world data. Structure YAML files with clear hierarchies: rooms as top-level keys containing connections, items, NPCs, and monsters as nested dictionaries—this maps naturally to Python objects via `dataclasses` or `NamedTuple` for type safety and clean serialization. For save/load, use JSON with atomic writes (`os.replace()`) and include a version field to handle future schema changes; store saves in platform-appropriate directories (use `platformdirs`).\n\nFor the command parser, adopt a two-stage approach: tokenize input into verbs/nouns (e.g., \"take sword\" → [\"take\", \"sword\"]), then map verbs to handler functions via a dictionary dispatch pattern. Support common aliases (n/s/e/w for directions, \"i\" for inventory) and handle edge cases like \"take all\" or ambiguous nouns by validating against the current room’s contents. Avoid over-engineering the parser—prioritize covering the specified commands (go, take, drop, use, examine, talk, attack, flee, look/status/help/quit) with clear error messages for unrecognized input.\n\nFor turn-based combat, model entities (player, monsters) with base stats (health, attack, defense) modified by equipped gear. Each combat round, calculate damage as `max(1, attacker.attack - defender.defense)` to ensure progress even against high-defense foes. Give monsters simple but distinct behaviors (e.g., one always attacks, another heals on low health) via a strategy pattern or state flags. Track combat state separately from world state to handle flee/win/lose transitions cleanly. For the boss’s two phases, use a state machine: phase 1 ends when health drops below a threshold, triggering a stat boost and new attack pattern in phase 2. The weakness item (e.g., \"silver dagger\") can be checked mid-combat to apply bonus damage or bypass defense entirely. Avoid deep inheritance for entities—prefer composition (e.g., `CombatStats` component) to keep equipment effects and monster behaviors flexible.",
+      "category": "codebase_observation",
+      "tags": [
+        "proactive",
+        "domain_knowledge"
+      ],
+      "source_flow": "design_and_plan",
+      "timestamp": "2026-07-26T08:38:32.480631+00:00"
+    },
+    {
+      "id": "83364433",
+      "content": "Batch structural creation: 8 files written, 5 goals completed, 0 failed gates. Generation cost: 11324 tokens.",
+      "category": "codebase_observation",
+      "tags": [
+        "batch_structural"
+      ],
+      "source_flow": "build_structure",
+      "timestamp": "2026-07-26T09:11:31.119309+00:00"
+    },
+    {
+      "id": "99689bb8",
+      "content": "Validation issues (non-blocking):\n  - lint: combat.py: ",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-26T09:12:20.116265+00:00"
+    },
+    {
+      "id": "0694d697",
+      "content": "Validation issues (non-blocking):\n  - lint: engine.py: ",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-26T09:14:07.553692+00:00"
+    },
+    {
+      "id": "deecab27",
+      "content": "Root cause: The Weapon constructor in createitem is missing the required 'type' argument. Weapon inherits from Item which requires a 'type' parameter, but createitem only passes id, name, description, and damage.\nRecommended fix: Every Item subclass constructor call must include the required 'type' parameter from the parent Item class.\n(Primary target: Add type='weapon' to the Weapon constructor call in createitem since Weapon.postinit__ sets self.type but the parent Item class requires it as a positional argument.)",
+      "category": "failure_analysis",
+      "tags": [],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-26T09:24:58.795031+00:00"
+    },
+    {
+      "id": "80379c6f",
+      "content": "regression: structural goal 'Load world data from YAML files into game entities. Validates structure and buil' reopened — a diagnosis for goal_id=9a607bb28d4a named its file data_loader.py for a fix edit.",
+      "category": "failure_analysis",
+      "tags": [
+        "regression",
+        "d6b80e17a310",
+        "9a607bb28d4a"
+      ],
+      "source_flow": "functional_sweep",
+      "timestamp": "2026-07-26T09:25:10.229094+00:00"
+    },
+    {
+      "id": "7e22e011",
+      "content": "Validation issues (non-blocking):\n  - lint: data_loader.py: ruff failed\n  Cause: Failed to load configuration `/Users/lah-rb/ouroboros_artifacts/nightruns/mistr",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-26T09:26:40.262533+00:00"
+    },
+    {
+      "id": "e033c0f3",
+      "content": "Root cause: The `directionmap` dictionary is defined inside the `if verb in (\"go\", \"move\")` block but is referenced outside of it in the shortcut movement check `if verb in directionmap`, causing an UnboundLocalE\nRecommended fix: Move the `direction_map` dictionary definition to the beginning of the function so it is available for all code paths that reference it.",
+      "category": "failure_analysis",
+      "tags": [],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-26T09:33:49.833834+00:00"
+    },
+    {
+      "id": "33c62023",
+      "content": "regression: structural goal 'Parse user input into structured commands. Handles movement, inventory, interact' reopened — a diagnosis for goal_id=9a607bb28d4a named its file parser.py for a fix edit.",
+      "category": "failure_analysis",
+      "tags": [
+        "regression",
+        "2e4ee789ebae",
+        "9a607bb28d4a"
+      ],
+      "source_flow": "functional_sweep",
+      "timestamp": "2026-07-26T09:34:03.125938+00:00"
+    },
+    {
+      "id": "5fef2dfc",
+      "content": "Validation issues (non-blocking):\n  - lint: parser.py: ruff failed\n  Cause: Failed to load configuration `/Users/lah-rb/ouroboros_artifacts/nightruns/mistr",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-26T09:36:52.287144+00:00"
+    },
+    {
+      "id": "82ecb408",
+      "content": "Root cause: The handleuse method only supports HealingItem usage, but the goal requires Weapon items (like rustysword) to be usable. When a non-HealingItem is passed, it falls through to the else clause and print\nRecommended fix: Extend handle_use to support Weapon items by adding an elif branch that equips the weapon (updating player's equipped slot) or provides appropriate feedback for usable weapons.",
+      "category": "failure_analysis",
+      "tags": [],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-26T10:41:29.797555+00:00"
+    },
+    {
+      "id": "d18b17e0",
+      "content": "regression: structural goal 'Core game loop: process commands, update state, render descriptions, handle move' reopened — a diagnosis for goal_id=5ed04e128a95 named its file engine.py for a fix edit.",
+      "category": "failure_analysis",
+      "tags": [
+        "regression",
+        "505fd3b13068",
+        "5ed04e128a95"
+      ],
+      "source_flow": "functional_sweep",
+      "timestamp": "2026-07-26T10:41:42.344918+00:00"
+    },
+    {
+      "id": "44dda16f",
+      "content": "Validation issues (non-blocking):\n  - lint: engine.py: ruff failed\n  Cause: Failed to load configuration `/Users/lah-rb/ouroboros_artifacts/nightruns/mistr",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-26T10:43:15.636271+00:00"
+    },
+    {
+      "id": "7d8a3520",
+      "content": "Root cause: The parser does not recognize 'equip' as a command verb, and the CommandType enum is missing EQUIP. Similarly, 'talk to [npc]' parsing requires exactly 3+ tokens with 'to' as the second token, but use\nRecommended fix: Add EQUIP to CommandType enum, add parsing logic in parseinput for 'equip [slot] [item]' commands, and fix talk command to accept both 'talk to [npc]' and 'talk [npc]' formats. The engine's handlecommand must also gain a case for CommandType.EQUIP that delegates to a new handle_equip method.",
+      "category": "failure_analysis",
+      "tags": [],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-26T12:06:38.260863+00:00"
+    },
+    {
+      "id": "f2946f14",
+      "content": "regression: structural goal 'Parse user input into structured commands. Handles movement, inventory, interact' reopened — a diagnosis for goal_id=81ef4167908f named its file parser.py for a fix edit.",
+      "category": "failure_analysis",
+      "tags": [
+        "regression",
+        "2e4ee789ebae",
+        "81ef4167908f"
+      ],
+      "source_flow": "functional_sweep",
+      "timestamp": "2026-07-26T12:06:55.182287+00:00"
+    },
+    {
+      "id": "2e36e98f",
+      "content": "Validation issues (non-blocking):\n  - lint: parser.py: ruff failed\n  Cause: Failed to load configuration `/Users/lah-rb/ouroboros_artifacts/nightruns/mistr",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-26T12:11:57.791173+00:00"
+    },
+    {
+      "id": "e1e589f1",
+      "content": "seam gate: cross-module interface check failed at structural phase exit (attempt 1/3): \n[FAIL] typecheck: parser.py\n  - Command() got unexpected keyword argument(s): slot",
+      "category": "failure_analysis",
+      "tags": [
+        "seam_gate"
+      ],
+      "source_flow": "structural_sweep",
+      "timestamp": "2026-07-26T12:12:08.608072+00:00"
+    },
+    {
+      "id": "900096ea",
+      "content": "Validation issues (non-blocking):\n  - lint: parser.py: ruff failed\n  Cause: Failed to load configuration `/Users/lah-rb/ouroboros_artifacts/nightruns/mistr",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-26T12:15:53.047495+00:00"
+    },
+    {
+      "id": "9fa06d95",
+      "content": "Root cause: The renderstatus method checks for EquipmentSlot.WEAPON in state.equipped as a key, but equipitem stores the item_id using str(slot) which produces 'EquipmentSlot.WEAPON' as the key string, not the en\nRecommended fix: All equipment slot lookups must use string keys ('weapon', 'armor') instead of EquipmentSlot enum values to match how equipitem stores them.\n(Primary target: Change renderstatus to look up equipped items using the stringified slot names ('weapon', 'armor') instead of the EquipmentSlot enum values, m",
+      "category": "failure_analysis",
+      "tags": [],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-26T13:00:18.136922+00:00"
+    },
+    {
+      "id": "a23c9793",
+      "content": "regression: structural goal 'Core game loop: process commands, update state, render descriptions, handle move' reopened — a diagnosis for goal_id=81ef4167908f named its file engine.py for a fix edit.",
+      "category": "failure_analysis",
+      "tags": [
+        "regression",
+        "505fd3b13068",
+        "81ef4167908f"
+      ],
+      "source_flow": "functional_sweep",
+      "timestamp": "2026-07-26T13:00:32.790345+00:00"
+    },
+    {
+      "id": "2f8f13a1",
+      "content": "Validation issues (non-blocking):\n  - lint: engine.py: ruff failed\n  Cause: Failed to load configuration `/Users/lah-rb/ouroboros_artifacts/nightruns/mistr\n  - lint: models.py: ruff failed\n  Cause: Failed to load configuration `/Users/lah-rb/ouroboros_artifacts/nightruns/mistr",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-26T13:03:58.184682+00:00"
+    },
+    {
+      "id": "2baaf914",
+      "content": "Root cause: The parser's directionmap only recognizes north/south/east/west and their abbreviations, but world.yaml defines room exits with 'up' and 'down' directions which are not in the Direction enum or direct\nRecommended fix: Add UP and DOWN to the Direction enum in models.py, then add 'up', 'u', 'down', 'd' mappings to the directionmap in parser.py's parseinput function to support vertical movement commands.",
+      "category": "failure_analysis",
+      "tags": [],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-26T13:49:23.908080+00:00"
+    },
+    {
+      "id": "2a156f16",
+      "content": "regression: structural goal 'Parse user input into structured commands. Handles movement, inventory, interact' reopened — a diagnosis for goal_id=efd3197b6c4f named its file parser.py for a fix edit.",
+      "category": "failure_analysis",
+      "tags": [
+        "regression",
+        "2e4ee789ebae",
+        "efd3197b6c4f"
+      ],
+      "source_flow": "functional_sweep",
+      "timestamp": "2026-07-26T13:49:38.736738+00:00"
+    },
+    {
+      "id": "7044bdab",
+      "content": "Validation issues (non-blocking):\n  - lint: parser.py: ruff failed\n  Cause: Failed to load configuration `/Users/lah-rb/ouroboros_artifacts/nightruns/mistr\n  - lint: models.py: ruff failed\n  Cause: Failed to load configuration `/Users/lah-rb/ouroboros_artifacts/nightruns/mistr",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-26T13:54:37.751144+00:00"
+    },
+    {
+      "id": "606ce9f5",
+      "content": "Root cause: The directionmap dictionary in handlemovement is missing entries for Direction.UP and Direction.DOWN, causing KeyError when players use vertical movement commands.\nRecommended fix: Add 'Direction.UP: \"up\"' and 'Direction.DOWN: \"down\"' to the directionmap dictionary in handlemovement to support vertical movement.",
+      "category": "failure_analysis",
+      "tags": [],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-26T14:51:07.608292+00:00"
+    },
+    {
+      "id": "4eb71448",
+      "content": "regression: structural goal 'Core game loop: process commands, update state, render descriptions, handle move' reopened — a diagnosis for goal_id=efd3197b6c4f named its file engine.py for a fix edit.",
+      "category": "failure_analysis",
+      "tags": [
+        "regression",
+        "505fd3b13068",
+        "efd3197b6c4f"
+      ],
+      "source_flow": "functional_sweep",
+      "timestamp": "2026-07-26T14:51:18.120143+00:00"
+    },
+    {
+      "id": "2187d86f",
+      "content": "Validation issues (non-blocking):\n  - lint: engine.py: ruff failed\n  Cause: Failed to load configuration `/Users/lah-rb/ouroboros_artifacts/nightruns/mistr",
+      "category": "lint_warning",
+      "tags": [
+        "lint",
+        "non_blocking"
+      ],
+      "source_flow": "unknown",
+      "timestamp": "2026-07-26T14:52:34.402835+00:00"
+    },
+    {
+      "id": "7350b4c0",
+      "content": "Root cause: The NPC dialogue in world.yaml is loaded as a list of dicts with 'text' and 'next' keys, but the NPC model expects a list of dicts with str/int/None values (not nested dicts). The handle_talk method a\nRecommended fix: Update loadworld to transform the raw YAML dialogue entries (dicts with 'text' and 'next' keys) into the expected format for NPC.dialogue. The current code works because the raw dicts are passed through, but this is implicit and fragile. The dialogue should be a list of dicts where each dict has at ",
+      "category": "failure_analysis",
+      "tags": [],
+      "source_flow": "diagnose_issue",
+      "timestamp": "2026-07-26T15:37:31.688985+00:00"
+    },
+    {
+      "id": "8f1d5b23",
+      "content": "regression: structural goal 'Load world data from YAML files into game entities. Validates structure and buil' reopened — a diagnosis for goal_id=34b72597aed0 named its file data_loader.py for a fix edit.",
+      "category": "failure_analysis",
+      "tags": [
+        "regression",
+        "d6b80e17a310",
+        "34b72597aed0"
+      ],
+      "source_flow": "functional_sweep",
+      "timestamp": "2026-07-26T15:37:48.975151+00:00"
+    }
+  ],
+  "architecture": {
+    "import_scheme": "flat",
+    "run_command": "python main.py",
+    "smoke_command": "echo quit | python main.py",
+    "working_directory": "project root",
+    "init_files": false,
+    "modules": [
+      {
+        "file": "models.py",
+        "responsibility": "Data classes for game entities: Room, Item, Weapon, Armor, HealingItem, NPC, Monster, Boss, Player, GameState",
+        "defines": [
+          "Room",
+          "Item",
+          "Weapon",
+          "Armor",
+          "HealingItem",
+          "NPC",
+          "Monster",
+          "Boss",
+          "Player",
+          "GameState",
+          "Direction",
+          "EquipmentSlot"
+        ],
+        "imports_from": {}
+      },
+      {
+        "file": "data_loader.py",
+        "responsibility": "Load world data from YAML files into game entities. Validates structure and builds object graph.",
+        "defines": [
+          "load_world",
+          "load_rooms",
+          "load_items",
+          "load_npcs",
+          "load_monsters"
+        ],
+        "imports_from": {
+          "models": [
+            "Room",
+            "Item",
+            "Weapon",
+            "Armor",
+            "HealingItem",
+            "NPC",
+            "Monster",
+            "Boss"
+          ]
+        }
+      },
+      {
+        "file": "parser.py",
+        "responsibility": "Parse user input into structured commands. Handles movement, inventory, interaction, combat, and system commands.",
+        "defines": [
+          "Command",
+          "CommandType",
+          "parse_input"
+        ],
+        "imports_from": {
+          "models": [
+            "Direction"
+          ]
+        }
+      },
+      {
+        "file": "combat.py",
+        "responsibility": "Turn-based combat system: attack resolution, damage calculation, monster behaviors, boss phases, and weakness mechanics.",
+        "defines": [
+          "CombatEngine",
+          "CombatAction",
+          "CombatResult"
+        ],
+        "imports_from": {
+          "models": [
+            "Player",
+            "Monster",
+            "Boss",
+            "Weapon",
+            "Armor",
+            "HealingItem"
+          ]
+        }
+      },
+      {
+        "file": "game_state.py",
+        "responsibility": "Manage mutable game state: player location, inventory, equipment, room state, NPC dialogue progress, defeated monsters. Serialization for save/load.",
+        "defines": [
+          "GameStateManager",
+          "save_game",
+          "load_game"
+        ],
+        "imports_from": {
+          "models": [
+            "Player",
+            "GameState"
+          ],
+          "data_loader": [
+            "load_world"
+          ]
+        }
+      },
+      {
+        "file": "engine.py",
+        "responsibility": "Core game loop: process commands, update state, render descriptions, handle movement, item interactions, NPC dialogue, and combat initiation.",
+        "defines": [
+          "GameEngine",
+          "render_room",
+          "handle_command"
+        ],
+        "imports_from": {
+          "models": [
+            "Player",
+            "Room",
+            "Item",
+            "NPC",
+            "Monster",
+            "Boss",
+            "Direction"
+          ],
+          "parser": [
+            "Command",
+            "CommandType",
+            "parse_input"
+          ],
+          "combat": [
+            "CombatEngine",
+            "CombatAction",
+            "CombatResult"
+          ],
+          "game_state": [
+            "GameStateManager"
+          ]
+        }
+      },
+      {
+        "file": "world.yaml",
+        "responsibility": "YAML definition of the demo world: rooms, connections, items, NPCs, monsters, boss, and starting state.",
+        "defines": [],
+        "imports_from": {}
+      },
+      {
+        "file": "main.py",
+        "responsibility": "Entry point: initialize game, load world, start engine loop, handle save/load menu.",
+        "defines": [
+          "main"
+        ],
+        "imports_from": {
+          "engine": [
+            "GameEngine"
+          ],
+          "game_state": [
+            "GameStateManager",
+            "load_game"
+          ],
+          "data_loader": [
+            "load_world"
+          ]
+        }
+      }
+    ],
+    "creation_order": [
+      "models.py",
+      "data_loader.py",
+      "parser.py",
+      "combat.py",
+      "game_state.py",
+      "world.yaml",
+      "main.py"
+    ],
+    "interfaces": [
+      {
+        "caller": "main.py",
+        "callee": "data_loader.py",
+        "symbol": "load_world",
+        "signature": "load_world(file_path: str) -> dict with keys: rooms, items, npcs, monsters, boss, start_room_id"
+      },
+      {
+        "caller": "engine.py",
+        "callee": "parser.py",
+        "symbol": "parse_input",
+        "signature": "parse_input(raw: str) -> Command"
+      },
+      {
+        "caller": "engine.py",
+        "callee": "combat.py",
+        "symbol": "CombatEngine",
+        "signature": "CombatEngine(player: Player, enemy: Monster | Boss) -> CombatResult"
+      },
+      {
+        "caller": "engine.py",
+        "callee": "game_state.py",
+        "symbol": "GameStateManager",
+        "signature": "GameStateManager(initial_state: GameState) -> None"
+      },
+      {
+        "caller": "game_state.py",
+        "callee": "data_loader.py",
+        "symbol": "load_world",
+        "signature": "load_world(file_path: str) -> dict"
+      },
+      {
+        "caller": "engine.py",
+        "callee": "game_state.py",
+        "symbol": "save_game",
+        "signature": "save_game(state: GameState, file_path: str) -> None"
+      },
+      {
+        "caller": "main.py",
+        "callee": "game_state.py",
+        "symbol": "load_game",
+        "signature": "load_game(file_path: str) -> GameState"
+      }
+    ],
+    "data_shapes": [
+      {
+        "file": "world.yaml",
+        "consumed_by": "data_loader.py",
+        "structure": "Mapping with top-level keys: rooms, items, npcs, monsters, boss, start_room_id. Rooms reference items/NPCs/monsters by id.",
+        "example": "rooms:\n  entrance:\n    title: Entrance Hall\n    description: A dimly lit hall with torches on the walls.\n    exits:\n      north: armory\n      east: garden\n    items:\n      - rusty_sword\n    npcs: []\n    monster: null\n    boss: null\nitems:\n  rusty_sword:\n    id: rusty_sword\n    name: Rusty Sword\n    description: An old but serviceable sword.\n    type: weapon\n    damage: 5\n  health_potion:\n    id: health_potion\n    name: Health Potion\n    description: Restores 20 health when used.\n    type: healing\n    heal_amount: 20\nnpcs:\n  guard:\n    id: guard\n    name: Old Guard\n    description: A retired soldier with a knowing look.\n    dialogue:\n      - text: The boss fears the Silver Blade.\n        next: 1\n      - text: Find it in the treasure room.\n        next: null\nmonsters:\n  goblin:\n    id: goblin\n    name: Goblin\n    description: A small green creature with sharp teeth.\n    health: 20\n    attack: 4\n    defense: 1\nboss:\n  id: dark_knight\n    name: Dark Knight\n    description: A towering figure clad in black armor.\n    health: 50\n    attack: 8\n    defense: 3\n    phase2_health_threshold: 25\n    phase2_attack: 12\n    weakness_item: silver_blade\nstart_room_id: entrance"
+      }
+    ],
+    "state_shapes": [
+      {
+        "name": "GameState",
+        "owner": "models.py",
+        "consumed_by": "engine.py, game_state.py, combat.py",
+        "structure": "{player: Player, current_room_id: str, inventory: list of item_ids, equipped: {slot: item_id}, room_states: {room_id: {items: [item_id], npcs: [npc_id], monster: monster_id | null}}, npc_dialogue_progress: {npc_id: int}, defeated_monsters: set of monster_ids, boss_defeated: bool}"
+      },
+      {
+        "name": "Player",
+        "owner": "models.py",
+        "consumed_by": "engine.py, combat.py, game_state.py",
+        "structure": "{health: int, max_health: int, attack: int, defense: int, inventory: list of item_ids, equipped: {slot: item_id}}"
+      },
+      {
+        "name": "load_world() return / GameEngine.__init__ input",
+        "owner": "data_loader.py",
+        "consumed_by": "engine.py, main.py",
+        "structure": "{rooms: {room_id: Room}, items: {item_id: Item}, npcs: {npc_id: NPC}, monsters: {monster_id: Monster}, boss: Boss, start_room_id: str} — exactly these top-level keys"
+      },
+      {
+        "name": "save file JSON",
+        "owner": "game_state.py",
+        "consumed_by": "game_state.py",
+        "structure": "{player: {health: int, max_health: int, attack: int, defense: int, inventory: [item_id], equipped: {slot: item_id}}, current_room_id: str, room_states: {room_id: {items: [item_id], npcs: [npc_id], monster: monster_id | null}}, npc_dialogue_progress: {npc_id: int}, defeated_monsters: [monster_id], boss_defeated: bool}"
+      },
+      {
+        "name": "Command",
+        "owner": "parser.py",
+        "consumed_by": "engine.py",
+        "structure": "{type: CommandType, direction: Direction | null, item_id: str | null, npc_id: str | null, monster_id: str | null}"
+      }
+    ],
+    "transient_files": [
+      "save.json",
+      "*.save.json"
+    ],
+    "notes": "Flat structure for simplicity in a small project. YAML world file is the single source of truth for content. Combat system is decoupled for testability. Save files are JSON with full state serialization.",
+    "coherence_criteria": [],
+    "coherence_grounded": true,
+    "coherence_reason": "",
+    "coherence_attempts": 1
+  },
+  "research_plan": null,
+  "task_definition": null,
+  "dispatch_history": [
+    {
+      "cycle": 3,
+      "flow": "file_ops",
+      "goal_id": "dff4ef23d82b",
+      "target_file_path": "combat.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T09:12:29.720313+00:00"
+    },
+    {
+      "cycle": 4,
+      "flow": "file_ops",
+      "goal_id": "aada8010a5df",
+      "target_file_path": "main.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T09:13:15.162318+00:00"
+    },
+    {
+      "cycle": 5,
+      "flow": "file_ops",
+      "goal_id": "505fd3b13068",
+      "target_file_path": "engine.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T09:14:17.058744+00:00"
+    },
+    {
+      "cycle": 7,
+      "flow": "interact",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "",
+      "result_status": "failed",
+      "timestamp": "2026-07-26T09:17:26.949555+00:00"
+    },
+    {
+      "cycle": 8,
+      "flow": "diagnose_issue",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "data_loader.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-26T09:25:10.228135+00:00"
+    },
+    {
+      "cycle": 9,
+      "flow": "file_ops",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "data_loader.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T09:26:50.982577+00:00"
+    },
+    {
+      "cycle": 10,
+      "flow": "interact",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "",
+      "result_status": "failed",
+      "timestamp": "2026-07-26T09:27:13.276204+00:00"
+    },
+    {
+      "cycle": 11,
+      "flow": "diagnose_issue",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "parser.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-26T09:34:03.125084+00:00"
+    },
+    {
+      "cycle": 12,
+      "flow": "file_ops",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "parser.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T09:37:01.068007+00:00"
+    },
+    {
+      "cycle": 13,
+      "flow": "interact",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T09:37:17.257227+00:00"
+    },
+    {
+      "cycle": 14,
+      "flow": "interact",
+      "goal_id": "3acad39042b7",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T09:43:00.742160+00:00"
+    },
+    {
+      "cycle": 15,
+      "flow": "interact",
+      "goal_id": "46d8e3ad42a9",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T09:52:02.150752+00:00"
+    },
+    {
+      "cycle": 16,
+      "flow": "interact",
+      "goal_id": "b95269a9e43e",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T09:59:07.712175+00:00"
+    },
+    {
+      "cycle": 17,
+      "flow": "interact",
+      "goal_id": "b960e0f9d9ac",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T10:07:55.355327+00:00"
+    },
+    {
+      "cycle": 18,
+      "flow": "interact",
+      "goal_id": "55bf7b952ac1",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T10:21:04.220519+00:00"
+    },
+    {
+      "cycle": 19,
+      "flow": "interact",
+      "goal_id": "5ed04e128a95",
+      "target_file_path": "",
+      "result_status": "failed",
+      "timestamp": "2026-07-26T10:28:54.801359+00:00"
+    },
+    {
+      "cycle": 20,
+      "flow": "diagnose_issue",
+      "goal_id": "5ed04e128a95",
+      "target_file_path": "engine.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-26T10:41:42.344016+00:00"
+    },
+    {
+      "cycle": 21,
+      "flow": "file_ops",
+      "goal_id": "5ed04e128a95",
+      "target_file_path": "engine.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T10:43:24.948956+00:00"
+    },
+    {
+      "cycle": 22,
+      "flow": "interact",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T10:43:40.618752+00:00"
+    },
+    {
+      "cycle": 23,
+      "flow": "interact",
+      "goal_id": "5ed04e128a95",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T10:54:24.306680+00:00"
+    },
+    {
+      "cycle": 24,
+      "flow": "interact",
+      "goal_id": "81ef4167908f",
+      "target_file_path": "",
+      "result_status": "failed",
+      "timestamp": "2026-07-26T11:53:02.494326+00:00"
+    },
+    {
+      "cycle": 25,
+      "flow": "diagnose_issue",
+      "goal_id": "81ef4167908f",
+      "target_file_path": "parser.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-26T12:06:55.181188+00:00"
+    },
+    {
+      "cycle": 26,
+      "flow": "file_ops",
+      "goal_id": "81ef4167908f",
+      "target_file_path": "parser.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T12:12:08.432180+00:00"
+    },
+    {
+      "cycle": 27,
+      "flow": "file_ops",
+      "goal_id": "2e4ee789ebae",
+      "target_file_path": "parser.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T12:16:02.388281+00:00"
+    },
+    {
+      "cycle": 28,
+      "flow": "interact",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T12:16:17.573812+00:00"
+    },
+    {
+      "cycle": 29,
+      "flow": "interact",
+      "goal_id": "81ef4167908f",
+      "target_file_path": "",
+      "result_status": "failed",
+      "timestamp": "2026-07-26T12:35:10.840337+00:00"
+    },
+    {
+      "cycle": 30,
+      "flow": "diagnose_issue",
+      "goal_id": "81ef4167908f",
+      "target_file_path": "engine.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-26T13:00:32.789452+00:00"
+    },
+    {
+      "cycle": 31,
+      "flow": "file_ops",
+      "goal_id": "81ef4167908f",
+      "target_file_path": "engine.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T13:04:10.292740+00:00"
+    },
+    {
+      "cycle": 32,
+      "flow": "interact",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T13:04:25.748436+00:00"
+    },
+    {
+      "cycle": 33,
+      "flow": "interact",
+      "goal_id": "81ef4167908f",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T13:24:21.859502+00:00"
+    },
+    {
+      "cycle": 34,
+      "flow": "interact",
+      "goal_id": "efd3197b6c4f",
+      "target_file_path": "",
+      "result_status": "failed",
+      "timestamp": "2026-07-26T13:37:23.466285+00:00"
+    },
+    {
+      "cycle": 35,
+      "flow": "diagnose_issue",
+      "goal_id": "efd3197b6c4f",
+      "target_file_path": "parser.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-26T13:49:38.735898+00:00"
+    },
+    {
+      "cycle": 36,
+      "flow": "file_ops",
+      "goal_id": "efd3197b6c4f",
+      "target_file_path": "parser.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T13:54:49.594585+00:00"
+    },
+    {
+      "cycle": 37,
+      "flow": "interact",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T13:55:02.716373+00:00"
+    },
+    {
+      "cycle": 38,
+      "flow": "interact",
+      "goal_id": "efd3197b6c4f",
+      "target_file_path": "",
+      "result_status": "failed",
+      "timestamp": "2026-07-26T14:40:00.193563+00:00"
+    },
+    {
+      "cycle": 39,
+      "flow": "diagnose_issue",
+      "goal_id": "efd3197b6c4f",
+      "target_file_path": "engine.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-26T14:51:18.118829+00:00"
+    },
+    {
+      "cycle": 40,
+      "flow": "file_ops",
+      "goal_id": "efd3197b6c4f",
+      "target_file_path": "engine.py",
+      "result_status": "success",
+      "timestamp": "2026-07-26T14:52:43.320755+00:00"
+    },
+    {
+      "cycle": 41,
+      "flow": "interact",
+      "goal_id": "9a607bb28d4a",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T14:52:58.189603+00:00"
+    },
+    {
+      "cycle": 42,
+      "flow": "interact",
+      "goal_id": "efd3197b6c4f",
+      "target_file_path": "",
+      "result_status": "success",
+      "timestamp": "2026-07-26T15:13:53.523938+00:00"
+    },
+    {
+      "cycle": 43,
+      "flow": "interact",
+      "goal_id": "34b72597aed0",
+      "target_file_path": "",
+      "result_status": "failed",
+      "timestamp": "2026-07-26T15:21:45.991964+00:00"
+    },
+    {
+      "cycle": 44,
+      "flow": "diagnose_issue",
+      "goal_id": "34b72597aed0",
+      "target_file_path": "data_loader.py",
+      "result_status": "diagnosed",
+      "timestamp": "2026-07-26T15:37:48.972960+00:00"
+    }
+  ],
+  "notes_archived": 0,
+  "dispatch_archived": 0,
+  "workspace_ledger": [
+    {
+      "cycle": 6,
+      "kind": "provision",
+      "description": "project_ops completed with status: success. Files: pyproject.toml, README.md, ruff.toml",
+      "status": "success",
+      "details": {},
+      "timestamp": "2026-07-26T09:17:08.476898+00:00"
+    }
+  ],
+  "environment_verified": true,
+  "completed_at_phase": "",
+  "smoke_baseline_ok": false,
+  "tests_verified": false,
+  "regression_dirty": true,
+  "last_edit_cycle": 40,
+  "last_regression_cycle": -1,
+  "reopen_count": 0,
+  "pending_directive": "",
+  "router_findings": "",
+  "created_at": "2026-07-26T08:28:32.127558+00:00",
+  "updated_at": "2026-07-26T15:37:48.977945+00:00",
+  "config": {
+    "working_directory": "/Users/lah-rb/ouroboros_artifacts/nightruns/mistral_boss2",
+    "origin": "greenfield",
+    "top_phase": "quality",
+    "effects_profile": "local",
+    "escalation_budget_usd": null,
+    "escalation_tokens_used": 0,
+    "llmvp_endpoint": "http://localhost:8008/graphql",
+    "flow_set": "code_core",
+    "task_profile": "",
+    "structural_mode": "batch",
+    "web_research": true,
+    "deep_research": false,
+    "vision": false,
+    "audio": false,
+    "modality_sidecar_max_images": 6,
+    "modality_sidecar_max_audio": 2,
+    "held_out_tests": false,
+    "run_until": "completed",
+    "max_cycles": null,
+    "max_wall_clock_s": null,
+    "test_gate": "auto"
+  },
+  "schema_version": 7
+}

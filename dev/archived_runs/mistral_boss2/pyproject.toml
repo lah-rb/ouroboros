@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "text-adventure-game"
+version = "0.1.0"
+description = "A text adventure game with combat, NPCs, and a final boss"
+authors = [{name = "Ouroboros", email = "dev@ouroboros.example"}]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+text-adventure = "main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]

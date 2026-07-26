@@ -1,0 +1,6 @@
+TEST REPORT
+===========
+Game launched successfully.
+Initial room (Village Square) displayed correctly with Iron Sword.
+When executing "go north", the game crashed with a NameError: name 'Direction' is not defined.
+This is a FAIL per criteria: traceback on execution.

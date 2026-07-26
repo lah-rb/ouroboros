@@ -1,0 +1,15 @@
+Welcome to the game!
+Room: Village Square
+Status: Visited
+Items: Iron Sword
+NPCs: none
+Monster: none
+> Room: Elder's Hut
+Status: Visited
+Items: none
+NPCs: Village Elder
+Monster: none
+> Village Elder says: "The Shadow Lich has hidden its phylactery in the Throne Room."
+Village Elder says: "Only dawn's light can banish the shadow."
+> 
+Goodbye!

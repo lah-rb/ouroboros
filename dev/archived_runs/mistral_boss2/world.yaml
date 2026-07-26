@@ -1,0 +1,194 @@
+rooms:
+  entrance:
+    title: Entrance Hall
+    description: A dimly lit hall with flickering torches on the walls. The air is musty with age. A large wooden door stands to the north, and a narrow passage leads east.
+    exits:
+      north: armory
+      east: garden
+    items:
+      - rusty_sword
+    npcs: []
+    monster: null
+    boss: null
+  garden:
+    title: Overgrown Garden
+    description: Once a beautiful garden, now overrun with weeds. A stone path leads west back to the entrance, and a dark corridor heads south.
+    exits:
+      west: entrance
+      south: library
+    items:
+      - health_potion
+    npcs:
+      - old_gardener
+    monster: null
+    boss: null
+  library:
+    title: Ancient Library
+    description: Dusty tomes line the shelves. A spiral staircase leads up to a balcony. The only exit is north back to the garden.
+    exits:
+      north: garden
+      up: study
+    items:
+      - leather_armor
+    npcs:
+      - wise_scholar
+    monster: null
+    boss: null
+  study:
+    title: Scholar's Study
+    description: A small room filled with scrolls and maps. A trapdoor in the floor leads down to a dark chamber.
+    exits:
+      down: dungeon
+      south: library
+    items:
+      - map
+    npcs: []
+    monster: goblin
+    boss: null
+  dungeon:
+    title: Dungeon
+    description: A damp and cold prison. The only way out is up through the trapdoor, or east through a rusted gate.
+    exits:
+      up: study
+      east: treasure_room
+    items: []
+    npcs: []
+    monster: skeleton
+    boss: null
+  armory:
+    title: Armory
+    description: Racks of rusted weapons line the walls. There's a door to the south and another to the east.
+    exits:
+      south: entrance
+      east: barracks
+    items:
+      - iron_sword
+    npcs: []
+    monster: orc
+    boss: null
+  barracks:
+    title: Old Barracks
+    description: Rows of empty beds line this room. A door leads west to the armory, and another east to the throne room.
+    exits:
+      west: armory
+      east: throne_room
+    items: []
+    npcs: []
+    monster: null
+    boss: null
+  treasure_room:
+    title: Treasure Room
+    description: Gold and jewels glitter in the torchlight. But something dangerous lurks here...
+    exits:
+      west: dungeon
+    items:
+      - silver_blade
+    npcs: []
+    monster: null
+    boss: dark_knight
+  throne_room:
+    title: Throne Room
+    description: A grand room with a broken throne. The final challenge awaits here.
+    exits:
+      west: barracks
+    items: []
+    npcs: []
+    monster: null
+    boss: null
+
+items:
+  rusty_sword:
+    id: rusty_sword
+    name: Rusty Sword
+    description: An old but serviceable sword. Better than nothing.
+    type: weapon
+    damage: 5
+  iron_sword:
+    id: iron_sword
+    name: Iron Sword
+    description: A well-made sword that gleams in the light.
+    type: weapon
+    damage: 8
+  silver_blade:
+    id: silver_blade
+    name: Silver Blade
+    description: A blade forged from pure silver. It hums with magical energy.
+    type: weapon
+    damage: 10
+  leather_armor:
+    id: leather_armor
+    name: Leather Armor
+    description: Lightweight armor that offers some protection.
+    type: armor
+    defense: 3
+  health_potion:
+    id: health_potion
+    name: Health Potion
+    description: A red potion that restores vitality when consumed.
+    type: healing
+    heal_amount: 20
+  map:
+    id: map
+    name: Dungeon Map
+    description: A detailed map of the dungeon. It shows a hidden treasure room to the east of the dungeon.
+    type: item
+
+npcs:
+  old_gardener:
+    id: old_gardener
+    name: Old Gardener
+    description: An elderly man who tends to the overgrown garden. He seems to know more than he lets on.
+    dialogue:
+      - text: The dark knight who rules this place has one weakness...
+        next: 1
+      - text: They say he fears the blade of silver. If only someone could find it...
+        next: 2
+      - text: I've heard rumors it's hidden in a room filled with treasure.
+        next: null
+  wise_scholar:
+    id: wise_scholar
+    name: Wise Scholar
+    description: A learned man who spends his days studying ancient texts.
+    dialogue:
+      - text: The dark knight's power is great, but not absolute.
+        next: 1
+      - text: There's an old legend about a silver blade that can harm him. It was hidden away long ago.
+        next: 2
+      - text: The treasure room... yes, that's where it would be. But beware, many dangers lie between here and there.
+        next: null
+
+monsters:
+  goblin:
+    id: goblin
+    name: Goblin
+    description: A small green creature with sharp teeth and beady eyes.
+    health: 15
+    attack: 4
+    defense: 1
+  skeleton:
+    id: skeleton
+    name: Skeleton
+    description: A reanimated skeleton armed with a rusted sword.
+    health: 20
+    attack: 6
+    defense: 2
+  orc:
+    id: orc
+    name: Orc
+    description: A hulking brute with a crude axe.
+    health: 25
+    attack: 7
+    defense: 3
+
+boss:
+  id: dark_knight
+  name: Dark Knight
+  description: A towering figure clad in black armor. His eyes glow with dark energy.
+  health: 60
+  attack: 8
+  defense: 4
+  phase2_health_threshold: 30
+  phase2_attack: 12
+  weakness_item: silver_blade
+
+start_room_id: entrance

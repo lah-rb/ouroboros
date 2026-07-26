@@ -1,0 +1,188 @@
+rooms:
+  village_square:
+    name: Village Square
+    description: A quiet cobblestone square, the heart of the village. A sense of unease hangs in the air.
+    connections:
+      north: elder_hut
+      east: whispering_forest
+    items: [iron_sword]
+    npcs: []
+    monsters: []
+
+  elder_hut:
+    name: Elder's Hut
+    description: A small, thatched hut filled with ancient artifacts and the scent of herbs.
+    connections:
+      south: village_square
+    items: []
+    npcs: [elder]
+    monsters: []
+
+  whispering_forest:
+    name: Whispering Forest
+    description: Tall, gnarled trees whisper secrets of the dark. The path is overgrown and eerie.
+    connections:
+      west: village_square
+      north: ancient_tower
+      east: hidden_cave
+    items: []
+    npcs: [hermit]
+    monsters: [wolf_pack]
+
+  ancient_tower:
+    name: Ancient Tower
+    description: A crumbling stone tower, once a place of learning. Dusty tomes litter the floors.
+    connections:
+      south: whispering_forest
+      east: ruined_library
+      north: secret_garden
+    items: [ancient_key, magic_scroll]
+    npcs: []
+    monsters: []
+
+  hidden_cave:
+    name: Hidden Cave
+    description: A dark cave behind a waterfall. Dripping water echoes in the chambers.
+    connections:
+      west: whispering_forest
+      north: crystal_cavern
+    items: [leather_armor]
+    npcs: []
+    monsters: [cave_bat]
+
+  crystal_cavern:
+    name: Crystal Cavern
+    description: A glittering cavern filled with luminous crystals that cast an ethereal glow.
+    connections:
+      south: hidden_cave
+      north: throne_room
+    items: [crystal_of_dawn]
+    npcs: []
+    monsters: []
+
+  ruined_library:
+    name: Ruined Library
+    description: A destroyed library, its shelves broken and books scattered. Dark magic lingers here.
+    connections:
+      west: ancient_tower
+    items: []
+    npcs: []
+    monsters: [risen_skeleton]
+
+  throne_room:
+    name: Throne Room
+    description: A vast, dark chamber with a towering throne. The air is thick with necromantic energy.
+    connections:
+      south: crystal_cavern
+    items: []
+    npcs: []
+    monsters: [shadow_lich]
+
+  secret_garden:
+    name: Secret Garden
+    description: A hidden garden where nature clings to life despite the darkness. Flowers bloom with faint light.
+    connections:
+      south: ancient_tower
+    items: [healing_herb]
+    npcs: []
+    monsters: []
+
+items:
+  iron_sword:
+    name: Iron Sword
+    type: weapon
+    stats:
+      attack_bonus: 5
+    description: A sturdy iron sword, reliable in combat.
+
+  leather_armor:
+    name: Leather Armor
+    type: armor
+    stats:
+      defense_bonus: 3
+    description: Tough leather armor that offers basic protection.
+
+  healing_herb:
+    name: Healing Herb
+    type: healing
+    stats:
+      heal_amount: 20
+    description: A red herb that restores health when consumed.
+
+  crystal_of_dawn:
+    name: Crystal of Dawn
+    type: key
+    stats: {}
+    description: A radiant crystal that holds the power of dawn. It is the only weakness of the Shadow Lich.
+
+  ancient_key:
+    name: Ancient Key
+    type: key
+    stats: {}
+    description: An ornate key that opens the Ruined Library.
+
+  magic_scroll:
+    name: Magic Scroll
+    type: key
+    stats: {}
+    description: A scroll containing ancient lore about the Shadow Lich.
+
+npcs:
+  elder:
+    name: Village Elder
+    dialogue:
+      - "The Shadow Lich has hidden its phylactery in the Throne Room."
+      - "Only dawn's light can banish the shadow."
+    quest_flags: [knows_weakness]
+
+  hermit:
+    name: Hermit
+    dialogue:
+      - "The Lich has two forms: spectral and corporeal."
+      - "The Crystal of Dawn must be used at the moment of its vulnerability."
+    quest_flags: [knows_lich_forms]
+
+monsters:
+  wolf_pack:
+    name: Wolf Pack
+    health: 15
+    attack: 3
+    behavior: aggressive
+    loot: []
+
+  cave_bat:
+    name: Cave Bat
+    health: 10
+    attack: 2
+    behavior: aggressive
+    loot: []
+
+  risen_skeleton:
+    name: Risen Skeleton
+    health: 20
+    attack: 4
+    behavior: aggressive
+    loot: []
+
+  shadow_lich:
+    name: Shadow Lich
+    health: 150
+    attack: 15
+    behavior: aggressive
+    loot: []
+    phases:
+      - name: Spectral Form
+        attack: 15
+        behavior: aggressive
+        resistances: [physical]
+        description: A swirling shadow that resists physical attacks.
+        health_threshold: 150
+      - name: Corporeal Form
+        attack: 25
+        behavior: aggressive
+        vulnerabilities: [physical]
+        trigger: crystal_of_dawn
+        description: The Lich takes physical form, vulnerable to normal weapons.
+
+        health_threshold: 80
+start_room: village_square

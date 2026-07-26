@@ -42,3 +42,9 @@ llmvp/logs/llmvp_server.log
 llmvp/logs/interactions.jsonl
 models/
 logs/
+
+# Archived run artifacts (dev/archived_runs/): the resumable core is tracked
+# (workspace source + .agent/mission.json), but per-run TRACES are heavy
+# analysis data — 8.3MB for a single 7h run — and stay local only.
+dev/archived_runs/*/.agent/traces/
+dev/archived_runs/*/run_throughput.png
