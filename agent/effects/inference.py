@@ -302,6 +302,12 @@ class InferenceEffect:
         # behavior: OURO_EVAL_STUCK_S (default 300s), raised to 2x the
         # server-advertised expectedEvalSeconds when it offers one.
         self._watchdog_eval_stuck_s: float | None = None
+        # Retries for TRANSIENT infrastructure failures (capacity/connection).
+        # Instance attribute so tests can drive the loop without waiting on the
+        # real backoff, same rule as the watchdog knobs above.
+        self._transient_retries: int = int(
+            os.environ.get("OURO_TRANSIENT_RETRIES", "3")
+        )
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Lazy-initialize the HTTP client.
@@ -523,7 +529,78 @@ class InferenceEffect:
             runaway_token_ceiling=COMPLETION_RUNAWAY_TOKEN_CEILING,
         )
 
+    # Errors that mean "the infrastructure could not take this request right
+    # now", as opposed to "the model produced nothing". ONLY these retry.
+    # Deliberately NOT included: timeouts (the server may still be working, and
+    # retrying stacks load — that is how the 07-26 orphan prefill was made),
+    # watchdog aborts (already a considered decision), and GraphQL schema
+    # errors (a bug, not weather).
+    _TRANSIENT_ERROR_MARKERS = (
+        "instances are busy",
+        "connection error",
+    )
+    # Backoff between attempts. The server has ALREADY waited backend_timeout
+    # (180s) before reporting busy, so an instant retry is pointless — these
+    # are chosen to ride out a long generation finishing on the other seat.
+    _TRANSIENT_BACKOFF_S = (5.0, 15.0, 45.0)
+
+    def _is_transient(self, result: InferenceResult) -> bool:
+        err = (result.error or "").lower()
+        return bool(err) and any(m in err for m in self._TRANSIENT_ERROR_MARKERS)
+
     async def _request_with_health_watchdog(
+        self,
+        client: httpx.AsyncClient,
+        request_body: dict,
+        response_key: str = "completion",
+        runaway_token_ceiling: int | None = None,
+    ) -> InferenceResult:
+        """Run the request, retrying TRANSIENT infrastructure failures.
+
+        Why this exists (2026-07-26): a mistral boss run died five minutes in
+        because a leaked prefill held the single seat, the request came back
+        "All inference instances are busy", and design_initial's resolver
+        cannot tell that from "the model generated nothing" — both have
+        tokens_generated == 0, and its catch-all routes to a TERMINAL failure.
+        A seven-hour mission ended on a condition that cleared by itself
+        moments later. Five planning steps share that resolver shape.
+
+        The retry belongs HERE rather than in each flow: capacity is
+        infrastructure, not flow semantics, and asking every flow author to
+        handle "busy" is how one gets missed. Each attempt carries its own
+        watchdog, so a slow generation is still bounded normally.
+        """
+        attempts = self._transient_retries + 1
+        result = None
+        for i in range(attempts):
+            result = await self._request_once_with_watchdog(
+                client, request_body, response_key, runaway_token_ceiling
+            )
+            if not self._is_transient(result):
+                return result
+            if i < attempts - 1:
+                delay = self._TRANSIENT_BACKOFF_S[
+                    min(i, len(self._TRANSIENT_BACKOFF_S) - 1)
+                ]
+                # WARNING, not debug: a silent retry is indistinguishable from
+                # a healthy call, and this whole class of bug hides in that gap.
+                logger.warning(
+                    "Transient inference failure (attempt %d/%d): %s — "
+                    "retrying in %.0fs",
+                    i + 1,
+                    attempts,
+                    result.error,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        logger.error(
+            "Transient inference failure persisted after %d attempts: %s",
+            attempts,
+            result.error if result else "no result",
+        )
+        return result
+
+    async def _request_once_with_watchdog(
         self,
         client: httpx.AsyncClient,
         request_body: dict,
