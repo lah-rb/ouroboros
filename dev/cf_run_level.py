@@ -2,7 +2,13 @@
 """Generic counterfactual level-runner: re-run every turn's prompt at the currently-
 baked reasoning level, record action + CoT length. Appends to ACTIONS.
 Usage: cf_run_level.py <turns.json> <actions.jsonl> <level-name>"""
-import json, sys, urllib.request, re, time
+import json
+import sys
+import time
+import urllib.request
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cf_extract import extract as _extract
 
 TURNS, ACTIONS, LEVEL = sys.argv[1], sys.argv[2], sys.argv[3]
 turns = json.load(open(TURNS))
@@ -29,11 +35,18 @@ for i, t in enumerate(turns):
         rec = {"id": t["id"], "level": LEVEL, "error": err}
     else:
         raw = d["rawText"]
-        cm = re.search(r"analysis<\|message\|>(.*?)(?:<\|end\|>|<\|channel\|>final)", raw, re.DOTALL)
-        fm = re.search(r"final<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|$)", raw, re.DOTALL)
+        # Extraction lives in cf_extract now. The line that used to be here
+        # fell back to `raw.strip()[:1200]` when the final-channel regex
+        # missed — and it missed on every <|constrain|>json action — so
+        # truncated CoT was stored as the agent's action and judged as one.
+        # That single line is the root cause of the adaptive_thinking
+        # high-class collapse (dev/ADAPTIVE_THINKING_STATUS.md).
+        ex = _extract(raw, d.get("finished", True))
         rec = {"id": t["id"], "level": LEVEL,
-               "cot_chars": len(cm.group(1)) if cm else 0,
-               "action": (fm.group(1).strip() if fm else raw.strip())[:1200],
+               "cot_chars": ex["cot_chars"],
+               "action": ex["action"],      # None when unusable — NEVER the CoT
+               "usable": ex["usable"], "no_final": ex["no_final"],
+               "truncated": ex["truncated"],
                "tokens": d["tokensGenerated"]}
     out.write(json.dumps(rec) + "\n"); out.flush()
     if i % 40 == 0:
