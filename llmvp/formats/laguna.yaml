@@ -1,0 +1,100 @@
+# Laguna format schema — Poolside Laguna (laguna arch)
+#
+# Derived from the model's own chat template (`laguna_glm_thinking_v8`,
+# read out of Laguna-S-2.1-UD-IQ4_XS GGUF 2026-07-26). Forked from chatml
+# because the THINKING style matches (inline <think>/</think>) but NOTHING
+# else does — the framing is XML-ish per-role tags, not <|im_start|>.
+#
+#     〈|EOS|〉                       <- emitted once at the very front
+#     <system>...</system>\n
+#     <user>...</user>\n
+#     <assistant><think>...</think>...</assistant>\n
+#
+# generation prompt: "<assistant>" + ("<think>" if thinking else "</think>")
+#
+# NOTE THE THINKING-OFF FORM. Laguna does not suppress reasoning by OMITTING
+# the opener (step-3.7's mechanic) — it prefills the CLOSE tag alone,
+# structurally declaring the think block already finished. That is a third
+# variant: step-3.7 omits, gemma-4 supplies a full empty block
+# (open + close), laguna supplies close-only. Hence
+# `prefill_closed_close_only` below.
+#
+# STATUS 2026-07-26: UNTESTED LIVE — the `laguna` arch is absent from our
+# llama.cpp build (b9860; support lands >= b10087), so nothing has been
+# rendered against the real model. Every value here is read from the
+# template, not observed. Validate with dev/ probes before trusting it:
+# the tekken family shipped with `thinking: true` LYING for weeks because
+# nobody rendered it.
+
+family: laguna
+display_name: "Laguna (Poolside)"
+
+tokens:
+  # Generic fallbacks; every real role overrides these in role_tokens below.
+  msg_open: "<"
+  msg_content: ">"
+  msg_close: ""
+  gen_stop: "</assistant>"
+  history_close: "</assistant>\n"
+  # The template emits 〈|EOS|〉 itself at the front (note: U+3008/U+3009 CJK
+  # angle brackets, NOT ASCII <>). tokenizer.ggml.add_bos_token=true, so
+  # llama.cpp prepends BOS and the template must NOT also supply one — see
+  # the tekken BOS note in schema.py for what a duplicate/missing BOS costs.
+  bos: ""
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: "assistant"
+
+# Per-role XML framing — the whole reason this is not a chatml alias.
+role_tokens:
+  system:
+    msg_open: "<system>"
+    msg_content: ""
+    msg_close: "</system>\n"
+  user:
+    msg_open: "<user>"
+    msg_content: ""
+    msg_close: "</user>\n"
+  assistant:
+    msg_open: "<assistant>"
+    msg_content: ""
+    msg_close: "</assistant>\n"
+
+thinking:
+  style: inline_tags
+  open_tag: "<think>"
+  close_tag: "</think>"
+  # Laguna's own template defaults enable_thinking=TRUE, and suppression is
+  # the close-only prefill rather than omission.
+  prefill_closed_when_disabled: true
+  prefill_closed_close_only: true
+  # Per-level gate, mirroring step-3.7: a routed level outside this list
+  # closes the gate for that turn. Left EMPTY until measured — the step-3.7
+  # gate was only correct because dev/step37_reasoning_probe.py established
+  # that thinking is prefill-gated on that model. Do not copy the mechanic
+  # across families on the assumption it transfers.
+  gate_levels: []
+
+system_block:
+  identity: "You are a helpful assistant."
+  reasoning_default: ""
+  reasoning_prefix: ""
+  channel_directive: ""
+  template: "{identity}\n{persona}"
+
+traits:
+  fold_system_into_first_user: false
+  supports_developer_role: false
+
+generation:
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+turn_transition:
+  needs_close: true
+  after_generation: "</assistant>\n"

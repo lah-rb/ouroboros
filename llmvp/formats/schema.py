@@ -80,6 +80,13 @@ class ThinkingSpec(BaseModel):
     # Inverse of the usual inline_tags behavior, which injects the OPEN tag
     # when thinking is ENABLED; hence its own flag.
     prefill_closed_when_disabled: bool = False
+    # Laguna: thinking-off prefills ONLY the close tag — no opener — which
+    # its template treats as "the think block is already finished". Distinct
+    # from the gemma form above, which supplies a full empty block. Three
+    # variants now exist across families (step-3.7 OMITS the opener, gemma
+    # supplies open+close, laguna supplies close-only), so this cannot be
+    # inferred — each family must state it.
+    prefill_closed_close_only: bool = False
 
     # Per-level think GATE (Step-3.7 mechanics, 2026-07-25): for families
     # where thinking only happens when the opener is PREFILLED, the

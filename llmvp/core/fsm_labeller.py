@@ -86,6 +86,15 @@ _FAMILY_STRUCTURAL_CATS: dict[str, set] = {
     "olmo": {
         ObsCategory.MARKER_THINK,
     },
+    # Laguna is XML-framed (<user>/<assistant>) with the SAME inline
+    # <think>/</think> markers as chatml, and its thinking-off form is the
+    # bare close tag — which _chatml_start_phase already handles as
+    # "prefilled thinking". It MUST be registered here and in the phase
+    # dispatch for the same reason OLMo must: the unknown-family default
+    # leaves a "think>" residue at the head of extracted CONTENT.
+    "laguna": {
+        ObsCategory.MARKER_THINK,
+    },
     "mistral": {
         ObsCategory.MARKER_INST,
         ObsCategory.MARKER_END_TAG,
@@ -277,7 +286,7 @@ def label_atoms(
     #   See _bracket_think_start_phase.
     if family == "harmony":
         phase = Phase.DELIM
-    elif family in ("chatml", "olmo"):
+    elif family in ("chatml", "olmo", "laguna"):
         phase = _chatml_start_phase(atoms)
     elif family in ("tekken", "mistral"):
         phase = _bracket_think_start_phase(atoms)

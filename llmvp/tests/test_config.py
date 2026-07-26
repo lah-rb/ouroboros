@@ -166,8 +166,17 @@ def test_format_schema_loading():
         schema = load_schema(family)
         assert schema.family == family
         assert schema.tokens.msg_open
-        assert schema.tokens.msg_close
         assert schema.tokens.gen_stop
+        # Every role must have SOME close token — either the generic one or a
+        # per-role override. Laguna (2026-07-26) is the first family that is
+        # fully per-role (<user>...</user>), so requiring a generic msg_close
+        # would have forced a fake value into its spec that could leak into
+        # rendered output. The real invariant is "no role closes with nothing".
+        for role in schema.roles:
+            rt = schema.role_tokens.get(role)
+            assert schema.tokens.msg_close or (
+                rt and rt.msg_close
+            ), f"{family}/{role} has no close token, generic or per-role"
 
 
 def test_format_renderer_harmony():
@@ -752,3 +761,64 @@ def test_max_concurrent_requests_is_optional_and_defaults_by_mode():
     # an explicit value still pins the width — the machinery is kept
     pinned = SimpleNamespace(max_concurrent_requests=3, decode_mode="batched")
     assert resolve_working_seats(pinned) == 3
+
+
+def test_laguna_family_renders_its_xml_framing_and_close_only_thinking(monkeypatch):
+    """Laguna onboarding (2026-07-26). PREPARED but never rendered against the
+    real model — the arch is absent from our b9860 llama.cpp build.
+
+    Three things this pins, each of which burned a prior onboarding:
+    - per-role XML framing (<user>...</user>), NOT chatml's <|im_start|>, so
+      it is a real family rather than a chatml alias;
+    - thinking ON prefills the OPEN tag (template: "<assistant>" + "<think>");
+    - thinking OFF prefills the CLOSE TAG ALONE. A THIRD variant — step-3.7
+      OMITS the opener, gemma-4 supplies a full empty block, laguna supplies
+      close-only — so it cannot be inferred from the other families.
+
+    NOTE: the first version of this test wrapped the thinking-OFF assertions in
+    a signature check that silently skipped them, so mutating the close-only
+    branch changed nothing. It drives the real config path now.
+    """
+    from types import SimpleNamespace
+
+    import formats.renderer as rmod
+    from formats.registry import clear_cache, get_renderer
+
+    clear_cache()
+    r = get_renderer("laguna")
+
+    sys_block = r.render_system(persona="PERSONA")
+    assert sys_block.startswith("<system>"), sys_block[:40]
+    assert sys_block.endswith("</system>\n")
+    assert "<|im_start|>" not in sys_block, "leaked chatml framing"
+
+    def _cfg(thinking: bool):
+        return SimpleNamespace(model=SimpleNamespace(thinking=thinking))
+
+    monkeypatch.setattr(rmod, "get_config", lambda: _cfg(True), raising=False)
+    import core.config as ccfg
+
+    monkeypatch.setattr(ccfg, "get_config", lambda: _cfg(True))
+    on = r.render_generation_prompt()
+    assert on.startswith("<assistant>"), on[:40]
+    assert "<think>" in on, f"thinking ON must prefill the opener: {on!r}"
+
+    monkeypatch.setattr(ccfg, "get_config", lambda: _cfg(False))
+    off = r.render_generation_prompt()
+    assert "</think>" in off, f"thinking OFF must prefill the close tag: {off!r}"
+    assert "<think>" not in off.replace("</think>", ""), (
+        f"laguna must NOT supply an opener when thinking is off (that is the "
+        f"gemma form, not this one): {off!r}"
+    )
+
+
+def test_laguna_is_registered_in_fsm_labeller():
+    """The OLMo lesson: a family with <think> markers that is NOT registered
+    falls to the unknown-family default, which left a 'think>' residue at the
+    head of extracted CONTENT (a SyntaxError as line 1 of a generated file) and
+    captured zero thinking. Registration is not optional for a thinking family.
+    """
+    from core.fsm_labeller import _FAMILY_STRUCTURAL_CATS, _structural_cats_for
+
+    assert "laguna" in _FAMILY_STRUCTURAL_CATS, "laguna unregistered — see OLMo"
+    assert _structural_cats_for("laguna") == _structural_cats_for("chatml")

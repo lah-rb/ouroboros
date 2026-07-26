@@ -1,0 +1,96 @@
+# Laguna-S-2.1 (Poolside) — PREPARED, NOT YET LOADABLE.
+#
+# BLOCKER: the `laguna` arch is absent from our llama.cpp build. Shipped lib is
+# b9860 (libllama.0.0.9860.dylib); laguna support lands at b10087 via PR #25165
+# (Poolside's own implementation; S-2.1 shares the `laguna` arch with XS.2/M.1).
+# Sources disagree on whether it merged upstream or still needs the PR branch —
+# CHECK before choosing a build source. Poolside also maintains a fork branch
+# `laguna` carrying DFlash speculative decoding. A rebuild unlocks this model;
+# it does NOT unlock EAGLE (still no C API for it).
+#
+# KV GEOMETRY (GGUF headers, 2026-07-26, computed BEFORE any load — the rule
+# that exists because reboot #3 was precomputable):
+#   48 layers, MoE 256 experts / 10 used, kv_heads 8, k=v=128,
+#   per-layer heterogeneous head_count [48,72,72,72,48,72] x8,
+#   sliding_window 512, 1,048,576 trained context,
+#   weights 57.6 GB (IQ4_XS, 3 shards)  ->  192 KB/token with swa_full
+#
+#     n_ctx    KV GB    total    vs the REAL 113 GB wired limit
+#      32768     6.4     64.0    very safe
+#      65536    12.9     70.5    safe
+#     131072    25.8     83.3    <- THIS CONFIG, ~30 GB headroom
+#     262144    51.5    109.1    over the practical ceiling
+#
+# The most comfortable geometry profiled on this box (gpt-oss needs 100.6 GB
+# for its 524k pool; mistral-medium needs 65k just to fit).
+#
+# sliding_window is 512, so WITHOUT swa_full most layers would hold 512 cells
+# and KV would be trivial — but batched mode REQUIRES swa_full, so 192 KB/token
+# is the figure that applies.
+#
+# EVERYTHING HERE IS UNVALIDATED. The numbers are arithmetic from headers and
+# formats/laguna.yaml is read from the chat template, not observed. Before
+# trusting either: a render probe, a thinking on/off probe, and
+# dev/memguard_boot_probe.sh at this n_ctx. The tekken family shipped with
+# `thinking: true` LYING for weeks because nobody rendered it.
+
+app:
+  host: 0.0.0.0
+  port: 8008
+  log_level: info
+  cors_origins:
+  - '*'
+  backend_timeout: 180
+  openai_shim: true
+graphql:
+  max_query_depth: 10
+  max_tokens: 131072
+  max_aliases: 50
+  introspection_enabled: true
+model:
+  name: Laguna-S-2.1
+  family: laguna
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Laguna-S-2.1-GGUF/Laguna-S-2.1-UD-IQ4_XS-00001-of-00003.gguf
+  n_ctx: 131072
+  kv_preflight_gb: 96
+  model_max_context: 1048576
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: true
+  swa_full: true
+  kv_unified: true
+  flow_kv_cache: false
+  session_full_replay: true
+  resident_seq_cache: true
+  context_refresh_drain_s: 300
+prompt:
+  persona_file: ./knowledge/SOUL.md
+generation:
+  max_tokens_default: 32768
+  temperature_default: 1.0
+  top_p: 1.0
+  top_k: 0
+  min_p: 0.0
+  presence_penalty: 0.0
+  repeat_penalty: 1.05
+  session_temp_floor: 0.35
+  streaming_default: true
+knowledge:
+  # MUST be regenerated for this model — knowledge is PRE-TOKENIZED, and
+  # laguna uses a gpt2 tokenizer (vocab 100352) while gpt-oss uses harmony.
+  # Feeding another model's tokens.bin is silent garbage, not an error.
+  tokens_bin: ./data/laguna-s-2.1.tokens.bin
+  token_limit: 32768
+resources:
+  decode_mode: batched
+  cpu_threads: 15
+  jit_concurrency_limit: null
+tools:
+  enabled: false
+  max_iterations: 3
+logging:
+  enabled: true
+  directory: ./logs

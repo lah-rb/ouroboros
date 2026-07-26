@@ -326,8 +326,9 @@ class FormatRenderer:
                 and self.s.thinking.open_tag
                 and self.s.thinking.close_tag
             ):
-                parts.append(self.s.thinking.open_tag)
-                parts.append("\n")
+                if not self.s.thinking.prefill_closed_close_only:
+                    parts.append(self.s.thinking.open_tag)
+                    parts.append("\n")
                 parts.append(self.s.thinking.close_tag)
 
         return "".join(parts)
