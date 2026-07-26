@@ -351,6 +351,61 @@ gap in 11 all get it at once.
 gpt-oss (flow_kv_cache unsafe, resident_seq_cache is session-scoped). That gap
 is the thing 11b would close.
 
+### 11c. Speculative decoding for swarm decode — GATED on one measurement
+
+The lesser lever (prefill is ~82% of wall clock on real workloads; this trims
+the other 18%), but the precondition turns out to be satisfied and it has
+never been tested in the regime that matters.
+
+**Why revisit.** SD was measured HARMFUL single-stream at ~65 tok/s. That says
+little about swarm workers at 2-6 tok/s per stream — a rate which looks slow
+but is the correct consequence of sharing one device across many streams, not
+idle hardware.
+
+**The precondition IS met.** Derived from the 2026-07-26 decode ladder, the
+marginal cost of adding a token to a batched step falls monotonically and has
+NOT flattened at N=128:
+
+    N       1     2     4     8    16    32    48    64    96   128
+    ms/tok 19.8  13.6  10.5   9.3   7.3   6.9   5.7   4.9   4.25  3.62
+
+Cheap extra tokens per step is exactly what SD needs. Had this flattened, the
+idea would be dead.
+
+**The catch: SD and batching harvest the SAME slack.** At N=1 a token costs
+19.8 ms — huge headroom, which is why SD is attractive single-stream in theory.
+By N=64 it is 4.9 ms and most of that slack is already banked by batching.
+Break-even acceptance at N=64 (sub-linear batch-cost fit):
+
+    K=3  batch 64->192 (x2.21 step)  needs ~65% acceptance
+    K=4  batch 64->256 (x2.71 step)  needs ~70%
+    K=6  batch 64->384 (x3.63 step)  needs ~78%
+
+Note it gets HARDER as K grows — the opposite of the single-stream case.
+
+**Two blockers.**
+- The batched engine has NO speculative path. `LlamaNGramMapDecoding` is wired
+  per-instance via `draft_model=` on the POOL path only; `grep draft
+  inference/batched_engine.py` returns nothing. Swarms run batched, so this is
+  a build, not a config flip.
+- Our draft is n-gram/prompt-lookup, not a draft model (EAGLE-3 is in llama.cpp
+  C++ but unbound in our fork — see the llmvp-binding memory). Prompt-lookup
+  accepts well only when output COPIES from input. Swarm workers do echo
+  contract signatures, type names and imports from a shared spec, which is
+  plausibly our best case; novel function bodies will not copy, and those are
+  most of the tokens.
+
+**THE GATE — do this before writing any engine code.** Pool mode already has
+working speculative. Run it on representative swarm worker prompts and record
+accepted-vs-proposed tokens. One afternoon, no new engine code, decisive:
+
+    acceptance >= 70%  -> build batched SD; expect ~1.1-1.3x on swarm decode
+    acceptance <  65%  -> it can only lose. Close the question for good rather
+                          than relitigating it every few months.
+
+Record the measured rate either way — a null result here is worth keeping,
+because "speculative decoding on Mac" keeps coming back up.
+
 ## 12. Small items (grab-bag)
 
 - Agent-side identical-retry backoff: the KV-eviction and anti-gut loops
