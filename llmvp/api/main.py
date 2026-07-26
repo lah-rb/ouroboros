@@ -442,6 +442,14 @@ def main():
 def _register_foreground_pid() -> None:
     """Claim PID_FILE for this foreground server, refusing if one is live."""
     existing = _read_pid_file()
+    # OUR OWN pid is already there on the --backend path: the parent writes the
+    # CHILD's pid, then the child re-execs main.py without --backend and lands
+    # here. Without this check the child sees itself registered, concludes a
+    # server is already running, and refuses to start — which is exactly how
+    # the 2026-07-26 ceiling run found no server ("A server is already running
+    # (PID: 91015)" moments after "Server started in background (PID: 91015)").
+    if existing == os.getpid():
+        return
     if existing is not None and _owning_server_process(existing) is not None:
         raise RuntimeError(
             f"❌ A server is already running (PID: {existing}) — stop it first"

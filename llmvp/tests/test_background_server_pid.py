@@ -275,3 +275,25 @@ def test_main_registers_and_releases_around_the_foreground_server(
         "it, which is how one held port 8008 for seven hours"
     )
     assert not pid_file.exists(), "PID file not released on clean exit"
+
+
+def test_backend_child_does_not_refuse_its_own_registration(pid_file, monkeypatch):
+    """REGRESSION 2026-07-26. start_background_server writes the CHILD's pid,
+    then the child re-execs main.py WITHOUT --backend and reaches
+    _register_foreground_pid. It must recognize its own pid rather than
+    concluding a server is already running.
+
+    The first version of the foreground-registration change did not, so every
+    --backend start killed itself:
+        "Server started in background (PID: 91015)"
+        "RuntimeError: A server is already running (PID: 91015)"
+    Caught in production, not by the unit tests — those all used a pid
+    different from the one in the file, which is the one case that works.
+    """
+    pid_file.write_text("4321")
+    monkeypatch.setattr(main.os, "getpid", lambda: 4321)  # we ARE 4321
+    monkeypatch.setattr(
+        main.psutil, "Process", lambda pid: _FakeProc(["python", "api/main.py"])
+    )
+    main._register_foreground_pid()  # must NOT raise
+    assert pid_file.read_text().strip() == "4321"
