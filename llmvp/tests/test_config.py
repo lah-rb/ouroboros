@@ -812,13 +812,17 @@ def test_laguna_family_renders_its_xml_framing_and_close_only_thinking(monkeypat
     )
 
 
-def test_laguna_is_registered_in_fsm_labeller():
-    """The OLMo lesson: a family with <think> markers that is NOT registered
-    falls to the unknown-family default, which left a 'think>' residue at the
-    head of extracted CONTENT (a SyntaxError as line 1 of a generated file) and
-    captured zero thinking. Registration is not optional for a thinking family.
-    """
-    from core.fsm_labeller import _FAMILY_STRUCTURAL_CATS, _structural_cats_for
+def test_laguna_gets_think_marker_handling_in_the_fsm():
+    """The OLMo lesson, restated for the derivation refactor (2026-07-26).
 
-    assert "laguna" in _FAMILY_STRUCTURAL_CATS, "laguna unregistered — see OLMo"
+    An unregistered thinking family used to fall to the unknown-family default
+    and leave a "think>" residue at the head of extracted CONTENT — a
+    SyntaxError as line 1 of a generated file — while capturing zero thinking.
+    Registration was a manual two-place edit; it is now DERIVED from
+    formats/laguna.yaml, so this asserts the OUTCOME rather than table
+    membership: laguna must be treated exactly like chatml.
+    """
+    from core.fsm_labeller import _shape_for, _structural_cats_for, _ThinkShape
+
+    assert _shape_for("laguna") is _ThinkShape.ANGLE
     assert _structural_cats_for("laguna") == _structural_cats_for("chatml")

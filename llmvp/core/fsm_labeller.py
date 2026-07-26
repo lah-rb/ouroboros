@@ -72,45 +72,116 @@ _ALWAYS_STRUCTURAL_CATS = {
 #
 # Only unambiguous marker-words belong here — atoms the featurizer
 # emits only inside a structural <|...|> or [...] context.
-_FAMILY_STRUCTURAL_CATS: dict[str, set] = {
-    "harmony": set(),
-    "chatml": {
-        ObsCategory.MARKER_THINK,
-    },
-    # OLMo is chatml-framed with inline <think> tags (formats/olmo.yaml —
-    # chatml + the functions declaration). It MUST alias chatml here and in
-    # the phase dispatch: the unknown-family default (DELIM, no think-marker
-    # handling) mis-split OLMo output, leaving a "think>" residue at the head
-    # of extracted CONTENT (a SyntaxError as combat.py line 1, 2026-07-23)
-    # and capturing NO thinking at all (thinking_content=0 on every call).
-    "olmo": {
-        ObsCategory.MARKER_THINK,
-    },
-    # Laguna is XML-framed (<user>/<assistant>) with the SAME inline
-    # <think>/</think> markers as chatml, and its thinking-off form is the
-    # bare close tag — which _chatml_start_phase already handles as
-    # "prefilled thinking". It MUST be registered here and in the phase
-    # dispatch for the same reason OLMo must: the unknown-family default
-    # leaves a "think>" residue at the head of extracted CONTENT.
-    "laguna": {
-        ObsCategory.MARKER_THINK,
-    },
-    "mistral": {
-        ObsCategory.MARKER_INST,
-        ObsCategory.MARKER_END_TAG,
-        ObsCategory.MARKER_THINK,
-    },
-    "tekken": {
-        ObsCategory.MARKER_INST,
-        ObsCategory.MARKER_END_TAG,
-        ObsCategory.MARKER_THINK,
-    },
+# ── Family behaviour: DERIVED from the format spec, not hardcoded ─────────
+#
+# Registering a family used to mean editing TWO places here — this table and
+# the phase dispatch below — with nothing enforcing that you did both. The
+# OLMo incident is what that costs: it was added to one and not the other, fell
+# to the unknown-family default, and left a "think>" residue at the head of
+# extracted CONTENT (a SyntaxError as line 1 of combat.py, 2026-07-23) while
+# capturing thinking_content=0 on every call.
+#
+# Both behaviours are derivable from what formats/<family>.yaml ALREADY
+# declares, so a new family now needs ZERO edits in this file:
+#
+#   thinking.style == "channel"      -> harmony shape (start DELIM)
+#   thinking.style == "inline_tags"  -> tag shape, angle vs bracket read from
+#                                       the literal open_tag
+#   framing contains "[INST]"        -> mistral INST markers are structural
+#
+# Overrides below are for families whose SPEC and FSM behaviour genuinely
+# disagree, each with the reason stated. Do not add one to avoid understanding
+# a family — that is how the parallel table started.
+
+
+class _ThinkShape(str, Enum):
+    CHANNEL = "channel"      # harmony: <|channel|>name<|message|>
+    ANGLE = "angle"          # chatml/olmo/laguna: <think></think>
+    BRACKET = "bracket"      # tekken/mistral: [THINK][/THINK]
+    NONE = "none"            # pure content from the first token
+
+
+# family -> (shape, reason). ONLY for real spec/FSM disagreements.
+_SHAPE_OVERRIDES: dict[str, tuple["_ThinkShape", str]] = {
+    # gemma declares style: inline_tags with <|channel>thought / <channel|>,
+    # but its template PRE-SUPPLIES an already-closed empty thought block, so
+    # in practice generation is pure content from the first token and the
+    # featurizer emits no think markers for those literals. Deriving ANGLE
+    # here would change a working family's start phase on a technicality.
+    "gemma": (_ThinkShape.NONE, "template pre-closes the thought block"),
 }
 
 
+# Family names the FSM is called with that have NO format spec of their own.
+# "mistral" is the legacy name for the tekken family (formats/tekken.yaml) —
+# there is no formats/mistral.yaml, and callers still pass it (see the
+# test_mistral_* cases). This alias was previously encoded only IMPLICITLY, by
+# repeating tekken's values under a "mistral" key in the hardcoded table; the
+# derivation refactor surfaced it. Keep it explicit rather than reintroducing
+# a parallel table.
+_FAMILY_ALIASES: dict[str, str] = {"mistral": "tekken"}
+
+
+def _spec_for(family: str):
+    """The format spec, or None when it cannot be loaded.
+
+    None is not a failure path to fix — the FSM must keep labelling if the
+    format package is unavailable (it is imported by tooling that does not
+    always have the server's config). Callers fall back to the safe default.
+    """
+    try:
+        from formats.registry import load_schema
+
+        return load_schema(_FAMILY_ALIASES.get(family, family))
+    except Exception:  # noqa: BLE001 — labelling must not depend on formats
+        return None
+
+
+def _shape_for(family: str) -> "_ThinkShape":
+    if family in _SHAPE_OVERRIDES:
+        return _SHAPE_OVERRIDES[family][0]
+    spec = _spec_for(family)
+    if spec is None:
+        return _ThinkShape.CHANNEL  # unknown -> DELIM, the safe default
+    style = getattr(spec.thinking, "style", "")
+    if style == "channel":
+        return _ThinkShape.CHANNEL
+    if style == "none":
+        return _ThinkShape.NONE
+    open_tag = getattr(spec.thinking, "open_tag", "") or ""
+    return _ThinkShape.BRACKET if open_tag.startswith("[") else _ThinkShape.ANGLE
+
+
+def _uses_inst_framing(family: str) -> bool:
+    """Whether [INST]-style framing markers are structural for this family —
+    read from the framing tokens rather than inferred from the thinking tags,
+    because they are independent properties that only happen to coincide in
+    the mistral family today."""
+    spec = _spec_for(family)
+    if spec is None:
+        return False
+    framing = (getattr(spec.tokens, "msg_open", "") or "") + (
+        getattr(spec.tokens, "msg_close", "") or ""
+    )
+    for rt in (getattr(spec, "role_tokens", {}) or {}).values():
+        framing += (getattr(rt, "msg_open", "") or "") + (
+            getattr(rt, "msg_close", "") or ""
+        )
+    return "[INST]" in framing
+
+
 def _structural_cats_for(family: str) -> set:
-    """Atom categories treated as structural (→ D label) for this family."""
-    return _ALWAYS_STRUCTURAL_CATS | _FAMILY_STRUCTURAL_CATS.get(family, set())
+    """Atom categories treated as structural (→ D label) for this family.
+
+    Derived from the format spec — see the note above _ThinkShape.
+    """
+    cats = set(_ALWAYS_STRUCTURAL_CATS)
+    shape = _shape_for(family)
+    if shape in (_ThinkShape.ANGLE, _ThinkShape.BRACKET):
+        cats.add(ObsCategory.MARKER_THINK)
+    if _uses_inst_framing(family):
+        cats |= {ObsCategory.MARKER_INST, ObsCategory.MARKER_END_TAG}
+    return cats
 
 
 def _chatml_start_phase(atoms: list["Atom"]) -> "Phase":
@@ -284,13 +355,17 @@ def label_atoms(
     #   bracket markers [THINK]/[/THINK]. The historical default is
     #   pure content, but Magistral etc. add inline thinking.
     #   See _bracket_think_start_phase.
-    if family == "harmony":
+    # DERIVED from the format spec (see _ThinkShape) — this used to be a
+    # second hardcoded family list that had to be kept in sync with the
+    # structural-category table by hand, which is exactly how OLMo broke.
+    shape = _shape_for(family)
+    if shape is _ThinkShape.CHANNEL:
         phase = Phase.DELIM
-    elif family in ("chatml", "olmo", "laguna"):
+    elif shape is _ThinkShape.ANGLE:
         phase = _chatml_start_phase(atoms)
-    elif family in ("tekken", "mistral"):
+    elif shape is _ThinkShape.BRACKET:
         phase = _bracket_think_start_phase(atoms)
-    elif family == "gemma":
+    elif shape is _ThinkShape.NONE:
         # Gemma has no thinking markers — generation is pure content from
         # the first token (like the no-think Tekken/Mistral case).
         phase = Phase.CONTENT

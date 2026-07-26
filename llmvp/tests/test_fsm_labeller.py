@@ -916,3 +916,84 @@ def test_olmo_family_aliases_chatml_think_handling():
     # Fully-tagged shape.
     ph2 = fsm_extract_phases("<think>\nr\n</think>\nc", family="olmo")
     assert ph2.get("T") == "r" and ph2.get("C") == "c"
+
+
+# ── family behaviour is DERIVED, not hardcoded (2026-07-26) ───────────────
+
+
+def test_derived_family_behaviour_matches_the_old_hardcoded_table():
+    """EQUIVALENCE GUARD for the derivation refactor.
+
+    Family behaviour used to be two hardcoded lists — a structural-category
+    table and a phase-dispatch tuple — that had to be edited together with
+    nothing enforcing it. That is how OLMo broke: added to one, missed in the
+    other, fell to the unknown-family default, and left a "think>" residue as
+    line 1 of a generated file while capturing zero thinking.
+
+    Both are now derived from formats/<family>.yaml. This pins the derivation
+    against the EXACT values the old table held, so the refactor cannot have
+    silently changed a working family. If a value here needs to change, that
+    is a real behaviour change and must be argued for, not edited to green.
+    """
+    from core.featurizer import ObsCategory
+    from core.fsm_labeller import _ALWAYS_STRUCTURAL_CATS, _structural_cats_for
+
+    expected = {
+        "harmony": set(),
+        "chatml": {ObsCategory.MARKER_THINK},
+        "olmo": {ObsCategory.MARKER_THINK},
+        "laguna": {ObsCategory.MARKER_THINK},
+        "mistral": {
+            ObsCategory.MARKER_INST,
+            ObsCategory.MARKER_END_TAG,
+            ObsCategory.MARKER_THINK,
+        },
+        "tekken": {
+            ObsCategory.MARKER_INST,
+            ObsCategory.MARKER_END_TAG,
+            ObsCategory.MARKER_THINK,
+        },
+        "gemma": set(),  # override: template pre-closes the thought block
+    }
+    for family, extra in expected.items():
+        got = _structural_cats_for(family)
+        assert got == (_ALWAYS_STRUCTURAL_CATS | extra), (
+            f"{family}: derived {got - _ALWAYS_STRUCTURAL_CATS}, " f"table said {extra}"
+        )
+
+
+def test_a_new_chatml_fork_needs_no_fsm_edits():
+    """THE POINT of the refactor. laguna was onboarded the same day this
+    landed; before it, that meant remembering two separate registration sites.
+    A family whose spec declares inline <think> tags must get chatml treatment
+    with no entry in this file at all."""
+    from core.featurizer import ObsCategory
+    from core.fsm_labeller import _ThinkShape, _shape_for, _structural_cats_for
+
+    assert _shape_for("laguna") is _ThinkShape.ANGLE
+    assert ObsCategory.MARKER_THINK in _structural_cats_for("laguna")
+    # and it is NOT special-cased
+    from core.fsm_labeller import _SHAPE_OVERRIDES
+
+    assert "laguna" not in _SHAPE_OVERRIDES
+
+
+def test_unknown_family_falls_back_to_the_safe_default():
+    """An unloadable/unknown family must start in DELIM, not CONTENT — a
+    misrouted family that starts in CONTENT silently leaks structural markers
+    into extracted content."""
+    from core.fsm_labeller import _ThinkShape, _shape_for
+
+    assert _shape_for("no-such-family-xyz") is _ThinkShape.CHANNEL
+
+
+def test_inst_framing_is_read_from_framing_not_thinking_tags():
+    """[INST] markers and [THINK] tags are INDEPENDENT properties that only
+    coincide in the mistral family today. Deriving one from the other would
+    mislabel a future family that uses bracket thinking without INST framing.
+    """
+    from core.fsm_labeller import _uses_inst_framing
+
+    assert _uses_inst_framing("tekken") is True
+    assert _uses_inst_framing("chatml") is False
+    assert _uses_inst_framing("laguna") is False
