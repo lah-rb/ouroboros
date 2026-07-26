@@ -121,8 +121,18 @@ canary is **withdrawn** — "always low" is indistinguishable from a fixed low
 policy, i.e. gpt-oss faster at low, not smarter when adaptive.
 
 Next actions live in that file's §8. Cheapest first rung: **run the owed
-pairwise panels on the 13 quarantined highs** — a handful certified breaks the
-two-class ceiling before any new collection.
+pairwise panels on the quarantined highs** — `dev/label_quarantine_v1.json`
+holds **84** of them (52 unanimous 3/3, 31 split, 1 short-votes), not the 13
+of the early pilot. Certifying even the 52 unanimous ones breaks the two-class
+ceiling before any new collection.
+
+**BLOCKED on a corpus re-run (2026-07-26):** the pairwise protocol needs
+final-channel actions, and the stored candidates were mutilated by the
+extraction bug fixed in 59a6d65 — 93% of quarantined highs have no final
+channel at all. The regeneration proved the fix (4,107/4,107 usable) but its
+LEVEL dimension is void: rawCompletion silently dropped `reasoning` (fixed in
+0297fa1), so all three "levels" were identical generations. Re-run
+`dev/cf_regen_swarm.py --run` now that the field is honored, THEN panel.
 
 Remaining format work (unchanged, still useful):
 
