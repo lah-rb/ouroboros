@@ -121,10 +121,67 @@ Token 24 IS `</assistant>` (verified: `</assistant>` tokenizes to exactly
 That works — every test terminated — but a token-level stop cannot be defeated
 by tokenization boundaries the way a string match can. Latent fragility.
 
+## Upstream: same symptom reported, DIFFERENT root cause (checked, 2026-07-26)
+
+llama.cpp PR #25165 (Laguna support) carries a thread on exactly our symptom —
+"reasoning_content consuming entire max_tokens budgets while content remains
+empty":
+
+- **dmmdea:** "load: special_eos_id is not in special_eog_ids - the tokenizer
+  config may be incorrect"
+- **CISC:** "At some point we should add support for multiple `eos` tokens ...
+  however I think for now just adding `</assistant>` to the `eot` list in
+  `llama-vocab.cpp` is acceptable."
+- Fix merged as commit `54f214a` (build **b10018+**): add `</assistant>` as an
+  autoparser stop string "so the server catches it however it is tokenized."
+
+**That root cause does NOT apply to our build.** Verified directly against the
+loaded vocab on b10131:
+
+    token   2 (EOS)          is_eog = True
+    token  24 (</assistant>) is_eog = True
+    token  19 (</think>)     is_eog = False   <- correct; it ends the block, not the turn
+
+Both stop tokens are registered. Two further caveats on transferring their fix:
+the merged remedy lives in **llama-server's autoparser**, and we drive
+llama-cpp-python directly; and our runaway persisted *after* `top_k` was
+corrected to 20. So our thinking runaway is a genuine failure to emit any
+terminator while reasoning — not EOG mis-registration.
+
+What DOES transfer is the workaround: upstream recommends disabling reasoning
+rather than passing chat-template arguments, which is independently what we
+found works (`thinking: false`, above).
+
+## Tool-calling is NOT prompt-induced (checked, 2026-07-26)
+
+Luke's hypothesis, by analogy to gpt-oss needing its calling block withheld:
+does the system prompt lead laguna to tool-call? **No — there is no calling
+block to remove.** The rendered batch-step prompt (10,857 chars) contains:
+
+    <tool_call>      absent        tools            absent
+    <arg_key>        absent        <tool_response>  absent
+
+The only hits for "tool"/"function" are the English words "tooling" and
+"function" in prose. Moreover `knowledge/SOUL.md` explicitly FORBIDS it:
+
+    "Within a single answer you do not invoke tools, run commands, or execute
+     shell directly — the answer IS the request to do those things."
+
+Laguna emitted `<tool_call>` in 41% of turns with zero syntactic prompting and
+against an explicit prohibition. This is baked-in agentic training, not prompt
+leakage — a materially different situation from gpt-oss, where withholding the
+harmony calling block was sufficient.
+
+**The real analogue of that remedy is a logit ban.** `<tool_call>` is a SINGLE
+token — id **25** (`</tool_call>` = 26) — so suppressing it is one `logit_bias`
+entry, not a string filter. Untested; the alternative worth weighing first is
+that laguna is a coding-agent model and wiring its tool protocol to the real
+tool layer may be the intended mode rather than a defect to suppress.
+
 ## Before any tournament placement
 
-1. Fix or accept issue A (batch path) — otherwise every laguna run pays the
-   slower serial fallback.
+1. Decide the tool-call posture: logit-ban token 25, or wire laguna's tool
+   protocol through. 41% of turns currently produce nothing usable.
 2. Re-run with a longer bound to see whether it clears functional/quality, not
    just structural.
 3. Compare against gpt-oss on the SAME bound; today's numbers are laguna-only.
