@@ -40,12 +40,16 @@ stop_server(){
   local pid
   pid=$(pgrep -f "[a]pi/main.py" | head -1) || true
   [ -n "${pid:-}" ] || return 0
-  kill -TERM "$pid" 2>/dev/null || true   # never SIGKILL: hard kill leaks the pool
-  for _ in $(seq 1 360); do
+  kill -TERM "$pid" 2>/dev/null || true   # never SIGKILL: it leaks the pool
+  # 900s from MEASUREMENT, not theory: tearing down the 74GB APEX server took
+  # 560s wall (SIGTERM 16:37:50 -> exit 16:47:10, 2026-07-27). The first patch
+  # here guessed 360s from context_refresh_drain_s=300 and would still have
+  # failed.
+  for _ in $(seq 1 900); do
     pgrep -f "[a]pi/main.py" >/dev/null || { log "  server $pid down"; return 0; }
     sleep 1
   done
-  log "  ERROR server $pid did not exit on SIGTERM after 360s"
+  log "  ERROR server $pid did not exit on SIGTERM after 900s"
   return 1
 }
 
