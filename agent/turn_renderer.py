@@ -359,6 +359,23 @@ class TurnRenderer:
         return (
             "Respond with JSON matching this shape:\n\n"
             f"```json\n{example_json}\n```\n\n"
+            # A CLOSING DIRECTIVE, not just the example. Ending on a 40-line
+            # JSON blob leaves the last instruction "here is a shape" and never
+            # "emit only this", so a model inclined to preamble opens with
+            # "I'll examine the project files to determine…" — which a JSON
+            # extractor reads as nothing at all.
+            #
+            # Measured on the exact env-detection prompt that failed in
+            # production (laguna-S-2.1, 6 reps per arm, both temperatures):
+            # as-shipped 1/6 JSON, with this line 6/6. Identical at t=0.2 and
+            # t=1.0, so it is arrangement, not sampling.
+            #
+            # The steps that never had this problem already close this way —
+            # design_architecture ends "Now return ONLY the single fenced JSON
+            # blueprint … Do NOT write files, code, prose, or commands."
+            "Return ONLY the fenced JSON object above — no preamble, "
+            "explanation, or commentary. A JSON extractor consumes this "
+            "response directly.\n\n"
             "> "
         )
 

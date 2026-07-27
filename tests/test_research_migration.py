@@ -94,7 +94,16 @@ def test_plan_queries_renders_with_all_inputs(
     assert "Common pitfalls" in prompt
     assert "❌" not in prompt
     assert "✅" not in prompt
-    assert "Return ONLY" not in prompt
+    # "Return ONLY" is no longer legacy template noise: the json_document
+    # ENVELOPE now supplies a closing output-directive after the schema example.
+    # Ending on a 40-line JSON blob left the last instruction as "here is a
+    # shape" and never "emit only this", and a model inclined to preamble
+    # opened with "I'll examine the project files…" — which a JSON extractor
+    # reads as nothing. Measured on the exact prompt that failed in production
+    # (laguna-S-2.1, 6 reps/arm): 1/6 JSON as-shipped, 6/6 with the directive,
+    # identical at t=0.2 and t=1.0. The instruction TEMPLATE still carries none
+    # of this; it comes from the envelope.
+    assert "Return ONLY the fenced JSON object above" in prompt
 
     # Envelope with example from research_queries schema
     assert "```json" in prompt
