@@ -42,6 +42,47 @@ logger = logging.getLogger(__name__)
 
 MAX_INVESTIGATION_TURNS = 8
 
+# The marker `_sweep_after_project_ops` records instead of a filename, since an
+# environment fix has no edit target. Kept here because the warning below has to
+# phrase that case differently.
+ENV_ATTEMPT_TARGET = "<environment>"
+
+
+def repeat_target_warning(key: str, count: int) -> str:
+    """The warning shown when the same target has been fixed >=2 times in vain.
+
+    SUBJECT MATTERS. "engine.py has failed 2 times" names the FILE, so it reads
+    just as easily as "the edits failed to land on disk" — a mechanical write
+    failure the model can do nothing about — as "editing it did not resolve the
+    goal". Only the second reading is true, and only the second hints that the
+    defect may not be in that file at all. TRAP_BRIEF §7 records a run where the
+    model re-derived a correct root cause 26 times and patched the wrong target
+    every time; the ambiguous phrasing gave it no reason to relocalise.
+
+    So: name the ACTION as the subject, state the CRITERION it failed against
+    (the goal, not the write), rule out the mechanical reading explicitly, and
+    offer two equally-weighted next moves rather than a prohibition. "DO NOT"
+    framing has its own failure modes — models either over-comply and avoid even
+    partial-match targets, or rebel against the prohibition.
+    """
+    if key == ENV_ATTEMPT_TARGET:
+        # "editing <environment>" would be nonsense, and the mechanical reading
+        # to rule out is different: these commands ran and exited clean.
+        return (
+            f"CRITICAL: {count} environment fixes have been applied and the "
+            f"goal still fails. Each one reported success, so the issue is not "
+            f"that they failed to run — it is that running them did not "
+            f"resolve the failure. Either the environment change was the wrong "
+            f"one, or the defect is not environmental."
+        )
+    return (
+        f"CRITICAL: editing {key} has failed to resolve the goal {count} "
+        f"times. The problem is not that the edits failed to apply — they "
+        f"applied. It is that they did not fix the failure. Either sharpen "
+        f"the instruction for {key}, or the defect lies elsewhere and this "
+        f"file is where it merely surfaces."
+    )
+
 
 def _extract_traceback(terminal_output: str) -> str:
     """Extract a Python traceback from terminal output, if present.
@@ -586,18 +627,10 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         if after:
             parts.append(f"Current state: {after}")
 
-        # Target-repeat guard. 902 round: the prior "Note: X has
-        # been patched multiple times… Consider a different target"
-        # framing was soft advice that the model routinely read
-        # past. Using "DO NOT" can create its own failure modes
-        # (models either over-comply and avoid even partial-match
-        # targets, or rebel against prohibition framing). We use
-        # "CRITICAL:" with the failure count baked in and two
-        # equally-weighted next actions: tighten the instruction
-        # (if this really is the right target and earlier fixes
-        # missed the point) or pick a different approach. The
-        # model chooses between them based on evidence instead of
-        # being told what to do.
+        # Target-repeat guard. 902 round: the prior "Note: X has been patched
+        # multiple times… Consider a different target" framing was soft advice
+        # that the model routinely read past. See `repeat_target_warning` for
+        # the current phrasing and why it is worded the way it is.
         target_counts: dict[str, int] = {}
         for att in recent:
             if not isinstance(att, dict):
@@ -616,11 +649,7 @@ async def action_start_diagnosis_session(step_input: StepInput) -> StepOutput:
         if repeat_pairs:
             parts.append("")
             for key, count in repeat_pairs:
-                parts.append(
-                    f"CRITICAL: {key} has failed {count} times. "
-                    f"Tighten the instruction for it or figure out "
-                    f"a new approach."
-                )
+                parts.append(repeat_target_warning(key, count))
         parts.append("")
 
     # ── ## Already done / ## External findings (ops ports) ─────

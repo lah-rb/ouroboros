@@ -2535,8 +2535,13 @@ def _prior_diagnosis_context(goal: Any) -> tuple[str, str]:
 
 # The repeat-target warning keys on "target_file:target_symbol" and skips empty
 # keys, so an environment fix needs a stable non-empty marker to accumulate a
-# count. It renders as "CRITICAL: <environment> has failed N times."
-_ENV_ATTEMPT_TARGET = "<environment>"
+# count. Re-exported rather than redeclared so the marker the sweep WRITES and
+# the marker the diagnosis seed READS cannot drift: on a drift the env attempt
+# falls through to the file phrasing and renders "editing <environment> has
+# failed to resolve the goal", which is nonsense the model cannot act on.
+from agent.actions.diagnosis_session_actions import (  # noqa: E402
+    ENV_ATTEMPT_TARGET as _ENV_ATTEMPT_TARGET,
+)
 
 
 async def _sweep_after_project_ops(

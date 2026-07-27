@@ -5,7 +5,8 @@ route `goal.failed_attempts` stayed `[]` forever. That silently disabled three
 mechanisms which are all already built and merely starved of input:
 
   - the "## Prior attempts" section of the diagnose seed
-  - the repeat-target "CRITICAL: X has failed N times" warning
+  - the repeat-target CRITICAL warning ("N fix attempts have targeted X and
+    the goal still fails")
   - the stuck-goal web-search gate (`search_gate` requires >= 2 attempts)
 
 So every diagnose cycle on that route was seeded byte-identically and the model,
@@ -93,3 +94,73 @@ async def test_attempt_carries_the_diagnosis_and_pre_headline():
     att = goal.failed_attempts[0]
     assert "PyYAML" in att.diagnosis_summary
     assert "ModuleNotFoundError" in att.pre_headline
+
+
+class TestRepeatWarningWording:
+    """The warning's SUBJECT must be the action, not the file.
+
+    "engine.py has failed 2 times" reads just as easily as "the edits failed to
+    land on disk" — a mechanical failure the model cannot act on — as "editing
+    it did not fix the goal". Only the second is true, and only the second hints
+    the defect may not be in that file at all. TRAP_BRIEF §7 records a run where
+    116 of 116 edits hit the wrong package while the runtime error named the
+    right file 117 times.
+    """
+
+    def test_the_subject_is_the_edit_not_the_file(self):
+        from agent.actions.diagnosis_session_actions import repeat_target_warning
+
+        w = repeat_target_warning("engine.py", 2)
+        assert "editing engine.py has failed to resolve the goal 2 times" in w
+        # The ambiguous form must not survive anywhere in the sentence.
+        assert "engine.py has failed 2 times" not in w
+
+    def test_it_rules_out_the_write_having_failed(self):
+        from agent.actions.diagnosis_session_actions import repeat_target_warning
+
+        w = repeat_target_warning("engine.py", 3)
+        assert "not that the edits failed to apply" in w
+
+    def test_it_offers_relocalisation_as_a_peer_option(self):
+        """Two equally-weighted next moves, not a prohibition — "DO NOT" framing
+        makes models avoid even partial-match targets, or rebel outright."""
+        from agent.actions.diagnosis_session_actions import repeat_target_warning
+
+        w = repeat_target_warning("engine.py", 2)
+        assert "sharpen the instruction" in w
+        assert "defect lies elsewhere" in w
+        assert "DO NOT" not in w
+
+    def test_symbol_qualified_targets_read_naturally(self):
+        from agent.actions.diagnosis_session_actions import repeat_target_warning
+
+        w = repeat_target_warning("engine.py:resolve_turn", 2)
+        assert "editing engine.py:resolve_turn has failed" in w
+
+    def test_environment_attempts_get_their_own_phrasing(self):
+        """"editing <environment>" would be nonsense, and the mechanical reading
+        to rule out is different: those commands ran, and exited clean."""
+        from agent.actions.diagnosis_session_actions import (
+            ENV_ATTEMPT_TARGET,
+            repeat_target_warning,
+        )
+
+        w = repeat_target_warning(ENV_ATTEMPT_TARGET, 2)
+        assert "editing" not in w
+        assert "2 environment fixes have been applied" in w
+        assert "not that they failed to run" in w
+        assert "is not environmental" in w
+
+    def test_env_marker_matches_the_one_the_sweep_records(self):
+        """A drift between these two makes every env attempt fall through to the
+        file phrasing and render "editing <environment> has failed"."""
+        from agent.actions.diagnosis_session_actions import ENV_ATTEMPT_TARGET
+        from agent.actions.mission_actions import _ENV_ATTEMPT_TARGET
+
+        assert ENV_ATTEMPT_TARGET == _ENV_ATTEMPT_TARGET
+
+    def test_count_is_interpolated_not_hardcoded(self):
+        from agent.actions.diagnosis_session_actions import repeat_target_warning
+
+        assert "7 times" in repeat_target_warning("a.py", 7)
+        assert "4 environment fixes" in repeat_target_warning("<environment>", 4)
