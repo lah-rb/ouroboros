@@ -287,6 +287,17 @@ class GoalRecord(BaseModel):
     # re-litigated (prevents looping on an expected first-pass cross-module
     # import). See structural_block_reason in agent/actions/reporting_actions.py.
     import_reviewed: bool = False
+    # Structural lint gate: the same one-pass contract as import_reviewed, for
+    # lint. Linting used to block HARD — every finding had to be fixed or the
+    # file never cleared the structural gate — until a model hit a ruff error it
+    # could not actually fix and looped until the backstop. The reaction was to
+    # make lint purely advisory, which overshot: a real defect
+    # (F821 Undefined name) was recorded, ignored, and the goal closed, so it
+    # resurfaced in the functional phase at diagnose-loop cost instead of being
+    # a one-line fix at write time. This is the middle path — ASK once, accept
+    # whatever comes back — so an unfixable finding costs one cheap look rather
+    # than a run. See structural_block_reason in agent/actions/reporting_actions.py.
+    lint_reviewed: bool = False
     # Brownfield "absent = the task" marker. A functional goal that names a
     # capability which does NOT exist yet and must be BUILT (not verified or
     # bug-fixed). Set by the directive planner (action_derive_directive_goals);

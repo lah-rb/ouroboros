@@ -1524,7 +1524,28 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
         )
 
         diag_candidates = _diagnose_batch_candidates(mission, working_dir)
-        if len(diag_candidates) >= 2:
+        # A lint-blocked goal makes the burst worth firing on its own. The >=2
+        # threshold is an economy heuristic against the SERIAL diagnose_issue a
+        # hard gate failure would otherwise take; for lint the counterfactual is
+        # spending nothing at all, so the comparison is one cheap one-shot
+        # worker vs. shipping a known defect into the functional phase. Bursting
+        # at one keeps the ask deterministic instead of leaving a lone
+        # lint-blocked goal stalled until some unrelated goal also fails.
+        lint_blocked = [
+            g
+            for g, _, last in diag_candidates
+            if structural_block_reason(g, getattr(last, "checks_failed", []) or [])
+            == "lint"
+        ]
+        if len(diag_candidates) >= 2 or lint_blocked:
+            # Mark the lint question ASKED, not answered — before dispatch and
+            # persisted immediately, so a reload (or an unconfident triage that
+            # books nothing) cannot re-litigate it. This is the bound that makes
+            # blocking safe: an unfixable finding costs one look, never a run.
+            for g in lint_blocked:
+                g.lint_reviewed = True
+            if lint_blocked and effects:
+                await effects.save_mission(mission)
             dispatch_config = {
                 "goal_id": "",
                 "goal_description": "Triage all gate-failed goals in one batch",
@@ -1794,6 +1815,33 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                 f"that module exists. {getattr(last, 'summary', '')[:200]}"
             )
             logger.info("Structural sweep: import review for %s", file_path)
+        elif block_reason == "lint" and goal.reports:
+            # Fallback ask, for the paths the triage burst does not cover
+            # (serial mode; a goal already in the triaged ledger). Same
+            # one-pass contract: flag set on ASK, persisted before dispatch.
+            #
+            # Framed as a DECISION rather than an order because the history
+            # here is a hard-blocking gate that deadlocked on an unfixable
+            # finding. "Fix it if you can, say so if you can't" is the whole
+            # point; declining is a legitimate, terminal answer.
+            last = goal.reports[-1]
+            goal.lint_reviewed = True
+            if effects:
+                await effects.save_mission(mission)
+            lint_out = (getattr(last, "terminal_output", "") or "")[:800]
+            fix_directive = (
+                f"{file_path} compiles and imports but FAILS LINT "
+                f"({', '.join(getattr(last, 'checks_failed', []))}). The "
+                f"auto-fixable findings have already been applied, so what "
+                f"remains needed a human-shaped decision. Decide: if this is a "
+                f"real defect — an undefined name, an unused or missing "
+                f"import, a shadowed binding — FIX it now. If it is a style "
+                f"preference, or a finding you cannot resolve without changing "
+                f"behaviour, make NO change and say why. You get ONE pass; the "
+                f"goal proceeds either way."
+                + (f"\n\nLint output:\n{lint_out}" if lint_out else "")
+            )
+            logger.info("Structural sweep: lint review for %s", file_path)
         elif goal.reports:
             last = goal.reports[-1]
             if getattr(last, "checks_failed", []):

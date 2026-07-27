@@ -2149,8 +2149,8 @@ _DIAGNOSE_WORKER_PROMPT = (
 
 def _diagnose_batch_candidates(mission: Any, working_directory: str) -> list[tuple]:
     """Gate-failed structural goals eligible for one-shot triage: file on
-    disk, last report failed and is not already a diagnosis, not an
-    import-decision case, and not already triaged by a prior burst."""
+    disk, last report failed (or lint-blocked) and is not already a diagnosis,
+    not an import-decision case, and not already triaged by a prior burst."""
     import os
 
     from agent.actions.mission_actions import structural_block_reason
@@ -2168,12 +2168,19 @@ def _diagnose_batch_candidates(mission: Any, working_directory: str) -> list[tup
         if not goal.reports or goal.id in triaged:
             continue
         last = goal.reports[-1]
-        if getattr(last, "status", "") != "failed":
-            continue
         if getattr(last, "flow", "") in ("diagnose_issue", "diagnose_batch"):
             continue
         checks_failed = getattr(last, "checks_failed", []) or []
-        if structural_block_reason(goal, checks_failed) == "import":
+        block = structural_block_reason(goal, checks_failed)
+        # The import decision is a judgment call, not a defect investigation —
+        # it stays on the interactive file_ops path.
+        if block == "import":
+            continue
+        # A LINT-ONLY failure leaves the report reading "success": only
+        # REQUIRED checks drive `passed`, and lint is not required. So it has
+        # to be admitted explicitly or the burst never sees the class of defect
+        # it is cheapest at (a named rule, file and line, in one file).
+        if getattr(last, "status", "") != "failed" and block != "lint":
             continue
         files = [f for f in (goal.associated_files or []) if f]
         if len(files) != 1:

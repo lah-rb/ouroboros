@@ -376,13 +376,31 @@ def structural_block_reason(goal: Any, checks_failed: list) -> str | None:
       once reviewed, an unresolved import is accepted (an expected first-pass
       cross-module import resolves on its own; a genuine residual is caught by
       functional). This avoids looping on imports that can't be fixed yet.
-    - lint failures never block (optional).
+    - ``"lint"`` — the file compiles and imports but fails lint, AND the model
+      hasn't yet had a fix-or-defer decision pass (``goal.lint_reviewed``).
+      Same one-pass contract as import, for the same reason.
+
+    ON LINT, WHICH HAS BEEN BOTH WAYS. It originally blocked hard: every
+    finding had to be fixed or the file never cleared the gate. That deadlocked
+    a run on a ruff error the model could not fix, so lint was made purely
+    advisory — which overshot in the other direction. `ruff check --fix` has
+    already auto-fixed whatever it can, so a residual finding is usually real:
+    the 2026-07-27 poolside run recorded `F821 Undefined name 'random'`, scored
+    the file as passing, closed the goal, and paid for it later in the
+    functional phase as a diagnose loop. Blocking for ONE pass gets the defect
+    looked at while it is cheap, and cannot deadlock: the flag is set when the
+    question is asked, not when it is answered, so an unfixable finding costs
+    exactly one look. The mini-diagnose that receives it can also decline
+    outright (``confident: false``), which is a second, independent bound.
     """
     if any(c.startswith("syntax:") for c in checks_failed):
         return "syntax"
     if any(c.startswith("import:") for c in checks_failed):
         if not getattr(goal, "import_reviewed", False):
             return "import"
+    if any(c.startswith("lint:") for c in checks_failed):
+        if not getattr(goal, "lint_reviewed", False):
+            return "lint"
     return None
 
 

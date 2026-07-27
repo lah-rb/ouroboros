@@ -57,8 +57,31 @@ def test_clean_does_not_block():
     assert structural_block_reason(g, g.reports[-1].checks_failed) is None
 
 
-def test_lint_only_does_not_block():
+def test_lint_blocks_until_reviewed():
+    """CHANGED 2026-07-27: lint was advisory and is now a one-pass ask.
+
+    See tests/test_lint_gate.py for the full contract and the history — it has
+    been both a hard block (deadlocked a run) and pure advice (shipped an F821
+    into the functional phase).
+    """
     g = _goal(["lint: main.py"])
+    assert structural_block_reason(g, g.reports[-1].checks_failed) == "lint"
+
+
+def test_lint_accepted_after_review():
+    g = _goal(["lint: main.py"])
+    g.lint_reviewed = True
+    assert structural_block_reason(g, g.reports[-1].checks_failed) is None
+
+
+def test_import_is_asked_before_lint():
+    """Two different questions; import is the one that stops the program
+    running, so it goes first. Each still costs one pass."""
+    g = _goal(["import: main.py", "lint: main.py"])
+    assert structural_block_reason(g, g.reports[-1].checks_failed) == "import"
+    g.import_reviewed = True
+    assert structural_block_reason(g, g.reports[-1].checks_failed) == "lint"
+    g.lint_reviewed = True
     assert structural_block_reason(g, g.reports[-1].checks_failed) is None
 
 
