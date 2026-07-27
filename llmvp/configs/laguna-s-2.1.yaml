@@ -59,7 +59,14 @@ model:
   verbose: false
   flash_attn_type: auto
   n_batch: 2048
-  thinking: true
+  # THINKING-OFF ARM (2026-07-26). With thinking on, the two deepest agent
+  # prompts (architecture design, functional-goal decomposition) reasoned to
+  # the 32768 max_tokens cap without ever emitting </think> or an answer —
+  # 133k and 125k chars of circling CoT, truncated mid-sentence. top_k 0->20
+  # fixed sampling-tail rambling but not this. laguna suppresses thinking by
+  # prefilling the CLOSE tag alone (formats/laguna.yaml
+  # prefill_closed_close_only), structurally declaring reasoning finished.
+  thinking: false
   swa_full: true
   kv_unified: true
   flow_kv_cache: false
@@ -72,10 +79,19 @@ generation:
   max_tokens_default: 32768
   temperature_default: 1.0
   top_p: 1.0
-  top_k: 0
+  # VENDOR-MATCHED (generation_config.json, unsloth/Laguna-S-2.1): temperature
+  # 1.0 and top_p 1.0 ARE correct for this model, but top_k is 20 — NOT 0.
+  # top_k: 0 disables truncation entirely, so at temperature 1.0 the full
+  # distribution tail is sampled. That value was inherited from the gpt-oss
+  # config, where it is right (harmony wants unconstrained sampling at t=1.0)
+  # and here it produced a 24,000-token thinking ramble on the first agent
+  # design step (2026-07-26). formats/laguna.yaml already had top_k: 20; the
+  # config silently overrode it.
+  top_k: 20
   min_p: 0.0
   presence_penalty: 0.0
-  repeat_penalty: 1.05
+  # Vendor sets no repetition_penalty (i.e. 1.0); 1.05 also came from gpt-oss.
+  repeat_penalty: 1.0
   session_temp_floor: 0.35
   streaming_default: true
 knowledge:
