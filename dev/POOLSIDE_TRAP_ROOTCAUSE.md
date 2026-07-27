@@ -88,3 +88,76 @@ not to code generation, and the fall is a framework trap that any model can hit.
 
 A rerun with the venv pre-provisioned (or bootstrap hardened) would measure what
 this run was meant to measure.
+
+
+---
+
+# FIXED — 2026-07-27
+
+Every link in the chain now has a break, and **A and B independently prevent the
+original failure**. Verified end-to-end against a rebuilt fixture (empty `.venv`
++ `pyproject.toml` declaring PyYAML + code importing yaml): the venv is no
+longer created, no longer activated when present, and the program runs.
+
+| # | fix | commit |
+|---|---|---|
+| A | `uv venv` gated on a real Python install, not on a `py` section existing | `8280fa9` |
+| C | loud warning when a Python project declares no install command | `8280fa9` |
+| B | venv activation requires >=1 installed distribution | `8280fa9` |
+| E | `FailedAttempt` recorded on the project_ops route | `d5ba47d` |
+| D | failed install escalates to a command-capable loop (OPEN_TASKS §2) | `e61fdc0` |
+| F | dead `run_setup_commands` step removed | `264adc0` |
+| G | `verify_project_env` — project_ops verifies its own work | `1a09700` |
+
+**33 new tests, every one mutation-verified.** Agent suite 1695, llmvp 418.
+
+## What each actually changed
+
+**A** — `_uvize_install_commands` keyed venv creation on a `py` SECTION, and
+`syntax` is required for every detected extension, so every Python project
+always had one. Zero install commands still returned
+`["uv venv --allow-existing --python 3.x"]`. Now gated on a Python install
+actually being present; `python -m pip install …` is also recognised, which was
+previously neither rewritten nor counted.
+
+**B** — `venv_env_overrides` accepted any `.venv/bin/python` as proof of
+usability. Activation now requires an installed distribution. The predicate was
+chosen deliberately: activating a venv with zero distributions can never help —
+neutral for a stdlib-only project, harmful when the deps live in the ambient
+interpreter. Proven by the arm that survived *because* it had no venv.
+
+**E** — the most instructive. Three mechanisms (`## Prior attempts`, the
+repeat-target CRITICAL warning, the web-search gate) were already built and
+simply starved of input, because attempts were recorded on the file_ops route
+only. After three env cycles they now all fire. **This reframes the 26 identical
+diagnoses as the framework's repetition, not the model's** — its `root_cause`
+was correct every cycle; it was re-reading a byte-identical seed.
+
+**D** — closes `OPEN_TASKS` §2. Note `TRAP_BRIEF.md` §7 supersedes its own
+"escalate to the PTY" recommendation with A′, on the grounds that ground truth
+was present and IGNORED. That is correct for thompson-nfa (static tracing
+mis-localised to the wrong package) and does **not** describe this failure: here
+localisation was right every cycle and the remedy was inexpressible. Different
+sub-case; an action space is exactly what it needs.
+
+**G** — verifies DECLARED distributions via `importlib.metadata`, deliberately
+by distribution name rather than module name (PyYAML->yaml, beautifulsoup4->bs4;
+a manifest declares the former). A probe that cannot run reports unverified,
+never a pass. `escalate_env`'s "resolved" is re-verified rather than trusted —
+the same class of self-claim that produced this trap — via a separate step whose
+failure route terminates, so a persistently-missing dependency cannot cycle.
+
+## Still open
+
+- The **laguna JSON-extraction failure** that started the chain is a model-format
+  issue, tracked in `dev/laguna/FINDINGS.md`. Deliberately not "fixed" here: any
+  model can return a malformed response, and the framework must not convert one
+  into a silent 50-minute loop. It no longer does.
+- `test_install_command` is absent from `schemas/validation_env_config.json` yet
+  prompted for and consumed, and is not uv-rewritten — so its own prompt example
+  (`pip install -e '.[test]'`) runs bare `pip` in a pip-less uv venv.
+- `action_persist_validation_env` uses a shallow `dict.update`, so a later
+  detection omitting `install_command` silently erases a working one.
+- A rerun of the poolside 2h mission would measure what that run was meant to
+  measure. Success looks like: `Collected install_command` present, multi-turn
+  PTY sessions (it had 45, all 1-turn), `diagnose_issue` in single digits.
