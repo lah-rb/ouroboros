@@ -54,7 +54,11 @@ def test_escalate_env_supplies_both_required_inputs(flows):
 def test_escalate_env_branches_on_resolved_vs_deferred(flows):
     rules = flows["project_ops"]["steps"]["escalate_env"]["resolver"]["rules"]
     assert rules[0]["condition"] == "result.status == 'resolved'"
-    assert rules[0]["transition"] == "collect_test_installs", "resolved → continue"
+    # "resolved" is the escalation's own claim about its own work — the exact
+    # class of claim that produced this trap — so it is re-verified rather than
+    # taken on trust. See test_project_env_verification.py for the loop's
+    # termination guarantee.
+    assert rules[0]["transition"] == "verify_env_after_escalation"
     assert rules[-1]["transition"] == "build_report_failure", "deferred → honest failure"
 
 

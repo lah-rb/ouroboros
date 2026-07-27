@@ -9595,6 +9595,30 @@
           "rules": [
             {
               "condition": "context.get('all_passed') == true",
+              "transition": "verify_env"
+            },
+            {
+              "condition": "true",
+              "transition": "escalate_env"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "verify_env": {
+        "action": "verify_project_env",
+        "description": "Confirm the declared dependencies are importable",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.env_verified == true",
               "transition": "collect_test_installs"
             },
             {
@@ -9603,6 +9627,8 @@
             }
           ]
         },
+        "publishes": [],
+        "effects": [],
         "terminal": false
       },
       "escalate_env": {
@@ -9639,6 +9665,30 @@
           "rules": [
             {
               "condition": "result.status == 'resolved'",
+              "transition": "verify_env_after_escalation"
+            },
+            {
+              "condition": "true",
+              "transition": "build_report_failure"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "verify_env_after_escalation": {
+        "action": "verify_project_env",
+        "description": "Re-confirm dependencies after the escalation's repair",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.env_verified == true",
               "transition": "collect_test_installs"
             },
             {
@@ -9647,6 +9697,8 @@
             }
           ]
         },
+        "publishes": [],
+        "effects": [],
         "terminal": false
       },
       "collect_test_installs": {

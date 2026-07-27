@@ -688,7 +688,16 @@ def test_project_ops_wires_test_install_leg():
         r["condition"]: r["transition"]
         for r in steps["run_installs"]["resolver"]["rules"]
     }
-    assert ri["context.get('all_passed') == true"] == "collect_test_installs"
+    # A successful install now goes through verify_env before being believed —
+    # "the install commands exited 0" is not "the dependencies are installed",
+    # and an empty venv reported success on every cycle while installing
+    # nothing. The test-install leg is unchanged, just one step further on.
+    assert ri["context.get('all_passed') == true"] == "verify_env"
+    ve = {
+        r["condition"]: r["transition"]
+        for r in steps["verify_env"]["resolver"]["rules"]
+    }
+    assert ve["result.env_verified == true"] == "collect_test_installs"
     cti = steps["collect_test_installs"]
     assert cti["params"]["field"] == "test_install_command"
     rti = steps["run_test_installs"]

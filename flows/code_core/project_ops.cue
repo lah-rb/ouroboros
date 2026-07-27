@@ -192,11 +192,38 @@ project_ops: #FlowDefinition & {
 				rules: [
 					// all_passed lives in context (via publishes), not in
 					// result (sub-flow returns nest under result._returns).
-					{condition: "context.get('all_passed') == true", transition: "collect_test_installs"},
+					{condition: "context.get('all_passed') == true", transition: "verify_env"},
 					{condition: "true", transition: "escalate_env"},
 				]
 			}
 			publishes: ["all_passed", "terminal_output"]
+		}
+
+		// ── Verify the install actually landed ──────────────────────
+		//
+		// "The install commands exited 0" is NOT "the dependencies are
+		// installed". The empty-venv run reported success on every cycle while
+		// nothing was installed, and that false success propagated into the
+		// workspace ledger ("[provision] … — success") where the next diagnosis
+		// read it as settled (dev/POOLSIDE_TRAP_ROOTCAUSE.md).
+		//
+		// Probes the interpreter the project will actually run under, so it also
+		// catches an install that landed in a DIFFERENT interpreter — the
+		// failure this whole subsystem exists to prevent. A project that
+		// declares no dependencies verifies trivially.
+
+		verify_env: #StepDefinition & {
+			action:      "verify_project_env"
+			description: "Confirm the declared dependencies are importable"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.env_verified == true", transition: "collect_test_installs"},
+					// Declared-but-absent: the install claimed success and did
+					// not deliver. Escalate rather than report success.
+					{condition: "true", transition: "escalate_env"},
+				]
+			}
 		}
 
 		// ── Install failed → escalate (the only fix path that can RUN) ──
@@ -238,7 +265,26 @@ project_ops: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.status == 'resolved'", transition: "collect_test_installs"},
+					// Re-verify rather than take the escalation's word for it —
+					// "resolved" is its own claim about its own work, which is
+					// the exact class of claim that produced this trap.
+					{condition: "result.status == 'resolved'", transition: "verify_env_after_escalation"},
+					{condition: "true", transition: "build_report_failure"},
+				]
+			}
+		}
+
+		// Second verification pass. Separate step rather than a loop back to
+		// verify_env: escalate_env must not be re-enterable from its own
+		// verification, or a persistently-missing dependency would cycle
+		// escalate → verify → escalate indefinitely. This terminates.
+		verify_env_after_escalation: #StepDefinition & {
+			action:      "verify_project_env"
+			description: "Re-confirm dependencies after the escalation's repair"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.env_verified == true", transition: "collect_test_installs"},
 					{condition: "true", transition: "build_report_failure"},
 				]
 			}

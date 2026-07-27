@@ -541,6 +541,7 @@ def build_action_registry() -> ActionRegistry:
         action_check_dependency_coverage,
         action_parse_dep_check_result,
         action_collect_env_field,
+        action_verify_project_env,
         action_parse_inference_json,
     )
 
@@ -555,6 +556,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("check_dependency_coverage", action_check_dependency_coverage)
     registry.register("parse_dep_check_result", action_parse_dep_check_result)
     registry.register("collect_env_field", action_collect_env_field)
+    registry.register("verify_project_env", action_verify_project_env)
     registry.register("parse_inference_json", action_parse_inference_json)
 
     # Deterministic evaluation (interact flow — run_commands path)

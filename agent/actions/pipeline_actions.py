@@ -414,6 +414,133 @@ async def action_lookup_validation_env(step_input: StepInput) -> StepOutput:
     )
 
 
+# ── Post-install verification ─────────────────────────────────────────
+
+# "PyYAML>=6.0", "requests[socks] ; python_version>'3.8'" -> the bare name.
+_REQ_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def _declared_distributions(pyproject: str, requirements: str) -> list[str]:
+    """Distribution names the project declares, from pyproject and/or
+    requirements.txt.
+
+    Distribution names are used deliberately rather than module names: the two
+    routinely differ (PyYAML->yaml, beautifulsoup4->bs4), and a manifest
+    declares the former. importlib.metadata resolves exactly that, so no
+    name-mapping guesswork is needed.
+    """
+    names: list[str] = []
+    if pyproject:
+        try:
+            import tomllib
+
+            data = tomllib.loads(pyproject)
+        except Exception:  # noqa: BLE001 — a malformed manifest is not our error
+            data = {}
+        deps = (data.get("project") or {}).get("dependencies") or []
+        if isinstance(deps, list):
+            names.extend(str(d) for d in deps)
+    for line in (requirements or "").splitlines():
+        line = line.strip()
+        # Skip comments, blanks, and pip flags (-r, -e, --index-url, …).
+        if not line or line.startswith("#") or line.startswith("-"):
+            continue
+        names.append(line)
+    out: list[str] = []
+    for raw in names:
+        m = _REQ_NAME_RE.match(raw)
+        if m and m.group(1) not in out:
+            out.append(m.group(1))
+    return out
+
+
+async def action_verify_project_env(step_input: StepInput) -> StepOutput:
+    """Confirm the DECLARED dependencies are actually present.
+
+    project_ops used to report success on "the install commands exited 0",
+    which is not the same claim. The empty-venv run reported success on every
+    cycle while nothing was installed, and that false success propagated into
+    the workspace ledger ("[provision] … — success") where the next diagnosis
+    read it as settled (dev/POOLSIDE_TRAP_ROOTCAUSE.md).
+
+    Runs one probe in the interpreter the project will actually use — so it
+    also catches an install that landed in a DIFFERENT interpreter than the one
+    the program runs under, which is the failure this whole subsystem exists to
+    prevent.
+
+    Result:
+        env_verified: bool — nothing declared, or everything declared is present
+        missing: list[str] — declared distributions the interpreter cannot find
+    """
+    effects = step_input.effects
+    if effects is None:
+        return StepOutput(
+            result={"env_verified": True, "missing": []},
+            observations="No effects interface — skipping env verification",
+        )
+
+    async def _maybe_read(path: str) -> str:
+        try:
+            if not await effects.file_exists(path):
+                return ""
+            fc = await effects.read_file(path)
+            return getattr(fc, "content", "") or ""
+        except Exception:  # noqa: BLE001 — absence is the common case
+            return ""
+
+    declared = _declared_distributions(
+        await _maybe_read("pyproject.toml"), await _maybe_read("requirements.txt")
+    )
+    if not declared:
+        return StepOutput(
+            result={"env_verified": True, "missing": []},
+            observations="No declared dependencies to verify",
+        )
+
+    probe = (
+        "import importlib.metadata as md, sys\n"
+        "missing = []\n"
+        "for name in sys.argv[1:]:\n"
+        "    try:\n"
+        "        md.distribution(name)\n"
+        "    except Exception:\n"
+        "        missing.append(name)\n"
+        "print(','.join(missing))\n"
+    )
+    res = await effects.run_command(["python", "-c", probe, *declared], timeout=60)
+
+    if res.return_code != 0:
+        # The probe itself could not run — report unverified rather than
+        # inventing a pass. A broken interpreter is exactly what we are looking
+        # for here.
+        logger.warning(
+            "env verification probe failed (rc=%s): %s",
+            res.return_code,
+            (res.stderr or "")[:200],
+        )
+        return StepOutput(
+            result={"env_verified": False, "missing": declared},
+            observations=f"Could not verify {len(declared)} declared dependencies",
+        )
+
+    missing = [n for n in (res.stdout or "").strip().split(",") if n]
+    if missing:
+        logger.warning(
+            "env verification: %d declared dependencies are NOT installed in the "
+            "interpreter the project runs under: %s",
+            len(missing),
+            ", ".join(missing),
+        )
+    return StepOutput(
+        result={"env_verified": not missing, "missing": missing},
+        observations=(
+            f"All {len(declared)} declared dependencies present"
+            if not missing
+            else f"Missing declared dependencies: {', '.join(missing)}"
+        ),
+    )
+
+
 async def action_collect_env_field(step_input: StepInput) -> StepOutput:
     """Collect a named field from all language sections in .agent/env.json.
 
