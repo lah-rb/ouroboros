@@ -79,3 +79,37 @@ def test_escalate_is_a_subflow_not_tail_callable(flows):
     assert not any("tail_call" in s for s in terminals), (
         "escalate terminals must not tail-call — it returns to its invoker"
     )
+
+
+# ── The dead setup-commands step ──────────────────────────────────────
+
+
+def test_project_ops_no_longer_has_the_dead_setup_step(flows):
+    """`run_setup_commands` ran `execute_project_setup`, which JSON-parses
+    `inference_response` for `setup_actions` — while `plan_setup` declares
+    response_shape "code" and demands `# === FILE: path ===` fences. The
+    contracts never met, so it logged "Could not parse setup plan" and ran ZERO
+    commands, and its resolver discarded even that."""
+    assert "run_setup_commands" not in flows["project_ops"]["steps"]
+
+
+def test_write_files_routes_straight_to_env_detection(flows):
+    rules = flows["project_ops"]["steps"]["write_files"]["resolver"]["rules"]
+    assert [r["transition"] for r in rules] == ["detect_env"]
+
+
+def test_no_dangling_transitions_in_project_ops(flows):
+    steps = flows["project_ops"]["steps"]
+    targets = {
+        r["transition"]
+        for s in steps.values()
+        for r in s.get("resolver", {}).get("rules", [])
+    }
+    assert not (targets - set(steps)), "every transition must name a real step"
+
+
+def test_execute_project_setup_still_used_correctly_by_ops(flows):
+    """The ACTION is fine — only the code_core wiring was wrong. ops feeds it
+    prompts/ops/plan_provision.yaml, which does emit {"setup_actions": [...]}."""
+    ops = flows["ops_task"]["steps"]
+    assert any(s.get("action") == "execute_project_setup" for s in ops.values())

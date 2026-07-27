@@ -106,24 +106,35 @@ project_ops: #FlowDefinition & {
 			params: protect_existing: true
 			resolver: {
 				type: "rule"
-				rules: [
-					{condition: "result.files_written > 0", transition: "run_setup_commands"},
-					{condition: "true", transition: "run_setup_commands"},
-				]
-			}
-		}
-
-		// ── Phase 4: Run setup commands ─────────────────────────────
-
-		run_setup_commands: #StepDefinition & {
-			action:      "execute_project_setup"
-			description: "Run setup commands (pip install, mkdir, etc.)"
-			context: optional: ["files_changed", "inference_response"]
-			resolver: {
-				type: "rule"
 				rules: [{condition: "true", transition: "detect_env"}]
 			}
 		}
+
+		// ── (removed) Phase 4: run setup commands ───────────────────
+		//
+		// A `run_setup_commands` step ran `execute_project_setup` here. It was
+		// DEAD: that action JSON-parses `inference_response` looking for
+		// `setup_actions`, while `plan_setup` above declares
+		// `response_shape: "code"` and its instruction demands
+		// `# === FILE: <path> ===` fences. The two contracts never met, so the
+		// step logged "Could not parse setup plan from inference response" and
+		// ran zero commands — and its resolver was `{condition: "true"}`, so
+		// even that failure was discarded. It contributed the appearance of a
+		// command-capable fix path while providing none, which is part of why a
+		// stalled environment fix could look survivable
+		// (dev/POOLSIDE_TRAP_ROOTCAUSE.md).
+		//
+		// Removed rather than repaired, for three reasons: installs are already
+		// handled properly by collect_installs → run_installs; a command-capable
+		// remedy now exists at the point of failure (escalate_env below, bounded
+		// and re-verifying); and the only way this step could ever have fired
+		// was a model emitting JSON where fences were demanded, which would then
+		// run raw model-authored shell VERBATIM — it is the one call site that
+		// skips the uv rewriting in _uvize_install_commands.
+		//
+		// `execute_project_setup` itself is unchanged and still correct: ops
+		// (flows/ops/ops_task.cue) feeds it prompts/ops/plan_provision.yaml,
+		// which does emit `{"setup_actions": [...]}`.
 
 		// ── Phase 5: Detect validation tooling ──────────────────────
 

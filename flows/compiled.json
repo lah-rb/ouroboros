@@ -9494,35 +9494,6 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.files_written > 0",
-              "transition": "run_setup_commands"
-            },
-            {
-              "condition": "true",
-              "transition": "run_setup_commands"
-            }
-          ]
-        },
-        "publishes": [],
-        "effects": [],
-        "terminal": false
-      },
-      "run_setup_commands": {
-        "action": "execute_project_setup",
-        "description": "Run setup commands (pip install, mkdir, etc.)",
-        "context": {
-          "required": [],
-          "optional": [
-            "files_changed",
-            "inference_response"
-          ]
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
               "condition": "true",
               "transition": "detect_env"
             }
