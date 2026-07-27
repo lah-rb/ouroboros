@@ -41,7 +41,12 @@ LABELS = ["alpha", "beta", "gamma", "delta", "epsilon"]
 # .agent/ is the critical one: mission.json carries the goal ledger AND the
 # verbatim objective, either of which can identify the run.
 STRIP_DIRS = {".agent", ".venv", "__pycache__", ".ruff_cache", ".pytest_cache", ".git"}
-STRIP_GLOBS = ["run.log", "create.log", "*.png", "output.txt", "*.jsonl", "nohup.out"]
+# OUTCOME is a harness summary (goal counts, runtime, syntax tallies) written
+# beside the artifact by dev/overnight_tier_run.sh. It survived the 2026-07-27
+# tier staging and would have handed judges the goal ledger the .agent strip
+# exists to remove. Any new harness that writes a sidecar needs a line here.
+STRIP_GLOBS = ["run.log", "create.log", "*.png", "output.txt", "*.jsonl",
+               "nohup.out", "OUTCOME", "*.OUTCOME"]
 
 # Strings that would identify which system/model produced an artifact. Extend
 # freely — a false positive costs one look, a false negative costs the panel.
