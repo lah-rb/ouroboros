@@ -4762,7 +4762,7 @@
           "rules": [
             {
               "condition": "result.status == 'success' and context.module_fix_symbol_continue == true",
-              "transition": "extract_symbols"
+              "transition": "reread_after_module_fix"
             },
             {
               "condition": "result.status == 'success'",
@@ -4778,6 +4778,52 @@
             }
           ]
         },
+        "terminal": false
+      },
+      "reread_after_module_fix": {
+        "action": "read_files",
+        "description": "Re-read after the module-frame edit so both halves of the fix see the same file",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "config": {},
+        "param_schema": {
+          "target": {
+            "type": "string",
+            "required": true,
+            "description": "File to read"
+          },
+          "discover_imports": {
+            "type": "boolean",
+            "required": false,
+            "default": false,
+            "description": "Follow import statements and load referenced files"
+          }
+        },
+        "params": {
+          "target": {
+            "$ref": "input.target_file_path"
+          },
+          "discover_imports": false
+        },
+        "publishes": [
+          "target_file"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.file_found == true",
+              "transition": "extract_symbols"
+            },
+            {
+              "condition": "true",
+              "transition": "lookup_env"
+            }
+          ]
+        },
+        "effects": [],
         "terminal": false
       },
       "extract_symbols": {

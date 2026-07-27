@@ -182,7 +182,10 @@ file_ops: #FlowDefinition & {
 					// change — continue the SAME pass into symbol routing so
 					// the second half of the fix lands via patch instead of
 					// being dropped (module splice alone can't touch bodies).
-					{condition: "result.status == 'success' and context.module_fix_symbol_continue == true", transition: "extract_symbols"},
+					// Via the RE-READ: the frame edit already wrote the file,
+					// and everything downstream reads context.target_file,
+					// which read_target loaded BEFORE that write.
+					{condition: "result.status == 'success' and context.module_fix_symbol_continue == true", transition: "reread_after_module_fix"},
 					{condition: "result.status == 'success'", transition: "lookup_env"},
 					// Splice mismatch / frame not applicable → safe full-rewrite fallback.
 					{condition: "result.status == 'full_rewrite_requested'", transition: "run_rewrite"},
@@ -190,6 +193,43 @@ file_ops: #FlowDefinition & {
 				]
 			}
 			publishes: ["files_changed", "edit_summary"]
+		}
+
+		// Refresh the file snapshot between the two halves of a multi-part
+		// fix. WITHOUT THIS THE PASS REVERTS ITS OWN WRITE.
+		//
+		// patch_module writes the frame-edited file to disk, but its
+		// file_ops-level invocation publishes only files_changed and
+		// edit_summary — the sub-flow's file_content_updated never reaches
+		// this context. Continuing straight to extract_symbols therefore
+		// built the symbol table from the PRE-EDIT snapshot, run_patch
+		// spliced into that same stale content, and write_patched_file wrote
+		// it back — erasing the module line. The lint gate then re-reported
+		// the identical error and the goal looped to the backstop (2026-07-27
+		// poolside run, goal 1a7564ac: `import random` declared and written
+		// FIVE times, absent every time).
+		//
+		// It must be target_file that is refreshed, not merely run_patch's
+		// file_content: action_extract_symbol_bodies derives line/byte offsets
+		// from this same value, so refreshing one and not the other would
+		// splice v0's offsets into v1's bytes — silent off-by-one corruption,
+		// strictly worse than the clean revert it replaced.
+		//
+		// Disk is the source of truth: effects.read_file opens fresh with no
+		// cache, and the frame edit's write is the last thing to touch it.
+		reread_after_module_fix: #StepDefinition & _templates.read_target_file & {
+			description: "Re-read after the module-frame edit so both halves of the fix see the same file"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.file_found == true", transition: "extract_symbols"},
+					// The module half DID land and files_changed is already
+					// published, so a vanished file goes to validation to be
+					// reported honestly — not compile_report_failure, which
+					// would discard a successful edit.
+					{condition: "true", transition: "lookup_env"},
+				]
+			}
 		}
 
 		extract_symbols: #StepDefinition & _templates.extract_symbols & {

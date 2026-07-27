@@ -114,11 +114,25 @@ looks healthy elsewhere. The `CONCLUDE_PROMPT` actively invites the paired
 form and promises *"both edits are applied, module line first"* — the
 second edit reverts the first.
 
-Reproduced at the flow-contract level in
-`tests/test_module_fix_symbol_continue_clobber.py` (6 tests). The obvious
-fix is to lift `file_content_updated` out of `run_module_frame_edit` and
-into `target_file.content` (or re-read before `extract_symbols`); the test
-is written to fail loudly if that lands, so it gets updated deliberately.
+#### FIXED 2026-07-27
+
+`file_ops` gained `reread_after_module_fix` on that one arc: a frame edit
+that continues into symbol routing re-reads the file first, so both halves
+of a multi-part fix see the same bytes. Disk is the source of truth —
+`effects.read_file` opens fresh with no cache and the frame edit's write is
+the last thing to touch the file.
+
+**The narrower fix would have been worse than the bug.** Publishing
+`file_content_updated` and having `run_patch` prefer it leaves
+`action_extract_symbol_bodies` deriving line/byte offsets from the stale
+snapshot, so v0's offsets get spliced into v1's bytes — silent off-by-one
+corruption instead of a clean revert. `test_stale_offsets_truncate_the_
+symbol_in_the_new_file` demonstrates it concretely: the stale range ends a
+line short and orphans the symbol's final statement. That is why the
+refresh is of `target_file` itself and sits *before* `extract_symbols`.
+
+12 tests in `tests/test_module_fix_symbol_continue_clobber.py`, both
+mutations caught (direct edge restored; fixture import removed).
 
 #### The separate, real gap: lint is advisory
 
