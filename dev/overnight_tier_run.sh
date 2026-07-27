@@ -87,18 +87,26 @@ for cfg in "${ARMS[@]}"; do
   rc=$?
   mins=$(( (SECONDS - start) / 60 ))
 
-  files=$(find "$WORK" -type f -not -path "*/.agent/*" -not -name "OUTCOME" 2>/dev/null | wc -l | tr -d ' ')
+  # Count AUTHORED artifacts only. The first run of this reported devstral at
+  # 622 files and gpt-oss at 80, which read as a 7x productivity gap — it was
+  # .venv, __pycache__ and .ruff_cache. Authored counts are 9 and 11. Any
+  # tree the agent runs `uv`/`pip` in will bury its real output like this.
+  PRUNE=( -not -path "*/.agent/*" -not -path "*/.venv/*"
+          -not -path "*/__pycache__/*" -not -path "*/.ruff_cache/*"
+          -not -path "*/.git/*" -not -name "OUTCOME" )
+  files=$(find "$WORK" -type f "${PRUNE[@]}" 2>/dev/null | wc -l | tr -d ' ')
+  raw=$(find "$WORK" -type f -not -path "*/.agent/*" 2>/dev/null | wc -l | tr -d ' ')
   ok=0; bad=0
   while IFS= read -r f; do
     if uv run python -c "import ast,sys;ast.parse(open(sys.argv[1]).read())" "$f" 2>/dev/null; then
       ok=$((ok+1)); else bad=$((bad+1)); fi
-  done < <(find "$WORK" -name "*.py" -not -path "*/.agent/*" 2>/dev/null)
+  done < <(find "$WORK" -name "*.py" "${PRUNE[@]}" 2>/dev/null)
 
   status=$(uv run ouroboros.py mission status --working-dir "$WORK" 2>/dev/null \
              | grep -E "^  Status:|Goals \(" | tr '\n' ' ')
-  log "  done rc=$rc ${mins}min files=$files py_ok=$ok py_fail=$bad | $status"
-  printf 'rc=%s\nminutes=%s\nfiles=%s\npy_ok=%s\npy_fail=%s\n%s\n' \
-    "$rc" "$mins" "$files" "$ok" "$bad" "$status" > "$WORK/OUTCOME"
+  log "  done rc=$rc ${mins}min files=$files (raw=$raw) py_ok=$ok py_fail=$bad | $status"
+  printf 'rc=%s\nminutes=%s\nfiles=%s\nraw_files=%s\npy_ok=%s\npy_fail=%s\n%s\n' \
+    "$rc" "$mins" "$files" "$raw" "$ok" "$bad" "$status" > "$WORK/OUTCOME"
 done
 
 stop_server
