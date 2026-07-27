@@ -180,6 +180,64 @@ Format contributes **2.8×**; the drop from in-domain full-text to live is
 covariate shift actually bites, and it reproduces the observed 199/201 (1.0%)
 almost exactly.
 
+#### What that 18× actually is: the router is an ACT-AS detector
+
+The "domain shift" above is not diffuse. It is one static flow section.
+
+`plan_interaction` is turn-based, so it renders through `_execute_turn_inference`
+(`agent/runtime.py:1145`), and the router is handed the **entire** turn render
+(`rendered_prompt`, line 1243): banner + `evidence` (dynamic session state) +
+`instruction` (`run_in_terminal/plan_interaction_rules` — the `---ACT AS---`
+block) + `options` + `envelope`. Three of those four sections are static per
+flow. The server-side persona (`SOUL.md` → `SEQ_STATIC`) is prepended by LLMVP
+and appears in **neither** training nor serving, so that one dimension matches.
+
+The `---ACT AS---` block does not:
+
+| | training | live |
+|---|---|---|
+| prompts containing `---ACT AS---` | **20.9%** | **99.1%** |
+
+and within training that block is a near-deterministic label marker:
+
+| training rows | low | medium | medium rate |
+|---|---|---|---|
+| **with** ACT AS | 358 | 6 | **1.6%** |
+| without ACT AS | 1473 | 292 | 16.5% |
+
+**The live rate (1.55%) is the training conditional (1.6%).** The router is not
+routing on session state; it is detecting a static instruction block that
+happens to correlate with a low-labeled collection subpopulation, and that block
+is present on essentially every production turn.
+
+Ablation confirms it causally — removing just that section from 4000 live
+prompts (1439 chars, 28% of the prompt):
+
+| | medium rate |
+|---|---|
+| as sent | 1.55% |
+| ACT AS section removed | **40.52%** |
+
+**+38.98pp from one static section** — an order of magnitude larger than the
+elision/length effect (+5.60pp). This supersedes the generic "domain shift"
+framing above: the shift is substantially this one block.
+
+**Do not read 40.52% as the corrected rate.** It is what the classifier does on
+a representation it was also never trained on (training's own base rate is 14%).
+The finding is that train and serve representations differ, not that stripping
+fixes it.
+
+**Design consequence.** A flow-static section carries zero per-turn signal by
+construction — it is identical on every turn of every run — so including it in a
+per-turn routing feature can only dilute (TF-IDF is L2-normalized) or, as here,
+supply a spurious subpopulation marker. Whatever representation is chosen, it
+must be **identical at train and serve time**, which the current pipeline never
+verified. `_execute_inference_action` already computes the split
+(`flow_static_prefix, flow_dynamic`, line 941); the turn path does not, but
+`TurnRenderer.render` builds per-section parts (line 115-122) and a
+dynamic-only variant is straightforward. **DECISION OWED** — this is a
+production behavior change and needs a matched retrain, not a one-line patch.
+
 **What this does NOT show.** The held-out score is *not* an artifact: under the
 exact shipped recipe, macro-F1 is 0.618 for the mixture and **0.616**
 length-normalized, 0.609 full-text-only. Dropping the preview rows does not fix
