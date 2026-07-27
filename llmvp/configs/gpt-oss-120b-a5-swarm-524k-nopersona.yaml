@@ -87,7 +87,7 @@ model:
   reasoning_head_swap: true
 
 prompt:
-  persona_file: "./knowledge/SOUL.md"
+  persona_file: "./knowledge/SOUL_EMPTY.md"
 
 generation:
   # Ample default — design_and_plan and the contract author run at high/

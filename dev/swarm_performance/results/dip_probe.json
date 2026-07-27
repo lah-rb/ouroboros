@@ -1,0 +1,118 @@
+{
+  "server": {
+    "status": "ok",
+    "poolSize": 128,
+    "kvPoolTokens": 524288
+  },
+  "gen": 256,
+  "rows": [
+    {
+      "size": 4096,
+      "n": 24,
+      "context_depth": 4559,
+      "fresh_prompt": 2498,
+      "decode_tok_s_per_stream": 3.38,
+      "decode_tok_s_aggregate": 81.2,
+      "prefill_ms_mean": 30621,
+      "wall_s": 116.0,
+      "effective_tok_s": 52.2,
+      "errors": 0
+    },
+    {
+      "size": 8192,
+      "n": 24,
+      "context_depth": 7022,
+      "fresh_prompt": 4962,
+      "decode_tok_s_per_stream": 2.26,
+      "decode_tok_s_aggregate": 54.2,
+      "prefill_ms_mean": 70580,
+      "wall_s": 205.0,
+      "effective_tok_s": 29.4,
+      "errors": 0
+    },
+    {
+      "size": 4096,
+      "n": 32,
+      "context_depth": 4561,
+      "fresh_prompt": 2498,
+      "decode_tok_s_per_stream": 2.32,
+      "decode_tok_s_aggregate": 74.1,
+      "prefill_ms_mean": 43846,
+      "wall_s": 165.1,
+      "effective_tok_s": 49.2,
+      "errors": 0
+    },
+    {
+      "size": 8192,
+      "n": 32,
+      "context_depth": 7022,
+      "fresh_prompt": 4962,
+      "decode_tok_s_per_stream": 1.42,
+      "decode_tok_s_aggregate": 45.3,
+      "prefill_ms_mean": 99181,
+      "wall_s": 307.1,
+      "effective_tok_s": 26.2,
+      "errors": 0
+    },
+    {
+      "size": 4096,
+      "n": 48,
+      "context_depth": 4562,
+      "fresh_prompt": 2498,
+      "decode_tok_s_per_stream": 1.57,
+      "decode_tok_s_aggregate": 75.6,
+      "prefill_ms_mean": 68936,
+      "wall_s": 251.6,
+      "effective_tok_s": 48.6,
+      "errors": 0
+    },
+    {
+      "size": 8192,
+      "n": 48,
+      "context_depth": 7019,
+      "fresh_prompt": 4962,
+      "decode_tok_s_per_stream": 0.96,
+      "decode_tok_s_aggregate": 46.1,
+      "prefill_ms_mean": 158228,
+      "wall_s": 469.0,
+      "effective_tok_s": 25.4,
+      "errors": 0
+    },
+    {
+      "size": 4096,
+      "n": 64,
+      "context_depth": 4561,
+      "fresh_prompt": 2498,
+      "decode_tok_s_per_stream": 1.13,
+      "decode_tok_s_aggregate": 72.2,
+      "prefill_ms_mean": 96532,
+      "wall_s": 351.7,
+      "effective_tok_s": 46.2,
+      "errors": 0
+    },
+    {
+      "size": 4096,
+      "n": 80,
+      "context_depth": 4559,
+      "fresh_prompt": 2498,
+      "decode_tok_s_per_stream": 0.95,
+      "decode_tok_s_aggregate": 75.6,
+      "prefill_ms_mean": 129732,
+      "wall_s": 445.6,
+      "effective_tok_s": 45.2,
+      "errors": 0
+    }
+  ],
+  "skipped": [
+    [
+      64,
+      8192,
+      540672
+    ],
+    [
+      80,
+      8192,
+      675840
+    ]
+  ]
+}

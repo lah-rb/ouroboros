@@ -276,6 +276,90 @@ honest optimizer is **interpolation over the measured surface**, not a fitted
 law — and it should refuse to extrapolate past the sampled depths rather than
 return the confident wrong sign the power law gives today.
 
+## 8. The static prefix is ~94% FREE (measured by intervention)
+
+*Pre-registered in `PREREG_static_prefix.md` before the run; harness comparison
+`results/nopersona_surface.json` vs `results/swarm_regime_surface.json`.*
+
+**Luke's question:** every request carries the 1809-token knowledge prefix as KV
+depth. Is that a real throughput tax, or is it free — meaning the depth axis has
+a floor that isn't actually costing anything?
+
+**It is nearly free.** Fitting `D_eff = D_private + w·D_static` jointly over all
+64 cells of both configurations:
+
+| w | MAPE |
+|---|---|
+| 0.00 — static FREE | 5.72% |
+| **0.06 — best fit** | **5.28%** |
+| 1.00 — costs like fresh | 10.14% |
+
+**A static token costs ~6% of a private token.** The 1809-token prefix
+contributes ~109 effective tokens of depth, not 1809.
+
+### Why: shared cells, and the fingerprint that proves it
+
+`batched_engine.py:881` forks the persona head with
+`ctx.memory_seq_cp(head.seq, slot.seq, -1, -1)`. In llama.cpp that **adds a
+seq_id to existing cells rather than duplicating K/V** — one physical copy
+serving all N streams.
+
+The raw deltas show this more clearly than the fit. Removing 1737 static tokens:
+
+| N | size 256 | size 2048 |
+|---|---|---|
+| 4 | **+22.2%** | +11.5% |
+| 24 | +2.8% | +2.2% |
+| 96 | **+5.4%** | **−1.2%** |
+
+**The gain SHRINKS as N grows.** If static were per-stream KV traffic, removing
+it would help *most* at high N, where KV traffic dominates (measured elasticity
+rises from −0.42 at N=4 to −1.41 at N=96). It does the opposite. That is the
+signature of a cost paid **once per decode step regardless of N**.
+
+### Why observation could not answer this, and intervention could
+
+`D_static` is CONSTANT at 1809 across every previously collected cell, so `w` is
+mathematically **unidentifiable** from that data — any fit merely reallocates a
+constant between terms. An earlier refit that appeared to favour "not free"
+(private-depth MAPE 16.3% vs total 8.2%) was measuring nothing of the sort. Only
+varying `D_static` identifies `w`. **The one-line config change decided in one
+run what 62 observational cells could not.**
+
+### Verification caught a self-undoing intervention
+
+The first attempt truncated the derived cache `data/*.tokens.bin` to 8 tokens.
+The server detected it as stale and **rebuilt it from `SOUL.md`**, restoring all
+1809 tokens. The run returned byte-identical numbers (82.3 tok/s, depth 2253) —
+a *perfect null result that meant nothing*. Only an explicit "did the
+intervention take?" check (implied static = `cachedPrefixTokens`) caught it. The
+real knob is the SOURCE (`prompt.persona_file`), not the cache: 8686 → 29 chars
+took the prefix 1809 → 72 tokens.
+
+**Always assert the intervention landed before interpreting its result.** A null
+is indistinguishable from a no-op.
+
+### Consequences
+
+1. **Trimming the knowledge prefix is NOT a throughput lever.** Shrinking
+   SOUL.md by 96% bought 5.4% at N=96 and −1.2% at N=96/size 2048. Spend the
+   prefix budget on capability; it is very nearly free.
+2. **Depth accounting must use private tokens.** All depths quoted in §5-§7 are
+   TOTAL and overstate effective depth by ~1700. `N*` tracks private depth:
+   private 148 → N*=128; 444-1519 → N*=96; 2882 → N*=24; 10250 → N*=4.
+3. **The regen hold-out depth has now been wrong twice, both mine.** Original
+   566 (static ignored, i.e. w=0), then "corrected" to 2375 (w=1). The truth is
+   `566 + 0.06×1809 ≈ 675` — the ORIGINAL figure was nearly right and the
+   correction made it worse. Recorded because the correction was committed and
+   argued for.
+4. **OPEN follow-up — the pool-fit gate may be over-conservative by N×1809.**
+   If cells are shared for MEMORY as they are for time, the guard should count
+   the static prefix ONCE, not per stream. At size 8192 it skipped N=64 as
+   452,160 > 419,430; counting static once gives 64×5256 + 1809 = **338,193,
+   which fits**. This is an inference from the same mechanism, NOT measured —
+   the w=0.06 result is about decode time, not allocation. Test by attempting
+   the skipped cell directly.
+
 ---
 
 ## What this changes
