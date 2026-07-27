@@ -241,3 +241,75 @@ bound on laguna's runaway, versus the blunt `thinking: false`) and `logit_bias`.
 2. Re-run with a longer bound to see whether it clears functional/quality, not
    just structural.
 3. Compare against gpt-oss on the SAME bound; today's numbers are laguna-only.
+
+## The three quants, read from the GGUF headers (2026-07-27)
+
+Luke tested a third build in LM Studio — Myric's `Laguna-S-2.1-APEX-i-quality`
+(73.9 GB) — and reported an anomaly worth explaining: **it decodes faster than
+unsloth's IQ4_XS while claiming an average weight above 5 bits.** Both halves are
+true, and the headers say why.
+
+Grouping every tensor by whether it is on the per-token hot path
+(`expert_used_count = 10` of `expert_count = 256`, so expert bytes are read at
+10/256):
+
+| build | file | dense+attn — read **every** token | experts | **read/token** |
+|---|---|---|---|---|
+| unsloth UD-IQ4_XS | 53.6 GiB | 3.87 `Q8_0` | 49.6 (`IQ3_S`×92, `IQ4_XS`×47) | **5.94 GiB** |
+| **APEX i-quality** | 68.9 GiB | **2.73 `Q6_K`** | 66.0 (`IQ4_XS`×84, `Q5_K`×30, `Q6_K`×27) | **5.44 GiB** |
+| poolside Q4_K_M | 89.4 GiB | 3.50 `Q8_0` | 85.8 (`Q4_K`×117, `BF16`×24) | **6.99 GiB** |
+
+APEX's measured average is 5.031 bpw — Luke's ">5" confirmed from the file, not
+the label.
+
+**APEX is 15 GiB larger than unsloth and reads 8% FEWER bytes per token.** It
+spends its extra size on the expert bank, of which only 10/256 is touched per
+token, while making the always-read dense path *cheaper*: `Q6_K` at 2.73 GiB
+against unsloth's `Q8_0` at 3.87. It has the smallest hot path of the three.
+
+**The general lesson: for a 256-expert MoE with 10 active, file size is a poor
+proxy for decode speed.** 91% of poolside's file and 93% of APEX's is expert
+weight that is read at 4% duty. Rank builds by hot-path size, not by GB. An
+earlier framing of this — "i-quants are compute-heavy to dequantize, K-quants
+are faster per byte" — is not needed here and was the wrong lever; plain
+bandwidth accounting explains the ordering on its own. (The dequant cost is
+still a real secondary effect against unsloth, whose 92 `IQ3_S` expert tensors
+are the most expensive type in the set to unpack.)
+
+**APEX should also not have unsloth's 3-bit failure modes** — nothing in it is
+below `IQ4_XS`, and unsloth's repetition loops and missing stop tokens were
+attributed to its 92 three-bit expert tensors.
+
+### Context: APEX reaches the full window, poolside cannot
+
+Headers give 48 layers × 8 kv-heads × 128 head-dim = **192 KiB/token**.
+
+| n_ctx | KV | APEX total | poolside total |
+|---|---|---|---|
+| 65536 | 12.9 GB | **86.8 GB** | 108.9 GB ← runs stable today |
+| 98304 | 19.3 GB | 93.2 GB | over the wired limit |
+| 131072 | 25.8 GB | **99.7 GB** | over — unreachable |
+
+APEX at unsloth's **full 131072** totals 99.7 GB, which is 9 GB *below* the
+poolside configuration that already boots and runs. So APEX is the only build
+that gets both >4.5-bit experts and the full context.
+
+`configs/laguna-s-2.1-apex.yaml` nonetheless pins **65536, matched to poolside**,
+because its first job is a controlled A/B where the quant is the only variable.
+Matching is free: the 2026-07-27 poolside 2h run logged **zero truncation events
+across 262 flows**, so n_ctx never bound and the larger window would buy nothing
+measurable. Raising it is a one-line change once the quant question is settled.
+
+### Still open on APEX
+
+- **Thinking.** Luke found the thinking toggle does nothing in LM Studio on *any*
+  laguna quant, which points at a template problem rather than a quant one. Our
+  own lever is `reasoning_budget` (plumbed in f7ccbbe, still unused): it forces
+  `reasoning_end` when the model will not close its own think block, which is the
+  principled bound on the runaway that `thinking: false` currently blunt-forces.
+  Untested on any build.
+- **Regeneration variance.** Luke reports that at the same prompt and quant, APEX
+  produces a markedly different *style* on every regeneration. Not yet
+  characterised. Note our configs run `temperature 1.0 / top_p 1.0 / top_k 20`
+  per the vendor `generation_config.json`, which is a high-entropy setting — the
+  first thing to rule out before treating it as a property of the build.
