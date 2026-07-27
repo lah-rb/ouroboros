@@ -142,12 +142,19 @@ for entry in "${ARMS[@]}"; do
   diag=$(grep -c "Starting flow 'diagnose" "$L" 2>/dev/null || echo 0)
   trunc=$(grep -c "truncat" "$L" 2>/dev/null || echo 0)
   venvpkgs=$(ls -d "$WORK"/.venv/lib/python*/site-packages/*.dist-info 2>/dev/null | wc -l | tr -d ' ')
+  # The two gates landed 2026-07-27. F821 counts undefined names SHIPPED (the
+  # class that used to close a goal silently); lint_ask counts how often the
+  # new one-pass gate actually fired; repeat_warn counts goals that kept
+  # hammering one target. All three should be low, and F821 should be 0.
+  f821=$(uv run ruff check --select F821 --no-cache "$WORK" 2>/dev/null | grep -c "F821" || echo 0)
+  lintask=$(grep -c "lint review for\|diagnose-batching" "$L" 2>/dev/null || echo 0)
+  warn=$(grep -c "has failed to resolve the goal" "$L" 2>/dev/null || echo 0)
 
   status=$(uv run ouroboros.py mission status --working-dir "$WORK" 2>/dev/null \
              | grep -E "^  Status:|Goals \(" | tr '\n' ' ')
-  log "  done rc=$rc ${mins}min files=$files py_ok=$ok py_fail=$bad venv=${venvpkgs}pkgs install_cmd=$inst long_cycle=$cyc diagnose=$diag trunc=$trunc | $status"
-  printf 'cfg=%s\nrc=%s\nminutes=%s\nfiles=%s\npy_ok=%s\npy_fail=%s\nvenv_pkgs=%s\ninstall_cmd=%s\nlong_cycle=%s\ndiagnose=%s\ntruncations=%s\n%s\n' \
-    "$cfg" "$rc" "$mins" "$files" "$ok" "$bad" "$venvpkgs" "$inst" "$cyc" "$diag" "$trunc" "$status" > "$WORK/OUTCOME"
+  log "  done rc=$rc ${mins}min files=$files py_ok=$ok py_fail=$bad venv=${venvpkgs}pkgs install_cmd=$inst long_cycle=$cyc diagnose=$diag trunc=$trunc F821=$f821 lint_ask=$lintask repeat_warn=$warn | $status"
+  printf 'cfg=%s\nrc=%s\nminutes=%s\nfiles=%s\npy_ok=%s\npy_fail=%s\nvenv_pkgs=%s\ninstall_cmd=%s\nlong_cycle=%s\ndiagnose=%s\ntruncations=%s\nF821=%s\nlint_ask=%s\nrepeat_warn=%s\n%s\n' \
+    "$cfg" "$rc" "$mins" "$files" "$ok" "$bad" "$venvpkgs" "$inst" "$cyc" "$diag" "$trunc" "$f821" "$lintask" "$warn" "$status" > "$WORK/OUTCOME"
 done
 
 stop_server
