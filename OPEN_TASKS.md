@@ -74,6 +74,54 @@ describes a *different* failure from the env one just fixed, and nothing
 here addresses it. Localisation was correct on every cycle in the env
 case; the remedy was simply inexpressible.
 
+### 2b. A THIRD sub-case, found live 2026-07-27: right file, wrong GRANULARITY
+
+Caught while watching the poolside 2h run (`/tmp/tier/poolside-2h-v2`),
+goal `1a7564ac`. `engine.py:509` calls `random.choice(exits)` and the file
+has **no `import random`** — a NameError that crashes `flee`. The model
+diagnosed it correctly and identically **three times**, each attempt
+targeting `engine.py:GameEngine._do_combat_flee`.
+
+It cannot succeed. `action_rewrite_symbol_turn` splices the model's output
+over exactly the symbol's line range
+(`ast_actions.py:1622-1625`, byte-range fallback at `:1613-1618`):
+
+    before = file_lines[: start_line - 1]
+    after  = file_lines[end_line:]
+
+A module-level import lies outside that range, so if the model emits one it
+is discarded by construction. Same shape as the env trap — correct
+diagnosis, inexpressible remedy — but a *new* sub-case: the file is right,
+the defect is right, the **granularity** is wrong. The repeat-target
+warning (reworded in `250be67`) tells the model to look elsewhere, which
+does not help when "elsewhere" is module scope and module scope is
+unreachable from a symbol patch.
+
+**This class is mechanically detectable and we never look.**
+`ruff check --select F821` reports it in milliseconds:
+
+    F821 Undefined name `random`  --> engine.py:509:29
+
+Ruff appears in `agent/` only as a path-exclusion pattern
+(`file_ops_actions.py:96`, `refinement_actions.py:209`, `local.py:336`) —
+it is **never run on the write path**. Three LLM diagnose cycles were spent
+on a defect a linter finds for free.
+
+Two candidate fixes, not yet implemented:
+
+1. **Deterministic F821 gate after a write.** Cheapest and catches the
+   whole undefined-name class, not just imports. Needs care: F821 has
+   false positives on dynamic patterns, so it should inform rather than
+   block.
+2. **Let the patch path reach module scope.** Either add a module-header
+   pseudo-symbol to the rewrite queue, or give `escalate` (which can run
+   commands and write whole files) this case the way the env sub-case now
+   routes to it.
+
+Arm 3 of the quant chain (`dev/poolside_v3_followon.sh`) records `F821`
+and `repeat_warn` in its OUTCOME file, so the next run measures this
+instead of it having to be re-found by hand.
+
 ## 3. TB2: the next measurement
 
 Canary complete — **adaptive 2/8 (first-ever winning-avg-corewars pass) vs
