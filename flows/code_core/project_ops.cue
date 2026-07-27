@@ -182,10 +182,55 @@ project_ops: #FlowDefinition & {
 					// all_passed lives in context (via publishes), not in
 					// result (sub-flow returns nest under result._returns).
 					{condition: "context.get('all_passed') == true", transition: "collect_test_installs"},
+					{condition: "true", transition: "escalate_env"},
+				]
+			}
+			publishes: ["all_passed", "terminal_output"]
+		}
+
+		// ── Install failed → escalate (the only fix path that can RUN) ──
+		//
+		// This used to go straight to build_report_failure, which returns to the
+		// functional sweep, which re-diagnoses. But diagnose_issue's whole action
+		// space is "trace a symbol" and this flow's own planner emits config
+		// FILES — so an environment defect (a package declared but not
+		// installed) had no expressible remedy anywhere on the route. One run
+		// re-derived the same CORRECT root cause 26 times and wrote a fix script
+		// 22 times that nothing ever executed (dev/POOLSIDE_TRAP_ROOTCAUSE.md).
+		//
+		// `escalate` is a bounded read/run/write REACT loop that CAN run
+		// commands, and its own prompt tells it to re-run the failing signal
+		// before changing anything. It shipped with exactly one caller
+		// (file_ops.self_correct); OPEN_TASKS §2 records wiring it to the
+		// stalled fix-loop as the fix. Invoked as a SUB-FLOW, exactly as
+		// file_ops does — escalate's terminals are `terminal: true` with a
+		// status, so it returns to its invoker and cannot be tail-called.
+		//
+		// NOTE this is a different sub-case from TRAP_BRIEF §7's A′. There the
+		// ground truth was present and IGNORED (static tracing mis-localised to
+		// the wrong package), so more ground truth would not have helped. Here
+		// localisation was correct every cycle and the remedy was inexpressible
+		// — which is precisely what an action space fixes.
+
+		escalate_env: #StepDefinition & {
+			action:      "flow"
+			description: "Dependency install failed — bounded read/run/write recovery"
+			flow:        "escalate"
+			context: optional: ["terminal_output", "install_commands"]
+			input_map: {
+				mission_id:        {$ref: "input.mission_id"}
+				working_directory: {$ref: "input.working_directory"}
+				failure_evidence:  {$ref: "context.terminal_output", default: "The dependency install commands failed."}
+				expected_outcome:  "The project's declared dependencies are installed and importable by the interpreter that runs the program."
+				invoking_flow:     "project_ops"
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.status == 'resolved'", transition: "collect_test_installs"},
 					{condition: "true", transition: "build_report_failure"},
 				]
 			}
-			publishes: ["all_passed"]
 		}
 
 		// ── Test dependencies — an LLM-set env category ───────────
