@@ -1,12 +1,16 @@
 #!/bin/bash
 # Laguna quant A/B — APEX (2h) then the unsloth retry (45m, short leash).
 #
-#   setsid nohup bash dev/laguna_quant_ab.sh > /tmp/tier/quant_ab.log 2>&1 &
+#   python3 dev/daemonize.py /tmp/tier/quant_ab.log bash dev/laguna_quant_ab.sh
 #
 # SURVIVAL: background jobs started from a Claude Code session die when that
 # session exits, and nohup alone does not save them (it stranded a PAUSED
-# mission and a DOWN server once already). `setsid` leaves the session's
-# process group — use the invocation above verbatim.
+# mission and a DOWN server once already). This has to leave the session's
+# process group. An earlier version of this header said to use `setsid` —
+# MACOS HAS NO setsid, so that line just failed and the job stayed in the
+# session's process group, i.e. exactly the death it was meant to prevent.
+# Verify before walking away: `ps -o pid,ppid -p $(pgrep -f laguna_quant_ab)`
+# must show PPID 1.
 #
 # CHAINING: this script WAITS for any in-flight `ouroboros.py start` to exit
 # before touching the server, so it can be armed while the poolside 2h run is
