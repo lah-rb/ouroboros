@@ -1,0 +1,108 @@
+# Laguna-S-2.1, POOLSIDE first-party GGUF — the quant hypothesis.
+#
+# WHY THIS EXISTS. The unsloth build we tested pushes 92 expert tensors to
+# IQ3_S — THREE-BIT — and that is exactly the regime where repetition loops and
+# failure to emit stop tokens appear. Our laguna runs are dominated by precisely
+# those symptoms: 51% of the 2h tier run inside long generations, two hitting
+# the 32k cap and returning truncated output (dev/TIER_RUN_2026-07-27.md), plus
+# pure-CoT runaways of 125-137k chars that never emit an answer.
+#
+# TENSOR COMPOSITION (read from the GGUF headers, 2026-07-27):
+#
+#   unsloth UD-IQ4_XS  57.6 GB   Q8_0 x385  F32 x287  IQ3_S x92   IQ4_XS x47
+#   poolside Q4_K_M    96.0 GB   Q8_0 x386  F32 x287  Q4_K  x117  BF16   x24
+#
+# Same 814 tensors, same arch, same dense/attention precision. The whole 1.67x
+# size difference is the EXPERTS: unsloth quantises 92 of them to 3-bit, while
+# poolside holds nothing below 4.5-bit and keeps 24 at full BF16. "Q4_K_M" is a
+# misleading name here — the file is mostly 8-bit.
+#
+# THE TRADE — 4x LESS CONTEXT. 96 GB of weights against a 113 GB wired limit:
+#
+#   n_ctx    KV GB   total    verdict
+#    16384     3.2    99.3    OK
+#    32768     6.4   102.5    OK   <- THIS CONFIG (gpt-oss runs stable at 100.6)
+#    49152     9.7   105.7    tight
+#    65536    12.9   108.9    tight
+#    98304    19.3   115.4    over the wired limit
+#   131072    25.8   121.8    over — the unsloth context is unreachable here
+#
+# UNVALIDATED. Nothing below has been run. Before trusting it: boot at this
+# n_ctx, then re-run dev/laguna/sampling_sweep.py and compare against
+# dev/laguna/sweep_results.json arm C (the unsloth baseline at identical
+# sampling) — that isolates the QUANT as the only changed variable.
+#
+# THE FOLLOW-UP THAT MATTERS MOST: thinking is false here to match arm C for a
+# controlled comparison, but the real prize is a `thinking: true` variant. On
+# unsloth, thinking-on was catastrophic (zero files in 22 minutes, two >100k
+# pure-CoT runaways). If the better quant restores termination, we get laguna's
+# reasoning back instead of having to suppress it.
+
+app:
+  host: 0.0.0.0
+  port: 8008
+  log_level: info
+  cors_origins:
+  - '*'
+  backend_timeout: 180
+  openai_shim: true
+graphql:
+  max_query_depth: 10
+  max_tokens: 32768
+  max_aliases: 50
+  introspection_enabled: true
+model:
+  name: Laguna-S-2.1-poolside
+  family: laguna
+  path: /Users/lah-rb/.lmstudio/models/poolside/Laguna-S-2.1-GGUF/laguna-s-2.1-Q4_K_M.gguf
+  n_ctx: 32768
+  # 102.5GB computed; leave real headroom over it rather than shaving the guard.
+  kv_preflight_gb: 108
+  model_max_context: 1048576
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: false
+  swa_full: true
+  kv_unified: true
+  flow_kv_cache: false
+  session_full_replay: true
+  resident_seq_cache: true
+  context_refresh_drain_s: 300
+prompt:
+  persona_file: ./knowledge/SOUL.md
+generation:
+  # HALVED from the unsloth config's 32768. With n_ctx 32768 a single 32k
+  # generation could consume the entire window, and on this model the long
+  # generations are the documented failure — a tighter cap bounds the damage
+  # and costs less wall clock when one does run away.
+  max_tokens_default: 16384
+  temperature_default: 1.0
+  top_p: 1.0
+  top_k: 20              # vendor generation_config.json; NOT 0 (see unsloth cfg)
+  min_p: 0.0
+  presence_penalty: 0.0
+  repeat_penalty: 1.0    # penalties truncate code output — sweep arm B
+  # <tool_call> is a single token; laguna emits it unprompted in 20-40% of turns
+  # and we do not support per-model tool protocols. Arm C: 0/4 tool calls,
+  # 100% usable output.
+  logit_bias: {25: -100.0}
+  session_temp_floor: 0.35
+  streaming_default: true
+knowledge:
+  # Rebuilt automatically when stale — same tokenizer as the unsloth build, but
+  # keyed per config file, so it regenerates on first boot.
+  tokens_bin: ./data/laguna-s-2.1-poolside.tokens.bin
+  token_limit: 32768
+resources:
+  decode_mode: batched
+  cpu_threads: 15
+  jit_concurrency_limit: null
+tools:
+  enabled: false
+  max_iterations: 3
+logging:
+  enabled: true
+  directory: ./logs
