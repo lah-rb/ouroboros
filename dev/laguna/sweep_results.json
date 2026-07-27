@@ -108,5 +108,51 @@
         "wall_s": 30.2
       }
     ]
+  },
+  {
+    "arm": "C-logit-ban (baseline + ban token 25)",
+    "reps": 4,
+    "tool_call_rate": 0.0,
+    "runaway_rate": 1.0,
+    "usable_rate": 1.0,
+    "median_gen": 8000,
+    "rows": [
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 32424,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 211.2
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 30845,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 211.0
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 30949,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 211.9
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 32279,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 211.8
+      }
+    ]
   }
 ]

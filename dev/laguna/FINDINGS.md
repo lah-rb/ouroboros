@@ -187,8 +187,9 @@ answer. Raw data in `dev/laguna/sweep_results.json`.
 
 | arm | tool_call | usable | median gen |
 |---|---|---|---|
-| A baseline (top_k 20, rp 1.0, thinking off) | 20% | **80%** | 8000 (capped) |
+| A baseline (top_k 20, rp 1.0, thinking off) | 20% | 80% | 8000 (capped) |
 | B penalties (rp 1.1, freq 0.3, last_n 512, DRY 0.8) | 40% | 60% | **988** |
+| **C logit ban (baseline + ban token 25)** | **0%** | **100%** | 8000 (capped) |
 
 **Yes, they change behaviour — for the worse.** The penalties TRUNCATE output
 hard (median 8000 -> 988; individual reps of 487 and 91 tokens for a "produce
@@ -200,6 +201,12 @@ not reduce tool-calling either (40% vs 20%, though n=5 cannot separate those).
 **Conclusion: leave the penalty family OFF for code workloads.** They are a
 loop-breaker for prose degeneration (the qwen paragraph-orbit case), not a
 general quality knob.
+
+**Arm C settles the tool-call question: the logit ban works.** `<tool_call>` is
+a single token (id 25), so `logit_bias: {25: -100.0}` makes it unsamplable —
+0/4 tool calls and 4/4 usable output, versus 20% / 80% at baseline. This is
+config, not per-model tool support: one banned token id, no protocol handling.
+Adopted for the overnight tier run.
 
 ### Two corrections this sweep forced
 
