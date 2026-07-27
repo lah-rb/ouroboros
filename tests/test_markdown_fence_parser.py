@@ -164,3 +164,73 @@ def test_content_has_exactly_one_trailing_newline():
     blocks = parse_file_blocks("```python\n# === FILE: main.py ===\nx = 1\n```\n")
     _, content = blocks[0]
     assert content.endswith("\n") and not content.endswith("\n\n")
+
+
+class TestSingleFenceMultipleFileMarkers:
+    """A fence carrying MORE than one `# === FILE: path ===` marker.
+
+    "One fence per file" and "one fence, files separated by markers" are both
+    reasonable readings of the multi-file instruction, and models pick either.
+    The marker syntax is explicit enough to disambiguate, so both parse.
+    """
+
+    def test_single_fence_with_three_markers_yields_three_files(self):
+        text = (
+            "```python\n"
+            "# === FILE: models.py ===\n"
+            "class Player:\n    pass\n"
+            "\n"
+            "# === FILE: combat.py ===\n"
+            "def fight():\n    pass\n"
+            "```"
+        )
+        assert parse_file_blocks(text) == [
+            ("models.py", "class Player:\n    pass\n"),
+            ("combat.py", "def fight():\n    pass\n"),
+        ]
+
+    def test_trailing_marker_with_no_body_is_an_empty_file(self):
+        # `__init__.py` is the common case: the marker IS the declaration.
+        text = (
+            "```python\n"
+            "# === FILE: a.py ===\n"
+            "A = 1\n"
+            "# === FILE: pkg/__init__.py ===\n"
+            "```"
+        )
+        assert parse_file_blocks(text) == [("a.py", "A = 1\n"), ("pkg/__init__.py", "")]
+
+    def test_one_fence_per_file_still_works(self):
+        # The pre-existing protocol must be untouched.
+        text = (
+            "```python\n# === FILE: a.py ===\nA = 1\n```\n"
+            "```python\n# === FILE: b.py ===\nB = 2\n```"
+        )
+        assert parse_file_blocks(text) == [("a.py", "A = 1\n"), ("b.py", "B = 2\n")]
+
+    def test_marker_text_inside_a_body_is_NOT_split(self):
+        # THE SAFETY CASE. agent/renderers.py emits this exact marker syntax,
+        # so a generated file can legitimately contain marker-looking text.
+        # Splitting is licensed only when the fence's FIRST substantive line is
+        # a marker; here it is not, so the body must survive intact.
+        text = (
+            "```python\n"
+            'TEMPLATE = """\n'
+            "# === FILE: not_a_real_file.py ===\n"
+            '"""\n'
+            "```"
+        )
+        blocks = parse_file_blocks(text, fallback_path="renderers.py")
+        assert [p for p, _ in blocks] == ["renderers.py"]
+        assert "not_a_real_file.py" in blocks[0][1]
+
+    def test_duplicate_paths_within_one_fence_keep_the_first(self):
+        text = (
+            "```python\n"
+            "# === FILE: a.py ===\n"
+            "FIRST = 1\n"
+            "# === FILE: a.py ===\n"
+            "SECOND = 2\n"
+            "```"
+        )
+        assert parse_file_blocks(text) == [("a.py", "FIRST = 1\n")]

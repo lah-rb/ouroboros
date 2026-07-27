@@ -160,6 +160,41 @@ def _looks_like_empty_fence(raw_content: str) -> bool:
 _FILE_MARKER_RE = re.compile(r"^\s*(?:#|//|--)?\s*===\s*FILE:\s*(.+?)\s*===\s*$")
 
 
+def _segment_lines(lines: list[str], start: int) -> list[tuple[str, str]]:
+    """Split fence-body ``lines`` into (path, content) at every FILE marker.
+
+    ``start`` is the index of a line ALREADY known to be a FILE marker, which
+    is what licenses the split: a fence whose first substantive line is a
+    marker is unambiguously in multi-file protocol, so further markers in it
+    are separators rather than content.
+
+    Callers must not use this on a body that does not begin with a marker.
+    Generated files legitimately contain marker-looking text — ``renderers.py``
+    emits exactly this syntax — and splitting those would corrupt them. The
+    first-line gate keeps that case on the untouched single-file path.
+    """
+    out: list[tuple[str, str]] = []
+    path = _FILE_MARKER_RE.match(lines[start]).group(1).strip()  # type: ignore[union-attr]
+    buf: list[str] = []
+    for line in lines[start + 1 :]:
+        nxt = _FILE_MARKER_RE.match(line)
+        if nxt:
+            out.append((path, _join_body(buf)))
+            path, buf = nxt.group(1).strip(), []
+            continue
+        buf.append(line)
+    out.append((path, _join_body(buf)))
+    return out
+
+
+def _join_body(lines: list[str]) -> str:
+    """Trim leading blanks, rstrip, and terminate with exactly one newline."""
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    content = "\n".join(lines).rstrip() + "\n"
+    return "" if content == "\n" else content
+
+
 def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str]]:
     """Parse text containing fenced code blocks with `# === FILE: path ===`
     markers as the first comment line inside each fence.
@@ -211,20 +246,38 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
 
         marker = _FILE_MARKER_RE.match(lines[first_nonblank_idx])
         if marker:
-            file_path = marker.group(1).strip()
-            # Strip the marker line (and any leading blanks before it)
-            # from the body so the written file contains only the
-            # actual source code.
-            remaining_lines = lines[first_nonblank_idx + 1 :]
-            # Trim one trailing newline that may have been introduced
-            # by the split — but preserve intentional trailing blank
-            # lines. Strip only leading blanks from the remainder so
-            # the file starts at the first substantive line.
-            while remaining_lines and not remaining_lines[0].strip():
-                remaining_lines.pop(0)
-            content = "\n".join(remaining_lines).rstrip() + "\n"
-            if content == "\n":
-                content = ""
+            # The marker line is stripped so the written file contains only
+            # the actual source. A fence in this protocol may carry MORE than
+            # one file: "one fence per file" and "one fence, files separated
+            # by markers" are both reasonable readings of the instruction, and
+            # models pick either. Laguna-S-2.1 emitted all 7 files in a single
+            # fence, which used to parse as 0 usable files (2026-07-26).
+            # Splitting here is unambiguous because the marker syntax is
+            # explicit — see _segment_lines for why the first-line gate above
+            # is what makes it safe.
+            candidates = _segment_lines(lines, first_nonblank_idx)
+            for cand_path, cand_content in candidates:
+                if not cand_path or cand_path in seen_paths:
+                    if cand_path in seen_paths:
+                        logger.debug(
+                            "Skipping duplicate FILE block for %r (first kept)",
+                            cand_path,
+                        )
+                    continue
+                # Empty content under a DECLARED path is an intentionally empty
+                # file (__init__.py is the common case) — the marker is the
+                # declaration, so emit it. Reject only non-empty content that
+                # is placeholder echo ("# complete modified file content").
+                if not cand_content or _is_meaningful_content(cand_content):
+                    blocks.append((cand_path, cand_content))
+                    seen_paths.add(cand_path)
+            if len(candidates) > 1:
+                logger.info(
+                    "Fence carried %d FILE markers; split into %d files",
+                    len(candidates),
+                    len(candidates),
+                )
+            continue
         else:
             # No marker — use fallback_path if provided.
             if not fallback_path:

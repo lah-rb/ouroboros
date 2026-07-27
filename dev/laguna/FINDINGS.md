@@ -67,18 +67,39 @@ Artifacts: models.py 17.9k, engine.py 26.6k, combat.py 15.5k, loader.py 14.6k,
 parser.py 7.2k, main.py 0.8k, data/world.yaml 10.6k. **5 of 6 Python files
 parse clean.**
 
-## Open issue A: batch structural path fails (0/7)
+## Open issue A: batch structural path fails (0/7) — CAUSE CORRECTED
 
 `structural_mode: batch` produced `Batch slice: wrote 0/7 declared files`.
-The model emits the correct `# === FILE: path ===` markers but nests all
-7 files inside a SINGLE fence, while `agent/markdown_fence.py:parse_file_blocks`
-expects **one fence per file** with the marker on the fence's first line.
-The run recovered via the per-file `file_ops -> create` fallback.
 
-**Recommended hardening (general, not laguna-specific):** when a single fence
-contains multiple FILE markers, split on them. The marker protocol is
-unambiguous either way, and one-fence-per-file is a coin-flip reading of the
-instruction that other models will also get wrong.
+**First diagnosis was WRONG.** I claimed the model nested all 7 files inside a
+single fence, reading that off the largest response in the run (17,938 chars,
+one fence, opening with a `models.py` marker). That response carried exactly ONE
+marker — it was an ordinary single-file create, not a nested batch. No response
+in the entire run contained more than 3 FILE markers.
+
+**Actual cause: laguna emits TOOL CALLS where we expect content.** The batch
+step returned:
+
+    I'll build this text adventure game as a coherent system... Let me first
+    check the environment.<tool_call>shell<arg_key>cmd</arg_key><arg_value>python
+    --version && python -c "import yaml; ..."</arg_value></tool_call>
+
+Zero fences, zero markers. **14 of 34 responses in the run (41%) contained
+`<tool_call>`.** `<tool_call>`/`<tool_response>` are native to laguna's chat
+template, and the model card describes it as reasoning "before calling tools and
+between tool calls" — it is natively agentic. We run `tools.enabled: false`, so
+those turns produce nothing usable and are absorbed by retries/fallback.
+
+This is the dominant integration gap for laguna, and it is not a parser problem.
+Options, none yet tested: suppress tool-calling via the system block; teach the
+format schema to strip/park `<tool_call>` spans; or wire laguna's tool protocol
+to the real tool layer (it is a coding-agent model — this may be the point of it).
+
+**Separately**, `parse_file_blocks` was hardened to split a single fence on
+multiple FILE markers (`agent/markdown_fence.py`). That is a real robustness win
+— "one fence per file" vs "one fence, marker-separated" is a coin-flip reading
+of the instruction and models do pick either — but it should NOT be credited
+with fixing laguna, which never emitted that shape.
 
 ## Open issue B: prose leaks into generated code (1 file in 7)
 
