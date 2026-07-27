@@ -2319,21 +2319,7 @@ async def _sweep_after_file_ops(
     # on target_file alone, still useful.
     fops_target_symbol = getattr(last_report, "target_symbol", "") or ""
 
-    # Find the diagnosis that led to this attempt, and the
-    # interact that triggered that diagnosis — we capture its
-    # headline as "pre_headline" so the next diagnose cycle
-    # can render before/after regression comparisons.
-    prior_diag_summary = ""
-    prior_interact_headline = ""
-    saw_diag = False
-    for prev_report in reversed(goal.reports[:-1]):
-        flow = getattr(prev_report, "flow", "")
-        if flow == "diagnose_issue" and not prior_diag_summary:
-            prior_diag_summary = getattr(prev_report, "summary", "")
-            saw_diag = True
-        elif saw_diag and flow == "interact":
-            prior_interact_headline = getattr(prev_report, "headline", "")
-            break
+    prior_diag_summary, prior_interact_headline = _prior_diagnosis_context(goal)
 
     goal.failed_attempts.append(
         FailedAttempt(
@@ -2525,6 +2511,34 @@ async def _sweep_after_file_ops(
         )
 
 
+def _prior_diagnosis_context(goal: Any) -> tuple[str, str]:
+    """The diagnosis that led to the latest attempt, plus the headline of the
+    interact that triggered it.
+
+    The headline becomes a ``pre_headline`` so the next diagnose cycle can
+    render a before/after regression comparison. Shared by the file_ops and
+    project_ops routes so both record attempts the same way.
+    """
+    prior_diag_summary = ""
+    prior_interact_headline = ""
+    saw_diag = False
+    for prev_report in reversed(goal.reports[:-1]):
+        flow = getattr(prev_report, "flow", "")
+        if flow == "diagnose_issue" and not prior_diag_summary:
+            prior_diag_summary = getattr(prev_report, "summary", "")
+            saw_diag = True
+        elif saw_diag and flow == "interact":
+            prior_interact_headline = getattr(prev_report, "headline", "")
+            break
+    return prior_diag_summary, prior_interact_headline
+
+
+# The repeat-target warning keys on "target_file:target_symbol" and skips empty
+# keys, so an environment fix needs a stable non-empty marker to accumulate a
+# count. It renders as "CRITICAL: <environment> has failed N times."
+_ENV_ATTEMPT_TARGET = "<environment>"
+
+
 async def _sweep_after_project_ops(
     goal: Any,
     last_report: Any,
@@ -2535,6 +2549,33 @@ async def _sweep_after_project_ops(
 ) -> StepOutput:
     """After a project_ops env/dep fix: re-test on success, re-diagnose
     on failure."""
+    # RECORD THE ATTEMPT, exactly as the file_ops route does. Without this,
+    # goal.failed_attempts stayed [] forever on the environment route, which
+    # silently disabled three mechanisms that are all already built: the
+    # "## Prior attempts" seed section, the repeat-target CRITICAL warning, and
+    # the stuck-goal web-search gate (which needs >= 2 attempts). The model
+    # therefore re-diagnosed from a byte-identical seed every cycle and,
+    # correctly, produced an identical conclusion — 26 times in one run
+    # (dev/POOLSIDE_TRAP_ROOTCAUSE.md).
+    #
+    # Appended before branching on status, mirroring file_ops: project_ops
+    # reporting "success" only means its install commands exited 0, not that
+    # the goal is fixed. If the re-test below passes, the goal completes and
+    # this record is discarded with it.
+    from agent.persistence.models import FailedAttempt
+
+    prior_diag_summary, prior_interact_headline = _prior_diagnosis_context(goal)
+    goal.failed_attempts.append(
+        FailedAttempt(
+            target_file=_ENV_ATTEMPT_TARGET,
+            target_symbol="",
+            flow="project_ops",
+            reason=(getattr(last_report, "summary", "") or "no details")[:500],
+            diagnosis_summary=prior_diag_summary,
+            pre_headline=prior_interact_headline,
+        )
+    )
+
     if report_status == "success":
         # Environment fix applied — re-test the goal
         dispatch_config = {
