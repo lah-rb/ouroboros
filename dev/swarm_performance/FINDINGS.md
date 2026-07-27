@@ -10,6 +10,11 @@ quietly corrected — several of them were mine.
 
 ---
 
+> **STATUS 2026-07-26.** Homogeneous-batch capacity is characterized (96 cells,
+> two server configurations, zero errors). **Heterogeneous workloads are NOT —
+> see §9**, which is the honest boundary of everything below. Next lever:
+> the shared prefix cache, on the §8 evidence (see *What this changes*).
+
 ## TL;DR — the capacity model in four lines
 
 1. **Seats are nearly free.** 128 concurrent streams cost 2.7% of a 393k pool.
@@ -360,15 +365,79 @@ is indistinguishable from a no-op.
    the w=0.06 result is about decode time, not allocation. Test by attempting
    the skipped cell directly.
 
+## 9. NOT CHARACTERIZED: heterogeneous workloads
+
+**Every number in this document was measured on a HOMOGENEOUS batch** — within
+any single cell, all N streams share one prompt size and one generation length
+(`--gen` is fixed precisely so every cell runs the same number of decode steps,
+§ METHODS). Real swarm work is nothing like that, and the gap is already
+visible in the one ragged measurement we have.
+
+**The evidence that it matters:** the corpus regen (c=48, real mixed
+generations) is over-predicted by the surface-fitted model by **+32.5%** —
+159 predicted vs 120 observed. The homogeneous surface says a width should
+deliver more than a ragged workload at that width actually does. The regen's
+generation lengths spanned **8.4×** (low 95 tok / medium 246 / high 798).
+
+**Three uncharacterized mechanisms, all plausible contributors:**
+
+1. **Retirement decay.** Under continuous batching, short streams finish and
+   free their seats mid-wave, so effective N *declines* through a wave that
+   started at N. A wave launched at 48 with an 8.4× length spread spends most of
+   its wall-clock well below 48. Nominal width overstates realized width, and
+   the overstatement grows with the spread.
+2. **Mixed depth in one batch.** Every cell here holds depth constant across
+   streams. Unknown whether a batch containing one 20k-depth stream and 47
+   shallow ones costs the MAX depth, the MEAN, or the sum — the three imply very
+   different sizing rules, and §5's compounding says the answer matters a lot.
+3. **Arrival staggering.** All cells launch N requests simultaneously. Real
+   fan-outs trickle in as upstream steps complete, which changes both seat
+   occupancy and how prefill (serialized, §4) interleaves with decode.
+
+**Why this is the honest boundary of the model.** §7 already shows the fitted
+optimizer cannot express an interior optimum; §9 says that even where it fits,
+it fits the wrong workload shape. Any `N*` recommendation derived from this
+document is an upper bound on a homogeneous batch, not a prediction for a swarm.
+
+**How to close it:** a ragged-batch harness — same widths and depths, but draw
+generation length from a distribution (start with the regen's measured 95/246/798
+mix) and optionally stagger arrivals. Report realized-N over time alongside
+aggregate. Two cells would already separate mechanism 1 from mechanism 2:
+same mean generation length, one uniform and one 8.4×-spread.
+
 ---
 
 ## What this changes
 
-**Shared prefix cache (OPEN_TASKS §11) is the top lever, not merely the biggest.**
-Prefill cannot be parallelized, so the only way to reduce it is to stop paying
-for the same tokens repeatedly. Measured waste on the counterfactual corpus:
-**1.03M of 1.54M prompt tokens (67%) were redundant re-reads** of identical
-prompts. Swarm fan-outs pay a shared blueprint/contract context once per worker.
+**Shared prefix cache (OPEN_TASKS §11) is THE performance lever to chase next —
+and §8 turned the argument for it from qualitative to measured.**
+
+The case now rests on two independent measurements pointing the same way:
+
+- **Prefill cannot be parallelized** (§4, serialization ≈ 1.0 at every width and
+  prompt size). Seats cannot help prefill-bound work. The *only* way to reduce
+  it is to stop paying for the same tokens twice.
+- **Shared KV costs ~6% of private KV** (§8, w=0.06 by intervention). This is
+  the important new fact: it is a direct measurement of what the sharing
+  mechanism is worth once tokens are shared, and it is enormous. The 1809-token
+  static prefix is carried by every request on this server at ~109 effective
+  tokens of depth.
+
+Together: tokens that are shared are nearly free in BOTH phases — no prefill
+(cache hit) and ~6% of decode. Tokens that are private cost full freight in
+both. **The entire performance question reduces to what fraction of the prompt
+can be made shared.** Today exactly one thing is: the persona head. Everything a
+swarm actually re-reads — blueprint, contract, shared design context, common
+file bodies — is private and paid N times.
+
+Measured waste on the counterfactual corpus: **1.03M of 1.54M prompt tokens
+(67%) were redundant re-reads.** The mechanism to fix it is already in the
+engine and already proven at w=0.06; it is only pointed at one block of text.
+
+Note this also **reverses the intuitive read of §8**. "Static is free" sounds
+like the prefix is a non-issue to be ignored. The operational conclusion is the
+opposite: the prefix is the one part of the prompt already enjoying a 16×
+discount, which is precisely why the work is to widen what qualifies.
 
 **Speculative decoding (OPEN_TASKS §11c) needs re-analysis at depth.** My
 break-even (~70% acceptance at N=64) was computed entirely at *shallow* ladder

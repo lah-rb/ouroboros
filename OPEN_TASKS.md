@@ -306,7 +306,33 @@ Flow-level retries are the fallback if per-step policy turns out to differ.
 timeout. An abandoned socket leaves the server working, which is what
 manufactured the "busy" in the first place.
 
-## 11. Shared prefix cache — the biggest untapped serving lever
+## 11. Shared prefix cache — THE next performance lever (Luke, 2026-07-26)
+
+**PROMOTED on measured evidence.** The swarm-performance study
+(`dev/swarm_performance/FINDINGS.md`) closes with two independent measurements
+that make this the highest-value work available:
+
+- **Prefill does not parallelize** (§4) — serialization ≈ 1.0 at every width and
+  prompt size, so seats cannot help prefill-bound work. The only lever is not
+  reading the same tokens twice.
+- **Shared KV costs ~6% of private KV** (§8) — `w = 0.06`, measured by
+  intervention (empty persona vs production, 64 cells). Tokens that are SHARED
+  are nearly free in both phases: no prefill on a hit, and ~6% of decode.
+  Tokens that are PRIVATE pay full freight in both.
+
+So the whole serving-performance question reduces to **what fraction of a prompt
+can be made shared.** Today exactly one block qualifies — the persona head.
+Everything a swarm genuinely re-reads (blueprint, contract, shared design
+context, common file bodies) is private and paid N times over. The mechanism is
+already in the engine and already proven at 16× discount; it is simply pointed
+at one block of text.
+
+**Caveat carried from FINDINGS §9:** all of the above is homogeneous-batch
+measurement. Heterogeneous workloads are uncharacterized, and the one ragged
+datapoint (the corpus regen) is over-predicted by the model by +32.5%. That does
+not weaken the cache case — prefill serialization and w=0.06 are both
+workload-shape independent — but any *sizing* recommendation from that study is
+an upper bound, not a prediction.
 
 **Finding (2026-07-26).** There is NO opportunistic prefix cache. Reuse is
 entirely via explicitly pinned seq bands:
