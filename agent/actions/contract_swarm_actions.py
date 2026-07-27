@@ -2331,6 +2331,16 @@ async def action_swarm_diagnose_batch(step_input: StepInput) -> StepOutput:
         )
         diagnosed.append(path)
 
+    # The lint gate's one-pass bound is spent HERE, where the question actually
+    # reaches a worker — not when the burst was dispatched. Marking at dispatch
+    # made the gate a no-op: structural_sweep_next set the flag, the flag
+    # cleared the block, and this action then recomputed candidates and found
+    # NOTHING to triage (2026-07-27 APEX arm, cycle 4: dispatch_diagnose_batch
+    # -> fan_out_triage -> report_failed with the lint finding untouched).
+    for g, _, _ in targets:
+        if getattr(g, "lint_reviewed", None) is False:
+            g.lint_reviewed = True
+
     mission.notes.append(
         NoteRecord(
             # Content = the triaged goal-id ledger the candidate filter reads.

@@ -232,27 +232,62 @@ class TestTheSweepActuallyAsks:
         assert out.result.get("needs_diagnose_batch") is True
         assert out.context_updates["dispatch_config"]["flow"] == "diagnose_batch"
 
-    def test_the_flag_is_set_on_ASK_not_on_answer(self, tmp_path):
-        """The bound. If this were set when a fix succeeded, an unfixable
-        finding would re-block every cycle — the original deadlock."""
+    def test_dispatch_does_NOT_spend_the_flag(self, tmp_path):
+        """REGRESSION. Marking at dispatch clears the block before the burst
+        runs; swarm_diagnose_batch then recomputes candidates, finds nothing,
+        and the gate triages NOTHING while still costing a cycle. Seen live on
+        the APEX arm: dispatch_diagnose_batch -> fan_out_triage -> report_failed
+        with the lint finding untouched. The flag is spent inside the burst,
+        where a worker actually sees the finding."""
         import asyncio
 
         mission = self._mission(tmp_path, ["lint: engine.py"])
         asyncio.run(self._sweep(mission))
-        assert mission.goals[0].lint_reviewed is True, (
-            "marking must happen at dispatch, before any answer comes back"
+        assert mission.goals[0].lint_reviewed is False, (
+            "the goal must still be a candidate when the burst recomputes"
         )
 
-    def test_a_second_sweep_does_not_re_ask(self, tmp_path):
-        """Directly exercises the anti-deadlock property: the same goal, still
-        failing lint, is accepted on the next pass."""
+    def test_the_goal_survives_as_a_candidate_for_the_burst(self, tmp_path):
+        """The property the above protects: after dispatch, the burst can still
+        see the goal."""
+        import asyncio
+
+        from agent.actions.contract_swarm_actions import _diagnose_batch_candidates
+
+        mission = self._mission(tmp_path, ["lint: engine.py"])
+        asyncio.run(self._sweep(mission))
+        got = _diagnose_batch_candidates(mission, str(tmp_path))
+        assert [p for _, p, _ in got] == ["engine.py"], (
+            "dispatch must not consume the very candidate it dispatched for"
+        )
+
+    def test_a_burst_that_books_nothing_is_still_bounded(self, tmp_path):
+        """THE ANTI-DEADLOCK PROPERTY, end to end.
+
+        If the burst declines (confident: false) it books no diagnosis — but it
+        does record the goal in the triaged ledger. On the next sweep the goal
+        is therefore NOT a burst candidate, falls to the per-file decision, and
+        that spends the flag. So an unfixable finding costs one burst plus one
+        interactive ask, and then the goal proceeds forever after.
+        """
         import asyncio
 
         from agent.actions.reporting_actions import structural_block_reason
+        from agent.persistence.models import NoteRecord
 
         mission = self._mission(tmp_path, ["lint: engine.py"])
-        asyncio.run(self._sweep(mission))
         g = mission.goals[0]
+        # Simulate the burst having run and declined.
+        mission.notes.append(
+            NoteRecord(
+                content=g.id,
+                category="codebase_observation",
+                tags=["diagnose_batch"],
+                source_flow="diagnose_batch",
+            )
+        )
+        asyncio.run(self._sweep(mission))
+        assert g.lint_reviewed is True, "the per-file ask is the terminal bound"
         assert structural_block_reason(g, g.reports[-1].checks_failed) is None
 
     def test_serial_mode_asks_via_the_per_file_decision(self, tmp_path):

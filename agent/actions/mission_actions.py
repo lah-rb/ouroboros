@@ -1538,14 +1538,13 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             == "lint"
         ]
         if len(diag_candidates) >= 2 or lint_blocked:
-            # Mark the lint question ASKED, not answered — before dispatch and
-            # persisted immediately, so a reload (or an unconfident triage that
-            # books nothing) cannot re-litigate it. This is the bound that makes
-            # blocking safe: an unfixable finding costs one look, never a run.
-            for g in lint_blocked:
-                g.lint_reviewed = True
-            if lint_blocked and effects:
-                await effects.save_mission(mission)
+            # DO NOT mark lint_reviewed here. Marking at dispatch clears the
+            # block before the burst runs, and swarm_diagnose_batch recomputes
+            # candidates — so it finds nothing and the gate triages NOTHING
+            # while still costing a cycle (2026-07-27 APEX arm, cycle 4).
+            # The flag is spent inside the burst, where a worker actually sees
+            # the finding; the triaged-goal ledger plus the per-file lint
+            # decision below are what bound it if the burst books nothing.
             dispatch_config = {
                 "goal_id": "",
                 "goal_description": "Triage all gate-failed goals in one batch",
