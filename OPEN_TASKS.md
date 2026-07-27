@@ -120,19 +120,34 @@ inert since ~07-17 (0–3% activation vs 25–70% in early July); and the −42%
 canary is **withdrawn** — "always low" is indistinguishable from a fixed low
 policy, i.e. gpt-oss faster at low, not smarter when adaptive.
 
-Next actions live in that file's §8. Cheapest first rung: **run the owed
-pairwise panels on the quarantined highs** — `dev/label_quarantine_v1.json`
-holds **84** of them (52 unanimous 3/3, 31 split, 1 short-votes), not the 13
-of the early pilot. Certifying even the 52 unanimous ones breaks the two-class
-ceiling before any new collection.
+**DECISION (Luke, 2026-07-26): start fresh — capture dynamic content only for
+training, present only the dynamic portion to the router. Phase 0 is dead.**
 
-**BLOCKED on a corpus re-run (2026-07-26):** the pairwise protocol needs
-final-channel actions, and the stored candidates were mutilated by the
-extraction bug fixed in 59a6d65 — 93% of quarantined highs have no final
-channel at all. The regeneration proved the fix (4,107/4,107 usable) but its
-LEVEL dimension is void: rawCompletion silently dropped `reasoning` (fixed in
-0297fa1), so all three "levels" were identical generations. Re-run
-`dev/cf_regen_swarm.py --run` now that the field is honored, THEN panel.
+Next actions live in that file's §8. ~~Phase 0 pairwise panels on the 84
+quarantined highs~~ — **CANCELLED.** Those labels were assigned against a prompt
+composition production no longer sends, so certifying them banks work that
+cannot transfer.
+
+The cause is dated and precise (§3.5, §8.0): the router is handed the **entire**
+turn render, and a **1,459-char static instruction block**
+(`run_in_terminal/plan_interaction_rules`, the `---ACT AS---` section) was added
+to `plan_interaction` *after* the corpus was collected. It appears in **20.9% of
+training prompts and 99.1% of live prompts**, and within training it is a
+near-deterministic low marker (1.6% medium with it vs 16.5% without). The
+observed live activation of 1.55% **is** that conditional — the router is an
+ACT-AS detector, not a state router. Ablating that one section moves live
+prompts 1.55% → 40.52%.
+
+**Dead:** Phase 0; `trusted_labels_v1` + `*_labeling.json` as router-training
+sources; the regenerated corpus for router purposes (actions conditioned on
+elided previews). **Survives:** the methodology, the harnesses, the static
+cue-authored highs, the tree-walk plan, and the regen as a serving-performance
+artifact.
+
+**First rung is now §8.0.1: one shared representation function** imported by
+both the runtime router call and the capture tooling — the bug class was two
+paths assumed to produce the same string and never compared. Nothing else
+starts until train and serve provably share one representation.
 
 Remaining format work (unchanged, still useful):
 

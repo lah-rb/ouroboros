@@ -500,15 +500,93 @@ states where turn-local judgment lies — itself a finding worth having.
 
 ## 8. Sequence
 
-1. **Phase 0 (cheap, do first):** run the owed pairwise panels on the 13
-   quarantined highs. Even a handful certified breaks the 2-class ceiling
-   before any new collection.
-2. **Pilot:** one tree-walk mission — short objective, backbone = deployed
+**DECISION (Luke, 2026-07-26): start fresh. Capture dynamic content only for
+training, and present only the dynamic portion to the router at decision time.
+Phase 0 is informative but dead.**
+
+### 8.0 Why Phase 0 is dead
+
+Phase 0 would certify highs whose labels were assigned against the *old*
+representation. §3.5 establishes that representation is being abandoned, so
+certifying those 84 records banks work that cannot transfer — the labels are
+sound judgments about a prompt shape production no longer sends.
+
+The corpus/serve mismatch has a precise, dated cause. A **1,459-char static
+instruction block** (`run_in_terminal/plan_interaction_rules`) was inserted into
+`plan_interaction` *after* the corpus was collected, displacing the dynamic
+content:
+
+| corpus | `## Session history` at | contains ACT AS |
+|---|---|---|
+| TRAIN v3 (full text) | offset **143** | 20.9% |
+| TRAIN previews | offset 139 | 4.5% |
+| **LIVE today** | offset **1,622** | **99.1%** |
+
+This is also why the 1510-char elision was so destructive: in the corpus era the
+budget reached the *start* of session history and snipped everything after it.
+Both failures are the same failure — nobody checked that the string used for
+training is the string produced at serve time.
+
+**Dead:** Phase 0 pairwise panels; `trusted_labels_v1` and the `*_labeling.json`
+sets as *router training* sources; the 2026-07-26 regenerated corpus for router
+purposes (its actions were conditioned on elided previews).
+
+**Survives:** JUDGE_STANDARD and the blind-panel methodology; the build/train/
+probe harnesses (`build_trusted_set.py`, `train_reasoning_router.py`,
+`router_skew_probe.py`, `router_actas_ablation.py`,
+`router_composition_diff.py`); the **static cue-authored highs** (§6 — flow-author
+intent, not learned, unaffected by any of this); the tree-walk design below; and
+the regen as a *serving-performance* artifact (`swarm_performance/FINDINGS.md`
+§6-7), where it remains valid.
+
+### 8.0.1 The invariant this must be built around
+
+The bug class was never "bad labels" — it was **two code paths that were assumed
+to produce the same string and were never compared.** The fix is not a better
+capture script; it is making divergence impossible:
+
+> **One shared representation function, imported by both the runtime router call
+> and the capture tooling.** Not two implementations that agree today.
+
+Concretely for `plan_interaction`, dynamic = `## Session history` + `## Last
+turn`; static = banner, `---ACT AS---…---END---`, `## Options`, envelope.
+Measured on 4000 live prompts, the dynamic portion is **median 2,536 chars
+(~634 tokens), p90 9,458** — 56% of the prompt, an ample signal budget, and by
+construction it contains the per-turn state the routing question is actually
+about.
+
+Requirements for the rebuild:
+
+1. **Shared extractor.** `TurnRenderer.render` already builds per-section parts
+   (`agent/turn_renderer.py:115-122`); add a dynamic-only variant and have the
+   router call it. `_execute_inference_action` has an equivalent split already
+   (`flow_static_prefix, flow_dynamic`, `runtime.py:941`) — the turn path is the
+   gap.
+2. **Store the exact featurized string** in every training record, plus a hash
+   of the extractor version. A record whose text cannot be reproduced by the
+   current extractor is quarantined, not trained on.
+3. **Assert no static section survives.** A capture-time check that the stored
+   text contains none of the known static markers would have caught this on day
+   one, and costs one `assert`.
+4. **Composition canary in CI/monitoring** — compare the live featurized
+   distribution against the training distribution (§9 already logs activation
+   rate; add median length + static-marker rate). The ACT AS insertion would
+   have shown as an instant step change.
+
+### 8.1 Rebuild sequence
+
+1. ~~Phase 0 pairwise panels~~ — **cancelled, see §8.0.**
+2. **Build the shared extractor + capture assertions** (§8.0.1). Nothing else
+   starts until train and serve provably share one representation.
+3. **Pilot:** one tree-walk mission — short objective, backbone = deployed
    router, ~8–10 contested pivots, snapshot-forked branches, blind-pool
    endpoint panels + cost telemetry. Deliverable: ~10 gold pivot labels, one
    gold mission label, measured cost-per-label to decide scale.
-3. **Retrain 3-class** on the aggregate; keep static cue-highs as the backbone.
-4. **ε-randomized levels in production** (5–10% of routed turns get a random
+4. **Retrain 3-class** on the aggregate; keep static cue-highs as the backbone.
+   Highs are certified from the tree-walk's outcome-linked comparisons, which is
+   what §3.1's certification clamp always needed — the quarantined highs were
+   never the only route to a third class.
+5. **ε-randomized levels in production** (5–10% of routed turns get a random
    level) as the continuous drift monitor between tree-walk rounds — generates
    off-manifold states *and* outcome-linked comparisons with no dedicated runs.
 
