@@ -173,8 +173,18 @@ rather than degrading smoothly. Not the quadratic-attention shape expected.
 
 ## 6. Why real workloads land at ~100 tok/s
 
-From the 4,107-request corpus regeneration (c=48, real prompts, mixed
-generation lengths): **1,559,528 tokens in 14,899s = 104.7 tok/s effective.**
+From the 4,107-request corpus regeneration (c=48, mixed generation lengths):
+**1,559,528 tokens in 14,899s = 104.7 tok/s effective.**
+
+**Correction (2026-07-26):** this run's prompts were NOT full prompts. The regen
+fed `r["context"]` from the `*_labeling.json` files (`dev/cf_regen_swarm.py:75`),
+which is a middle-elided 1510-char preview — see
+`dev/ADAPTIVE_THINKING_STATUS.md` §3.5. So the 376-token mean prompt is
+correctly measured but describes a **shallow** workload: mean decode depth
+≈ 376 + 380/2 = **566 tokens**. That is what makes this run usable as an
+optimizer hold-out (§7), and it also explains the 67% "redundant re-read"
+figure below — those are distinct turns whose previews collapsed to identical
+strings, not repeated work.
 
 Decomposed:
 
@@ -198,6 +208,73 @@ run *faster* per token because overhead amortizes:
 | low | 95 | 1.71 tok/s |
 | medium | 246 | 2.08 tok/s |
 | high | 798 | **2.31 tok/s** |
+
+## 7. Can we derive a swarm optimizer? Not yet — and the reason is structural
+
+`results/context_surface.json` (9 cells, 0 errors, 6 skipped over the 80% pool
+guard) is the first data with enough N coverage at fixed depth to locate an
+**interior optimum**:
+
+| depth | N=4 | N=16 | N=24 | N=32 | N=64 |
+|---|---|---|---|---|---|
+| ~4,690 | 60.8 | 76.7 | **79.9** | 70.7 | 68.3 |
+| ~12,060 | **38.8** | 32.5 | 28.7 | — | — |
+| ~21,950 | **24.7** | — | — | — | — |
+
+**Aggregate is not monotone in N.** At 4.7k depth it peaks at N≈24 and falls
+15% by N=64. At 12k depth N=4 is already past the optimum.
+
+### The power-law model fits the easy region and fails the axis that matters
+
+Fitting `log A = a + k(D)·log N + b·log D` over all 30 measured cells (ladder +
+curve + surface) gives MAPE 18.0%, max error 76.3%, and:
+
+| depth | k observed | k model | |
+|---|---|---|---|
+| 148 | 0.313 | 0.295 | OK |
+| ~2,400 | 0.430 | 0.173 | model low |
+| 4,691 | 0.132 | 0.143 | OK |
+| 12,045 | **−0.012** | +0.102 | **SIGN WRONG** |
+| 21,880 | **−0.138** | +0.075 | **SIGN WRONG** |
+
+Two problems, the second fatal:
+
+1. Past ~12k depth the model predicts concurrency *gains* where measurement
+   shows *losses*.
+2. `A = r(D)·N^k(D)` is **monotone in N by construction**, so it cannot express
+   an interior peak — the one quantity an optimizer exists to compute. It can
+   only ever return N=max (k>0) or N=1 (k<0).
+
+**Hold-out against the regen (N=48, depth 566): predicted 127.4 vs observed
+120.0, +6.1%.** Do not read this as validation. That point sits where the
+ladder samples N=48 directly, so it is interpolation along N at shallow depth
+and tests none of the depth machinery.
+
+### A mechanistic alternative was tried and is worse
+
+Roofline reasoning (weights read once per step and amortized over N; each
+stream's KV read every step, scaling N·D) gives `A = N/(a + kv·N·D)`, optionally
+`+ c·N²` for scheduling contention:
+
+| model | params | MAPE | max err |
+|---|---|---|---|
+| power law `r(D)·N^k(D)` | 4 | **18.0%** | 76.3% |
+| roofline `N/(a+kv·N·D)` | 2 | 66.7% | 96.9% |
+| roofline + contention | 3 | 44.9% | 86.2% |
+
+Both are worse, and the contention form yields a **depth-independent** N*=75
+against measured optima of 128 / 24 / 4. The mechanism in §5 is a correct story
+about *where the time goes*; it is not yet a correct model of *aggregate vs N*.
+
+### What is actually missing
+
+A true interior peak is measured at exactly **one** depth (4,691). There is no N
+sweep between 148 and 4,691 — which is precisely the swarm regime (the regen sat
+at 566). `results/swarm_regime_surface.json` fills it: sizes 256/512/1024/2048 ×
+N ∈ {4,8,16,24,32,48,64,96}. Until N*(D) is measured across that band, the
+honest optimizer is **interpolation over the measured surface**, not a fitted
+law — and it should refuse to extrapolate past the sampled depths rather than
+return the confident wrong sign the power law gives today.
 
 ---
 
