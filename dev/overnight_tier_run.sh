@@ -11,8 +11,14 @@
 #
 # NOTE ON SURVIVAL: background jobs started from a Claude Code session die when
 # that session exits (dev memory: stranded a PAUSED mission and a DOWN server).
-# Launch this under `setsid` so it leaves the session's process group:
-#     setsid nohup bash dev/overnight_tier_run.sh > /tmp/tier/driver.log 2>&1 &
+# This has to leave the session's process group. It previously said to use
+# `setsid`, WHICH DOES NOT EXIST ON macOS — the command fails, the job stays in
+# the session's process group, and it dies exactly as described above. Use:
+#
+#     python3 dev/daemonize.py /tmp/tier/driver.log bash dev/overnight_tier_run.sh
+#
+# Verify before walking away: `ps -o pid,ppid -p $(pgrep -f overnight_tier_run)`
+# must show PPID 1.
 set -u
 ROOT=/Users/lah-rb/Repos/ouroboros
 cd "$ROOT"
