@@ -76,7 +76,19 @@ model:
 prompt:
   persona_file: ./knowledge/SOUL.md
 generation:
-  max_tokens_default: 32768
+  # 32768 -> 65536 (2026-07-27). The old cap was set to bound runaway damage,
+  # but the poolside run showed it also CUT LEGITIMATE WORK: the batch
+  # structural step declared 12 files and was severed mid-fence inside
+  # combat.py, and truncation was being read as success because the slice
+  # counts what survived the cut, not what the model set out to write.
+  #
+  # NOT raised to n_ctx (131072) the way the poolside/APEX configs are. Those
+  # sit at 65536 n_ctx, so "cap == window" bounds a runaway at 65536 either
+  # way. Here the window is twice as large, and unsloth is the build whose
+  # known failure mode IS runaway generation (two >100k-char pure-CoT episodes
+  # that never emitted an answer). Matching the other arms' 65536 removes the
+  # truncation defect while keeping the blast radius identical to theirs.
+  max_tokens_default: 65536
   temperature_default: 1.0
   top_p: 1.0
   # VENDOR-MATCHED (generation_config.json, unsloth/Laguna-S-2.1): temperature
@@ -96,7 +108,16 @@ generation:
   # in ~20-40% of turns with NO tool syntax anywhere in the prompt and against
   # an explicit prohibition in SOUL.md; we do not support per-model tool
   # protocols, so those turns produce nothing usable.
-  logit_bias: {25: -100.0}
+  #
+  # 19 = </think>, added 2026-07-27 to match the poolside config. Banned ONLY
+  # because thinking is off here: the close-only prefill
+  # (formats/laguna.yaml prefill_closed_close_only) ends the prompt with a bare
+  # </think> to declare reasoning finished, and laguna reads that as a
+  # separator to REPRODUCE — 64 emissions in one 2048-token generation, each
+  # restating the same intent, until the long-cycle detector killed the stream.
+  # That is a property of the MODEL and our prompt format, not of the quant, so
+  # it applies to this build too. Do NOT carry to a thinking:true variant.
+  logit_bias: {25: -100.0, 19: -100.0}
   session_temp_floor: 0.35
   streaming_default: true
 knowledge:
