@@ -253,7 +253,7 @@ def build_sampling_params(
     """
     from llama_cpp._internals import LlamaSamplingParams
 
-    return LlamaSamplingParams(
+    params = LlamaSamplingParams(
         temp=float(sampling_kwargs.get("temp", 0.80)),
         top_p=float(sampling_kwargs.get("top_p", 0.95)),
         top_k=int(sampling_kwargs.get("top_k", 40)),
@@ -263,6 +263,52 @@ def build_sampling_params(
         grammar=grammar._grammar if grammar else "",
         seed=seed if seed is not None else fallback_seed,
     )
+
+    # OPT-IN KNOBS. Everything above is always set; everything below is applied
+    # only when the config asked for it, so an untouched model's sampler chain
+    # is byte-identical to before.
+    #
+    # These were being DROPPED in batched mode. `_build_generate_kwargs` has
+    # emitted penalty_last_n and the DRY keys since the qwen loop work, and the
+    # alternating-pool path forwards them to Llama.generate() — but this builder
+    # only ever read 8 fields, so under `decode_mode: batched` (the default) the
+    # loop mitigations were silently inert. Found while asking whether
+    # repeat_penalty affects laguna: some of them could not, because they never
+    # reached the sampler (2026-07-26).
+    for key, cast in (
+        ("penalty_last_n", int),
+        ("penalty_freq", float),
+        ("dry_multiplier", float),
+        ("dry_base", float),
+        ("dry_allowed_length", int),
+        ("dry_penalty_last_n", int),
+    ):
+        if sampling_kwargs.get(key) is not None:
+            setattr(params, key, cast(sampling_kwargs[key]))
+
+    # Reasoning budget — hard cap on thinking length. On overrun the sampler
+    # FORCES reasoning_end, so an answer still follows instead of the model
+    # reasoning to max_tokens and returning nothing (laguna's failure mode).
+    # -1 = unrestricted (library default), 0 = end immediately, N > 0 = budget.
+    rb = sampling_kwargs.get("reasoning_budget")
+    if rb is not None:
+        params.reasoning_budget = int(rb)
+        for key in ("reasoning_start", "reasoning_end"):
+            if sampling_kwargs.get(key):
+                setattr(params, key, str(sampling_kwargs[key]))
+
+    # Logit bias — {token_id: bias}; -inf effectively bans a token. Used to
+    # suppress native tool-call tokens on models that emit them unprompted.
+    bias = sampling_kwargs.get("logit_bias")
+    if bias:
+        import llama_cpp as _lc
+
+        params.logit_bias = [
+            _lc.llama_logit_bias(token=int(tok), bias=float(val))
+            for tok, val in dict(bias).items()
+        ]
+
+    return params
 
 
 @dataclass

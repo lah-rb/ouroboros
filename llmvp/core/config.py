@@ -292,6 +292,25 @@ class GenerationConfig(BaseModel):
     dry_allowed_length: Optional[int] = None  # default 2 when DRY enabled
     dry_penalty_last_n: Optional[int] = None  # default -1 (whole context)
 
+    # Frequency penalty (llama.cpp penalty_freq). Separate from presence:
+    # scales with how OFTEN a token appeared, not merely whether it did.
+    penalty_freq: Optional[float] = None
+    # Hard cap on THINKING length for reasoning models. On overrun llama.cpp
+    # forces the reasoning_end tag, so an answer still follows instead of the
+    # model reasoning to max_tokens and returning nothing. -1/None =
+    # unrestricted, 0 = end immediately, N > 0 = token budget. Laguna-S-2.1
+    # reasoned to the 32768 cap without emitting an answer; this bounds it
+    # WITHOUT giving up reasoning entirely (thinking: false is the blunt form).
+    reasoning_budget: Optional[int] = None
+    # Reasoning delimiters the budget forces; default to the chatml-family tags.
+    reasoning_start: Optional[str] = None
+    reasoning_end: Optional[str] = None
+    # {token_id: bias} applied at sampling; large negative effectively BANS a
+    # token. Present for models that emit native tool-call tokens unprompted
+    # (laguna emits <tool_call> = id 25 in 41% of turns against an explicit
+    # prohibition, with no tool syntax anywhere in the prompt).
+    logit_bias: Optional[dict] = None
+
     # Degeneration retry — when a SESSION turn aborts with
     # DegenerateGenerationError (repetition guard or long-cycle guard), the
     # purge machinery has already restored the pre-turn state; with this

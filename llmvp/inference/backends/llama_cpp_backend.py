@@ -3146,6 +3146,20 @@ class LlamaCppBackend(BaseBackend):
             kwargs["dry_penalty_last_n"] = int(
                 gen.dry_penalty_last_n if gen.dry_penalty_last_n is not None else -1
             )
+        if gen.penalty_freq:
+            kwargs["penalty_freq"] = float(gen.penalty_freq)
+        # Reasoning budget / logit bias: batched-engine knobs (see
+        # batched_engine._build_sampling_params). Emitted only when configured
+        # so the pool path, which forwards this dict to Llama.generate(), never
+        # sees a key it does not understand.
+        if gen.reasoning_budget is not None:
+            kwargs["reasoning_budget"] = int(gen.reasoning_budget)
+            if gen.reasoning_start:
+                kwargs["reasoning_start"] = str(gen.reasoning_start)
+            if gen.reasoning_end:
+                kwargs["reasoning_end"] = str(gen.reasoning_end)
+        if gen.logit_bias:
+            kwargs["logit_bias"] = dict(gen.logit_bias)
         return kwargs
 
     def generate_sync(

@@ -55,6 +55,14 @@ def _backend() -> LlamaCppBackend:
             repeat_penalty=None,
             penalty_last_n=None,
             dry_multiplier=None,
+            # Mirror GenerationConfig: _build_generate_kwargs reads these by
+            # direct attribute access, so a double missing one raises
+            # AttributeError rather than behaving like an unset option.
+            penalty_freq=None,
+            reasoning_budget=None,
+            reasoning_start=None,
+            reasoning_end=None,
+            logit_bias=None,
         ),
     )
     be = LlamaCppBackend(config)
