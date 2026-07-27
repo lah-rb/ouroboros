@@ -17,13 +17,13 @@
 # poolside holds nothing below 4.5-bit and keeps 24 at full BF16. "Q4_K_M" is a
 # misleading name here — the file is mostly 8-bit.
 #
-# THE TRADE — 4x LESS CONTEXT. 96 GB of weights against a 113 GB wired limit:
+# THE TRADE — 2x LESS CONTEXT (65536 vs the unsloth build's 131072). 96 GB of weights against a 113 GB wired limit:
 #
 #   n_ctx    KV GB   total    verdict
 #    16384     3.2    99.3    OK
-#    32768     6.4   102.5    OK   <- THIS CONFIG (gpt-oss runs stable at 100.6)
-#    49152     9.7   105.7    tight
-#    65536    12.9   108.9    tight
+#    32768     6.4   102.5    OK  (gpt-oss runs stable at 100.6)
+#    49152     9.7   105.7    OK  <- FALLBACK
+#    65536    12.9   108.9    OK  <- THIS CONFIG (Luke: ~10GB more headroom)
 #    98304    19.3   115.4    over the wired limit
 #   131072    25.8   121.8    over — the unsloth context is unreachable here
 #
@@ -55,9 +55,13 @@ model:
   name: Laguna-S-2.1-poolside
   family: laguna
   path: /Users/lah-rb/.lmstudio/models/poolside/Laguna-S-2.1-GGUF/laguna-s-2.1-Q4_K_M.gguf
-  n_ctx: 32768
-  # 102.5GB computed; leave real headroom over it rather than shaving the guard.
-  kv_preflight_gb: 108
+  # 65536 on Luke's read that there is ~10GB more headroom than the
+  # conservative estimate (unlike step-3.7, which is genuinely tight at 32k).
+  # 96.0GB weights + 12.9GB KV = 108.9GB against the 113GB wired limit.
+  # Fallback if it will not boot or wires unstable: 49152 = 105.7GB.
+  n_ctx: 65536
+  # 108.9GB computed at this n_ctx; guard set above it, not shaved to fit.
+  kv_preflight_gb: 112
   model_max_context: 1048576
   n_gpu_layers: -1
   seed: -1
@@ -74,11 +78,11 @@ model:
 prompt:
   persona_file: ./knowledge/SOUL.md
 generation:
-  # HALVED from the unsloth config's 32768. With n_ctx 32768 a single 32k
-  # generation could consume the entire window, and on this model the long
-  # generations are the documented failure — a tighter cap bounds the damage
-  # and costs less wall clock when one does run away.
-  max_tokens_default: 16384
+  # 24576 against the unsloth config's 32768. Long generations ARE the
+  # documented failure on this model (51% of the tier run, two capped), so a
+  # tighter cap bounds the damage — while still leaving 40k of the 65536
+  # window for prompt and history.
+  max_tokens_default: 24576
   temperature_default: 1.0
   top_p: 1.0
   top_k: 20              # vendor generation_config.json; NOT 0 (see unsloth cfg)
