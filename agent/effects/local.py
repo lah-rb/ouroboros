@@ -149,10 +149,42 @@ class LocalEffects:
             or os.path.isfile(os.path.join(bindir, "python3"))
         ):
             return {}
+        # An EMPTY venv must not shadow a working interpreter. `bin/python`
+        # existing was the whole test, and an empty `uv venv` passes it — so a
+        # venv created with nothing installed hid a system Python that had the
+        # project's dependencies, and every command and PTY for the rest of the
+        # mission ran under the empty one (dev/POOLSIDE_TRAP_ROOTCAUSE.md).
+        #
+        # Activating a venv with zero installed distributions can never help:
+        # it is neutral for a stdlib-only project and actively harmful when the
+        # dependencies live in the ambient interpreter. So decline it.
+        if not self._venv_has_distributions(venv):
+            logger.warning(
+                "ignoring %s — it has no installed distributions; using the "
+                "ambient interpreter so a bare venv cannot shadow it",
+                venv,
+            )
+            return {}
         return {
             "VIRTUAL_ENV": venv,
             "PATH": bindir + os.pathsep + os.environ.get("PATH", ""),
         }
+
+    @staticmethod
+    def _venv_has_distributions(venv: str) -> bool:
+        """True when the venv's site-packages holds at least one installed
+        distribution. Scans for a ``*.dist-info`` marker and short-circuits on
+        the first hit, so this stays cheap enough to run per command. Not cached:
+        an install lands mid-mission and the answer must change with it."""
+        for libdir in glob.glob(os.path.join(venv, "lib", "python*", "site-packages")):
+            try:
+                with os.scandir(libdir) as entries:
+                    for e in entries:
+                        if e.name.endswith(".dist-info"):
+                            return True
+            except OSError:
+                continue
+        return False
 
     def _command_env(self) -> dict[str, str]:
         """Subprocess env for project commands: the inherited environment with the

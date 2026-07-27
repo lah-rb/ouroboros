@@ -478,17 +478,35 @@ def _uvize_install_commands(commands: list[str], env_config: dict) -> list[str]:
       top-level modules — setuptools refuses auto-discovery). The framework runs
       programs via ``python main.py`` from the project root, so only the declared
       DEPENDENCIES are needed; installing them from pyproject sidesteps the build.
-    - Prepend ``uv venv --allow-existing`` for Python so the venv that uv pip /
-      validation / execution all target actually exists.
-    Non-Python install commands (npm, cargo, …) pass through unchanged."""
-    has_python = isinstance(env_config.get("py"), dict)
+    - Prepend ``uv venv --allow-existing`` for Python **only when a Python
+      install will actually run into it**.
+    Non-Python install commands (npm, cargo, …) pass through unchanged.
+
+    THE VENV IS GATED ON A REAL INSTALL, NOT ON A ``py`` SECTION. It used to be
+    seeded from ``isinstance(env_config.get("py"), dict)``, and ``syntax`` is a
+    required field for every detected extension — so every Python project always
+    has a ``py`` section. A model that omitted ``install_command`` (its own
+    prompt calls that "optional") therefore produced NO commands, and this
+    function still returned ``["uv venv --allow-existing --python 3.x"]``: venv
+    creation with nothing after it. The caller computes ``commands_found`` AFTER
+    this rewrite, so that lone line made the step report success while creating
+    an EMPTY venv — which then shadowed a working system interpreter for every
+    command and PTY for the rest of the mission (``local.py`` activates any
+    ``.venv`` with a ``bin/python``). One 2h run lost ~50 minutes to the
+    resulting blind diagnose loop; see dev/POOLSIDE_TRAP_ROOTCAUSE.md.
+
+    An empty venv is strictly worse than no venv: the arm in that comparison
+    that created none ran fine on system Python."""
     out: list[str] = []
+    python_install = False
     for cmd in commands:
         toks = cmd.split()
         # Normalize bare pip → uv pip (the LLM may emit either, or `uv pip`).
         if toks and toks[0] in ("pip", "pip3"):
             toks = ["uv", "pip", *toks[1:]]
-            has_python = True
+        # `python -m pip install …` is the third form models reach for.
+        elif toks[:3] in (["python", "-m", "pip"], ["python3", "-m", "pip"]):
+            toks = ["uv", "pip", *toks[3:]]
         # An editable project install (`... install -e .`) BUILDS the project,
         # which fails for the common flat-layout (several top-level modules —
         # setuptools refuses auto-discovery). The framework runs programs via
@@ -496,11 +514,23 @@ def _uvize_install_commands(commands: list[str], env_config: dict) -> list[str]:
         # from pyproject instead. Gated on a uv pip install so non-pip commands
         # that merely contain "-e" can't be clobbered.
         if toks[:3] == ["uv", "pip", "install"]:
-            has_python = True
+            python_install = True
             if "-e" in toks[3:] or "--editable" in toks[3:]:
                 toks = ["uv", "pip", "install", "-r", "pyproject.toml"]
         out.append(" ".join(toks))
-    if has_python:
+
+    # A Python project that declared NO install command is the trap condition.
+    # Say so — the step used to report success and move on, leaving the failure
+    # to surface an hour later as a ModuleNotFoundError with no trace back here.
+    if isinstance(env_config.get("py"), dict) and not python_install:
+        logger.warning(
+            "env detection produced a `py` section but NO Python install "
+            "command; skipping venv creation so the system interpreter stays "
+            "usable. Declared dependencies will NOT be installed — if the "
+            "project imports third-party packages it will fail at startup."
+        )
+
+    if python_install:
         # Pin the venv to the interpreter the framework itself runs on.
         # Unpinned, uv discovers whatever PATH offers — live failure: the
         # macOS system Python 3.9.6, where the 3.10+ union/generic syntax
