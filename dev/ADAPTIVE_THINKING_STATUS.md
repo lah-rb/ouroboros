@@ -61,7 +61,7 @@ So the pipeline *did* find highs. The zero-high training set came later.
 
 ---
 
-## 3. Failure shape — three multiplying clamps
+## 3. Failure shape — four multiplying clamps
 
 ### 3.1 Certification clamp (the proximate cause of the 2-class router)
 
@@ -122,6 +122,84 @@ The value of thinking at turn *t* accrues at turns *t+k*. A judge scoring turn
 *t* in isolation structurally cannot see it. Full-run comparison is the correct
 counterfactual object, and it does not decompose into per-turn labels because
 trajectories diverge at the first differing decision.
+
+### 3.5 Representation clamp — the router never sees what it was trained on
+
+*Measured 2026-07-26. Reproduce with `uv run python dev/router_skew_probe.py`.*
+
+Three of the five label sources (`phaseB`, `phaseC`, `tb1_cf`) stored a
+middle-elided **1510-char preview** where the pipeline expected a prompt:
+
+```
+[dynamic head ~290-500 chars] …[snip]… [static menu tail]
+```
+
+The elision budget was set without separating static scaffolding from turn
+content. So the snip landed on the discriminative middle — task brief, bulk of
+session history — while faithfully preserving the boilerplate tail (1361 of
+1369 records share their closing 24 characters). The cached static prefix never
+entered at all. `v3` and `grow` stored full text, leaving the training set
+length-bimodal: **490 short rows at 24.7% medium, 1639 long rows at 10.8%.**
+
+**Two consequences, both measured.**
+
+*(a) It destroyed training data through a sound dedup.* 659 records collapsed
+to byte-identical previews spanning **123 distinct tasks** — the largest single
+group is **595 records across 116 tasks** with differing candidate actions.
+`build_trusted_set` then keyed dedup on `sha(prompt)` (line 130) where `prompt`
+IS that preview (lines 47, 58), and quarantined **477 records** (451
+`dedup_duplicate` + 26 `dedup_conflict`). The dedup was correct. It ran on a key
+that had already lost the information distinguishing the rows.
+
+*(b) It biases the serve-time decision through length, not content.* Ablating
+4000 real runtime prompts (THR=0.4):
+
+| arm | medium rate | Δ |
+|---|---|---|
+| full prompt (what runtime sends) | 1.55% | — |
+| cut to 1510, **no** marker | 7.15% | **+5.60** |
+| cut to 1510, with marker | 7.92% | +6.38 |
+| full length, marker injected | 1.62% | +0.07 |
+
+The elision marker is worth +0.07pp. **Length carries ~88% of the effect** —
+TF-IDF is L2-normalized, so a 1510-char document concentrates weight on its few
+tokens while a 5100-char one dilutes every feature. Preview rows were both short
+*and* 2.3× more likely to be labeled medium, so brevity became a proxy for the
+label.
+
+**Decomposition (out-of-fold, shipped recipe):**
+
+| | medium rate at THR=0.4 |
+|---|---|
+| preview rows, in-domain | 79.59% |
+| full-text rows, in-domain | 28.55% |
+| **live runtime prompts** | **1.55%** |
+
+Format contributes **2.8×**; the drop from in-domain full-text to live is
+**18×**. **Domain shift dominates** — this is the channel through which §3.2's
+covariate shift actually bites, and it reproduces the observed 199/201 (1.0%)
+almost exactly.
+
+**What this does NOT show.** The held-out score is *not* an artifact: under the
+exact shipped recipe, macro-F1 is 0.618 for the mixture and **0.616**
+length-normalized, 0.609 full-text-only. Dropping the preview rows does not fix
+the router — it makes it more inert (0.07% live) while shedding 41% of the
+medium class. The remedy is §7's tree-walk relabeling on states the learner
+actually visits, not a corpus patch.
+
+**Recovery, if the labels are ever reused:** preview heads are literal prefixes
+of the originals, and `llmvp/logs/interactions.jsonl` still holds full text for
+every one. **702 of 1369 records (51.3%)** rejoin to exactly one full prompt via
+head + `task`; the 619-record turn-0 group does not disambiguate and would need
+timestamp ordering or recollection.
+
+**Three wrong answers preceded this one**, all offered before anything was
+measured: that the corpus was 43% duplicates (dedup ran — the shipped set has
+2129 rows and 2129 distinct prompt hashes); that those were genuine duplicates
+(they were distinct turns with snipped middles); and that the 0.622 macro-F1 was
+a length shortcut (it survives length normalization). The corpus-construction
+root cause is real, but it is the elision budget — and every wrong version of it
+was a plausible story checked against nothing.
 
 ---
 
