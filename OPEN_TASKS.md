@@ -74,53 +74,69 @@ describes a *different* failure from the env one just fixed, and nothing
 here addresses it. Localisation was correct on every cycle in the env
 case; the remedy was simply inexpressible.
 
-### 2b. A THIRD sub-case, found live 2026-07-27: right file, wrong GRANULARITY
+### 2b. NOT a trap sub-case — a self-reverting write. Found live 2026-07-27
 
-Caught while watching the poolside 2h run (`/tmp/tier/poolside-2h-v2`),
-goal `1a7564ac`. `engine.py:509` calls `random.choice(exits)` and the file
-has **no `import random`** — a NameError that crashes `flee`. The model
-diagnosed it correctly and identically **three times**, each attempt
-targeting `engine.py:GameEngine._do_combat_flee`.
+Caught watching the poolside 2h run (`/tmp/tier/poolside-2h-v2`), goal
+`1a7564ac`. `engine.py` calls `random.choice(exits)` with **no `import
+random`** — a NameError that crashes `flee`. It was re-diagnosed all run.
 
-It cannot succeed. `action_rewrite_symbol_turn` splices the model's output
-over exactly the symbol's line range
-(`ast_actions.py:1622-1625`, byte-range fallback at `:1613-1618`):
+**An earlier revision of this entry blamed symbol-splice granularity and
+claimed ruff never runs. Both were wrong.** Every upstream stage worked:
 
-    before = file_lines[: start_line - 1]
-    after  = file_lines[end_line:]
+- `ruff check --fix {file}` IS the configured lint tier and DOES run
+- it reported `F821 Undefined name 'random'` with file:line
+- that reached the prompt intact — `checks_failed: ['lint: engine.py']`
+  plus the full finding in `terminal_output` (the `gate_output` threading
+  added after the 2026-07-16 "rewrote engine.py 360×" loop)
+- the model diagnosed it correctly and declared `kind: "module_fix"` with
+  `module_statement: "import random"` — **five separate times**
+- `check_module_fix` routed to `run_module_frame_edit` all five times
+- `action_splice_frame` called `effects.write_file` and logged success
 
-A module-level import lies outside that range, so if the model emits one it
-is discarded by construction. Same shape as the env trap — correct
-diagnosis, inexpressible remedy — but a *new* sub-case: the file is right,
-the defect is right, the **granularity** is wrong. The repeat-target
-warning (reworded in `250be67`) tells the model to look elsewhere, which
-does not help when "elsewhere" is module scope and module scope is
-unreachable from a symbol patch.
+The frame editor was selected correctly and the import reached disk. It is
+absent at the end of the run because **the pass reverts its own write.**
 
-**This class is mechanically detectable and we never look.**
-`ruff check --select F821` reports it in milliseconds:
+#### The revert
 
-    F821 Undefined name `random`  --> engine.py:509:29
+`read_target` loads the file into `context.target_file.content`.
+`run_module_frame_edit` writes the frame-edited content to disk but
+publishes only `files_changed` and `edit_summary` — the sub-flow's
+`file_content_updated` is **not lifted back into file_ops' context**. When
+`module_fix_symbol_continue` is true the flow continues to
+`extract_symbols` → `run_patch`, and `run_patch` sources `file_content`
+from `context.target_file.content` — the pre-frame-edit snapshot. The
+symbol rewrite is spliced into stale content and `write_patched_file`
+writes it back, erasing the import. Then F821 fires again. Forever.
 
-Ruff appears in `agent/` only as a path-exclusion pattern
-(`file_ops_actions.py:96`, `refinement_actions.py:209`, `local.py:336`) —
-it is **never run on the write path**. Three LLM diagnose cycles were spent
-on a defect a linter finds for free.
+Only the **paired** form self-reverts. A module fix with no body change
+routes `success → lookup_env` and persists fine, which is why the path
+looks healthy elsewhere. The `CONCLUDE_PROMPT` actively invites the paired
+form and promises *"both edits are applied, module line first"* — the
+second edit reverts the first.
 
-Two candidate fixes, not yet implemented:
+Reproduced at the flow-contract level in
+`tests/test_module_fix_symbol_continue_clobber.py` (6 tests). The obvious
+fix is to lift `file_content_updated` out of `run_module_frame_edit` and
+into `target_file.content` (or re-read before `extract_symbols`); the test
+is written to fail loudly if that lands, so it gets updated deliberately.
 
-1. **Deterministic F821 gate after a write.** Cheapest and catches the
-   whole undefined-name class, not just imports. Needs care: F821 has
-   false positives on dynamic patterns, so it should inform rather than
-   block.
-2. **Let the patch path reach module scope.** Either add a module-header
-   pseudo-symbol to the rewrite queue, or give `escalate` (which can run
-   commands and write whole files) this case the way the env sub-case now
-   routes to it.
+#### The separate, real gap: lint is advisory
+
+`pipeline_actions.py:757` sets `"required": tier == "syntax"`, and the
+batch recorder scores a file as passed unless a **required** check fails:
+
+    "passed": not any(not c.get("passed") and c.get("required") for c in checks)
+
+So a file with `F821 Undefined name` is recorded as **passing** its
+structural gate and the goal closes. The defect resurfaces much later
+through the functional sweep, where it costs a diagnose loop instead of a
+one-line fix at write time. Luke's position (2026-07-27) is that ruff
+should gate every structural goal, on the first edit as well as later ones
+— it already *runs* there; what is missing is that failing it should mean
+something.
 
 Arm 3 of the quant chain (`dev/poolside_v3_followon.sh`) records `F821`
-and `repeat_warn` in its OUTCOME file, so the next run measures this
-instead of it having to be re-found by hand.
+and `repeat_warn` in its OUTCOME file so this is measured next run.
 
 ## 3. TB2: the next measurement
 
