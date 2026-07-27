@@ -57,11 +57,11 @@ stop_server(){
   # SIGTERM, never SIGKILL: a hard kill leaks the instance pool and the next
   # launch finds availableInstances short.
   kill -TERM "$pid" 2>/dev/null || true
-  for _ in $(seq 1 120); do
+  for _ in $(seq 1 360); do
     pgrep -f "[a]pi/main.py" >/dev/null || { log "  server $pid down"; return 0; }
     sleep 1
   done
-  log "  WARN server $pid did not exit on SIGTERM after 120s"
+  log "  ERROR server $pid did not exit on SIGTERM after 360s"
   return 1
 }
 
@@ -94,7 +94,16 @@ for entry in "${ARMS[@]}"; do
   rm -rf "$WORK"; mkdir -p "$WORK"
   log "--- ARM $cfg (backstop $WALL) -> $WORK ---"
 
-  stop_server
+  # A failed stop must ABORT the arm. api/main.py refuses to start while
+  # another server holds the pidfile ("A server is already running"), so
+  # booting anyway is a guaranteed failure that then burns the full
+  # BOOT_TIMEOUT in wait_healthy before skipping — 15 minutes to learn nothing.
+  # Seen for real 2026-07-27 when a 74GB teardown outlasted the old 120s budget.
+  if ! stop_server; then
+    log "  SKIP $cfg — previous server would not stop; refusing to boot on top of it"
+    echo "SKIPPED_STOP" > "$WORK/OUTCOME"
+    continue
+  fi
   echo -n "$cfg" > "$ROOT/llmvp/active_config.txt"
   ( cd "$ROOT/llmvp" && nohup .venv/bin/python api/main.py \
       > "$BASE/${cfg}_server.log" 2>&1 & )

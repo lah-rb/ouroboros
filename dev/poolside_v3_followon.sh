@@ -41,11 +41,11 @@ stop_server(){
   pid=$(pgrep -f "[a]pi/main.py" | head -1) || true
   [ -n "${pid:-}" ] || return 0
   kill -TERM "$pid" 2>/dev/null || true   # never SIGKILL: hard kill leaks the pool
-  for _ in $(seq 1 120); do
+  for _ in $(seq 1 360); do
     pgrep -f "[a]pi/main.py" >/dev/null || { log "  server $pid down"; return 0; }
     sleep 1
   done
-  log "  WARN server $pid did not exit on SIGTERM after 120s"
+  log "  ERROR server $pid did not exit on SIGTERM after 360s"
   return 1
 }
 
@@ -75,7 +75,14 @@ sleep 20
 log "=== ARM 3: $CFG on current agent code (backstop $WALL) ==="
 rm -rf "$WORK"; mkdir -p "$WORK"
 
-stop_server
+# A failed stop must ABORT: api/main.py refuses to start while another server
+# holds the pidfile, so booting anyway guarantees failure and then burns the
+# full BOOT_TIMEOUT before saying so.
+if ! stop_server; then
+  log "  ABORT — previous server would not stop; refusing to boot on top of it"
+  echo "SKIPPED_STOP" > "$WORK/OUTCOME"
+  exit 1
+fi
 echo -n "$CFG" > "$ROOT/llmvp/active_config.txt"
 ( cd "$ROOT/llmvp" && nohup .venv/bin/python api/main.py \
     > "$BASE/${CFG}_v3_server.log" 2>&1 & )
