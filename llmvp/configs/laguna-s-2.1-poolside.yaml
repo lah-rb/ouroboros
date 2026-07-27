@@ -48,7 +48,7 @@ app:
   openai_shim: true
 graphql:
   max_query_depth: 10
-  max_tokens: 32768
+  max_tokens: 65536   # must not bind before generation.max_tokens_default
   max_aliases: 50
   introspection_enabled: true
 model:
@@ -78,21 +78,35 @@ model:
 prompt:
   persona_file: ./knowledge/SOUL.md
 generation:
-  # 24576 against the unsloth config's 32768. Long generations ARE the
-  # documented failure on this model (51% of the tier run, two capped), so a
-  # tighter cap bounds the damage — while still leaving 40k of the 65536
-  # window for prompt and history.
-  max_tokens_default: 24576
+  # NO ARTIFICIAL CAP: equal to n_ctx, so the context window is the only
+  # limit. The 24576 cap was set to bound runaway damage, but it was cutting
+  # LEGITIMATE work — the batch structural step declared 12 files and was
+  # severed mid-fence inside combat.py, losing two files and leaving a stale
+  # earlier pass in place. Truncation was being read as "10/10 declared files
+  # written" because the slice counts what survived the cut, not what the model
+  # set out to write. llama.cpp still bounds a single generation by the space
+  # actually left in the window after the prompt.
+  max_tokens_default: 65536
   temperature_default: 1.0
   top_p: 1.0
   top_k: 20              # vendor generation_config.json; NOT 0 (see unsloth cfg)
   min_p: 0.0
   presence_penalty: 0.0
   repeat_penalty: 1.0    # penalties truncate code output — sweep arm B
-  # <tool_call> is a single token; laguna emits it unprompted in 20-40% of turns
-  # and we do not support per-model tool protocols. Arm C: 0/4 tool calls,
-  # 100% usable output.
-  logit_bias: {25: -100.0}
+  # 25 = <tool_call>: a single token; laguna emits it unprompted in 20-40% of
+  # turns and we do not support per-model tool protocols. Sweep arm C: 0/4 tool
+  # calls, 100% usable output.
+  #
+  # 19 = </think>: banned only because thinking is OFF here. The close-only
+  # prefill (formats/laguna.yaml prefill_closed_close_only) ends the prompt with
+  # a bare </think> to declare reasoning finished, and laguna reads that as a
+  # separator to REPRODUCE — it emitted </think> 64 times in one 2048-token
+  # generation, each cycle restating the same intent, until the server's
+  # long-cycle detector killed the stream (ratio 0.0194, period ~158B). With
+  # thinking off the tag has no legitimate use, so banning it removes the
+  # punctuation the loop was built on. Do NOT carry this to a thinking:true
+  # config — there </think> is load-bearing.
+  logit_bias: {25: -100.0, 19: -100.0}
   session_temp_floor: 0.35
   streaming_default: true
 knowledge:

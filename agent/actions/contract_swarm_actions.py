@@ -1795,15 +1795,56 @@ async def action_run_contract_typecheck(step_input: StepInput) -> StepOutput:
 
 _DATA_EXTS = (".yaml", ".yml", ".json", ".toml")
 
-_CONTENT_WORKER_PROMPT = (
-    "You are generating ONE complete data file for a project.\n"
-    "The goal below carries the mandatory data contract (exact key names), "
-    "the exemplar shape, and the shared entity-id registry slice — bind to "
-    "them exactly; every id you reference must come from the registry.\n\n"
-    "GOAL:\n{directive}\n\n"
+# The preamble ASSERTS what the goal carries, so it must be built from what the
+# goal actually carries. The unconditional version claimed a data contract, an
+# exemplar and an entity-id registry slice regardless — and when enrichment had
+# not run (every code_core dispatch) the model was told a registry was present
+# and binding, could not find it, and had no action available to go get it.
+# Laguna restated "I need to find the entity-id registry" 64 times until the
+# long-cycle detector killed the stream.
+#
+# An instruction the model cannot satisfy is worse than no instruction: it
+# cannot be complied with and it cannot be ignored.
+_CONTENT_WORKER_HEAD = "You are generating ONE complete data file for a project.\n"
+_CONTENT_WORKER_TAIL = (
+    "\nGOAL:\n{directive}\n\n"
     "Output ONLY the raw contents of {file_path} — no markdown fences, no "
     "commentary, no FILE markers. The output must be valid {ext}."
 )
+_CONTENT_CLAIM_CONTRACT = (
+    "The goal below carries the mandatory data contract (exact key names) and "
+    "the exemplar shape — bind to them exactly.\n"
+)
+_CONTENT_CLAIM_REGISTRY = (
+    "It also carries the shared entity-id registry slice; every id you "
+    "reference must come from it.\n"
+)
+_CONTENT_CLAIM_NONE = (
+    "No shared schema or id registry is available for this file, and you "
+    "cannot fetch one — do not look for it. Choose clear, internally "
+    "consistent ids and key names and treat your own choices as "
+    "authoritative.\n"
+)
+
+
+def _content_worker_prompt(directive: str) -> str:
+    """Build the worker preamble from what the directive ACTUALLY contains.
+
+    Keyed on the same markers `_enrich_data_goals` writes, so the claim and the
+    content cannot drift apart.
+    """
+    head = _CONTENT_WORKER_HEAD
+    has_contract = _DATA_CONTRACT_MARKER in directive
+    has_registry = _ENTITY_REGISTRY_MARKER in directive
+    if has_contract:
+        head += _CONTENT_CLAIM_CONTRACT
+        if has_registry:
+            head += _CONTENT_CLAIM_REGISTRY
+    elif has_registry:
+        head += _CONTENT_CLAIM_REGISTRY
+    else:
+        head += _CONTENT_CLAIM_NONE
+    return head + _CONTENT_WORKER_TAIL
 
 
 def _strip_content_fences(text: str) -> str:
@@ -1817,8 +1858,12 @@ def _strip_content_fences(text: str) -> str:
     return t
 
 
-async def action_swarm_generate_content(step_input: StepInput) -> StepOutput:
+async def action_generate_content_batch(step_input: StepInput) -> StepOutput:
     """Fan out one stateless completion per missing data-file goal.
+
+    Dispatched by BOTH code_core and contract_swarm, so it establishes its own
+    precondition (see the enrichment call below) instead of assuming a
+    contract_swarm action ran first.
 
     Context required: mission
     Params: max_workers (default 32), pool_budget (default 131072 —
@@ -1848,6 +1893,32 @@ async def action_swarm_generate_content(step_input: StepInput) -> StepOutput:
     max_workers = int(step_input.params.get("max_workers", 32) or 32)
     pool_budget = int(step_input.params.get("pool_budget", 131072) or 131072)
 
+    # ESTABLISH OUR OWN PRECONDITION. The worker prompt below tells the model
+    # its goal "carries the mandatory data contract, the exemplar shape, and
+    # the shared entity-id registry slice". That was only ever true when
+    # `action_parse_contracts` had run first — a contract_swarm action. This
+    # flow is ALSO dispatched by code_core (mission_control.dispatch_content_batch),
+    # where nothing calls it, so every worker got a bare goal and a prompt
+    # insisting a registry was present and binding.
+    #
+    # Laguna-S-2.1 took that literally: "I need to find the entity-id registry"
+    # restated 64 times until the long-cycle detector killed the stream at 2048
+    # tokens, twice, and the batch produced zero files. Other models paper over
+    # it by inventing ids — which is how cross-file id mismatches
+    # (shadow_lord/shadow_lich) reach the artifact as the decisive seam defect.
+    #
+    # Enrichment is idempotent (marker-guarded per block) and saves, so calling
+    # it here is safe whether or not contract_swarm already did. code_core has
+    # the shape+exemplar contracts in architecture.data_shapes; the entity-id
+    # registry is genuinely contract_swarm-derived and stays absent there,
+    # which is why the prompt is now conditional on what actually landed.
+    if mission is not None:
+        enriched = await _enrich_data_goals(
+            effects, mission, _data_contracts(mission), ctx.get("data_registry") or []
+        )
+        if enriched:
+            logger.info("content fan-out: enriched %d data goal(s)", enriched)
+
     targets: list[tuple[Any, str]] = []
     if mission is not None:
         for goal in mission.goals:
@@ -1874,13 +1945,29 @@ async def action_swarm_generate_content(step_input: StepInput) -> StepOutput:
         )
 
     prompts = {
-        path: _CONTENT_WORKER_PROMPT.format(
+        path: _content_worker_prompt(goal.description).format(
             directive=goal.description,
             file_path=path,
             ext=path.rsplit(".", 1)[-1],
         )
         for goal, path in targets
     }
+    # A data goal reaching the fan-out with no contract means enrichment found
+    # nothing to push — architecture.data_shapes is empty or does not name this
+    # file. The worker is now told so honestly (it invents its own ids), but
+    # that is a DEGRADED path: the shape contract is what keeps separately
+    # generated files binding to one vocabulary, and losing it is how
+    # cross-file seam bugs are born. Say so rather than degrade silently.
+    bare = [p for goal, p in targets if _DATA_CONTRACT_MARKER not in goal.description]
+    if bare:
+        logger.warning(
+            "content fan-out: %d/%d data file(s) have NO shape contract — "
+            "check architecture.data_shapes covers them; workers will invent "
+            "their own key names and ids: %s",
+            len(bare),
+            len(targets),
+            ", ".join(bare[:6]),
+        )
     decision = await pool_fit_width(
         effects,
         [estimate_draw(p) for p in prompts.values()],

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.actions.contract_swarm_actions import action_swarm_generate_content
+from agent.actions.contract_swarm_actions import action_generate_content_batch
 from agent.actions.mission_actions import action_structural_sweep_next
 from agent.effects.mock import MockEffects
 from agent.models import FlowMeta, StepInput
@@ -144,7 +144,7 @@ async def test_content_batch_generates_books_and_completes(tmp_path):
         mission=mission,
         inference_responses=[_GOOD_YAML, "```yaml\n" + _GOOD_YAML + "```"],
     )
-    out = await action_swarm_generate_content(_batch_si(mission, fx, tmp_path))
+    out = await action_generate_content_batch(_batch_si(mission, fx, tmp_path))
     assert out.result["any_ok"] is True and out.result["n_targets"] == 2
     assert sorted(out.context_updates["files_changed"]) == [
         "items.yaml",
@@ -167,7 +167,7 @@ async def test_content_batch_retries_on_parse_failure_then_passes(tmp_path):
         mission=mission,
         inference_responses=[_BAD_YAML, _GOOD_YAML, _GOOD_YAML],
     )
-    out = await action_swarm_generate_content(_batch_si(mission, fx, tmp_path))
+    out = await action_generate_content_batch(_batch_si(mission, fx, tmp_path))
     assert out.result["any_ok"] is True
     n_inferences = sum(1 for c in fx.calls if c.method == "run_inference")
     assert n_inferences == 3  # one retry for the parse failure
@@ -186,7 +186,7 @@ async def test_content_batch_failure_leaves_goal_for_serial_path(tmp_path):
         mission=mission,
         inference_responses=[_BAD_YAML, _BAD_YAML, _GOOD_YAML],
     )
-    out = await action_swarm_generate_content(_batch_si(mission, fx, tmp_path))
+    out = await action_generate_content_batch(_batch_si(mission, fx, tmp_path))
     assert out.result["any_ok"] is True  # one of two landed
     failed_goal = next(
         g for g in mission.goals if "rooms.yaml" in (g.associated_files or [])
@@ -203,7 +203,7 @@ async def test_content_batch_skips_existing_files(tmp_path):
     mission = _mission(tmp_path)
     (tmp_path / "rooms.yaml").write_text(_GOOD_YAML)
     fx = MockEffects(mission=mission, inference_responses=[_GOOD_YAML])
-    out = await action_swarm_generate_content(_batch_si(mission, fx, tmp_path))
+    out = await action_generate_content_batch(_batch_si(mission, fx, tmp_path))
     assert out.result["n_targets"] == 1  # only items.yaml
 
 

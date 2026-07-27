@@ -208,7 +208,7 @@ mission_control_contracted: #FlowDefinition & {
 		}
 
 		// Batch mode, post-symbol-swarm: fan out ALL missing data files in
-		// one burst. last_goal_id stays empty — swarm_generate_content books
+		// one burst. last_goal_id stays empty — generate_content_batch books
 		// per-goal reports itself (the apply_batch_results discipline).
 		dispatch_content_batch: #StepDefinition & {
 			action:      "noop"

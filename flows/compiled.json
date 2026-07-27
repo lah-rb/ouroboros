@@ -1380,6 +1380,157 @@
       "fallback": "reorganize"
     }
   },
+  "create_content_batch": {
+    "flow": "create_content_batch",
+    "version": 1,
+    "description": "Fan out one stateless completion per missing data-file goal \u2014 the\ncontent analog of build_contracts' symbol swarm. Parse-gated,\nper-goal booked; failures degrade to the serial create path.",
+    "context_tier": "flow_directive",
+    "returns": {
+      "files_changed": {
+        "type": "list",
+        "from": "context.files_changed",
+        "optional": true
+      },
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "flow_directive"
+      ],
+      "optional": [
+        "goal_id",
+        "working_directory"
+      ]
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.6"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state for data-file goals",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "fan_out_content"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "fan_out_content": {
+        "action": "generate_content_batch",
+        "description": "One stateless completion per missing data file",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {
+          "max_workers": 32,
+          "pool_budget": 131072
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.any_ok == true",
+              "transition": "report_success"
+            },
+            {
+              "condition": "true",
+              "transition": "report_failed"
+            }
+          ]
+        },
+        "publishes": [
+          "files_changed",
+          "directive_report",
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "report_success": {
+        "action": "noop",
+        "description": "Return to the controller \u2014 content batch booked",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "success"
+          }
+        }
+      },
+      "report_failed": {
+        "action": "noop",
+        "description": "Return to the controller \u2014 batch produced nothing usable",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "failed"
+          }
+        }
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "data_patch": {
     "flow": "data_patch",
     "version": 1,
@@ -15208,157 +15359,6 @@
       "report_failed": {
         "action": "noop",
         "description": "Return to mission_control_integrated \u2014 batch produced nothing usable",
-        "context": {
-          "required": [],
-          "optional": []
-        },
-        "params": {},
-        "config": {},
-        "publishes": [],
-        "effects": [],
-        "terminal": false,
-        "tail_call": {
-          "flow": "mission_control",
-          "input_map": {
-            "mission_id": {
-              "$ref": "input.mission_id"
-            },
-            "last_goal_id": {
-              "$ref": "input.goal_id"
-            },
-            "last_status": "failed"
-          }
-        }
-      }
-    },
-    "entry": "load_state",
-    "overflow": {
-      "strategy": "split",
-      "fallback": "reorganize"
-    }
-  },
-  "create_content_batch": {
-    "flow": "create_content_batch",
-    "version": 1,
-    "description": "Fan out one stateless completion per missing data-file goal \u2014 the\ncontent analog of build_contracts' symbol swarm. Parse-gated,\nper-goal booked; failures degrade to the serial create path.",
-    "context_tier": "flow_directive",
-    "returns": {
-      "files_changed": {
-        "type": "list",
-        "from": "context.files_changed",
-        "optional": true
-      },
-      "directive_report": {
-        "type": "dict",
-        "from": "context.directive_report",
-        "optional": true
-      }
-    },
-    "projections": {},
-    "input": {
-      "required": [
-        "mission_id",
-        "flow_directive"
-      ],
-      "optional": [
-        "goal_id",
-        "working_directory"
-      ]
-    },
-    "defaults": {
-      "config": {
-        "temperature": "t*0.6"
-      }
-    },
-    "steps": {
-      "load_state": {
-        "action": "load_mission_state",
-        "description": "Load mission state for data-file goals",
-        "context": {
-          "required": [],
-          "optional": []
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "true",
-              "transition": "fan_out_content"
-            }
-          ]
-        },
-        "publishes": [
-          "mission",
-          "events"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "fan_out_content": {
-        "action": "swarm_generate_content",
-        "description": "One stateless completion per missing data file",
-        "context": {
-          "required": [
-            "mission"
-          ],
-          "optional": []
-        },
-        "params": {
-          "max_workers": 32,
-          "pool_budget": 131072
-        },
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "result.any_ok == true",
-              "transition": "report_success"
-            },
-            {
-              "condition": "true",
-              "transition": "report_failed"
-            }
-          ]
-        },
-        "publishes": [
-          "files_changed",
-          "directive_report",
-          "mission"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "report_success": {
-        "action": "noop",
-        "description": "Return to the controller \u2014 content batch booked",
-        "context": {
-          "required": [],
-          "optional": []
-        },
-        "params": {},
-        "config": {},
-        "publishes": [],
-        "effects": [],
-        "terminal": false,
-        "tail_call": {
-          "flow": "mission_control",
-          "input_map": {
-            "mission_id": {
-              "$ref": "input.mission_id"
-            },
-            "last_goal_id": {
-              "$ref": "input.goal_id"
-            },
-            "last_status": "success"
-          }
-        }
-      },
-      "report_failed": {
-        "action": "noop",
-        "description": "Return to the controller \u2014 batch produced nothing usable",
         "context": {
           "required": [],
           "optional": []

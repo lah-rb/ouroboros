@@ -1,9 +1,17 @@
 // create_content_batch.cue — one burst for ALL missing data-file goals.
 //
-// After build_contracts swarms the code symbols, the data files
-// (rooms.yaml, items.yaml, …) remain: independent structural goals whose
-// registry-enriched descriptions (_enrich_data_goals) already carry the
-// shape contract + shared entity-id slice. The serial path generates them
+// A first-class step of BOTH flow sets — it lives in shared/ because
+// code_core and contract_swarm each dispatch it, and it establishes its own
+// precondition rather than inheriting one. It used to live under
+// contract_swarm/ and assume `action_parse_contracts` had already enriched the
+// goals; code_core dispatches it too and never runs that action, so every
+// worker received a bare goal while the prompt insisted a data contract and an
+// entity-id registry were present. The generator now enriches the goals itself
+// (idempotent) and states only what actually landed.
+//
+// The data files (rooms.yaml, items.yaml, …) are independent structural goals
+// whose enriched descriptions carry the shape contract, plus the shared
+// entity-id slice when contract_swarm produced one. The serial path generates them
 // one-per-controller-cycle through file_ops/create — the measured serial
 // residue (3.3–38.7 min across the swarm-class study). This flow fans
 // them out as ONE burst of stateless completions on the shared fan-out
@@ -53,7 +61,7 @@ create_content_batch: #FlowDefinition & {
 		}
 
 		fan_out_content: #StepDefinition & {
-			action:      "swarm_generate_content"
+			action:      "generate_content_batch"
 			description: "One stateless completion per missing data file"
 			context: required: ["mission"]
 			params: {
