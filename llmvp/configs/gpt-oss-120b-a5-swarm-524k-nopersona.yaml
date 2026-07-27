@@ -1,0 +1,134 @@
+# PRODUCTION SWARM CONFIG — gpt-oss-120b-a5, shared cell pool 524288.
+#
+# MEASURED CEILING LADDER (2026-07-26, dev/memguard_boot_probe.sh, steady
+# wired with nothing else running). The REAL wired limit on this box is
+# `sysctl iogpu.wired_limit_mb` = **113 GB**, not the 116 that several docs
+# and configs assumed:
+#
+#     n_ctx    predicted   measured   under 113
+#     393216      94.4       91.1      21.9 GB   (the old production value)
+#     524288     104.0      100.6      12.4 GB   <- THIS CONFIG
+#     589824     108.7      105.2       7.8 GB   tested READY, reasonable for
+#                                                batch work where nothing else
+#                                                runs; 5% more pool, 4.6 GB
+#                                                less headroom
+#     655360     113.7      109.9       3.1 GB   boots, but leaves 0.8 GB FREE
+#                                                on a 128 GB box — not viable
+#
+# Marginal cost measured at 71.7 KB/token against 72.0 predicted — the model
+# is exact; the constant -3.4 GB offset is fixed, not drift. 720896 would land
+# ~114.6 and is above the limit.
+#
+# WHY 524288 AND NOT HIGHER: 393216 was conservative by ~33%, and the earlier
+# "BREACH" verdict on 524k was an artifact of a probe ceiling set at 100 GB —
+# it measured 100.6, missing by 0.6 GB against a guard 12 GB below the real
+# limit. 589824 is genuinely fine for a dedicated batch run; it is not the
+# default because 7.8 GB of headroom has to absorb the agent process, Python,
+# editors and any Docker VM, and at 655360 that budget is already spent.
+#
+# CONTRACT-SWARM config (BATCHED): gpt-oss-120b-a5 for the contract-swarm
+# structural runs — n=symbols concurrent worker completions
+# (swarm_generate_symbols fans out one stateless completion per symbol,
+# uncapped: EOS ends generation, max_tokens_default is the ramble
+# ceiling) plus the mission's own session traffic.
+#
+# Budget math (kv_unified: n_ctx is the SHARED cell pool across ALL
+# working seats; cells are consumed per ACTUAL token — max_tokens never
+# reserves anything — measured 2026-07-20, dev/serving_perf_reference.md):
+# the client-side pool-fit gate in swarm_generate_symbols admits the full
+# n=symbols fan-out only when estimated read context + generation margin
+# fits 80% of n_ctx, and waves otherwise, so W=32 is an admission
+# ceiling, not a promise of 32 huge streams. n_ctx 131072 = the
+# known-good single-context footprint on this box (swa_full KV ≈ 9.2G;
+# see the gameab config's wired-ceiling math). Aggregate decode rises
+# monotonically with stream count (56→89 tok/s at N=1→6; ~200 at N=64);
+# early-EOS workers release cells + decode share back to the big ones.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 131072
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "gpt-oss-120b-a5"
+  family: "harmony"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
+  n_ctx: 524288
+  # Refuse arithmetically-impossible loads before Metal allocates. Set from
+  # the REAL wired limit (113 GB) minus working headroom, not the 116 that
+  # was assumed before it was checked.
+  kv_preflight_gb: 106
+  # model max context (trained per-stream range) vs n_ctx (the swarm
+  # max context: the shared KV cell pool). No single stream may exceed
+  # this, however large the pool. (2026-07-24 context-ladder split.)
+  model_max_context: 131072
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: true
+  thinking_mode: medium
+  swa_full: true
+  kv_unified: true
+  flow_kv_cache: false
+  session_full_replay: true
+  resident_seq_cache: true
+  context_refresh_drain_s: 300
+  reasoning_head_swap: true
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  # Ample default — design_and_plan and the contract author run at high/
+  # medium reasoning and must not be starved (a low default silently cut
+  # the architecture generation to an EMPTY response: gpt-oss burns the
+  # budget on CoT before emitting content). Swarm WORKERS carry no
+  # override, so this default is also their ceiling — it only binds on a
+  # ramble (EOS ends honest work), and the worker layer names that
+  # failure honestly instead of retrying it.
+  max_tokens_default: 32768
+  temperature_default: 1.0
+  top_p: 1.0
+  top_k: 0
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.05
+  session_temp_floor: 0.35
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/nopersona.tokens.bin"
+  token_limit: 32768
+
+resources:
+  decode_mode: "batched"
+  cpu_threads: 15
+  # W: admission ceiling for the n=symbols fan-out (engine proven to 64
+  # streams). The client-side pool-fit gate is the real load governor.
+  # UNCAPPED (field omitted) as of 2026-07-26 — resolves to the measured-safe
+  # default of 128 working seats. The old explicit 32 was costing ~40% of
+  # achievable throughput (144.7 tok/s at N=32 vs 202.5 at N=64, ladder in
+  # dev/decode_ceiling/). Seats are nearly free; the REAL limiter is pool
+  # cells, enforced by the swarm pool-fit gate against estimated context.
+  # Set an explicit value to pin the width for a controlled A/B or a
+  # latency-bounded workload.
+  jit_concurrency_limit: null
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
