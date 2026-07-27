@@ -51,15 +51,28 @@ time collapses on the pilot set; rerun the 12-instance pilot
 
 *Build + unit tests need no server; evaluation does.*
 
-## 2. TRAP_BRIEF re-validation (cheap; do before any investment)
+## 2. TRAP_BRIEF re-validation — ENV SUB-CASE FIXED 2026-07-27
 
 `dev/TRAP_BRIEF.md` documents the deterministic-startup-fail
-blind-diagnose trap. ALL its evidence predates the featurizer bare-<
-fix, which was the actual root cause of several "trapped" runs. Rerun
-one canonical trap task (thompson-nfa-regex-engine or bplus-tree
-greenfield mission) post-fix. If the trap no longer reproduces, stamp
-the doc CLOSED and archive it; if it does, the fix is wiring the stalled
-fix-loop detector to the (now shipped) escalate flow.
+blind-diagnose trap. A live instance was root-caused and fixed on
+2026-07-27 — see `dev/POOLSIDE_TRAP_ROOTCAUSE.md`. **The escalate-flow
+wiring this item called for is DONE** (`e61fdc0`): a failed dependency
+install now routes to `escalate` (bounded read/run/write) instead of
+dead-ending, and its result is re-verified rather than trusted.
+
+Seven fixes landed, 33 mutation-verified tests. The trigger was found:
+`_uvize_install_commands` created a venv whenever a `py` SECTION existed
+rather than when an install would run into it, so a model omitting
+`install_command` got an EMPTY venv that reported success and then
+shadowed a working system interpreter.
+
+**Still worth doing, but narrower than originally scoped:** rerun one
+canonical trap task (thompson-nfa-regex-engine or bplus-tree greenfield)
+to check the OTHER sub-case. TRAP_BRIEF §7's A′ analysis — ground truth
+present but IGNORED, static tracing mis-localising to the wrong package —
+describes a *different* failure from the env one just fixed, and nothing
+here addresses it. Localisation was correct on every cycle in the env
+case; the remedy was simply inexpressible.
 
 ## 3. TB2: the next measurement
 
