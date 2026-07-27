@@ -92,6 +92,11 @@ generation:
   presence_penalty: 0.0
   # Vendor sets no repetition_penalty (i.e. 1.0); 1.05 also came from gpt-oss.
   repeat_penalty: 1.0
+  # ARM C: ban laguna's native <tool_call> token (id 25). It emits tool calls
+  # in ~20-40% of turns with NO tool syntax anywhere in the prompt and against
+  # an explicit prohibition in SOUL.md; we do not support per-model tool
+  # protocols, so those turns produce nothing usable.
+  logit_bias: {25: -100.0}
   session_temp_floor: 0.35
   streaming_default: true
 knowledge:

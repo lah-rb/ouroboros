@@ -1,0 +1,112 @@
+[
+  {
+    "arm": "A-baseline (top_k20, rp1.0, thinking off)",
+    "reps": 5,
+    "tool_call_rate": 0.2,
+    "runaway_rate": 1.0,
+    "usable_rate": 0.8,
+    "median_gen": 8000,
+    "rows": [
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 31278,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 209.4
+      },
+      {
+        "tool_call": true,
+        "gen": 8000,
+        "finished": true,
+        "chars": 32960,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 210.8
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 31957,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 211.5
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 31371,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 232.5
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 33637,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 233.1
+      }
+    ]
+  },
+  {
+    "arm": "B-penalties (rp1.1 freq0.3 last_n512 DRY0.8)",
+    "reps": 5,
+    "tool_call_rate": 0.4,
+    "runaway_rate": 0.4,
+    "usable_rate": 0.6,
+    "median_gen": 988,
+    "rows": [
+      {
+        "tool_call": false,
+        "gen": 487,
+        "finished": true,
+        "chars": 1950,
+        "capped": false,
+        "has_fence": true,
+        "wall_s": 18.2
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 48669,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 220.5
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 43964,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 206.1
+      },
+      {
+        "tool_call": true,
+        "gen": 91,
+        "finished": true,
+        "chars": 363,
+        "capped": false,
+        "has_fence": false,
+        "wall_s": 8.1
+      },
+      {
+        "tool_call": true,
+        "gen": 988,
+        "finished": true,
+        "chars": 2156,
+        "capped": false,
+        "has_fence": true,
+        "wall_s": 30.2
+      }
+    ]
+  }
+]

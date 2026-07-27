@@ -178,6 +178,55 @@ entry, not a string filter. Untested; the alternative worth weighing first is
 that laguna is a coding-agent model and wiring its tool protocol to the real
 tool layer may be the intended mode rather than a defect to suppress.
 
+## Sampling sweep — do "repeat_penalty and friends" change anything? (2026-07-26)
+
+Method: replay the EXACT 10,857-char prompt that made laguna emit a tool call
+(`dev/laguna/sampling_sweep.py`), one server config per arm, 4-5 reps.
+`max_tokens` 8000 — low enough that a cap-hit is cheap, high enough for a real
+answer. Raw data in `dev/laguna/sweep_results.json`.
+
+| arm | tool_call | usable | median gen |
+|---|---|---|---|
+| A baseline (top_k 20, rp 1.0, thinking off) | 20% | **80%** | 8000 (capped) |
+| B penalties (rp 1.1, freq 0.3, last_n 512, DRY 0.8) | 40% | 60% | **988** |
+
+**Yes, they change behaviour — for the worse.** The penalties TRUNCATE output
+hard (median 8000 -> 988; individual reps of 487 and 91 tokens for a "produce
+every file" task). In hindsight this is the expected direction: **code is
+repetitive** — imports, boilerplate, parallel signatures — so repeat/frequency
+penalties and DRY punish exactly the structure code generation needs. They did
+not reduce tool-calling either (40% vs 20%, though n=5 cannot separate those).
+
+**Conclusion: leave the penalty family OFF for code workloads.** They are a
+loop-breaker for prose degeneration (the qwen paragraph-orbit case), not a
+general quality knob.
+
+### Two corrections this sweep forced
+
+**"runaway=100%" in arm A is a bad metric, not a finding.** Every rep hit my
+artificial 8000 cap, but 4 of 5 carried fenced code. For a prompt demanding 7
+complete files, >8000 tokens is legitimate output. Cap-hit != pathology; the
+honest measure is the usable rate.
+
+**The mission's 0/7 was UNLUCKY, not systematic.** Replaying its exact prompt,
+80% of attempts produce usable fenced code. The mission drew the ~20% tool-call
+case on its single attempt. Retry alone recovers most of this.
+
+### A real bug this question exposed (fixed, f7ccbbe)
+
+Asking whether repeat_penalty affects laguna revealed that **some of those knobs
+could not affect anything**: `build_sampling_params` in the batched engine only
+forwarded 8 fields, silently dropping `penalty_last_n` and the entire DRY
+sampler that `_build_generate_kwargs` has emitted since the qwen loop work. The
+alternating-pool path forwarded them correctly, which is why it went unnoticed.
+Under `decode_mode: batched` — the DEFAULT — those loop mitigations were
+configured, logged, and INERT. Any conclusion drawn about them in batched mode
+since then was measuring an unchanged sampler.
+
+Same commit adds two knobs the fork already supported and we were not using:
+`reasoning_budget` (forces the reasoning-end tag on overrun — the principled
+bound on laguna's runaway, versus the blunt `thinking: false`) and `logit_bias`.
+
 ## Before any tournament placement
 
 1. Decide the tool-call posture: logit-ban token 25, or wire laguna's tool
