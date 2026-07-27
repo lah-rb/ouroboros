@@ -50,7 +50,11 @@ def backend(monkeypatch):
         return b
 
     monkeypatch.setattr(inference, "_get_backend", _get_backend)
-    monkeypatch.setattr(inference, "resolve_max_tokens", lambda v: v or 128)
+    # Signature carries `prepopulated` since the prompt+generation clamp; this
+    # double ignores it (these tests are about reasoning kwargs, not budgets).
+    monkeypatch.setattr(
+        inference, "resolve_max_tokens", lambda v, prepopulated=0: v or 128
+    )
     monkeypatch.setattr(inference, "resolve_temperature", lambda v: v or 0.7)
     monkeypatch.setattr(
         inference.static_tokens_manager, "get_static_tokens", lambda: [1, 2, 3]
