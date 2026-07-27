@@ -2765,6 +2765,32 @@ class LlamaCppBackend(BaseBackend):
             kv_bytes = self.kv_bytes_from_header(
                 m.n_ctx, kvh_list, int(key_len), int(value_len)
             )
+            # MEASURED override. The header formula assumes swa_full gives every
+            # layer a full-size cache. On interleaved-SWA architectures that
+            # over-predicts: gemma-4-31b measures 0.87 MB/token against a
+            # formula ~1.72 — almost exactly 2x — so a config stable at ~81GB
+            # peak got REFUSED at a computed 130.4GB and an unattended batch
+            # lost the arm (2026-07-27).
+            #
+            # A config may therefore declare bytes/token it has actually
+            # measured. The guard still runs — it is re-armed against real
+            # geometry rather than disabled — which is the safe way to fix an
+            # over-prediction. Raising kv_preflight_gb past physical memory
+            # would silence the guard instead, and it exists because three
+            # hard reboots were precomputable.
+            measured = getattr(m, "kv_bytes_per_token_measured", None)
+            if measured:
+                kv_bytes = int(measured) * int(m.n_ctx)
+                logger.info(
+                    "🧮 KV preflight: using MEASURED %.2f MB/token (config) "
+                    "instead of the %.2f MB/token header formula",
+                    int(measured) / 1e6,
+                    self.kv_bytes_from_header(
+                        m.n_ctx, kvh_list, int(key_len), int(value_len)
+                    )
+                    / int(m.n_ctx)
+                    / 1e6,
+                )
             split_count = _field("split.count")
             weights_bytes = self.weights_bytes_total(path, split_count)
         except Exception:  # noqa: BLE001 — preflight must never block a load

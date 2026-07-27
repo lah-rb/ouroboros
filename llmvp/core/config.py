@@ -73,6 +73,12 @@ class ModelConfig(BaseModel):
     # landmine, and the requirement belongs with the config that has it.
     # Precedence: OURO_KV_PREFLIGHT_GB (operator override) > this > 100.
     kv_preflight_gb: Optional[float] = None
+    # Bytes of KV per token as MEASURED on this machine. Set only when the
+    # header formula is known wrong for the architecture: it assumes swa_full
+    # gives every layer a full-size cache, which over-predicts ~2x on
+    # interleaved-SWA models (gemma-4). Re-arms the preflight against real
+    # geometry rather than disabling it by inflating kv_preflight_gb.
+    kv_bytes_per_token_measured: Optional[int] = None
     flash_attention: bool = False  # DEAD no-op (wrong kwarg name); see flash_attn_type
     batch_size: int = 64  # DEAD no-op (wrong kwarg name); see n_batch
     # The two fields above were silently swallowed by Llama()'s **kwargs (the binding

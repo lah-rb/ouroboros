@@ -52,6 +52,18 @@ model:
   # reboot-#3 death either way. Window-boundary session canary still
   # pending before deep-session workloads at this size.
   n_ctx: 65536
+  # The theory-based preflight assumes every layer carries a full-size cache
+  # and so over-predicts ~2x for gemma-4 (formula ~1.72MB/token vs the 0.87
+  # MEASURED above). At 65536 it computes 130.4GB against a 100GB default and
+  # REFUSES a config that is stable in practice at ~81GB peak. Carrying the
+  # documented budget here rather than in OURO_KV_PREFLIGHT_GB means every
+  # launch site gets it — an unattended batch that did not know to export the
+  # env var lost this arm outright (overnight tier run, 2026-07-27).
+  kv_preflight_gb: 112
+  # 0.87 MB/token, measured 2026-07-25 by dev/context_pressure_probe.py
+  # across the 32k/48k/64k rungs. 65536 * 0.87MB = 57GB KV + 17.7GB weights
+  # = ~75GB, against the ~81GB peak the probe observed.
+  kv_bytes_per_token_measured: 870000
   # The trained per-stream range (the swarm/model context split): the
   # stream limit is min(n_ctx, this) = 32768 here.
   model_max_context: 262144
