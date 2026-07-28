@@ -24,13 +24,31 @@
 # 1.15 GiB of BF16 in the always-read dense path. That is +0.77 bpw of real
 # quality.
 #
-# IT ALSO COSTS SPEED, and this is the part the qwen result does NOT predict:
-# the hot path grows 5.86 -> 6.92 GiB/token, +18%. On a memory-bound Metal
-# decode that is roughly linear, so expect ~25 tok/s where i-quality gave ~30.
-# "Balanced" here is NOT the small-hot-path recipe it was for the qwens. Judge
-# this arm on artifact quality and on whether the paragraph-orbit degeneration
-# (poolside hit one on 2026-07-28, retired at 4,096 tokens by the long-cycle
-# guard) survives the higher-precision experts — NOT on throughput.
+# IT WAS PREDICTED TO COST SPEED. IT DOES NOT — MEASURED, 2026-07-28.
+# The prediction here was that the hot path growing 5.86 -> 6.92 GiB/token
+# (+18%) would show up roughly linearly on a memory-bound Metal decode, i.e.
+# ~19 tok/s against i-quality's 22.4. Two matched 1h arms, full-run medians:
+#
+#   i-quality   22.4 tok/s (n=154)      I-Balanced   22.5 tok/s (n>150)
+#
+# Indistinguishable. And the wider fleet says the same: unsloth 53.6 GiB, APEX
+# i-quality 68.9, I-Balanced 79.4 and poolside 89.4 — a ~36 GiB file spread and
+# a 19% read-per-token spread — all decode in the same band. read/token is a
+# POOR PREDICTOR for this architecture. Something other than expert-weight
+# bandwidth dominates; the 256-expert routing and per-token gather cost the
+# same whatever the experts are quantized to, which fits. Do not size laguna
+# quant decisions off hot-path arithmetic — measure.
+#
+# The practical consequence is good: quant choice here is nearly free on speed,
+# so the decision is purely quality.
+#
+# THE DEGENERATION RESULT, same two arms: i-quality 3 long-cycle aborts,
+# I-Balanced ZERO. That is the axis this config was built to test and it moved
+# in the predicted direction — deleting the IQ4_XS expert tier removed the
+# orbits. Everything ELSE in that comparison favoured i-quality (17 files vs
+# 11, full project scaffolding vs none, live-test sessions 15-success/5-issues
+# vs 9/10), so this is NOT a clean win, and the Uncensored confound below is
+# the first thing to suspect.
 #
 # CONFOUND, ACKNOWLEDGED. Only the *Uncensored* finetune has the balanced
 # recipe applied so far, so this arm varies TWO things: recipe and finetune. A
