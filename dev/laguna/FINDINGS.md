@@ -313,3 +313,55 @@ measurable. Raising it is a one-line change once the quant question is settled.
   characterised. Note our configs run `temperature 1.0 / top_p 1.0 / top_k 20`
   per the vendor `generation_config.json`, which is a high-entropy setting — the
   first thing to rule out before treating it as a property of the build.
+
+## The APEX arm was killed, and why the numbers would have lied (2026-07-27)
+
+The 2h APEX arm was stopped at ~95 min with 7 files against poolside-v2's 11.
+Taken at face value that reads as a quant deficit. It is not — the arm never ran
+the same pipeline.
+
+APEX's `build_structure` batch generation reached 48,318 tokens carrying **15
+complete `# === FILE:` blocks** and was then **evicted** by
+`KV cell pool exhausted`. The agent received an exception, all 15 files were
+discarded, and the mission fell back to the per-file `create` path. So the arm
+was measuring SERIAL creation while poolside-v2 measured a completed BATCH.
+Luke's call: the achievable-quality gap between those two paths is large enough
+that the comparison is meaningless. Killed rather than finished.
+
+**The generation was not degenerate.** Distinct 200-char windows 0.996, top
+repeat ×2 — the long-cycle detector was right to stay silent. It was laguna's
+untagged deliberation (`thinking: false`, so its reasoning is plain prose in the
+output stream) interleaved with real file production, cut mid-sentence.
+
+### Root cause, and why the obvious fix was not the fix
+
+`n_ctx` budgets the **sum** of live streams under `decode_mode: batched`, but
+every clamp in the path was **per-stream** — the engine's
+`effective_max = min(req.max_tokens, n_ctx - total)` and the config's
+`max_tokens_default`. Each stream passed its own check (48,510 of 65,536) while
+their total did not. Pressure was then discovered only reactively, and the
+relief path *evicted with an error*, discarding everything produced.
+
+Landed on `ingest-workspace-and-tb-comparison` (f74a6dc, f9ce9b0):
+
+- admission sizes against FREE cells — shrink to fit, queue below a 512-token
+  floor, fail what can never fit; occupancy counts each stream's ENTITLEMENT,
+  not its decoded position
+- KV pressure force-windows instead of evicting, so partial work is delivered
+- the cut is announced (`truncated`), since a force-window stops BELOW
+  max_tokens and the derived truncation test cannot see it
+- a truncated batch's severed trailing block is dropped rather than written over
+  a good file (CommonMark closes an unterminated fence implicitly)
+
+### What this says about the quant question, independent of the arm
+
+Decode rate at MATCHED context is near parity — APEX/poolside 0.96–1.00× from
+0–24k, drifting to ~1.11× at 48–56k (n=1, weak). Context burden dominates:
+poolside falls 38.4 → 28.4 t/s across the range. Luke's zero-context figures
+(APEX 50+ vs poolside ~40 t/s) match the hot-path bandwidth prediction (1.28×),
+so **the quant advantage is real at zero context and largely gone by ~8k** —
+which is where every agent workload lives. Practical read: quant choice barely
+moves decode speed for us; context length does. That is an argument for the
+prefix-cache work, not for quant tuning.
+
+**Re-run the A/B on the fixed engine before drawing any quant conclusion.**
