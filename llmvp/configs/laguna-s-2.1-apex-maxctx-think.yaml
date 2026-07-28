@@ -1,0 +1,141 @@
+# APEX at MAX CONTEXT with an UNCAPPED chain of thought.
+#
+# The bounded probe (20k) showed 6/6 samples deliberating to the cap with
+# zero files — but a cap is not a refutation. The CoT was NOT degenerate
+# (distinct 200-char windows 384/384 = 1.000); it was genuine exploration
+# that had not converged when we cut it off. This asks the honest version
+# of the question: given room, does it ever land?
+#
+# KV geometry (headers: 48 layers x 8 kv-heads x 128 head-dim = 192 KiB/tok):
+#   131072 ctx -> 25.8 GB KV + 73.9 GB weights = 99.7 GB, which is 9 GB
+#   BELOW the poolside config that already boots and runs stable. APEX is
+#   the only laguna build that reaches the full window on this hardware.
+#
+# Uncapped means max_tokens == n_ctx: the window is the only limit. The
+# admission clamp (f9ce9b0) sizes the real budget against free KV cells, so
+# this cannot oversubscribe the pool the way the 2026-07-27 eviction did.
+#
+# Laguna-S-2.1, Myric APEX "i-quality" GGUF — the third quant.
+#
+# WHY THIS EXISTS. We have two laguna builds and they bracket the trade badly:
+# unsloth is small and 3-bit in the experts (repetition loops, no stop tokens),
+# poolside is 4.5-bit-and-up but costs 2x the context. Luke found APEX in
+# LM Studio and reported the anomaly this config is built around: IT DECODES
+# FASTER THAN UNSLOTH'S IQ4 WHILE CLAIMING AN AVERAGE WEIGHT ABOVE 5 BITS.
+#
+# That is real, and the GGUF headers explain it (read 2026-07-27, all three
+# builds, grouped by whether a tensor is on the per-token hot path):
+#
+#   build              file      dense+attn        experts               read/tok
+#   unsloth UD-IQ4_XS  53.6 GiB  3.87 Q8_0         49.6 IQ3_S x92        5.94 GiB
+#                                                       IQ4_XS x47
+#   APEX i-quality     68.9 GiB  2.73 Q6_K         66.0 IQ4_XS x84       5.44 GiB
+#                                                       Q5_K   x30
+#                                                       Q6_K   x27
+#   poolside Q4_K_M    89.4 GiB  3.50 Q8_0         85.8 Q4_K  x117       6.99 GiB
+#                                                       BF16   x24
+#
+#   avg bpw: APEX 5.031 (Luke's ">5" — confirmed from the headers)
+#   read/tok = dense+attn+router + experts * 10/256   (expert_used_count=10 of 256)
+#
+# APEX IS 15 GiB BIGGER THAN UNSLOTH AND READS 8% FEWER BYTES PER TOKEN. It
+# spends its extra size on the expert bank, of which only 10/256 is touched per
+# token, while making the ALWAYS-read dense path cheaper: Q6_K at 2.73 GiB
+# against unsloth's Q8_0 at 3.87. For a 256-expert MoE with 10 active, file size
+# is a poor proxy for decode speed — the hot path is what matters, and APEX has
+# the smallest hot path of the three. (Its experts are also IQ4_XS/Q5_K rather
+# than unsloth's IQ3_S, so it should not have unsloth's 3-bit failure modes.)
+#
+# KV GEOMETRY (headers: 48 layers, 8 kv-heads, 128 head-dim -> 192 KiB/token):
+#
+#   n_ctx    KV GB   total GB   verdict
+#    65536    12.9      86.8    <- THIS CONFIG (matches poolside for the A/B)
+#    98304    19.3      93.2    OK
+#   131072    25.8      99.7    OK  <- reachable, unlike poolside
+#
+# The poolside config that boots and runs stable today totals 108.9 GB. APEX at
+# the FULL 131072 is 99.7 GB — 9 GB BELOW a proven-good configuration. So APEX
+# can run unsloth's full context at 5.03 bpw, which poolside cannot. We are NOT
+# doing that here on purpose (see below).
+#
+# WHY 65536 AND NOT 131072. This config's job is a controlled A/B against the
+# 2026-07-27 poolside 2h run, so the quant must be the only variable. Matching
+# n_ctx is free: that run logged ZERO truncation events across 262 flows, so
+# n_ctx never bound and the larger window would buy nothing measurable while
+# costing the comparison. Raising it to 131072 is a one-line change (n_ctx,
+# graphql.max_tokens, generation.max_tokens_default all move together) and is
+# the right follow-up ONCE the quant question is settled.
+
+app:
+  host: 0.0.0.0
+  port: 8008
+  log_level: info
+  cors_origins:
+  - '*'
+  backend_timeout: 180
+  openai_shim: true
+graphql:
+  max_query_depth: 10
+  max_tokens: 131072  # must not bind before generation.max_tokens_default
+  max_aliases: 50
+  introspection_enabled: true
+model:
+  name: Laguna-S-2.1-APEX-maxctx-think
+  family: laguna
+  path: /Users/lah-rb/.lmstudio/models/Myric/Laguna-S-2.1-APEX-GGUF/Laguna-S-2.1-APEX-i-quality.gguf
+  # Matched to laguna-s-2.1-poolside.yaml so the quant is the only variable.
+  # 73.9GB weights + 12.9GB KV = 86.8GB against the 113GB wired limit — 22GB
+  # more headroom than the poolside config, which itself boots clean.
+  n_ctx: 131072
+  # Guard set above the computed total, not shaved to fit.
+  kv_preflight_gb: 104
+  model_max_context: 1048576
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: true
+  swa_full: true
+  kv_unified: true
+  flow_kv_cache: false
+  session_full_replay: true
+  resident_seq_cache: true
+  context_refresh_drain_s: 300
+prompt:
+  persona_file: ./knowledge/SOUL.md
+generation:
+  # Equal to n_ctx: the window is the only limit. See the poolside config for
+  # why an artificial cap was cutting legitimate multi-file work.
+  max_tokens_default: 131072
+  temperature_default: 1.0
+  top_p: 1.0
+  top_k: 20              # vendor generation_config.json; NOT 0
+  min_p: 0.0
+  presence_penalty: 0.0
+  repeat_penalty: 1.0    # penalties truncate code output — sweep arm B
+  # Both bans carried over from poolside unchanged, since they are properties of
+  # the MODEL and our prompt format, not of the quant:
+  #   25 = <tool_call>, emitted unprompted in 20-40% of turns; we do not support
+  #        per-model tool protocols.
+  #   19 = </think>, banned ONLY because thinking is off here — the close-only
+  #        prefill ends the prompt with a bare </think> and laguna reproduces it
+  #        as a separator. Do NOT carry this to a thinking:true variant.
+  # thinking is ON — </think> (19) is load-bearing and must not be banned.
+  logit_bias: {25: -100.0}
+  session_temp_floor: 0.35
+  streaming_default: true
+knowledge:
+  # Keyed per config file, so it regenerates on first boot.
+  tokens_bin: ./data/laguna-s-2.1-apex.tokens.bin
+  token_limit: 32768
+resources:
+  decode_mode: batched
+  cpu_threads: 15
+  jit_concurrency_limit: null
+tools:
+  enabled: false
+  max_iterations: 3
+logging:
+  enabled: true
+  directory: ./logs
