@@ -422,3 +422,54 @@ not stop the deliberation, it would ROUTE it somewhere the FSM can strip.
 
 Prediction to test: with thinking on, the same batch turn should return a
 SMALLER, cleaner post-strip answer for the same delivered files.
+
+## The CoT difficulty ladder, and why "uncapped" was not uncapped (2026-07-28)
+
+### The ladder: a cliff, not a slope
+
+| rung | median tokens | ran to cap | wall |
+|---|---|---|---|
+| trivial (capital of France) | 182 | 0/2 | 1–4s |
+| easy (reverse a string) | 550 | 0/2 | 8–15s |
+| moderate (Stack class) | 259 | 0/2 | 5–7s |
+| hard (one complete module) | **11,347** | 0/2 | 316s |
+| very hard (six interdependent files) | **20,000** | **2/2** | 520–572s |
+
+laguna does NOT deliberate to whatever budget it is handed — "capital of France"
+answers in 52 tokens. CoT scales with the ASK. Everything up to one complete
+module converges, and the two `hard` samples landed within 1.4% of each other
+(11,193 / 11,347), which is remarkably stable for a model whose non-think
+generations ranged 3k–60k. Then six files: 2/2 to the cap.
+
+**So the batch turn is the defect, not the model.** One module converges at 11k;
+eleven do not converge at 60k. That is a decomposition problem, and it means the
+manifest-complete stop idea treats a symptom — the structural fix is not asking
+for eleven files in one turn.
+
+### The uncapped arm failed on MY design error, and the failure is informative
+
+The max-context arm died at 26 minutes with zero files:
+
+    [design_initial] Inference error: Generation aborted by watchdog
+    [failed] Failed to design architecture and derive goals
+
+There are THREE independent caps and I removed only one:
+
+| cap | value | where |
+|---|---|---|
+| `max_tokens_default` | raised to 131,072 | config |
+| engine admission clamp | sized to free KV cells | server (f9ce9b0) |
+| **`COMPLETION_RUNAWAY_TOKEN_CEILING`** | **49,152** | **agent watchdog** |
+
+`agent/effects/inference.py:257`. It is a module constant with no env override,
+and it exists for a good reason: it bounds the Qwen3-Next repetition bug that
+otherwise generates to 262k. Calling the arm "uncapped" without checking the
+agent side was my oversight.
+
+The result still says something: with thinking on, **`design_initial` alone
+exceeds 49,152 tokens** — the ARCHITECTURE step, well before the eleven-file
+batch. Consistent with the ladder's cliff rather than contradicting it.
+
+A genuinely uncapped test requires raising a safety guard, which is a decision
+worth making deliberately rather than overnight. If taken, raise it for the
+laguna arm only and keep the qwen protection intact.
