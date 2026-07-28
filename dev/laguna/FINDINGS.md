@@ -365,3 +365,60 @@ moves decode speed for us; context length does. That is an argument for the
 prefix-cache work, not for quant tuning.
 
 **Re-run the A/B on the fixed engine before drawing any quant conclusion.**
+
+## We have been running laguna in its weak mode (2026-07-27)
+
+Poolside's 2.1 release notes plus the model's own chat template (read from the
+APEX GGUF) settle two things at once — one correction and one much larger
+finding.
+
+### Correction: the close-only prefill is CORRECT
+
+I hypothesised that `prefill_closed_close_only` was malformed relative to
+training — a `</think>` with no opener — and that banning token 19 therefore
+prevented the model from ever closing its turn. **Both halves are wrong.** The
+model's template:
+
+```jinja
+{%- if add_generation_prompt -%}
+  {{- "<assistant>" -}}
+  {%- if enable_thinking -%}{{- '<think>' -}}
+  {%- else -%}{{- '</think>' -}}{%- endif -%}
+{%- endif -%}
+```
+
+Non-thinking mode renders exactly `<assistant></think>`. Our format is faithful.
+And in non-think mode `</think>` is always PREFILLED, never something the model
+must emit, so the token-19 ban blocks nothing. Detection was never the issue
+either: the GGUF registers `eos=2` and `eot=24`, llama.cpp folds both into its
+EOG set, and the 60,138-token replay retired on BUDGET rather than EOG — the
+model simply never tried to stop.
+
+### The finding: thinking is the mode we should have been using
+
+| benchmark | no-think | think |
+|---|---|---|
+| DeepSWE | 16.5% | **40.4%** |
+| Terminal-Bench 2.1 | 60.4% | 70.2% |
+| SWE-Bench Multilingual | 71% | 79% |
+| SWE-Bench Pro | 53% | 59% |
+
+**Every laguna number we hold — including the tier-run placement — was measured
+with thinking off.** The gap is widest on agentic coding, which is our workload:
+DeepSWE is 2.4x.
+
+`thinking: false` was adopted because the UNSLOTH build produced two
+>100k-char pure-CoT runaways and zero files in 22 minutes. That justification
+now looks thin: unsloth is the 3-bit expert quant with known pathologies,
+thinking is the vendor DEFAULT, and the notes say the model "determines the
+right thinking/test-time compute budget for a given problem" and "may think for
+long sequences before making progress". Long thinking is designed behaviour.
+
+It also reframes the 68% deliberation tail in the APEX replay. The model
+deliberates because it is trained to; in non-think mode there is no `<think>`
+channel to put it in, so it lands in CONTENT — unstrippable, and
+indistinguishable from output to every consumer downstream. Thinking mode would
+not stop the deliberation, it would ROUTE it somewhere the FSM can strip.
+
+Prediction to test: with thinking on, the same batch turn should return a
+SMALLER, cleaner post-strip answer for the same delivered files.

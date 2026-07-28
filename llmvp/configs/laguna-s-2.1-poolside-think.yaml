@@ -1,3 +1,18 @@
+# Poolside laguna in THINKING mode — the vendor's default and, per their
+# 2.1 release notes, substantially stronger on our exact workload:
+#   DeepSWE 16.5% -> 40.4%   Terminal-Bench 2.1 60.4% -> 70.2%
+#   SWE-Bench Multilingual 71% -> 79%   SWE-Bench Pro 53% -> 59%
+#
+# Every laguna result we hold was measured with thinking OFF, i.e. in the
+# weak mode. `thinking: false` was adopted after the UNSLOTH build produced
+# two >100k-char pure-CoT runaways — but that is the 3-bit quant with known
+# pathologies, and the vendor states the model self-budgets test-time compute
+# and "may think for long sequences before making progress".
+#
+# This config pairs thinking with the quant that TERMINATES reliably
+# (poolside's longest generation across a 2h run was 15,146 tokens), so the
+# mode is tested independently of APEX's heavy-tail variance.
+#
 # Laguna-S-2.1, POOLSIDE first-party GGUF — the quant hypothesis.
 #
 # WHY THIS EXISTS. The unsloth build we tested pushes 92 expert tensors to
@@ -17,13 +32,13 @@
 # poolside holds nothing below 4.5-bit and keeps 24 at full BF16. "Q4_K_M" is a
 # misleading name here — the file is mostly 8-bit.
 #
-# THE TRADE — 4x LESS CONTEXT. 96 GB of weights against a 113 GB wired limit:
+# THE TRADE — 2x LESS CONTEXT (65536 vs the unsloth build's 131072). 96 GB of weights against a 113 GB wired limit:
 #
 #   n_ctx    KV GB   total    verdict
 #    16384     3.2    99.3    OK
-#    32768     6.4   102.5    OK   <- THIS CONFIG (gpt-oss runs stable at 100.6)
-#    49152     9.7   105.7    tight
-#    65536    12.9   108.9    tight
+#    32768     6.4   102.5    OK  (gpt-oss runs stable at 100.6)
+#    49152     9.7   105.7    OK  <- FALLBACK
+#    65536    12.9   108.9    OK  <- THIS CONFIG (Luke: ~10GB more headroom)
 #    98304    19.3   115.4    over the wired limit
 #   131072    25.8   121.8    over — the unsloth context is unreachable here
 #
@@ -48,16 +63,20 @@ app:
   openai_shim: true
 graphql:
   max_query_depth: 10
-  max_tokens: 32768
+  max_tokens: 65536   # must not bind before generation.max_tokens_default
   max_aliases: 50
   introspection_enabled: true
 model:
   name: Laguna-S-2.1-poolside-think
   family: laguna
   path: /Users/lah-rb/.lmstudio/models/poolside/Laguna-S-2.1-GGUF/laguna-s-2.1-Q4_K_M.gguf
-  n_ctx: 32768
-  # 102.5GB computed; leave real headroom over it rather than shaving the guard.
-  kv_preflight_gb: 108
+  # 65536 on Luke's read that there is ~10GB more headroom than the
+  # conservative estimate (unlike step-3.7, which is genuinely tight at 32k).
+  # 96.0GB weights + 12.9GB KV = 108.9GB against the 113GB wired limit.
+  # Fallback if it will not boot or wires unstable: 49152 = 105.7GB.
+  n_ctx: 65536
+  # 108.9GB computed at this n_ctx; guard set above it, not shaved to fit.
+  kv_preflight_gb: 112
   model_max_context: 1048576
   n_gpu_layers: -1
   seed: -1
@@ -74,27 +93,42 @@ model:
 prompt:
   persona_file: ./knowledge/SOUL.md
 generation:
-  # HALVED from the unsloth config's 32768. With n_ctx 32768 a single 32k
-  # generation could consume the entire window, and on this model the long
-  # generations are the documented failure — a tighter cap bounds the damage
-  # and costs less wall clock when one does run away.
-  max_tokens_default: 16384
+  # NO ARTIFICIAL CAP: equal to n_ctx, so the context window is the only
+  # limit. The 24576 cap was set to bound runaway damage, but it was cutting
+  # LEGITIMATE work — the batch structural step declared 12 files and was
+  # severed mid-fence inside combat.py, losing two files and leaving a stale
+  # earlier pass in place. Truncation was being read as "10/10 declared files
+  # written" because the slice counts what survived the cut, not what the model
+  # set out to write. llama.cpp still bounds a single generation by the space
+  # actually left in the window after the prompt.
+  max_tokens_default: 65536
   temperature_default: 1.0
   top_p: 1.0
   top_k: 20              # vendor generation_config.json; NOT 0 (see unsloth cfg)
   min_p: 0.0
   presence_penalty: 0.0
   repeat_penalty: 1.0    # penalties truncate code output — sweep arm B
-  # <tool_call> is a single token; laguna emits it unprompted in 20-40% of turns
-  # and we do not support per-model tool protocols. Arm C: 0/4 tool calls,
-  # 100% usable output.
+  # 25 = <tool_call>: a single token; laguna emits it unprompted in 20-40% of
+  # turns and we do not support per-model tool protocols. Sweep arm C: 0/4 tool
+  # calls, 100% usable output.
+  #
+  # 19 = </think>: banned only because thinking is OFF here. The close-only
+  # prefill (formats/laguna.yaml prefill_closed_close_only) ends the prompt with
+  # a bare </think> to declare reasoning finished, and laguna reads that as a
+  # separator to REPRODUCE — it emitted </think> 64 times in one 2048-token
+  # generation, each cycle restating the same intent, until the server's
+  # long-cycle detector killed the stream (ratio 0.0194, period ~158B). With
+  # thinking off the tag has no legitimate use, so banning it removes the
+  # punctuation the loop was built on. Do NOT carry this to a thinking:true
+  # config — there </think> is load-bearing.
+  # thinking is ON, so </think> (19) is LOAD-BEARING and must not be banned.
   logit_bias: {25: -100.0}
   session_temp_floor: 0.35
   streaming_default: true
 knowledge:
   # Rebuilt automatically when stale — same tokenizer as the unsloth build, but
   # keyed per config file, so it regenerates on first boot.
-  tokens_bin: ./data/laguna-s-2.1-poolside-think.tokens.bin
+  tokens_bin: ./data/laguna-s-2.1-poolside.tokens.bin
   token_limit: 32768
 resources:
   decode_mode: batched
