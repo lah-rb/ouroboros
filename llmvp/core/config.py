@@ -829,6 +829,25 @@ def section_fields(model_cls: type) -> dict:
     return out
 
 
+# (config stem, base it extends or None, overridden key paths) for the config
+# most recently loaded. See load_config for why this is recorded rather than
+# only logged.
+_LAST_RESOLUTION: tuple = ("", None, [])
+
+
+def describe_resolution() -> Optional[str]:
+    """One line naming what the active config inherited, or None if it is
+    self-contained. Emitted by the startup path, which is the first moment
+    logging is configured."""
+    stem, base_name, overridden = _LAST_RESOLUTION
+    if not base_name:
+        return None
+    return (
+        f"🧬 Config {stem} extends {base_name} — overrides: "
+        f"{', '.join(overridden) or '(none)'}"
+    )
+
+
 def _merge_over(
     base: dict, child: dict, model_cls: type = None, _path: str = ""
 ) -> tuple[dict, list[str]]:
@@ -931,6 +950,14 @@ def load_config(path: Optional[Path] = None) -> Config:
         # that for concision, so the resolved shape has to be VISIBLE at boot —
         # the same lesson the RoPE overrides taught: a setting you cannot see
         # is a setting you cannot debug.
+        #
+        # RECORDED, not just logged. init_config() runs at MODULE IMPORT, before
+        # the server calls logging.basicConfig, so a log call here reaches a
+        # handlerless logger at WARNING and is simply lost — the first live run
+        # on an inherited config found exactly that. The startup path re-emits
+        # this via describe_resolution() once logging exists.
+        global _LAST_RESOLUTION
+        _LAST_RESOLUTION = (cfg_path.stem, base_name, list(overridden))
         if base_name:
             log.info(
                 "🧬 Config %s extends %s — overrides: %s",

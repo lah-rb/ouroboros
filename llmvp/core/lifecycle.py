@@ -97,6 +97,15 @@ async def initialize_server_async(skip_knowledge: bool | None = None) -> None:
         RuntimeError: If initialization fails
     """
     try:
+        # First line of the boot record, because it is the one that says WHICH
+        # config this is. load_config runs at module import — before
+        # logging.basicConfig — so its own emission is swallowed; this is where
+        # it actually reaches the log an operator reads.
+        from core.config import describe_resolution
+
+        if (_inherit := describe_resolution()) is not None:
+            log.info(_inherit)
+
         skip = skip_knowledge if skip_knowledge is not None else _skip_knowledge
 
         if skip:

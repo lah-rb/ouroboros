@@ -1,0 +1,45 @@
+# Laguna i-quality + a global temperature floor at 0.7.
+#
+# THE QUESTION. The 2026-07-28 i-quality 1h agent run took THREE long-cycle
+# aborts. All three landed on short, mechanical turns sampled at temp 0.4 —
+# generate_new_symbol twice, generate_rewrite once — while the 18,466-token
+# batch turn and a 20,480-token generation ran clean. Degeneration here is not
+# a property of long generations; it tracks the low-temperature band.
+#
+# WHY 0.7 SPECIFICALLY, and why this is not a patch. It is poolside's own
+# general-use recommendation for laguna, so this arm asks whether honouring the
+# vendor's operating point removes the failure — not whether an arbitrary knob
+# suppresses a symptom. The three qwen configs already carry
+# temperature_floor: 0.7 and took ZERO aborts across 618 generations; laguna
+# carries no global floor at all, only session_temp_floor: 0.35 which never
+# applied to these turns because they are stateless completions.
+#
+# WHAT THE YARN SWEEP RULED OUT FIRST. Three RoPE arms (GGUF default,
+# yarn_attn_factor 1.0, rope_freq_scale 0.125) all returned VERDICT (b), and
+# the overrides made convergence WORSE — freq-scale-8x took `hard` from 2/2
+# converging to 2/2 capped. Geometry is not the lever, which leaves sampling.
+#
+# WHAT THIS ARM CANNOT SETTLE. The floor lifts ~190 calls/run that currently
+# sample at 0.0 — investigate, plan_interaction, conclude, evaluate_outcome.
+# Those never degenerated, so if the artifact gets WORSE while the aborts stop,
+# the floor is trading diagnosis quality for stability and the next iteration
+# should scope it to the code-emission steps rather than globally.
+#
+# BASELINE TO BEAT (laguna-s-2.1-apex, 1h, same mission, fixed watchdog):
+#   3 degenerations · 17 files · 21/45 goals · 22.4 tok/s median
+#   batch turn 11/11 files in one generation, no prose tail, no serial fallback
+#   PTY 20 interact flows, 15 success / 5 with-issues
+#   blind panel 35/50 (2nd of 5 artifacts measured; 122b anchors at 42)
+#
+# results: recorded here when the arm lands.
+
+extends: laguna-s-2.1-apex
+
+model:
+  name: Laguna-S-2.1-APEX-tempfloor
+generation:
+  # The ONLY functional change in this arm. Applies to every request —
+  # completions and session turns alike — raising anything below it. The flow
+  # multipliers drive real steps to 0.0-0.4 (t*0.1 exists), which is the band
+  # every observed live runaway has sat in.
+  temperature_floor: 0.7

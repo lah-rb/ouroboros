@@ -229,3 +229,33 @@ class TestDocOnlyKeys:
         assert "results" in DOC_ONLY_KEYS and "notes" in DOC_ONLY_KEYS
         cfg = load_config(p)
         assert cfg.model.name == "documented"
+
+
+class TestTheDiffIsActuallyVisible:
+    """load_config runs at MODULE IMPORT, before the server calls
+    logging.basicConfig — so a log call inside it reaches a handlerless logger
+    at WARNING and vanishes. The first live boot on an inherited config found
+    exactly that: the config resolved correctly and the run aborted anyway,
+    because the evidence it resolved was nowhere in the server log.
+
+    Recording the resolution and re-emitting it from the startup path is what
+    makes the mitigation real, so it needs a test that does not depend on log
+    capture at import time."""
+
+    def test_an_inherited_config_reports_its_base_and_overrides(self, configs):
+        from core.config import describe_resolution, load_config
+
+        p = configs / "experiments" / "kid.yaml"
+        write(p, "extends: base-model\nmodel: {name: kid, n_ctx: 4096}\n")
+        load_config(p)
+        line = describe_resolution()
+        assert "kid extends base-model" in line
+        assert "model.name" in line and "model.n_ctx" in line
+
+    def test_a_self_contained_config_reports_nothing(self, configs):
+        """Silence is correct here — a root config has nothing to disclose, and
+        a line saying so on every boot is noise."""
+        from core.config import describe_resolution, load_config
+
+        load_config(configs / "base-model.yaml")
+        assert describe_resolution() is None
