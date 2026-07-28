@@ -1,8 +1,28 @@
 # ── GREENFIELD TIER 2 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
 # 3rd of 8: the most polished shell of the finals with genuinely working
 # save/load — but unwinnable (dead dialogue, inert weakness, unbeatable boss
-# math). NOTE: first run caught DEGENERATION (family paragraph-orbit); this
-# standing is from the clean r2 rerun under the vendor-sampling stack.
+# math). That standing was measured on the unsloth Q6_K build and is carried
+# here pending re-ranking, since this config now serves APEX I-Balanced.
+#
+# The current quant has its own, better evidence: 42/50 in the 2026-07-28 blind
+# panel, and the judge FINISHED the game — three wins in five attempts, through
+# both boss phases, using the weakness item and a mid-fight heal, then
+# restarting from the defeat screen. That is the first winnable artifact any
+# panel here has produced.
+#
+# THE DEGENERATION NOTE THAT USED TO LIVE HERE IS GONE, and deliberately. It
+# recorded that the FIRST run on this model caught a family paragraph-orbit and
+# that the tier standing came from a clean rerun. On APEX I-Balanced there was
+# nothing to caveat: 134 generations, ZERO guard events, longest 12,570 tokens.
+# Fleet-wide, 618 generations across all three qwen MoEs with not one
+# degenerate turn. Switching to APEX I-Balanced appears to have resolved the
+# fragility in this family.
+#
+# "Appears to" is the honest strength. It is an absence over ~600 generations,
+# not a mechanism, and the sampling mitigations below were live the whole time
+# — so this is quant AND stack, not quant alone. The guards stay armed and the
+# vendor profile stays; if an orbit ever returns, the note comes back with the
+# capture that proves it.
 app:
   host: "0.0.0.0"
   port: 8008

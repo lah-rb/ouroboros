@@ -1,8 +1,23 @@
-# ── GREENFIELD TIER 3 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
-# Respectable, largely compatible. Artifact died at boot (Monster missing its
-# @dataclass decorator — one smoke run catches it) atop a world wired
-# unwinnable. Family note: GDN-hybrid deliberation-orbit propensity — token
-# guards + vendor sampling hold within generations, but plan for orbit risk.
+# ── UNRANKED (2026-07-28). The tier-3 standing this carried was measured on
+# the unsloth build; on APEX I-Balanced this is objectively a different model
+# and its old placement no longer describes it. Re-earn a tier from a panel
+# run on THIS quant.
+#
+# THE DEGENERATION NOTE THAT USED TO LIVE HERE IS GONE, and deliberately.
+# It warned of a GDN-hybrid deliberation-orbit propensity — the failure this
+# model has been held back by for longer than any other in the fleet, and the
+# one the long-cycle guard was built for after a 130k-token menu-turn loop.
+# On APEX I-Balanced it did not appear: **448 generations** in one hour, ZERO
+# guard events, median 23 tokens, p90 226, longest 7,046 — the tightest
+# distribution of any model we have measured. Fleet-wide, 618 generations
+# across all three qwen MoEs with not one degenerate turn. Switching to APEX
+# I-Balanced appears to have resolved the fragility in this family.
+#
+# "Appears to" is the honest strength. It is an absence over ~600 generations,
+# not a mechanism, and the sampling mitigations below were live the whole time
+# — so this is quant AND stack, not quant alone. The guards stay armed and the
+# vendor profile stays; if an orbit ever returns, the note comes back with the
+# capture that proves it.
 app:
   host: "0.0.0.0"
   port: 8008

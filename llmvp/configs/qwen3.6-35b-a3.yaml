@@ -1,9 +1,22 @@
-# ── GREENFIELD TIER 3 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
-# Respectable, largely compatible. Completed 8/8 structural goals but the
-# artifact was unplayable by design (can't enter monster rooms + must be in
-# room to attack) and the functional phase was consumed by a plan_interaction
-# ORBIT (turn-level deliberation loop, 132k-token prompts — the family
-# propensity above the token-level guards).
+# ── UNRANKED (2026-07-28). The tier-3 standing this carried was measured on
+# the unsloth build; on APEX I-Balanced this is objectively a different model
+# and its old placement no longer describes it. Re-earn a tier from a panel
+# run on THIS quant.
+#
+# THE DEGENERATION NOTE THAT USED TO LIVE HERE IS GONE, and deliberately.
+# It described a family paragraph-ORBIT — a turn-level deliberation loop above
+# the token-level guards — that shaped this config's whole sampling stack. On
+# APEX I-Balanced it did not appear: 36 generations, ZERO guard events of any
+# kind (long-cycle, run-length, cycle-period), across the 2026-07-28 arm and
+# its rerun. Fleet-wide the same held — 618 generations across all three qwen
+# MoEs, not one degenerate turn. Switching to APEX I-Balanced appears to have
+# resolved the fragility in this family.
+#
+# "Appears to" is the honest strength. It is an absence over ~600 generations,
+# not a mechanism, and the sampling mitigations below were live the whole time
+# — so this is quant AND stack, not quant alone. The guards stay armed and the
+# vendor profile stays; if an orbit ever returns, the note comes back with the
+# capture that proves it.
 app:
   host: "0.0.0.0"
   port: 8008
