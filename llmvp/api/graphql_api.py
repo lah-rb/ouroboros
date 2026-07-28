@@ -502,7 +502,7 @@ class Query:
         # Budget-derived OR engine-cut — see the completion path; a KV-pressure
         # force-window stops below the budget and the derivation misses it.
         truncated = tokens >= max_tokens or (
-            cache.get("end_reason") == "kv_pressure_truncated"
+            cache.get("end_reason") in ("kv_pressure_truncated", "length")
         )
         return CompletionResponse(
             text=text,

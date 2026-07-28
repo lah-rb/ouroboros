@@ -355,6 +355,11 @@ _MIN_ADMIT_BUDGET = 512
 # BELOW max_tokens, so the derived "tokens_generated >= max_tokens" truncation
 # test does not fire for it.
 _END_KV_PRESSURE = "kv_pressure_truncated"
+# End reason for a generation stopped by its own token budget. Distinct from
+# "completed" because the ENGINE's budget can be lower than the caller's
+# max_tokens (admission sizes against free cells), so the caller's
+# `tokens_generated >= max_tokens` test cannot detect this cut either.
+_END_LENGTH = "length"
 # Held back from the pool when sizing admissions: the batch being decoded, the
 # transient cells of a stream mid-join, and ordinary accounting drift. The
 # reactive ladder (_relieve_pressure) remains the backstop — this is a margin,
@@ -873,8 +878,19 @@ class BatchedEngine:
             if text:
                 s.req.out.emit(text)
 
-            if verdict.stop or len(s.completion_tokens) >= s.effective_max:
-                self._retire(s, reason=verdict.end_reason or "completed")
+            hit_cap = len(s.completion_tokens) >= s.effective_max
+            if verdict.stop or hit_cap:
+                # "completed" for both was a real hole. `effective_max` is the
+                # ENGINE's budget, which admission may have sized BELOW the
+                # caller's max_tokens — so a generation cut at the cap looked
+                # identical to one that stopped on EOS, and the API's derived
+                # `tokens_generated >= max_tokens` test could not see it. The
+                # 2026-07-27 replay generated 60,138 of an admitted 60,138 and
+                # reported truncated=False.
+                reason = verdict.end_reason or (
+                    _END_LENGTH if hit_cap and not verdict.stop else "completed"
+                )
+                self._retire(s, reason=reason)
 
     def _relieve_pressure(self, active: List[StreamState]) -> None:
         """KV-pressure ladder: shrink prefill first; if there is nothing

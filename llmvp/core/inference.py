@@ -64,9 +64,15 @@ class CompletionOutcome:
 
     @property
     def truncated_by_engine(self) -> bool:
-        """The response was cut short by the engine rather than by the model
-        or the token budget."""
-        return self.end_reason == "kv_pressure_truncated"
+        """The response was cut short by the engine, not by the model.
+
+        Covers BOTH engine-side cuts, because the caller cannot detect either
+        one from token counts: the engine's budget may be lower than the
+        caller's ``max_tokens`` (admission sizes against free KV cells), so a
+        cut at that budget stops below the caller's number, and a KV-pressure
+        force-window stops below it too.
+        """
+        return self.end_reason in ("kv_pressure_truncated", "length")
 
 
 # Held back from the computed generation budget: the window must still admit

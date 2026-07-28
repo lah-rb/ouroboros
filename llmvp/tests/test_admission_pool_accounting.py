@@ -17,20 +17,30 @@ This makes pressure rare; force-windowing makes it survivable.
 from __future__ import annotations
 
 from inference.batched_engine import (
-    _MIN_ADMIT_BUDGET,
     _POOL_SLACK,
     StreamPhase,
     _AdmitVerdict,
 )
 
-from tests.test_batched_engine import FakeCtx, FakeSampler, _engine_with, _req, _slot
+from tests.test_batched_engine import (
+    EOG,
+    FakeCtx,
+    FakeSampler,
+    _engine_with,
+    _req,
+    _slot,
+)
 
 
 def _eng():
     # The factory is keyed by request_id, so every id a test admits needs one.
     return _engine_with(
         FakeCtx(decode_script=[0]),
-        samplers={k: FakeSampler([1]) for k in ("a", "x", "big", "small")},
+        # Long enough to drive several _step calls; ends on EOG so a
+        # natural stop is reachable as well as a budget cut.
+        samplers={
+            k: FakeSampler([1, 2, 3, 4, EOG]) for k in ("a", "x", "big", "small")
+        },
     )
 
 
@@ -177,3 +187,71 @@ class TestTheQueueMakesProgress:
         req = _req("x", [100], max_tokens=40_000, slot=_seat(3))
         _, verdict = eng._size_against_pool(req, n_ctx=POOL, total=100)
         assert verdict is not _AdmitVerdict.QUEUE
+
+
+class TestACutIsAlwaysAnnounced:
+    """Every way a generation can stop short must reach the caller.
+
+    Found by the 2026-07-27 replay: it generated 60,138 of an admitted 60,138
+    and reported `truncated: False`. The API derives truncation as
+    `tokens_generated >= max_tokens`, but ADMISSION had sized the engine's
+    budget (60,138) below the caller's (60,330) — so the cut landed in the gap
+    and was invisible. Same shape as the force-window hole, introduced by the
+    admission clamp itself.
+    """
+
+    def test_hitting_the_engine_budget_retires_as_length_not_completed(self):
+        """Drives the REAL _step to its cap. An earlier version of this test
+        reimplemented the decision inline and passed against a mutation that
+        removed the fix entirely — proving only that the copy agreed with
+        itself."""
+        from inference.batched_engine import _END_LENGTH
+
+        eng = _eng()
+        req = _req("x", [100], max_tokens=2, slot=_seat(3))
+        req._stream_id = "x"
+        eng._admit(req)
+        for _ in range(4):
+            eng._step()
+        st_reason = req.slot._last_end_reason
+        assert st_reason == _END_LENGTH, (
+            f"a generation cut at its budget must not look like a natural "
+            f"stop — got {st_reason!r}"
+        )
+        assert req.out.done and req.out.error is None, "and it still succeeds"
+
+    def test_a_stream_that_stops_naturally_is_not_marked_length(self):
+        """EOG before the cap — the reason must stay ordinary."""
+        eng = _eng()
+        req = _req("x", [100], max_tokens=50, slot=_seat(3))
+        req._stream_id = "x"
+        eng._admit(req)
+        for _ in range(6):
+            eng._step()
+        assert req.slot._last_end_reason != "length"
+
+    def test_both_engine_cuts_mark_the_outcome_truncated(self):
+        from core.inference import CompletionOutcome
+
+        for reason in ("length", "kv_pressure_truncated"):
+            assert CompletionOutcome(
+                text="x", tokens_generated=1, end_reason=reason
+            ).truncated_by_engine, reason
+
+    def test_an_ordinary_completion_is_not_marked_truncated(self):
+        from core.inference import CompletionOutcome
+
+        for reason in ("", "completed", "final_channel_close"):
+            assert not CompletionOutcome(
+                text="x", tokens_generated=1, end_reason=reason
+            ).truncated_by_engine, reason
+
+    def test_the_engine_budget_can_sit_below_the_callers(self):
+        """The precondition that makes the derived test insufficient — if these
+        were always equal the API's arithmetic would suffice."""
+        eng = _eng()
+        _live(eng, "a", 0, gen_start=0, budget=50_000)
+        req = _req("x", [100], max_tokens=40_000, slot=_seat(3))
+        got, verdict = eng._size_against_pool(req, n_ctx=POOL, total=100)
+        assert verdict is _AdmitVerdict.ADMIT
+        assert got < req.max_tokens

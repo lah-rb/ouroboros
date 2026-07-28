@@ -123,11 +123,29 @@ def main() -> int:
     if not errors and files == 0:
         print("FAIL: completed with zero FILE blocks — nothing usable came back")
         ok = False
-    # A cut MUST be announced; a natural stop needs no flag.
+    # A cut MUST be announced. Comparing tokensGenerated against the REQUESTED
+    # max_tokens is not enough and was the hole in the first version of this
+    # gate: the engine sizes its own budget against free KV cells, so a cut
+    # lands BELOW the number this script asked for and the comparison never
+    # fires. (2026-07-27: 60,138 of an admitted 60,138, truncated=False, and
+    # this gate said PASS.)
+    #
+    # Detect the cut structurally instead: an odd count of fence lines means the
+    # final fenced block never closed, so the response was severed mid-file.
+    fence_lines = sum(1 for ln in text.splitlines() if ln.lstrip().startswith("```"))
+    severed = fence_lines % 2 == 1
+    if not errors and severed and not data.get("truncated"):
+        print(
+            f"FAIL: response ends mid-fence ({fence_lines} fence lines) but "
+            f"truncated is False — a severed response is being reported as "
+            f"complete"
+        )
+        ok = False
     if not errors and data.get("tokensGenerated", 0) >= args.max_tokens:
         if not data.get("truncated"):
-            print("FAIL: hit the budget but truncated is False")
+            print("FAIL: hit the requested budget but truncated is False")
             ok = False
+    print(f"fence lines     : {fence_lines} ({'severed' if severed else 'closed'})")
 
     print("VERDICT:", "PASS — work survived" if ok else "FAIL")
     return 0 if ok else 1
