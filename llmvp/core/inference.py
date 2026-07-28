@@ -55,6 +55,18 @@ class CompletionOutcome:
     # split inference time into prefill vs decode per call. 0 when unavailable.
     prefill_ms: float = 0.0
     decode_ms: float = 0.0
+    # Why generation stopped. "" for an ordinary stop. Set to
+    # "kv_pressure_truncated" when the batched engine force-windowed the stream
+    # to relieve KV pressure — that cut lands BELOW max_tokens, so the derived
+    # "tokens_generated >= max_tokens" truncation test cannot see it, and a
+    # caller checking only that flag would treat a severed response as complete.
+    end_reason: str = ""
+
+    @property
+    def truncated_by_engine(self) -> bool:
+        """The response was cut short by the engine rather than by the model
+        or the token budget."""
+        return self.end_reason == "kv_pressure_truncated"
 
 
 # Held back from the computed generation budget: the window must still admit
@@ -458,6 +470,7 @@ async def run_completion(
             generated_tokens=real_gen,
             cache_hit=bool(getattr(gen_target, "_last_cache_hit", False)),
             flow_key=str(getattr(gen_target, "_last_flow_key", "") or ""),
+            end_reason=str(getattr(gen_target, "_last_end_reason", "") or ""),
             # Prefer the per-stream wall spans (batched seats stash them —
             # concurrency-accurate); fall back to the global tracker's
             # single-generation timing for the pool path.

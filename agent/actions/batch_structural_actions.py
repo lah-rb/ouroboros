@@ -489,6 +489,28 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
     declared_set = set(declared)
     blocks = parse_file_blocks(raw)
 
+    # A TRUNCATED response's last file is very likely severed mid-body, and
+    # CommonMark closes an unterminated fence implicitly at end of input — so
+    # markdown-it hands it back as a perfectly ordinary block and we would write
+    # half a file over a good one. Drop it and let `missing` route it to the
+    # serial create path, which regenerates it in full.
+    #
+    # Only when the fence really is unterminated: a truncation that happened to
+    # land after a closing fence has a complete last file, and discarding it
+    # would cost a regeneration for nothing. An odd count of fence lines means
+    # the final one never closed.
+    if truncated and blocks:
+        fence_lines = sum(1 for ln in raw.splitlines() if ln.lstrip().startswith("```"))
+        if fence_lines % 2 == 1:
+            severed_path, _ = blocks[-1]
+            blocks = blocks[:-1]
+            logger.warning(
+                "Batch slice: dropping trailing block %r — response was "
+                "truncated with an unterminated fence, so its body is "
+                "incomplete. It stays MISSING for the serial create path.",
+                severed_path,
+            )
+
     written: list[str] = []
     extra: list[str] = []
     for path, content in blocks:

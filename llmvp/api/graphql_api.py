@@ -499,7 +499,11 @@ class Query:
             grammar=request.grammar,
             reasoning=request.reasoning,
         )
-        truncated = tokens >= max_tokens
+        # Budget-derived OR engine-cut — see the completion path; a KV-pressure
+        # force-window stops below the budget and the derivation misses it.
+        truncated = tokens >= max_tokens or (
+            cache.get("end_reason") == "kv_pressure_truncated"
+        )
         return CompletionResponse(
             text=text,
             tokens_generated=tokens,
@@ -562,7 +566,13 @@ class Query:
             text=outcome.text,
             tokens_generated=outcome.tokens_generated,
             finished=True,
-            truncated=outcome.tokens_generated >= effective_max,
+            # Budget-derived OR engine-cut. The derivation alone cannot see a
+            # KV-pressure force-window, which stops BELOW the budget — without
+            # the second term a severed response reads as complete.
+            truncated=(
+                outcome.tokens_generated >= effective_max
+                or outcome.truncated_by_engine
+            ),
             prompt_tokens=outcome.prompt_tokens,
             cached_prefix_tokens=outcome.cached_prefix_tokens,
             fresh_prefill_tokens=outcome.fresh_prefill_tokens,
