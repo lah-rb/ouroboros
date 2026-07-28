@@ -1,0 +1,130 @@
+# Laguna-S-2.1 Uncensored, SC117 APEX "I-Balanced" GGUF — the recipe arm.
+#
+# WHY THIS EXISTS. The three qwen models that improved markedly on 2026-07-28
+# are all APEX **I-Balanced** (mudler). Our laguna is APEX **i-quality**. That
+# is the one recipe axis we have never varied on this model, so it is worth a
+# run — but read the headers before believing the analogy.
+#
+# THE ANALOGY IS WEAKER THAN IT LOOKS. The qwen configs moved unsloth ->
+# I-Balanced. This config moves i-quality -> I-Balanced. Different baseline: the
+# qwen jump replaced a 3-bit-ish expert bank, whereas i-quality is already a
+# good build. What actually changes here (headers read 2026-07-28):
+#
+#   build            file      dense+attn          experts          read/tok  bpw
+#   APEX i-quality   68.9 GiB  3.30 Q6_K           33.5 IQ4_XS      5.86 GiB  5.031
+#                                                  16.6 Q6_K
+#                                                  15.5 Q5_K
+#   APEX I-Balanced  79.4 GiB  3.98 Q6_K+BF16      58.8 Q5_K        6.92 GiB  5.800
+#                                                  16.6 Q6_K
+#
+#   read/tok = dense+attn+router + experts * 10/256   (expert_used_count=10 of 256)
+#
+# I-Balanced DELETES THE IQ4_XS EXPERT TIER — the lowest-precision third of the
+# bank, and where quant damage concentrates — promoting it to Q5_K, and puts
+# 1.15 GiB of BF16 in the always-read dense path. That is +0.77 bpw of real
+# quality.
+#
+# IT ALSO COSTS SPEED, and this is the part the qwen result does NOT predict:
+# the hot path grows 5.86 -> 6.92 GiB/token, +18%. On a memory-bound Metal
+# decode that is roughly linear, so expect ~25 tok/s where i-quality gave ~30.
+# "Balanced" here is NOT the small-hot-path recipe it was for the qwens. Judge
+# this arm on artifact quality and on whether the paragraph-orbit degeneration
+# (poolside hit one on 2026-07-28, retired at 4,096 tokens by the long-cycle
+# guard) survives the higher-precision experts — NOT on throughput.
+#
+# CONFOUND, ACKNOWLEDGED. Only the *Uncensored* finetune has the balanced
+# recipe applied so far, so this arm varies TWO things: recipe and finetune. A
+# clean read needs a base-model I-Balanced build if one appears. Any behavioural
+# difference in refusal, tone, or instruction-following belongs to the finetune,
+# not the quant.
+#
+# KV GEOMETRY (headers: 48 layers, 8 kv-heads, 128 head-dim -> 192 KiB/token,
+# identical to i-quality — only the weights differ):
+#
+#   n_ctx    KV GiB   total GiB   verdict
+#    65536    12.0       91.4     <- THIS CONFIG (matches the i-quality arm)
+#    98304    18.0       97.4     OK
+#   131072    24.0      103.4     OK, but declare kv_preflight_gb with it
+#
+# The poolside config that boots and runs stable totals 108.9 GB, so even 131072
+# is inside proven-good territory. n_ctx stays at 65536 anyway: this arm's job
+# is the RECIPE, and the 2026-07-28 laguna runs logged no truncation events, so
+# a bigger window would buy nothing measurable while costing the comparison.
+
+app:
+  host: 0.0.0.0
+  port: 8008
+  log_level: info
+  cors_origins:
+  - '*'
+  backend_timeout: 180
+  openai_shim: true
+graphql:
+  max_query_depth: 10
+  max_tokens: 65536   # must not bind before generation.max_tokens_default
+  max_aliases: 50
+  introspection_enabled: true
+model:
+  name: Laguna-S-2.1-APEX-Balanced
+  family: laguna
+  path: /Users/lah-rb/.lmstudio/models/SC117/Laguna-S-2.1-Uncensored-APEX-GGUF/Laguna-S-2.1-Uncensored-APEX-I-Balanced.gguf
+  # n_ctx matched to laguna-s-2.1-apex.yaml (and thus poolside) so the RECIPE
+  # is the only variable this config changes. Headers: 79.4GB weights + 12.0GB
+  # KV = 91.4GB against the 113GB wired limit. That is 4.6GB more than the
+  # i-quality config at the same n_ctx, and still 17GB inside the poolside
+  # config that boots clean.
+  n_ctx: 65536
+  # Guard set above the computed total, not shaved to fit.
+  kv_preflight_gb: 96
+  model_max_context: 1048576
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: false
+  swa_full: true
+  kv_unified: true
+  flow_kv_cache: false
+  session_full_replay: true
+  resident_seq_cache: true
+  context_refresh_drain_s: 300
+prompt:
+  persona_file: ./knowledge/SOUL.md
+generation:
+  # Equal to n_ctx: the window is the only limit. See the poolside config for
+  # why an artificial cap was cutting legitimate multi-file work.
+  max_tokens_default: 65536
+  temperature_default: 1.0
+  top_p: 1.0
+  top_k: 20              # vendor generation_config.json; NOT 0
+  min_p: 0.0
+  presence_penalty: 0.0
+  repeat_penalty: 1.0    # penalties truncate code output — sweep arm B
+  # Both bans carried over from poolside unchanged, since they are properties of
+  # the MODEL and our prompt format, not of the quant:
+  #   25 = <tool_call>, emitted unprompted in 20-40% of turns; we do not support
+  #        per-model tool protocols.
+  #   19 = </think>, banned ONLY because thinking is off here — the close-only
+  #        prefill ends the prompt with a bare </think> and laguna reproduces it
+  #        as a separator. Do NOT carry this to a thinking:true variant.
+  logit_bias: {25: -100.0, 19: -100.0}
+  session_temp_floor: 0.35
+  streaming_default: true
+knowledge:
+  # Keyed per config file, so it regenerates on first boot.
+  # Its OWN cache, not the i-quality config's: a shared tokens_bin would have
+  # the two arms invalidating each other's static buffer on every swap, and the
+  # uncensored finetune is not guaranteed to carry an identical vocab.
+  tokens_bin: ./data/laguna-s-2.1-apex-balanced.tokens.bin
+  token_limit: 32768
+resources:
+  decode_mode: batched
+  cpu_threads: 15
+  jit_concurrency_limit: null
+tools:
+  enabled: false
+  max_iterations: 3
+logging:
+  enabled: true
+  directory: ./logs
