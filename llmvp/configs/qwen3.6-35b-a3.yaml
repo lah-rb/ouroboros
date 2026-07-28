@@ -23,7 +23,7 @@ graphql:
 model:
   name: "qwen3.6-35b-a3"
   family: "chatml"
-  path: /Users/lah-rb/.lmstudio/models/noctrex/Qwen3.6-35B-A3B-MXFP4_MOE-GGUF/Qwen3.6-35B-A3B-MXFP4_MOE_BF16.gguf
+  path: /Users/lah-rb/.lmstudio/models/mudler/Qwen3.6-35B-A3B-APEX-GGUF/Qwen3.6-35B-A3B-APEX-I-Balanced.gguf
   n_ctx: 262144
   n_gpu_layers: -1
   seed: -1

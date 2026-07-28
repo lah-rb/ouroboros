@@ -19,8 +19,15 @@ graphql:
 model:
   name: "qwen3.5-122b-a10"
   family: "chatml"
-  path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.5-122B-A10B-GGUF/Qwen3.5-122B-A10B-Q6_K-00001-of-00004.gguf
-  n_ctx: 262144
+  path: /Users/lah-rb/.lmstudio/models/mudler/Qwen3.5-122B-A10B-APEX-GGUF/Qwen3.5-122B-A10B-APEX-I-Balanced.gguf
+  # 131072, not the trained 262144: at 262144 this computes to 107.5 GiB
+  # (83.5 weights + 24.0 KV at 96 KiB/token) and the 100 GiB preflight refuses
+  # the load — so 262144 was a config that could not serve. 131072 lands at
+  # 95.5 GiB. Nothing is given up: the 2026-07-28 arm ran the whole hour here
+  # with a largest generation of 12,570 tokens and zero truncation events, so
+  # the bigger window would not have bound. Raising it again means declaring
+  # kv_preflight_gb with it (poolside proves ~109 GiB is stable on this box).
+  n_ctx: 131072
   n_gpu_layers: -1   
   seed: -1
   verbose: false
