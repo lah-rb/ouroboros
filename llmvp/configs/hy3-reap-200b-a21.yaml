@@ -1,4 +1,5 @@
 # Hunyuan-3 REAP 200B-A21B (OpenMOSE IQ4_XS) — the largest model attempted here.
+# A REAP prune of Tencent's Hy3 295B-A21B: expert count cut, active params kept.
 #
 # ⚠️ THIS CONFIG CANNOT BOOT AS WRITTEN, AND THAT IS THE POINT OF WRITING IT.
 # The preflight will refuse it, loudly, before touching Metal. The arithmetic
@@ -111,13 +112,15 @@ prompt:
 
 generation:
   max_tokens_default: 16384
-  # From formats/hunyuan3.yaml, and NOT vendor guidance — the GGUF carries no
-  # sampling recommendations. Replace with Tencent's model-card values before
-  # any comparative run: a REAP-pruned MoE at IQ4 is precisely where sampling
-  # defaults stop being cosmetic.
-  temperature_default: 0.7
-  top_p: 0.8
-  top_k: 20
+  # Tencent's own (model card, 2026-07-28): temperature 0.9, top_p 1.0. Well
+  # outside this fleet's usual 0.6-0.7 / 0.8-0.95 band — top_p 1.0 leaves the
+  # distribution untruncated at a high temperature. Deliberately NOT normalised
+  # toward the house style; on a REAP-pruned MoE the vendor's operating point is
+  # the only calibrated reference available. top_k 0 = disabled, because the
+  # card specifies none and 20 would truncate what 1.0 keeps.
+  temperature_default: 0.9
+  top_p: 1.0
+  top_k: 0
   min_p: 0.0
   # Both guards armed (null => enabled). Non-negotiable for a first run on a
   # pruned MoE — REAP's documented failure mode is agent decay, and the

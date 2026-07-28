@@ -1,7 +1,9 @@
 # Hunyuan-3 format schema — Tencent Hunyuan v3 (`hy_v3` arch)
 #
-# Read out of Hy3-REAP-200B-GGUF-IQ4_XS (2026-07-28). Every value here comes
-# from the model's own chat template, NOT from a family it resembles.
+# Read out of Hy3-REAP-200B-GGUF-IQ4_XS (2026-07-28) — a REAP prune of Tencent's
+# Hy3 295B-A21B down to ~200B total, active params unchanged. Every structural
+# value here comes from the model's own chat template, NOT from a lookalike;
+# sampling comes from Tencent's model card.
 #
 #     <｜hy_begin_of_sentence:opensource｜>{system}
 #     <｜hy_User:opensource｜>{user}
@@ -145,15 +147,20 @@ traits:
   supports_developer_role: false
 
 generation:
-  # NOT from Tencent. The GGUF carries architecture and template but NO
-  # sampling recommendations, and the model card was not consulted — these are
-  # the conservative MoE defaults this repo uses elsewhere, marked so nobody
-  # later reads them as vendor guidance. Replace with the card's values before
-  # any comparative run; a quantised REAP-pruned MoE is exactly the case where
-  # sampling defaults are load-bearing.
-  temperature: 0.7
-  top_p: 0.8
-  top_k: 20
+  # TENCENT'S OWN, from the Hy3 model card (huggingface.co/tencent/Hy3, read
+  # 2026-07-28): "Recommended parameters: temperature=0.9, top_p=1.0".
+  #
+  # Note how UNUSUAL that is for this fleet — everything else here runs 0.6-0.7
+  # with top_p 0.8-0.95. top_p 1.0 means no nucleus truncation at all, so the
+  # full distribution is live at a high temperature. Do not "fix" it toward the
+  # house style: on a REAP-pruned MoE the expert routing is already perturbed,
+  # and the vendor's operating point is the only calibrated reference we have.
+  temperature: 0.9
+  top_p: 1.0
+  # The card specifies NOTHING for these. Left at neutral rather than guessed —
+  # top_k 20 (the qwen house value) would silently truncate a distribution the
+  # vendor explicitly leaves whole.
+  top_k: 0
   min_p: 0.0
   repeat_penalty: 1.0
 
