@@ -473,3 +473,54 @@ batch. Consistent with the ladder's cliff rather than contradicting it.
 A genuinely uncapped test requires raising a safety guard, which is a decision
 worth making deliberately rather than overnight. If taken, raise it for the
 laguna arm only and keep the qwen protection intact.
+
+## The 49,152 ceiling is what kills the batch turn — on BOTH quants
+
+Poolside's overnight arm reached **49,639 tokens** on `build_structure` and was
+cancelled:
+
+    Health watchdog: runaway generation — 49639 tokens exceeds ceiling 49152
+    Inference cancelled by health watchdog (stalled or runaway)
+    Flow 'build_structure': step 'report_failed'
+
+Not KV pressure. Not the degeneration detectors. The agent-side
+`COMPLETION_RUNAWAY_TOKEN_CEILING` (`agent/effects/inference.py:257`) — the same
+guard that ended the APEX max-context arm at `design_initial`.
+
+### This unifies every batch failure we have seen
+
+| run | mode | batch outcome | at |
+|---|---|---|---|
+| APEX arm 1 | non-think | evicted (KV pool) | 48,318 tok |
+| APEX arm 2 | think | ceiling cancel at `design_initial` | 49,152 |
+| APEX 2h fixed | non-think | `cycle period 5 x 12` | ~18k |
+| poolside overnight | non-think | **ceiling cancel** | 49,639 |
+| poolside v2 | non-think | SUCCEEDED, 11 files | ~15k |
+
+The eleven-file batch turn routinely wants 45–50k+ tokens on laguna, and 49,152
+is where the agent stops it. APEX arm 1's eviction at 48,318 was the SAME wall
+approached from the other side — the KV pool gave out ~800 tokens before the
+ceiling would have.
+
+### Two corrections to what I claimed earlier
+
+**"Poolside sits entirely in class 1 (benign long artifacts)."** Wrong. Poolside
+reached 49,639 tokens tonight against a previously observed maximum of 15,146.
+Its v2 run succeeded on the same prompt at ~15k. Same model, same prompt, same
+harness: 15k one night, 49k+ the next. Poolside has the same heavy tail as APEX
+— we had only ever seen a good draw.
+
+**"APEX is the quant that enters class 2."** Also too strong. The distinguishing
+factor is the DRAW, not the quant.
+
+### Why this makes decomposition the fix, not a bigger ceiling
+
+The CoT ladder measured one complete module converging at ~11.3k tokens, twice,
+within 1.4% of each other. Eleven files as a single turn do not converge at 49k
+or 60k. Raising the ceiling buys attempts at a turn that has never once
+converged when it ran long; decomposing the ask targets the thing the ladder
+shows the model can actually do.
+
+The ceiling is also doing real work — it bounds the Qwen3-Next repetition bug
+that otherwise runs to 262k — so raising it globally trades a known protection
+for a turn that should not exist in this shape.
