@@ -53,8 +53,19 @@ class FormatRenderer:
     def _message_frame(self, role: str, *, channel: str | None = None) -> tuple:
         """Return (pre_segments, post_segments) — the framing around a role's
         message content. All framing segments are is_framing=True."""
+        # PRESENCE of the role entry is the signal, not whether its values are
+        # truthy. A family may legitimately frame a role with NOTHING: Hunyuan-3
+        # emits the system prompt bare after BOS, and turns are delimited by the
+        # NEXT role's opener rather than by any closer.
+        #
+        # The old check (`rt.msg_open or rt.msg_close`) fell through to the
+        # generic pattern for such a role, which does not degrade gracefully —
+        # it SYNTHESISES a token. For hunyuan3 that produced
+        # `<｜hy_system:opensource｜>`, a string the tokenizer has never seen,
+        # framing the entire static prefix in garbage. Silence is a valid frame;
+        # an invented special token is not.
         rt = self.s.role_tokens.get(role)
-        if rt and (rt.msg_open or rt.msg_close):
+        if rt is not None:
             pre = rt.msg_open + (rt.msg_content or "")
             pre_segs = [(pre, True)] if pre else []
             post_segs = [(rt.msg_close, True)] if rt.msg_close else []

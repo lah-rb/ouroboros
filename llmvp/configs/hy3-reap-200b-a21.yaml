@@ -1,0 +1,139 @@
+# Hunyuan-3 REAP 200B-A21B (OpenMOSE IQ4_XS) — the largest model attempted here.
+#
+# ⚠️ THIS CONFIG CANNOT BOOT AS WRITTEN, AND THAT IS THE POINT OF WRITING IT.
+# The preflight will refuse it, loudly, before touching Metal. The arithmetic
+# below is the deliverable; leaving it undiscovered until a 108 GB load wedged
+# the machine would not be.
+#
+# ── WHY IT DOES NOT FIT ──────────────────────────────────────────────
+#
+#   weights   108.3 GB   (100.8 GiB across 6 shards, IQ4_XS, avg 4.289 bpw)
+#   wired cap 116.0 GB   (iogpu.wired_limit_mb=116000 of 137.4 GB physical)
+#   ---------------------------------------------------------------
+#   left for KV                7.7 GB
+#
+# And the KV is the most expensive we have measured: 81 layers x 8 kv-heads x
+# 128 head-dim = 324 KiB/token at f16. For scale — laguna is 192, qwen3.5-122b
+# is 96. So 7.7 GB buys ~23,200 tokens, and that is the WHOLE window:
+#
+#   KV type   KiB/tok   max n_ctx in 7.7 GB
+#   f16           324            23,208
+#   q8_0          172            43,707     <- needs type_k/type_v wired
+#   q4_0           91            82,592     <- needs type_k/type_v wired
+#
+# 23k tokens does not fit the workload. The batch structural turn alone is a
+# ~5k prompt plus a 13,000-18,000 token generation (measured on laguna and
+# qwen), the static prefix is ~1.8k, and under decode_mode: batched n_ctx
+# budgets the SUM of live streams. One turn would consume the context.
+#
+# There is a second ceiling behind the first: 108.3 GB of wired weights plus KV
+# plus the server's own ~10 GB anon footprint sits near 137.4 GB of PHYSICAL
+# memory. Even if the wired cap were raised, the machine has no room to be a
+# machine.
+#
+# ── WHAT WOULD MAKE IT RUNNABLE, IN ORDER OF SENSE ───────────────────
+# 1. WIRE type_k/type_v. llama-cpp-python exposes both and ModelConfig does not
+#    pass them. q4_0 KV turns 324 KiB/token into 91 and is a general win —
+#    every large-context config on this box pays the f16 KV price today. This
+#    is a small, self-contained change that benefits the whole fleet, and it is
+#    the prerequisite for this model rather than a workaround for it.
+#    Even then: 82k theoretical KV tokens, but only ~7.7 GB of room, so the
+#    real ceiling stays memory, not cells.
+# 2. A SMALLER QUANT. IQ3 would land near 82 GB and leave ~34 GB for KV. But
+#    this is already a REAP-pruned model — 128 experts cut to 8 active from a
+#    200B base — and stacking aggressive quantisation on aggressive pruning is
+#    lossy-on-lossy. If the point is to test whether code_core's design
+#    protects against REAP decay, confounding it with IQ3 damage defeats it.
+# 3. RAISING iogpu.wired_limit_mb. Not recommended at this size: it trades OS
+#    headroom for a model that still would not have working context.
+#
+# ── WHY IT IS STILL WORTH HAVING ─────────────────────────────────────
+# Luke's thesis is that code_core's design principles — deterministic gates,
+# live PTY testing, per-file acceptance checks — should protect against the
+# agent decay REAP models are known for. That is a good experiment and this is
+# the right model for it. It just needs KV quantisation to land first, or a
+# quant that leaves room to think in.
+#
+# ── FAMILY ───────────────────────────────────────────────────────────
+# formats/hunyuan3.yaml, written from this GGUF's own template. Note the
+# full-width U+FF5C pipes and the `:opensource` suffix on every special token —
+# `<think:opensource>`, not `<think>`. Reasoning is a system-prompt dial
+# (no_think/low/high), not a prefill mechanic.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 16384
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "hy3-reap-200b-a21"
+  family: "hunyuan3"
+  path: /Users/lah-rb/.lmstudio/models/OpenMOSE/Hy3-REAP-200B-21B-GGUF/Hy3-REAP-200B-GGUF-IQ4_XS-00001-of-00006.gguf
+  # 16384, which is NOT a working context for this agent — it is the largest
+  # value that leaves any margin at all (108.3 + 5.4 = 113.7 GB). Chosen so the
+  # first boot attempt fails on the preflight's terms rather than the kernel's.
+  n_ctx: 16384
+  # Trained range is 262144. Recorded because it is the model's real capability
+  # and the gap to n_ctx is the whole story here.
+  model_max_context: 262144
+  # DELIBERATELY BELOW the computed total. The preflight is supposed to refuse
+  # this load, and a budget set high enough to admit it would be defeating the
+  # one guard standing between a 108 GB allocation and a hard reboot.
+  kv_preflight_gb: 110
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: false
+  # thinking_mode is UNSET, deliberately. Our vocabulary (high/low/medium/none)
+  # does not map onto Tencent's (no_think/low/high) — see the OPEN GAP note in
+  # formats/hunyuan3.yaml. Unset makes the renderer fall back to the family's
+  # reasoning_default, which is the literal `no_think` the template expects.
+  # Setting it to `none` here would render `reasoning_effort:none`, which the
+  # model's own template raises on.
+  swa_full: false          # dense attention, 81 layers — no SWA to make full
+  kv_unified: false
+  session_full_replay: true
+  resident_seq_cache: false
+
+prompt:
+  system_prompt: "You are a helpful assistant."
+
+generation:
+  max_tokens_default: 16384
+  # From formats/hunyuan3.yaml, and NOT vendor guidance — the GGUF carries no
+  # sampling recommendations. Replace with Tencent's model-card values before
+  # any comparative run: a REAP-pruned MoE at IQ4 is precisely where sampling
+  # defaults stop being cosmetic.
+  temperature_default: 0.7
+  top_p: 0.8
+  top_k: 20
+  min_p: 0.0
+  # Both guards armed (null => enabled). Non-negotiable for a first run on a
+  # pruned MoE — REAP's documented failure mode is agent decay, and the
+  # long-cycle guard is what catches a paragraph-scale orbit at ~2k tokens with
+  # the specimen dumped instead of at 49k with nothing.
+  repetition_guard_enabled: null
+  long_cycle_guard_enabled: null
+
+knowledge:
+  tokens_bin: ./data/hy3-reap-200b-a21.tokens.bin
+  token_limit: 8192
+
+resources:
+  decode_mode: pool
+  cpu_threads: 16
+
+logging:
+  enabled: true
+  directory: ./logs

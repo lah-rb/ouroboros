@@ -1,0 +1,162 @@
+# Hunyuan-3 format schema — Tencent Hunyuan v3 (`hy_v3` arch)
+#
+# Read out of Hy3-REAP-200B-GGUF-IQ4_XS (2026-07-28). Every value here comes
+# from the model's own chat template, NOT from a family it resembles.
+#
+#     <｜hy_begin_of_sentence:opensource｜>{system}
+#     <｜hy_User:opensource｜>{user}
+#     <｜hy_Assistant:opensource｜><think:opensource>…</think:opensource>{answer}<｜hy_eos:opensource｜>
+#
+# ── THREE THINGS THAT WILL BITE ──────────────────────────────────────
+#
+# 1. THE PIPES ARE FULL-WIDTH. `｜` is U+FF5C, not ASCII `|`, and the sentence
+#    delimiters are U+FF5C too. A hand-typed `<|hy_User|>` is a DIFFERENT
+#    STRING that tokenizes to garbage and silently produces an unframed turn.
+#    Same class of trap as laguna's U+3008/3009 CJK brackets. Copy, never type.
+#
+# 2. EVERY SPECIAL TOKEN CARRIES A `:opensource` SUFFIX. The template builds
+#    them as `'<｜hy_User{}｜>'.format(HYTK)` with `HYTK = ':opensource'` — a
+#    build-variant marker baked into the token text. So the think tags are
+#    `<think:opensource>`, not `<think>`. Anything matching a bare `<think>`
+#    will not fire. This is why the family cannot be a chatml/laguna alias
+#    despite the shape looking identical.
+#
+# 3. REASONING EFFORT IS A SYSTEM-PROMPT SUFFIX, NOT A PREFILL. The template
+#    appends `<｜reasoning_mode:opensource｜>reasoning_effort:<level>` to the
+#    SYSTEM prompt, with levels no_think / low / high — and raises on anything
+#    else. That is Tencent's own dial and it is a third suppression mechanic
+#    beyond the three already catalogued (step-3.7 omits the opener, gemma-4
+#    pre-supplies an empty closed block, laguna prefills close-only). Hunyuan
+#    instead ASKS, in the system block, and lets the model decide.
+#    Template default when unset: `no_think`.
+#
+# ── STATUS: UNVALIDATED, AND UNRUNNABLE ON THIS BOX ──────────────────
+# Nothing here has been rendered against the live model, because the IQ4_XS
+# weights are 108.3 GB against a 116 GB wired limit — 7.7 GB left for a KV
+# cache that costs 324 KiB/token (81 layers x 8 kv-heads x 128 dim), the
+# largest geometry we have measured. See configs/hy3-reap-200b-a21.yaml for the
+# arithmetic. Treat every value below as READ, not OBSERVED — the tekken family
+# shipped with `thinking: true` lying for weeks because nobody rendered it.
+
+family: hunyuan3
+display_name: "Hunyuan 3 (Tencent)"
+
+tokens:
+  # Turn framing is a single leading token per role with no closer — the next
+  # role token is the delimiter. Assistant turns end on EOS.
+  #
+  # These two spell the GENERIC pattern `<｜hy_<Role>:opensource｜>`; every real
+  # role overrides them in role_tokens below with the exact capitalisation the
+  # tokenizer expects (hy_User, hy_Assistant — NOT hy_user). They are non-empty
+  # because the schema contract requires it, and stating the true pattern is
+  # better than a placeholder that would mask a missing role override.
+  msg_open: "<｜hy_"
+  msg_content: ":opensource｜>"
+  msg_close: ""
+  gen_stop: "<｜hy_eos:opensource｜>"
+  history_close: "<｜hy_eos:opensource｜>"
+  # tokenizer.ggml.add_bos_token — the template emits bos_token itself, so the
+  # renderer must not also supply one. See the tekken BOS note in schema.py for
+  # what a duplicate costs.
+  bos: ""
+
+# ⚠️ CAPITALISATION IS LOAD-BEARING. render_generation_prompt rebuilds the
+# assistant opener as `tokens.msg_open + roles["assistant"] + tokens.msg_content`
+# — it does NOT read role_tokens for that path. So these must be the exact
+# strings inside the real tokens (hy_User, hy_Assistant), not lowercase role
+# names. Rendering with "assistant" here produced
+# `<｜hy_assistant:opensource｜>`, a token that does not exist, and the model
+# would have seen an unframed turn.
+roles:
+  system: "system"
+  user: "User"
+  assistant: "Assistant"
+
+role_tokens:
+  # The system prompt is emitted BARE, straight after BOS — it is simply the
+  # first text in the sequence, with no role token of its own.
+  #
+  # All three empty is the POINT: this role has no framing. The renderer keys
+  # on the presence of this entry, not on its values — an earlier version fell
+  # through to the generic pattern here and synthesised
+  # `<｜hy_system:opensource｜>`, a token the tokenizer has never seen, wrapping
+  # the whole static prefix in garbage.
+  system:
+    msg_open: ""
+    msg_content: ""
+    msg_close: ""
+  user:
+    msg_open: "<｜hy_User:opensource｜>"
+    msg_content: ""
+    msg_close: ""
+  assistant:
+    msg_open: "<｜hy_Assistant:opensource｜>"
+    msg_content: ""
+    msg_close: "<｜hy_eos:opensource｜>"
+
+thinking:
+  style: inline_tags
+  open_tag: "<think:opensource>"
+  close_tag: "</think:opensource>"
+  # Suppression is NOT structural here — no prefilled close, no omitted opener.
+  # It is the reasoning_effort:no_think line in the system block (see note 3),
+  # which is why both prefill flags are false: setting either would fight the
+  # template's own mechanic.
+  prefill_closed_when_disabled: false
+  prefill_closed_close_only: false
+  # Left EMPTY deliberately. step-3.7's gate was only correct because a probe
+  # established that thinking is prefill-gated on that model; whether Hunyuan
+  # honours reasoning_effort as a hard gate or a hint is UNMEASURED. Do not
+  # copy the mechanic across families on the assumption it transfers.
+  gate_levels: []
+
+system_block:
+  identity: "You are a helpful assistant."
+  # Tencent's dial, appended to the system prompt by the template. Levels are
+  # exactly no_think | low | high — the template RAISES on anything else, so a
+  # typo here is a hard failure at render rather than a silent downgrade.
+  reasoning_default: "no_think"
+  reasoning_prefix: "<｜reasoning_mode:opensource｜>reasoning_effort:"
+  channel_directive: ""
+  template: "{identity}\n{persona}"
+
+# The canonical router speaks low/medium/high; Hunyuan's template accepts ONLY
+# no_think | low | high and RAISES on anything else. That is exactly what this
+# map is for — routing `medium` without it would emit `reasoning_effort:medium`
+# and hard-fail at render.
+#
+# medium collapses onto `low` rather than `high`: Hunyuan is effectively
+# trimodal-with-a-gap, and the conservative reading of a middle level is the
+# cheaper side. UNMEASURED — revisit once the model runs.
+#
+# LENGTH INVARIANT (see ReasoningSpec): the mid-session head splice needs the
+# rendered levels to tokenize to the SAME length, and `no_think`/`low`/`high`
+# plainly do not. The splice verifies per call and refuses a mismatch, so this
+# degrades to "no mid-session swap" rather than corruption — but per-turn
+# reasoning routing will NOT work on this family until the off-state is padded.
+reasoning:
+  levels:
+    low: "low"
+    medium: "low"
+    high: "high"
+
+traits:
+  fold_system_into_first_user: false
+  supports_developer_role: false
+
+generation:
+  # NOT from Tencent. The GGUF carries architecture and template but NO
+  # sampling recommendations, and the model card was not consulted — these are
+  # the conservative MoE defaults this repo uses elsewhere, marked so nobody
+  # later reads them as vendor guidance. Replace with the card's values before
+  # any comparative run; a quantised REAP-pruned MoE is exactly the case where
+  # sampling defaults are load-bearing.
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+turn_transition:
+  needs_close: true
+  after_generation: "<｜hy_eos:opensource｜>"

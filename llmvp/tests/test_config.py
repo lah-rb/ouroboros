@@ -167,16 +167,33 @@ def test_format_schema_loading():
         assert schema.family == family
         assert schema.tokens.msg_open
         assert schema.tokens.gen_stop
-        # Every role must have SOME close token — either the generic one or a
-        # per-role override. Laguna (2026-07-26) is the first family that is
-        # fully per-role (<user>...</user>), so requiring a generic msg_close
-        # would have forced a fake value into its spec that could leak into
-        # rendered output. The real invariant is "no role closes with nothing".
+        # THE REAL INVARIANT IS THAT TURNS ARE UNAMBIGUOUSLY DELIMITED, and
+        # there are two ways to achieve it. Laguna (2026-07-26) closes every
+        # role explicitly (<user>...</user>). Hunyuan-3 (2026-07-28) does not
+        # close user or system turns AT ALL — its template emits
+        # `user_token + content` and lets the NEXT role's opener delimit, so
+        # the sequence is unambiguous without a closer anywhere but the
+        # assistant turn, which ends on EOS.
+        #
+        # This was originally "no role closes with nothing", which the laguna
+        # comment already justified relaxing once: forcing a generic msg_close
+        # would push a fake value into a spec where it could leak into rendered
+        # output. Hunyuan is the same argument one step further — inventing a
+        # user-turn closer would inject a token the model never saw in
+        # training. So the assertion follows the property instead of the shape.
+        opener_delimited = all(
+            (schema.role_tokens.get(r) or schema.tokens).msg_open
+            for r in schema.roles
+            if r != "system"  # hunyuan emits the system prompt bare after BOS
+        )
         for role in schema.roles:
             rt = schema.role_tokens.get(role)
-            assert schema.tokens.msg_close or (
-                rt and rt.msg_close
-            ), f"{family}/{role} has no close token, generic or per-role"
+            closed = schema.tokens.msg_close or (rt and rt.msg_close)
+            assert closed or opener_delimited, (
+                f"{family}/{role} has no close token and the family does not "
+                f"delimit turns by the next role's opener either — a rendered "
+                f"conversation would run its turns together"
+            )
 
 
 def test_format_renderer_harmony():
