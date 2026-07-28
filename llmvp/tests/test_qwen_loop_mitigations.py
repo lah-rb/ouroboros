@@ -59,23 +59,41 @@ def test_generate_kwargs_dry_defaults_fill_in():
 # ── qwen configs actually carry the posture ────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "qwen3-next-coder-80b-a3",
-        "qwen3.5-122b-a10",
-        "qwen3.6-35b-a3",
-        "qwen3.6-27b",
-        "qwen3-next-coder-80b-a3-jit",
-    ],
-)
-def test_qwen_configs_carry_loop_posture(name):
-    import yaml
+def _qwen_config_paths() -> "list[Path]":
+    """Every qwen config on disk, DISCOVERED rather than enumerated.
+
+    The hardcoded list broke the suite when an experimental config was retired
+    (qwen3-next-coder-80b-a3-jit, 2026-07-27: an old JIT mechanism no longer
+    relevant). A test whose job is "the posture is present wherever it should
+    be" should not also assert which experiments exist — retiring a config is
+    a normal act, and making it a test failure taxes exactly the kind of
+    cheap experimentation the configs directory is for.
+
+    Discovery also fixes the inverse bug the list had: a NEW qwen config was
+    silently unchecked until someone remembered to add it here.
+    """
     from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "configs"
+    return sorted(p for p in root.glob("qwen*.yaml") if p.is_file())
+
+
+def _qwen_ids() -> "list[str]":
+    return [p.stem for p in _qwen_config_paths()]
+
+
+def test_there_are_qwen_configs_to_check():
+    """Guard the guard: a glob that matches nothing would make every posture
+    assertion below vacuously pass."""
+    assert _qwen_config_paths(), "no qwen configs found — the glob is wrong"
+
+
+@pytest.mark.parametrize("path", _qwen_config_paths(), ids=_qwen_ids())
+def test_qwen_configs_carry_loop_posture(path):
+    import yaml
 
     from core.config import Config
 
-    path = Path(__file__).resolve().parents[1] / "configs" / f"{name}.yaml"
     cfg = Config.model_validate(yaml.safe_load(path.read_text()))
     gen = cfg.generation
     # DRY removed 2026-07-22 (isolation test): it converted the catchable
