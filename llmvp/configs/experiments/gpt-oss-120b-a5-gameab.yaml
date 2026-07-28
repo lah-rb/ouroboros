@@ -1,0 +1,16 @@
+# GAME-AB config (BATCHED): gpt-oss-120b-a5 for the greenfield-mission
+# reasoning A/B spike — TWO missions run in PARALLEL (arm A adaptive, arm B
+# baseline), each pinning a session seat, with a spare seat for stateless
+# completions. Single default persona; reasoning_head_swap drives the router
+# (turn-0 install + mid-session SPLICE + per-completion swap, all batched-wired
+# 2026-07-15). Clone of the tau shape (the known-good W=3 batched config).
+#
+# Inherits gpt-oss-120b-a5. Only the differences appear below; run the
+# server and read the '🧬 Config ... extends ...' line to see what is
+# in force. `null` on a key means RESET to that field's default,
+# which is distinct from omitting it (omitted = inherit).
+extends: gpt-oss-120b-a5
+
+resources:
+  decode_mode: batched
+  max_concurrent_requests: 3

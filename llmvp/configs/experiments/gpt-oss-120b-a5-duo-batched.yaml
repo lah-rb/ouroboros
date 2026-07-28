@@ -1,0 +1,23 @@
+# DUO config (BATCHED): gpt-oss-120b-a5 dual-persona on the single-context
+# batched decode engine (decode_mode: "batched"). ONE context, TWO working
+# seats, persona heads pinned on the band above them — any seat serves any
+# persona (fork at acquire), so there is no per-persona slot starvation and
+# no multi-context Metal exposure. The tau-bench dual-LLM substrate, v2.
+# slot_personas is meaningless here (every persona in `personas` is warmed).
+#
+# Inherits gpt-oss-120b-a5. Only the differences appear below; run the
+# server and read the '🧬 Config ... extends ...' line to see what is
+# in force. `null` on a key means RESET to that field's default,
+# which is distinct from omitting it (omitted = inherit).
+extends: gpt-oss-120b-a5
+
+model:
+  n_ctx: 65536
+  context_refresh_drain_s: 0.0
+resources:
+  decode_mode: batched
+  max_concurrent_requests: 2
+personas:
+  user_sim:
+    persona_file: ./knowledge/USER_SIM.md
+    tokens_bin: ./data/gpt-oss-120b-a5-user_sim.tokens.bin

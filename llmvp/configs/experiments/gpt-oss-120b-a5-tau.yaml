@@ -1,0 +1,27 @@
+# TAU config (BATCHED): gpt-oss-120b-a5 for the τ-bench control-inversion
+# POC — THREE personas on the single-context batched engine (decode_mode:
+# "batched"): default (the ops-mission operator), user_sim (the simulated
+# customer), tau_boss (the shift-supervisor controller). W=3 working seats
+# so the two pinned persona sessions (user_sim + tau_boss) coexist with the
+# operator mission's stateless/session calls without acquisition deadlock.
+# Any seat serves any persona (fork at acquire). Derived from the duo config.
+#
+# Inherits gpt-oss-120b-a5. Only the differences appear below; run the
+# server and read the '🧬 Config ... extends ...' line to see what is
+# in force. `null` on a key means RESET to that field's default,
+# which is distinct from omitting it (omitted = inherit).
+extends: gpt-oss-120b-a5
+
+model:
+  n_ctx: 65536
+  context_refresh_drain_s: 0.0
+resources:
+  decode_mode: batched
+  max_concurrent_requests: 3
+personas:
+  user_sim:
+    persona_file: ./knowledge/USER_SIM.md
+    tokens_bin: ./data/gpt-oss-120b-a5-user_sim.tokens.bin
+  tau_boss:
+    persona_file: ./knowledge/TAU_BOSS.md
+    tokens_bin: ./data/gpt-oss-120b-a5-tau_boss.tokens.bin

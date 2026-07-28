@@ -43,92 +43,23 @@
 # see the gameab config's wired-ceiling math). Aggregate decode rises
 # monotonically with stream count (56→89 tok/s at N=1→6; ~200 at N=64);
 # early-EOS workers release cells + decode share back to the big ones.
-
-app:
-  host: "0.0.0.0"
-  port: 8008
-  log_level: "info"
-  cors_origins: ["*"]
-  backend_timeout: 180
-  openai_shim: true
-
-graphql:
-  max_query_depth: 10
-  max_tokens: 131072
-  max_aliases: 50
-  introspection_enabled: true
+#
+# Inherits gpt-oss-120b-a5. Only the differences appear below; run the
+# server and read the '🧬 Config ... extends ...' line to see what is
+# in force. `null` on a key means RESET to that field's default,
+# which is distinct from omitting it (omitted = inherit).
+extends: gpt-oss-120b-a5
 
 model:
-  name: "gpt-oss-120b-a5"
-  family: "harmony"
-  path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
   n_ctx: 524288
-  # Refuse arithmetically-impossible loads before Metal allocates. Set from
-  # the REAL wired limit (113 GB) minus working headroom, not the 116 that
-  # was assumed before it was checked.
   kv_preflight_gb: 106
-  # model max context (trained per-stream range) vs n_ctx (the swarm
-  # max context: the shared KV cell pool). No single stream may exceed
-  # this, however large the pool. (2026-07-24 context-ladder split.)
   model_max_context: 131072
-  n_gpu_layers: -1
-  seed: -1
-  verbose: false
-  flash_attn_type: auto
-  n_batch: 2048
-  thinking: true
-  thinking_mode: medium
-  swa_full: true
-  kv_unified: true
-  flow_kv_cache: false
-  session_full_replay: true
-  resident_seq_cache: true
-  context_refresh_drain_s: 300
-  reasoning_head_swap: true
-
 prompt:
-  persona_file: "./knowledge/SOUL_EMPTY.md"
-
+  persona_file: ./knowledge/SOUL_EMPTY.md
 generation:
-  # Ample default — design_and_plan and the contract author run at high/
-  # medium reasoning and must not be starved (a low default silently cut
-  # the architecture generation to an EMPTY response: gpt-oss burns the
-  # budget on CoT before emitting content). Swarm WORKERS carry no
-  # override, so this default is also their ceiling — it only binds on a
-  # ramble (EOS ends honest work), and the worker layer names that
-  # failure honestly instead of retrying it.
   max_tokens_default: 32768
-  temperature_default: 1.0
-  top_p: 1.0
-  top_k: 0
-  min_p: 0.00
-  presence_penalty: 0.0
-  repeat_penalty: 1.05
-  session_temp_floor: 0.35
-  streaming_default: true
-
 knowledge:
-  tokens_bin: "./data/nopersona.tokens.bin"
-  token_limit: 32768
-
+  tokens_bin: ./data/nopersona.tokens.bin
 resources:
-  decode_mode: "batched"
-  cpu_threads: 15
-  # W: admission ceiling for the n=symbols fan-out (engine proven to 64
-  # streams). The client-side pool-fit gate is the real load governor.
-  # UNCAPPED (field omitted) as of 2026-07-26 — resolves to the measured-safe
-  # default of 128 working seats. The old explicit 32 was costing ~40% of
-  # achievable throughput (144.7 tok/s at N=32 vs 202.5 at N=64, ladder in
-  # dev/decode_ceiling/). Seats are nearly free; the REAL limiter is pool
-  # cells, enforced by the swarm pool-fit gate against estimated context.
-  # Set an explicit value to pin the width for a controlled A/B or a
-  # latency-bounded workload.
-  jit_concurrency_limit: null
-
-tools:
-  enabled: false
-  max_iterations: 3
-
-logging:
-  enabled: true
-  directory: "./logs"
+  decode_mode: batched
+  max_concurrent_requests: null

@@ -1,0 +1,67 @@
+# Poolside laguna in THINKING mode — the vendor's default and, per their
+# 2.1 release notes, substantially stronger on our exact workload:
+#   DeepSWE 16.5% -> 40.4%   Terminal-Bench 2.1 60.4% -> 70.2%
+#   SWE-Bench Multilingual 71% -> 79%   SWE-Bench Pro 53% -> 59%
+#
+# Every laguna result we hold was measured with thinking OFF, i.e. in the
+# weak mode. `thinking: false` was adopted after the UNSLOTH build produced
+# two >100k-char pure-CoT runaways — but that is the 3-bit quant with known
+# pathologies, and the vendor states the model self-budgets test-time compute
+# and "may think for long sequences before making progress".
+#
+# This config pairs thinking with the quant that TERMINATES reliably
+# (poolside's longest generation across a 2h run was 15,146 tokens), so the
+# mode is tested independently of APEX's heavy-tail variance.
+#
+# Laguna-S-2.1, POOLSIDE first-party GGUF — the quant hypothesis.
+#
+# WHY THIS EXISTS. The unsloth build we tested pushes 92 expert tensors to
+# IQ3_S — THREE-BIT — and that is exactly the regime where repetition loops and
+# failure to emit stop tokens appear. Our laguna runs are dominated by precisely
+# those symptoms: 51% of the 2h tier run inside long generations, two hitting
+# the 32k cap and returning truncated output (dev/TIER_RUN_2026-07-27.md), plus
+# pure-CoT runaways of 125-137k chars that never emit an answer.
+#
+# TENSOR COMPOSITION (read from the GGUF headers, 2026-07-27):
+#
+#   unsloth UD-IQ4_XS  57.6 GB   Q8_0 x385  F32 x287  IQ3_S x92   IQ4_XS x47
+#   poolside Q4_K_M    96.0 GB   Q8_0 x386  F32 x287  Q4_K  x117  BF16   x24
+#
+# Same 814 tensors, same arch, same dense/attention precision. The whole 1.67x
+# size difference is the EXPERTS: unsloth quantises 92 of them to 3-bit, while
+# poolside holds nothing below 4.5-bit and keeps 24 at full BF16. "Q4_K_M" is a
+# misleading name here — the file is mostly 8-bit.
+#
+# THE TRADE — 2x LESS CONTEXT (65536 vs the unsloth build's 131072). 96 GB of weights against a 113 GB wired limit:
+#
+#   n_ctx    KV GB   total    verdict
+#    16384     3.2    99.3    OK
+#    32768     6.4   102.5    OK  (gpt-oss runs stable at 100.6)
+#    49152     9.7   105.7    OK  <- FALLBACK
+#    65536    12.9   108.9    OK  <- THIS CONFIG (Luke: ~10GB more headroom)
+#    98304    19.3   115.4    over the wired limit
+#   131072    25.8   121.8    over — the unsloth context is unreachable here
+#
+# UNVALIDATED. Nothing below has been run. Before trusting it: boot at this
+# n_ctx, then re-run dev/laguna/sampling_sweep.py and compare against
+# dev/laguna/sweep_results.json arm C (the unsloth baseline at identical
+# sampling) — that isolates the QUANT as the only changed variable.
+#
+# THE FOLLOW-UP THAT MATTERS MOST: thinking is false here to match arm C for a
+# controlled comparison, but the real prize is a `thinking: true` variant. On
+# unsloth, thinking-on was catastrophic (zero files in 22 minutes, two >100k
+# pure-CoT runaways). If the better quant restores termination, we get laguna's
+# reasoning back instead of having to suppress it.
+#
+# Inherits laguna-s-2.1-poolside. Only the differences appear below; run the
+# server and read the '🧬 Config ... extends ...' line to see what is
+# in force. `null` on a key means RESET to that field's default,
+# which is distinct from omitting it (omitted = inherit).
+extends: laguna-s-2.1-poolside
+
+model:
+  name: Laguna-S-2.1-poolside-think
+  thinking: true
+generation:
+  logit_bias:
+    25: -100.0

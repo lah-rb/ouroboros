@@ -61,77 +61,17 @@
 # costing the comparison. Raising it to 131072 is a one-line change (n_ctx,
 # graphql.max_tokens, generation.max_tokens_default all move together) and is
 # the right follow-up ONCE the quant question is settled.
+#
+# Inherits laguna-s-2.1-apex. Only the differences appear below; run the
+# server and read the '🧬 Config ... extends ...' line to see what is
+# in force. `null` on a key means RESET to that field's default,
+# which is distinct from omitting it (omitted = inherit).
+extends: laguna-s-2.1-apex
 
-app:
-  host: 0.0.0.0
-  port: 8008
-  log_level: info
-  cors_origins:
-  - '*'
-  backend_timeout: 180
-  openai_shim: true
-graphql:
-  max_query_depth: 10
-  max_tokens: 65536   # must not bind before generation.max_tokens_default
-  max_aliases: 50
-  introspection_enabled: true
 model:
-  name: Laguna-S-2.1-APEX-think
-  family: laguna
-  path: /Users/lah-rb/.lmstudio/models/Myric/Laguna-S-2.1-APEX-GGUF/Laguna-S-2.1-APEX-i-quality.gguf
-  # Matched to laguna-s-2.1-poolside.yaml so the quant is the only variable.
-  # 73.9GB weights + 12.9GB KV = 86.8GB against the 113GB wired limit — 22GB
-  # more headroom than the poolside config, which itself boots clean.
-  n_ctx: 65536
-  # Guard set above the computed total, not shaved to fit.
-  kv_preflight_gb: 92
-  model_max_context: 1048576
-  n_gpu_layers: -1
-  seed: -1
-  verbose: false
-  flash_attn_type: auto
-  n_batch: 2048
+  name: Laguna-S-2.1-APEX-think-yarn8x
+  rope_freq_scale: 0.125
   thinking: true
-  swa_full: true
-  kv_unified: true
-  flow_kv_cache: false
-  session_full_replay: true
-  resident_seq_cache: true
-  context_refresh_drain_s: 300
-prompt:
-  persona_file: ./knowledge/SOUL.md
 generation:
-  # Equal to n_ctx: the window is the only limit. See the poolside config for
-  # why an artificial cap was cutting legitimate multi-file work.
-  max_tokens_default: 65536
-  temperature_default: 1.0
-  top_p: 1.0
-  top_k: 20              # vendor generation_config.json; NOT 0
-  min_p: 0.0
-  presence_penalty: 0.0
-  repeat_penalty: 1.0    # penalties truncate code output — sweep arm B
-  # Both bans carried over from poolside unchanged, since they are properties of
-  # the MODEL and our prompt format, not of the quant:
-  #   25 = <tool_call>, emitted unprompted in 20-40% of turns; we do not support
-  #        per-model tool protocols.
-  #   19 = </think>, banned ONLY because thinking is off here — the close-only
-  #        prefill ends the prompt with a bare </think> and laguna reproduces it
-  #        as a separator. Do NOT carry this to a thinking:true variant.
-  # ARM C: thinking is ON, so </think> is load-bearing and must NOT be banned.
-  logit_bias: {25: -100.0}
-  session_temp_floor: 0.35
-  streaming_default: true
-knowledge:
-  # Keyed per config file, so it regenerates on first boot.
-  tokens_bin: ./data/laguna-s-2.1-apex.tokens.bin
-  token_limit: 32768
-resources:
-  decode_mode: batched
-  cpu_threads: 15
-  jit_concurrency_limit: null
-tools:
-  enabled: false
-  max_iterations: 3
-logging:
-  enabled: true
-  directory: ./logs
+  logit_bias:
+    25: -100.0

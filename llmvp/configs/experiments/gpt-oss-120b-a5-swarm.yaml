@@ -1,0 +1,31 @@
+# CONTRACT-SWARM config (BATCHED): gpt-oss-120b-a5 for the contract-swarm
+# structural runs — n=symbols concurrent worker completions
+# (swarm_generate_symbols fans out one stateless completion per symbol,
+# uncapped: EOS ends generation, max_tokens_default is the ramble
+# ceiling) plus the mission's own session traffic.
+#
+# Budget math (kv_unified: n_ctx is the SHARED cell pool across ALL
+# working seats; cells are consumed per ACTUAL token — max_tokens never
+# reserves anything — measured 2026-07-20, dev/serving_perf_reference.md):
+# the client-side pool-fit gate in swarm_generate_symbols admits the full
+# n=symbols fan-out only when estimated read context + generation margin
+# fits 80% of n_ctx, and waves otherwise, so W=32 is an admission
+# ceiling, not a promise of 32 huge streams. n_ctx 131072 = the
+# known-good single-context footprint on this box (swa_full KV ≈ 9.2G;
+# see the gameab config's wired-ceiling math). Aggregate decode rises
+# monotonically with stream count (56→89 tok/s at N=1→6; ~200 at N=64);
+# early-EOS workers release cells + decode share back to the big ones.
+#
+# Inherits gpt-oss-120b-a5. Only the differences appear below; run the
+# server and read the '🧬 Config ... extends ...' line to see what is
+# in force. `null` on a key means RESET to that field's default,
+# which is distinct from omitting it (omitted = inherit).
+extends: gpt-oss-120b-a5
+
+model:
+  model_max_context: 131072
+generation:
+  max_tokens_default: 32768
+resources:
+  decode_mode: batched
+  max_concurrent_requests: 32

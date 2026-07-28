@@ -1,0 +1,32 @@
+# MISTRAL MEDIUM BOSS CONFIG — dense 128B, the largest-dense arm of the
+# boss comparison against step37 (largest MoE).
+#
+# KV GEOMETRY (measured from GGUF headers 2026-07-25, before any load —
+# the rule that exists because reboot #3 was precomputable):
+#   mistral3, 88 layers, 8 kv_heads, k_len=v_len=128, NO sliding window
+#   => 352 KB/token  (vs gpt-oss 72 KB, step37 180 KB)
+#   weights across 3 shards = 67.1 GB
+#     n_ctx  65536 -> KV 23.6 GB -> 90.7 GB total
+#     n_ctx  98304 -> KV 35.4 GB -> 102.6 GB total
+#     n_ctx 131072 -> KV 47.2 GB -> 114.4 GB total  <- vs the REAL 113 GB wired limit (sysctl iogpu.wired_limit_mb) — UNLOADABLE
+#
+# The shipped mistral-medium-3.5-128b.yaml carries n_ctx 131072, i.e. 114.4 GB
+# with a ~1.6 GB margin. It LOADS (KV wiring is lazy) but a run that actually
+# fills the context is the failure mode. Starting at 65536 and raising only on
+# MEASURED marginal cost from dev/context_pressure_probe.py.
+# ── GREENFIELD TIER 3 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# Respectable, largely compatible — but SLOW (42 tok/s cold prefill, ~6-7
+# tok/s decode; ~5 min per functional exchange at mission-scale prompts).
+# Diagnosis quality was 2-for-2 verbatim-correct; eliminated on the one seam
+# bug (str vs Command) it never got clock to diagnose. Effective window was
+# ~55 min of its 2h (watchdog doom loop, since fixed: expectedEvalSeconds).
+#
+# Inherits mistral-medium-3.5-128b. Only the differences appear below; run the
+# server and read the '🧬 Config ... extends ...' line to see what is
+# in force. `null` on a key means RESET to that field's default,
+# which is distinct from omitting it (omitted = inherit).
+extends: mistral-medium-3.5-128b
+
+model:
+  n_ctx: 65536
+  kv_preflight_gb: 104

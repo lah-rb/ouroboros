@@ -729,6 +729,51 @@ CONFIGS_DIR = BASE_DIR / "configs"
 POINTER_FILE = BASE_DIR / "active_config.txt"
 
 
+# Where a bare config name is looked up, in order. ROOT holds one servable
+# config per model; boss/ holds remote-provider entries (consulted per-request,
+# composing on top of whatever is resident); experiments/ holds variants built
+# to answer a question. archive/ is DELIBERATELY ABSENT — retiring a config
+# means it stops resolving by name, otherwise "archived" is just another
+# namespace and the directory stops meaning anything.
+SEARCH_DIRS = ("", "boss", "experiments")
+
+# Top-level keys that are documentation, not configuration: the experiment's
+# question and what the run answered. Stripped before validation because Config
+# is extra="forbid" — which is the right default, and the reason this list is
+# explicit rather than a loosened model.
+DOC_ONLY_KEYS = ("results", "notes", "extends")
+
+
+def resolve_config_path(name: str, root: Optional[Path] = None) -> Optional[Path]:
+    """Bare config name -> path, searching SEARCH_DIRS in order.
+
+    Root wins on collision so a base always shadows a variant that copied its
+    name. A name present in BOTH boss/ and experiments/ is an error rather than
+    a silent pick — the two directories mean different things and guessing
+    which one the operator meant is how a run measures the wrong config.
+
+    ``root`` is a parameter rather than a hardcoded global so resolution stays a
+    pure function of (name, root): the registry owns its own CONFIGS_DIR and
+    passes it, which is what lets a test point a catalog at a tmpdir.
+    """
+    base_dir = root or CONFIGS_DIR
+    stem = name.removesuffix(".yaml").removesuffix(".yml")
+    hits = [
+        p
+        for d in SEARCH_DIRS
+        if (p := (base_dir / d / f"{stem}.yaml")).is_file()
+    ]
+    if not hits:
+        return None
+    if len(hits) > 1 and hits[0].parent != base_dir:
+        raise ValueError(
+            f"ambiguous config name {stem!r} — found in "
+            + " and ".join(str(p.parent.name) for p in hits)
+            + ". Rename one; a bare name must identify exactly one config."
+        )
+    return hits[0].resolve()
+
+
 def _read_pointer_file() -> Optional[Path]:
     """Read the active configuration pointer file."""
     if not POINTER_FILE.is_file():
@@ -738,9 +783,7 @@ def _read_pointer_file() -> Optional[Path]:
     if not name:
         return None
 
-    candidate = name if name.lower().endswith((".yaml", ".yml")) else f"{name}.yaml"
-    cfg_path = (CONFIGS_DIR / candidate).resolve()
-    return cfg_path if cfg_path.is_file() else None
+    return resolve_config_path(name)
 
 
 def _default_config_path() -> Path:
@@ -757,6 +800,115 @@ def _default_config_path() -> Path:
     )
 
 
+def section_fields(model_cls: type) -> dict:
+    """field name -> nested model class, for fields that are config SECTIONS.
+
+    A section is a field whose type IS a BaseModel — ``model:``, ``generation:``
+    and friends. A field that merely CONTAINS models (``Dict[str,
+    PersonaConfig]``) is a value: merging it per-key would let a child add a
+    persona but never remove one, and "declare the set you want" is the more
+    predictable rule.
+    """
+    import typing
+
+    out = {}
+    for name, field in getattr(model_cls, "model_fields", {}).items():
+        ann = field.annotation
+        # Unwrap Optional[X] ONLY. Unwrapping any generic would make
+        # Dict[str, PersonaConfig] look like a section because PersonaConfig
+        # appears among its args — and then a child could add a persona but
+        # never remove one.
+        if typing.get_origin(ann) is typing.Union:
+            candidates = [a for a in typing.get_args(ann) if a is not type(None)]
+        else:
+            candidates = [ann]
+        for cand in candidates:
+            if isinstance(cand, type) and issubclass(cand, BaseModel):
+                out[name] = cand
+                break
+    return out
+
+
+def _merge_over(
+    base: dict, child: dict, model_cls: type = None, _path: str = ""
+) -> tuple[dict, list[str]]:
+    """Deep-merge ``child`` over ``base``. Returns (merged, overridden paths).
+
+    KEY PRESENCE IS THE OVERRIDE SIGNAL, not value. A key the child declares
+    wins even when its value is ``null``; a key the child omits is inherited.
+
+    That distinction is the whole design, because this schema encodes meaning in
+    ``None`` and the meaning is NOT uniform: ``temperature_floor: null`` means
+    disabled, ``repetition_guard_enabled: null`` means ENABLED, the rope/yarn
+    fields mean "do not pass this to llama.cpp at all", ``kv_preflight_gb``
+    means 100. If merging compared values, a child could never take a field
+    BACK to its default once a base had set it, and which behaviour it got
+    instead would differ per field. Keying on presence makes ``null`` mean
+    exactly "reset this to its own default" everywhere.
+
+    SECTIONS MERGE; VALUES REPLACE — including dict-valued fields. Recursing
+    into a value dict is a real bug, not a nicety: ``laguna-s-2.1-apex`` sets
+    ``generation.logit_bias: {19: -inf}`` to ban ``</think>`` because thinking
+    is OFF there, and a thinking variant that inherited that key per-key would
+    silently ban the token it depends on. Same reasoning for lists.
+    """
+    sections = section_fields(model_cls) if model_cls is not None else {}
+    merged = dict(base)
+    overridden: list[str] = []
+    for key, child_val in child.items():
+        here = f"{_path}{key}"
+        base_val = base.get(key)
+        if key in sections and isinstance(child_val, dict) and isinstance(base_val, dict):
+            merged[key], sub = _merge_over(
+                base_val, child_val, sections[key], f"{here}."
+            )
+            overridden.extend(sub)
+        else:
+            merged[key] = child_val
+            if key not in base or base_val != child_val:
+                overridden.append(here)
+    return merged, overridden
+
+
+def _load_raw_with_inheritance(
+    cfg_path: Path, root: Optional[Path] = None
+) -> tuple[dict, Optional[str], list[str]]:
+    """Read a config, applying a single ``extends:`` layer.
+
+    Returns (raw dict ready for validation, base name or None, overridden keys).
+
+    ONE LEVEL ONLY, deliberately. A chain is where inheritance stops being
+    readable — you can no longer answer "what is this config" without walking a
+    graph, which is exactly the property the flat directory had and the reason
+    it was worth keeping.
+    """
+    import yaml
+
+    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{cfg_path.name}: top level must be a mapping")
+
+    base_name = raw.get("extends")
+    if not base_name:
+        return raw, None, []
+
+    base_path = resolve_config_path(str(base_name), root)
+    if base_path is None:
+        raise FileNotFoundError(
+            f"{cfg_path.name}: extends {base_name!r}, which does not resolve"
+        )
+    base_raw = yaml.safe_load(base_path.read_text(encoding="utf-8")) or {}
+    if base_raw.get("extends"):
+        raise ValueError(
+            f"{cfg_path.name}: extends {base_name!r}, which itself extends "
+            f"{base_raw['extends']!r}. Inheritance is one level only — point "
+            f"this config at the root base directly."
+        )
+    child = {k: v for k, v in raw.items() if k != "extends"}
+    merged, overridden = _merge_over(base_raw, child, Config)
+    return merged, str(base_name), overridden
+
+
 def load_config(path: Optional[Path] = None) -> Config:
     """
     Load configuration from YAML file.
@@ -767,21 +919,31 @@ def load_config(path: Optional[Path] = None) -> Config:
     Returns:
         Config: The loaded and validated configuration object
     """
-    import yaml
-
+    log = logging.getLogger("llm-mvp")
     try:
         cfg_path = (path or _default_config_path()).expanduser().resolve()
         if not cfg_path.is_file():
             raise FileNotFoundError(f"Configuration file not found: {cfg_path}")
 
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            raw_cfg = yaml.safe_load(f)
+        raw_cfg, base_name, overridden = _load_raw_with_inheritance(cfg_path)
 
-        config = Config(**raw_cfg)
+        # A config used to be self-contained and greppable. Inheritance trades
+        # that for concision, so the resolved shape has to be VISIBLE at boot —
+        # the same lesson the RoPE overrides taught: a setting you cannot see
+        # is a setting you cannot debug.
+        if base_name:
+            log.info(
+                "🧬 Config %s extends %s — overrides: %s",
+                cfg_path.stem,
+                base_name,
+                ", ".join(overridden) or "(none)",
+            )
+
+        config = Config(**{k: v for k, v in raw_cfg.items() if k not in DOC_ONLY_KEYS})
         set_config(config)
         return config
     except Exception as exc:
-        logging.getLogger("llm-mvp").error(f"❌ Failed to load configuration: {exc}")
+        log.error(f"❌ Failed to load configuration: {exc}")
         raise
 
 

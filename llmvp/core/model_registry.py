@@ -12,16 +12,33 @@ any teardown begins.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
 import yaml
 
-from core.config import CONFIGS_DIR, POINTER_FILE
+from core.config import CONFIGS_DIR, POINTER_FILE, resolve_config_path
 
 # reference.yaml is annotated documentation, not a loadable config.
 _EXCLUDED_NAMES = {"reference"}
+
+# What LISTS, which is distinct from what RESOLVES. Root holds one servable
+# config per model and boss/ holds remote entries the escalate path addresses
+# per-request — both are identities an operator picks between, so both belong
+# in the catalog. experiments/ configs still resolve by name (pointer file,
+# scripts, an explicit swap) but stay OUT of the listing by default: a dozen
+# one-question variants in the swap menu is the clutter this split exists to
+# remove. OURO_LIST_EXPERIMENTS=1 opts them back in for a session.
+_LISTED_DIRS = ("", "boss")
+_EXPERIMENTS_DIR = "experiments"
+
+
+def _listed_dirs() -> tuple[str, ...]:
+    if os.environ.get("OURO_LIST_EXPERIMENTS", "").strip() in ("1", "true", "yes"):
+        return _LISTED_DIRS + (_EXPERIMENTS_DIR,)
+    return _LISTED_DIRS
 
 
 @dataclass
@@ -64,8 +81,8 @@ def resolve(name: str) -> Path:
     """Registry name -> config path, or KeyError listing what exists."""
     if name in _EXCLUDED_NAMES:
         raise KeyError(f"config {name!r} is not swappable")
-    path = CONFIGS_DIR / f"{name}.yaml"
-    if not path.is_file():
+    path = resolve_config_path(name, CONFIGS_DIR)
+    if path is None:
         known = ", ".join(sorted(e.name for e in list_models())) or "(none)"
         raise KeyError(f"unknown model config {name!r} — known: {known}")
     return path
@@ -76,8 +93,8 @@ def remote_config(name: str):
     remote entry (missing file or a local config)."""
     from core.config import RemoteModelConfig
 
-    path = CONFIGS_DIR / f"{name}.yaml"
-    if name in _EXCLUDED_NAMES or not path.is_file():
+    path = resolve_config_path(name, CONFIGS_DIR)
+    if name in _EXCLUDED_NAMES or path is None:
         return None
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or "provider" not in raw:
@@ -86,18 +103,27 @@ def remote_config(name: str):
 
 
 def list_models() -> List[ModelEntry]:
-    """Enumerate swappable configs (top-level configs/*.yaml, excluding
-    reference.yaml; archive/ is a subdirectory and never scanned)."""
+    """Enumerate swappable configs: root + boss/ (and experiments/ when
+    OURO_LIST_EXPERIMENTS=1), excluding reference.yaml. archive/ is never
+    scanned and never resolved — retiring a config means it stops answering
+    to its name."""
     current = active_name()
     entries: List[ModelEntry] = []
-    for path in sorted(CONFIGS_DIR.glob("*.yaml")):
+    paths = [q for d in _listed_dirs() for q in sorted((CONFIGS_DIR / d).glob("*.yaml"))]
+    for path in paths:
         name = path.stem
         if name in _EXCLUDED_NAMES:
             continue
         family, model_path, size_gb, present, error = "", "", 0.0, False, None
         provider = "local_llama"
         try:
-            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+            # Inheritance-aware, or an experiments/ entry would list with a
+            # blank family and path — its `model:` block is a DIFF, and the
+            # weights it actually serves live in the base. Still cheap: one
+            # extra file read, no pydantic.
+            from core.config import _load_raw_with_inheritance
+
+            raw, _base, _ovr = _load_raw_with_inheritance(path, CONFIGS_DIR)
             if isinstance(raw, dict) and "provider" in raw:
                 from core.config import RemoteModelConfig
 
