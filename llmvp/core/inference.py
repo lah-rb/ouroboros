@@ -55,12 +55,77 @@ class CompletionOutcome:
     # split inference time into prefill vs decode per call. 0 when unavailable.
     prefill_ms: float = 0.0
     decode_ms: float = 0.0
+    # Why generation stopped. "" for an ordinary stop. Set to
+    # "kv_pressure_truncated" when the batched engine force-windowed the stream
+    # to relieve KV pressure — that cut lands BELOW max_tokens, so the derived
+    # "tokens_generated >= max_tokens" truncation test cannot see it, and a
+    # caller checking only that flag would treat a severed response as complete.
+    end_reason: str = ""
+
+    @property
+    def truncated_by_engine(self) -> bool:
+        """The response was cut short by the engine rather than by the model
+        or the token budget."""
+        return self.end_reason == "kv_pressure_truncated"
 
 
-def resolve_max_tokens(requested: "int | None") -> int:
+# Held back from the computed generation budget: the window must still admit
+# the token being decoded plus a little slack for off-by-one in the prefill
+# accounting. Small on purpose — this is a rounding guard, not a policy knob.
+_GENERATION_SLACK = 64
+# Below this a "generation" is not worth starting; the caller gets a clear
+# error instead of a stream that emits two tokens and stops.
+_MIN_GENERATION_TOKENS = 128
+
+
+def resolve_max_tokens(requested: "int | None", prepopulated: int = 0) -> int:
     """Canonical request→config→256 max_tokens chain (single source of truth;
-    previously copy-pasted at every completion entry point)."""
-    return requested or config.generation.max_tokens_default or 256
+    previously copy-pasted at every completion entry point).
+
+    ``prepopulated`` is the context the window already owes before a single
+    token is generated — static prefix + rendered dynamic prompt. Pass it and
+    the budget is clamped so PROMPT + GENERATION fits the per-stream ceiling.
+
+    WHY THIS EXISTS. The prompt-length guard downstream checks that the prompt
+    fits. NOTHING checked that prompt + max_tokens fits, so a config with
+    ``max_tokens_default`` equal to ``n_ctx`` (which is what "no artificial
+    cap" naturally produces) lets a request ask for more window than exists:
+    on 2026-07-27 a 21,085-token prompt was granted a 65,536-token budget
+    against a 65,536-token window. Generation then runs until the KV pool
+    evicts the stream — and eviction DISCARDS EVERYTHING, so a batch that had
+    already emitted 15 complete files returned nothing at all. Clamping turns
+    that into an ordinary truncation, which keeps the work.
+
+    Keyed off ``stream_context_limit``, never raw ``n_ctx`` — see the property's
+    own docstring: a large pool must not admit a single stream beyond the
+    model's trained range.
+
+    NOT SUFFICIENT ALONE under batched decode, where ``n_ctx`` budgets the SUM
+    of live streams: this bounds one stream against the whole window, but it
+    cannot see the others. Admission-time clamping against live free cells is
+    the companion fix.
+    """
+    want = requested or config.generation.max_tokens_default or 256
+    if prepopulated <= 0:
+        return want  # caller cannot measure the prompt — unchanged behaviour
+
+    headroom = config.model.stream_context_limit - prepopulated - _GENERATION_SLACK
+    if headroom < _MIN_GENERATION_TOKENS:
+        raise ValueError(
+            f"No room to generate: prompt occupies {prepopulated} of "
+            f"{config.model.stream_context_limit} tokens, leaving {headroom} "
+            f"after slack — below the {_MIN_GENERATION_TOKENS}-token floor."
+        )
+    if headroom < want:
+        log.info(
+            "✂️ max_tokens %d → %d (prompt %d of %d)",
+            want,
+            headroom,
+            prepopulated,
+            config.model.stream_context_limit,
+        )
+        return headroom
+    return want
 
 
 def resolve_temperature(requested: "float | None", label: str = "Completion") -> float:
@@ -314,6 +379,10 @@ async def run_completion(
             f"per-stream context limit of {config.model.stream_context_limit} tokens."
         )
 
+    # The prompt fits; now make the GENERATION fit alongside it. Re-resolving
+    # is idempotent for the default chain and only ever lowers the budget.
+    max_tokens = resolve_max_tokens(max_tokens, prepopulated=total_len)
+
     full_prompt = list(static_tokens) + dynamic_ids
 
     # Get backend and acquire instance (if backend uses manual pooling)
@@ -401,6 +470,7 @@ async def run_completion(
             generated_tokens=real_gen,
             cache_hit=bool(getattr(gen_target, "_last_cache_hit", False)),
             flow_key=str(getattr(gen_target, "_last_flow_key", "") or ""),
+            end_reason=str(getattr(gen_target, "_last_end_reason", "") or ""),
             # Prefer the per-stream wall spans (batched seats stash them —
             # concurrency-accurate); fall back to the global tracker's
             # single-generation timing for the pool path.
@@ -480,6 +550,10 @@ async def run_raw_completion(
             f"per-stream context limit of {config.model.stream_context_limit} tokens."
         )
 
+    # The prompt fits; now make the GENERATION fit alongside it. Re-resolving
+    # is idempotent for the default chain and only ever lowers the budget.
+    max_tokens = resolve_max_tokens(max_tokens, prepopulated=total_len)
+
     full_prompt = list(static_tokens) + dynamic_ids
 
     backend = await _get_backend()
@@ -555,6 +629,10 @@ async def stream_completion(
             f"Combined prompt length ({total_len}) exceeds the model's "
             f"per-stream context limit of {config.model.stream_context_limit} tokens."
         )
+
+    # The prompt fits; now make the GENERATION fit alongside it. Re-resolving
+    # is idempotent for the default chain and only ever lowers the budget.
+    max_tokens = resolve_max_tokens(max_tokens, prepopulated=total_len)
 
     full_prompt = list(static_tokens) + dynamic_ids
 

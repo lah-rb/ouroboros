@@ -699,7 +699,20 @@ def test_install_head_replaces_seat_content():
         eng.shutdown()
 
 
-def test_pinned_seat_never_evicted_under_pressure():
+def test_pinned_session_is_windowed_not_destroyed_under_pressure():
+    """A pinned seat is the LAST victim, and windowing it is not eviction.
+
+    This asserted "never touched" and passed by doing nothing — which is a
+    LIVELOCK: with only pinned streams resident, _relieve_pressure logged an
+    error and returned, _step retried, and pressure recurred forever with no
+    progress. (The old code said as much: "future: force-window the largest
+    session instead.")
+
+    The turn now ends early, but the SESSION SURVIVES — _retire's pinned branch
+    advances `slot.n_tokens` to what was actually decoded and leaves the KV
+    live, so the next turn continues from a consistent position. That is the
+    invariant worth protecting; "the stream object stays in the dict" was not.
+    """
     ctx = FakeCtx(decode_script=[1])
     s_a = FakeSampler([10])
     eng = _engine_with(ctx, samplers={"a": s_a})
@@ -713,9 +726,39 @@ def test_pinned_seat_never_evicted_under_pressure():
     s.prompt_pos = 1
     s.last_token = 9
     eng._live_prefill_budget = 16
-    eng._step()  # pressure with ONLY a pinned stream — no eviction
-    assert "a" in eng._streams
-    assert eng.health()["kv_evictions"] == 0
+    eng._step()  # terminal pressure: only a pinned stream is resident
+
+    assert "a" not in eng._streams, "the turn ends rather than livelocking"
+    assert s.end_reason == "kv_pressure_truncated", (
+        "the caller must be able to tell this from a natural stop"
+    )
+    assert slot.pinned, "the seat stays a session seat"
+    assert slot.n_tokens == s.n_past, "session KV survives at the decoded position"
+
+
+def test_unpinned_streams_are_windowed_before_pinned_ones():
+    """Ordering guard: a stateless borrow is always preferred as the victim."""
+    ctx = FakeCtx(decode_script=[1])
+    eng = _engine_with(ctx, samplers={"a": FakeSampler([10]), "b": FakeSampler([11])})
+    pinned_slot, free_slot = _slot(0), _slot(1)
+    pinned_slot.pinned = True
+    for sid, slot in (("a", pinned_slot), ("b", free_slot)):
+        req = _req(sid, [100], slot=slot)
+        req._stream_id = sid
+        eng._admit(req)
+        st = eng._streams[sid]
+        st.phase = StreamPhase.DECODING
+        st.prompt_pos = 1
+        st.last_token = 9
+    # Make the pinned stream the LARGEST so "largest wins" would pick it if the
+    # pinned preference were not applied first.
+    eng._streams["a"].n_past = 9_000
+    eng._streams["b"].n_past = 10
+    eng._live_prefill_budget = 16
+    eng._step()
+
+    assert "a" in eng._streams, "the session must outlive the stateless borrow"
+    assert "b" not in eng._streams
 
 
 def test_output_bridge_end_and_error_semantics():

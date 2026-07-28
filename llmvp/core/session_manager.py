@@ -1008,6 +1008,10 @@ class SessionManager:
             ),
             "cache_hit": bool(getattr(_inst, "_last_cache_hit", False)),
             "flow_key": str(getattr(_inst, "_last_flow_key", "") or ""),
+            # Engine-side stop reason. A KV-pressure force-window ends the turn
+            # BELOW max_tokens, so the caller's `tokens >= max_tokens` test
+            # cannot see it and would read a severed turn as complete.
+            "end_reason": str(getattr(_inst, "_last_end_reason", "") or ""),
             # Prefer the per-stream wall spans (batched seats stash them —
             # concurrency-accurate); the global tracker's single-generation
             # timing is only correct when one stream runs at a time (pool).

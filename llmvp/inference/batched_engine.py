@@ -191,6 +191,10 @@ class SeqSlot:
     _last_flow_hit: bool = False
     _last_flow_key: str = ""
     _last_cache_hit: bool = False
+    # Why the last stream ended. "" for an ordinary stop; the KV-pressure
+    # force-window sets it so the caller can mark the response truncated —
+    # that cut lands BELOW max_tokens, so the derived truncation test misses it.
+    _last_end_reason: str = ""
     # Per-stream wall spans (seconds) — concurrency-accurate replacements
     # for the global tracker's eval/generation durations.
     _last_prefill_s: float = 0.0
@@ -341,6 +345,27 @@ class StreamState:
 # ----------------------------------------------------------------------
 
 _MIN_PREFILL_BUDGET = 16
+
+# Smallest generation worth admitting. Below this the turn burns a seat, a
+# prefill and a round-trip to produce nothing usable, so the request waits for
+# capacity instead.
+_MIN_ADMIT_BUDGET = 512
+# End reason for a stream ended early by KV pressure. Callers MUST be able to
+# tell this from a natural stop: the response carries real content and stops
+# BELOW max_tokens, so the derived "tokens_generated >= max_tokens" truncation
+# test does not fire for it.
+_END_KV_PRESSURE = "kv_pressure_truncated"
+# Held back from the pool when sizing admissions: the batch being decoded, the
+# transient cells of a stream mid-join, and ordinary accounting drift. The
+# reactive ladder (_relieve_pressure) remains the backstop — this is a margin,
+# not a guarantee.
+_POOL_SLACK = 256
+
+
+class _AdmitVerdict(Enum):
+    ADMIT = "admit"
+    QUEUE = "queue"  # no room now; retry when a stream retires
+    IMPOSSIBLE = "impossible"  # cannot fit even against pinned-only occupancy
 
 
 class BatchedEngine:
@@ -498,6 +523,11 @@ class BatchedEngine:
                     or self._join_inbox
                     or self._control_inbox
                     or self._has_active_streams()
+                    # A queued admission must not sleep here: with no active
+                    # streams the pool is at its emptiest, so _drain_waiting
+                    # will succeed on the next pass. Without this the engine
+                    # can idle forever holding work it is able to run.
+                    or self._waiting
                 ):
                     self._wake.wait()
                 if self._shutdown:
@@ -522,6 +552,9 @@ class BatchedEngine:
             for req in joiners:
                 self._admit(req)
             self._sweep_closed_bridges()
+            # Capacity may have freed since the last pass (a stream retired, a
+            # session released its seat) — retry anything parked for room.
+            self._drain_waiting()
             if self._has_active_streams():
                 try:
                     self._step()
@@ -537,6 +570,94 @@ class BatchedEngine:
                 self._retire_abandoned(s)
 
     # -- admission ----------------------------------------------------------
+
+    def _pinned_occupancy(self) -> int:
+        """Cells that will still be held after every evictable stream is gone.
+
+        Pinned session seats keep their KV between turns by design, and each
+        persona's static head is resident. This is the irreducible floor — a
+        request that cannot fit above it can never be admitted, however long it
+        waits, so it is failed rather than queued forever.
+        """
+        held = 0
+        for seat in self._seats:
+            if seat.pinned:
+                held += max(int(seat.n_tokens), int(seat.static_len))
+            else:
+                held += int(seat.static_len)
+        return held
+
+    def _live_occupancy(self, exclude: Optional[StreamRequest] = None) -> int:
+        """Cells currently spoken for by live streams, counting what each is
+        ENTITLED to rather than what it has decoded so far.
+
+        Counting `n_past` would under-count: a stream 500 tokens into a 40k
+        budget will take those 40k, and admitting against its current position
+        is exactly how the pool oversubscribes.
+        """
+        held = 0
+        for s in self._streams.values():
+            if s.phase is StreamPhase.DONE or (exclude is not None and s.req is exclude):
+                continue
+            held += int(s.gen_start_pos) + int(s.effective_max)
+        return held
+
+    def _free_cells(self, n_ctx: int, exclude: Optional[StreamRequest] = None) -> int:
+        """Cells available to a new stream right now."""
+        if not n_ctx:
+            return 0
+        # Pinned seats are already counted inside _live_occupancy when they have
+        # a live stream; take the larger of the two views rather than summing,
+        # which would double-count a pinned seat mid-turn.
+        occupied = max(self._live_occupancy(exclude), self._pinned_occupancy())
+        return max(0, n_ctx - occupied - _POOL_SLACK)
+
+    def _size_against_pool(
+        self, req: StreamRequest, n_ctx: int, total: int
+    ) -> "tuple[int, _AdmitVerdict]":
+        """(effective_max, verdict) under the shrink-to-fit / queue-below-floor
+        policy. Falls back to today's per-stream bound when the pool size is
+        unknown."""
+        per_stream = min(req.max_tokens, (n_ctx - total) if n_ctx else req.max_tokens)
+        if not n_ctx:
+            return per_stream, _AdmitVerdict.ADMIT
+
+        free = self._free_cells(n_ctx, exclude=req) - len(req.prompt_tokens)
+        if free >= per_stream:
+            return per_stream, _AdmitVerdict.ADMIT
+        if free >= _MIN_ADMIT_BUDGET:
+            # Shrink: a smaller generation that COMPLETES beats a larger one
+            # that gets evicted, because eviction discards everything.
+            logger.info(
+                "✂️ stream admitted at %d tokens (asked %d) — %d free cells",
+                free,
+                per_stream,
+                free,
+            )
+            return free, _AdmitVerdict.ADMIT
+        # Can it ever fit? Compare against the irreducible floor.
+        headroom = n_ctx - self._pinned_occupancy() - _POOL_SLACK
+        if headroom - len(req.prompt_tokens) < _MIN_ADMIT_BUDGET:
+            return 0, _AdmitVerdict.IMPOSSIBLE
+        return 0, _AdmitVerdict.QUEUE
+
+    def _drain_waiting(self) -> None:
+        """Retry queued admissions once capacity may have freed. FIFO, and it
+        stops at the first request that still does not fit so a large job is
+        not starved by a queue of small ones behind it."""
+        while self._waiting:
+            req = self._waiting[0]
+            if req.out.closed:
+                self._waiting.pop(0)
+                continue
+            slot = req.slot
+            n_ctx = (slot._n_ctx if slot else 0) or getattr(self._llama, "_n_ctx", 0)
+            total = (int(slot.n_tokens) if slot else 0) + len(req.prompt_tokens)
+            _, verdict = self._size_against_pool(req, n_ctx, total)
+            if verdict is _AdmitVerdict.QUEUE:
+                return  # still no room — leave it (and the rest) queued
+            self._waiting.pop(0)
+            self._admit(req)
 
     def _admit(self, req: StreamRequest) -> None:
         """Register a stream on its (pre-acquired) seat and build its
@@ -556,9 +677,36 @@ class BatchedEngine:
                 ValueError(f"Prompt ({total} tokens) exceeds context window ({n_ctx})")
             )
             return
-        effective_max = min(
-            req.max_tokens, (n_ctx - total) if n_ctx else req.max_tokens
-        )
+        # Size against FREE cells, not the whole window. The line below used to
+        # be `min(req.max_tokens, n_ctx - total)`, which is a per-STREAM bound —
+        # but under batched decode n_ctx budgets the SUM of live streams, so
+        # every stream can pass its own check while their total does not. That
+        # is how a 48,318-token generation carrying 15 complete files reached
+        # `KV cell pool exhausted` and was thrown away (2026-07-27 APEX arm).
+        effective_max, verdict = self._size_against_pool(req, n_ctx, total)
+        if verdict is _AdmitVerdict.QUEUE:
+            # Not enough free cells for a useful generation. Park it; the decode
+            # loop retries whenever capacity frees (a stream retires).
+            self._waiting.append(req)
+            logger.info(
+                "⏳ stream queued: %d free cells < floor %d (pool %d, prompt %d)",
+                self._free_cells(n_ctx, exclude=req),
+                _MIN_ADMIT_BUDGET,
+                n_ctx,
+                total,
+            )
+            return
+        if verdict is _AdmitVerdict.IMPOSSIBLE:
+            req.out.finish(
+                ValueError(
+                    f"Request cannot fit the KV pool: prompt {total} tokens + "
+                    f"a minimum {_MIN_ADMIT_BUDGET}-token generation exceeds "
+                    f"the {n_ctx}-cell pool even with every evictable stream "
+                    f"gone (resident/pinned occupancy "
+                    f"{self._pinned_occupancy()} cells)."
+                )
+            )
+            return
         buffer_mode = effective_max <= BUFFER_MODE_MAX_TOKENS
 
         try:
@@ -742,29 +890,44 @@ class BatchedEngine:
                 self._live_prefill_budget,
             )
             return
-        victims = [
-            s for s in active if not s.slot.pinned and s.phase is not StreamPhase.DONE
-        ]
+        # FORCE-WINDOW, don't discard. This used to retire the victim with a
+        # RetriableEngineError, which routes through `out.finish(error)` and
+        # drops every token it had produced. On 2026-07-27 that threw away a
+        # 48,318-token generation carrying 15 COMPLETE files, and the agent got
+        # an exception instead of the work. Ending the stream early delivers
+        # what exists; `truncated` on the response is what tells the caller it
+        # was cut (see _retire → slot._last_end_reason).
+        #
+        # Pinned sessions are windowed too, and last. A pinned seat holds its KV
+        # between turns by design, so leaving it untouched is what produced the
+        # old dead end below — "decode cannot proceed" with no action taken.
+        candidates = [s for s in active if s.phase is not StreamPhase.DONE]
+        victims = [s for s in candidates if not s.slot.pinned] or candidates
         if victims:
             victim = max(victims, key=lambda s: s.n_past)
             self._h_evictions += 1
-            logger.error(
-                "⚠️ KV pressure: evicting stream %s (%d tokens resident)",
+            logger.warning(
+                "⚠️ KV pressure: force-windowing stream %s at %d tokens "
+                "(%d resident)%s",
                 victim.stream_id,
+                len(victim.completion_tokens),
                 victim.n_past,
+                " [pinned session]" if victim.slot.pinned else "",
             )
-            self._retire(
-                victim,
-                error=RetriableEngineError(
-                    "KV cell pool exhausted — stream evicted; retry when load drops"
-                ),
-            )
+            # Same partial-capture courtesy the abandonment path already pays,
+            # so the text is inspectable afterwards rather than only inferable.
+            from inference import runaway_capture
+
+            if len(victim.completion_tokens) >= runaway_capture.CHECK_INTERVAL:
+                self.h_runaway_captures += 1
+                victim.pipeline.dump_capture("force-windowed under KV pressure")
+            self._retire(victim, reason=_END_KV_PRESSURE)
         else:
-            # Only pinned sessions remain — nothing safe to evict here.
-            # (future: force-window the largest session instead.)
+            # Nothing decoding at all — pressure with an empty active set means
+            # the pool is held entirely by resident KV outside this step.
             logger.error(
-                "⚠️ KV pressure with only pinned sessions resident — "
-                "decode cannot proceed until a session ends or windows"
+                "⚠️ KV pressure with no active stream to window — the pool is "
+                "held by resident KV; a session must end or release its seat"
             )
 
     # -- retirement -----------------------------------------------------------
@@ -787,6 +950,7 @@ class BatchedEngine:
         slot._last_dynamic_len = len(s.req.prompt_tokens)
         slot._last_flow_hit = False
         slot._last_flow_key = ""
+        slot._last_end_reason = s.end_reason or ""
         static_head = self._persona_heads.get(slot.persona)
         slot._last_cache_hit = bool(
             static_head and s.req.kv_base > static_head.n_tokens
