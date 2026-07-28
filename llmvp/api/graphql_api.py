@@ -114,6 +114,21 @@ class HealthStatus:
     decode_mode: str = ""
     checked_out: int = 0
     engine_active_streams: Optional[int] = None
+    # WHOSE generation these numbers describe. The tracker is a singleton with
+    # ONE status slot, so a client polling health has always been reading
+    # "the current generation" with no way to tell whether that is its own.
+    # A client whose request is queued behind someone else's would read the
+    # OTHER request's token count and act on it — six requests were cancelled
+    # that way in one run (2026-07-28), each reading an orphan's 52,120.
+    # ``get_status()`` has always returned this; it was simply never exposed.
+    # Empty string = no generation, or a path that does not use the tracker
+    # (remote-provider passthrough) — clients must treat empty as "unknown",
+    # never as "mine".
+    request_id: str = ""
+    # Whether the in-flight generation has closed its thinking block. Lets a
+    # client tell 46k tokens of chain-of-thought from 46k tokens of answer
+    # without parsing anything. Also already computed by ``get_status()``.
+    thinking_complete: Optional[bool] = None
 
 
 @strawberry.type
@@ -214,6 +229,12 @@ class CompletionRequest:
     # resident model as always. A REMOTE entry (provider yaml) -> its
     # adapter. An inactive local config -> error (swapModel first).
     model: Optional[str] = strawberry.field(default=None)
+    # Caller-supplied correlation id, echoed back on the health endpoint as
+    # ``request_id`` while this generation is in flight. Lets a polling client
+    # tell ITS generation's numbers from whatever else the (single-slot)
+    # tracker happens to be holding. None -> the tracker records "" and health
+    # reports "unknown", exactly as before.
+    request_id: Optional[str] = strawberry.field(default=None)
 
 
 @strawberry.type
@@ -407,6 +428,8 @@ class Query:
             prompt_tokens=tracker_status.get("prompt_tokens", 0),
             eval_duration=tracker_status.get("eval_duration"),
             expected_eval_seconds=tracker_status.get("expected_eval_seconds"),
+            request_id=tracker_status.get("request_id", "") or "",
+            thinking_complete=tracker_status.get("thinking_complete"),
             mem_process_rss_mb=status.get("mem_process_rss_mb"),
             mem_system_used_percent=status.get("mem_system_used_percent"),
             mem_system_available_mb=status.get("mem_system_available_mb"),
@@ -560,6 +583,7 @@ class Query:
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             grammar=request.grammar,
+            request_id=request.request_id,
             **extra,
         )
         return CompletionResponse(

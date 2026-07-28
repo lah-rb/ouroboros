@@ -150,6 +150,16 @@ class InferenceResult:
     # Server-measured phase timing: prefill (prompt eval) vs decode (generation).
     prefill_ms: float = 0.0
     decode_ms: float = 0.0
+    # The SERVER's degeneration verdict, when it aborted the turn itself.
+    # LLMVP's guards (llmvp/inference/repetition.py RepetitionGuard, and the
+    # long-cycle distinct-ngram check in runaway_capture.py) name exactly what
+    # they saw — "long-cycle repetition: 12/2048 distinct 24B n-grams" — and
+    # dump the specimen. That reason arrived as an undifferentiated GraphQL
+    # error string, so flows saw a generic failure and the diagnosis was only
+    # ever recovered by grepping the run log afterwards. Carrying it here is
+    # what lets a flow tell "the model looped" from "the server was busy".
+    degenerate: bool = False
+    degenerate_reason: str = ""
 
 
 # ── Terminal output limits ────────────────────────────────────────────

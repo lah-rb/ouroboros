@@ -321,6 +321,7 @@ async def run_completion(
     static_prefix: Optional[str] = None,
     flow_key: Optional[str] = None,
     reasoning: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> Tuple[str, int]:
     """
     Run a non-streaming completion.
@@ -329,6 +330,10 @@ async def run_completion(
         prompt: User prompt text
         max_tokens: Maximum tokens to generate (uses config default if None)
         temperature: Sampling temperature (uses config default if None)
+        request_id: Caller correlation id, published on the health endpoint
+            for the life of this generation. The single-slot generation
+            tracker cannot otherwise tell a polling client whose numbers it
+            is reading. None -> "" (unknown), the pre-existing behavior.
 
     Returns:
         Tuple of (generated_text, approximate_token_count)
@@ -404,6 +409,8 @@ async def run_completion(
         if grammar:
             gen_kwargs["grammar"] = grammar
         gen_kwargs.update(flow_kwargs)
+        if request_id:
+            gen_kwargs["request_id"] = str(request_id)
         # Per-request reasoning HEAD-SWAP for stateless completions. Skipped
         # when a flow prefix is pinned this request — that KV was computed
         # above the DEFAULT head, so swapping under it would misalign.
@@ -830,6 +837,7 @@ async def run_tool_completion(
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     grammar: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> Tuple[str, int]:
     """
     Run a completion with tool-call support.
@@ -839,13 +847,19 @@ async def run_tool_completion(
     Loops up to ``config.tools.max_iterations`` times.
 
     Falls back to plain ``run_completion()`` when tools are disabled.
+
+    ``request_id`` labels EVERY iteration of the loop — they are all the same
+    logical request from the caller's side, so a polling client stays matched
+    across the tool round-trips rather than losing its identity mid-turn.
     """
     from tools.protocol import parse_tool_call, has_tool_call, format_tool_result
     from tools.registry import get_registry
 
     tools_cfg = config.tools
     if not tools_cfg.enabled:
-        return await run_completion(prompt, max_tokens, temperature)
+        return await run_completion(
+            prompt, max_tokens, temperature, request_id=request_id
+        )
 
     max_tokens = resolve_max_tokens(max_tokens)
     temperature = resolve_temperature(temperature)
@@ -879,6 +893,7 @@ async def run_tool_completion(
                 prompt_tokens=full_prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                **({"request_id": str(request_id)} if request_id else {}),
             )
             answer = _strip_delimiter(answer)
             total_tokens += _approximate_token_count(answer)

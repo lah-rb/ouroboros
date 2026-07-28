@@ -14,6 +14,7 @@ import logging
 import asyncio
 import os
 import re
+import uuid
 from typing import Any
 
 import httpx
@@ -72,11 +73,14 @@ query Health {
 }
 """
 
-# Watchdog variant: adds the server's advisory expectedEvalSeconds (worst-case
+# Watchdog variant: adds the fields that let the watchdog know WHOSE generation
+# it is looking at, plus the server's advisory expectedEvalSeconds (worst-case
 # prefill estimate for the in-flight prompt). Kept SEPARATE from HEALTH_QUERY
 # because an older server rejects unknown fields with an empty ``data`` — the
 # watchdog detects that and downgrades to HEALTH_QUERY; other health consumers
-# never need the field and stay on the legacy query.
+# never need the fields and stay on the legacy query. That downgrade is also
+# what selects fallback mode: a server that cannot name the request is a server
+# whose verdicts we cannot use, so the old heuristic takes over.
 HEALTH_QUERY_WATCHDOG = """
 query Health {
     health {
@@ -91,6 +95,10 @@ query Health {
         promptTokens
         evalDuration
         expectedEvalSeconds
+        requestId
+        thinkingComplete
+        decodeMode
+        engineActiveStreams
     }
 }
 """
@@ -241,11 +249,68 @@ def resolve_temperature(
     raise InferenceError(f"Invalid temperature type: {type(value).__name__}")
 
 
-# Hard ceilings on tokens a single generation may produce before the health
-# watchdog cancels it as a runaway. They bound the Qwen3-Next repetition bug
-# (unclamped Gated-DeltaNet decay) which otherwise generates to max_tokens
+# Markers that identify a server-side degeneration verdict inside a GraphQL
+# error message. Each is the leading text of a reason string LLMVP's guards
+# produce (llmvp/inference/repetition.py::RepetitionGuard.observe and
+# token_pipeline.py::TokenPipeline.feed), carried out as a
+# DegenerateGenerationError. Matching on the reason's own words rather than on
+# an exception class name keeps this a plain HTTP client — Ouroboros imports
+# nothing from LLMVP.
+_DEGENERATE_MARKERS = (
+    "run-length ",
+    "cycle period ",
+    "long-cycle",
+    "detokenization failed",
+)
+
+
+def _request_identity(request_body: dict) -> str:
+    """The id the server will publish on health for this request.
+
+    Two shapes, because the server derives the id differently per path:
+
+    * **Session turns** are already identified by their session id — turns are
+      sequential and only one driver issues them, so LLMVP labels the
+      generation with the session id rather than inventing a second key. We
+      must match on the SAME value, so read it out rather than stamping.
+    * **Stateless completions** carry no natural key, so mint one and stamp it
+      into the request variables as ``requestId``.
+
+    Returns "" if the body has neither shape (nothing to match on, so the
+    watchdog stays in fallback mode rather than matching on a guess).
+    """
+    variables = (request_body or {}).get("variables") or {}
+    request_vars = variables.get("request")
+    if not isinstance(request_vars, dict):
+        return ""
+    session_id = request_vars.get("sessionId")
+    if session_id:
+        return str(session_id)
+    request_id = f"ouro-{uuid.uuid4().hex[:16]}"
+    request_vars["requestId"] = request_id
+    return request_id
+
+
+def _degenerate_reason(error_msg: str) -> str:
+    """The server's degeneration reason inside an error message, else "".
+
+    Returns the reason from its marker onward — "long-cycle repetition:
+    12/2048 distinct 24B n-grams …" — so what reaches the flow is what the
+    guard actually saw, not a generic "inference failed".
+    """
+    if not error_msg:
+        return ""
+    lowered = error_msg.lower()
+    hits = [lowered.find(m) for m in _DEGENERATE_MARKERS]
+    starts = [i for i in hits if i >= 0]
+    return error_msg[min(starts) :].strip() if starts else ""
+
+
+# FALLBACK-ONLY ceilings on tokens a single generation may produce before the
+# health watchdog cancels it as a runaway. They bound the Qwen3-Next repetition
+# bug (unclamped Gated-DeltaNet decay) which otherwise generates to max_tokens
 # (262k) — observed as both a ~79-min session hang AND a ~20-min completion
-# (whole-file rewrite) runaway. The stall watchdog can't catch these: a
+# (whole-file rewrite) runaway. The stall watchdog can't catch those: a
 # repetition loop keeps tokens *advancing*, so only a token ceiling stops it.
 #
 # Two tiers because legitimate output sizes differ:
@@ -253,6 +318,21 @@ def resolve_temperature(
 #     a few k) never approach 32k.
 #   - completions (whole-file rewrites, multi-file scaffolds) legitimately reach
 #     ~10-24k, so the ceiling sits higher with headroom — still far below 262k.
+#
+# WHY FALLBACK-ONLY (2026-07-28). LLMVP now detects degeneration itself, and far
+# better than a token count can: RepetitionGuard aborts token-level collapse
+# within tens of tokens, and the long-cycle guard catches paragraph-scale orbits
+# every ~2k tokens — the latter built for THIS exact Qwen3-Next failure, whose
+# post-mortem records "130k+ tokens, 43 watchdog cancellations, text discarded".
+# Both name a reason and dump the specimen. A blind token count cannot tell
+# 46k tokens of chain-of-thought from 46k tokens of loop, and on 2026-07-28 it
+# guessed wrong: a qwen3.6-35b batch turn was cancelled at 49,987 tokens, 200s
+# before the server delivered a complete, correct eleven-file artifact.
+#
+# So when health names the request (LLMVP, tracker-served) the server owns the
+# degeneration verdict and these are advisory only. They still CANCEL where no
+# verdict is available — an older server, or a remote-provider passthrough that
+# never touches the tracker — which is the case they were written for anyway.
 SESSION_RUNAWAY_TOKEN_CEILING = 32768
 COMPLETION_RUNAWAY_TOKEN_CEILING = 49152
 # Guard G1 — last-resort prompt-size backstop (~120k tokens). The per-source
@@ -521,8 +601,9 @@ class InferenceEffect:
         }
 
         # Use the watchdog-backed request for non-session inference. The
-        # completion ceiling bounds a runaway whole-file/scaffold generation
-        # (the stall watchdog misses it — a repetition loop keeps emitting).
+        # completion ceiling is the FALLBACK bound for servers that cannot name
+        # the request; where LLMVP can, its repetition and long-cycle guards
+        # own runaways and the watchdog only checks liveness.
         return await self._request_with_health_watchdog(
             client,
             request_body,
@@ -607,25 +688,29 @@ class InferenceEffect:
         response_key: str = "completion",
         runaway_token_ceiling: int | None = None,
     ) -> InferenceResult:
-        """Execute an inference request with health-polling watchdog.
+        """Execute an inference request with a health-polling LIVENESS watchdog.
 
         Strategy:
         1. Fire the request with no fixed timeout (httpx timeout=None).
         2. Concurrently run a watchdog that polls LLMVP health every 30s.
-        3. If health shows tokens stalled for 60s+ (two consecutive polls
-           with no token increase), cancel the request — the model is stuck.
-        4. If a ``runaway_token_ceiling`` is set and the live token count
-           crosses it, cancel — the model is looping/runaway even though it's
-           still "productively" emitting tokens (the stall check alone misses
-           this; it's how the Qwen3-Next decay-clamp repetition hangs).
-        5. If health shows tokens increasing under the ceiling, the watchdog
-           stays quiet and lets the request complete naturally.
+        3. Act ONLY on health that names this request (``requestId``). The
+           tracker is a single-slot singleton, so an unmatched snapshot is
+           somebody else's generation and says nothing about ours.
+        4. Cancel on LIVENESS failures against our own numbers: tokens stalled
+           past the threshold, prompt eval overrunning the server's own
+           estimate, zero tokens and stalled. A wedged server cannot report its
+           own death — this is the part no server-side detector can replace.
+        5. Leave CONTENT judgement to the server. LLMVP's repetition and
+           long-cycle guards abort degenerate generations themselves, name the
+           reason and dump the specimen; the watchdog relays that verdict
+           instead of guessing at it from a token count.
+        6. Fall back to the historical token-ceiling behavior only where no
+           identity is available (older server, remote-provider passthrough).
 
         ``response_key`` selects the GraphQL payload field — "completion" for
         normal completions, "sessionCompletion" for memoryful session turns.
 
-        This means productive long generations (large files) are never
-        killed prematurely, but stuck *and* runaway generations are caught.
+        Productive long generations are never killed; stuck ones still are.
         """
 
         async def _do_request() -> InferenceResult:
@@ -639,12 +724,25 @@ class InferenceEffect:
                     error_msg = "; ".join(
                         e.get("message", str(e)) for e in data["errors"]
                     )
-                    logger.error("GraphQL inference errors: %s", error_msg)
+                    reason = _degenerate_reason(error_msg)
+                    if reason:
+                        # The server caught a loop and named it. This is the
+                        # verdict the watchdog used to approximate with a token
+                        # ceiling; log it as such rather than burying it in the
+                        # generic GraphQL-error line.
+                        logger.warning(
+                            "Server aborted the generation as degenerate: %s",
+                            reason,
+                        )
+                    else:
+                        logger.error("GraphQL inference errors: %s", error_msg)
                     return InferenceResult(
                         text="",
                         tokens_generated=0,
                         finished=False,
                         error=f"GraphQL errors: {error_msg}",
+                        degenerate=bool(reason),
+                        degenerate_reason=reason,
                     )
 
                 completion = data["data"][response_key]
@@ -692,22 +790,29 @@ class InferenceEffect:
 
         import asyncio
 
+        # Label this request so health can tell the watchdog whether the numbers
+        # it is reading are ours. A server that ignores the label simply reports
+        # no id, and the watchdog runs in fallback mode.
+        request_id = _request_identity(request_body)
+
         # Run the request with the watchdog
         request_task = asyncio.create_task(_do_request())
         watchdog_task = asyncio.create_task(
-            self._health_watchdog(request_task, runaway_token_ceiling)
+            self._health_watchdog(request_task, runaway_token_ceiling, request_id)
         )
 
         try:
             result = await request_task
         except asyncio.CancelledError:
-            # Watchdog cancelled us — stalled or runaway
-            logger.error("Inference cancelled by health watchdog (stalled or runaway)")
+            # Watchdog cancelled us — the server stopped making progress on OUR
+            # request. Note the server may still be decoding: cancelling drops
+            # the consumer, not the generation.
+            logger.error("Inference cancelled by health watchdog (no progress)")
             result = InferenceResult(
                 text="",
                 tokens_generated=0,
                 finished=False,
-                error="Generation aborted by watchdog (stall or runaway)",
+                error="Generation aborted by watchdog (no progress)",
             )
         finally:
             watchdog_task.cancel()
@@ -730,30 +835,81 @@ class InferenceEffect:
         finally:
             await health_client.aclose()
 
-    async def _health_watchdog(
-        self, request_task: asyncio.Task, runaway_token_ceiling: int | None = None
-    ) -> None:
-        """Monitor generation health and cancel if stalled.
+    def _identify(self, health: dict, request_id: str) -> tuple[bool, str]:
+        """Whose generation does this health snapshot describe?
 
-        Starts polling after an initial grace period (60s).
-        Cancels the request if tokens stop advancing for 60s.
+        Returns ``(usable, why)``:
+
+        * ``(True, "mine")`` — health names our request. Its numbers are ours.
+        * ``(True, "unidentified")`` — the server cannot attribute generations
+          at all (no ``requestId`` field, or we never got an id to match on).
+          Usable only in the historical, heuristic sense: this is the
+          older-server / remote-passthrough case, and the caller keeps the
+          token ceiling for it.
+        * ``(False, …)`` — the snapshot is someone else's, or is a blend. Not
+          evidence about our request.
+
+        The blend case is real: under ``decode_mode: batched`` the tracker's
+        single status slot is reset by every interleaved ``start()``, so with
+        more than one stream live the token count belongs to no single request
+        (see GenerationTracker.finish's note on ``quiet=True``). The batched
+        engine reports truthful per-stream numbers at retirement, and owns
+        abandonment and force-windowing per stream — so staying quiet there
+        loses nothing.
+        """
+        if "requestId" not in health:
+            return True, "unidentified"  # server predates identity — heuristic
+        if not request_id:
+            return True, "unidentified"  # nothing to match on — heuristic
+        reported = health.get("requestId") or ""
+        if reported != request_id:
+            return False, f"requestId={reported or '(none)'}"
+        if (health.get("decodeMode") or "") == "batched" and (
+            health.get("engineActiveStreams") or 0
+        ) > 1:
+            return False, "batched blend (numbers span multiple streams)"
+        return True, "mine"
+
+    async def _health_watchdog(
+        self,
+        request_task: asyncio.Task,
+        runaway_token_ceiling: int | None = None,
+        request_id: str = "",
+    ) -> None:
+        """Monitor OUR generation's liveness and cancel if it stops progressing.
+
+        Acts only on health snapshots that name ``request_id``. The generation
+        tracker is a single-slot singleton, so an unmatched snapshot describes
+        somebody else's work and is not evidence about ours — reading it as
+        ours is how six requests were cancelled by an orphan's token count on
+        2026-07-28, each having generated nothing at all.
+
+        The grace and stall clocks therefore start when health first CONFIRMS
+        our generation, not when the request was issued. A request queued behind
+        a busy instance used to burn its grace period waiting and then judge
+        itself on the first poll (the 60,027 ms cancels in that same run).
+
+        When no identity is available — an older server, or a remote-provider
+        passthrough that never touches the tracker — the loop falls back to the
+        historical behavior including ``runaway_token_ceiling``.
         """
         import asyncio as _asyncio
 
-        grace_period = self._watchdog_grace_s
         poll_interval = self._watchdog_poll_s
         stall_threshold = self._watchdog_stall_s
 
-        await _asyncio.sleep(grace_period)
+        await _asyncio.sleep(self._watchdog_grace_s)
 
         last_token_count = -1
+        advisory_logged = False
 
-        # Prefer the expectedEvalSeconds-enriched health query (the
-        # server's advisory worst-case eval estimate for the in-flight
-        # prompt — model speed knowledge stays server-side). An older
-        # server rejects the unknown field, which surfaces as an empty
-        # ``data`` — downgrade to the legacy query ONCE rather than
-        # silently polling a dead query for the whole run.
+        # Prefer the enriched health query: requestId (whose generation this
+        # is), thinkingComplete, and the server's advisory expectedEvalSeconds
+        # worst-case prefill estimate — model-speed knowledge stays server-side.
+        # An older server rejects the unknown fields, which surfaces as an empty
+        # ``data`` — downgrade to the legacy query ONCE rather than silently
+        # polling a dead query for the whole run. That downgrade also SELECTS
+        # fallback mode: no identity means no server verdict to trust.
         watchdog_query = HEALTH_QUERY_WATCHDOG
 
         while not request_task.done():
@@ -762,8 +918,8 @@ class InferenceEffect:
 
                 if not health and watchdog_query is not HEALTH_QUERY:
                     logger.info(
-                        "Health watchdog: server lacks expectedEvalSeconds "
-                        "— falling back to legacy health query"
+                        "Health watchdog: server lacks the enriched health "
+                        "fields — falling back to legacy query (heuristic mode)"
                     )
                     watchdog_query = HEALTH_QUERY
                     continue
@@ -777,8 +933,36 @@ class InferenceEffect:
                 eval_dur = health.get("evalDuration")
                 expected_eval = health.get("expectedEvalSeconds")
 
+                identified, why = self._identify(health, request_id)
+                if not identified:
+                    # Not our numbers. Someone else holds the instance, or the
+                    # server cannot attribute the generation. Either way there
+                    # is nothing here to judge — no cancel branch is reached, so
+                    # waiting in a queue is free however long it takes.
+                    #
+                    # Deliberately NOT resetting last_token_count: an
+                    # interleaved foreign snapshot must not re-arm our stall
+                    # tracking. Resetting it to -1 would make the next matched
+                    # poll take the "tokens advancing" branch unconditionally
+                    # (anything > -1) and skip the stall check — masking a real
+                    # stall for as long as another request keeps appearing.
+                    # Stall is decided by the server's secondsSinceLastToken
+                    # anyway, which our polling gaps cannot distort.
+                    logger.debug(
+                        "Health watchdog: health is not ours (%s) — waiting", why
+                    )
+                    await _asyncio.sleep(poll_interval)
+                    continue
+
+                # Heuristic mode only: no server verdict is available for this
+                # request, so the blind token ceiling is still the best bound
+                # there is. When the server DOES own the verdict its repetition
+                # and long-cycle guards abort the turn themselves, far earlier
+                # and with the reason named.
+                ceiling_applies = why == "unidentified" and runaway_token_ceiling
+
                 if gen_active:
-                    if runaway_token_ceiling and tokens > runaway_token_ceiling:
+                    if ceiling_applies and tokens > runaway_token_ceiling:
                         # Tokens still advancing, but past the sane ceiling
                         # for this request type — a runaway/repetition loop
                         # (stall detection alone never fires on these).
@@ -791,6 +975,27 @@ class InferenceEffect:
                         )
                         request_task.cancel()
                         return
+                    if (
+                        runaway_token_ceiling
+                        and not ceiling_applies
+                        and tokens > runaway_token_ceiling
+                        and not advisory_logged
+                    ):
+                        # Past where the old ceiling would have fired. The
+                        # server's guards have NOT called this degenerate, so it
+                        # is a long generation, not a loop — keep the signal for
+                        # post-run analysis and let it finish.
+                        advisory_logged = True
+                        logger.warning(
+                            "Health watchdog: long generation — %d tokens past "
+                            "the advisory ceiling %d (phase=%s, thinking_done=%s"
+                            "). Server guards have not flagged it; NOT "
+                            "cancelling.",
+                            tokens,
+                            runaway_token_ceiling,
+                            phase,
+                            health.get("thinkingComplete"),
+                        )
                     if tokens > last_token_count:
                         # Model is actively generating — reset stall tracking
                         last_token_count = tokens
@@ -979,8 +1184,11 @@ class InferenceEffect:
         # path previously fired a raw POST on the timeout=None client with no
         # guard, so a stuck or runaway turn (e.g. the Qwen3-Next long-context
         # decay-clamp repetition loop) could hang the agent indefinitely until
-        # an external kill. The ceiling bounds runaways; stall detection bounds
-        # stuck instances — protecting all diagnosis reasoning + AST edits.
+        # an external kill. Stall detection bounds stuck instances; the ceiling
+        # is the fallback bound where the server cannot name the request (see
+        # its definition) — LLMVP's own guards own runaways otherwise. The
+        # session id is what health publishes for these turns, so the watchdog
+        # matches on it without anything extra being sent.
         return await self._request_with_health_watchdog(
             client,
             request_body,

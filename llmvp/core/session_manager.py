@@ -689,6 +689,15 @@ class SessionManager:
             # the scaling gate (deadlock against a draining scaler).
             gen_kwargs["_nested_guard"] = True
 
+            # Publish WHOSE generation this is on the health endpoint. The
+            # session id is the natural identity: turns are sequential and only
+            # this session's driver issues them, so "session X is generating"
+            # unambiguously means "the caller polling for session X". Without
+            # it, a client polling health during its own turn cannot tell its
+            # numbers from another seat's — which is how six requests were
+            # cancelled by an orphan's token count on 2026-07-28.
+            gen_kwargs["request_id"] = session_id
+
             # Degeneration-retry recipe (session_turn_complete): per-request
             # Llama.generate sampling overrides, merged over the config
             # defaults in the backend.
