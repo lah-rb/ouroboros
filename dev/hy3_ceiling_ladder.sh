@@ -52,17 +52,12 @@ export PATH="$HOME/.local/bin:$PATH" PYTHONPATH="$ROOT"
 
 # ── 0. Save what a reboot would eat ──────────────────────────────────
 log "=== archiving /tmp before a run that may reboot the machine ==="
-mkdir -p "$ARCHIVE"
-for d in /tmp/tier /tmp/qwen_panel /tmp/laguna_panel; do
-  [ -d "$d" ] || continue
-  if cp -R "$d" "$ARCHIVE/" 2>/dev/null; then
-    log "  archived $d -> $ARCHIVE/$(basename "$d")"
-  else
-    log "  ABORT — could not archive $d. Not proceeding: this run can destroy it."
-    exit 1
-  fi
-done
-log "  archive size: $(du -sh "$ARCHIVE" | cut -f1)   at $ARCHIVE"
+if bash "$ROOT/dev/preserve_run_artifacts.sh" "pre-hy3-$STAMP" 2>&1 | tee -a "$LOG" | grep -q "SAFE TO REBOOT"; then
+  log "  archive complete at $ARCHIVE"
+else
+  log "  ABORT — archive failed. Not proceeding: this run can destroy /tmp."
+  exit 1
+fi
 
 while pgrep -f "[o]uroboros.py start" >/dev/null; do
   log "  waiting for an in-flight mission to finish…"; sleep 120
