@@ -477,7 +477,57 @@ class LlamaCppBackend(BaseBackend):
             # native n-gram speculative decoding (gated by config.model.speculative).
             n_batch=int(getattr(self.config.model, "n_batch", 2048) or 2048),
             draft_model=self._make_draft(),
+            # RoPE/YaRN overrides — omitted entirely unless a config sets them,
+            # so the default path is byte-identical to before this existed.
+            **self._rope_kwargs(),
         )
+
+    # RoPE/YaRN params llama.cpp accepts. Each maps a config field of the same
+    # name to the Llama() kwarg; unset (None) means "don't pass it", which
+    # leaves llama.cpp's own resolution — GGUF metadata plus its defaults —
+    # exactly as it was.
+    _ROPE_FIELDS = (
+        "rope_scaling_type",
+        "rope_freq_base",
+        "rope_freq_scale",
+        "yarn_ext_factor",
+        "yarn_attn_factor",
+        "yarn_beta_fast",
+        "yarn_beta_slow",
+        "yarn_orig_ctx",
+    )
+
+    def _rope_kwargs(self) -> dict:
+        """Explicit RoPE/YaRN overrides, and a record of what is in force.
+
+        WHY THIS EXISTS. Laguna's GGUF declares
+        ``rope.scaling.yarn_attn_factor = 1.4852`` while poolside's own guidance
+        is 1.0, and llama-cpp-python's default is also 1.0 — so which value the
+        model actually ran under was not merely unset, it was UNOBSERVABLE: we
+        never passed the parameter and nothing logged the resolved value. The
+        same GGUF asks for a 128x YaRN stretch (8192 -> 1M) that we never use at
+        our working contexts.
+
+        Both halves are fixed here: the params become settable, and the ones the
+        GGUF declares are logged at load whether or not we override them, so the
+        question "what is attn_factor right now" always has an answer.
+        """
+        out: dict = {}
+        for field in self._ROPE_FIELDS:
+            val = getattr(self.config.model, field, None)
+            if val is not None:
+                out[field] = val
+        if out:
+            log.info(
+                "🧭 RoPE/YaRN overrides: %s",
+                ", ".join(f"{k}={v}" for k, v in sorted(out.items())),
+            )
+        else:
+            log.info(
+                "🧭 RoPE/YaRN: no overrides — llama.cpp resolves from GGUF "
+                "metadata and its own defaults"
+            )
+        return out
 
     def _create_shared_instance(
         self, primary: Any, n_ctx_override: Optional[int] = None
@@ -2781,7 +2831,7 @@ class LlamaCppBackend(BaseBackend):
             measured = getattr(m, "kv_bytes_per_token_measured", None)
             if measured:
                 kv_bytes = int(measured) * int(m.n_ctx)
-                logger.info(
+                log.info(
                     "🧮 KV preflight: using MEASURED %.2f MB/token (config) "
                     "instead of the %.2f MB/token header formula",
                     int(measured) / 1e6,

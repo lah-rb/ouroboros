@@ -87,6 +87,27 @@ class ModelConfig(BaseModel):
     # the n_batch=2048 default — so wiring them changes nothing until explicitly tuned.
     flash_attn_type: str = "auto"  # auto (-1, llama.cpp decides) | on (1) | off (0)
     n_batch: int = 2048  # logical prefill batch (the prior silent default)
+
+    # ── RoPE / YaRN overrides ─────────────────────────────────────────
+    # All None by default: unset means the parameter is NOT passed to
+    # llama.cpp, which then resolves it from GGUF metadata and its own
+    # defaults — i.e. exactly the behaviour that existed before these fields.
+    #
+    # These matter because a GGUF's declared scaling is tuned for the context
+    # the publisher targeted, not the one we run. Laguna declares
+    # `yarn_attn_factor = 1.4852` (poolside's own guidance says 1.0) and a
+    # scaling factor of 128 to stretch an 8192 base to 1M — while we run at
+    # 65536, an 8x stretch. Until now none of that was settable OR visible.
+    #
+    # rope_scaling_type: -1 unspecified | 0 none | 1 linear | 2 yarn
+    rope_scaling_type: Optional[int] = None
+    rope_freq_base: Optional[float] = None
+    rope_freq_scale: Optional[float] = None
+    yarn_ext_factor: Optional[float] = None
+    yarn_attn_factor: Optional[float] = None
+    yarn_beta_fast: Optional[float] = None
+    yarn_beta_slow: Optional[float] = None
+    yarn_orig_ctx: Optional[int] = None
     # Speculative decoding via the binding's native n-gram-map draft
     # (LlamaNGramMapDecoding): O(1) incremental n-gram lookup over the live context,
     # LOSSLESS (the target verifies every drafted token), zero extra model. Well-suited
