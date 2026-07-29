@@ -809,6 +809,18 @@ class LlamaCppBackend(BaseBackend):
             # re-runs this warm path — instead of swallowing the failure.
             log.error(f"❌ Warm-up failed for pool slot #{idx}: {exc}")
             llm_inst._needs_context_refresh = True
+            # A WARM-UP failure is the strongest unservable signal there is:
+            # the slot could not prefill its own static prefix, before a single
+            # request arrived. Routing it through the same accounting as a
+            # generate-path failure is what lets a configuration that cannot
+            # decode take itself out at BOOT rather than after user work fails.
+            #
+            # The Hy3 40960 rung is the case: -3 on a 1,783-token static eval,
+            # a heal, then -1 "exceeding capacity" forever. The old code counted
+            # nothing here (_mark_decode_failure is only called from the
+            # generate path), so unhealed_decode_failures stayed 0 through four
+            # failed generations and the switch never armed.
+            self._mark_decode_failure(llm_inst, exc)
 
     def _rewarm_after_teardown(self) -> None:
         """Re-warm the primary instance after scale-down.
@@ -1449,6 +1461,22 @@ class LlamaCppBackend(BaseBackend):
                 self._active_generations,
                 len(live),
             )
+
+    @staticmethod
+    def _is_fatal_decode(exc: Exception) -> bool:
+        """Codes that mean the CONTEXT is unusable, not that the caller erred.
+
+        -3 (GGML_STATUS_FAILED) latches the Metal backend. -2 is an allocation
+        failure. -1 is normally a caller bug — an empty or oversized batch — but
+        it is included because it is what the SAME fault re-presents as after a
+        rebuild: the Hy3 40960 rung failed -3 on its static eval, healed, then
+        returned -1 "Invalid input batch (exceeding capacity)" on every attempt
+        with an unchanged 1,800-token batch that fits n_batch 2048 comfortably.
+        A batch that was valid before a rebuild and invalid after it is a
+        context that cannot serve, not a malformed request.
+        """
+        s = str(exc)
+        return any(f"code {c}" in s for c in ("-3", "-2", "-1"))
 
     def _mark_decode_failure(self, inst: Any, exc: Exception) -> None:
         """Record a fatal decode failure and flag the instance for a context
@@ -3714,7 +3742,7 @@ class LlamaCppBackend(BaseBackend):
             # and every later decode on this CONTEXT fails until it is
             # recreated. Mark the instance so release/acquire heals it via a
             # targeted context refresh; -2 (alloc failed) gets the same cure.
-            if "code -3" in str(e) or "code -2" in str(e):
+            if self._is_fatal_decode(e):
                 self._mark_decode_failure(instance, e)
             raise
         finally:

@@ -4,11 +4,10 @@
 #
 #   python3 dev/daemonize.py ~/ouroboros-runs/hy3_fine_console.log bash dev/hy3_fine_sweep.sh
 #
-# ── WHAT ROUND 2 LEFT ────────────────────────────────────────────────
-# 32768 decoded. 49152 and 65536 LOADED, reported healthy, and failed every
-# decode with llama_decode -3. 81920 rebooted the machine mid-load. So the
-# functional wall sits somewhere in a 16k-token band nobody has looked inside.
-# Rungs here step 4096 at a time through it.
+# ── WHERE THE WALL IS NOW ────────────────────────────────────────────
+# Round 3 bracketed it: 32768 and 36864 decoded, 40960 failed all four
+# generations. So the wall sits in a 4k band. Rungs here step 2048 through it —
+# 36864 (known good) up to 43008 (known bad) — to name the exact figure.
 #
 # ── WHY EACH RUNG GENERATES FOUR TIMES ───────────────────────────────
 # Round 2 generated ONCE per rung, which cannot exercise the new unservable
@@ -26,14 +25,22 @@
 # that limps. That is the switch working, and this sweep is its first live
 # test — it has only ever been exercised in unit tests.
 #
-# ── AND IT VALIDATES THE CONFIG FIX ──────────────────────────────────
-# Round 2 ran with NO static tokens: prompt.persona_file was unset, so
-# PersonaConfig failed validation and the server fell back to lightweight mode
-# with no system block — which is why the model ignored reasoning_effort:no_think
-# and returned empty content. Every rung below asserts the static buffer loaded
-# AND that output is non-empty, so a repeat of that failure stops the sweep
-# instead of being logged as OK. Round 2's rung criteria passed two rungs that
-# could not decode at all; these do not.
+# ── AND IT VALIDATES TWO CONFIG FIXES ────────────────────────────────
+# Round 3 found both by failing:
+#
+# 1. prompt.persona_file was unset -> PersonaConfig(None) failed validation ->
+#    no static tokens -> no system block at all. Rungs assert the buffer loaded.
+# 2. system_block.template lacked {reasoning_prefix}, and reasoning_prefix
+#    lacked {reasoning}. The directive was BUILT and then silently discarded, so
+#    the model thought on every turn despite reasoning_effort: no_think, burned
+#    its budget on CoT and returned empty content. Rungs now count how many
+#    generations opened a think block: with no_think honoured that should be
+#    ~0, and a high count means the dial still is not reaching the model.
+#
+# The second is the one worth watching. Hy3 appends its reasoning line to the
+# END of the system prompt; this renderer puts the prefix at the FRONT. If
+# thinking persists with the directive verifiably present, position is the
+# reason and the family needs a post_system placement instead.
 set -u
 ROOT=/Users/lah-rb/Repos/ouroboros
 RUNS=$HOME/ouroboros-runs
@@ -43,6 +50,12 @@ CFG=hy3-reap-200b-a21
 BOOT_TIMEOUT=1200
 RESTORE_CFG=gpt-oss-120b-a5-swarm-524k
 GENS_PER_RUNG=4
+# 1500, not 300. Round 3 truncated the model mid-chain-of-thought and scored
+# the empty result as a rung failure — an artifact of the budget, not the
+# context. With the reasoning directive now actually rendering, no_think
+# should keep turns short anyway; this is headroom so a thinking turn can
+# still land rather than being cut and counted against the rung.
+MAXTOK=1500
 
 mkdir -p "$RUNS"
 log(){ echo "[$(date '+%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; sync; }
@@ -104,7 +117,7 @@ rung(){
     fi
     local ans txt
     ans=$(curl -s -m 600 -X POST http://localhost:8008/graphql -H 'Content-Type: application/json' \
-      -d '{"query":"query($p:String!,$m:Int!){completion(request:{prompt:$p,maxTokens:$m}){text tokensGenerated}}","variables":{"p":"Write a Python function that merges two sorted lists. Return only the code.","m":300}}' 2>/dev/null)
+      -d '{"query":"query($p:String!,$m:Int!){completion(request:{prompt:$p,maxTokens:$m}){text tokensGenerated}}","variables":{"p":"Write a Python function that merges two sorted lists. Return only the code.","m":'$MAXTOK'}}' 2>/dev/null)
     case "$ans" in
       *"code -3"*|*"Fatal Decode"*) fail=$((fail+1)); log "  gen$i: DECODE -3" ;;
       *'"text": ""'*)               empty=$((empty+1)); log "  gen$i: EMPTY (decoded, nothing extracted)" ;;
@@ -113,16 +126,19 @@ rung(){
     esac
   done
 
+  # Did the reasoning dial reach the model? Counted from the server's own raw
+  # answers, not inferred from the stripped text.
+  local thinking; thinking=$(grep -c "raw answer len=[0-9]*, first100='<think:opensource>" "$slog" 2>/dev/null || echo 0)
   local h; h=$(curl -s -m 5 -X POST http://localhost:8008/graphql -H 'Content-Type: application/json' \
     -d '{"query":"{ health { decodeFailures unhealedDecodeFailures unservable } }"}' 2>/dev/null | head -c 160)
   local peak; peak=$(awk -F, '/^S,/{if($4+0>m)m=$4+0} END{printf "%.1f", m}' "$(ls -t "$RUNS"/wired_hy3-fine_*.csv | head -1)" 2>/dev/null)
-  log "RUNG $n  ok=$ok fail=$fail empty=$empty  kv=${kvmib}MiB peak_wired=${peak}GB  health=$h"
+  log "RUNG $n  ok=$ok fail=$fail empty=$empty thinking=$thinking/$GENS_PER_RUNG  kv=${kvmib}MiB peak_wired=${peak}GB  health=$h"
   [ "$ok" -gt 0 ] || return 4   # loaded but never produced usable output
   return 0
 }
 
 log "=== Hy3 fine sweep (4 generations per rung — the kill switch needs repeats) ==="
-for pair in "32768 122" "36864 124" "40960 126" "45056 128" "49152 130"; do
+for pair in "36864 124" "38912 125" "40960 126" "43008 127"; do
   set -- $pair
   rung "$1" "$2"; rc=$?
   case $rc in

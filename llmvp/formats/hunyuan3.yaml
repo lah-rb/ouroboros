@@ -118,9 +118,23 @@ system_block:
   # exactly no_think | low | high — the template RAISES on anything else, so a
   # typo here is a hard failure at render rather than a silent downgrade.
   reasoning_default: "no_think"
-  reasoning_prefix: "<｜reasoning_mode:opensource｜>reasoning_effort:"
+  reasoning_prefix: "<｜reasoning_mode:opensource｜>reasoning_effort:{reasoning}\n"
   channel_directive: ""
-  template: "{identity}\n{persona}"
+  # {reasoning_prefix} IS LOAD-BEARING and was missing. The renderer computes
+  # the prefix from reasoning_prefix + the resolved level, then substitutes it
+  # into this template — a template without the placeholder silently DISCARDS
+  # it. That is what happened on 2026-07-28: the directive was built correctly,
+  # dropped here, and the model thought on every turn despite
+  # reasoning_effort: no_think, burning its whole budget on CoT and returning
+  # empty content.
+  #
+  # POSITION IS A KNOWN DEVIATION. Hy3's own chat template APPENDS the
+  # reasoning line to the END of the system prompt; this renderer places the
+  # prefix at the FRONT by contract (see the edge-trim note in renderer.py,
+  # which relies on system_content.startswith(prefix)). Whether the model
+  # honours it leading rather than trailing is UNMEASURED — verify before
+  # trusting reasoning control on this family.
+  template: "{reasoning_prefix}{identity}\n{persona}"
 
 # The canonical router speaks low/medium/high; Hunyuan's template accepts ONLY
 # no_think | low | high and RAISES on anything else. That is exactly what this
