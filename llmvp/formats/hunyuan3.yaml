@@ -118,7 +118,12 @@ system_block:
   # exactly no_think | low | high — the template RAISES on anything else, so a
   # typo here is a hard failure at render rather than a silent downgrade.
   reasoning_default: "no_think"
-  reasoning_prefix: "<｜reasoning_mode:opensource｜>reasoning_effort:{reasoning}\n"
+  # EMPTY DELIBERATELY — see post_system below. reasoning_prefix is folded into
+  # system_content, which tokenize_segments treats as CONTENT (special parsing
+  # OFF, so untrusted text cannot forge a control token). That is the right
+  # default and it makes this the wrong home for a control token: the directive
+  # rendered as lookalike TEXT and the model never saw token 120044.
+  reasoning_prefix: ""
   channel_directive: ""
   # {reasoning_prefix} IS LOAD-BEARING and was missing. The renderer computes
   # the prefix from reasoning_prefix + the resolved level, then substitutes it
@@ -134,7 +139,26 @@ system_block:
   # which relies on system_content.startswith(prefix)). Whether the model
   # honours it leading rather than trailing is UNMEASURED — verify before
   # trusting reasoning control on this family.
-  template: "{reasoning_prefix}{identity}\n{persona}"
+  template: "{identity}\n{persona}"
+  # THE DIRECTIVE LIVES HERE, and the placement is doubly correct.
+  #
+  # 1. TOKENIZATION. post_system is emitted as a FRAMING segment, so
+  #    <｜reasoning_mode:opensource｜> is parsed to its canonical id 120044 —
+  #    a type-3 CONTROL token in this vocab. In reasoning_prefix it was content
+  #    and tokenized to lookalike pieces, so the control never reached the model.
+  #    tekken uses post_system for its own reasoning_effort for the same reason.
+  # 2. POSITION. Hy3's own chat template does
+  #      system_prompt = system_prompt + reasoning_mode_token + "reasoning_effort:" + level
+  #    i.e. appended AFTER the system content — which is exactly where
+  #    post_system emits, before the first user turn.
+  #
+  # MEASURED 2026-07-28, and worth stating so nobody re-runs it: with the token
+  # canonical and correctly placed, no_think / low / high produced IDENTICAL
+  # behaviour (empty think block, 9 generations). The dial does not appear to
+  # work on this REAP build. Kept correct anyway — a control that is right and
+  # ignored is a different problem from one that was never delivered, and only
+  # the first can be re-tested against a future build.
+  post_system: "<｜reasoning_mode:opensource｜>reasoning_effort:{reasoning}"
 
 # The canonical router speaks low/medium/high; Hunyuan's template accepts ONLY
 # no_think | low | high and RAISES on anything else. That is exactly what this

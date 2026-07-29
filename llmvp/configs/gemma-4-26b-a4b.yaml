@@ -1,0 +1,94 @@
+# Gemma-4 26B-A4B (unsloth UD-QAT) — the FIRST MoE gemma in the fleet.
+#
+# gemma-4-31b is dense; this one is 128 experts with 8 active, 4B live params on
+# 26B total, at 14.2 GB. That makes it the cheapest model here by weights and a
+# natural tournament entrant.
+#
+# ── THE KV NUMBER BELOW IS A CEILING, NOT A MEASUREMENT ──────────────
+# The header formula gives 480 KiB/token (30 layers x 8 kv-heads x 512 head-dim)
+# and it is KNOWN WRONG for this architecture. gemma-4 interleaves sliding-window
+# and full attention — the per-layer head counts confirm it — while the formula
+# assumes swa_full gives every layer a full-size cache. On the dense sibling that
+# over-predicted by roughly 2x, which is exactly why
+# kv_bytes_per_token_measured exists (gemma-4-31b carries 870,000 against a
+# formula figure near double).
+#
+#   n_ctx    formula KV    weights+KV     if it over-predicts ~2x
+#   32768        16.1 GB       30.4 GB              ~22 GB
+#   65536        32.2 GB       46.5 GB              ~30 GB   <- THIS CONFIG
+#  131072        64.4 GB       78.7 GB              ~46 GB
+#
+# 65536 is sized against the PESSIMISTIC figure so the first boot cannot be a
+# surprise. MEASURE IT: read the "KV buffer size" the loader reports, divide by
+# n_ctx, and put the real number in kv_bytes_per_token_measured — then the
+# preflight guards real geometry instead of a doubled estimate, and 131072 very
+# likely opens up.
+#
+# FAMILY: gemma, unchanged. The FSM treats gemma as NONE-shape via an explicit
+# override (its template pre-supplies an empty closed thought block, so
+# generation is pure content from the first token) — that is about the template,
+# not the parameter count, so it carries over to the MoE unchanged.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 65536
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "gemma-4-26b-a4b"
+  family: "gemma"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf
+  n_ctx: 65536
+  model_max_context: 262144
+  # 50 against the PESSIMISTIC 46.5 GB. Deliberately sized on the formula rather
+  # than a hoped-for measured value: a preflight tuned to an estimate we expect
+  # to be wrong in our favour is not a guard.
+  kv_preflight_gb: 50
+  # Left UNSET on purpose — fill it after the first boot from the reported KV
+  # buffer. Guessing it from the dense sibling's 870,000 would be arithmetic on
+  # an arithmetic error; the whole point of the field is that it is measured.
+  # kv_bytes_per_token_measured: <measure me>
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: true
+  swa_full: false
+  kv_unified: false
+  session_full_replay: true
+  resident_seq_cache: false
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+  system_prompt: "You are a helpful assistant."
+
+generation:
+  max_tokens_default: 65536
+  temperature_default: 1.0
+  top_p: 0.95
+  top_k: 64
+  min_p: 0.0
+  repetition_guard_enabled: null
+  long_cycle_guard_enabled: null
+
+knowledge:
+  tokens_bin: ./data/gemma-4-26b-a4b.tokens.bin
+  token_limit: 32768
+
+resources:
+  decode_mode: pool
+  cpu_threads: 16
+
+logging:
+  enabled: true
+  directory: ./logs

@@ -1,0 +1,86 @@
+# GLM-4.7-Flash (Zhipu) — mudler APEX I-Balanced.
+#
+# THE SURPRISE IS THE ATTENTION. The GGUF reports arch=deepseek2, not a glm
+# arch: this model uses MLA (multi-head latent attention) — n_kv_head 1 with
+# head_dim 576 — so KV costs 106 KiB/token against laguna's 192, hy3's 324 and
+# gemma-4-26B's formula figure of 480. Combined with 22.1 GB of weights that
+# makes it the roomiest model in the fleet by a wide margin:
+#
+#   n_ctx    KV GB   weights+KV
+#    65536     7.1        29.1
+#   131072    14.2        36.2   <- THIS CONFIG
+#   202752    22.0        44.1   full trained range, still trivial here
+#
+# 131072 is chosen for comparability with the rest of the fleet rather than
+# because anything forces it. The trained range is 202752 and there is room for
+# all of it; raise n_ctx, graphql.max_tokens and generation.max_tokens_default
+# together if a run wants it.
+#
+# FAMILY: formats/glm4.yaml, new for this model. Two things to know — the
+# document prefix is [gMASK]<sop> and [gMASK] is ALSO the BOS id (154822), so
+# exactly one emitter is allowed or the model sees it twice; and thinking-off is
+# a bare prefilled </think>, laguna's close-only mechanic rather than an omitted
+# opener.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 131072
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "glm-4.7-flash"
+  family: "glm4"
+  path: /Users/lah-rb/.lmstudio/models/mudler/GLM-4.7-Flash-APEX-GGUF/GLM-4.7-Flash-APEX-I-Balanced.gguf
+  n_ctx: 131072
+  model_max_context: 202752
+  # 40 against a computed 36.2 GB. Generous because there is nothing to guard
+  # against at this size — the point of the number is that it still refuses a
+  # run-away n_ctx, not that it is tight.
+  kv_preflight_gb: 40
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: true
+  swa_full: false
+  kv_unified: false
+  session_full_replay: true
+  resident_seq_cache: false
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+  system_prompt: "You are a helpful assistant."
+
+generation:
+  max_tokens_default: 131072
+  # From formats/glm4.yaml and NOT vendor guidance — the GGUF carries no
+  # sampling recommendations. Replace with Zhipu's card values before any
+  # comparative run.
+  temperature_default: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  repetition_guard_enabled: null
+  long_cycle_guard_enabled: null
+
+knowledge:
+  tokens_bin: ./data/glm-4.7-flash.tokens.bin
+  token_limit: 32768
+
+resources:
+  decode_mode: pool
+  cpu_threads: 16
+
+logging:
+  enabled: true
+  directory: ./logs

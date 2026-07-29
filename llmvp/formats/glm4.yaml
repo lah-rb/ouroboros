@@ -1,0 +1,125 @@
+# GLM-4 format schema — Zhipu GLM-4.x
+#
+# Read out of GLM-4.7-Flash-APEX-I-Balanced (2026-07-28). Every value comes from
+# the model's own chat template, not from a family it resembles.
+#
+#     [gMASK]<sop>
+#     <|system|>{system}
+#     <|user|>{user}
+#     <|assistant|><think>…</think>{answer}
+#
+# generation prompt: "<|assistant|>" + ("<think>" if thinking else "</think>")
+#
+# ── WHY IT IS NOT A CHATML ALIAS ─────────────────────────────────────
+# The thinking style matches chatml (bare <think>/</think>, no suffix) but
+# nothing else does: a two-token document prefix, pipe-delimited role tokens
+# rather than <|im_start|>role, and no closer on any turn — the next role token
+# is the delimiter, and only the assistant turn ends, on EOS. Aliasing would
+# also lose the prefix, which is the part the model cannot do without.
+#
+# ── THE ONE TRAP: [gMASK] IS ALSO THE BOS ────────────────────────────
+# tokenizer.ggml.bos_token_id = 154822 = [gMASK], and the template ALSO emits
+# `[gMASK]<sop>` itself. add_bos_token is unset in this GGUF, so whether
+# llama.cpp prepends BOS is its own default — and if it does while this schema
+# emits the prefix too, the model sees [gMASK] twice. That is the tekken BOS
+# failure exactly (see schema.py). Hence `bos: ""` below and the prefix carried
+# in the system role's framing instead: one emitter, not two. VERIFY on first
+# boot by dumping the static prefix — a duplicate here is silent.
+#
+# ── TOKEN TYPES, CHECKED ─────────────────────────────────────────────
+#   [gMASK] 154822 · <sop> 154824 · <|system|> 154826 · <|user|> 154827
+#   <|assistant|> 154828 · <|endoftext|> 154820      all type-3 CONTROL
+#   <think> 154841 · </think> 154842                 type-4 USER_DEFINED
+#
+# The role tokens are CONTROL tokens, so they must land in FRAMING segments to
+# tokenize canonically — tokenize_segments handles that, and role_tokens/bos are
+# framing by construction. This is what the hunyuan3 reasoning directive got
+# wrong by living in system_content (2026-07-28): a control token rendered as
+# content becomes lookalike text and the model never sees it.
+#
+# ── STATUS: READ, NOT OBSERVED ───────────────────────────────────────
+# Nothing here has been rendered against the live model yet. The tekken family
+# shipped with `thinking: true` lying for weeks because nobody checked, so treat
+# every value as provisional until a boot confirms it.
+
+family: glm4
+display_name: "GLM-4 (Zhipu)"
+
+tokens:
+  # Generic fallbacks. Every real role overrides these below; these two spell the
+  # <|role|> pattern so render_generation_prompt — which rebuilds the assistant
+  # opener as msg_open + roles["assistant"] + msg_content and does NOT read
+  # role_tokens — reconstructs <|assistant|> exactly. Getting this wrong on
+  # hunyuan3 produced a token that did not exist.
+  msg_open: "<|"
+  msg_content: "|>"
+  msg_close: ""
+  gen_stop: "<|endoftext|>"
+  history_close: "<|endoftext|>"
+  # EMPTY ON PURPOSE — see the [gMASK] note above. The document prefix is
+  # emitted once, by the system role, so it cannot be doubled.
+  bos: ""
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: "assistant"
+
+role_tokens:
+  # The document prefix rides on the system open. GLM's template emits
+  # `[gMASK]<sop>` before anything else and the system block is always first in
+  # our render order, so this places it exactly once at the front.
+  system:
+    msg_open: "[gMASK]<sop><|system|>"
+    msg_content: ""
+    msg_close: ""
+  user:
+    msg_open: "<|user|>"
+    msg_content: ""
+    msg_close: ""
+  assistant:
+    msg_open: "<|assistant|>"
+    msg_content: ""
+    msg_close: "<|endoftext|>"
+
+thinking:
+  style: inline_tags
+  open_tag: "<think>"
+  close_tag: "</think>"
+  # CLOSE-ONLY PREFILL, the same mechanic as laguna. GLM does not suppress
+  # reasoning by omitting the opener (step-3.7) or by supplying an empty closed
+  # block (gemma-4) — its template emits a BARE </think> after <|assistant|>:
+  #   <|assistant|>{{ '</think>' if not enable_thinking else '<think>' }}
+  # i.e. it declares the think block already finished.
+  prefill_closed_when_disabled: true
+  prefill_closed_close_only: true
+  # UNMEASURED. step-3.7's gate was only correct because a probe established
+  # thinking is prefill-gated there; whether GLM honours a per-level gate is
+  # unknown, and copying the mechanic across families on assumption is how it
+  # goes wrong.
+  gate_levels: []
+
+system_block:
+  identity: "You are a helpful assistant."
+  reasoning_default: ""
+  reasoning_prefix: ""
+  channel_directive: ""
+  template: "{identity}\n{persona}"
+
+traits:
+  fold_system_into_first_user: false
+  supports_developer_role: false
+
+generation:
+  # NOT vendor guidance — the GGUF carries none and the model card was not
+  # consulted. These are conservative MoE defaults, marked so nobody later reads
+  # them as Zhipu's. Replace before any comparative run.
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+turn_transition:
+  needs_close: true
+  after_generation: "<|endoftext|>"

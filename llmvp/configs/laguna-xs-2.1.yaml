@@ -1,0 +1,93 @@
+# Laguna-XS-2.1 (Poolside) — mudler APEX I-Balanced.
+#
+# The small sibling of Laguna-S, and the FIRST I-Balanced laguna that is not
+# confounded: the only S-series I-Balanced build available was the Uncensored
+# finetune, which scored 18/50 blind against i-quality's 35 and could never
+# separate recipe from finetune. This is a base model, so an XS result is
+# attributable to the model and the recipe rather than to a tune.
+#
+# ── GEOMETRY, AND A ROPE DIFFERENCE FROM LAGUNA-S ────────────────────
+#   40 layers x 8 kv-heads x 128 head-dim = 160 KiB/token
+#   24.3 GB weights (256 experts, 8 active — S uses 10)
+#
+#   n_ctx    KV GB   weights+KV
+#    65536    10.5        34.8   <- THIS CONFIG
+#   131072    21.0        45.3   comfortably reachable
+#
+# The YaRN declaration is NOT the same as Laguna-S. XS declares
+# scaling.factor 32.0 and yarn_attn_factor 1.3466; S declares 128.0 and 1.4852.
+# Both stretch from an original 8192. At n_ctx 65536 the real stretch is 8x, so
+# XS's declared 32x is a 4x overshoot where S's 128x was 16x.
+#
+# DO NOT "CORRECT" IT. The 2026-07-28 yarn sweep on Laguna-S tested exactly that
+# intuition across three arms and the GGUF default won: overriding
+# rope_freq_scale to match the actual context took the `hard` rung from 2/2
+# converging to 2/2 capped, and yarn_attn_factor 1.0 (poolside's own written
+# recommendation) also degraded it. The declared values are left untouched here
+# for the same reason.
+#
+# FAMILY: laguna, unchanged — same arch, same tags, same close-only
+# thinking-off prefill. thinking:false matches the S-series serving default;
+# every laguna result the fleet holds was measured that way.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 65536
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "laguna-xs-2.1"
+  family: "laguna"
+  path: /Users/lah-rb/.lmstudio/models/mudler/Laguna-XS-2.1-APEX-GGUF/Laguna-XS-2.1-APEX-I-Balanced.gguf
+  n_ctx: 65536
+  model_max_context: 262144
+  kv_preflight_gb: 38
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+  thinking: false
+  swa_full: false
+  kv_unified: false
+  session_full_replay: true
+  resident_seq_cache: false
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+  system_prompt: "You are a helpful assistant."
+
+generation:
+  max_tokens_default: 65536
+  temperature_default: 1.0
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  # Token 19 is </think> and 25 is <tool_call>. Both banned because thinking is
+  # OFF here and laguna emits <tool_call> unprompted against an explicit
+  # prohibition (41% of turns on S). Carried from laguna-s-2.1-apex; a
+  # thinking:true variant MUST drop the 19 ban or it bans what it depends on.
+  logit_bias: {19: -100.0, 25: -100.0}
+  repetition_guard_enabled: null
+  long_cycle_guard_enabled: null
+
+knowledge:
+  tokens_bin: ./data/laguna-xs-2.1.tokens.bin
+  token_limit: 32768
+
+resources:
+  decode_mode: pool
+  cpu_threads: 16
+
+logging:
+  enabled: true
+  directory: ./logs

@@ -12,6 +12,10 @@
 #   POSITION  — Hy3's own template APPENDS the line to the end of the system
 #               prompt; our renderer places it at the FRONT. The hunyuan3post
 #               family + hy3-postsystem config move it, changing nothing else.
+#               ROUND 1 RESULT: both placements identical, 18/18 — but on a
+#               one-token trick question the model answered correctly with an
+#               empty think block at EVERY level, which is right behaviour and
+#               no evidence either way. Hence the hard prompt below.
 #   THE MODEL — a REAP prune drops experts, and instruction-following on a
 #               rarely-exercised control line is exactly the kind of behaviour
 #               pruning can cost. If BOTH placements ignore it, that is the
@@ -69,13 +73,23 @@ arm(){
   grep -q "Could not load static tokens" "$slog" && { log "  !! static tokens failed"; return 1; }
   log "  up · static tokens loaded"
 
-  local level
+  # TWO PROMPTS, and the pairing is the measurement. Round 1 of this probe used
+  # only the easy one and got 18/18 identical results — the model answered "9"
+  # correctly every time with an empty think block, which is CORRECT behaviour
+  # on a question needing no reasoning, and told us nothing about the dial. A
+  # flat result is only informative if something in the run is known to move.
+  local pname pbody level
+  for pname in easy hard; do
+  case $pname in
+    easy) pbody="A farmer has 17 sheep. All but 9 run away. How many are left? Answer with just the number." ;;
+    hard) pbody="Three friends split a 180 dollar bill. Alice pays 40 percent of the total. Bob pays 25 percent more than Carol. How much does each pay? Give only the three amounts." ;;
+  esac
   for level in no_think low high; do
     local mark; mark=$(wc -l < "$slog")
     local i
     for i in $(seq 1 $REPS); do
       curl -s -m 600 -X POST http://localhost:8008/graphql -H 'Content-Type: application/json' \
-        -d "{\"query\":\"query(\$p:String!,\$m:Int!,\$r:String){completion(request:{prompt:\$p,maxTokens:\$m,reasoning:\$r}){text tokensGenerated}}\",\"variables\":{\"p\":\"A farmer has 17 sheep. All but 9 run away. How many are left? Answer with just the number.\",\"m\":2000,\"r\":\"$level\"}}" \
+        -d "{\"query\":\"query(\$p:String!,\$m:Int!,\$r:String){completion(request:{prompt:\$p,maxTokens:\$m,reasoning:\$r}){text tokensGenerated}}\",\"variables\":{\"p\":\"$pbody\",\"m\":2000,\"r\":\"$level\"}}" \
         >/dev/null 2>&1
     done
     # Read the server's own accounting for the lines this level produced.
@@ -86,7 +100,8 @@ arm(){
       /run_completion: after strip len=/ { match($0,/len=[0-9]+/); st=substr($0,RSTART+4,RLENGTH-4)+0; sstr+=st }
       END { if(nraw) printf "n=%d think=%d raw_avg=%d out_avg=%d cot_avg=%d", nraw, think, sraw/nraw, sstr/nraw, (sraw-sstr)/nraw;
             else printf "no generations recorded" }')
-    log "  reasoning=$level  ->  $stats"
+    log "  $pname/$level  ->  $stats"
+  done
   done
 }
 
@@ -100,8 +115,12 @@ echo -n "$RESTORE_CFG" > "$ROOT/llmvp/active_config.txt"
 ( cd "$ROOT/llmvp" && nohup .venv/bin/python api/main.py > "$RUNS/hy3r_restore.log" 2>&1 & )
 for _ in $(seq 1 120); do server_up && break; sleep 10; done
 log "restored $RESTORE_CFG"
-log ""; log "SUMMARY:"; grep -E "═══|reasoning=" "$LOG" | sed 's/^\[[^]]*\] /  /' | tee -a "$LOG"
+log ""; log "SUMMARY:"; grep -E "═══|easy/|hard/" "$LOG" | sed 's/^\[[^]]*\] /  /' | tee -a "$LOG"
 log ""
-log "READ IT AS: think=0 at no_think means the dial works. cot_avg separating"
-log "across no_think/low/high means three real granularities; two clusters mean"
-log "it is bimodal like everything else in the fleet."
+log "READ IT AS: cot_avg=37 is an EMPTY think block (18-char open + 19-char"
+log "close), NOT reasoning. The EASY rows are the control and should stay near 37"
+log "at every level — that question needs no thought, and round 1 of this probe"
+log "used only that prompt, got 18/18 identical, and settled nothing. The signal"
+log "is the HARD rows: cot_avg rising across no_think < low < high means three"
+log "real granularities; two clusters means bimodal; all flat means the REAP"
+log "prune has cost the control line."
