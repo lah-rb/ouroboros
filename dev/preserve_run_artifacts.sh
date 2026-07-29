@@ -31,7 +31,17 @@ for d in /tmp/tier /tmp/qwen_panel /tmp/laguna_panel /tmp/blind_panel; do
   fi
 done
 
-[ "$n" -gt 0 ] || { echo "  nothing found in /tmp to archive"; exit 0; }
+if [ "$n" -eq 0 ]; then
+  # An EMPTY /tmp is the safest state there is — there is nothing to lose. This
+  # path must still emit the safety token, because callers gate on it: the Hy3
+  # ladder refused to start after a reboot had already cleared /tmp, reading
+  # "nothing to archive" as "archive failed". A guard that blocks on the safe
+  # case teaches people to bypass it.
+  echo "  nothing in /tmp to archive — it is already empty"
+  rmdir "$DEST" 2>/dev/null || true   # don't leave an empty dated dir behind
+  echo "SAFE TO REBOOT"
+  exit 0
+fi
 
 # A manifest, because six months from now the directory names alone will not
 # say which arm was which.
