@@ -37,7 +37,7 @@ model:
   # closes it immediately (it self-emits the empty channel anyway —
   # dev/gemma_pad_probe.py).
   thinking: true
-  path: /Users/lah-rb/.lmstudio/models/lmstudio-community/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf
+  path: /Users/lah-rb/.lmstudio/models/unsloth/gemma-4-31B-it-qat-GGUF/gemma-4-31B-it-qat-UD-Q4_K_XL.gguf
   # Full native context (Luke 2026-07-24): the old 65536 cap guarded a
   # semi-broken early release that blew up memory at full context without
   # warning — not observed with the QAT GGUF on the current llama-cpp bin,
