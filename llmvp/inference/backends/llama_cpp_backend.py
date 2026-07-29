@@ -216,6 +216,25 @@ class LlamaCppBackend(BaseBackend):
         # and the targeted context-refresh heals that recover the slot.
         self._h_decode_failures = 0
         self._h_latch_heals = 0
+        # CONSECUTIVE fatal decodes that a context rebuild did NOT fix. This is
+        # the number that distinguishes a healable fault from an unservable
+        # configuration, and it is the crash predictor.
+        #
+        # -3 has several causes and most of them heal: SWA-boundary corruption
+        # on a pinned prefix, save_state churn, a one-off command-buffer
+        # failure. _heal_instance rebuilds the context, the latch clears, work
+        # resumes. Killing on the FIRST -3 would take the server down for
+        # conditions it currently recovers from.
+        #
+        # What does NOT heal is a configuration whose decode cannot fit. On
+        # 2026-07-28 the Hy3 ladder saw exactly that at n_ctx 49152 and 65536 —
+        # both loaded, both reported healthy, both failed EVERY decode with -3 —
+        # and the next rung up rebooted the machine while holding 108 GB of
+        # weights. A heal-then-fail-again loop is that state, and it is a
+        # LEADING indicator: it appeared two rungs before the crash, while the
+        # machine was still entirely healthy.
+        self._consecutive_unhealed_decode_failures = 0
+        self._unservable = False
         # Harmony final-channel dynamic stop (see inference/final_channel_stop):
         # how many session turns ended at a non-empty final close rather than the
         # (history-form-shadowed) <|return|>. Non-zero confirms the stop is doing
@@ -1438,6 +1457,12 @@ class LlamaCppBackend(BaseBackend):
         _heal_instance before it serves again. The failing turn still errors
         (caller sees it); the SLOT self-heals."""
         self._h_decode_failures += 1
+        # Already rebuilt since the last failure and failing again? Then the
+        # rebuild is not the cure and repeating it just burns time while the
+        # weights stay resident.
+        if getattr(inst, "_healed_since_failure", False):
+            self._consecutive_unhealed_decode_failures += 1
+        inst._healed_since_failure = False
         inst._needs_context_refresh = True
         log.error(
             "💥 fatal decode failure #%d on instance [%s]: %s — context "
@@ -1448,6 +1473,51 @@ class LlamaCppBackend(BaseBackend):
             getattr(inst, "_persona", "default"),
             exc,
         )
+        self._maybe_declare_unservable()
+
+    # How many heal-then-fail-again cycles before the configuration is called
+    # unservable. 2 means: rebuild once, fail again, rebuild once more, fail
+    # again — no reasonable transient survives that.
+    _UNHEALED_LIMIT = int(os.environ.get("OURO_UNHEALED_DECODE_LIMIT", "2"))
+
+    def _maybe_declare_unservable(self) -> None:
+        """Stop serving when rebuilding the context stops helping.
+
+        THE PROCESS EXITS rather than merely refusing work, and that is the
+        point: a server stuck in a heal/fail loop is holding its weights
+        resident — 108 GB in the case that motivated this — while the decode
+        that cannot fit keeps asking the allocator for more. On 2026-07-28 that
+        state preceded a hard reboot by two rungs of a context ladder. Releasing
+        the memory is the only action that protects the machine; refusing
+        requests while still holding it does not.
+
+        Exit is via SIGTERM to self so the normal shutdown path runs (the pool
+        drains rather than leaking, which a hard kill does not do — see the
+        single-instance pool leak of 2026-07-19).
+        """
+        if self._unservable:
+            return
+        if self._consecutive_unhealed_decode_failures < self._UNHEALED_LIMIT:
+            return
+        self._unservable = True
+        log.error(
+            "🛑 UNSERVABLE: %d fatal decodes survived a context rebuild. This "
+            "is not a latch — the configuration cannot decode. Holding %s "
+            "resident while retrying is what precedes a machine reboot, so "
+            "this process is shutting down. Lower n_ctx (the last "
+            "measured-decodable value belongs in the config) or reduce the "
+            "model; raising kv_preflight_gb is how the guard gets bypassed, "
+            "not how the load is made to fit.",
+            self._consecutive_unhealed_decode_failures,
+            getattr(getattr(self, "config", None), "model", None)
+            and getattr(self.config.model, "name", "the model") or "the model",
+        )
+        try:
+            import signal as _signal
+
+            os.kill(os.getpid(), _signal.SIGTERM)
+        except Exception:  # noqa: BLE001 — never mask the original decode error
+            log.exception("could not signal self; the flag stays set")
 
     async def _heal_instance(self, inst: Any) -> None:
         """Targeted context refresh for a decode-poisoned instance: rebuild
@@ -1462,6 +1532,9 @@ class LlamaCppBackend(BaseBackend):
                     return
                 await run_in_threadpool(self._refresh_context_sync, inst)
             inst._needs_context_refresh = False
+            # Armed: if the NEXT decode on this instance also fails, the
+            # rebuild demonstrably did not help.
+            inst._healed_since_failure = True
             self._h_latch_heals += 1
             log.info(
                 "🩹 latch heal #%d complete [%s] — context rebuilt, slot healthy",
@@ -3624,6 +3697,17 @@ class LlamaCppBackend(BaseBackend):
             instance._last_cache_hit = (
                 bool(flow_hit_telemetry) or int(kv_base) > self._resident_static_len
             )
+            # A decode completed, so whatever was wrong is no longer wrong.
+            # Resetting here is what keeps the unservable escalation aimed at
+            # a CONSECUTIVE heal/fail loop rather than at a slow drip of
+            # unrelated transients accumulating over a long run.
+            if self._consecutive_unhealed_decode_failures:
+                log.info(
+                    "✅ decode recovered after %d unhealed failure(s) — counter reset",
+                    self._consecutive_unhealed_decode_failures,
+                )
+                self._consecutive_unhealed_decode_failures = 0
+            instance._healed_since_failure = False
         except RuntimeError as e:
             # llama_decode -3 (GGML_STATUS_FAILED) latches the Metal backend:
             # ggml-metal sets a sticky has_error on any failed command buffer
@@ -4061,6 +4145,8 @@ class LlamaCppBackend(BaseBackend):
         info["flow_fallbacks"] = self._h_flow_fallbacks
         info["runaway_captures"] = self._h_runaway_captures
         info["decode_failures"] = self._h_decode_failures
+        info["unhealed_decode_failures"] = self._consecutive_unhealed_decode_failures
+        info["unservable"] = self._unservable
         info["latch_heals"] = self._h_latch_heals
         info["final_channel_stops"] = self._h_final_channel_stops
         info["context_refreshes"] = self._h_context_refreshes

@@ -129,6 +129,16 @@ class HealthStatus:
     # client tell 46k tokens of chain-of-thought from 46k tokens of answer
     # without parsing anything. Also already computed by ``get_status()``.
     thinking_complete: Optional[bool] = None
+    # Decode health. unhealed_decode_failures counts fatal decodes that a
+    # CONTEXT REBUILD DID NOT FIX — the signal separating a healable Metal
+    # latch from a configuration that cannot decode at all, and a leading
+    # indicator of machine-level memory failure: it appeared two context rungs
+    # before a hard reboot on 2026-07-28, while the box was still healthy.
+    # unservable means the backend has given up and is shutting down to release
+    # its weights, which is the only action that protects the machine.
+    decode_failures: int = 0
+    unhealed_decode_failures: int = 0
+    unservable: bool = False
 
 
 @strawberry.type
@@ -428,6 +438,9 @@ class Query:
             prompt_tokens=tracker_status.get("prompt_tokens", 0),
             eval_duration=tracker_status.get("eval_duration"),
             expected_eval_seconds=tracker_status.get("expected_eval_seconds"),
+            decode_failures=status.get("decode_failures", 0),
+            unhealed_decode_failures=status.get("unhealed_decode_failures", 0),
+            unservable=bool(status.get("unservable", False)),
             request_id=tracker_status.get("request_id", "") or "",
             thinking_complete=tracker_status.get("thinking_complete"),
             mem_process_rss_mb=status.get("mem_process_rss_mb"),

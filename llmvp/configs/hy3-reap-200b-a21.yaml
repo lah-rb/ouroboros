@@ -64,16 +64,18 @@ model:
   name: "hy3-reap-200b-a21"
   family: "hunyuan3"
   path: /Users/lah-rb/.lmstudio/models/OpenMOSE/Hy3-REAP-200B-21B-GGUF/Hy3-REAP-200B-GGUF-IQ4_XS-00001-of-00006.gguf
-  # 24576 — MEASURED good, not predicted. The highest rung the ladder tried,
-  # and it passed; the ceiling above this is unexplored.
-  n_ctx: 24576
+  # 32768 — the highest MEASURED-DECODABLE rung. Above this the model still
+  # LOADS and reports healthy, then fails every decode with llama_decode -3
+  # (49152 and 65536 both), and at 81920 the load itself rebooted the machine.
+  # See the header for the full ladder.
+  n_ctx: 32768
   # Trained range is 262144. Recorded because it is the model's real capability
   # and the gap to n_ctx is the whole story here.
   model_max_context: 262144
-  # 119 admits the measured 116.4 GB total and refuses the next doubling. The
-  # preflight stays armed — it just no longer refuses a configuration that
-  # demonstrably works.
-  kv_preflight_gb: 119
+  # 122 admits 32768 (119.0 GB measured) and refuses the next step up. The
+  # ladder raised this per rung to climb; that is exactly how the 81920 load
+  # got through and rebooted the box. Do not raise it to make a load succeed.
+  kv_preflight_gb: 122
   n_gpu_layers: -1
   seed: -1
   verbose: false
