@@ -997,3 +997,73 @@ def test_inst_framing_is_read_from_framing_not_thinking_tags():
     assert _uses_inst_framing("tekken") is True
     assert _uses_inst_framing("chatml") is False
     assert _uses_inst_framing("laguna") is False
+
+
+class TestSuffixedThinkTags:
+    """A family whose think tag carries a suffix — hunyuan3's
+    `<think:opensource>` — must not leak the suffix into CONTENT.
+
+    THE FIRST LIVE GENERATION ON THAT FAMILY (2026-07-28) returned
+    ``:opensource>def reverse_string(s): ...``. The labeller arms its closer
+    lookahead for the atom IMMEDIATELY after the marker word; `:opensource` is
+    not that closer, so it fell through as content. Written to disk that is a
+    SyntaxError on line 1 — which is precisely the OLMo `think>` residue
+    incident of 2026-07-23, in a new family.
+
+    The tail is DERIVED from the family spec, so the guarantee that matters is
+    twofold: suffixed families get stripped, and unsuffixed families are
+    untouched by the machinery that strips them.
+    """
+
+    def _content(self, raw: str, family: str) -> str:
+        from core.featurizer import featurize
+        from core.fsm_labeller import label_atoms
+
+        return "".join(t for t, lab in label_atoms(featurize(raw), family=family) if lab == "C")
+
+    def test_the_suffix_never_reaches_content(self):
+        got = self._content(
+            "</think:opensource>def reverse_string(s):\n    return s[::-1]", "hunyuan3"
+        )
+        assert got.startswith("def reverse_string"), got[:40]
+        assert "opensource" not in got
+
+    def test_the_opening_tag_is_stripped_too(self):
+        got = self._content(
+            "<think:opensource>weighing it up</think:opensource>ANSWER", "hunyuan3"
+        )
+        assert got == "ANSWER", repr(got)
+
+    def test_thinking_between_suffixed_tags_is_captured_as_T(self):
+        """Not merely discarded — the reasoning has to land in T, or
+        thinking_content is 0 on every call (the other half of the OLMo bug)."""
+        from core.featurizer import featurize
+        from core.fsm_labeller import label_atoms
+
+        out = label_atoms(
+            featurize("<think:opensource>deliberating</think:opensource>done"),
+            family="hunyuan3",
+        )
+        assert "deliberating" in "".join(t for t, lab in out if lab == "T")
+
+    def test_an_unsuffixed_family_is_unaffected(self):
+        """The regression guard. Deriving a tail must not change chatml,
+        laguna, olmo or anything else whose tag is bare."""
+        for fam in ("chatml", "laguna", "olmo"):
+            got = self._content("</think>def f(x):\n    return x", fam)
+            assert got == "def f(x):\n    return x", f"{fam}: {got!r}"
+
+    def test_the_tail_is_read_from_the_spec_not_hardcoded(self):
+        from core.fsm_labeller import _tag_tail_for
+
+        assert _tag_tail_for("hunyuan3") == ":opensource"
+        assert _tag_tail_for("chatml") == ""
+        assert _tag_tail_for("laguna") == ""
+
+    def test_content_that_merely_resembles_the_suffix_survives(self):
+        """The tail is matched by TEXT and only right after the marker word, so
+        prose containing the same characters elsewhere is still content."""
+        got = self._content(
+            "</think:opensource>see the :opensource notes", "hunyuan3"
+        )
+        assert got == "see the :opensource notes", repr(got)

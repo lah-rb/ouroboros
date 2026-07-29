@@ -1,65 +1,50 @@
-# Hunyuan-3 REAP 200B-A21B (OpenMOSE IQ4_XS) — the largest model attempted here.
+# Hunyuan-3 REAP 200B-A21B (OpenMOSE IQ4_XS) — the largest model run here.
 # A REAP prune of Tencent's Hy3 295B-A21B: expert count cut, active params kept.
 #
-# ⚠️ THIS CONFIG CANNOT BOOT AS WRITTEN, AND THAT IS THE POINT OF WRITING IT.
-# The preflight will refuse it, loudly, before touching Metal. The arithmetic
-# below is the deliverable; leaving it undiscovered until a 108 GB load wedged
-# the machine would not be.
+# ── IT RUNS. MY ARITHMETIC SAID IT COULD NOT. ────────────────────────
+# This header previously read "THIS CONFIG CANNOT BOOT AS WRITTEN". That was
+# wrong, and the ladder (dev/hy3_ceiling_ladder.sh, 2026-07-28) proved it by
+# loading and generating correct code at every rung tried:
 #
-# ── WHY IT DOES NOT FIT ──────────────────────────────────────────────
+#   n_ctx    KV allocated   bytes/token   weights+KV    result
+#    2048        640 MiB      327,680      109.0 GB      OK
+#    4096      1,280 MiB      327,680      109.6 GB      OK
+#    8192      2,560 MiB      327,680      111.0 GB      OK
+#   16384      5,120 MiB      327,680      113.7 GB      OK
+#   24576      7,680 MiB      327,680      116.4 GB      OK  <- ABOVE the cap
 #
-#   weights   108.3 GB   (100.8 GiB across 6 shards, IQ4_XS, avg 4.289 bpw)
-#   wired cap 116.0 GB   (iogpu.wired_limit_mb=116000 of 137.4 GB physical)
-#   ---------------------------------------------------------------
-#   left for KV                7.7 GB
+# WHAT WAS RIGHT: the KV formula. Measured 327,680 B/token against a predicted
+# 331,776 — a 0.988 ratio. Unlike gemma-4 there is no interleaved-SWA
+# over-prediction to correct, so kv_bytes_per_token_measured is unnecessary
+# here; the headers tell the truth for this architecture.
 #
-# And the KV is the most expensive we have measured: 81 layers x 8 kv-heads x
-# 128 head-dim = 324 KiB/token at f16. For scale — laguna is 192, qwen3.5-122b
-# is 96. So 7.7 GB buys ~23,200 tokens, and that is the WHOLE window:
+# WHAT WAS WRONG: treating iogpu.wired_limit_mb as a hard allocation ceiling.
+# It bounds how much may be WIRED, not how much may be allocated. 24576 tokens
+# computes to 116.4 GB against a 116 GB cap and served fine. A related
+# observation from the wired-memory recorder: at idle the server shows ~2.5 GB
+# wired against ~105 GB RSS — weights are not wired until Metal actually
+# decodes, so load-time totals are not the number that matters.
 #
-#   KV type   KiB/tok   max n_ctx in 7.7 GB
-#   f16           324            23,208
-#   q8_0          172            43,707     <- needs type_k/type_v wired
-#   q4_0           91            82,592     <- needs type_k/type_v wired
+# THE REAL CEILING IS STILL UNKNOWN, because the last rung passed. Everything
+# above 24576 is unmeasured. Run the ladder further with
+# dev/wired_mem_recorder.py alongside — it fsyncs every sample, so the last
+# line survives a machine that does not.
 #
-# 23k tokens does not fit the workload. The batch structural turn alone is a
-# ~5k prompt plus a 13,000-18,000 token generation (measured on laguna and
-# qwen), the static prefix is ~1.8k, and under decode_mode: batched n_ctx
-# budgets the SUM of live streams. One turn would consume the context.
-#
-# There is a second ceiling behind the first: 108.3 GB of wired weights plus KV
-# plus the server's own ~10 GB anon footprint sits near 137.4 GB of PHYSICAL
-# memory. Even if the wired cap were raised, the machine has no room to be a
-# machine.
-#
-# ── WHAT WOULD MAKE IT RUNNABLE, IN ORDER OF SENSE ───────────────────
-# 1. WIRE type_k/type_v. llama-cpp-python exposes both and ModelConfig does not
-#    pass them. q4_0 KV turns 324 KiB/token into 91 and is a general win —
-#    every large-context config on this box pays the f16 KV price today. This
-#    is a small, self-contained change that benefits the whole fleet, and it is
-#    the prerequisite for this model rather than a workaround for it.
-#    Even then: 82k theoretical KV tokens, but only ~7.7 GB of room, so the
-#    real ceiling stays memory, not cells.
-# 2. A SMALLER QUANT. IQ3 would land near 82 GB and leave ~34 GB for KV. But
-#    this is already a REAP-pruned model — 128 experts cut to 8 active from a
-#    200B base — and stacking aggressive quantisation on aggressive pruning is
-#    lossy-on-lossy. If the point is to test whether code_core's design
-#    protects against REAP decay, confounding it with IQ3 damage defeats it.
-# 3. RAISING iogpu.wired_limit_mb. Not recommended at this size: it trades OS
-#    headroom for a model that still would not have working context.
-#
-# ── WHY IT IS STILL WORTH HAVING ─────────────────────────────────────
-# Luke's thesis is that code_core's design principles — deterministic gates,
-# live PTY testing, per-file acceptance checks — should protect against the
-# agent decay REAP models are known for. That is a good experiment and this is
-# the right model for it. It just needs KV quantisation to land first, or a
-# quant that leaves room to think in.
+# ── WHAT STILL LIMITS IT ─────────────────────────────────────────────
+# Context, not memory. The batch structural turn is a ~5k prompt plus a
+# 13,000-18,000 token generation (measured on laguna and qwen), and the static
+# prefix is ~1.8k. At 24576 that fits ONE such turn with nothing spare, and
+# under decode_mode: batched n_ctx budgets the SUM of live streams — which is
+# why this config runs pool. Wiring type_k/type_v (exposed by the binding,
+# unused by ModelConfig) would take KV to ~91 KiB/token at q4_0 and is a
+# fleet-wide win worth having on its own merits.
 #
 # ── FAMILY ───────────────────────────────────────────────────────────
-# formats/hunyuan3.yaml, written from this GGUF's own template. Note the
-# full-width U+FF5C pipes and the `:opensource` suffix on every special token —
-# `<think:opensource>`, not `<think>`. Reasoning is a system-prompt dial
-# (no_think/low/high), not a prefill mechanic.
+# formats/hunyuan3.yaml, written from this GGUF's own template. The first live
+# generation exposed a real extraction bug — the `:opensource` suffix on the
+# think tags leaked into CONTENT (`:opensource>def reverse_string(s)`, a
+# SyntaxError as line 1). Fixed in core/fsm_labeller.py by deriving the tag
+# tail from the spec; see TestSuffixedThinkTags.
 
 app:
   host: "0.0.0.0"
@@ -79,17 +64,16 @@ model:
   name: "hy3-reap-200b-a21"
   family: "hunyuan3"
   path: /Users/lah-rb/.lmstudio/models/OpenMOSE/Hy3-REAP-200B-21B-GGUF/Hy3-REAP-200B-GGUF-IQ4_XS-00001-of-00006.gguf
-  # 16384, which is NOT a working context for this agent — it is the largest
-  # value that leaves any margin at all (108.3 + 5.4 = 113.7 GB). Chosen so the
-  # first boot attempt fails on the preflight's terms rather than the kernel's.
-  n_ctx: 16384
+  # 24576 — MEASURED good, not predicted. The highest rung the ladder tried,
+  # and it passed; the ceiling above this is unexplored.
+  n_ctx: 24576
   # Trained range is 262144. Recorded because it is the model's real capability
   # and the gap to n_ctx is the whole story here.
   model_max_context: 262144
-  # DELIBERATELY BELOW the computed total. The preflight is supposed to refuse
-  # this load, and a budget set high enough to admit it would be defeating the
-  # one guard standing between a 108 GB allocation and a hard reboot.
-  kv_preflight_gb: 110
+  # 119 admits the measured 116.4 GB total and refuses the next doubling. The
+  # preflight stays armed — it just no longer refuses a configuration that
+  # demonstrably works.
+  kv_preflight_gb: 119
   n_gpu_layers: -1
   seed: -1
   verbose: false

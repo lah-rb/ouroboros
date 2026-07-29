@@ -152,6 +152,37 @@ def _shape_for(family: str) -> "_ThinkShape":
     return _ThinkShape.BRACKET if open_tag.startswith("[") else _ThinkShape.ANGLE
 
 
+def _tag_tail_for(family: str) -> str:
+    """Text a family puts BETWEEN the marker word and the tag's closing char.
+
+    ``<think>`` has none. Hunyuan-3's tags are ``<think:opensource>`` — every
+    special token in that family carries a build-variant suffix — so ``think``
+    is followed by ``:opensource`` before the ``>``.
+
+    That broke extraction on the first live generation (2026-07-28): the
+    labeller arms its closer lookahead for the atom IMMEDIATELY after the
+    marker word, ``:opensource`` is not that closer, and the fragment fell
+    through as CONTENT. Every answer came back as
+    ``:opensource>def reverse_string(s): ...`` — which written to disk is a
+    SyntaxError on line 1. That is the OLMo residue incident (2026-07-23)
+    reproduced in a new family, and the reason this is derived from the spec
+    rather than special-cased: the next family with a suffixed tag gets it
+    free, and a family without one is unaffected (empty tail).
+    """
+    spec = _spec_for(family)
+    if spec is None:
+        return ""
+    for attr in ("open_tag", "close_tag"):
+        tag = (getattr(spec.thinking, attr, "") or "").strip()
+        if not tag or len(tag) < 3:
+            continue
+        inner = tag[1:-1].lstrip("/")  # drop the brackets and any leading slash
+        low = inner.lower()
+        if low.startswith("think") and len(inner) > 5:
+            return inner[5:]  # everything after the marker word
+    return ""
+
+
 def _uses_inst_framing(family: str) -> bool:
     """Whether [INST]-style framing markers are structural for this family —
     read from the framing tokens rather than inferred from the thinking tags,
@@ -416,6 +447,10 @@ def label_atoms(
     #    labelled D as the compound's closer (e.g. '>' after <think,
     #    ']' after [THINK).
     pending_close_cats: set = set()
+    # Declared text between the marker word and the tag's closer,
+    # e.g. ':opensource' for hunyuan3. Empty for every other family.
+    tag_tail = _tag_tail_for(family)
+    pending_tail = ""
 
     def _relabel(idx: int, new_label: str) -> None:
         """Flip a previously emitted atom's label."""
@@ -485,6 +520,11 @@ def label_atoms(
                     phase = Phase.THINKING
                 _relabel(i - 1, "D")  # the '<' or '</'
                 pending_close_cats = {ObsCategory.ANGLE_CLOSE}
+                # Families whose tag carries a suffix (<think:opensource>)
+                # put atoms between the marker word and the '>'. Consume
+                # exactly the declared suffix — never more — so a family
+                # without one is untouched.
+                pending_tail = tag_tail
             elif prev.category == ObsCategory.BRACKET_OPEN:
                 # [THINK] opening
                 phase = Phase.THINKING
@@ -539,10 +579,18 @@ def label_atoms(
             # is NOT the compound marker that just armed it.
             if cat not in compound_marker_cats:
                 pending_close_cats = set()
+                pending_tail = ""
+        elif pending_tail and pending_tail.startswith(atom.text):
+            # Part of the declared tag suffix, not content. Matching by TEXT
+            # (not category) is what keeps this from swallowing real output:
+            # it can only consume atoms the family said would be there.
+            result.append((atom.text, "D"))
+            pending_tail = pending_tail[len(atom.text):]
         elif cat in pending_close_cats:
             # This atom closes the compound marker we just recognized.
             result.append((atom.text, "D"))
             pending_close_cats = set()
+            pending_tail = ""
         else:
             # Content atom: label by current phase
             if phase == Phase.THINKING:
