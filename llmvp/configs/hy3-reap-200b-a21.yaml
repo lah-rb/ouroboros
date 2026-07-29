@@ -94,6 +94,17 @@ model:
   resident_seq_cache: false
 
 prompt:
+  # WITHOUT THIS the static token buffer never builds. resolve_persona("default")
+  # constructs PersonaConfig(persona_file=prompt.persona_file, ...) and an unset
+  # value fails validation, so the server logs "Could not load static tokens"
+  # and falls back to lightweight mode with NO system block at all.
+  #
+  # That is not cosmetic: the system block is where this family's reasoning dial
+  # lives (<｜reasoning_mode:opensource｜>reasoning_effort:no_think). Without it
+  # the model thought when the config said not to, spent all 1,200 tokens of its
+  # budget deliberating, never closed the block, and returned empty content —
+  # which read as three separate bugs before the cause was found (2026-07-28).
+  persona_file: "./knowledge/SOUL.md"
   system_prompt: "You are a helpful assistant."
 
 generation:
