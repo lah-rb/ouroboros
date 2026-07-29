@@ -1,0 +1,23 @@
+# Hy3 with the reasoning directive APPENDED instead of prefixed.
+#
+# THE QUESTION. With reasoning_effort:no_think verifiably in the rendered system
+# block, the model opened a think block on 4/4 generations (2026-07-28). The
+# directive is reaching the prompt and being ignored. Hy3's own chat template
+# APPENDS that line to the end of the system prompt; our renderer places it at
+# the front. This arm changes only that.
+#
+# Everything else is inherited, so a difference in outcome is attributable to
+# position and nothing else.
+
+extends: hy3-reap-200b-a21
+
+model:
+  name: "hy3-postsystem"
+  family: "hunyuan3post"
+  # Well inside the measured wall (38912) so the probe tests reasoning, not
+  # capacity — a decode failure here would confound the two.
+  n_ctx: 32768
+knowledge:
+  # Its own static cache: the family differs, so the rendered prefix differs,
+  # and sharing a tokens_bin would have the two arms invalidating each other.
+  tokens_bin: ./data/hy3-postsystem.tokens.bin
