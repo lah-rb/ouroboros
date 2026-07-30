@@ -212,6 +212,14 @@ nothing and arms the catch. The refusal names the fix. All 20 shipped configs lo
 unchanged (none set it false). `llmvp/tests/test_config_inheritance.py::
 TestSessionStrategyValidation`, 5 tests, 3 mutations bite.
 
+**POSITION 2026-07-30:** the fleet is now three-valued as this section asked:
+11 configs resident (flat, measured ~8x cheaper at realistic session shape),
+5 replay-by-ARCHITECTURE (both qwen3.6, qwen3.5 — measured refusals — plus
+step37; correctly so), legacy unreachable via validated config. Remaining work
+here is pure deletion: the save_state else-arm in session_turn AND the M8
+legacy flow-blob branch (see 11b position — every flow-capable config is
+resident, so both paths are dead code with a rap sheet).
+
 **Still owed here:** deleting the save_state branch in
 `core/session_manager.session_turn` (the `else` arm) plus its purge path. The
 validator now makes that arm unreachable from any loadable config, so the deletion
@@ -569,21 +577,47 @@ gap in 11 all get it at once.
 gpt-oss (flow_kv_cache unsafe, resident_seq_cache is session-scoped). That gap
 is the thing 11b would close.
 
-### 11b-BUG (found 2026-07-30, Block E pilot): resident flow HIT forks the
-### head and then prefills the FULL prompt anyway — on glm, and silently
+### 11b — POSITION 2026-07-30: the ban is obsolete; one build separates the
+### flow cache from production
 
-`dev/caching/EXPERIMENT.md` Block E, cachecell-E3 (glm, resident+kv_unified,
-flow_kv_cache: true): BUILD and 19 HITs all logged (`resident flow HIT
-'e3:pilot' (seq 2, 4041 tok)`), fork verified — but hit-arm
-`freshPrefillTokens` equalled the cold arm (3,904 vs 3,968) and each HIT ran
-2.3 s SLOWER than cold. The post-fork eval does not skip the head span.
-Suspect seam: the double-probe head-boundary tokenization
-(`inference/tokenizer.py:310-330`) on non-harmony families; harmony measured
-real savings (620 HITs, terminal-bench retest). Second defect: `cacheHit=true`
-+ `flowFallbacks=0` while the skip fails — the telemetry cannot see it. Fix
-the skip AND make the accounting assert `fresh < prompt_tokens - head_len` on
-a claimed HIT. Until then flow_kv_cache is a net LOSS on at least glm, and
-every non-harmony measurement of it is suspect.
+**The "flow-skip bug" resolved as a CLIENT-CONTRACT violation, not a server
+defect.** The contract: `prompt` is the DYNAMIC TAIL ONLY; the server prepends
+`static_prefix` (warm_flows.py is the reference client). The 2026-07-30 pilot
+led its prompt with the head too, so the server skipped the pinned copy and
+dutifully prefilled the duplicate — total_ctx 7,947 = static 1,786 + head
+2,255 + duplicated head+tail 3,906, each "HIT" 2.3s SLOWER than cold with
+cacheHit=true. Two fixes landed: a loud detect-and-strip guard in
+run_completion (a doubled head is wrong on the uncached path too), and the
+corrected pilot.
+
+**The corrected measurement (glm, pool, resident M9 band, 2.3k head + 1.7k
+tails): HIT saves 3.51 s/call = 49% of prefill** (1,652 fresh vs 3,907; 11/11
+hits). This refines CACHE_STATE's "flat 0.2–0.5 s/call — not the lever"
+verdict: that was measured on ~2k TOTAL prompts in the shallow-head era; at
+realistic head sizes the flow cache IS a lever.
+
+**Why the ban is obsolete (operator's framing, confirmed):** the ban hit M8 —
+save_state BLOBS whose churn corrupted the static KV (the 2026-06 code -3
+regression). M9 (seq-ops, the "v2" this section called for) has existed since
+Phase 2, shares none of that mechanism, and postdates the ban's evidence. The
+seq robustness + refresh tooling (windowing, latch-heal, per-seq purge,
+context refresh) that keeps deep sessions healthy applies to flow seqs
+identically.
+
+**What separates it from production:**
+1. **Batched mode ignores the flow band entirely** (`_warm_batched` forces it
+   off; persona heads cover only the GLOBAL static, not per-flow heads) — and
+   production runs batched. THE remaining build: port the flow band to batched
+   using the snapshot-band pattern that shipped 2026-07-30 (band seqs above
+   snapshots in plan_seq_map, control-inbox surgery, seat fork; BUILD = eval
+   the head via a normal stream then capture-style seq_cp). Medium effort,
+   pattern proven.
+2. Fleet configs all carry `flow_kv_cache: false`. The POOL resident configs
+   (glm, hy3, mistral-medium, gemma-26b, laguna-xs) can flip on today's
+   measured evidence; the gpt-oss production flip waits on (1).
+3. The M8 legacy blob path is now dead weight: every flow-capable config is
+   resident, so the save_state flow branch (`_flow_states` blobs) is
+   unreachable in practice — delete with §4's else-arm.
 
 ### 11c. Speculative decoding for swarm decode — GATED on one measurement
 

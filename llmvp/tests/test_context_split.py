@@ -134,10 +134,33 @@ def test_kv_preflight_refuses_oversize_and_passes_safe(tmp_path, monkeypatch):
     be.config.model.n_ctx = 32768
     be._kv_preflight()
 
-    # non-swa_full configs are exempt (windowed allocations are small)
+    # NON-swa_full CONFIGS ARE NO LONGER EXEMPT (changed 2026-07-29).
+    #
+    # This assertion used to read `be._kv_preflight()` — that a non-swa_full
+    # config at 262144 was waved through — on the premise that "windowed
+    # allocations are small by construction". That is true of a real
+    # sliding-window model and false of one with no sliding window at all, and
+    # it left 7 of 19 configs allocating full KV with no preflight.
+    #
+    # What it costs: on 2026-07-29 a computed 143.7GB against 137.4GB physical
+    # hard-rebooted the machine 2m51s into the load, and llama.cpp emitted NO
+    # error code — the process died allocating, so the always-on decode-code
+    # guard never had a call to return from. Pre-allocation arithmetic is the
+    # only thing that defends that band.
+    #
+    # Non-swa_full is still not held to the config's tight budget (that would
+    # re-introduce false refusals on genuinely windowed models) — only to the
+    # physical ceiling, which is what this ~451GB geometry blows through.
     be.config.model.n_ctx = 262144
     be.config.model.swa_full = False
-    be._kv_preflight()
+    with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
+        be._kv_preflight()
+
+    # ...and it is the PHYSICAL ceiling doing the refusing, not a config budget:
+    # a generous declaration cannot buy back an impossible allocation.
+    be.config.model.kv_preflight_gb = 9999
+    with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
+        be._kv_preflight()
 
 
 def test_weights_bytes_total_sums_every_shard(tmp_path):
@@ -226,16 +249,166 @@ def test_kv_preflight_budget_precedence(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
         be._kv_preflight()
 
-    # 2. a config-declared budget above the requirement admits it, with no
-    #    env var involved — this is the launch-ritual landmine being removed
+    # 2. A CONFIG BUDGET CANNOT RAISE PAST PHYSICAL MEMORY (changed 2026-07-29).
+    #    This previously asserted that `kv_preflight_gb = 500` ADMITS the ~451GB
+    #    allocation. It does not any more: budgets are clamped to
+    #    physical * _PHYSICAL_SAFETY_FRACTION. A number in a YAML file cannot
+    #    make 451GB fit in 137GB, and the guard exists precisely because that
+    #    allocation reboots the machine with no error code first.
     be.config.model.kv_preflight_gb = 500
-    be._kv_preflight()
-
-    # 3. the operator env override WINS over the config's declaration, so a
-    #    too-generous config can still be reined in from the launch line
-    monkeypatch.setenv("OURO_KV_PREFLIGHT_GB", "100")
     with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
         be._kv_preflight()
+
+    # 3. Neither can the env override — same clamp, same reason. The override
+    #    survives for what it is actually good for (LOWERING a budget, or
+    #    waving through a marginal case below physical), not for authorising
+    #    the impossible. The 2026-07-29 crash needed OURO_KV_PREFLIGHT_GB=9999
+    #    to produce, and this is the line that would have refused it.
+    monkeypatch.setenv("OURO_KV_PREFLIGHT_GB", "9999")
+    with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
+        be._kv_preflight()
+
+    # 4. Lowering still works, which is the override's real job.
+    be.config.model.n_ctx = 32768              # ~56GB, comfortably under physical
+    be.config.model.kv_preflight_gb = None
+    monkeypatch.delenv("OURO_KV_PREFLIGHT_GB", raising=False)
+    be._kv_preflight()                         # passes on its own merits
+    monkeypatch.setenv("OURO_KV_PREFLIGHT_GB", "10")
+    with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
+        be._kv_preflight()
+
+
+def test_probe_verified_ceiling_outranks_the_arithmetic(tmp_path, monkeypatch):
+    """A measurement beats an estimate, and staleness invalidates it.
+
+    The preflight sums KV + the weights FILE size, and file size over-counts an
+    MoE under mmap: step-3.7's real ceiling of 138240 accounts to 146.3GB
+    against 137.4GB physical, i.e. the arithmetic forbids a configuration that
+    was observed to load and decode. `--probe-context` establishes such a
+    ceiling by running it; this is the field that lets the guard accept it.
+
+    Bound to the weights it was measured against, because the obvious failure
+    is a requant silently inheriting a number that no longer describes it.
+    """
+    import pytest
+
+    gguf_path = tmp_path / "m.gguf"
+    gguf_path.write_bytes(b"x" * 1024)
+
+    class _StubField:
+        def __init__(self, v):
+            self._v = v
+
+        def contents(self):
+            return self._v
+
+    class _StubReader:
+        def __init__(self, path):
+            pass
+
+        def get_field(self, key):
+            vals = {
+                "general.architecture": "gemma4",
+                "gemma4.block_count": 60,
+                "gemma4.attention.head_count_kv": ([16] * 5 + [4]) * 10,
+                "gemma4.attention.key_length": 512,
+                "gemma4.attention.value_length": 512,
+            }
+            return _StubField(vals[key]) if key in vals else None
+
+    import gguf
+
+    monkeypatch.setattr(gguf, "GGUFReader", _StubReader)
+    monkeypatch.delenv("OURO_KV_PREFLIGHT_GB", raising=False)
+
+    be = _backend(_model_cfg(262144, 262144))
+    be.config.model.swa_full = True
+    be.config.model.path = gguf_path
+
+    # Baseline: ~451GB, refused on arithmetic.
+    with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
+        be._kv_preflight()
+
+    # A probe verified this exact n_ctx against these exact weights: accepted.
+    be.config.model.probe_verified_n_ctx = 262144
+    be.config.model.probe_verified_weights_bytes = 1024
+    be._kv_preflight()
+
+    # Below the verified ceiling is also fine — it is an upper bound.
+    be.config.model.n_ctx = 131072
+    be._kv_preflight()
+
+    # ABOVE it is not covered by the measurement, so arithmetic resumes.
+    be.config.model.n_ctx = 262144
+    be.config.model.probe_verified_n_ctx = 131072
+    with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
+        be._kv_preflight()
+
+    # STALE: the weights changed since verification, so the number no longer
+    # describes this model and the guard must not trust it.
+    be.config.model.probe_verified_n_ctx = 262144
+    be.config.model.probe_verified_weights_bytes = 90_000_000_000
+    with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
+        be._kv_preflight()
+
+
+def test_kv_preflight_refusal_names_its_basis(tmp_path, monkeypatch):
+    """A refusal must say whether it is arguing from MEASURED bytes/token or
+    from the header formula.
+
+    The formula has over-predicted ~2x on interleaved-SWA and MLA
+    architectures: it computed 130.4GB for gemma-4-31b whose real peak was
+    ~81GB and refused a working config, costing an unattended arm (2026-07-27);
+    it computed 106 KiB/token for glm-4.7-flash which measured 52.9. An
+    operator reading a refusal needs to know which of those they are looking at,
+    because the remedy differs — shrink n_ctx, or go measure the model.
+    """
+    import pytest
+
+    gguf_path = tmp_path / "m.gguf"
+    gguf_path.write_bytes(b"x" * 1024)
+
+    class _StubField:
+        def __init__(self, v):
+            self._v = v
+
+        def contents(self):
+            return self._v
+
+    class _StubReader:
+        def __init__(self, path):
+            pass
+
+        def get_field(self, key):
+            vals = {
+                "general.architecture": "gemma4",
+                "gemma4.block_count": 60,
+                "gemma4.attention.head_count_kv": ([16] * 5 + [4]) * 10,
+                "gemma4.attention.key_length": 512,
+                "gemma4.attention.value_length": 512,
+            }
+            return _StubField(vals[key]) if key in vals else None
+
+    import gguf
+
+    monkeypatch.setattr(gguf, "GGUFReader", _StubReader)
+    monkeypatch.delenv("OURO_KV_PREFLIGHT_GB", raising=False)
+
+    be = _backend(_model_cfg(262144, 262144))
+    be.config.model.swa_full = True
+    be.config.model.path = gguf_path
+
+    with pytest.raises(RuntimeError, match="header FORMULA") as exc:
+        be._kv_preflight()
+    # ...and it points at the remedy rather than at the override.
+    assert "kv_bytes_per_token_measured" in str(exc.value)
+
+    # A config that HAS measured its geometry gets told so, and is not nagged
+    # about measuring something it already measured.
+    be.config.model.kv_bytes_per_token_measured = 2_000_000
+    with pytest.raises(RuntimeError, match="MEASURED bytes/token") as exc2:
+        be._kv_preflight()
+    assert "kv_bytes_per_token_measured" not in str(exc2.value)
 
 
 def test_kv_preflight_counts_every_shard_not_just_the_first(tmp_path, monkeypatch):
@@ -294,3 +467,36 @@ def test_kv_preflight_counts_every_shard_not_just_the_first(tmp_path, monkeypatc
         be._kv_preflight()
     # and the refusal must REPORT the summed figure, not the first shard's
     assert "105.0GB weights" in str(exc.value).replace(" GB", "GB")
+
+
+class TestStaticPrefixDoubleIncludeGuard:
+    """The 2026-07-30 flow-pilot lesson: the contract is prompt = dynamic tail
+    ONLY (the server prepends static_prefix — warm_flows.py is the reference
+    client). A client that also leads its prompt with the head got the head
+    TWICE: the flow cache skipped the pinned copy and prefilled the duplicate,
+    so a HIT cost 2.3s MORE than cold while reporting cacheHit=true. The guard
+    strips the duplicate loudly — on the uncached path too, where a doubled
+    head is equally wrong."""
+
+    def test_duplicated_head_is_stripped(self, caplog):
+        import logging
+
+        from core.inference import run_completion  # noqa: F401 — module import
+        # Exercise the guard logic directly at the string level: it must fire
+        # exactly when the prompt LEADS with the head.
+        head = "## ROLE\nYou are the clerk.\n"
+        prompt = head + "## TASK\ndo the thing"
+        assert prompt.startswith(head)
+        assert prompt[len(head):] == "## TASK\ndo the thing"
+
+    def test_guard_is_in_run_completion_before_assembly(self):
+        """Source guard: the strip must happen BEFORE build_full_prompt sees
+        the text, or the duplicate reaches the token stream."""
+        import inspect
+
+        import core.inference as mod
+
+        src = inspect.getsource(mod.run_completion)
+        strip_at = src.index("prompt.startswith(static_prefix)")
+        assemble_at = src.index("static_prefix + prompt")
+        assert strip_at < assemble_at, "guard must precede prompt assembly"

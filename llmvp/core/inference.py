@@ -48,6 +48,12 @@ class CompletionOutcome:
     cached_prefix_tokens: int = 0
     fresh_prefill_tokens: int = 0
     generated_tokens: int = 0
+    # Of `generated_tokens`, how many were chain-of-thought rather than the
+    # answer the flow consumes. Tokenized from the FSM-extracted thinking span
+    # with the model's own tokenizer, so it is comparable to the other counts.
+    # 0 means UNKNOWN (no thinking extracted, or the count failed) — it does not
+    # prove the model did not reason. content_tokens = generated - reasoning.
+    reasoning_tokens: int = 0
     cache_hit: bool = False
     flow_key: str = ""
     # Precise phase timing (server-measured): prefill = prompt-eval (start ->
@@ -350,6 +356,25 @@ async def run_completion(
 
     static_tokens = static_tokens_manager.get_static_tokens()
 
+    # DOUBLE-INCLUDE GUARD (2026-07-30). The contract is: `static_prefix` is the
+    # invariant head, `prompt` is the DYNAMIC TAIL ONLY — the server
+    # concatenates. A client that also leads its prompt with the head text gets
+    # the head TWICE: the flow cache then skips the pinned copy and dutifully
+    # prefills the duplicate, so a "HIT" costs MORE than a cold call while
+    # reporting cacheHit=true — measured live on the 2026-07-30 flow pilot
+    # (hit fresh 3,906 ≈ cold 3,907, each hit 2.3s SLOWER, total_ctx 7,947 =
+    # static 1,786 + head 2,255 + duplicated head+tail 3,906). Heal it loudly:
+    # the model seeing the head twice is wrong on the UNCACHED path too.
+    if static_prefix and prompt.startswith(static_prefix):
+        log.warning(
+            "🧩 static_prefix DUPLICATED at the head of `prompt` (%d chars) — "
+            "stripping the copy. The contract: prompt is the dynamic tail only; "
+            "the server prepends static_prefix. A duplicated head makes a flow "
+            "HIT cost more than a cold call while reporting cacheHit=true.",
+            len(static_prefix),
+        )
+        prompt = prompt[len(static_prefix):]
+
     # Build complete prompt BEFORE acquiring instance to minimize pool hold time
     tokenizer = get_cached_tokenizer()
     flow_kwargs: dict = {}
@@ -474,6 +499,35 @@ async def run_completion(
             mode="non-stream",
             extra={"thinking": _think[:200_000]} if _think else None,
         )
+
+        # ── CoT vs AGENT-TURN SPLIT ──────────────────────────────────
+        # generated_tokens alone cannot distinguish a model that reasoned for
+        # 12k tokens and answered in 300 from one that wrote 12k of content, and
+        # on a heavy-thinking fleet that is the difference that matters. The
+        # glm-4.7-flash arm spent 82% of its output on thought (471,573 raw
+        # chars -> 85,746 content) and that had to be derived by hand from
+        # server-log character counts after the fact.
+        #
+        # TOKENIZED, NOT ESTIMATED. `_approximate_token_count` is whitespace
+        # splitting; mixing it into a register set that is otherwise exact
+        # backend counts is how a figure gets quoted as measured when it is not.
+        # Best-effort: any failure leaves 0, and the field is documented as
+        # "0 = unknown", never "0 = no reasoning".
+        reasoning_tokens = 0
+        if _think:
+            try:
+                reasoning_tokens = len(backend.tokenize(_think, special=False))
+            except Exception:  # noqa: BLE001 — telemetry must never fail a call
+                log.debug("reasoning-token count unavailable", exc_info=True)
+        if real_gen and reasoning_tokens:
+            log.info(
+                "🧠 CoT split: %d reasoning + %d content = %d generated (%.0f%% thought)",
+                reasoning_tokens,
+                max(0, real_gen - reasoning_tokens),
+                real_gen,
+                reasoning_tokens * 100.0 / real_gen,
+            )
+
         return CompletionOutcome(
             text=answer,
             tokens_generated=tokens_generated,
@@ -481,6 +535,7 @@ async def run_completion(
             cached_prefix_tokens=cached_prefix,
             fresh_prefill_tokens=fresh_prefill,
             generated_tokens=real_gen,
+            reasoning_tokens=reasoning_tokens,
             cache_hit=bool(getattr(gen_target, "_last_cache_hit", False)),
             flow_key=str(getattr(gen_target, "_last_flow_key", "") or ""),
             end_reason=str(getattr(gen_target, "_last_end_reason", "") or ""),
