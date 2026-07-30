@@ -64,20 +64,27 @@ model:
   name: "hy3-reap-200b-a21"
   family: "hunyuan3"
   path: /Users/lah-rb/.lmstudio/models/OpenMOSE/Hy3-REAP-200B-21B-GGUF/Hy3-REAP-200B-GGUF-IQ4_XS-00001-of-00006.gguf
-  # 32768 — the highest MEASURED-DECODABLE rung. Above this the model still
-  # LOADS and reports healthy, then fails every decode with llama_decode -3
-  # (49152 and 65536 both), and at 81920 the load itself rebooted the machine.
-  # See the header for the full ladder.
+  # 32768 by CHOICE, not by ceiling: 36864 is measured-decodable (below) and
+  # the extra 12.5% buys nothing real — a batch structural turn is a ~5k
+  # prompt plus a 13-18k generation, so one turn fits at either value and two
+  # fit at neither. 32768 keeps ~1.2GB more headroom for the same capability.
+  # (The older note here — "above this the model still LOADS and reports
+  # healthy, then fails every decode with llama_decode -3 (49152 and 65536)"
+  # — remains true of those rungs; the boundary is just further out than
+  # 32768. At 81920 the load itself rebooted the machine.)
   n_ctx: 32768
   probe_verified_weights_bytes: 108278458240
-  # 26624 was written here on 2026-07-30 and RETRACTED the same day: it was
-  # an artifact of a probe clamped to `iogpu.wired_limit_mb`, a boundary two
-  # measurements had already crossed while serving fine (the 2026-07-28
-  # ladder at 116.4GB, and that same probe run's own rung 30720 at 121.7GB
-  # peak wired). The clamp is gone; PHYSICAL memory is what kills this box.
-  # 32768 is the stronger evidence — it is what production has served,
-  # repeatedly, at a real footprint of ~122.4GB = 0.891 of physical.
-  probe_verified_n_ctx: 32768
+  # MEASURED 2026-07-30 (run ctx_probe_20260730-125646): 36864 loads and
+  # decodes 3/3 at 123.6GB peak wired. GUARD-BOUND — every failing rung was
+  # an arithmetic refusal at the probe's 0.90-of-physical ceiling, so this is
+  # a LOWER bound; the hardware boundary was never reached.
+  #
+  # A 26624 was briefly written here the same day and RETRACTED: it came from
+  # a probe clamped to `iogpu.wired_limit_mb`, which is not a ceiling. Three
+  # passing measurements cross it — 116.4GB (2026-07-28 ladder), 121.7GB and
+  # 123.6GB (this probe) — against a 121.6GB "limit". PHYSICAL memory is what
+  # kills this box; both recorded hard reboots ran it out of RAM outright.
+  probe_verified_n_ctx: 36864
   # Trained range is 262144. Recorded because it is the model's real capability
   # and the gap to n_ctx is the whole story here.
   model_max_context: 262144

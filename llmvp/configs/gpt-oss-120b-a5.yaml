@@ -57,7 +57,9 @@ model:
   # sizes: 3.51s/call = 49% of prefill (glm pilot; gpt-oss prefill is
   # faster so the absolute saving is smaller, the fraction similar).
   flow_kv_cache: true
-  # gpt-oss uses the save_state/load_state session path, which corrupts the 120B
+  # HISTORICAL (the path described here was DELETED 2026-07-30, OPEN_TASKS §4;
+  # this comment is why the flag below is on, not a description of live code):
+  # gpt-oss ran the save_state/load_state session path, which corrupts the 120B
   # KV at deep context. A 6h/80-task sweep crashed the server with `llama_decode
   # code -1` (Invalid input batch at Pos 2174) inside session_turn, right after a
   # 12-turn / 1020s interactive session (zork/maze class). session_full_replay

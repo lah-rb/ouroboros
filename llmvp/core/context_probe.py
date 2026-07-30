@@ -391,21 +391,38 @@ class Probe:
             os.fsync(fh.fileno())
         tmp.replace(self.base / "RESULTS.json")
 
-    def peak_wired(self) -> float:
-        """Peak wired GB from the sampler.
+    def _wired_rows(self) -> list:
+        """Sample rows from the recorder's CSV.
 
         NOTE the recorder writes to ~/ouroboros-runs/ regardless of cwd (it says
         so, deliberately: /tmp does not survive the reboot this probe might
         cause). Globbing the probe's own directory finds nothing and reports a
         silent 0.0 on every rung — which looks like a measurement rather than a
         missing one."""
+        csvs = sorted(RUNS.glob("wired_ctxprobe_*.csv"))
+        if not csvs:
+            return []
+        return [ln for ln in csvs[-1].read_text().splitlines()
+                if ln.startswith("S,")]
+
+    def mark_wired(self) -> None:
+        """Watermark the sampler before a rung starts, so peak_wired() reports
+        THIS rung's peak and not the run's.
+
+        One recorder covers the whole probe session, so an unwatermarked max is
+        monotone across every model and rung. That is not a subtle error: in
+        run ctx_probe_20260730-124104, gemma-26b (14GB of weights) inherited
+        hy3's 120.4GB and its measured overhead came out as 100.4GB. It was
+        harmless there only because gemma hit the trained range on its first
+        rung — anywhere else it would have poisoned the arithmetic gate, which
+        is exactly how a probe artifact becomes a recorded 'ceiling'."""
+        self._wired_mark = len(self._wired_rows())
+
+    def peak_wired(self) -> float:
+        """Peak wired GB since the last mark_wired()."""
         try:
-            csvs = sorted(RUNS.glob("wired_ctxprobe_*.csv"))
-            if not csvs:
-                return 0.0
-            return max((float(ln.split(",")[3]) for ln in
-                        csvs[-1].read_text().splitlines() if ln.startswith("S,")),
-                       default=0.0)
+            rows = self._wired_rows()[getattr(self, "_wired_mark", 0):]
+            return max((float(ln.split(",")[3]) for ln in rows), default=0.0)
         except Exception:  # noqa: BLE001
             return 0.0
 
@@ -414,6 +431,7 @@ class Probe:
         t0 = time.time()
         self.log(f"  ── rung n_ctx={n}")
         stop_server(self.log)
+        self.mark_wired()   # this rung's peak, not the run's
         set_n_ctx(cfg_path, n)
         (LLMVP / "active_config.txt").write_text(cfg)
         slog = self.base / f"{cfg}_{n}_server.log"

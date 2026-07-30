@@ -6,6 +6,22 @@ hy3 tier arm, the windowing-hazard investigation). Supersedes
 `dev/archive/docs/CACHE_STATE.md` as the reference; that document remains the
 authoritative *snapshot of 2026-07-12* and is pointed here from its header.
 
+> **ADDENDUM 2026-07-30 — what changed the day after assembly.** Read this
+> before citing the mechanism catalog:
+> - **M8 (save_state-blob flow cache) and the legacy save_state session splice
+>   are DELETED**, not merely unreachable. Two session strategies remain,
+>   resident and full-replay. OPEN_TASKS §4 and §11b are closed.
+> - **M9's flow band now works under `decode_mode: batched`** — the shape
+>   production actually runs — and is live-accepted on gpt-oss swarm: fresh
+>   prefill 4,237 → 17 tokens, 3,970 ms → 0.1 ms per call, needle through the
+>   pinned head verbatim. `flow_kv_cache: true` on all 7 servable resident
+>   configs. The 2026-06 ban applied to M8 and does not survive it.
+> - **The wired limit is NOT a memory ceiling** (§4's ledger implied it could
+>   be). `iogpu.wired_limit_mb` = 121.6 GB has been crossed by three separate
+>   passing measurements — 116.4 GB (2026-07-28 ladder), 121.7 GB and 123.0 GB
+>   (2026-07-30 probe rungs). PHYSICAL memory is what kills the machine; both
+>   recorded hard reboots ran it out of RAM outright.
+
 Caching was the original concern that fueled building LLMVP. This corpus exists
 because the evidence had fragmented across ~29 sources, "cache hit rate" had
 come to name three different quantities, and at least one doctrine statement
