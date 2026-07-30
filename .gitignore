@@ -38,8 +38,6 @@ dev/archive/state_exp/data/
 
 # terminal-bench harness run outputs (per-run logs, casts, results)
 runs/
-llmvp/logs/llmvp_server.log
-llmvp/logs/interactions.jsonl
 models/
 logs/
 
@@ -48,3 +46,15 @@ logs/
 # analysis data — 8.3MB for a single 7h run — and stay local only.
 dev/archived_runs/*/.agent/traces/
 dev/archived_runs/*/run_throughput.png
+
+# ── Regenerable artifacts and log churn (untracked 2026-07-30) ──────
+# Pre-tokenized static buffers: derived from knowledge/ + the persona files
+# (both tracked) and auto-rebuilt when missing or stale, so versioning them
+# only produced a binary diff on every model switch.
+llmvp/data/*.tokens.bin
+# Server logs, per-run backend logs, and forensic captures. server_stdout.log
+# rewrites on every boot. NOTE: llmvp/tests/test_fsm_labeller.py cites
+# logs/runaway_captures/20260703T152322_106343.json as the provenance of a
+# fixture — if that lineage should survive a fresh clone, copy the specimen
+# under a tests fixture path rather than re-tracking this directory.
+llmvp/logs/
