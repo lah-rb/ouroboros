@@ -386,27 +386,15 @@ better-grounded) declaration and the tripwire alone. Pure observation —
 snapshot at session start, flush what appeared — remains the universal fix if
 that gap ever bites.
 
-### 11a. Three defects found while mapping `project_ops` (unfixed)
+### 11a. Vacuous verification, same run
 
-Recorded, not chased:
+**The three `project_ops` defects recorded here were fixed 2026-07-30**
+(`91451f7`, alongside the plan_setup split): the phantom `setup_complete`
+return is removed, `test_install_command` was added to the schema that
+forbade it, and `write_files` now reports `parse_failed` and routes it to
+`build_report_failure` instead of treating a fence-parse failure as success.
 
-- **`setup_result` is never published.** `project_ops.cue:25`
-  (`returns.setup_complete ← context.setup_result`) and `build_report_success`'s
-  optional context both read it, but the only publisher was the deleted
-  `run_setup_commands` step. So `setup_complete` is permanently absent from the
-  flow's returns, and `reporting_actions.py:333,342-343` renders a `Setup: …`
-  line that can never appear for project_ops.
-- **`test_install_command` is forbidden by its own schema.**
-  `collect_test_installs` (`project_ops.cue`) reads that field and
-  `prompts/set_env/detect_tooling_rules.yaml` asks the model for it at length —
-  but `schemas/validation_env_config.json` sets `additionalProperties: false` on
-  `LanguageCommands`, so a schema-conforming response can never contain it. The
-  step therefore always finds nothing and falls through. Either add the field to
-  the schema or drop the prompt paragraph and the step.
-- **`write_files`' resolver is unconditional** (`{condition: "true"}`), so
-  `all_written == false` or "No file blocks found" routes onward silently.
-
-Related, same run: **7 of 9 failed reports recorded ZERO checks**
+Still open, from the same run: **7 of 9 failed reports recorded ZERO checks**
 (`checks_passed: [] / checks_failed: []`). A failure verdict with no checkable
 items is unfalsifiable — the vacuous-verification shape again.
 
