@@ -388,27 +388,50 @@ class SessionManager:
         )
 
         if snap_entry is not None:
-            session.snapshot_forked = True
-            session.turn_count = int(snap_entry.get("turn_count") or 0)
-            if resident:
-                # Hot fork (~zero prefill); cold miss (refresh/instance
-                # mismatch/replay-only entry) rebuilds by re-prefill. Both
-                # leave seq 0 holding static + snapshot content — the live-KV
-                # turn path appends from there.
-                async with self._generation_guard():
-                    got = await run_in_threadpool(
-                        self._backend.fork_snapshot_seq, instance, from_snapshot
-                    )
-                    if got is None:
-                        await run_in_threadpool(
-                            self._backend.rebuild_snapshot_cold,
-                            instance,
-                            from_snapshot,
+            # THE SEAT MUST SURVIVE A FAILED FORK. Everything from here to
+            # registration can raise — most reliably `rebuild_snapshot_cold`,
+            # which under batched ALWAYS raises on a cold entry (a seat has no
+            # .eval), and every entry goes cold after any context refresh. The
+            # instance was acquired above and, on a batched seat, already
+            # marked `pinned` — so an escaping exception left it leased with
+            # no session to release it, and the seat reaper skips pinned seats
+            # by design. That is one seat of 128 gone permanently, per call.
+            try:
+                session.snapshot_forked = True
+                session.turn_count = int(snap_entry.get("turn_count") or 0)
+                if resident:
+                    # Hot fork (~zero prefill); cold miss (refresh/instance
+                    # mismatch/replay-only entry) rebuilds by re-prefill. Both
+                    # leave seq 0 holding static + snapshot content — the
+                    # live-KV turn path appends from there.
+                    async with self._generation_guard():
+                        got = await run_in_threadpool(
+                            self._backend.fork_snapshot_seq, instance, from_snapshot
                         )
-            else:
-                # Replay fallback (recurrent models / resident off): seed the
-                # history; turn 1 re-prefills it on the static base.
-                session.token_history = list(snap_entry["dyn_tokens"])
+                        if got is None:
+                            await run_in_threadpool(
+                                self._backend.rebuild_snapshot_cold,
+                                instance,
+                                from_snapshot,
+                            )
+                else:
+                    # Replay fallback (recurrent models / resident off): seed
+                    # the history; turn 1 re-prefills it on the static base.
+                    session.token_history = list(snap_entry["dyn_tokens"])
+            except BaseException:
+                # Unpin FIRST: release_instance on a still-pinned seat is a
+                # no-op in the batched backend, which would re-leak it.
+                if hasattr(instance, "pinned"):
+                    instance.pinned = False
+                with contextlib.suppress(Exception):
+                    await self._backend.release_instance(instance)
+                log.error(
+                    "🌱 Session %s fork from snapshot %r FAILED — seat released "
+                    "(a leaked seat is permanent; the reaper skips pinned seats)",
+                    session_id,
+                    from_snapshot,
+                )
+                raise
             log.info(
                 "🌱 Session %s forked from snapshot %r (turn_count=%d, mode=%s)",
                 session_id,

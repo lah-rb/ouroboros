@@ -191,6 +191,13 @@ tier:
 # ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
 probe_verified_cache:
   run_id: cells_20260729-232251
+  # ⚠️ PRE-FLIP. F2 was measured on 2026-07-29 with swa_full:false, BEFORE this
+  # config was flipped to swa_full:true + resident on 2026-07-30. Its
+  # `can_shift: False` is a property of the old flags, NOT of this model — read
+  # as history. swa_full is exactly what makes pinned/forked prefixes sound at
+  # sliding_window 512, and the sibling laguna-s runs resident in production
+  # batched. No post-flip cell has been recorded here yet; until one is, this
+  # config's resident claim is unverified on this model.
   F2:
     strategy: full_replay
     can_shift: False

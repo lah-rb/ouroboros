@@ -623,6 +623,22 @@ class Config(BaseModel):
                     "every persona in `personas` is warmed as a pinned head and "
                     "any seat can serve any persona"
                 )
+        # An INERT flow cache. Since the M8 save_state-blob path was deleted
+        # (2026-07-30) the flow cache is a seq-ops mechanism only, so without
+        # the resident cache there is nothing to pin onto: the request takes
+        # the retired branch, increments flow_fallbacks forever, and serves
+        # from the static base. The flag reads as a feature and buys nothing.
+        # Warned, not raised — resident is a REQUEST that the can_shift gate
+        # may deny at load, so a config can be honestly written this way and
+        # only discover the denial on the box.
+        if self.model.flow_kv_cache and not self.model.resident_seq_cache:
+            logging.getLogger(__name__).warning(
+                "model.flow_kv_cache is ON but model.resident_seq_cache is OFF "
+                "— the flow cache is seq-ops only since the blob path was "
+                "retired, so it will serve from the static base and count a "
+                "fallback on every request. Enable resident_seq_cache, or turn "
+                "flow_kv_cache off."
+            )
         return self
 
     @model_validator(mode="after")

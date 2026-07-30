@@ -46,7 +46,18 @@ model:
   n_gpu_layers: -1
   seed: -1
   verbose: false
-  flow_kv_cache: true
+  # OFF 2026-07-30. It was `true` while `resident_seq_cache` is unset (false),
+  # which since the M8 blob path was deleted means the flow cache has nothing
+  # to pin onto: every request took the retired branch, incremented
+  # flow_fallbacks, and served from the static base. The flag read as a feature
+  # and bought nothing. Config validation now warns on this combination.
+  #
+  # Turning it ON is gated on measuring resident FIRST. This is the GDN-hybrid
+  # substrate, and both siblings measured memory_can_shift=False with the flags
+  # forced on (qwen3.5-122b-a10 cell RC2; qwen3.6-27b cell F5), so the expected
+  # answer is an architecture refusal — but this model has never been measured
+  # and the file should not pretend either way.
+  flow_kv_cache: false
   kv_unified: true
   swa_full: true
   # Qwen3.6 is an ALWAYS-ON thinking model — it emits <think>…</think> every

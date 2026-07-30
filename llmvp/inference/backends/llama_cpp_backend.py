@@ -1073,15 +1073,48 @@ class LlamaCppBackend(BaseBackend):
         # at retire, HIT via install_flow_sync) and lives on the seq map's
         # flow slots.
         if self._session_flow_fork:
-            log.info(
-                "session flow-fork is pool-only — disabled in batched mode"
+            log.warning(
+                "⚠️ resident_session_flow_fork is ON in config but is POOL-ONLY "
+                "— disabled under batched. The per-session turn-0 flow fork "
+                "will not happen; the stateless flow band below is unrelated."
             )
         self._session_flow_fork = False
-        if self._flow_band:
-            log.info(
-                "flow band ACTIVE in batched mode (%d slots)",
-                self._flow_hot_set,
+        # Recompute: _flow_band was derived in __init__ as
+        # (_flow_resident or _session_flow_fork), and _session_flow_fork just
+        # became False. Reporting the stale value announced an 8-slot band on
+        # every batched config with flow_kv_cache: false — the seq map sizes
+        # flow_slots from flow_kv_cache ALONE, so the band did not exist. Read
+        # the map, not the intent.
+        self._flow_band = self._flow_resident or self._session_flow_fork
+        _flow_slots = len(seq_map.flow_seqs)
+        if _flow_slots:
+            log.info("flow band ACTIVE in batched mode (%d slots)", _flow_slots)
+        elif getattr(self.config.model, "flow_kv_cache", False):
+            log.warning(
+                "⚠️ flow_kv_cache is ON but the batched seq map allocated NO "
+                "flow slots — the stateless flow cache is inert this boot"
             )
+
+        # DECLARE WHAT WE WILL NOT DO, ONCE, AT BOOT. These features are
+        # pool-only and were each announced per-request at log.debug — i.e.
+        # invisible at the default level. A config could request a feature,
+        # never receive it, and read as though it had: the same
+        # record-says-one-thing/run-does-another shape as the transient-files
+        # declaration drift. The per-request debug lines stay for tracing; this
+        # is the line an operator actually sees.
+        _ignored = []
+        if getattr(self.config.model, "resident_strip_reasoning", False):
+            _ignored.append(
+                "resident_strip_reasoning (prior-turn CoT will ACCUMULATE in "
+                "the live seq across every turn)"
+            )
+        if getattr(getattr(self.config, "generation", None), "degen_retry_enabled", None):
+            _ignored.append(
+                "degen_retry sampling overrides (the retry still fires, but at "
+                "temperature only — presence penalty and penalty window dropped)"
+            )
+        for _feat in _ignored:
+            log.warning("⚠️ POOL-ONLY, ignored under batched: %s", _feat)
 
         # Seats carry the per-STREAM ceiling (min of pool allocation and
         # trained range) — the pool may be far larger than any one stream
@@ -2058,10 +2091,11 @@ class LlamaCppBackend(BaseBackend):
         between a fact and an inference."""
         if self._resident_active:
             return "resident"
-        if bool(getattr(getattr(self.config, "model", None),
-                        "session_full_replay", True)):
-            return "full_replay"
-        return "legacy_save_state"
+        # Only two strategies exist. The legacy save_state splice was deleted
+        # 2026-07-30 and the validator refuses `session_full_replay: false`, so
+        # non-resident is full_replay by construction. Returning a third name
+        # here put a dead value into the health register.
+        return "full_replay"
 
     def _log_session_strategy(self) -> None:
         """One line, every load, whatever the flags.
@@ -2092,8 +2126,6 @@ class LlamaCppBackend(BaseBackend):
             # exactly hy3 — quadratic re-prefill by omission, not by necessity.
             detail = (" — resident AVAILABLE but not enabled; this model is "
                       "paying full re-prefill per session turn")
-        elif strategy == "legacy_save_state":
-            detail = " — LEGACY save_state path (see dev/caching/CORPUS.md: unsafe)"
 
         log.info(
             "🧩 session strategy: %s (resident_requested=%s, memory_can_shift=%s, "
@@ -2745,9 +2777,12 @@ class LlamaCppBackend(BaseBackend):
                 log.warning(
                     "🧩 resident_seq_cache requested but memory_can_shift=False "
                     "(interleaved-SWA without swa_full, or recurrent memory) — "
-                    "falling back to the legacy save_state path. For iSWA "
-                    "models (gpt-oss / OLMo 3 / Gemma class) set swa_full: "
-                    "true + kv_unified: true to enable the resident cache."
+                    "falling back to FULL REPLAY, which re-prefills the whole "
+                    "session every turn (measured 7.8-9.8x more prefill at "
+                    "depth 16). For iSWA models (gpt-oss / OLMo 3 / Gemma "
+                    "class) set swa_full: true + kv_unified: true to enable "
+                    "the resident cache; recurrent/hybrid architectures "
+                    "(qwen GDN class) are refused regardless of flags."
                 )
                 _params = self._primary_instance.context_params
                 _nsm = int(getattr(_params, "n_seq_max", 1) or 1)

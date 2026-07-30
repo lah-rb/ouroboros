@@ -65,8 +65,11 @@ model:
   # costs 5.7 GB of KV against 14.2 GB of weights — 19.9 GB total on a 137 GB
   # box. There is no memory question left to answer, so re-running the ladder to
   # walk it up 15k at a time would only re-measure the fix.
-  # probe_verified_n_ctx RETIRED 2026-07-30: measured under swa_full:false;
-  # invalid under the flipped flags. Re-probe if n_ctx is ever raised.
+  # probe_verified_n_ctx was RETIRED earlier on 2026-07-30 (it had been
+  # measured under swa_full:false) and then RE-MEASURED the same day under the
+  # flipped flags — run ctx_probe_20260730-124104 passed the full trained range
+  # 262144 at 14.2GB weights + 55GB KV. The value above is that re-measurement,
+  # not the retired one.
   model_max_context: 262144
   # 50 against the PESSIMISTIC 46.5 GB. Deliberately sized on the formula rather
   # than a hoped-for measured value: a preflight tuned to an estimate we expect

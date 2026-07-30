@@ -100,9 +100,14 @@ class TestEffectiveStrategy:
         b = _with_ctx(_backend(full_replay=True))
         assert b._session_strategy() == "full_replay"
 
-    def test_legacy_when_neither_is_set(self):
+    def test_there_is_no_third_strategy(self):
+        """This used to assert `legacy_save_state` when neither flag was set.
+        That path was DELETED 2026-07-30 and the validator refuses
+        `session_full_replay: false`, so the state is unreachable from any
+        loadable config — and reporting a third name put a dead value into the
+        health register. Non-resident is full_replay, by construction."""
         b = _with_ctx(_backend(resident_requested=False, full_replay=False))
-        assert b._session_strategy() == "legacy_save_state"
+        assert b._session_strategy() == "full_replay"
 
     def test_requested_but_denied_still_reports_the_path_it_landed_on(self):
         """The §4 wrinkle: the request was granted by config and refused by the
@@ -165,10 +170,14 @@ class TestStrategyLogLine:
         out = self._log(b, caplog)
         assert "session strategy" in out
 
-    def test_legacy_path_is_called_out_as_unsafe(self, caplog):
+    def test_the_deleted_path_is_never_named(self, caplog):
+        """It used to print ' — LEGACY save_state path … unsafe'. Naming a path
+        that no longer exists is worse than silence: it sends the reader
+        looking for code to inspect."""
         b = _with_ctx(_backend(resident_requested=False, full_replay=False))
         out = self._log(b, caplog)
-        assert "LEGACY save_state" in out
+        assert "LEGACY save_state" not in out
+        assert "session strategy: full_replay" in out
 
 
 class TestTheAskIsUnconditional:
