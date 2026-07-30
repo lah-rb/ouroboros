@@ -1949,7 +1949,10 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
     INFO; the fail-open bound logs WARNING (a silent fail-open is exactly
     the state an operator must not miss).
     """
-    from agent.actions.batch_structural_actions import _transfer_shape_violations
+    from agent.actions.batch_structural_actions import (
+        _symbol_reachability,
+        _transfer_shape_violations,
+    )
     from agent.actions.contract_swarm_actions import action_run_contract_typecheck
     from agent.models import FlowMeta as _FlowMeta
     from agent.models import StepInput as _StepInput
@@ -2022,16 +2025,81 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
             out = entry.get("output") or "typecheck failed"
             problems.setdefault(f, []).append(out[:500])
 
-    if not problems:
+    # ── reachability split ────────────────────────────────────────────
+    # A seam every one of whose access sites is unreachable cannot affect the
+    # artifact's behaviour, and must not consume the fix budget. Five of the
+    # eight historical fail-opens were one such seam
+    # (GameEngine._handle_flee, called only from a dispatcher nothing wired
+    # up) re-reported at five successive phase exits. Still reported — dead
+    # code carrying a real AttributeError is cruft — just not blocking.
+    reach = _symbol_reachability(sources)
+    _dead: set[str] = reach["dead"]
+    _sites: dict[str, set[str]] = reach["access_sites"]
+
+    def _missing_attr(v: str) -> str:
+        m = re.search(r"has no attribute/method '([A-Za-z_]\w*)'", v)
+        return m.group(1) if m else ""
+
+    blocking: dict[str, list[str]] = {}
+    unreachable: list[str] = []
+    for f, vs in problems.items():
+        for v in vs:
+            attr = _missing_attr(v)
+            holders = _sites.get(attr) or set()
+            # Only suppress when we positively know every access site AND all
+            # of them are dead. No sites found = keep it blocking.
+            if attr and holders and holders <= _dead:
+                unreachable.append(v)
+            else:
+                blocking.setdefault(f, []).append(v)
+
+    cruft = [
+        f"dead duplicate: {d} duplicates live {live}" for d, live in reach["dead_dupes"]
+    ] + [
+        f"orphaned method at module level (fell out of its class): {o}"
+        for o in reach["orphans"]
+    ]
+    if unreachable or cruft:
+        for line in unreachable:
+            logger.info("Seam gate: unreachable seam (dead code) — %s", line)
+        for line in cruft:
+            logger.info("Seam gate: %s", line)
+        mission.notes.append(
+            NoteRecord(
+                content=(
+                    "seam gate: structural cruft that does not affect behaviour "
+                    "(NOT blocking, no fix attempt spent): "
+                    + "; ".join(unreachable + cruft)[:600]
+                ),
+                category="failure_analysis",
+                tags=["seam_gate_advisory"],
+                source_flow="structural_sweep",
+            )
+        )
+        await effects.save_mission(mission)
+
+    if not blocking:
         logger.info(
             "Seam gate: clean — %d file(s) checked (transfer-shape + typecheck), "
-            "no cross-module mismatches",
+            "no reachable mismatches (%d unreachable seam(s), %d cruft item(s) "
+            "reported)",
             len(sources),
+            len(unreachable),
+            len(cruft),
         )
         return None
+    problems = blocking
 
     target = sorted(problems)[0]
     seams = "\n".join(v for vs in problems.values() for v in vs)[:800]
+    # Direction: a missing DEFINITION is not a wrong call. The old directive
+    # said "fix {target} so its cross-module calls match", which points the
+    # model at the call site — so a missing method got its caller re-edited
+    # three times and the definition was never written (devstral, 3 identical
+    # attempts). Name the absent members and say where they belong.
+    missing = sorted(
+        {a for vs in problems.values() for a in (_missing_attr(v) for v in vs) if a}
+    )
     goal = next(
         (
             g
@@ -2064,9 +2132,20 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
         "flow": "file_ops",
         "target_file_path": target,
         "flow_directive": (
-            f"Cross-module interface check failed at structural phase exit. "
-            f"Fix {target} so its cross-module calls match what the other "
-            f"modules actually define and return:\n{seams}"
+            (
+                f"Interface check failed at structural phase exit. The "
+                f"following members are CALLED but never DEFINED: "
+                f"{', '.join(missing)}. Add the missing definition(s) to the "
+                f"class that should own them in {target}. The call sites are "
+                f"correct — do not edit them, and do not delete the calls:\n"
+                f"{seams}"
+            )
+            if missing
+            else (
+                f"Cross-module interface check failed at structural phase exit. "
+                f"Fix {target} so its cross-module calls match what the other "
+                f"modules actually define and return:\n{seams}"
+            )
         ),
         "error_output": seams,
         "recent_reports": [],

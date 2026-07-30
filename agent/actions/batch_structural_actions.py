@@ -448,6 +448,124 @@ def _transfer_shape_violations(sources: dict[str, str]) -> dict[str, list[str]]:
     return out
 
 
+# ── reachability: which symbols can actually run ──────────────────────
+#
+# WHY (2026-07-30, from the eight seam-gate fail-open firings): five of them
+# were one run re-reporting `GameEngine._handle_flee` — a real AttributeError
+# sitting in `_handle_command`, a SECOND dispatcher the model wrote while
+# migrating to helper style and then never wired up. `run()` still called the
+# original. The seam could not execute, the fix loop spent its whole budget on
+# it, and the phase exited with a WARNING claiming unresolved seams.
+#
+# A seam in code nothing reaches is not a defect in the artifact's behaviour.
+# It is still cruft worth reporting, which is why this returns the dead
+# duplicates and orphans separately rather than silently dropping them.
+
+# Never called by name, so a name-reference test cannot see them.
+_IMPLICITLY_LIVE = ("main", "setup", "teardown")
+
+
+def _symbol_reachability(sources: dict[str, str]) -> dict[str, Any]:
+    """Static reachability over the structural fileset.
+
+    Returns a dict with:
+      ``dead``          {qualname} — defined, never referenced anywhere else
+      ``access_sites``  {attr_name: {qualname of each function accessing it}}
+      ``orphans``       ["path::name"] — module-level ``def f(self, ...)``,
+                        i.e. a method that fell out of its class on a splice
+      ``dead_dupes``    [(dead_qualname, live_qualname)] — a dead symbol whose
+                        underscore-normalized name matches a live one
+
+    Deliberately conservative about what counts as dead: dunders, the
+    ``_IMPLICITLY_LIVE`` names, anything decorated (a decorator may register
+    it), and anything whose name appears in ANY string literal (getattr /
+    dynamic dispatch) are all treated as live. A false "dead" here suppresses
+    a real seam, so the bias is toward calling things live.
+    """
+    trees: dict[str, Any] = {}
+    for path, text in sources.items():
+        try:
+            trees[path] = stdlib_ast.parse(text or "")
+        except SyntaxError:
+            continue
+
+    defs: dict[str, Any] = {}  # qualname -> node
+    orphans: list[str] = []
+    # qualname -> the set of names referenced anywhere inside its own body
+    own_refs: dict[str, set[str]] = {}
+    access_sites: dict[str, set[str]] = {}
+    all_refs: list[tuple[str, str]] = []  # (referenced_name, containing qualname)
+    string_names: set[str] = set()
+
+    def _fn_nodes(node: Any) -> bool:
+        return isinstance(node, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef))
+
+    for path, tree in trees.items():
+        for s in stdlib_ast.walk(tree):
+            if isinstance(s, stdlib_ast.Constant) and isinstance(s.value, str):
+                string_names.add(s.value.strip())
+
+        def _record(fn: Any, qual: str) -> None:
+            defs[qual] = fn
+            refs: set[str] = set()
+            for n in stdlib_ast.walk(fn):
+                if isinstance(n, stdlib_ast.Attribute):
+                    refs.add(n.attr)
+                    access_sites.setdefault(n.attr, set()).add(qual)
+                elif isinstance(n, stdlib_ast.Name):
+                    refs.add(n.id)
+            own_refs[qual] = refs
+            for r in refs:
+                all_refs.append((r, qual))
+
+        for node in tree.body:
+            if _fn_nodes(node):
+                _record(node, f"{path}::{node.name}")
+                if any(a.arg == "self" for a in node.args.args):
+                    orphans.append(f"{path}::{node.name}")
+            elif isinstance(node, stdlib_ast.ClassDef):
+                for item in node.body:
+                    if _fn_nodes(item):
+                        _record(item, f"{path}::{node.name}.{item.name}")
+
+    def _short(qual: str) -> str:
+        return qual.rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+
+    dead: set[str] = set()
+    for qual, fn in defs.items():
+        name = _short(qual)
+        if name.startswith("__") and name.endswith("__"):
+            continue
+        if name in _IMPLICITLY_LIVE or name.startswith("test_"):
+            continue
+        if getattr(fn, "decorator_list", None):
+            continue
+        if name in string_names:
+            continue  # getattr / dynamic dispatch — assume live
+        # Referenced from anywhere that is not its own body (recursion alone
+        # does not make a symbol reachable).
+        if any(r == name and holder != qual for r, holder in all_refs):
+            continue
+        dead.add(qual)
+
+    live_by_name: dict[str, str] = {}
+    for qual in defs:
+        if qual not in dead:
+            live_by_name.setdefault(_short(qual).lstrip("_"), qual)
+    dead_dupes = [
+        (q, live_by_name[_short(q).lstrip("_")])
+        for q in sorted(dead)
+        if _short(q).lstrip("_") in live_by_name
+    ]
+
+    return {
+        "dead": dead,
+        "access_sites": access_sites,
+        "orphans": sorted(orphans),
+        "dead_dupes": dead_dupes,
+    }
+
+
 async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
     """Slice a multi-file generation and write the declared files.
 
@@ -841,6 +959,23 @@ async def action_apply_batch_results(step_input: StepInput) -> StepOutput:
         + (", generation truncated" if truncated else "")
         + (f". Generation cost: {tokens} tokens." if tokens else ".")
     )
+    # LOG IT, not just note it. This summary is the only place that says whether
+    # a batch DELIVERED, and until 2026-07-29 it existed solely in mission.json
+    # notes — so a run being watched live was indistinguishable from a serial
+    # one. Two check-ins on the glm-4.7-flash arm could not tell which path it
+    # had taken; the answer ("1 files written ... 5 missing (serial fallback)")
+    # was sitting in a note the whole time. A partial batch is the single most
+    # important thing to know about a structural phase, because the fallback is
+    # far more expensive per file.
+    if missing or failed_files:
+        logger.warning("🧱 %s", summary)
+        if missing:
+            logger.warning("🧱 serial fallback will build: %s", ", ".join(missing))
+        if failed_files:
+            logger.warning("🧱 failed gates: %s", ", ".join(failed_files))
+    else:
+        logger.info("🧱 %s", summary)
+
     mission.notes.append(
         NoteRecord(
             content=summary
