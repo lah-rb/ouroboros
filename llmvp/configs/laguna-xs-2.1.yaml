@@ -70,7 +70,10 @@ model:
   verbose: false
   flash_attn_type: auto
   n_batch: 2048
-  thinking: false
+  # FLIPPED 2026-07-30: the owed thinking:true rerun (tier arm 4 of
+  # tier_20260730-082456). The non-thinking arm03 verdict stands as the
+  # baseline; this is the variant it called for.
+  thinking: true
   # FLIPPED 2026-07-30 per cell RC1: sliding_window 512, so swa_full is
   # what makes pinned/forked prefixes sound (sibling laguna-s runs it in
   # production batched).
@@ -93,7 +96,9 @@ generation:
   # OFF here and laguna emits <tool_call> unprompted against an explicit
   # prohibition (41% of turns on S). Carried from laguna-s-2.1-apex; a
   # thinking:true variant MUST drop the 19 ban or it bans what it depends on.
-  logit_bias: {19: -100.0, 25: -100.0}
+  # Token 19 (</think>) ban DROPPED per the rule above — thinking:true
+  # depends on it. 25 (<tool_call>) stays banned.
+  logit_bias: {25: -100.0}
   repetition_guard_enabled: null
   long_cycle_guard_enabled: null
 
