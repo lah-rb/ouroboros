@@ -27,10 +27,17 @@ stop_server(){ (cd "$LLMVP" && uv run llmvp.py --stop) >/dev/null 2>&1 || true; 
 start_server(){ (cd "$LLMVP" && uv run llmvp.py --backend) >/dev/null 2>&1 || true; wait_ready; }
 
 cleanup(){
+  # VERIFY the stop took before restoring: on 2026-07-30 the trap's stop had
+  # not completed before exit and the last CELL's server outlived the restore —
+  # active_config said production while qwen3.6-27b was still serving.
   stop_server
+  for _ in $(seq 1 12); do pgrep -f '[a]pi/main.py' >/dev/null || break; sleep 5; done
+  pgrep -f '[a]pi/main.py' >/dev/null && echo "!! server still up after stop — NOT restarting production over it"
   echo "$RESTORE" > $LLMVP/active_config.txt
   rm -f $LLMVP/configs/cachecell-*.yaml
-  echo "production config ($RESTORE) restored"
+  if ! pgrep -f '[a]pi/main.py' >/dev/null; then
+    start_server && echo "production config ($RESTORE) restored AND serving"                  || echo "production restored in active_config; server did not come up"
+  fi
 }
 trap cleanup EXIT
 
@@ -63,6 +70,8 @@ C2|C|gemma-4-26b-a4b|resident|unified|on|16|900
 D1|D|hy3-reap-200b-a21|resident|none|inherit|16|900
 D2|D|hy3-reap-200b-a21|resident|unified|inherit|16|900
 D3|D|hy3-reap-200b-a21|replay|na|inherit|16|900
+RC1|RC|laguna-xs-2.1|resident|unified|on|16|900
+RC2|RC|qwen3.5-122b-a10|resident|unified|on|16|900
 F1|F|mistral-medium-3.5-128b|resident|none|inherit|16|900
 F2|F|laguna-xs-2.1|replay|na|inherit|16|900
 F3|F|qwen3.5-122b-a10|replay|na|inherit|16|900

@@ -59,6 +59,12 @@ model:
   n_gpu_layers: -1   
   seed: -1
   verbose: false
+  # RESIDENT IS ARCHITECTURE-REFUSED (measured 2026-07-30, cell RC2):
+  # memory_can_shift stays False even with swa_full+kv_unified forced on —
+  # the recurrent component blocks seq ops regardless of SWA flags. This
+  # model is CORRECTLY on full_replay; keep its agent sessions shallow by
+  # flow design (replay cost at depth 16 realistic turns: 68.7s probe /
+  # extrapolates hy3-class on real charters).
   session_full_replay: true
 
 prompt:

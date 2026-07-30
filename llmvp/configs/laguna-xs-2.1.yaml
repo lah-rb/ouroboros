@@ -51,12 +51,18 @@ model:
   # RAISED 65536 -> 262144 on 2026-07-29 from the measured ceiling
   # (probe_verified_n_ctx below). KV 40 KiB/token x 262144 = 10.9GB
   # + 24.3GB weights = 35.2GB resident at boot.
-  n_ctx: 262144
+  # 262,144 surrendered 2026-07-30 for the flat session path (cell RC1,
+  # run cells_20260730-*): resident+swa_full+kv_unified measured flat at
+  # 65,536 with needles intact; replay needed 6.61x growing prefill (F2)
+  # to use the big window.
+  n_ctx: 65536
   # MEASURED 2026-07-29 (--probe-context): 41440 B/tok vs a 163840 formula (3.95x over — swa_full:false keeps the windowed
   # layers windowed, and the formula assumes a full cache on every layer).
-  kv_bytes_per_token_measured: 41440
+  # kv_bytes_per_token_measured RETIRED 2026-07-30: 41,440 was measured
+  # under swa_full:false; invalid under the flipped flags.
+  # probe_verified_n_ctx likewise. Re-probe before raising n_ctx.
   probe_verified_weights_bytes: 24308693792
-  probe_verified_n_ctx: 262144
+  # (probe_verified_n_ctx retired with the flag flip — see above)
   model_max_context: 262144
   kv_preflight_gb: 38
   n_gpu_layers: -1
@@ -65,10 +71,13 @@ model:
   flash_attn_type: auto
   n_batch: 2048
   thinking: false
-  swa_full: false
-  kv_unified: false
+  # FLIPPED 2026-07-30 per cell RC1: sliding_window 512, so swa_full is
+  # what makes pinned/forked prefixes sound (sibling laguna-s runs it in
+  # production batched).
+  swa_full: true
+  kv_unified: true
   session_full_replay: true
-  resident_seq_cache: false
+  resident_seq_cache: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

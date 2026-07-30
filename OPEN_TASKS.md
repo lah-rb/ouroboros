@@ -457,6 +457,12 @@ manufactured the "busy" in the first place.
 **See `dev/caching/CORPUS.md` + `EXPERIMENT.md` (2026-07-29): Block E carries
 11a's pilot and the F12 one-cell test; 11b's workload map is corpus §8.**
 
+**F12 RESOLVED 2026-07-30 (Block E1): cells are shared for MEMORY as for
+time.** 64 × ~9k unique prompts ran clean at ~78% real occupancy where
+static-per-stream counting predicted 93%. No gate change needed — the current
+gates already count client tokens only; F12's quoted skip arithmetic was an
+older revision's.
+
 **PROMOTED on measured evidence.** The swarm-performance study
 (`dev/swarm_performance/FINDINGS.md`) closes with two independent measurements
 that make this the highest-value work available:

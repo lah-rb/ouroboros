@@ -230,12 +230,16 @@ across seven models.
 
 ### Block E results (2026-07-30, same night)
 
-- **P-E1 HIT — the pool-fit gate over-counts by ~N×static (F12 resolved).**
-  64 × ~9k unique prompts = sum-counted 93% of the 744,448 pool (the gate
-  refuses at 80%) ran to completion with ZERO pressure/eviction/force-window
-  events and zero decode failures — actual occupancy was static-counted-once
-  (~78%). At N=64 the gate refuses ~116k tokens of admissible work. Follow-up:
-  teach the client pool-fit gate to count the shared head once.
+- **P-E1 HIT on the physical question — CORRECTED on the gate claim.**
+  64 × ~9k unique prompts ran to completion with ZERO pressure/eviction/
+  force-window events and zero decode failures at ~78% real pool occupancy:
+  **the pool holds the static head ONCE — w=0.06 extends from decode time to
+  MEMORY** (F12's open cell, resolved). The first write-up claimed the
+  admission gate "refuses ~116k of admissible work"; that was measured against
+  F12's QUOTED arithmetic, which belongs to an older gate revision. The
+  CURRENT gates (`agent/actions/fanout.py estimate_draw` and
+  `prefill_grid.py`'s `need = size*n`) already count client tokens only — no
+  code change needed, and F12's stale numbers join the stop-citing register.
   Bonus observation: the client timed out at 10 min and the server ran all 64
   abandoned requests to completion — the watchdog plan's abandonment gap,
   live on the batched path at 78% pool, harmless here because server-side

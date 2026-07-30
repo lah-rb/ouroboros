@@ -1,0 +1,16 @@
+── cell RC1 (RC): laguna-xs-2.1 strat=resident bands=unified swa=on depth=16 turn_tokens=900 ──
+   landed: strategy=resident n_ctx_seq=65536 (expected resident)
+{"label": "cell:RC1:laguna-xs-2.1", "errors": ["snapshot: snapshot capacity (0) reached \u2014 purge one first"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1535, "turn_tokens": 900, "fresh_curve": [1535, 1142, 1142, 1142, 1142, 1142, 1142, 1142, 1142, 1142, 1142, 1175, 1175, 1175, 1175, 24, 22], "prefill_curve_s": [1.2, 1.1, 1.1, 1.1, 1.2, 1.2, 1.2, 1.3, 1.3, 1.4, 1.4, 1.5, 1.5, 1.6, 1.6, 0.1, 0.1], "prefill_total_s": 19.8, "turn2_fresh": 1142, "turn3_fresh": 1142, "turn12_fresh": 24, "depth": 16, "curve_growth": 0.02, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "RC1", "block": "RC", "strategy_expected": "resident", "bands": "unified", "swa": "on", "n_ctx_seq_health": 65536}
+── cell RC2 (RC): qwen3.5-122b-a10 strat=resident bands=unified swa=on depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=full_replay n_ctx_seq=65536 (expected resident)
+cells appended to dev/caching/results/cells.jsonl (run_id cells_20260730-082014)
+!! server still up after stop — NOT restarting production over it
