@@ -320,6 +320,9 @@ class LlamaCppBackend(BaseBackend):
             getattr(getattr(config, "model", None), "session_snapshot_max", 2) or 0
         )
         self._snap_registry: "OrderedDict[str, dict]" = OrderedDict()
+        # Batched snapshot band: key -> snapshot seq id on the single context.
+        # (Pool mode uses per-instance inst._snap_seqs instead.)
+        self._batched_snap_seqs: Dict[str, int] = {}
         self._h_snapshot_rebuilds = 0
         # Per-request reasoning HEAD-SWAP (config.model.reasoning_head_swap). Pin a
         # system head per reasoning level on a band ABOVE the snapshot band; a
@@ -914,6 +917,7 @@ class LlamaCppBackend(BaseBackend):
                 self._pool_size,
                 persona_names,
                 self._reasoning_pin_levels if self._reasoning_head_swap else [],
+                snapshots=self._snapshot_max,
             )
         return self._batched_map
 
@@ -1031,6 +1035,7 @@ class LlamaCppBackend(BaseBackend):
         if self._engine is not None:
             self._engine._persona_heads = heads
             self._engine._reasoning_heads = reasoning_heads
+        self._demote_batched_snapshots()
         self._h_context_refreshes += 1
         log.info(
             "🧼 batched context rebuilt + heads re-pinned in %.2fs",
@@ -2114,7 +2119,10 @@ class LlamaCppBackend(BaseBackend):
         """Refuse a cross-persona snapshot restore: splicing persona-B's static
         head under persona-A's dynamic tokens silently corrupts the context."""
         snap_persona = entry.get("persona", "default")
-        inst_persona = getattr(inst, "_persona", "default")
+        # Pool instances carry `_persona`; batched SeqSlots carry `persona`.
+        inst_persona = getattr(inst, "_persona", None) or getattr(
+            inst, "persona", "default"
+        )
         if snap_persona != inst_persona:
             raise RuntimeError(
                 f"snapshot {key!r} belongs to persona '{snap_persona}' but this "
@@ -2127,10 +2135,7 @@ class LlamaCppBackend(BaseBackend):
         snapshot owns them alone once the working seq moves on. Registry entry
         survives session end; only purge_snapshot frees it."""
         if self._decode_mode == "batched":
-            raise RuntimeError(
-                "session snapshots are pool-only in batched mode v1 "
-                "(decode_mode: pool for snapshot workloads)"
-            )
+            return self._snapshot_seat(inst, key)
         if not self._resident_active:
             raise RuntimeError("resident cache inactive — use the replay fallback")
         if key in self._snap_registry:
@@ -2188,7 +2193,7 @@ class LlamaCppBackend(BaseBackend):
         instance): pure seq_cp, ~zero cost. Cold miss: returns None — caller
         runs rebuild_snapshot_cold. Unknown key: KeyError."""
         if self._decode_mode == "batched":
-            raise RuntimeError("session snapshots are pool-only in batched mode v1")
+            return self._fork_snapshot_seat(inst, key)
         entry = self._snap_registry[key]
         self._guard_snapshot_persona(inst, key, entry)
         seq = inst._snap_seqs.get(key)
@@ -2214,6 +2219,13 @@ class LlamaCppBackend(BaseBackend):
         """Re-prefill snapshot ``key`` from its token list (after a context
         refresh or on a different instance), then re-pin it hot. The cold path
         costs one prefill — loudly counted, never silent."""
+        if self._decode_mode == "batched":
+            raise RuntimeError(
+                f"snapshot {key!r} is COLD under batched mode — the cold rebuild "
+                "replays via inst.eval, which a seat does not have, and a "
+                "control-op replay would stall every live stream. Re-capture "
+                "from a live session (v1 boundary, 2026-07-30)."
+            )
         entry = self._snap_registry[key]
         self._guard_snapshot_persona(inst, key, entry)
         self._resident_restore_static(inst)
@@ -2239,10 +2251,124 @@ class LlamaCppBackend(BaseBackend):
         log.info("🧊 snapshot %r cold rebuild: %d tokens re-prefixed", key, n_total)
         return n_total
 
+    def _demote_batched_snapshots(self) -> int:
+        """The rebuilt context holds NO snapshot cells: demote every hot pin
+        to cold (registry survives; resident flag cleared) — the same demotion
+        the pool refresh performs. Under batched, cold = re-capture (the v1
+        boundary rebuild_snapshot_cold enforces with a clean raise). Extracted
+        from _rebuild_batched_context so it is testable without a context."""
+        for _k in list(self._batched_snap_seqs):
+            if _k in self._snap_registry:
+                self._snap_registry[_k]["resident"] = False
+        n = len(self._batched_snap_seqs)
+        self._batched_snap_seqs.clear()
+        if n:
+            log.info("📸 batched rebuild demoted %d hot snapshot(s) to cold", n)
+        return n
+
+    def _snapshot_seat(self, seat: Any, key: str) -> dict:
+        """Batched capture: pin a session seat's live KV on a snapshot-band seq.
+
+        Was "pool-only in batched mode v1" (a hard raise — Block E2 measured
+        the refusal clean, 2026-07-30); the band now exists in the seq map when
+        ``session_snapshot_max > 0``. All KV surgery routes through the
+        engine's control inbox, so it lands at a step boundary on the decode
+        thread — the same contract as ``SeqSlot.purge_to``. Under kv_unified
+        (a batched requirement) the band divides nothing; pinned cells accrue
+        per token like any other seq."""
+        engine = getattr(seat, "_engine_ref", None)
+        if engine is None:
+            raise RuntimeError("batched snapshot needs a seat-attached session")
+        smap = self._batched_seq_map()
+        if not len(smap.snap_seqs):
+            raise RuntimeError(
+                "session snapshots disabled: session_snapshot_max is 0 on this "
+                "config (the batched band is sized from it)"
+            )
+        if key in self._snap_registry:
+            raise RuntimeError(f"snapshot key {key!r} already exists — purge first")
+        used = set(self._batched_snap_seqs.values())
+        free = [q for q in smap.snap_seqs if q not in used]
+        if not free:
+            # Same contract as the pool band: capacity errors are the caller's
+            # signal to purge — never silent eviction.
+            raise RuntimeError(
+                f"snapshot capacity ({len(smap.snap_seqs)}) reached — purge one first"
+            )
+        snap_seq = free[0]
+        n_tokens = int(seat.n_tokens)
+        static_len = int(getattr(seat, "static_len", 0) or 0)
+
+        def _pin() -> None:
+            ctx = self._primary_instance._ctx
+            ctx.memory_seq_rm(snap_seq, 0, -1)
+            ctx.memory_seq_cp(seat.seq, snap_seq, -1, -1)
+
+        engine.control(_pin).result(timeout=30)
+        self._batched_snap_seqs[key] = snap_seq
+        self._snap_registry[key] = {
+            "dyn_tokens": [int(t) for t in seat.input_ids[static_len:n_tokens]],
+            "static_len": static_len,
+            "persona": getattr(seat, "persona", "default"),
+            "turn_count": 0,  # caller (session manager) overwrites
+            "created_at": time.time(),
+            "resident": True,
+        }
+        log.info(
+            "📸 batched snapshot %r pinned: seq %d, %d tokens (%d dynamic)",
+            key, snap_seq, n_tokens, n_tokens - static_len,
+        )
+        return {"tokens": n_tokens, "resident": True}
+
+    def _fork_snapshot_seat(self, seat: Any, key: str) -> Optional[int]:
+        """Batched hot fork: snapshot-band seq → this session's seat.
+
+        Returns the forked position, or None on a cold entry — and under
+        batched, cold stays a CLEAN REFUSAL downstream (rebuild_snapshot_cold
+        raises): the pool cold path replays via ``inst.eval``, which a seat
+        does not have, and evaluating a 30k-token history inside a control op
+        would stall every live stream at that step boundary. v1 boundary,
+        stated: capture-then-fork-hot is the designed use (label trees, doc
+        fan-outs); a snapshot that survived a context rebuild must be
+        re-captured from a live session."""
+        entry = self._snap_registry[key]
+        self._guard_snapshot_persona(seat, key, entry)
+        snap_seq = self._batched_snap_seqs.get(key)
+        if snap_seq is None or not entry.get("resident"):
+            return None
+        engine = getattr(seat, "_engine_ref", None)
+        if engine is None:
+            raise RuntimeError("batched snapshot fork needs a seat-attached session")
+        static_len = int(entry["static_len"])
+        n_total = static_len + len(entry["dyn_tokens"])
+        _heads = getattr(getattr(self, "_engine", None), "_persona_heads", {}) or {}
+        head = _heads.get(entry.get("persona", "default"))
+        head_tokens = list(getattr(head, "tokens", []) or [])[:static_len]
+
+        def _fork() -> None:
+            ctx = self._primary_instance._ctx
+            ctx.memory_seq_rm(seat.seq, 0, -1)
+            ctx.memory_seq_cp(snap_seq, seat.seq, -1, -1)
+
+        engine.control(_fork).result(timeout=30)
+        seat.input_ids = list(head_tokens) + [int(t) for t in entry["dyn_tokens"]]
+        seat.n_tokens = n_total
+        log.info(
+            "🌿 batched snapshot %r forked onto seat seq %d (%d tokens)",
+            key, seat.seq, n_total,
+        )
+        return n_total
+
     def purge_snapshot(self, key: str) -> bool:
         """Free ``key`` everywhere: hot seqs on every instance + registry."""
         found = key in self._snap_registry
         self._snap_registry.pop(key, None)
+        snap_seq = getattr(self, "_batched_snap_seqs", {}).pop(key, None)
+        if snap_seq is not None and getattr(self, "_engine", None) is not None:
+            with contextlib.suppress(Exception):
+                self._engine.control(
+                    lambda: self._primary_instance._ctx.memory_seq_rm(snap_seq, 0, -1)
+                ).result(timeout=30)
         for inst in self._all_instances:
             seq = getattr(inst, "_snap_seqs", {}).pop(key, None)
             if seq is not None:

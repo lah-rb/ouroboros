@@ -63,6 +63,11 @@ class SeqMap:
     persona_seqs: Dict[str, int]  # persona name -> pinned static-head seq
     reasoning_seqs: Dict[str, int]  # reasoning level -> pinned head seq
     n_seq_max: int
+    # Snapshot band: seqs above the reasoning heads that hold pinned session
+    # KV (capture = seq_cp from a seat; fork = seq_cp back onto a seat). Empty
+    # range when session_snapshot_max is 0 — the pre-2026-07-30 layout, under
+    # which sessionSnapshot raised "pool-only in batched mode v1".
+    snap_seqs: range = range(0)
 
     def working_seqs(self) -> range:
         return range(self.n_working)
@@ -72,23 +77,31 @@ def plan_seq_map(
     n_working: int,
     personas: List[str],
     reasoning_levels: List[str],
+    snapshots: int = 0,
 ) -> SeqMap:
-    """Lay out the seq bands: working seats, persona heads, reasoning heads.
+    """Lay out the seq bands: working seats, persona heads, reasoning heads,
+    session snapshots.
 
     Pure function so the arithmetic is unit-testable without a model.
     "default" is always a persona (the legacy prompt/knowledge head).
+    Under kv_unified (a batched requirement) extra seqs divide NOTHING —
+    the snapshot band costs only ids, its cells accrue per pinned token.
     """
     if n_working < 1:
         raise ValueError(f"n_working must be >= 1, got {n_working}")
+    if snapshots < 0:
+        raise ValueError(f"snapshots must be >= 0, got {snapshots}")
     names = list(dict.fromkeys(["default", *personas]))  # ordered, deduped
     persona_seqs = {name: n_working + i for i, name in enumerate(names)}
     base = n_working + len(names)
     reasoning_seqs = {lvl: base + i for i, lvl in enumerate(reasoning_levels)}
+    snap_base = base + len(reasoning_levels)
     return SeqMap(
         n_working=n_working,
         persona_seqs=persona_seqs,
         reasoning_seqs=reasoning_seqs,
-        n_seq_max=base + len(reasoning_levels),
+        n_seq_max=snap_base + snapshots,
+        snap_seqs=range(snap_base, snap_base + snapshots),
     )
 
 
