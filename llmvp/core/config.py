@@ -1018,6 +1018,94 @@ def _load_raw_with_inheritance(
     return merged, str(base_name), overridden
 
 
+# --------------------------------------------------------------------
+# cache_strategy — one key for the three deployable shapes
+# --------------------------------------------------------------------
+#
+# WHY (2026-07-30, from dev/caching/FEATURE_MATRIX.md): there are only THREE
+# deployable strategies, but standing one up meant getting four interacting
+# flags right across two sections, and every way of getting it wrong is SILENT.
+# The audit that produced the matrix found, in a 20-config fleet: a flow cache
+# enabled with nothing to pin onto, a reasoning head-swap declared on a model
+# that architecturally cannot host it, and a stock band quietly dividing a
+# per-seq window by twelve. Naming the shape once removes the class.
+#
+# WHAT IT DELIBERATELY DOES NOT SET: `swa_full`. That is ARCHITECTURE-
+# determined, not strategy-determined, and conflating the two would be a
+# regression rather than a convenience — glm (MLA) and hy3 (dense, 81 layers)
+# both run resident with swa_full FALSE and are correct, while gemma and
+# gpt-oss (SWA/iSWA) genuinely require it TRUE or their pinned prefixes corrupt
+# at the window boundary. There is no strategy-level answer; state it per model
+# and let the can_shift gate arbitrate at load.
+#
+# It is a REQUEST, like `resident_seq_cache` is: `memory_can_shift()` can still
+# refuse at load and drop the model to replay. Read the EFFECTIVE strategy from
+# health (`sessionStrategy` / `sessionCanShift`), never from this key.
+
+CACHE_STRATEGIES: dict[str, dict[str, dict]] = {
+    # S1 — the architecture-forced fallback. O(n^2) per session, and the only
+    # shape available to models the can_shift gate refuses.
+    "replay": {
+        "model": {"resident_seq_cache": False, "session_full_replay": True},
+        "resources": {"decode_mode": "pool"},
+    },
+    # S2 — the optimum for any model that supports it: every feature available.
+    "resident": {
+        "model": {
+            "resident_seq_cache": True,
+            "session_full_replay": True,
+            "kv_unified": True,
+        },
+        "resources": {"decode_mode": "pool"},
+    },
+    # S3 — concurrency, bought by forfeiting the session flow-fork, the CoT
+    # strip, sampling overrides and the cold-snapshot rebuild.
+    "batched": {
+        "model": {
+            "resident_seq_cache": True,
+            "session_full_replay": True,
+            "kv_unified": True,
+        },
+        "resources": {"decode_mode": "batched"},
+    },
+}
+
+
+def expand_cache_strategy(raw: dict) -> list[str]:
+    """Expand a top-level `cache_strategy:` into the flags it stands for.
+
+    Mutates `raw` in place and returns the list of settings it applied, for
+    the boot log. A flag stated explicitly ALONGSIDE a contradicting strategy
+    raises rather than picking a winner: two sources of truth for one decision
+    is the shape that produced most of the defects this key exists to prevent.
+    Restating a flag that AGREES is allowed and silent.
+    """
+    name = raw.pop("cache_strategy", None)
+    if name is None:
+        return []
+    if name not in CACHE_STRATEGIES:
+        raise ValueError(
+            f"cache_strategy {name!r} is not one of "
+            f"{sorted(CACHE_STRATEGIES)} — see dev/caching/FEATURE_MATRIX.md §1"
+        )
+    applied: list[str] = []
+    for section, values in CACHE_STRATEGIES[name].items():
+        sec = dict(raw.get(section) or {})
+        for key, want in values.items():
+            if key in sec and sec[key] != want:
+                raise ValueError(
+                    f"cache_strategy: {name!r} implies {section}.{key}={want!r}, "
+                    f"but this config also sets {section}.{key}={sec[key]!r}. "
+                    "Remove one — a strategy and a contradicting flag are two "
+                    "sources of truth for the same decision."
+                )
+            if key not in sec:
+                sec[key] = want
+                applied.append(f"{section}.{key}={want}")
+        raw[section] = sec
+    return applied
+
+
 def load_config(path: Optional[Path] = None) -> Config:
     """
     Load configuration from YAML file.
@@ -1054,6 +1142,21 @@ def load_config(path: Optional[Path] = None) -> Config:
                 cfg_path.stem,
                 base_name,
                 ", ".join(overridden) or "(none)",
+            )
+
+        # Resolve the strategy shorthand BEFORE construction, so every
+        # validator below sees one consistent config and none of them has to
+        # care whether the flags were written out or named.
+        _strategy = raw_cfg.get("cache_strategy")
+        _applied = expand_cache_strategy(raw_cfg)
+        if _applied:
+            log.info(
+                "🧩 cache_strategy: %s → %s", _strategy, ", ".join(_applied)
+            )
+        elif _strategy:
+            log.info(
+                "🧩 cache_strategy: %s (every implied flag already stated)",
+                _strategy,
             )
 
         config = Config(**{k: v for k, v in raw_cfg.items() if k not in DOC_ONLY_KEYS})

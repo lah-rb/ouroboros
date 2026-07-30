@@ -34,6 +34,14 @@ the config.
 `kv_unified` is a modifier, not a strategy: under `false` the per-seq window is
 `n_ctx / n_seq_max`; under `true` there is no division. It is mandatory under S3.
 
+**Naming a strategy (2026-07-30).** A top-level `cache_strategy: replay |
+resident | batched` expands to the flags it stands for, so onboarding a model
+is one decision instead of four across two sections. It deliberately does NOT
+set `swa_full` — that is architecture-determined, and a strategy-level value
+would be wrong for half the fleet (glm/MLA and hy3/dense run resident with it
+FALSE and are correct; gemma and gpt-oss require it TRUE). Stating a flag that
+contradicts the strategy raises at load. `core/config.py:CACHE_STRATEGIES`.
+
 ---
 
 ## 2. The matrix
@@ -99,7 +107,7 @@ figure is **~8×**.
 | glm-4.7-flash (MLA) | S2 | head-swap ⚠️ family has no `reasoning.levels` → won't qualify | needle fails at 16,896/seq — keep `kv_unified: true` |
 | hy3-reap-200b-a21 | S2 | snapshots | head-swap (family unmapped). Biggest replay saving in the fleet (875 s/session) |
 | gemma-4-26b-a4b | S2 | head-swap (one level ⇒ no band) | — |
-| gemma-4-31b | S2 | flow cache | `flow_kv_cache: false` is a *stale M8-era* verdict — re-evaluate under M9 |
+| gemma-4-31b | S2 | — (flow cache ON 2026-07-30) | the old `false` was a stale M8-era verdict; payout is INHERITED from glm, not measured here |
 | mistral-medium-3.5-128b | S2 | snapshots, head-swap | resident payout unmeasured (no replay arm) |
 | devstral-2-small-24b | S2 | flow, snapshots | replay arm unmeasured |
 | laguna-xs-2.1 | S2 | head-swap ⚠️ family unmapped | — |
@@ -142,28 +150,32 @@ never subtract it.
 
 ## 5. Defects this analysis surfaced
 
-Found while building the matrix; none previously recorded.
+Found while building the matrix; none previously recorded. **All seven are now
+resolved** — six fixed 2026-07-30 (`20c51f6`), the seventh measured and closed
+(`a679548`). Kept here because the failure SHAPE is the reusable part: a config
+requests a feature, the run does not deliver it, and nothing reconciles the
+two.
 
-1. **A cold snapshot fork under S3 permanently leaks a seat.** `start_session`
+1. **FIXED — a cold snapshot fork under S3 permanently leaked a seat.** `start_session`
    pins the seat (`session_manager.py:369`) before the fork; under batched a cold
    entry makes `rebuild_snapshot_cold` **raise** (`llama_cpp_backend.py:2236`), and
    the exception escapes *before* the session is registered — so the seat is never
    released, and the reaper skips it because `pinned` is already true
    (`batched_engine.py:1524`). Every such call costs one of 128 seats, forever.
    Reachable after **any** context refresh, which demotes all hot snapshots.
-2. **`"flow band ACTIVE in batched mode (8 slots)"` is false on the three laguna
-   configs.** `_flow_band` is computed once in `__init__` from
+2. **FIXED — `"flow band ACTIVE in batched mode (8 slots)"` was false on the three
+   laguna configs.** `_flow_band` is computed once in `__init__` from
    `_flow_resident or _session_flow_fork` and never recomputed after
    `_session_flow_fork = False`, while the seq map sizes `flow_slots` from
    `flow_kv_cache` alone. Batched + `flow_kv_cache: false` logs an 8-slot band
    that does not exist.
-3. **Two pool-only degradations are `log.debug`** — `resident_strip_reasoning`
+3. **FIXED — two pool-only degradations were `log.debug`** — `resident_strip_reasoning`
    and `sampling_overrides`. A batched config with CoT strip on accumulates
    reasoning across every turn with zero operational signal.
-4. **Dead "legacy_save_state" strings survive** in `_session_strategy()` and the
+4. **FIXED — dead "legacy_save_state" strings survived** in `_session_strategy()` and the
    can_shift-denial warning ("falling back to the legacy save_state path" — it
    falls back to full_replay). Health inherits the dead value.
-5. **`qwen3.6-35b-a3` has `flow_kv_cache: true` with resident off.** Since the M8
+5. **FIXED — `qwen3.6-35b-a3` had `flow_kv_cache: true` with resident off.** Since the M8
    blob path was deleted, this takes the retired branch: increments
    `flow_fallbacks` forever and serves from the static base. Turn it off, or
    measure can_shift and flip resident.
@@ -179,7 +191,7 @@ Found while building the matrix; none previously recorded.
    disqualifying, so the remaining S1 members are S1 on their own measurements,
    not by family inference.
 
-7. **Stale write-backs read as current fact.** `gemma-4-26b-a4b` keeps
+7. **FIXED — stale write-backs read as current fact.** `gemma-4-26b-a4b` keeps
    `probe_verified_n_ctx: 262144` while its own comment declares it retired;
    `laguna-xs-2.1`'s F2 cell says `can_shift: False` for a config now on resident,
    with no post-flip row to disambiguate.

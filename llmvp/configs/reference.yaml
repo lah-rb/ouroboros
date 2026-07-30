@@ -11,6 +11,26 @@
 #   - Remove optional fields to use their defaults
 #   - Update active_config.txt to point to your config file
 #
+# ── SHORTCUT: cache_strategy ─────────────────────────────────────────
+# A top-level `cache_strategy:` names one of the three deployable shapes and
+# expands to the flags it stands for, so a new model needs one decision
+# instead of four spread across `model:` and `resources:`.
+#
+#   cache_strategy: replay     # resident_seq_cache false, full_replay,   pool
+#   cache_strategy: resident   # resident + kv_unified,                   pool
+#   cache_strategy: batched    # resident + kv_unified,                   batched
+#
+# It deliberately does NOT set `swa_full`: that is ARCHITECTURE-determined,
+# not strategy-determined. MLA (glm) and dense (hy3) models run resident with
+# swa_full FALSE and are correct; SWA/iSWA models (gemma, gpt-oss) require it
+# TRUE or pinned prefixes corrupt at the window boundary. State it per model.
+#
+# Stating a flag that CONTRADICTS the strategy raises at load — two sources of
+# truth for one decision is the shape that caused the defects this prevents.
+# Like `resident_seq_cache`, it is a REQUEST: memory_can_shift() can refuse at
+# load. Read the effective strategy from health, never from this key.
+# See dev/caching/FEATURE_MATRIX.md.
+#
 # Legend:
 #   [M] = Mandatory (must be provided)
 #   [O] = Optional (has default value)

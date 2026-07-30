@@ -79,9 +79,19 @@ model:
   n_batch: 2048           # REAL knob (old batch_size: 512 was a silent no-op)
   swa_full: true
   kv_unified: true
-  # save_state churn corrupts deep-session KV (the gpt-oss `code -3` class);
-  # this config predated that finding with flow_kv_cache: true — now off.
-  flow_kv_cache: false
+  # ON 2026-07-30. The "off" verdict above was about M8 — the save_state BLOB
+  # implementation, whose churn corrupted deep-session KV (the gpt-oss `code -3`
+  # class). That path was DELETED 2026-07-30; the flow cache is now M9 seq-ops
+  # only (pin a prefix on a band seq, memory_seq_cp it onto the working seq),
+  # which shares none of that mechanism. This config is S2 (pool + resident +
+  # swa_full + kv_unified), so the band is available and divides nothing.
+  #
+  # Payout is INHERITED, not measured here: 3.51s/call = 49% of prefill on glm,
+  # 11/11 hits (the only model the corrected pilot covers). Cost is 8 seq ids,
+  # which under kv_unified cost ids and not window. Enabling on inherited
+  # evidence is the same call already made for the other seven configs — worth
+  # stating plainly rather than implying a per-model measurement exists.
+  flow_kv_cache: true
   # Full re-prefill per turn from the pristine static snapshot — the safe
   # session path on every model until resident is validated per-model.
   session_full_replay: true
