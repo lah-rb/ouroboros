@@ -19,10 +19,24 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
 - `tau_gold_replay.py` / `tau_episode_smoke.py` — τ-bench adapter plumbing validation.
 - `debate_ab.py` — the debate-vs-CoT apparatus (two-Opus-referee blind eval; keeper).
 - `oracle_health.sh` — TB1 grader-health sweep. `reverify_oracles.py` — offline oracle re-scorer over preserved traces.
+- **Tiering** — `ouroboros.py tier` (`agent/tier/`) runs the batch; `blind_panel/TIER_RUBRIC_v1.md`
+  is the instrument and `blind_panel/CHALLENGE_v1_CHECKLIST.md` the judge's half of
+  `missions/game_challenge_tier.yaml`. `blind_panel/stage.py` strips and blind-scans each
+  artifact. `tier_batch.sh` is the SUPERSEDED shell original, kept as the provenance of run
+  `tier_20260729-010118`.
+- `stop_token_audit.py` — every model's GGUF `eot`/`eom` vs its family's `gen_stop`. Belongs in
+  the new-family battery: a model can declare a turn-terminator we never stop on, and **no guard
+  we own can see it** — every degeneration detector looks for repetition, and a model
+  role-playing both sides of a chat never repeats. Cost the glm-4.7-flash arm 83 minutes.
+- `gguf_geometry.py` — KV geometry, hot-path bytes/token, chat template. Read the headers before
+  sizing any config; note the formula's ×2 for separate K/V is wrong for MLA architectures
+  (glm-4.7-flash measured at exactly half its predicted KV).
 
 ## LLMVP serving acceptance & perf
 - `batched_parity.py` — batched-decode determinism/isolation parity. `duo_soak.py` — multi-seat soak + latch-heal.
-- `snapshot_stress.py` — snapshot-tier acceptance. `cache_strategy_stress.py` / `cache_compat_matrix.{py,sh}` — KV strategy & per-model compat.
+- `snapshot_stress.py` — snapshot-tier acceptance. `cache_strategy_stress.py` / `cache_compat_matrix.{py,sh}` — KV strategy & per-model compat. **The compat matrix is the sweep harness — extend it, don't rebuild it** (`CACHE_SWEEP_PLAN.md` §sweep: raise depth 3→12, record the new `session_strategy` health fields, needle past the window).
+- `caching/` — **the caching corpus + formal experiment** (2026-07-29): `CORPUS.md` = every mechanism (M1–M20), claim, and measurement in one place with a 12+12 contradiction ledger and the vocabulary standard (prefix_reuse_rate, NOT "hit rate"); `EXPERIMENT.md` = the pre-registered design (blocks A–F, predictions recorded before any cell); `run_blocks.sh` = the cell runner (temp configs, intervention-landed hard assert, append-only results). Supersedes `archive/docs/CACHE_STATE.md` as the reference.
+- `CACHE_SWEEP_PLAN.md` — **why session caching gates the tier campaign** (2026-07-29, from the hy3 arm): full_replay re-prefills the whole session every turn, so the 10th PTY command cost 58.8s of prefill for 20 tokens, prefill hit 60.8% of run wall, and goal throughput fell ~5× between half-hours. 9 of 19 configs are on that path (5 explicit, 4 by omission — `resident_seq_cache` defaults False); prior art (`archive/docs/CACHE_STATE.md`, measured 2026-07-02) resolves 3 as correctly-recurrent, leaving 6 candidates. Carries pre-registered predictions, one recorded correction, and the KV-recheck trap: SWA models need `swa_full` for resident and `swa_full` RAISES KV.
 - `decode_scaling_bench.py` / `swarm_3proc_bench.py` / `jit_exercise_131k.py` — throughput & pool-lifecycle benches.
 - `ctx_decode_probe.py` / `ctx_session_decode_probe.py` / `ctx_multiturn_probe.py` — pool-beyond-trained capacity probes (stateless needle matrix; session-cached clean decode at 200k; 430-round coordinator-interrogates-workers rehearsal — 215/215 recall, 1.1s round-trips).
 - `serving_perf_reference.md` — **measured failure edges & design rules** (2026-07-20/21): decode-vs-N, prefill-vs-size, shared-pool wedge zone, worker budget sizing. Read before sizing any fan-out experiment.

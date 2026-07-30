@@ -60,9 +60,12 @@ def main() -> None:
 
     import yaml
 
-    from core.config import CONFIGS_DIR, Config, set_config
+    from core.config import Config, resolve_config_path, set_config
 
-    with open(CONFIGS_DIR / f"{args.config}.yaml", encoding="utf-8") as f:
+    # resolve_config_path, not CONFIGS_DIR / name: the direct open silently
+    # failed for any config reorganised into experiments/ or archive/ (P3,
+    # dev/caching/CORPUS.md).
+    with open(resolve_config_path(args.config), encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     raw["resources"]["decode_mode"] = args.mode
     raw["resources"]["max_concurrent_requests"] = (

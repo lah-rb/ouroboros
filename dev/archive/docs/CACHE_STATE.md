@@ -2,6 +2,7 @@
 
 > **STATUS: CLOSED 2026-07 — superseded by the shipped cache stack: resident_seq_cache (static-fork + memoryful sessions), snapshot tier, batched single-context engine. save_state demoted to primary-only; flow_kv_cache reverted to false (gpt-oss corruption). See memories: resident-seq-cache-implemented, flow-kv-cache-corrupts-gptoss, save-state-failure-modes.**
 
+> **SUPERSEDED AS REFERENCE by `dev/caching/CORPUS.md` (2026-07-29)** — the corpus carries this document's measurements forward, resolves its contradictions (incl. the falsified "resident safe in ANY config" claim — see corpus §5.1), and standardizes the vocabulary. This file remains the authoritative snapshot of 2026-07-12.
 _Last updated: 2026-07-12. Scope: every KV-prefix/state reuse layer Ouroboros flows use against the local LLMVP server (`llama-cpp-python` fork 0.3.40 embedded). Supersedes the 2026-07-02 revision (which predated the reasoning-head band, multi-persona pooling, and the Metal residency-set fix that made multi-instance ROBUST)._
 
 ## TL;DR
