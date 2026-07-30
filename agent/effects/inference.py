@@ -47,6 +47,7 @@ query Completion($request: CompletionRequest!) {
         cachedPrefixTokens
         freshPrefillTokens
         generatedTokens
+        reasoningTokens
         cacheHit
         flowKey
         prefillMs
@@ -166,6 +167,7 @@ query SessionCompletion($request: SessionTurnRequest!) {
         cachedPrefixTokens
         freshPrefillTokens
         generatedTokens
+        reasoningTokens
         cacheHit
         flowKey
         prefillMs
@@ -757,6 +759,7 @@ class InferenceEffect:
                     cached_prefix_tokens=completion.get("cachedPrefixTokens", 0) or 0,
                     fresh_prefill_tokens=completion.get("freshPrefillTokens", 0) or 0,
                     generated_tokens=completion.get("generatedTokens", 0) or 0,
+                    reasoning_tokens=completion.get("reasoningTokens", 0) or 0,
                     cache_hit=bool(completion.get("cacheHit", False)),
                     flow_key=completion.get("flowKey", "") or "",
                     prefill_ms=completion.get("prefillMs", 0.0) or 0.0,

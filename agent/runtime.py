@@ -213,6 +213,7 @@ def _cache_fields(result: Any) -> dict:
         "cached_prefix_tokens": int(getattr(result, "cached_prefix_tokens", 0) or 0),
         "fresh_prefill_tokens": int(getattr(result, "fresh_prefill_tokens", 0) or 0),
         "generated_tokens": int(getattr(result, "generated_tokens", 0) or 0),
+        "reasoning_tokens": int(getattr(result, "reasoning_tokens", 0) or 0),
         "cache_hit": bool(getattr(result, "cache_hit", False)),
         "flow_key": str(getattr(result, "flow_key", "") or ""),
         "prefill_ms": float(getattr(result, "prefill_ms", 0.0) or 0.0),

@@ -233,6 +233,12 @@ class InferenceCall(TraceEvent):
     cached_prefix_tokens: int = 0
     fresh_prefill_tokens: int = 0
     generated_tokens: int = 0
+    # Of generated_tokens, how many were chain-of-thought (server-tokenized
+    # from the FSM-extracted thinking span). content = generated - reasoning.
+    # 0 = UNKNOWN, not "did not reason" — a non-thinking model and a failed
+    # count are indistinguishable here, which is why the summary reports
+    # coverage alongside the ratio.
+    reasoning_tokens: int = 0
     cache_hit: bool = False
     flow_key: str = ""
     # Server-measured phase split of wall_ms: prefill (prompt eval) vs decode
@@ -472,6 +478,11 @@ def new_ledger() -> dict:
             "cached_prefix": 0,
             "fresh_prefill": 0,
             "generated": 0,
+            # CoT vs agent-turn split of `generated`. reasoning_calls counts
+            # how many calls reported a non-zero split, so the ratio can be
+            # read with its coverage instead of being taken on faith.
+            "reasoning": 0,
+            "reasoning_calls": 0,
             "ws_in": 0,
             "ws_out": 0,
             "real_calls": 0,
@@ -505,6 +516,11 @@ def _flow_bucket(ledger: dict, flow: str) -> dict:
             "cached_prefix": 0,
             "fresh_prefill": 0,
             "generated": 0,
+            # CoT vs agent-turn split of `generated`. reasoning_calls counts
+            # how many calls reported a non-zero split, so the ratio can be
+            # read with its coverage instead of being taken on faith.
+            "reasoning": 0,
+            "reasoning_calls": 0,
         }
         ledger["flows"][flow] = b
     return b
@@ -550,6 +566,12 @@ def fold_event(ledger: dict, e: dict) -> None:
             tok["fresh_prefill"] += fp
             tok["generated"] += gen
             tok["real_calls"] += 1
+            rz = int(e.get("reasoning_tokens", 0) or 0)
+            if rz:
+                tok["reasoning"] += rz
+                tok["reasoning_calls"] += 1
+                fb["reasoning"] += rz
+                fb["reasoning_calls"] += 1
             fb["cached_prefix"] += cp
             fb["fresh_prefill"] += fp
             fb["generated"] += gen
@@ -653,6 +675,27 @@ def finalize_ledger(ledger: dict, total_wall_ms: float) -> dict:
             "whitespace_out": tok["ws_out"],
             "real_calls": tok["real_calls"],
             "whitespace_calls": tok["ws_calls"],
+            # ── CoT vs AGENT-TURN SPLIT of `generated` ─────────────────
+            # `generated` alone cannot tell a model that reasoned 12k tokens
+            # and answered in 300 from one that wrote 12k of answer, which on
+            # a heavy-thinking fleet is the distinction that decides whether
+            # more wall clock would help. cot_pct is reported WITH its
+            # coverage: reasoning_calls/real_calls says how much of the run
+            # the ratio actually describes, because a non-thinking model and a
+            # failed count both look like 0 here.
+            "reasoning": tok["reasoning"],
+            "content": max(0, tok["generated"] - tok["reasoning"]),
+            "reasoning_calls": tok["reasoning_calls"],
+            "cot_pct": (
+                round(100.0 * tok["reasoning"] / tok["generated"], 1)
+                if tok["generated"]
+                else None
+            ),
+            "cot_coverage": (
+                round(tok["reasoning_calls"] / tok["real_calls"], 3)
+                if tok["real_calls"]
+                else None
+            ),
         },
         "cache": {
             "hit": ledger["cache"]["hit"],

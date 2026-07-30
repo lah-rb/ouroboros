@@ -145,6 +145,13 @@ class InferenceResult:
     cached_prefix_tokens: int = 0
     fresh_prefill_tokens: int = 0
     generated_tokens: int = 0
+    # Of generated_tokens, how many were chain-of-thought — server-tokenized
+    # from the FSM-extracted thinking span, so comparable to the counts above.
+    # content = generated_tokens - reasoning_tokens. 0 means UNKNOWN (the model
+    # did not emit a thinking span, or the count failed); it does not prove the
+    # model did not reason, which is why the trace summary reports coverage
+    # beside the ratio.
+    reasoning_tokens: int = 0
     cache_hit: bool = False
     flow_key: str = ""
     # Server-measured phase timing: prefill (prompt eval) vs decode (generation).
