@@ -150,13 +150,13 @@ Remaining format work:
   dial. Flags kept as intent; the depth dial self-activates if upstream makes
   step37 shiftable.
 
-## 5. Seam gate: the fail-open WARNING lies, and the counter is mis-scoped
+## 5. Seam gate: the fail-open WARNING still lies, and the counter is mis-scoped
 
 `_phase_exit_seam_gate` (`mission_actions.py:2063`) is validated live — 156×
 `Seam gate: clean`. It also fired 8× `attempt bound reached (3/3) — failing
 OPEN, phase exits with UNRESOLVED seams`. **Those eight were read on
-2026-07-30 and the WARNING is mostly wrong.** Three separate defects, in
-priority order:
+2026-07-30 and the WARNING is mostly wrong.** Three defects; **the third is
+fixed**, the first two are open and are the reason this section stays:
 
 **1. The bound check runs BEFORE any analysis, so the claim is never
 established.** `mission_actions.py:2100-2110` returns `None` on the attempt
@@ -178,21 +178,27 @@ sequentially-arising* seams, each fixed on the first try, and the mission was
 then permanently locked out of the gate. Key the counter to the seam identity
 (or reset it on a clean pass); the bound is mis-scoped, not too low.
 
-**3. One seam shape the fix loop genuinely cannot resolve: a missing
-self-method.** Devstral hit `GameEngine._handle_flee` three times with
-byte-identical seam text and identical localization, because the dispatch
-localizes to the **calling** symbol and instructs "Fix {target} so its
-cross-module calls match" (`:2194`) — so a missing-*definition* seam gets the
-call site re-edited three times and the definition never written. That one is
-a REAL defect that shipped: `devstral-2-small-24b/engine.py:459` calls
-`self._handle_flee()` and no such method exists. It is latent only by luck —
-it sits in `_handle_command`, a duplicated dispatcher with no callers, while
-the live `handle_command` handles flee inline.
+**3. FIXED 2026-07-30 (`fbad927`) — the missing-self-method shape.** Devstral
+hit `GameEngine._handle_flee` three times with byte-identical seam text
+because the dispatch localized to the **calling** symbol and said "fix
+{target} so its cross-module calls match", so a missing-*definition* seam got
+its caller re-edited three times and the method was never written. The seam
+was also unreachable: it sat in `_handle_command`, a second dispatcher the
+model wrote mid-migration to helper style and never wired up. Three changes
+landed: `_symbol_reachability()` (in `batch_structural_actions.py`, beside
+`_transfer_shape_violations`) makes a seam whose every access site is dead
+report-only rather than blocking; a missing definition now dispatches "ADD
+these members, do not edit the call sites"; and dead duplicates plus orphaned
+module-level methods are surfaced under a `seam_gate_advisory` tag that
+cannot consume the attempt budget. Biased toward LIVE throughout — dunders,
+decorated symbols, `main`, `test_*` and any name in a string are live,
+recursion is not reachability, unknown access sites stay blocking. 20 tests,
+5/5 mutations bite.
 
-Two smaller things found alongside: the gate is **misnamed for what fires** —
-all 8 surviving seams are intra-module self-attribute errors from the
-typecheck half, while the cross-module transfer-shape half produced zero, yet
-every message and the fix directive say "cross-module"; and the note stores
+Still true, and unfixed: the gate is **misnamed for what fires** — all 8
+surviving seams were intra-module self-attribute errors from the typecheck
+half, while the cross-module transfer-shape half produced zero, yet the
+non-missing-definition message still says "cross-module"; and the note stores
 `seams[:300]`, truncating mid-token in all 8, while the WARNING tells the
 operator the evidence is in those notes.
 
