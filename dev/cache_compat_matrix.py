@@ -63,7 +63,13 @@ def build_turn_payload(turn_i: int, target_tokens: int) -> tuple[str, str, str]:
     Returns (prompt, fact_key, fact_value). Deterministic per turn index so
     arms are token-comparable; each turn plants a distinct retrievable fact so
     a later needle can probe ANY depth, including past a window boundary."""
-    fact_value = f"{7000 + turn_i * 31}"
+    # HASH-DERIVED, not arithmetic. The first vintage used 7000+31*i, and a
+    # model that lost gamma-0 to windowing INFERRED it from surviving siblings
+    # (B07/D1 read early_fact_ok=True after their fact's window had dropped) —
+    # a linear sequence is a pattern, not a needle. md5 makes each value
+    # independent; results are comparable only within a vintage.
+    import hashlib
+    fact_value = str(4096 + int(hashlib.md5(f"fact:{turn_i}".encode()).hexdigest()[:4], 16))
     fact_key = f"gamma-{turn_i}"
     filler = (
         f"Progress note {turn_i}, segment {{j}}. The apparatus was recalibrated "
