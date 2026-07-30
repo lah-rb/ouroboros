@@ -298,6 +298,15 @@ _templates: {
 			optional: [...string] | *[]
 			...
 		}
+		// DECLARED 2026-07-30. The action writes both keys on EVERY return
+		// path — including the three early bails (no file / no tree-sitter /
+		// no symbols), which publish empty lists rather than nothing
+		// (ast_actions.py:192-263). Undeclared, this left file_ops.run_localize
+		// requiring a context key the linter could not see published, which is
+		// two of the two errors lint-flows reported at HEAD. The rung worked
+		// live the whole time — the runtime supplies what the contract did not
+		// declare — so this is the contract catching up with the behaviour.
+		publishes: ["symbol_table", "symbol_menu_options"]
 		...
 	}
 

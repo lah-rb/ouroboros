@@ -4869,7 +4869,10 @@
             }
           ]
         },
-        "publishes": [],
+        "publishes": [
+          "symbol_table",
+          "symbol_menu_options"
+        ],
         "effects": [],
         "terminal": false
       },
