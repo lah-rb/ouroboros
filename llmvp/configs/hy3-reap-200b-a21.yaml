@@ -69,6 +69,8 @@ model:
   # (49152 and 65536 both), and at 81920 the load itself rebooted the machine.
   # See the header for the full ladder.
   n_ctx: 32768
+  probe_verified_weights_bytes: 108278458240
+  probe_verified_n_ctx: 26624
   # Trained range is 262144. Recorded because it is the model's real capability
   # and the gap to n_ctx is the whole story here.
   model_max_context: 262144

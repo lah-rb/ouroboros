@@ -49,9 +49,14 @@ model:
   # 262,144 surrendered for the flat session path — the nominal range cost
   # 271.7s/session of re-reading to actually exploit (B09).
   n_ctx: 65536
-  # MEASURED 2026-07-29 (--probe-context): 21754 B/tok vs a 491520 formula (22.59x over — swa_full:false keeps the windowed
-  # layers windowed, and the formula assumes a full cache on every layer).
-  kv_bytes_per_token_measured: 21754
+  probe_verified_n_ctx: 262144
+  # RE-MEASURED 2026-07-30 under the FLIPPED flags (swa_full:true +
+  # resident + kv_unified): 225280 B/tok (56320 MiB live KV at 262144,
+  # --probe-context run ctx_probe_20260730-124104). The prior 21754 was
+  # measured under swa_full:false — the measured-under-other-flags class;
+  # the probe consumed it and under-predicted by 100GB (harmless here
+  # only because the whole trained range fits: 14.2GB weights + 55GB KV).
+  kv_bytes_per_token_measured: 225280
   probe_verified_weights_bytes: 14249047104
   # DERIVED, not measured — operator decision 2026-07-29, no retest.
   # The probe stopped at 246784 and it was OUR ARITHMETIC that stopped it: every
