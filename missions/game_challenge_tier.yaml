@@ -1,0 +1,72 @@
+# Tier-batch challenge — the model's half of the pair.
+#
+# Scored under dev/blind_panel/TIER_RUBRIC_v1.md. That rubric's conformance
+# dimension is a formula over dev/blind_panel/CHALLENGE_v1_CHECKLIST.md, and
+# EVERY item in that checklist is traceable to a phrase in the objective below.
+# If you edit this objective you MUST re-derive the checklist, or conformance
+# starts scoring the model against requirements it was never given.
+#
+# ── WHY IT IS A PARAGRAPH AND NOT A LIST ─────────────────────────────
+# The asymmetry is the measurement. The model receives prose to interpret; the
+# judge receives an enumerated list to check. Conformance therefore measures
+# instruction-following under interpretation, which is the thing that actually
+# varies between models — a bulleted spec would measure transcription.
+#
+# The model is NEVER shown the rubric. Publishing the weights would collapse
+# creativity and ambition into conformance and we would have measured compliance
+# three times.
+#
+# ── run_until: completed, AND THE BOUND IS THE WALL CLOCK ────────────
+# These fight each other only in name. The tier instrument is a cheap 2h slice
+# (TIER_RUBRIC v1.0 §1) — it does NOT wait for a mission to finish; --max-wall-clock
+# 2h parks it wherever it has got to, and the rubric expects an unfinished
+# artifact.
+#
+# `run_until: completed` is what makes that bound the ONLY bound. Omitting the
+# field looks like the neutral choice and is not: it defaults to
+# `cycle_budget`, which applies DEFAULT_MAX_CYCLES = 50
+# (agent/mission_config.py:141). Fifty cycles is inside the range these arms
+# actually reach — gpt-oss ran 53 in roughly an hour on 2026-07-27 while qwen
+# managed 31 — so the default would bound fast models by CYCLES and slow ones
+# by TIME, and every score would carry that confound. One clock for every arm.
+#
+# structural_mode: batch — one-shot creation via build_structure, which keeps
+# the deterministic cross-module gates (transfer-shape + typecheck) in the path.
+# Those gates target seam bugs, which have been the decisive defect in the
+# majority of panel arms to date.
+# version: 1
+
+objective: >
+  Build a text adventure game in Python that is genuinely fun to play, and make
+  it feel like a finished product rather than a prototype. It should open on a
+  title screen before play begins. The world itself lives in YAML data files —
+  rooms, items, NPCs, monsters, and the connections between them — kept separate
+  from the engine code, so that the world can be extended without editing
+  Python. Write a command parser covering movement (go north/south/east/west),
+  inventory handling (take, drop, use, examine, equip), conversation (talk to),
+  combat (attack, flee), and the usual utilities: look, status, help, and quit.
+  Help should tell a new player what they can actually type, and status should
+  show health, equipment, and location at a glance.
+
+  Combat is turn-based. The player has health and attack power; weapons and
+  armour found in the world change those stats once equipped, and healing items
+  can be used in the middle of a fight. Three regular monsters guard specific
+  rooms and fight back, each with its own behaviour rather than a shared script.
+  The final boss has two phases and a weakness to one special item hidden
+  somewhere in the world; beating it wins the game, and dying ends the run with
+  an honest defeat screen that offers a restart.
+
+  Track game state properly — location, stats, equipment, inventory, room
+  changes, NPC dialogue progression, and which monsters have already been
+  defeated — and support saving and loading all of it to JSON. Ship a playable
+  demo world of at least eight rooms and five items, among them a weapon, a
+  piece of armour, a healing item, and the boss-weakness item, plus two NPCs
+  whose branching dialogue hints at what the boss is vulnerable to. The game
+  runs from the command line, narrates combat clearly, and should be winnable by
+  a player who listens to the NPCs.
+
+working_dir: "/tmp/ouroboros-challenge"
+effects_profile: local
+llmvp_endpoint: "http://localhost:8008/graphql"
+structural_mode: batch
+run_until: completed

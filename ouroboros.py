@@ -921,6 +921,71 @@ def main() -> None:
         help="Exercise --help on every subcommand (catches import rot)",
     )
 
+    # ── tier subcommand ───────────────────────────────────────────
+    tier_parser = subparsers.add_parser(
+        "tier", help="Run a tier batch (serial model arms, blind-staged per arm)"
+    )
+    tier_sub = tier_parser.add_subparsers(dest="tier_command")
+
+    tier_run = tier_sub.add_parser("run", help="Start a batch (detaches by default)")
+    tier_run.add_argument(
+        "--models",
+        required=True,
+        help="Comma-separated config names, run in this order",
+    )
+    tier_run.add_argument("--mission", default="game_challenge_tier")
+    tier_run.add_argument("--wall", default="2h", help="Per-arm backstop")
+    tier_run.add_argument("--top-phase", default="quality")
+    tier_run.add_argument(
+        "--budget-h",
+        type=float,
+        default=11.0,
+        help="Stop STARTING new arms past this many hours",
+    )
+    # The server comes down when the chain ends. A batch is scheduled work, not
+    # a service window — leaving ~75-98GB wired for nobody is the wrong resting
+    # state. active_config is restored either way.
+    tier_run.add_argument(
+        "--leave-server-up",
+        action="store_true",
+        help="Reboot production after the chain instead of "
+        "leaving the server down (default: down)",
+    )
+    tier_run.add_argument(
+        "--foreground",
+        action="store_true",
+        help="Run in this process instead of detaching",
+    )
+    tier_run.add_argument(
+        "--_worker", dest="worker", action="store_true", help=argparse.SUPPRESS
+    )
+    tier_run.add_argument("--base", default="", help=argparse.SUPPRESS)
+    tier_run.add_argument(
+        "--resume-consumed-s", type=float, default=0.0, help=argparse.SUPPRESS
+    )
+
+    tier_sub.add_parser("status", help="Current arm, progress, and what has staged")
+    tier_sub.add_parser(
+        "list", help="All tier runs and their state (finds paused ones)"
+    )
+    # Pause rides the mission's own pause: agent/loop.py drains cleanly at the
+    # next cycle boundary, so nothing is cancelled mid-generation. Prefer it
+    # over skip for any arm worth keeping.
+    tier_sub.add_parser(
+        "pause", help="Park the current arm cleanly and free the machine (resumable)"
+    )
+    tier_resume = tier_sub.add_parser(
+        "resume", help="Pick a paused batch back up where it stopped"
+    )
+    tier_resume.add_argument("--top-phase", default="quality")
+    tier_resume.add_argument("--budget-h", type=float, default=11.0)
+
+    tier_sub.add_parser(
+        "skip", help="Abandon the current arm, stage what exists, continue"
+    )
+    tier_sub.add_parser("stop", help="Let the current arm finish, then end the chain")
+    tier_sub.add_parser("force-stop", help="Abandon the current arm AND end the chain")
+
     # ── mission subcommand ────────────────────────────────────────
     mission_parser = subparsers.add_parser("mission", help="Mission management")
     mission_sub = mission_parser.add_subparsers(dest="mission_command")
@@ -1061,6 +1126,13 @@ def main() -> None:
         cmd_smoke(args)
     elif args.command == "cli-smoke":
         cmd_cli_smoke(args)
+    elif args.command == "tier":
+        if not args.tier_command:
+            tier_parser.print_help()
+        else:
+            from agent.tier.cli import cmd_tier
+
+            cmd_tier(args)
     elif args.command == "mission":
         dispatch = {
             "create": cmd_mission_create,

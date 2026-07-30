@@ -50,7 +50,39 @@ STRIP_GLOBS = ["run.log", "create.log", "*.png", "output.txt", "*.jsonl",
 
 # Strings that would identify which system/model produced an artifact. Extend
 # freely — a false positive costs one look, a false negative costs the panel.
-IDENTIFIERS = [
+#
+# THIS LIST GOT MORE LOAD-BEARING under TIER_RUBRIC v1.0. The old /50 protocol
+# was play-only, so a model name buried in a comment was merely *likely* to be
+# seen. The tier rubric's pass 2 reads the source deliberately, which makes it
+# certain. Anything in the roster belongs here before the batch runs.
+#
+# Some of these will false-positive on game content — "apex predator", a monster
+# named after a llama. That is the intended trade: the scan reports for review,
+# it does not block, and one look is cheaper than one unblinded verdict.
+#
+# SPLIT DELIBERATELY. A MODEL name is what blinding exists to remove — one hit
+# and the verdict is compromised. A FRAMEWORK or judge name appears in EVERY
+# arm's generated pyproject/README/title screen, so it discriminates nothing in
+# a solo judgement and the judge already knows it is reading an agent's output.
+#
+# hy3's arm staged `staged_with_leaks` on a single hit: `main.py:16 contains
+# 'Ouroboros'` — the game's own title screen, "a text adventure by Ouroboros".
+# Reporting that as "do NOT judge past this" is how a blinding check gets
+# switched off for being noisy, and the manifest then records a leak that isn't
+# one. make_judge_packet.py already drew this line; stage.py is the scan's owner
+# and should be the one place the taxonomy lives.
+FRAMEWORK_IDENTIFIERS = [
+    "ouroboros",
+    "llmvp",
+    "adaptive",
+    "baseline",
+    "claude",
+    "opus",
+    "sonnet",
+]
+
+MODEL_IDENTIFIERS = [
+    # resident fleet
     "step37",
     "step-3.7",
     "stepfun",
@@ -61,23 +93,50 @@ IDENTIFIERS = [
     "mistral",
     "olmo",
     "devstral",
-    "ouroboros",
-    "llmvp",
-    "adaptive",
-    "baseline",
-    "claude",
-    "opus",
-    "sonnet",
+    "laguna",
+    "poolside",
+    "glm",
+    "zhipu",
+    "hunyuan",
+    "hy3",
+    "tencent",
+    # quant/recipe names that identify an arm as surely as a model name
+    "apex",
+    "reap",
+    "i-balanced",
+    "unsloth",
+    # families that show up in generated prose even when not resident
+    "deepseek",
+    "llama",
+    "kimi",
+    "moonshot",
+    "minimax",
 ]
+
+# What the scan matches: everything. What BLOCKS: model names only.
+IDENTIFIERS = MODEL_IDENTIFIERS + FRAMEWORK_IDENTIFIERS
 
 
 def stage_one(src: Path, dest: Path) -> None:
+    """Copy an artifact and strip it AT EVERY DEPTH.
+
+    Both loops used to be top-level only — `dest / d` and `dest.glob(pat)` — so
+    a nested cache or log survived staging. On 2026-07-29 that put
+    `src/__pycache__/__init__.cpython-312.pyc` into a judge packet with the
+    MODEL NAME compiled into it, which is the one string blinding exists to
+    remove. A `logs/run.log` one directory down would have survived the same
+    way. Depth is not a special case here; it is the normal shape of a Python
+    project the agent has run.
+    """
     shutil.copytree(src, dest, dirs_exist_ok=True)
-    for d in STRIP_DIRS:
-        shutil.rmtree(dest / d, ignore_errors=True)
+    # Collect before deleting: removing a parent invalidates paths under it.
+    doomed = [p for p in dest.rglob("*") if p.is_dir() and p.name in STRIP_DIRS]
+    for p in doomed:
+        shutil.rmtree(p, ignore_errors=True)
     for pat in STRIP_GLOBS:
-        for p in dest.glob(pat):
-            p.unlink(missing_ok=True)
+        for p in dest.rglob(pat):
+            if p.is_file():
+                p.unlink(missing_ok=True)
 
 
 def scan(root: Path) -> list[tuple[str, str, str]]:
@@ -132,17 +191,26 @@ def main() -> None:
     )
 
     print(f"staged {len(runs)} arms -> {out}")
-    leaks = []
+    model_pat = re.compile(
+        "|".join(re.escape(t) for t in MODEL_IDENTIFIERS), re.I
+    )
+    leaks, advisory = [], []
     for label in labels:
-        hits = scan(out / label)
-        for f, line, s in hits:
-            leaks.append(f"  {label}/{f}:{line}  contains {s!r}")
+        for f, line, s in scan(out / label):
+            entry = f"  {label}/{f}:{line}  contains {s!r}"
+            (leaks if model_pat.search(s) else advisory).append(entry)
+    if advisory:
+        print("\n   advisory (framework/judge names — present in every arm, "
+              "so they identify nothing; not a leak):")
+        print("\n".join(advisory))
     if leaks:
-        print("\n!! POSSIBLE IDENTIFIER LEAKS — review before judging:")
+        print("\n!! MODEL-NAME LEAKS — do NOT judge past this:")
         print("\n".join(leaks))
-        print("\n   (normalize or remove, then re-run; do NOT judge past this)")
-    else:
+        print("\n   (normalize or remove, then re-run)")
+    elif not advisory:
         print("identifier scan: clean")
+    else:
+        print("   identifier scan: no model names — judgeable")
 
     for j in range(1, args.judges + 1):
         jd = out / f"judge{j}"
