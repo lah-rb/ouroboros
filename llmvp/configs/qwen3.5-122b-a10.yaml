@@ -61,7 +61,12 @@ model:
   verbose: false
   # RESIDENT IS ARCHITECTURE-REFUSED (measured 2026-07-30, cell RC2):
   # memory_can_shift stays False even with swa_full+kv_unified forced on —
-  # the recurrent component blocks seq ops regardless of SWA flags. This
+  # the recurrent component blocks seq ops regardless of SWA flags.
+  # SCOPE (2026-07-30): this is measured for THIS model and holds for
+  # qwen3.6-27b (F5), but it is NOT a property of hybrid-recurrent in
+  # general — qwen3-next-coder-80b-a3 is a DeltaNet hybrid and grants
+  # can_shift, running flat to depth 16 with the needle intact (RC3).
+  # Read this as a GDN result, not a hybrid result. This
   # model is CORRECTLY on full_replay; keep its agent sessions shallow by
   # flow design (replay cost at depth 16 realistic turns: 68.7s probe /
   # extrapolates hy3-class on real charters).

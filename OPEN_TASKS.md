@@ -398,7 +398,29 @@ Still open, from the same run: **7 of 9 failed reports recorded ZERO checks**
 (`checks_passed: [] / checks_failed: []`). A failure verdict with no checkable
 items is unfalsifiable — the vacuous-verification shape again.
 
-## 12. Small items (grab-bag)
+## 12. Tier scores are confounded by cache strategy (S1 handicap)
+
+**Operator ask, 2026-07-30.** `dev/caching/FEATURE_MATRIX.md` establishes that
+S2 (pool + resident) is the optimum for any model that supports it, and that the
+four S1 models (qwen3.5-122b, qwen3.6-27b, step37, qwen3.6-35b) can layer
+**nothing** — no flow cache, no snapshots, no head-swap, no windowing, and
+sessions that re-prefill entirely every turn.
+
+So every tier placement for an S1 model was earned while paying **7.8–9.8× the
+prefill** of its S2 competitors, and the losses we already attribute to "capacity"
+(memory: framework-overhead-timeouts) may be partly strategy. Right now the
+ledger pools them as if the substrate were equal.
+
+**The cheap fix costs nothing extra:** every arm already reports the strategy
+triple in health (`sessionStrategy` / `sessionCanShift` / `residentRequested`).
+Tag each tier result with its strategy and report S1 placements separately
+rather than pooled.
+
+**The honest ceiling:** a matched A/B is impossible by construction — an S1
+model cannot be put on S2, that is what S1 *means*. So report the handicap
+alongside the score; never subtract it and never impute a counterfactual.
+
+## 13. Small items (grab-bag)
 
 - Agent-side identical-retry backoff: the KV-eviction and anti-gut loops
   both retried the same dispatch unchanged for hours. What exists today is
@@ -417,7 +439,7 @@ items is unfalsifiable — the vacuous-verification shape again.
   commits** ahead of `main`, whose tip is `4198104`. The longer this sits the
   less "decision" and the more "migration" it becomes.
 
-## 13. Parked until triggered (do NOT start unprompted)
+## 14. Parked until triggered (do NOT start unprompted)
 
 - **Polish/creativity gate** (rank 60 reserved in PHASE_RANKS): a
   `flows/code_core/polish_gate.cue` modeled on quality_gate.cue (review →

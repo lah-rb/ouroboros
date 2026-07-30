@@ -35,6 +35,16 @@ model:
   name: "qwen3-next-coder-80b-a3"
   family: "chatml"
   # RESIDENT cache economics (dev/CACHE_STATE.md matrix): hybrid DeltaNet — measured full-stack 2026-07-02 (append-only residency + seq_cp forks are SAFE on the hybrid; it is per-turn state SURGERY that corrupts recurrent state).
+  #
+  # RE-VALIDATED 2026-07-30 at realistic depth (cell RC3, below). This was the
+  # one resident claim in the fleet with contradicting family evidence and no
+  # measurement: its GDN siblings qwen3.5-122b (RC2) and qwen3.6-27b (F5) both
+  # measure memory_can_shift=False even with the flags forced on, and the
+  # qwen3.5 header generalizes that to "the recurrent component blocks seq ops
+  # regardless of SWA flags". THAT GENERALIZATION IS TOO BROAD — it does not
+  # hold here. This model grants can_shift, runs flat to depth 16, keeps the
+  # needle, and hot-forks a snapshot. Hybrid-recurrent is NOT by itself
+  # disqualifying; the DeltaNet variant differs from the GDN ones.
   swa_full: true
   kv_unified: true
   resident_seq_cache: true
@@ -134,3 +144,23 @@ tier:
       high tier 2 / low tier 1.
 
       FAMILY: the qwen hybrid architecture makes advanced features — cache strategies, instance swarming — markedly harder to adapt than a plain transformer. Applies to every qwen arm.
+
+# ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260730-qwen3next) ─
+# The compatibility test the config's resident claim had never had. Depth 16,
+# ~900 tok/turn — the same workload as the Block A-F cells, so these numbers
+# are directly comparable to the rest of the fleet.
+probe_verified_cache:
+  run_id: cells_20260730-qwen3next
+  RC3:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 262144
+    fresh_t2_last: [1107, 1140]
+    prefill_total_s: 34.5
+    curve_growth: 0.02
+    needle_at_depth: True
+    early_fact_ok: True
+    snapshot_fork: hot
+    fork_fresh: 21
+    fork_s: 1.6
+    fork_needle_ok: True

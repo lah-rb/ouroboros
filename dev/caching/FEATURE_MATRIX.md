@@ -104,7 +104,7 @@ figure is **~8×**.
 | devstral-2-small-24b | S2 | flow, snapshots | replay arm unmeasured |
 | laguna-xs-2.1 | S2 | head-swap ⚠️ family unmapped | — |
 | olmo-3.1-32b ×2 | S2 | flow, snapshots | gate-blocked; family unmapped for head-swap |
-| qwen3-next-coder-80b-a3 | S2 ⚠️ | — | **resident claim contradicted by family evidence and unmeasured** — see §5 |
+| qwen3-next-coder-80b-a3 | **S2 ✅** | flow cache, snapshots | resident **VALIDATED 2026-07-30** (cell RC3): flat to depth 16, needle intact, hot snapshot fork — see §5 |
 | laguna-s-2.1 / -apex / -poolside | **S3** | flow cache (currently `false`) | plain `laguna-s-2.1` **does not load** (arch absent from our build) |
 | **qwen3.5-122b-a10** | **S1** | **nothing** | can_shift **False** measured — recurrent blocks seq ops regardless of flags |
 | **qwen3.6-27b** | **S1** | **nothing** | can_shift **False** measured (811.4 s/session) |
@@ -115,6 +115,28 @@ figure is **~8×**.
 head-swap, no windowing, and O(n²) sessions. Their only lever is **flow design**:
 keep agent sessions shallow. That is a real constraint on model choice, not a
 config gap, and three of the four are measured-and-correct.
+
+### 4a. S2 is the optimum; track what S1 costs a family
+
+**S2 (pool + resident) is the definite optimum for any model that supports it** —
+it gets every feature, and S3 buys concurrency by *forfeiting* four of them
+(flow-fork, CoT strip, sampling overrides, cold-snapshot rebuild) plus taking a
+throughput inversion past ~12k depth. S3 is the right shape for swarm fan-out
+and the wrong shape for a deep single session.
+
+That makes S1 membership a standing handicap, and it is **confounded with model
+quality in every tier comparison we run**: the qwen-likes are judged on artifacts
+produced while paying 7.8–9.8× the prefill of their S2 competitors and losing
+snapshots and head-swap entirely. A tier placement for an S1 model is therefore
+not comparable to an S2 model's without saying so.
+
+**Open ask (operator, 2026-07-30): track family performance relative to S2
+models.** The cheap version costs nothing extra — every tier arm already records
+the strategy triple in health, so tag each arm's result with its strategy and
+report S1 placements separately rather than pooled. The expensive version is a
+matched A/B, which S1 models cannot run *by construction* (they cannot be put on
+S2), so the honest ceiling here is: report the handicap alongside the score,
+never subtract it.
 
 ---
 
@@ -145,10 +167,18 @@ Found while building the matrix; none previously recorded.
    blob path was deleted, this takes the retired branch: increments
    `flow_fallbacks` forever and serves from the static base. Turn it off, or
    measure can_shift and flip resident.
-6. **`qwen3-next-coder-80b-a3` claims resident on the GDN substrate that
-   `qwen3.5-122b-a10` measured as architecture-refused.** No `probe_verified_cache`
-   block; the claim rests on a 2026-07-02 note. It is the one resident claim in
-   the fleet with contradicting family evidence and zero measurement.
+6. **RESOLVED — `qwen3-next-coder-80b-a3`'s resident claim was the one in the
+   fleet with contradicting family evidence and zero measurement.** Measured
+   2026-07-30 (cell RC3, depth 16, ~900 tok/turn): `can_shift=True`, curve flat
+   at 1,107 fresh tok/turn, `curve_growth 0.02`, 34.5 s total prefill, needle
+   and early fact both intact, and a **hot** snapshot fork at 21 tok / 1.6 s.
+   The claim holds. **The family generalization was the wrong part** —
+   qwen3.5-122b's header said "the recurrent component blocks seq ops
+   regardless of SWA flags", which is true of the GDN models and NOT of this
+   DeltaNet one. Scoped at the source. Hybrid-recurrent is not by itself
+   disqualifying, so the remaining S1 members are S1 on their own measurements,
+   not by family inference.
+
 7. **Stale write-backs read as current fact.** `gemma-4-26b-a4b` keeps
    `probe_verified_n_ctx: 262144` while its own comment declares it retired;
    `laguna-xs-2.1`'s F2 cell says `can_shift: False` for a config now on resident,

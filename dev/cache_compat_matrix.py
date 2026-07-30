@@ -214,13 +214,43 @@ async def main() -> int:
             row["early_fact_ok"] = fv in (tf["text"] or "")
             curve.append(int(tf["freshPrefillTokens"] or 0))
             prefill_s.append(round(float(tf.get("prefillMs") or 0) / 1000, 1))
-        # Resident appends only the new turn; full-replay re-prefills the
-        # whole history (>= turn1's doc size again by turn 3).
+        # BEHAVIOURAL verdict, independent of what health reports — the point
+        # is to catch a config whose declared strategy and observed behaviour
+        # disagree.
+        #
+        # It used to test `turn3_fresh < turn1_fresh / 4`, which assumed turn 1
+        # carried a big doc and later turns were nearly empty. That holds for
+        # the 5-token filler and CANNOT hold at --turn-tokens 900, where every
+        # turn's payload is the same order as the doc: it mislabelled all 17
+        # resident cells of run cells_20260729-232251 as "full-replay". No
+        # conclusion was ever drawn from it (session_strategy and curve_growth
+        # were recorded alongside and are unambiguous), but a wrong field in a
+        # results file that gets mined is a trap.
+        #
+        # The workload-independent discriminator is MONOTONICITY, not size.
+        # Full-replay's fresh count is cumulative, so it rises on EVERY turn —
+        # by 1.8%/turn on the 5-token filler (cell B10: 1465→1724 over eleven
+        # turns) and by ~40%/turn at 900 tok. Resident prefills one turn's
+        # payload and is flat. Any ratio threshold that catches B10 also
+        # catches the small legitimate steps in a resident curve; counting how
+        # many consecutive turns INCREASE needs no threshold tuning.
+        #
+        # Measured on the body only: turn 1 carries the doc, and the last two
+        # entries are the needle + early-fact probes, which are tiny by design
+        # and would break monotonicity for both modes.
+        _body = curve[1:-2] if len(curve) >= 5 else curve[1:]
+        _steps = list(zip(_body, _body[1:]))
+        _rising = sum(1 for a, b in _steps if b > a)
         row["session_mode"] = (
-            "resident-live"
-            if row["turn3_fresh"] < row["turn1_fresh"] / 4
-            else "full-replay"
+            "full-replay"
+            if _steps and _rising >= 0.8 * len(_steps)
+            else "resident-live"
         )
+        # Disagreement between the declared strategy and the observed one is
+        # the finding, so record it rather than leaving a reader to diff two
+        # fields.
+        _declared = "full-replay" if row["session_strategy"] == "full_replay" else "resident-live"
+        row["strategy_matches_behaviour"] = row["session_mode"] == _declared
         # ── snapshot tier from the live session ──────────────────────
         try:
             snap = (await c.gql(SNAP, {"sessionId": sid, "key": "compat:doc"}))[
