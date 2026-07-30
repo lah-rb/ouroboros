@@ -70,7 +70,14 @@ model:
   # See the header for the full ladder.
   n_ctx: 32768
   probe_verified_weights_bytes: 108278458240
-  probe_verified_n_ctx: 26624
+  # 26624 was written here on 2026-07-30 and RETRACTED the same day: it was
+  # an artifact of a probe clamped to `iogpu.wired_limit_mb`, a boundary two
+  # measurements had already crossed while serving fine (the 2026-07-28
+  # ladder at 116.4GB, and that same probe run's own rung 30720 at 121.7GB
+  # peak wired). The clamp is gone; PHYSICAL memory is what kills this box.
+  # 32768 is the stronger evidence — it is what production has served,
+  # repeatedly, at a real footprint of ~122.4GB = 0.891 of physical.
+  probe_verified_n_ctx: 32768
   # Trained range is 262144. Recorded because it is the model's real capability
   # and the gap to n_ctx is the whole story here.
   model_max_context: 262144

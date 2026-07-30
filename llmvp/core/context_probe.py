@@ -124,33 +124,31 @@ _PROBE_START_MARGIN = 0.97
 # 0.89 clears the boundary while staying far below anything dangerous. The
 # margin between measuring and rebooting is thin, so this moves one point at a
 # time, not five.
-_PROBE_PHYSICAL_SAFETY = float(os.environ.get("OURO_PROBE_PHYSICAL_SAFETY", "0.89"))
+#
+# 0.89 -> 0.90 on 2026-07-30, one point, for a measured reason: PRODUCTION runs
+# hy3 at n_ctx 32768, whose real footprint (108.3GB weights + 10.9 KV + 3.2
+# measured overhead = 122.4GB) is 0.891 of physical. A probe that refuses a
+# configuration this machine serves every day is measuring its own constant.
+# 0.891 is therefore an OBSERVED-SAFE datapoint, and the only observed-fatal
+# one remains step-3.7 at 1.046 — the band between them is what the probe is
+# for. Both hard reboots ran the machine out of PHYSICAL memory; neither had
+# anything to do with iogpu.wired_limit_mb (see the note below it).
+_PROBE_PHYSICAL_SAFETY = float(os.environ.get("OURO_PROBE_PHYSICAL_SAFETY", "0.90"))
 
 
-def _wired_limit_gb() -> float:
-    """The IOGPU wired limit (sysctl iogpu.wired_limit_mb, MiB) — the REAL
-    Metal serving boundary on this box, and it sits BELOW 0.89 x physical
-    (116000 MiB = 121.6 GB = 0.885 x 137.4).
-
-    Why this matters (hy3 hard reboot, 2026-07-30): the 0.871-0.879 "usable
-    fraction" model was calibrated on <=66GB-weight models whose boundary
-    failures were clean pre-boot KV-allocation errors. hy3 (108GB weights,
-    324 KiB/token dense KV) put the whole ladder in the band between the
-    wired limit and physical, where an over-wired rung ALLOCATES lazily,
-    fails at first COMPUTE (status 5), latches, and the heal/rebuild churn
-    — which transiently doubles the KV while re-wiring against a saturated
-    limit — crosses physical and hard-reboots the OS. A rung the arithmetic
-    admitted at 121.9GB against a 122.3GB budget did exactly that. The
-    probe must never explore above the wired limit: nothing servable lives
-    there anyway. 0 = unreadable/unset (fall back to the physical fraction).
-    """
-    try:
-        out = subprocess.run(["sysctl", "-n", "iogpu.wired_limit_mb"],
-                             capture_output=True, text=True, timeout=5)
-        mb = float(out.stdout.strip() or 0)
-        return mb * 1.048576 / 1000.0 if mb > 0 else 0.0
-    except Exception:  # noqa: BLE001
-        return 0.0
+# THE WIRED LIMIT IS NOT THE CEILING — do not reintroduce a clamp to it.
+# `sysctl iogpu.wired_limit_mb` (116000 MiB = 121.6 GB) reads like a hard
+# Metal boundary and is not one. Two independent measurements cross it and
+# serve fine: the 2026-07-28 hy3 ladder at 116.4 GB (see the header of
+# dev/wired_mem_recorder.py, which exists BECAUSE of that observation) and
+# this probe's own 2026-07-30 rung 30720, which passed 3/3 generations at
+# peak_wired 121.7 GB. PHYSICAL memory is what dictates death: the only
+# hard reboots on record (step-3.7 at 143.7 GB, hy3 at ~125 GB + rebuild
+# churn) both ran the machine out of RAM outright. A clamp to the wired
+# limit was added here after the hy3 reboot and reverted the same day —
+# it refused production-proven configurations while doing nothing about
+# the actual failure mechanism (see rung(): a latched context must never
+# be generated into).
 
 PROBE_PROMPT = "Write a Python function that merges two sorted lists. Return only the code."
 
@@ -374,12 +372,6 @@ class Probe:
         self.physical_gb = _physical_memory_gb()
         # Probe fraction, not the production one — see _PROBE_PHYSICAL_SAFETY.
         self.ceiling_gb = self.physical_gb * _PROBE_PHYSICAL_SAFETY
-        # ...clamped to the wired limit minus a rebuild margin: the fraction
-        # model admitted a rung 0.3GB past the wired limit and the machine
-        # hard-rebooted (hy3, 2026-07-30 — see _wired_limit_gb).
-        wl = _wired_limit_gb()
-        if wl and wl - 1.0 < self.ceiling_gb:
-            self.ceiling_gb = wl - 1.0
 
     def log(self, msg: str) -> None:
         line = f"[{time.strftime('%m-%d %H:%M:%S')}] {msg}"
@@ -466,6 +458,31 @@ class Probe:
                      kv, self.peak_wired(), 0, 0, int(time.time() - t0),
                      saw_code, acted)
             self.log(f"     FAIL/{why}  guard_saw={saw_code} acted={acted}  {r.detail[:80]}")
+            stop_server(self.log)
+            return r
+
+        # HEALTHY IS NOT THE SAME AS SOUND — and the difference is what
+        # rebooted the machine (hy3 @ 40960, 2026-07-30). That rung OOMed at
+        # its FIRST compute (Metal status 5), which latched the context; the
+        # backend logged "Warm-up failed for pool slot #0" and then went on to
+        # log "Server initialized successfully", so healthy() said yes. The
+        # probe generated into it anyway. Every generation hit the latch and
+        # triggered a heal — and a context rebuild allocates a fresh KV
+        # alongside the one it is replacing, so the transient footprint jumped
+        # by a whole KV against a machine already near physical. That is what
+        # ran the box out of RAM, not the rung's steady-state size.
+        #
+        # So: a boot that already produced a decode code or a failed warm-up
+        # is a FAILING rung, full stop. Report it and stop the server without
+        # ever asking it to generate.
+        if saw_code or "Warm-up failed" in txt:
+            r = Rung(n, "decode_code",
+                     "latched during warm-up — not generated into "
+                     "(heal churn is what reboots the machine)",
+                     kv, self.peak_wired(), 0, 0, int(time.time() - t0),
+                     saw_code, acted)
+            self.log(f"     FAIL/decode_code  latched at warm-up; skipped "
+                     f"generations  guard_saw={saw_code} acted={acted}")
             stop_server(self.log)
             return r
 
@@ -697,8 +714,7 @@ class Probe:
         self.log(f"=== context ceiling probe · {len(self.args.configs)} models "
                  f"· resolution {self.args.resolution} ===")
         self.log(f"    config KV budget bypassed; ceiling {self.ceiling_gb:.1f}GB "
-                 f"(min of {_PROBE_PHYSICAL_SAFETY} x physical and wired limit "
-                 f"- 1GB), enforced on EVERY rung")
+                 f"({_PROBE_PHYSICAL_SAFETY} x physical), enforced on EVERY rung")
         self.log("    ERROR-CODE guard ON — it is the instrument under test")
         self.log(f"    base: {self.base}")
 
