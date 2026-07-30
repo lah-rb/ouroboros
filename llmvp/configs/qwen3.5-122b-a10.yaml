@@ -47,7 +47,15 @@ model:
   # with a largest generation of 12,570 tokens and zero truncation events, so
   # the bigger window would not have bound. Raising it again means declaring
   # kv_preflight_gb with it (poolside proves ~109 GiB is stable on this box).
-  n_ctx: 131072
+  # RAISED 131072 -> 262144 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 24 KiB/token x 262144 = 6.4GB
+  # + 89.6GB weights = 96.1GB resident at boot.
+  n_ctx: 262144
+  # MEASURED 2026-07-29 (--probe-context): 24576 B/tok vs a 98304 formula (4.00x over — swa_full:false keeps the windowed
+  # layers windowed, and the formula assumes a full cache on every layer).
+  kv_bytes_per_token_measured: 24576
+  probe_verified_weights_bytes: 89620649184
+  probe_verified_n_ctx: 262144
   n_gpu_layers: -1   
   seed: -1
   verbose: false
@@ -100,3 +108,33 @@ tools:
 logging:
   enabled: true
   directory: "./logs"
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v1.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right —
+# it is to make a SURPRISE legible, so an unexpected score prompts a look at
+# the run before the number enters the ledger.
+tier:
+  status: not_yet_run
+  expectation:
+    registered: 2026-07-29
+    tier: "1"
+    stars: null
+    basis: experience+benchmarks
+    why: >
+      The strongest qwen by benchmark. Expected to score somewhat above gpt-oss
+      within tier 1, but generally close — a good combination of speed under fire
+      and competence, with slightly verbose thinking.
+
+      FAMILY: the qwen hybrid architecture makes advanced features — cache strategies, instance swarming — markedly harder to adapt than a plain transformer. Applies to every qwen arm.
+
+# ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
+probe_verified_cache:
+  run_id: cells_20260729-232251
+  F3:
+    strategy: full_replay
+    can_shift: False
+    n_ctx_seq: 262144
+    fresh_t2_last: [2803, 18942]
+    prefill_total_s: 485.2
+    needle_at_depth: True

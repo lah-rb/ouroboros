@@ -32,7 +32,7 @@ app:
 
 graphql:
   max_query_depth: 10
-  max_tokens: 131072
+  max_tokens: 202752
   max_aliases: 50
   introspection_enabled: true
 
@@ -40,7 +40,15 @@ model:
   name: "glm-4.7-flash"
   family: "glm4"
   path: /Users/lah-rb/.lmstudio/models/mudler/GLM-4.7-Flash-APEX-GGUF/GLM-4.7-Flash-APEX-I-Balanced.gguf
-  n_ctx: 131072
+  # RAISED 131072 -> 202752 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 53 KiB/token x 202752 = 11.0GB
+  # + 22.1GB weights = 33.0GB resident at boot.
+  n_ctx: 202752
+  # MEASURED 2026-07-29 (--probe-context): 54144 B/tok vs a 108288 formula (2.00x over — swa_full:false keeps the windowed
+  # layers windowed, and the formula assumes a full cache on every layer).
+  kv_bytes_per_token_measured: 54144
+  probe_verified_weights_bytes: 22051833184
+  probe_verified_n_ctx: 202752
   model_max_context: 202752
   # 40 against a computed 36.2 GB. Generous because there is nothing to guard
   # against at this size — the point of the number is that it still refuses a
@@ -53,25 +61,86 @@ model:
   n_batch: 2048
   thinking: true
   swa_full: false
-  kv_unified: false
+  # FLIPPED 2026-07-30 per run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results): B08 measured resident+unified
+  # flat (9 tok/turn fresh, needles intact, full 202,752 window undivided).
+  kv_unified: true
   session_full_replay: true
-  resident_seq_cache: false
+  # FLIPPED 2026-07-30: replay cost 521.4s of prefill per 16-turn realistic
+  # session vs 65.1s resident+unified = 8.2x. MLA needs no swa_full (measured).
+  resident_seq_cache: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
   system_prompt: "You are a helpful assistant."
 
 generation:
-  max_tokens_default: 131072
-  # From formats/glm4.yaml and NOT vendor guidance — the GGUF carries no
-  # sampling recommendations. Replace with Zhipu's card values before any
-  # comparative run.
-  temperature_default: 0.6
-  top_p: 0.95
-  top_k: 20
+  # ── ZHIPU'S OWN AGENTIC SETTINGS (zai-org/GLM-4.7-Flash card) ───────
+  # The card gives THREE profiles, and the one that matters here is the agentic
+  # one — Ouroboros work is Terminal-Bench/SWE-bench shaped, not chat:
+  #
+  #   general              temp 1.0  top_p 0.95  max_new_tokens 131072
+  #   Terminal Bench /     temp 0.7  top_p 1.0   max_new_tokens  16384   <- THIS
+  #     SWE-bench Verified
+  #   tau^2-Bench          temp 0.0              max_new_tokens  16384
+  #
+  # WHAT THE 2026-07-29 ARM ACTUALLY RAN: temp 0.6, top_p 0.95, top_k 20, and a
+  # 131072 budget — the GENERAL profile's ceiling, 8x the agentic one. It
+  # generated 70,687 tokens on one build_structure step before being killed at
+  # 83 minutes, i.e. 4.3x the vendor's agentic maximum. That arm was neither a
+  # fair test of the model nor a clean reproduction of llama.cpp #19613
+  # ("continues to re-think and refine code after thinking block"), because it
+  # was never inside the envelope the vendor documents for this kind of work.
+  #
+  # ── AND WE RUN MAXIMIZED ANYWAY, DELIBERATELY ───────────────────────
+  # 16384 is the vendor's agentic recommendation and we are NOT using it. The
+  # fleet runs max_tokens at the per-stream ceiling, and a model that abuses
+  # that is signal worth seeing rather than masking. THIS IS THE MODEL TO WATCH.
+  #
+  # THE CAVEAT THAT MATTERS: the degeneration guards do NOT cover this failure.
+  # On 2026-07-29 GLM generated 70,687 tokens on one build_structure step and
+  # the long-cycle guard stayed SILENT across ~35 windows — correctly, because
+  # the output was never repetitive. It kept writing coherent new text. Both
+  # guards we own detect REPETITION; this model's failure mode is CONTINUATION,
+  # and there is nothing behind it. Compare llama.cpp #19613, "continues to
+  # re-think and refine code after thinking block", still open.
+  #
+  # So the only real bound here is the arm's wall-clock backstop. The cost of
+  # being wrong is one tier arm, which is a price knowingly accepted; it is not
+  # a risk the guards are quietly absorbing.
+  max_tokens_default: 202752
+  temperature_default: 0.7
+  # ── QWEN-STYLE TEMPERATURE FLOOR (2026-07-29) ───────────────────────
+  # Floor == default, so no flow multiplier can pull sampling below it. This is
+  # the qwen3.5-122b pattern (0.7/0.7/0.7), adopted here for a measured reason.
+  #
+  # The 2026-07-29 arm looped in the architecture-coherence critic — the capture
+  # is self-interrogation cycling every ~3.8KB ("Is there any ambiguity in X?"
+  # -> "Result: Coherent." -> "Wait, let me re-read...") — and its meta records
+  # temperature 0.06999999999999999. That is 0.7 x the 0.1 flow multiplier: BELOW
+  # the 0.24-0.32 band every previously observed runaway sat in, and the lowest
+  # effective temperature recorded on this machine today.
+  #
+  # TWO FAILURES, ONE PLAUSIBLE CAUSE. The same arm also produced a
+  # non-repetitive 29,022-token generation the long-cycle guard could not see.
+  # At an effective 0.07 the sampler is near-greedy, so if EOS is never the
+  # argmax the model has no path to stopping — which would make the runaway a
+  # SAMPLING artifact rather than the model ignoring its stop token. That is a
+  # hypothesis this floor tests directly: if the continuation stops too, low
+  # temperature was the trigger for both.
+  temperature_floor: 0.7
+  session_temp_floor: 0.7
+  top_p: 1.0
+  # DELIBERATELY UNSET. The card specifies no top_k for any profile; the old
+  # value of 20 was a conservative MoE guess of ours, and a top_k that tight is
+  # a real constraint on a model the vendor evaluates without one.
+  top_k: 0
   min_p: 0.0
   repetition_guard_enabled: null
   long_cycle_guard_enabled: null
+  # NOT WIRED: the card also asks for "Preserved Thinking" mode on multi-turn
+  # agentic tasks (reasoning retained across turns). We strip reasoning between
+  # turns, so this is a known divergence from the recommended setup rather than
+  # an oversight — worth revisiting if GLM proves admissible.
 
 knowledge:
   tokens_bin: ./data/glm-4.7-flash.tokens.bin
@@ -84,3 +153,235 @@ resources:
 logging:
   enabled: true
   directory: ./logs
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v1.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right —
+# it is to make a SURPRISE legible, so an unexpected score prompts a look at
+# the run before the number enters the ledger.
+tier:
+  status: recorded
+  rubric: TIER_RUBRIC v1.1
+  stars: 2                        # ★★  34/100
+  tier: 2                         # < 50
+  rejudge: not_required           # 2★ is outside the 40-59 band
+
+  # PRE-REGISTERED before the run, never revised. HIT: called "2-1 ... somewhat
+  # shy of the qwen3.6 MoE models", then refined to "a bit lower if it hit the
+  # serial path". It DID hit the serial path and landed tier 2 — the lower half
+  # of the registered range.
+  expectation:
+    registered: 2026-07-29
+    tier: "2-1"
+    stars: null
+    basis: reputation
+    outcome: hit
+    why: >
+      EXPERIMENTAL. Good reputation for agent work, but given its architecture
+      and age expected to land somewhat shy of the qwen3.6 MoE models.
+
+  judged:
+    run: tier_20260729-132535 · staged/arm01
+    judge_model: claude-opus-5[1m]
+    total: 34
+    dimensions:
+      no_broken_functions: {score: 0,  max: 20, stars: 0}   # ledger went negative, floored
+      robustness:          {score: 4,  max: 10, stars: 3}
+      ux:                  {score: 3,  max: 10, stars: 2}
+      conformance:         {score: 9,  max: 10, stars: 5}   # 47/53 requirements
+      ambition:            {score: 3,  max: 10, stars: 2}
+      creativity:          {score: 4,  max: 10, stars: 3}
+      org_project:         {score: 3,  max: 5,  stars: 4}
+      org_logic:           {score: 3,  max: 5,  stars: 4}
+      reusability:         {score: 3,  max: 10, stars: 2}
+      documentation:       {score: 2,  max: 10, stars: 2}   # hard-capped, §3.10
+
+    profile: >
+      It WROTE the game and did not DELIVER it. Conformance 47/53 — a complete
+      nine-room citadel, 6 items, 2 NPCs with branching hints, 8 monsters, a
+      two-form boss, all authored in YAML. Working functions 0/20: play reaches
+      three rooms and three fights and nothing else.
+
+    decisive_defect: >
+      TWO MISSING LINES IN THE LOADER. world_loader.load_world() builds
+      Room(title, description, exits, monster_id) and never passes the room's
+      items or npcs, so every item and both NPCs are orphaned in all nine rooms.
+      Half the command surface is left with no legal object. Compounded by a
+      cul-de-sac world graph (6 of 9 rooms have no inbound exit, hiding the boss
+      and the entire endgame) and by movement printing NOTHING on success while
+      `look` does not parse and `status` omits location — so the player is blind
+      from room two onward.
+
+      THIS IS THE SAME DEFECT AS laguna-S ON 2026-07-27: "the loader performs
+      that back-link correctly for items only; the equivalent loop for NPCs and
+      monsters is absent". Different model, different quant, same seam.
+
+    also_recurring: >
+      NO WIN CONDITION anywhere in the tree (grep for victor/congratul/you-win
+      returns nothing; killing the boss drops you back at the prompt). That was
+      gpt-oss's decisive defect in the same 2026-07-27 panel.
+
+    notable: >
+      `leave dagger` SILENTLY QUITS — `leave` is matched as a QUIT alias before
+      a DROP alias, so a player trying to drop an item exits with no
+      confirmation. And the modification probe found a masked crash: fixing the
+      loader seam makes the game fail to boot, because render() passes a list of
+      Item dataclasses to ', '.join (`sequence item 0: expected str instance`).
+      The seam that orphans everything is hiding a second bug behind it.
+
+    unmet_requirements: [23, 32, 37, 39, 41, 42]
+
+  observed:
+    run: tier_20260729-132535 (2026-07-29), the SECOND attempt
+    stage: game_challenge_tier · top_phase quality · structural_mode batch · 2h wall
+    exit: completed the full 127min backstop, mission parked `paused`
+    goals: 8/31
+    files: 12 (7 py), 0 syntax failures
+    cycles: 36 (~3.5 min/cycle)
+
+    # ── THE CHARACTER SIGNAL, and it dominates everything else ──────────
+    # 471,573 raw chars generated, 85,746 after stripping thought: 82% OF ALL
+    # OUTPUT WAS THINKING. Median useful generation 362 chars against a p90 of
+    # 5,061. It deliberates enormously and emits tersely.
+    thinking_overhead: 82% (471,573 raw -> 85,746 content across 59 generations)
+
+    # ── BATCH RAN, BATCH UNDER-DELIVERED ───────────────────────────────
+    # Confirmed from mission notes, not inferred:
+    #   "Batch structural creation: 1 files written, 1 goals completed,
+    #    0 failed gates, 5 missing (serial fallback). Generation cost: 13158
+    #    tokens. Missing: world_loader.py, parser.py, engine.py, main.py,
+    #    data/world.yaml"
+    # So build_structure emitted 1 of 6 files for 13k tokens and reported
+    # SUCCESS; mission_control then dispatched the other five one at a time via
+    # dispatch_structural_create. Note the fallback marker is written to mission
+    # NOTES and never to the run log, which is why two check-ins could not tell
+    # batch from serial.
+    structural_path: batch ran once, delivered 1/6, remainder built per-file
+    batch_cost: 13158 tokens for one file
+
+    # Clean where it counts: 59/59 generations returned valid fenced JSON, zero
+    # parse failures, zero transfer-shape rejections, zero empty rewrites.
+    # It is not a formatting problem — it is a wiring problem.
+    format_discipline: 59/59 valid structured output; 0 gate rejections
+    repair_activity: 3 regressed structural goals (engine.py via functional_sweep), 7 diagnoses
+
+    # ── REQUIRES A TEMPERATURE FLOOR TO RUN AT ALL ──────────────────────
+    # The FIRST attempt (tier_20260729-124648) was force-stopped at 32min with
+    # 1 file and 0/31 goals: it looped in the architecture-coherence critic
+    # (aborted by the long-cycle guard at 12,288 tokens) and then produced a
+    # non-repetitive 29,022-token generation no guard could see. Adding
+    # temperature_floor/session_temp_floor 0.7 fixed BOTH: longest generation
+    # this run 12,909 tokens and it RETURNED. All 59 generations needed
+    # clamping — 28 requested 0.10, 4 requested 0.07, 2 requested 0.00.
+    # The runaway was a SAMPLING artifact: near-greedy decoding never selected
+    # EOS. Not a stop-token problem, which was the wrong first diagnosis twice.
+    requires_temp_floor: true
+    unfloored_outcome: force-stopped 32min, 1 file, 0/31 goals
+
+    # ── TRACE METRICS (dev/README: trace summary, never hand-mined logs) ─
+    # traces/c417287e6a3c_20260729T192556.summary.json · completeness 85.9%
+    metrics:
+      wall_min: 127
+      decode_tps: 31.8
+      prefill_tps: 426.7
+      tokens_generated: 144638
+      tokens_input_real: 989296          # 730,326 fresh prefill + 258,970 cached
+      inferences: 146
+      cache_hit_rate: 1.00               # 145/145
+      prefix_reuse_rate: 0.262
+      # WHERE THE 127 MINUTES WENT. Inference is effectively the whole run and
+      # DECODE is two-thirds of it — consistent with the 82% thinking tax: this
+      # model's cost is tokens it generates, not context it reads.
+      wall_pct:
+        inference: 85.4                  # prefill 26.3 · decode 69.9
+        terminal: 0.06                   # 4.3 SECONDS of 127 minutes
+        mcp: 0.46
+        unaccounted: 14.1
+      counts: {cycles: 73, steps: 895, commands: 100, sessions: 24}
+
+    # ── PTY / DIAGNOSIS QUALITY: the strongest part of the run ───────────
+    # It DOES live-test, and the earlier failures were never a diagnosis
+    # weakness — the unfloored run simply never reached this phase, burning 32
+    # minutes inside one deliberation. With the floor it drives a terminal,
+    # observes real failures, and names real causes:
+    #
+    #   "observation commands like LOOK, TALK, or TAKE fail to execute during..."
+    #   "a bug in the Parser._is_valid_target method where it receives a w..."
+    #   "The ATTACK command handler was diagnosed as the root cause..."
+    #   {"confident": true, "root_cause": "The gate failure is not in src/parser.p..."
+    #
+    # Those are the SAME defects the blind judge found independently, and the
+    # last one correctly declines to blame the orphaned src/parser.py.
+    #
+    # THE LIMIT IS CONVERGENCE, NOT PERCEPTION. `Define data models` was tested,
+    # completed, regressed, re-tested, diagnosed, fixed, re-tested and diagnosed
+    # again — four visits, still open at the backstop. It sees the problem,
+    # describes it accurately, applies a fix, and the fix does not hold.
+    #
+    # SESSIONS ARE SHALLOW: 12 PTY sessions, five of them ONE turn (start, one
+    # command, close). Enough to catch "does it boot", not enough to catch "can
+    # you reach room two" — which is exactly the defect that sank the artifact.
+    # The judge needed a probing harness to map the world; the agent never
+    # walked it.
+    #
+    # AND TERMINAL TIME IS 0.06% OF WALL. Live testing is nearly free here, so
+    # deeper functional exploration is a cheap lever — the budget is spent on
+    # deliberation, not on driving the program.
+    pty: 12 sessions (5x1-turn, 3x2, 3x3, 1x4) · 9 functional sweeps, 7 completed, 4 diagnoses
+    diagnosis_quality: specific and correct; matched the blind judge's findings independently
+    convergence: poor — one goal took 4 visits and stayed open
+
+    note: >
+      Reputation for agent work is not contradicted by this run — the structured
+      output discipline is the best in the fleet so far (59/59 clean JSON) and
+      the diagnoses are accurate. What cost it is seam wiring plus an 82%
+      thinking tax at 31.8 tok/s, which leaves little budget for delivery inside
+      2h. Since terminal time is 0.06% of wall, more functional depth is close
+      to free and is the obvious lever; llama.cpp #19613 remains open upstream,
+      and the temperature floor is what makes this model usable here regardless.
+
+# ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
+probe_verified_cache:
+  run_id: cells_20260729-232251
+  A1:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 16896
+    fresh_t2_last: [1079, 16]
+    prefill_total_s: 47.4
+    needle_at_depth: False
+  B05:
+    strategy: full_replay
+    can_shift: True
+    n_ctx_seq: 202752
+    fresh_t2_last: [2724, 19131]
+    prefill_total_s: 521.4
+    needle_at_depth: True
+  B06:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 101376
+    fresh_t2_last: [1079, 16]
+    prefill_total_s: 63.4
+    needle_at_depth: True
+  B07:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 16896
+    fresh_t2_last: [1079, 16]
+    prefill_total_s: 55.7
+    needle_at_depth: False
+  B08:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 202752
+    fresh_t2_last: [1079, 16]
+    prefill_total_s: 65.1
+    needle_at_depth: True
+  B12:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 16896
+    fresh_t2_last: [9, 18]
+    prefill_total_s: 3.4
+    needle_at_depth: True

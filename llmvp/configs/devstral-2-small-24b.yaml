@@ -13,7 +13,7 @@ app:
 
 graphql:
   max_query_depth: 10
-  max_tokens: 131072
+  max_tokens: 393216
   max_aliases: 50
   introspection_enabled: true
 
@@ -25,7 +25,12 @@ model:
   kv_unified: true
   resident_seq_cache: true
   path: /Users/lah-rb/.lmstudio/models/byteshape/Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-IQ4_XS-4.04bpw.gguf
-  n_ctx: 131072
+  # RAISED 131072 -> 393216 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 160 KiB/token x 393216 = 64.4GB
+  # + 11.9GB weights = 76.3GB resident at boot.
+  n_ctx: 393216
+  probe_verified_weights_bytes: 11916774048
+  probe_verified_n_ctx: 393216
   n_gpu_layers: -1   
   seed: -1
   verbose: false
@@ -35,7 +40,7 @@ prompt:
   persona_file: "./knowledge/SOUL.md"
 
 generation:
-  max_tokens_default: 131072
+  max_tokens_default: 393216
   temperature_default: 0.7
   top_p: 0.95
   top_k: 0
@@ -60,3 +65,30 @@ tools:
 logging:
   enabled: true
   directory: "./logs"
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v1.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right —
+# it is to make a SURPRISE legible, so an unexpected score prompts a look at
+# the run before the number enters the ledger.
+tier:
+  status: not_yet_run
+  expectation:
+    registered: 2026-07-29
+    tier: "3-2"
+    stars: null
+    basis: experience
+    why: >
+      Minimum viable model. Long native context and reasonably usable output,
+      but expected at the bottom of the field.
+
+# ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
+probe_verified_cache:
+  run_id: cells_20260729-232251
+  F4:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 393216
+    fresh_t2_last: [1198, 14]
+    prefill_total_s: 97.1
+    needle_at_depth: True

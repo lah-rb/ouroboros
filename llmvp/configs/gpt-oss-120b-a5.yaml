@@ -24,6 +24,8 @@ model:
   family: "harmony"
   path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
   n_ctx: 131072
+  probe_verified_weights_bytes: 65369017728
+  probe_verified_n_ctx: 131072
   n_gpu_layers: -1   
   seed: -1
   verbose: false
@@ -105,3 +107,56 @@ tools:
 logging:
   enabled: true
   directory: "./logs"
+
+# ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
+probe_verified_cache:
+  run_id: cells_20260729-232251
+  A2:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1114, 19]
+    prefill_total_s: 22.4
+    needle_at_depth: True
+  B01:
+    strategy: full_replay
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [2567, 17394]
+    prefill_total_s: 207.7
+    needle_at_depth: True
+  B02:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1114, 19]
+    prefill_total_s: 26.4
+    needle_at_depth: True
+  B03:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1114, 19]
+    prefill_total_s: 26.5
+    needle_at_depth: True
+  B04:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1114, 19]
+    prefill_total_s: 26.3
+    needle_at_depth: True
+  B10:
+    strategy: full_replay
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1465, 1724]
+    prefill_total_s: 22.2
+    needle_at_depth: True
+  B11:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [12, 21]
+    prefill_total_s: 2.7
+    needle_at_depth: True

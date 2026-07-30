@@ -1,0 +1,281 @@
+── cell A1 (A): glm-4.7-flash strat=resident bands=stock swa=inherit depth=14 turn_tokens=900 ──
+   landed: strategy=resident n_ctx_seq=16896 (expected resident)
+{"label": "cell:A1:glm-4.7-flash", "errors": ["snapshot: snapshot would exceed context budget (0 pinned + 10532 candidate + 8192 reserve > 16896)"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1474, "turn_tokens": 900, "fresh_curve": [1474, 1079, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 18, 16], "prefill_curve_s": [2.2, 2.1, 2.5, 2.8, 3.1, 3.4, 3.7, 4.1, 4.4, 4.7, 5.0, 5.3, 3.8, 0.3, 0.2], "prefill_total_s": 47.4, "turn2_fresh": 1079, "turn3_fresh": 1080, "turn12_fresh": 18, "depth": 14, "curve_growth": 0.02, "session_needle_ok": false, "needle_at_depth": 14, "early_fact_ok": false, "session_mode": "full-replay", "cell": "A1", "block": "A", "strategy_expected": "resident", "bands": "stock", "swa": "inherit", "n_ctx_seq_health": 16896}
+── cell A2 (A): gpt-oss-120b-a5 strat=resident bands=stock swa=inherit depth=14 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=131072 (expected resident)
+{"label": "cell:A2:gpt-oss-120b-a5", "errors": [], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1415, "turn_tokens": 900, "fresh_curve": [1415, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 21, 19], "prefill_curve_s": [1.6, 1.5, 1.5, 1.6, 1.6, 1.6, 1.7, 1.7, 1.8, 1.8, 1.9, 1.9, 2.0, 0.2, 0.1], "prefill_total_s": 22.4, "turn2_fresh": 1114, "turn3_fresh": 1114, "turn12_fresh": 21, "depth": 14, "curve_growth": 0.02, "session_needle_ok": true, "needle_at_depth": 14, "early_fact_ok": true, "session_mode": "full-replay", "snapshot_resident": true, "fork_fresh": 21, "fork_s": 0.9, "fork_needle_ok": true, "fork_mode": "hot", "cell": "A2", "block": "A", "strategy_expected": "resident", "bands": "stock", "swa": "inherit", "n_ctx_seq_health": 131072}
+── cell B01 (B): gpt-oss-120b-a5 strat=replay bands=na swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=full_replay n_ctx_seq=131072 (expected full_replay)
+{"label": "cell:B01:gpt-oss-120b-a5", "errors": [], "resident_active": false, "session_strategy": "full_replay", "session_can_shift": true, "resident_requested": false, "turn1_fresh": 1415, "turn_tokens": 900, "fresh_curve": [1415, 2567, 3686, 4824, 5955, 7086, 8217, 9347, 10478, 11608, 12738, 13868, 14998, 16128, 17258, 17297, 17394], "prefill_curve_s": [1.6, 3.0, 4.4, 5.8, 7.2, 8.7, 10.3, 11.9, 13.4, 15.1, 16.8, 18.7, 20.4, 22.2, 24.1, 24.1, 24.3], "prefill_total_s": 207.7, "turn2_fresh": 2567, "turn3_fresh": 3686, "turn12_fresh": 17297, "depth": 16, "curve_growth": 6.74, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "snapshot_resident": false, "fork_fresh": 17458, "fork_s": 25.8, "fork_needle_ok": true, "fork_mode": "cold/replay", "cell": "B01", "block": "B", "strategy_expected": "full_replay", "bands": "na", "swa": "inherit", "n_ctx_seq_health": 131072}
+── cell B02 (B): gpt-oss-120b-a5 strat=resident bands=none swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=131072 (expected resident)
+{"label": "cell:B02:gpt-oss-120b-a5", "errors": ["snapshot: snapshot capacity (0) reached \u2014 purge one first"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1415, "turn_tokens": 900, "fresh_curve": [1415, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 21, 19], "prefill_curve_s": [1.6, 1.5, 1.5, 1.6, 1.6, 1.6, 1.7, 1.7, 1.8, 1.8, 1.9, 1.9, 2.0, 2.0, 2.0, 0.2, 0.2], "prefill_total_s": 26.4, "turn2_fresh": 1114, "turn3_fresh": 1114, "turn12_fresh": 21, "depth": 16, "curve_growth": 0.02, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "B02", "block": "B", "strategy_expected": "resident", "bands": "none", "swa": "inherit", "n_ctx_seq_health": 131072}
+── cell B03 (B): gpt-oss-120b-a5 strat=resident bands=stock swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=131072 (expected resident)
+{"label": "cell:B03:gpt-oss-120b-a5", "errors": [], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1415, "turn_tokens": 900, "fresh_curve": [1415, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 21, 19], "prefill_curve_s": [1.6, 1.5, 1.5, 1.6, 1.6, 1.6, 1.7, 1.7, 1.8, 1.8, 1.9, 1.9, 2.0, 2.0, 2.1, 0.2, 0.2], "prefill_total_s": 26.5, "turn2_fresh": 1114, "turn3_fresh": 1114, "turn12_fresh": 21, "depth": 16, "curve_growth": 0.02, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "snapshot_resident": true, "fork_fresh": 21, "fork_s": 1.0, "fork_needle_ok": true, "fork_mode": "hot", "cell": "B03", "block": "B", "strategy_expected": "resident", "bands": "stock", "swa": "inherit", "n_ctx_seq_health": 131072}
+── cell B04 (B): gpt-oss-120b-a5 strat=resident bands=unified swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=131072 (expected resident)
+{"label": "cell:B04:gpt-oss-120b-a5", "errors": ["snapshot: snapshot capacity (0) reached \u2014 purge one first"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1415, "turn_tokens": 900, "fresh_curve": [1415, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 1114, 21, 19], "prefill_curve_s": [1.6, 1.5, 1.5, 1.6, 1.6, 1.6, 1.7, 1.7, 1.8, 1.8, 1.9, 1.9, 2.0, 2.0, 2.0, 0.1, 0.2], "prefill_total_s": 26.3, "turn2_fresh": 1114, "turn3_fresh": 1114, "turn12_fresh": 21, "depth": 16, "curve_growth": 0.02, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "B04", "block": "B", "strategy_expected": "resident", "bands": "unified", "swa": "inherit", "n_ctx_seq_health": 131072}
+── cell B05 (B): glm-4.7-flash strat=replay bands=na swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=full_replay n_ctx_seq=202752 (expected full_replay)
+{"label": "cell:B05:glm-4.7-flash", "errors": [], "resident_active": false, "session_strategy": "full_replay", "session_can_shift": true, "resident_requested": false, "turn1_fresh": 1474, "turn_tokens": 900, "fresh_curve": [1474, 2724, 3963, 5204, 6445, 7686, 8927, 10168, 11409, 12650, 13891, 15132, 16373, 17614, 18855, 19034, 19131], "prefill_curve_s": [2.2, 4.5, 7.1, 10.2, 13.6, 17.5, 21.7, 26.2, 31.4, 36.8, 42.7, 48.9, 55.4, 62.5, 69.7, 71.0, 71.7], "prefill_total_s": 521.4, "turn2_fresh": 2724, "turn3_fresh": 3963, "turn12_fresh": 19034, "depth": 16, "curve_growth": 6.99, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "snapshot_resident": false, "fork_fresh": 19228, "fork_s": 75.6, "fork_needle_ok": true, "fork_mode": "cold/replay", "cell": "B05", "block": "B", "strategy_expected": "full_replay", "bands": "na", "swa": "inherit", "n_ctx_seq_health": 202752}
+── cell B06 (B): glm-4.7-flash strat=resident bands=none swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=101376 (expected resident)
+{"label": "cell:B06:glm-4.7-flash", "errors": ["snapshot: snapshot capacity (0) reached \u2014 purge one first"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1474, "turn_tokens": 900, "fresh_curve": [1474, 1079, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 18, 16], "prefill_curve_s": [2.4, 2.1, 2.5, 2.9, 3.2, 3.5, 3.8, 4.2, 4.5, 4.8, 5.2, 5.5, 5.8, 6.1, 6.5, 0.4, 0.4], "prefill_total_s": 63.4, "turn2_fresh": 1079, "turn3_fresh": 1080, "turn12_fresh": 18, "depth": 16, "curve_growth": 0.02, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "B06", "block": "B", "strategy_expected": "resident", "bands": "none", "swa": "inherit", "n_ctx_seq_health": 101376}
+── cell B07 (B): glm-4.7-flash strat=resident bands=stock swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=16896 (expected resident)
+{"label": "cell:B07:glm-4.7-flash", "errors": ["snapshot: snapshot would exceed context budget (0 pinned + 13741 candidate + 8192 reserve > 16896)"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1474, "turn_tokens": 900, "fresh_curve": [1474, 1079, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 18, 16], "prefill_curve_s": [2.2, 2.1, 2.5, 2.8, 3.1, 3.5, 3.9, 4.2, 4.5, 4.9, 5.2, 3.6, 4.0, 4.3, 4.6, 0.3, 0.3], "prefill_total_s": 55.7, "turn2_fresh": 1079, "turn3_fresh": 1080, "turn12_fresh": 18, "depth": 16, "curve_growth": 0.02, "session_needle_ok": false, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "B07", "block": "B", "strategy_expected": "resident", "bands": "stock", "swa": "inherit", "n_ctx_seq_health": 16896}
+── cell B08 (B): glm-4.7-flash strat=resident bands=unified swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=202752 (expected resident)
+{"label": "cell:B08:glm-4.7-flash", "errors": ["snapshot: snapshot capacity (0) reached \u2014 purge one first"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1474, "turn_tokens": 900, "fresh_curve": [1474, 1079, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 1080, 18, 16], "prefill_curve_s": [2.2, 2.1, 2.5, 2.9, 3.2, 3.6, 3.9, 4.3, 4.6, 5.0, 5.4, 5.7, 6.1, 6.4, 6.8, 0.4, 0.4], "prefill_total_s": 65.1, "turn2_fresh": 1079, "turn3_fresh": 1080, "turn12_fresh": 18, "depth": 16, "curve_growth": 0.02, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "B08", "block": "B", "strategy_expected": "resident", "bands": "unified", "swa": "inherit", "n_ctx_seq_health": 202752}
+── cell B09 (B): gemma-4-26b-a4b strat=replay bands=na swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=full_replay n_ctx_seq=262144 (expected full_replay)
+{"label": "cell:B09:gemma-4-26b-a4b", "errors": [], "resident_active": false, "session_strategy": "full_replay", "session_can_shift": false, "resident_requested": false, "turn1_fresh": 1475, "turn_tokens": 900, "fresh_curve": [1475, 2588, 3702, 4816, 5930, 7044, 8158, 9272, 10386, 11500, 12614, 13761, 14908, 16055, 17202, 17231, 17260], "prefill_curve_s": [3.2, 4.3, 5.4, 8.4, 9.8, 11.2, 12.7, 16.2, 18.0, 19.8, 21.8, 23.9, 26.3, 28.6, 31.0, 31.1, 31.2], "prefill_total_s": 271.7, "turn2_fresh": 2588, "turn3_fresh": 3702, "turn12_fresh": 17231, "depth": 16, "curve_growth": 6.66, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "snapshot_resident": false, "fork_fresh": 17291, "fork_s": 33.0, "fork_needle_ok": true, "fork_mode": "cold/replay", "cell": "B09", "block": "B", "strategy_expected": "full_replay", "bands": "na", "swa": "inherit", "n_ctx_seq_health": 262144}
+── cell B10 (B): gpt-oss-120b-a5 strat=replay bands=na swa=inherit depth=12 turn_tokens=0 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=full_replay n_ctx_seq=131072 (expected full_replay)
+{"label": "cell:B10:gpt-oss-120b-a5", "errors": [], "resident_active": false, "session_strategy": "full_replay", "session_can_shift": true, "resident_requested": false, "turn1_fresh": 1415, "turn_tokens": 0, "fresh_curve": [1415, 1465, 1491, 1517, 1542, 1567, 1591, 1615, 1640, 1665, 1690, 1724], "prefill_curve_s": [1.6, 1.7, 1.7, 1.7, 1.8, 1.9, 1.9, 1.9, 1.9, 2.0, 2.0, 2.1], "prefill_total_s": 22.2, "turn2_fresh": 1465, "turn3_fresh": 1491, "turn12_fresh": 1724, "depth": 12, "curve_growth": 1.18, "session_needle_ok": true, "needle_at_depth": 12, "session_mode": "full-replay", "snapshot_resident": false, "fork_fresh": 1791, "fork_s": 2.9, "fork_needle_ok": true, "fork_mode": "cold/replay", "cell": "B10", "block": "B", "strategy_expected": "full_replay", "bands": "na", "swa": "inherit", "n_ctx_seq_health": 131072}
+── cell B11 (B): gpt-oss-120b-a5 strat=resident bands=stock swa=inherit depth=12 turn_tokens=0 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=131072 (expected resident)
+{"label": "cell:B11:gpt-oss-120b-a5", "errors": [], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1415, "turn_tokens": 0, "fresh_curve": [1415, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 21], "prefill_curve_s": [1.6, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1], "prefill_total_s": 2.7, "turn2_fresh": 12, "turn3_fresh": 12, "turn12_fresh": 21, "depth": 12, "curve_growth": 1.75, "session_needle_ok": true, "needle_at_depth": 12, "session_mode": "resident-live", "snapshot_resident": true, "fork_fresh": 21, "fork_s": 0.7, "fork_needle_ok": true, "fork_mode": "hot", "cell": "B11", "block": "B", "strategy_expected": "resident", "bands": "stock", "swa": "inherit", "n_ctx_seq_health": 131072}
+── cell B12 (B): glm-4.7-flash strat=resident bands=stock swa=inherit depth=12 turn_tokens=0 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=16896 (expected resident)
+{"label": "cell:B12:glm-4.7-flash", "errors": [], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1474, "turn_tokens": 0, "fresh_curve": [1474, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 18], "prefill_curve_s": [2.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2], "prefill_total_s": 3.4, "turn2_fresh": 9, "turn3_fresh": 9, "turn12_fresh": 18, "depth": 12, "curve_growth": 2.0, "session_needle_ok": true, "needle_at_depth": 12, "session_mode": "resident-live", "snapshot_resident": true, "fork_fresh": 18, "fork_s": 1.3, "fork_needle_ok": true, "fork_mode": "hot", "cell": "B12", "block": "B", "strategy_expected": "resident", "bands": "stock", "swa": "inherit", "n_ctx_seq_health": 16896}
+── cell C1 (C): gemma-4-26b-a4b strat=resident bands=none swa=on depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=32768 (expected resident)
+{"label": "cell:C1:gemma-4-26b-a4b", "errors": ["snapshot: snapshot capacity (0) reached \u2014 purge one first"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1475, "turn_tokens": 900, "fresh_curve": [1475, 1111, 1111, 1111, 1111, 1111, 1111, 1111, 1111, 1111, 1111, 1144, 1144, 1144, 1144, 26, 24], "prefill_curve_s": [1.6, 1.1, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.5, 2.6, 0.2, 0.1], "prefill_total_s": 27.8, "turn2_fresh": 1111, "turn3_fresh": 1111, "turn12_fresh": 26, "depth": 16, "curve_growth": 0.02, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "C1", "block": "C", "strategy_expected": "resident", "bands": "none", "swa": "on", "n_ctx_seq_health": 32768}
+── cell C2 (C): gemma-4-26b-a4b strat=resident bands=unified swa=on depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=65536 (expected resident)
+{"label": "cell:C2:gemma-4-26b-a4b", "errors": ["snapshot: snapshot capacity (0) reached \u2014 purge one first"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1475, "turn_tokens": 900, "fresh_curve": [1475, 1111, 1111, 1111, 1111, 1111, 1111, 1111, 1111, 1111, 1111, 1144, 1144, 1144, 1144, 26, 24], "prefill_curve_s": [1.3, 1.1, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.4, 2.5, 2.6, 0.2, 0.1], "prefill_total_s": 27.6, "turn2_fresh": 1111, "turn3_fresh": 1111, "turn12_fresh": 26, "depth": 16, "curve_growth": 0.02, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "C2", "block": "C", "strategy_expected": "resident", "bands": "unified", "swa": "on", "n_ctx_seq_health": 65536}
+── cell D1 (D): hy3-reap-200b-a21 strat=resident bands=none swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=16384 (expected resident)
+{"label": "cell:D1:hy3-reap-200b-a21", "errors": ["snapshot: snapshot would exceed context budget (0 pinned + 12877 candidate + 8192 reserve > 16384)"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1475, "turn_tokens": 900, "fresh_curve": [1475, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 16, 14], "prefill_curve_s": [7.2, 6.2, 6.6, 7.0, 7.3, 7.7, 8.1, 8.5, 8.9, 9.3, 9.7, 8.1, 8.4, 8.8, 9.1, 0.5, 0.5], "prefill_total_s": 121.4, "turn2_fresh": 1141, "turn3_fresh": 1141, "turn12_fresh": 16, "depth": 16, "curve_growth": 0.01, "session_needle_ok": false, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "D1", "block": "D", "strategy_expected": "resident", "bands": "none", "swa": "inherit", "n_ctx_seq_health": 16384}
+── cell D2 (D): hy3-reap-200b-a21 strat=resident bands=unified swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=32768 (expected resident)
+{"label": "cell:D2:hy3-reap-200b-a21", "errors": ["snapshot: snapshot capacity (0) reached \u2014 purge one first"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1475, "turn_tokens": 900, "fresh_curve": [1475, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 1141, 16, 14], "prefill_curve_s": [6.9, 6.2, 6.6, 7.0, 7.3, 7.8, 8.1, 8.5, 8.9, 9.3, 9.7, 10.1, 10.4, 10.8, 11.2, 0.6, 0.6], "prefill_total_s": 129.4, "turn2_fresh": 1141, "turn3_fresh": 1141, "turn12_fresh": 16, "depth": 16, "curve_growth": 0.01, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "D2", "block": "D", "strategy_expected": "resident", "bands": "unified", "swa": "inherit", "n_ctx_seq_health": 32768}
+── cell D3 (D): hy3-reap-200b-a21 strat=replay bands=na swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=full_replay n_ctx_seq=32768 (expected full_replay)
+{"label": "cell:D3:hy3-reap-200b-a21", "errors": [], "resident_active": false, "session_strategy": "full_replay", "session_can_shift": true, "resident_requested": false, "turn1_fresh": 1475, "turn_tokens": 900, "fresh_curve": [1475, 2619, 3764, 4909, 6054, 7199, 8344, 9489, 10634, 11779, 12924, 14069, 15214, 16359, 17504, 17524, 17542], "prefill_curve_s": [7.0, 13.1, 19.1, 25.4, 32.2, 39.6, 47.3, 55.3, 63.5, 72.2, 81.8, 91.1, 100.9, 111.1, 122.3, 122.5, 122.7], "prefill_total_s": 1004.4, "turn2_fresh": 2619, "turn3_fresh": 3764, "turn12_fresh": 17524, "depth": 16, "curve_growth": 6.69, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "snapshot_resident": false, "fork_fresh": 17562, "fork_s": 123.4, "fork_needle_ok": true, "fork_mode": "cold/replay", "cell": "D3", "block": "D", "strategy_expected": "full_replay", "bands": "na", "swa": "inherit", "n_ctx_seq_health": 32768}
+── cell F1 (F): mistral-medium-3.5-128b strat=resident bands=none swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=73728 (expected resident)
+{"label": "cell:F1:mistral-medium-3.5-128b", "errors": ["snapshot: snapshot capacity (0) reached \u2014 purge one first"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1588, "turn_tokens": 900, "fresh_curve": [1588, 1198, 1198, 1198, 1198, 1198, 1198, 1198, 1198, 1198, 1198, 1231, 1231, 1231, 1231, 16, 14], "prefill_curve_s": [37.4, 27.6, 28.3, 29.0, 29.7, 30.4, 31.0, 31.7, 32.4, 33.1, 33.8, 35.3, 36.0, 36.8, 37.5, 1.2, 1.2], "prefill_total_s": 491.2, "turn2_fresh": 1198, "turn3_fresh": 1198, "turn12_fresh": 16, "depth": 16, "curve_growth": 0.01, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "F1", "block": "F", "strategy_expected": "resident", "bands": "none", "swa": "inherit", "n_ctx_seq_health": 73728}
+── cell F2 (F): laguna-xs-2.1 strat=replay bands=na swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=full_replay n_ctx_seq=262144 (expected full_replay)
+{"label": "cell:F2:laguna-xs-2.1", "errors": [], "resident_active": false, "session_strategy": "full_replay", "session_can_shift": false, "resident_requested": false, "turn1_fresh": 1535, "turn_tokens": 900, "fresh_curve": [1535, 2678, 3822, 4966, 6110, 7254, 8398, 9542, 10686, 11830, 12974, 14151, 15328, 16505, 17682, 17708, 17734], "prefill_curve_s": [1.8, 2.9, 3.8, 5.3, 6.4, 7.5, 9.1, 10.3, 11.4, 12.8, 14.0, 15.3, 16.7, 18.1, 19.6, 19.6, 19.6], "prefill_total_s": 174.6, "turn2_fresh": 2678, "turn3_fresh": 3822, "turn12_fresh": 17708, "depth": 16, "curve_growth": 6.61, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "snapshot_resident": false, "fork_fresh": 17762, "fork_s": 20.4, "fork_needle_ok": true, "fork_mode": "cold/replay", "cell": "F2", "block": "F", "strategy_expected": "full_replay", "bands": "na", "swa": "inherit", "n_ctx_seq_health": 262144}
+── cell F3 (F): qwen3.5-122b-a10 strat=replay bands=na swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=full_replay n_ctx_seq=262144 (expected full_replay)
+{"label": "cell:F3:qwen3.5-122b-a10", "errors": [], "resident_active": false, "session_strategy": "full_replay", "session_can_shift": false, "resident_requested": false, "turn1_fresh": 1533, "turn_tokens": 900, "fresh_curve": [1533, 2803, 4017, 5229, 6441, 7653, 8865, 10077, 11289, 12501, 13713, 14958, 16205, 17452, 18699, 18827, 18942], "prefill_curve_s": [4.8, 8.0, 10.7, 15.3, 18.2, 21.1, 25.9, 28.9, 32.1, 35.6, 38.8, 42.6, 46.0, 49.9, 53.5, 53.8, 54.1], "prefill_total_s": 485.2, "turn2_fresh": 2803, "turn3_fresh": 4017, "turn12_fresh": 18827, "depth": 16, "curve_growth": 6.72, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "snapshot_resident": false, "fork_fresh": 19037, "fork_s": 58.5, "fork_needle_ok": true, "fork_mode": "cold/replay", "cell": "F3", "block": "F", "strategy_expected": "full_replay", "bands": "na", "swa": "inherit", "n_ctx_seq_health": 262144}
+── cell F4 (F): devstral-2-small-24b strat=resident bands=none swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=resident n_ctx_seq=393216 (expected resident)
+{"label": "cell:F4:devstral-2-small-24b", "errors": ["snapshot: snapshot capacity (0) reached \u2014 purge one first"], "resident_active": true, "session_strategy": "resident", "session_can_shift": true, "resident_requested": true, "turn1_fresh": 1588, "turn_tokens": 900, "fresh_curve": [1588, 1198, 1198, 1198, 1198, 1198, 1198, 1198, 1198, 1198, 1198, 1231, 1231, 1231, 1231, 16, 14], "prefill_curve_s": [7.5, 5.6, 5.7, 5.9, 6.0, 6.0, 6.2, 6.3, 6.4, 6.5, 6.6, 6.8, 7.0, 7.1, 7.2, 0.3, 0.2], "prefill_total_s": 97.1, "turn2_fresh": 1198, "turn3_fresh": 1198, "turn12_fresh": 16, "depth": 16, "curve_growth": 0.01, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "cell": "F4", "block": "F", "strategy_expected": "resident", "bands": "none", "swa": "inherit", "n_ctx_seq_health": 393216}
+── cell F5 (F): qwen3.6-27b strat=replay bands=na swa=inherit depth=16 turn_tokens=900 ──
+❌ Failed to load configuration: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+❌ Configuration initialization failed: 
+🚨 No configuration file could be located.
+Please create an active_config.txt file in the project root
+that points to a configuration file in the ./configs/ directory.
+⚠️ Configuration initialization deferred. Call core.config.init_config() explicitly.
+   landed: strategy=full_replay n_ctx_seq=262144 (expected full_replay)
+{"label": "cell:F5:qwen3.6-27b", "errors": [], "resident_active": false, "session_strategy": "full_replay", "session_can_shift": false, "resident_requested": false, "turn1_fresh": 1533, "turn_tokens": 900, "fresh_curve": [1533, 2730, 3868, 5023, 6173, 7322, 8468, 9618, 10775, 11931, 13093, 14279, 15463, 16655, 17839, 17908, 17994], "prefill_curve_s": [8.2, 13.7, 18.6, 25.3, 30.7, 36.0, 42.6, 48.2, 53.9, 59.4, 65.1, 71.1, 77.1, 83.0, 89.1, 89.4, 90.0], "prefill_total_s": 811.4, "turn2_fresh": 2730, "turn3_fresh": 3868, "turn12_fresh": 17908, "depth": 16, "curve_growth": 6.56, "session_needle_ok": true, "needle_at_depth": 16, "early_fact_ok": true, "session_mode": "full-replay", "snapshot_resident": false, "fork_fresh": 18084, "fork_s": 95.1, "fork_needle_ok": true, "fork_mode": "cold/replay", "cell": "F5", "block": "F", "strategy_expected": "full_replay", "bands": "na", "swa": "inherit", "n_ctx_seq_health": 262144}
+cells appended to dev/caching/results/cells.jsonl (run_id cells_20260729-232251)
+production config (gpt-oss-120b-a5-swarm-524k) restored

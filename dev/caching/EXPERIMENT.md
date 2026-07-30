@@ -158,5 +158,77 @@ order. Results append per-cell; a crash loses one cell, not the run.
 
 ## Results
 
-*(Appended per block as cells complete. Predictions scored against results —
-hits AND misses.)*
+*(Scored 2026-07-30, run `cells_20260729-232251`: 24/24 cells, zero voids,
+1h36m wall. Rows: `dev/caching/results/cells.jsonl`.)*
+
+### The headline surface (Block B + D)
+
+| anchor | replay Σprefill (depth 16, ~900 tok/turn) | resident Σprefill | payout |
+|---|---|---|---|
+| gpt-oss-120b | 207.7 s | 26.4 s | **7.9×** |
+| glm-4.7-flash | 521.4 s | 63.4 s | **8.2×** |
+| gemma-4-26b | 271.7 s | 27.8 s (swa_full on) | **9.8×** |
+| hy3-reap-200b | 1,004.4 s | 129.4 s | **7.8×** |
+
+**The payout ratio is workload-determined (~8× at this shape); the absolute
+saving is model-speed-determined** (hy3 recovers ~875 s per 16-turn session —
+the mechanism behind its arm's 60.8%-of-wall prefill). Replay growth is
+architecture-independent: 6.74 / 6.99 / 6.66 / 6.69 / 6.61 / 6.72 / 6.56×
+across seven models.
+
+### Prediction scorecard — hits AND misses
+
+| prediction | verdict | note |
+|---|---|---|
+| P-A1 windowing at the true boundary, no decode error | **HIT** (both halves) | A1 windowed at 16,896 and kept answering (the pre-P1 trajectory was the hy3 crash); A2 kept both needles with no windowing |
+| P-A2 byte parity unaffected | not run as parity | superseded by 24 needle-clean cells; formal parity deferred to Block E hygiene |
+| P-B1 resident flat / replay superlinear | **HIT** | flat fresh 1080-1200/turn everywhere; replay ≥6.5× everywhere |
+| P-B2 band cost is window not speed | **HIT** | glm none/stock/unified within 3% on time; stock paid with the WINDOWED needle instead |
+| P-B3 kv_unified ≈ suppressed bands, no division | **HIT** | ≤3% deltas; seq_win = full n_ctx confirmed via health |
+| P-B4 probe understates replay magnitude | **HIT** | same model/strategy: probe +16 tok/turn (growth 1.18) vs realistic 6.74× |
+| P-C1 swa_full KV in the 100s-KB class; resident and useful context mutually exclusive | **HALF-MISS, good direction** | magnitude right (~430 KB/tok, 28.2 GB @65k) but 65,536 IS servable at 42.4 GB total — not mutually exclusive |
+| P-C2 payout matches other anchors once can_shift | **HIT** | 9.8× |
+| C decision rule (flip if >30% saving AND n_ctx ≥32,768) | **FIRES** | 90% saving, servable 65,536 → gemma-26b flips |
+| P-D1 hy3 flat ≈5 s/turn | **SPLIT** | decodes clean HIT; ~6× at depth-10 HIT (58.8→9.3 s); "flat in TIME" MISS — fresh tokens flat but prefill 6.2→9.7 s/turn rising: **token-flat ≠ time-flat on a dense model** (attention depth prices the prefill; mistral.rs's killer at survivable magnitude) |
+| P-D2 unified ≡ suppressed for hy3 | **HIT, and strictly better** | same cost, full window, needle survives — the recipe is resident+kv_unified |
+| P-F1 fleet spots behave per gate | **HIT** | mistral-medium/devstral flat with needles; laguna-xs/qwen3.5/qwen3.6 replay as configured, no errors anywhere |
+
+### Findings beyond the predictions
+
+1. **Dense-model resident prefill rises with depth** (D1/D2: 6.2→9.7 s/turn at
+   flat token deltas). Not a defect — but deep resident sessions on dense
+   models pay an attention-depth tax that MoE anchors do not show at this
+   depth. Corpus §4 addendum.
+2. **Instrument defect found and scoped**: the per-turn planted facts are
+   arithmetic (7000+31i), so a windowed-out early fact is inferable from
+   surviving siblings — `early_fact_ok` is only valid on non-windowed
+   sessions (B07/D1 showed True after their fact's window dropped). The doc
+   needle (arbitrary 7391) is the trustworthy probe. Fix: hash-derived values,
+   AFTER this vintage.
+3. **qwen3.6-27b (pure recurrent) replay at depth 16 costs 811 s** with
+   per-turn prefill reaching 90 s — the worst per-session cost measured, and
+   this model CANNOT go resident (gate-refused by architecture). Its sessions
+   should be kept shallow by flow design.
+4. Replay's snapshot-fork fallback at realistic depth: 95.1 s (F5) vs hot
+   forks of 0.7–2.3 s — the 40× cold-fork penalty from the 2026-07-02 matrix
+   grows with depth exactly as the mechanism predicts.
+
+### Adopted write-backs (per the registered rules + measured evidence)
+
+- **glm-4.7-flash**: resident + kv_unified (B08; operator pre-approved).
+- **mistral-medium-3.5-128b**: resident + kv_unified (F1; operator
+  pre-approved).
+- **hy3-reap-200b-a21**: resident + kv_unified (D2 — full window, needle
+  intact; supersedes the failed one-line-change prediction).
+- **gemma-4-26b-a4b**: swa_full + kv_unified + resident at n_ctx 65,536
+  (C decision rule fired: 90% saving; surrenders the 262k nominal range that
+  cost 271.7 s/session to actually read).
+- All 9 measured models get `probe_verified_cache:` blocks.
+- **Not flipped**: laguna-xs (needs its own swa_full KV re-check — sibling
+  flags differ; follow-up), qwen3.5 (same), qwen3.6-27b/35b + step37
+  (architecture-refused; correctly on replay).
+
+### Still open
+
+Block E (three one-cells: F12 pool-fit, snapshot-under-batched smoke,
+flow-band v2 pilot) — different tooling, queued next.

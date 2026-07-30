@@ -13,7 +13,7 @@ app:
 
 graphql:
   max_query_depth: 10
-  max_tokens: 262144
+  max_tokens: 147456
   max_aliases: 50
   introspection_enabled: true
 
@@ -32,7 +32,12 @@ model:
   # heavier per token than the MoE — 67GB of weights plus a deep-layer KV has
   # to stay under the REAL 113GB wired limit (iogpu.wired_limit_mb; 116 was an unchecked assumption). Raise only with memory headroom
   # measured, not assumed.
-  n_ctx: 131072
+  # RAISED 131072 -> 147456 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 352 KiB/token x 147456 = 53.2GB
+  # + 67.1GB weights = 120.3GB resident at boot.
+  n_ctx: 147456
+  probe_verified_weights_bytes: 67124438432
+  probe_verified_n_ctx: 147456
   n_gpu_layers: -1
   seed: -1
   verbose: false
@@ -48,6 +53,12 @@ model:
   # the default (config.py session_full_replay: bool = True) — stated
   # explicitly so the strategy is visible at a glance.
   session_full_replay: true
+  # ADDED 2026-07-30 per run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results): F1 measured resident flat
+  # (needles intact, 73,728/seq). First turn is slow (39.1s prefill in the
+  # sweep) but every later turn is ~1.1s — the dense prefill-bound profile
+  # (boss run: 82% of wall was prefill) is exactly what resident relieves.
+  resident_seq_cache: true
+  kv_unified: true
   # Verified live 2026-07-22 on a trivial prompt. REQUIRES BOS: character salad without it, correct with it.
   # Both official templates specify <s>; this follows the evidence.
   template_bos: true
@@ -56,7 +67,7 @@ prompt:
   persona_file: "./knowledge/SOUL.md"
 
 generation:
-  max_tokens_default: 131072
+  max_tokens_default: 147456
   temperature_default: 0.5
   top_p: 0.95
   top_k: 0
@@ -86,3 +97,31 @@ tools:
 logging:
   enabled: true
   directory: "./logs"
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v1.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right —
+# it is to make a SURPRISE legible, so an unexpected score prompts a look at
+# the run before the number enters the ledger.
+tier:
+  status: not_yet_run
+  expectation:
+    registered: 2026-07-29
+    tier: "2"
+    stars: null
+    basis: experience
+    why: >
+      A dense, competent model that is extremely slow. Expected tier 2 on
+      throughput grounds: limited revisions within the window, and a
+      correspondingly low goal count.
+
+# ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
+probe_verified_cache:
+  run_id: cells_20260729-232251
+  F1:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 73728
+    fresh_t2_last: [1198, 14]
+    prefill_total_s: 491.2
+    needle_at_depth: True

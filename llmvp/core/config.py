@@ -79,6 +79,28 @@ class ModelConfig(BaseModel):
     # interleaved-SWA models (gemma-4). Re-arms the preflight against real
     # geometry rather than disabling it by inflating kv_preflight_gb.
     kv_bytes_per_token_measured: Optional[int] = None
+
+    # ── PROBE-VERIFIED CEILING: a measurement outranks an estimate ─────
+    # Written by `api/main.py --probe-context`, which boots this model at
+    # successive n_ctx values and requires each rung to LOAD **and DECODE**.
+    # When n_ctx <= probe_verified_n_ctx the arithmetic refusal is skipped:
+    # the load has been observed to work on this machine, and a formula
+    # cannot overturn that.
+    #
+    # WHY IT IS NEEDED. The preflight sums KV + the weights FILE size, and file
+    # size is not resident footprint for an MoE under mmap. step-3.7 (196B-A11)
+    # measured a working ceiling of 138240 that accounts to 146.3GB against
+    # 137.4GB physical — the config was demonstrably fine and the arithmetic
+    # said impossible. Without this field the guard forbids a ceiling we paid a
+    # machine reboot to establish.
+    #
+    # STALENESS IS THE RISK, so the verification is bound to the weights it was
+    # measured against. probe_verified_weights_bytes records the summed shard
+    # size at verification time; if the file changes (a requant, a different
+    # quant level) the numbers no longer describe this model and the guard
+    # falls back to the formula rather than trusting a stale pass.
+    probe_verified_n_ctx: Optional[int] = None
+    probe_verified_weights_bytes: Optional[int] = None
     flash_attention: bool = False  # DEAD no-op (wrong kwarg name); see flash_attn_type
     batch_size: int = 64  # DEAD no-op (wrong kwarg name); see n_batch
     # The two fields above were silently swallowed by Llama()'s **kwargs (the binding
@@ -603,6 +625,46 @@ class Config(BaseModel):
                 )
         return self
 
+    @model_validator(mode="after")
+    def _validate_session_strategy(self) -> "Config":
+        """The session fallback must ALWAYS be armed (OPEN_TASKS §4).
+
+        `session_turn` picks resident → full_replay → legacy save_state, in that
+        order. Architecture is unknowable from config — `memory_can_shift()` can
+        only be asked of a loaded model — so `resident_seq_cache: true` is a
+        REQUEST that may be denied at load. When it is denied and
+        `session_full_replay` is false, the turn lands on the legacy
+        save_state path with nothing to catch it, and that path's rap sheet is
+        why §4 retires it: a `SystemError: Negative size passed to
+        PyBytes_FromStringAndSize` at deep context, save_state churn corrupting
+        the static KV over a run, and a corrupted state RELOADED every
+        subsequent turn (which uniquely explains "never recovers").
+
+        So requesting resident does not excuse disarming the fallback — it is
+        exactly the case that needs one. Since resident IGNORES
+        `session_full_replay` when it is active, keeping it true costs nothing
+        when resident works and saves the session when resident is refused.
+
+        This closes the third branch §4 describes: rather than passing validation
+        and silently running legacy, a config that could land there is refused at
+        load, with the fix named."""
+        if not self.model.session_full_replay:
+            requested = self.model.resident_seq_cache
+            why = (
+                "resident_seq_cache is requested, but the can_shift gate may "
+                "refuse it at load (interleaved-SWA without swa_full, or "
+                "recurrent memory) and then this session has NO safe path left"
+                if requested
+                else "no other safe session path is configured"
+            )
+            raise ValueError(
+                "model.session_full_replay: false selects the retired legacy "
+                f"save_state session path — {why}. Set session_full_replay: true "
+                "(it is ignored while the resident cache is active, so it costs "
+                "nothing but arms the fallback). See OPEN_TASKS §4."
+            )
+        return self
+
     def resolve_persona(self, name: Optional[str]) -> "PersonaConfig":
         """The persona's file/bin pair, with "default"/None falling through to
         the legacy prompt/knowledge fields."""
@@ -741,7 +803,19 @@ SEARCH_DIRS = ("", "boss", "experiments")
 # question and what the run answered. Stripped before validation because Config
 # is extra="forbid" — which is the right default, and the reason this list is
 # explicit rather than a loosened model.
-DOC_ONLY_KEYS = ("results", "notes", "extends")
+#
+# `tier` is the standing record from TIER_RUBRIC v1.0 — the star, and the
+# OBSERVED half a stripped artifact can never carry (speed, degeneration,
+# behaviour under framework faults, where the backstop parked it). It lives in
+# the config rather than a block comment because comments cannot be read back:
+# a tier is data the next scheduler wants, and the 2026-07-29 batch had to
+# reconstruct every arm's character by grepping run logs.
+#
+# Structure it as: `tier.status`, `tier.stars`, `tier.rubric`, `tier.judged`
+# (blind half — absent until a fresh judge scores it) and `tier.observed`
+# (operator half). Never merge the two: §7 of the rubric forbids a judge from
+# seeing the observed half, and keeping them in one blob invites a leak.
+DOC_ONLY_KEYS = ("results", "notes", "extends", "tier", "probe_verified_cache")
 
 
 def resolve_config_path(name: str, root: Optional[Path] = None) -> Optional[Path]:

@@ -4,25 +4,21 @@
 # 26B total, at 14.2 GB. That makes it the cheapest model here by weights and a
 # natural tournament entrant.
 #
-# ── THE KV NUMBER BELOW IS A CEILING, NOT A MEASUREMENT ──────────────
-# The header formula gives 480 KiB/token (30 layers x 8 kv-heads x 512 head-dim)
-# and it is KNOWN WRONG for this architecture. gemma-4 interleaves sliding-window
-# and full attention — the per-layer head counts confirm it — while the formula
-# assumes swa_full gives every layer a full-size cache. On the dense sibling that
-# over-predicted by roughly 2x, which is exactly why
-# kv_bytes_per_token_measured exists (gemma-4-31b carries 870,000 against a
-# formula figure near double).
+# ── KV IS MEASURED NOW, AND THE FORMULA WAS 22x OUT ──────────────────
+# The header formula gives 480 KiB/token (30 layers x 8 kv-heads x 512 head-dim).
+# The real figure is 21.2 KiB/token — 22.59x smaller — measured 2026-07-29 by
+# `--probe-context`. gemma-4 interleaves sliding-window and full attention, the
+# formula assumes swa_full gives every layer a full-size cache, and this config
+# runs swa_full:false so the windowed layers stay windowed.
 #
-#   n_ctx    formula KV    weights+KV     if it over-predicts ~2x
-#   32768        16.1 GB       30.4 GB              ~22 GB
-#   65536        32.2 GB       46.5 GB              ~30 GB   <- THIS CONFIG
-#  131072        64.4 GB       78.7 GB              ~46 GB
+#   n_ctx     formula KV    MEASURED KV    weights+KV
+#    65536       32.2 GB         1.4 GB       15.6 GB   (the old config value)
+#   131072       64.4 GB         2.9 GB       17.1 GB
+#   262144      128.7 GB         5.7 GB       19.9 GB   <- FULL TRAINED RANGE
 #
-# 65536 is sized against the PESSIMISTIC figure so the first boot cannot be a
-# surprise. MEASURE IT: read the "KV buffer size" the loader reports, divide by
-# n_ctx, and put the real number in kv_bytes_per_token_measured — then the
-# preflight guards real geometry instead of a doubled estimate, and 131072 very
-# likely opens up.
+# So nothing about memory constrains this model: its entire trained range costs
+# 5.7 GB of KV on a 137 GB box. It was configured at a quarter of that against
+# an estimate that was wrong by more than an order of magnitude.
 #
 # FAMILY: gemma, unchanged. The FSM treats gemma as NONE-shape via an explicit
 # override (its template pre-supplies an empty closed thought block, so
@@ -39,7 +35,7 @@ app:
 
 graphql:
   max_query_depth: 10
-  max_tokens: 65536
+  max_tokens: 262144
   max_aliases: 50
   introspection_enabled: true
 
@@ -47,33 +43,74 @@ model:
   name: "gemma-4-26b-a4b"
   family: "gemma"
   path: /Users/lah-rb/.lmstudio/models/unsloth/gemma-4-26B-A4B-it-qat-GGUF/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf
+  # RAISED 65536 -> 262144 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 21 KiB/token x 262144 = 5.7GB
+  # + 14.2GB weights = 20.0GB resident at boot.
+  # 262,144 surrendered for the flat session path — the nominal range cost
+  # 271.7s/session of re-reading to actually exploit (B09).
   n_ctx: 65536
+  # MEASURED 2026-07-29 (--probe-context): 21754 B/tok vs a 491520 formula (22.59x over — swa_full:false keeps the windowed
+  # layers windowed, and the formula assumes a full cache on every layer).
+  kv_bytes_per_token_measured: 21754
+  probe_verified_weights_bytes: 14249047104
+  # DERIVED, not measured — operator decision 2026-07-29, no retest.
+  # The probe stopped at 246784 and it was OUR ARITHMETIC that stopped it: every
+  # failing rung was `preflight_refused` against the 480 KiB/token formula, at a
+  # phantom 107.5 GB. With the measured 21754 B/tok above, the full trained range
+  # costs 5.7 GB of KV against 14.2 GB of weights — 19.9 GB total on a 137 GB
+  # box. There is no memory question left to answer, so re-running the ladder to
+  # walk it up 15k at a time would only re-measure the fix.
+  # probe_verified_n_ctx RETIRED 2026-07-30: measured under swa_full:false;
+  # invalid under the flipped flags. Re-probe if n_ctx is ever raised.
   model_max_context: 262144
   # 50 against the PESSIMISTIC 46.5 GB. Deliberately sized on the formula rather
   # than a hoped-for measured value: a preflight tuned to an estimate we expect
   # to be wrong in our favour is not a guard.
   kv_preflight_gb: 50
-  # Left UNSET on purpose — fill it after the first boot from the reported KV
-  # buffer. Guessing it from the dense sibling's 870,000 would be arithmetic on
-  # an arithmetic error; the whole point of the field is that it is measured.
-  # kv_bytes_per_token_measured: <measure me>
   n_gpu_layers: -1
   seed: -1
   verbose: false
   flash_attn_type: auto
   n_batch: 2048
+  # ── THE swa_full TRADE — DECIDED BY MEASUREMENT 2026-07-30 ──────────
+  # The original doctrine here ("keep swa_full off, keep the cheap 21.2 KiB/tok
+  # KV and the full 262,144 range, avoid the resident cache by running one
+  # thinking level") was coherent — and Block C of the caching experiment
+  # (run cells_20260729-232251, dev/caching/EXPERIMENT.md) measured its cost:
+  #
+  #     gemma-4-31b     swa_full: true    ->  880 KiB/token, ceiling 113664
+  #     THIS CONFIG     swa_full: false   -> 21.2 KiB/token, ceiling 246784+
+  #     THIS CONFIG     swa_full: true    -> ~430 KiB/token; 65,536 = 28.2 GB
+  #                                          KV + 14.2 weights = 42.4 GB total
+  #
+  # What the cheap-KV doctrine actually bought was full_replay sessions: 271.7s
+  # of prefill per 16-turn realistic session (B09) to make the big window
+  # usable at all. resident+swa_full does the same session in 27.8s (C1) — a
+  # 90% saving, which fired the PRE-REGISTERED decision rule (flip if >30%
+  # saving AND servable n_ctx >= 32,768). The 262,144 nominal range is
+  # surrendered: it was headroom the session path could not afford to read.
+  #
+  # Still true and still load-bearing: gemma-4 interleaves SWA and full
+  # attention; without swa_full, pinned/forked prefixes corrupt at the window
+  # boundary (llama_decode -3), which is why resident REQUIRES it here.
+  # `thinking: true` stays — one reasoning level means no head swaps, so the
+  # reasoning band stays out of n_seq_max.
+  #
+  # (Contrast step-3.7, which asks for resident_seq_cache WITHOUT swa_full and
+  # silently gets neither — it builds the seq-band context, frees it, and
+  # rebuilds single-seq every boot.)
   thinking: true
-  swa_full: false
-  kv_unified: false
+  swa_full: true
+  kv_unified: true
   session_full_replay: true
-  resident_seq_cache: false
+  resident_seq_cache: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
   system_prompt: "You are a helpful assistant."
 
 generation:
-  max_tokens_default: 65536
+  max_tokens_default: 262144
   temperature_default: 1.0
   top_p: 0.95
   top_k: 64
@@ -92,3 +129,46 @@ resources:
 logging:
   enabled: true
   directory: ./logs
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v1.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right —
+# it is to make a SURPRISE legible, so an unexpected score prompts a look at
+# the run before the number enters the ledger.
+tier:
+  status: not_yet_run
+  expectation:
+    registered: 2026-07-29
+    tier: "2-1"
+    stars: null
+    basis: benchmarks
+    why: >
+      EXPERIMENTAL — not from experience. Benchmarks indicate that in thinking
+      mode it should land below gemma-4 dense thinking, but close to qwen3.6-27b.
+      Its speed and extra context may prove advantageous in ways the benchmarks
+      do not show.
+
+# ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
+probe_verified_cache:
+  run_id: cells_20260729-232251
+  B09:
+    strategy: full_replay
+    can_shift: False
+    n_ctx_seq: 262144
+    fresh_t2_last: [2588, 17260]
+    prefill_total_s: 271.7
+    needle_at_depth: True
+  C1:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 32768
+    fresh_t2_last: [1111, 24]
+    prefill_total_s: 27.8
+    needle_at_depth: True
+  C2:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 65536
+    fresh_t2_last: [1111, 24]
+    prefill_total_s: 27.6
+    needle_at_depth: True

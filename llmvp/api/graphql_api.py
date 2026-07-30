@@ -83,6 +83,18 @@ class HealthStatus:
     mem_system_wired_mb: Optional[float] = None
     flow_cache_entries: int = 0
     resident_active: bool = False
+    # Which per-turn KV mechanism is ACTUALLY in use, and whether the arch could
+    # host the flat one. `resident_active` alone cannot tell "never requested"
+    # from "requested and denied", and only the second is a misconfiguration.
+    # `session_can_shift` is None when the question could not be put — never
+    # collapse that to False, which would read as a measured "this arch cannot".
+    session_strategy: str = ""
+    session_can_shift: Optional[bool] = None
+    resident_requested: bool = False
+    # TRUE per-seq window (0 = undetermined). Equals n_ctx under kv_unified;
+    # n_ctx/n_seq_max on a fragmented context — the number a client must size
+    # per-stream work against, NOT n_ctx.
+    n_ctx_seq: int = 0
     flow_builds: int = 0
     flow_hits: int = 0
     flow_evicts: int = 0
@@ -188,6 +200,11 @@ class CompletionResponse:
     cached_prefix_tokens: int = 0
     fresh_prefill_tokens: int = 0
     generated_tokens: int = 0
+    # Of generated_tokens, how many were chain-of-thought. Lets the trace split
+    # decode cost into thinking vs the answer the flow actually consumes — the
+    # distinction that matters on a heavy-thinking fleet, where one model can
+    # spend 82% of its output on thought. 0 = UNKNOWN, not "no reasoning".
+    reasoning_tokens: int = 0
     cache_hit: bool = False
     flow_key: str = ""
     # Precise phase timing (server-measured): prefill = prompt eval, decode =
@@ -449,6 +466,10 @@ class Query:
             mem_system_wired_mb=status.get("mem_system_wired_mb"),
             flow_cache_entries=status.get("flow_cache_entries", 0),
             resident_active=status.get("resident_active", False),
+            session_strategy=status.get("session_strategy", ""),
+            session_can_shift=status.get("session_can_shift"),
+            resident_requested=status.get("resident_requested", False),
+            n_ctx_seq=status.get("n_ctx_seq", 0),
             flow_builds=status.get("flow_builds", 0),
             flow_hits=status.get("flow_hits", 0),
             flow_evicts=status.get("flow_evicts", 0),
@@ -614,6 +635,7 @@ class Query:
             cached_prefix_tokens=outcome.cached_prefix_tokens,
             fresh_prefill_tokens=outcome.fresh_prefill_tokens,
             generated_tokens=outcome.generated_tokens,
+            reasoning_tokens=outcome.reasoning_tokens,
             cache_hit=outcome.cache_hit,
             flow_key=outcome.flow_key,
             prefill_ms=outcome.prefill_ms,
@@ -789,6 +811,7 @@ class Mutation:
             cached_prefix_tokens=outcome.cached_prefix_tokens,
             fresh_prefill_tokens=outcome.fresh_prefill_tokens,
             generated_tokens=outcome.generated_tokens,
+            reasoning_tokens=outcome.reasoning_tokens,
             cache_hit=outcome.cache_hit,
             flow_key=outcome.flow_key,
             prefill_ms=outcome.prefill_ms,

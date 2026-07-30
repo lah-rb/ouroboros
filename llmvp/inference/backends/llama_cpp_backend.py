@@ -77,6 +77,51 @@ _GGML_LOG_LEVELS = {2: logging.INFO, 3: logging.WARNING, 4: logging.ERROR}
 _ggml_log_cb = None  # ctypes CFUNCTYPE ref — MUST outlive the process
 _ggml_line_buf: dict = {"buf": ""}
 
+# Fraction of physical memory a KV+weights allocation may claim.
+#
+# MEASURED, on four models across three architectures and four quants
+# (2026-07-29, `--probe-context`). Each was walked to the largest n_ctx that
+# would load AND decode, then its weights + live KV expressed as a fraction of
+# the 137.4GB physical:
+#
+#     gemma-4-31b       119.7GB   0.871      dense, Q4_K_XL
+#     laguna-poolside   120.6GB   0.878      MoE, Q4_K_M
+#     step-3.7-flash    120.8GB   0.879      MoE, IQ4_XS
+#
+# Three architectures landing inside 0.008 of each other is a real constant,
+# not a coincidence, and 0.87 sits at or just below the lowest of them.
+#
+# The first value here was 0.90, inferred from a single crash (a computed
+# 143.7GB against 137.4 physical hard rebooted the machine). That was too
+# generous by exactly the margin the probes then found: every opening rung
+# computed at 0.90 FAILED, on all four models, by 6-10%.
+_PHYSICAL_SAFETY_FRACTION = float(os.environ.get("OURO_PHYSICAL_SAFETY", "0.87"))
+
+
+def _physical_memory_gb() -> float:
+    """Physical RAM in DECIMAL GB — the same units _kv_preflight compares in.
+
+    Sizing a budget from the binary figure lands ~7% short, which on this
+    machine is larger than the entire margin between a clean load and a reboot.
+    """
+    try:
+        import psutil
+
+        return psutil.virtual_memory().total / 1e9
+    except Exception:  # noqa: BLE001 — fall back rather than skip the guard
+        try:
+            import subprocess
+
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                                 capture_output=True, text=True, timeout=5)
+            return int(out.stdout.strip()) / 1e9
+        except Exception:  # noqa: BLE001
+            # Unknown physical memory must not silently disable the ceiling.
+            # 128GB is this fleet's floor; a wrong-but-present bound beats none.
+            log.warning("⚠️ could not read physical memory — KV preflight "
+                        "ceiling assuming 128GB")
+            return 128.0
+
 
 def _install_ggml_log_forwarding() -> None:
     global _ggml_log_cb
@@ -189,6 +234,16 @@ class LlamaCppBackend(BaseBackend):
             getattr(getattr(config, "model", None), "resident_seq_cache", False)
         )
         self._resident_active = False
+        # Whether the ARCH can host the resident cache, asked at load whether or
+        # not we requested it. None = not yet asked / unaskable.
+        #
+        # WHY UNCONDITIONALLY: the can_shift gate below used to run only when
+        # resident was REQUESTED, so a config with resident_seq_cache: false
+        # produced no evidence either way and the answer stayed unknown. hy3 sat
+        # in that state through a full tier arm, paying O(n^2) session re-prefill
+        # (60.8% of run wall at 58min) while nobody could say whether the flat
+        # path was even available to it. An unasked question is not a measurement.
+        self._session_can_shift: Optional[bool] = None
         self._resident_static_len = 0
         self._resident_static_tokens: List[int] = []
         # Phase 2: resident flow-prefix hot-set. When resident + flow_kv_cache, each
@@ -592,10 +647,14 @@ class LlamaCppBackend(BaseBackend):
         inst._ctx = ctx
         # Per-STREAM ceiling, not the allocation: session windowing keys off
         # _n_ctx, and a pool larger than the trained range (the swarm/model
-        # context split) must not let a session grow past n_ctx_train.
+        # context split) must not let a session grow past n_ctx_train — AND,
+        # since 2026-07-29, past the TRUE per-seq window (n_ctx/n_seq_max under
+        # kv_unified:false). Without the seq clamp the guard fired at n_ctx
+        # while llama.cpp held 1/12th of that per sequence.
         _base_ctx = int(n_ctx_override) if n_ctx_override else primary._n_ctx
         _lim = self._stream_ctx_limit()
-        inst._n_ctx = min(_base_ctx, _lim) if _lim else _base_ctx
+        _seq_lim = self._seq_ctx_limit(ctx, params)
+        inst._n_ctx = min(c for c in (_base_ctx, _lim, _seq_lim) if c)
         inst._persona_n_ctx = int(n_ctx_override) if n_ctx_override else None
 
         # New batch
@@ -1105,6 +1164,14 @@ class LlamaCppBackend(BaseBackend):
             n_seq_max=inst.context_params.n_seq_max,
             verbose=False,
         )
+        # Re-derive the per-stream ceiling from the REBUILT context. A refresh
+        # can change the seq geometry (the resident-denial un-fragment path
+        # rebuilds with n_seq_max=1 through here), and a stale _n_ctx would
+        # re-open the exact blind spot the seq clamp exists to close.
+        _seq_lim = self._seq_ctx_limit(inst._ctx, inst.context_params)
+        _lim = self._stream_ctx_limit()
+        _base = int(getattr(inst, "_persona_n_ctx", None) or inst.context_params.n_ctx)
+        inst._n_ctx = min(c for c in (_base, _lim, _seq_lim) if c)
         # Reset per-instance mutable arrays + sampler (mirrors _create_shared_instance).
         inst.input_ids = np.ndarray((inst._n_ctx,), dtype=np.intc)
         # ONE row when logits_all is false — see _create_shared_instance.
@@ -1949,6 +2016,70 @@ class LlamaCppBackend(BaseBackend):
     # Semi-permanent session snapshots (hot seq band + cold token list)
     # ------------------------------------------------------------------
 
+    def _ask_can_shift(self) -> Optional[bool]:
+        """Can this arch host the resident cache? Asked ALWAYS, acted on only
+        when requested. Returns None when the question cannot be put (a test
+        double, or a binding without the call) — None means UNKNOWN and must
+        never be collapsed to False, which would read as a measured 'no'."""
+        try:
+            return bool(self._primary_instance._ctx.memory_can_shift())
+        except Exception:  # noqa: BLE001 — a probe must not break a load
+            log.debug("memory_can_shift() unavailable", exc_info=True)
+            return None
+
+    def _session_strategy(self) -> str:
+        """Which per-turn KV mechanism this server will ACTUALLY use.
+
+        Derived, never declared: `resident_seq_cache: true` in a config is a
+        REQUEST that the can_shift gate may deny, and the denial silently lands
+        on a different path. Naming the effective strategy is the difference
+        between a fact and an inference."""
+        if self._resident_active:
+            return "resident"
+        if bool(getattr(getattr(self.config, "model", None),
+                        "session_full_replay", True)):
+            return "full_replay"
+        return "legacy_save_state"
+
+    def _log_session_strategy(self) -> None:
+        """One line, every load, whatever the flags.
+
+        Costs nothing and closes a real forensic gap: hy3's session path had to
+        be reverse-engineered from `static=0 tok` inside a generation log line,
+        and its can_shift answer did not exist anywhere because the gate only
+        ran when resident was requested."""
+        strategy = self._session_strategy()
+        try:
+            params = self._primary_instance.context_params
+            n_ctx = int(getattr(params, "n_ctx", 0) or 0)
+            n_seq = max(1, int(getattr(params, "n_seq_max", 1) or 1))
+            # The REAL per-seq window, asked of the context — not the display
+            # arithmetic. The arithmetic misled once already (it assumed /2
+            # for a config the stock bands split /12).
+            seq_win = self._seq_ctx_limit(
+                getattr(self._primary_instance, "_ctx", None), params
+            )
+        except Exception:  # noqa: BLE001
+            n_ctx, n_seq, seq_win = 0, 1, 0
+
+        shift = ("unknown" if self._session_can_shift is None
+                 else str(self._session_can_shift))
+        detail = ""
+        if strategy != "resident" and self._session_can_shift is True:
+            # THE ACTIONABLE CASE: a flat path is available and unused. This is
+            # exactly hy3 — quadratic re-prefill by omission, not by necessity.
+            detail = (" — resident AVAILABLE but not enabled; this model is "
+                      "paying full re-prefill per session turn")
+        elif strategy == "legacy_save_state":
+            detail = " — LEGACY save_state path (see OPEN_TASKS §4: unsafe)"
+
+        log.info(
+            "🧩 session strategy: %s (resident_requested=%s, memory_can_shift=%s, "
+            "n_ctx=%d, n_seq_max=%d, n_ctx_seq=%d)%s",
+            strategy, self._resident_requested, shift,
+            n_ctx, n_seq, seq_win or (n_ctx // n_seq), detail,
+        )
+
     def _pool_seq_map(self):
         """The pool band layout for the CURRENT flags (see seq_layout.py) —
         the one place _snap_seq_base/_reasoning_seq_base/n_seq_max derive
@@ -2461,8 +2592,9 @@ class LlamaCppBackend(BaseBackend):
         # would otherwise run on a fraction of the configured window (observed
         # 2026-07-22: OLMo's 65k became 5,632/seq — the first design prompt
         # failed to decode at all; qwen3.5's 264k became 22k/seq).
+        self._session_can_shift = self._ask_can_shift()
         if self._resident_requested:
-            can_shift = bool(self._primary_instance._ctx.memory_can_shift())
+            can_shift = bool(self._session_can_shift)
             self._resident_active = can_shift
             if can_shift:
                 log.info("🧩 Resident-seq cache ACTIVE (memory_can_shift=True)")
@@ -2487,6 +2619,22 @@ class LlamaCppBackend(BaseBackend):
                     await run_in_threadpool(
                         self._refresh_context_sync, self._primary_instance
                     )
+
+        # Clamp the PRIMARY's per-stream ceiling by the true per-seq window.
+        # _create_shared_instance clamps pool slots 1..N, but the primary IS
+        # pool slot 0 and its _n_ctx came from upstream Llama as the TOTAL
+        # allocation — a session pinned to slot 0 on a fragmented context had
+        # no guard at all. Placed after the resident gate so a denial's
+        # un-fragment rebuild (n_seq_max back to 1) is what gets measured.
+        try:
+            _p = self._primary_instance
+            _seq_lim = self._seq_ctx_limit(_p._ctx, _p.context_params)
+            _lim = self._stream_ctx_limit()
+            _p._n_ctx = min(c for c in (int(_p._n_ctx), _lim, _seq_lim) if c)
+        except Exception:  # noqa: BLE001 — test doubles without a real ctx
+            log.debug("primary per-seq clamp skipped", exc_info=True)
+
+        self._log_session_strategy()
 
         # Resolve the persona-per-slot assignment (multi-persona pooling).
         # Falls back to all-default for configs without slot_personas and for
@@ -2824,18 +2972,31 @@ class LlamaCppBackend(BaseBackend):
         """Total on-disk weight bytes, summing EVERY shard of a split GGUF.
 
         ``os.path.getsize(path)`` sees only the shard it was handed, and large
-        models ship split: Step-3.7-Flash is
-        ``...-00001-of-00003.gguf`` at 43GB + 44GB + 11GB. Measuring shard 1
-        alone reported 46.5GB against ~98GB actual — a 55GB under-count, in
-        the one calculation whose entire job is refusing an allocation that
-        would hard-reboot the machine. It passed the default 100GB budget by
-        accident rather than by fitting.
+        models ship split. Step-3.7-Flash currently ships as
+        ``...-00001-of-00003.gguf`` at 5MB + 49.4GB + 45.9GB = 95.3GB
+        (unsloth UD-IQ4_XS; the retired stepfun quant was ~2.7GB heavier).
+        Measuring shard 1 alone would report 5MB against 95.3GB actual, in the
+        one calculation whose entire job is refusing an allocation that would
+        hard-reboot the machine.
 
         ``split.count`` comes from the GGUF header when available; the
         filename pattern is the fallback, since a header read that failed
         upstream still leaves the naming convention intact. Both paths verify
         each sibling exists before counting it, and a single-file model simply
         returns its own size.
+
+        A sibling ``mmproj-*.gguf`` (the vision projector — 7.9GB next to
+        Step-3.7, 2.3GB next to gemma-4) is correctly EXCLUDED, because it only
+        matches by living in the same directory and not by the shard pattern.
+        Anything that switches this to a directory glob must re-exclude it by
+        name or it silently adds ~8GB to a budget measured in single-digit GB
+        of headroom.
+
+        NOTE this is FILE size, which is an upper bound on resident footprint,
+        not a measurement of it: an MoE under mmap pages in only what it routes
+        to. step-3.7 at its verified 138240 ceiling accounts to 146.3GB here
+        against a 121.8GB peak RSS. That over-count is safe (it refuses early)
+        but it is why `probe_verified_n_ctx` exists.
         """
         import glob as _glob
         import re as _re
@@ -2885,8 +3046,21 @@ class LlamaCppBackend(BaseBackend):
         import os
 
         m = getattr(self.config, "model", None)
-        if not getattr(m, "swa_full", False):
-            return
+        # RUNS FOR EVERY CONFIG as of 2026-07-29. It used to return here unless
+        # swa_full was set, on the premise that "windowed-SWA allocations are
+        # small by construction" — true for a real sliding-window model, and
+        # simply false for one that has no sliding window at all. That left 7 of
+        # 19 configs (glm-4.7-flash/deepseek2-MLA, hy3, gemma-4-26b-a4b,
+        # laguna-xs, mistral-medium, qwen3.5-122b, qwen3.6-27b) allocating full
+        # KV with no preflight whatsoever.
+        #
+        # The premise still earns something, so it survives as a BUDGET choice
+        # rather than an on/off switch (see `budget_gb` below): swa_full configs
+        # are held to their configured budget, non-swa_full configs only to the
+        # physical ceiling. That catches the catastrophic case everywhere
+        # without re-introducing the false refusals a tight formula produces on
+        # genuinely windowed models.
+        swa_full = bool(getattr(m, "swa_full", False))
         try:
             from gguf import GGUFReader
 
@@ -2946,27 +3120,96 @@ class LlamaCppBackend(BaseBackend):
             weights_bytes = self.weights_bytes_total(path, split_count)
         except Exception:  # noqa: BLE001 — preflight must never block a load
             return
+        # ── THE HARD CEILING, WHICH NOTHING MAY RAISE ────────────────
+        # Measured 2026-07-29: step-3.7 at n_ctx 262144 computed 143.7GB against
+        # 137.4GB physical — 6.3GB over, 4.6% — and HARD-REBOOTED the machine
+        # 2m51s into the load. llama.cpp emitted no error code at all: the
+        # process died allocating, so the always-on decode-code guard never had
+        # a call to return from. That crash required OURO_KV_PREFLIGHT_GB=9999
+        # to produce, i.e. this guard was correct and had to be switched off.
+        #
+        # So the override may LOWER the budget or wave through a marginal case;
+        # it may not authorise an allocation the machine cannot physically
+        # satisfy. Note iogpu.wired_limit_mb is NOT a defence here — wired
+        # peaked at 97.5GB against a 116GB cap while free memory sat at 0.06GB.
+        physical_gb = _physical_memory_gb()
+        hard_ceiling_gb = physical_gb * _PHYSICAL_SAFETY_FRACTION
+
         env_budget = os.environ.get("OURO_KV_PREFLIGHT_GB")
         cfg_budget = getattr(m, "kv_preflight_gb", None)
-        budget_gb = float(env_budget or cfg_budget or 100)
+        if swa_full:
+            asked_gb = float(env_budget or cfg_budget or hard_ceiling_gb)
+        else:
+            # Windowed SWA genuinely allocates less than this formula predicts
+            # on a real sliding-window model, so do not hold it to a tight
+            # configured budget — but the machine's physical limit is not a
+            # matter of configuration.
+            asked_gb = hard_ceiling_gb
+        budget_gb = min(asked_gb, hard_ceiling_gb)
+        clamped = budget_gb < asked_gb
+
         total_gb = (kv_bytes + weights_bytes) / 1e9
+
+        # ── A PROBE-VERIFIED CEILING OUTRANKS THE ARITHMETIC ─────────
+        # This n_ctx has been observed to load AND decode on this machine, so a
+        # formula that says otherwise is wrong about the formula, not about the
+        # machine. Bound to the weights it was measured against: a requant
+        # invalidates the measurement and drops us back to the estimate.
+        verified = getattr(m, "probe_verified_n_ctx", None)
+        verified_w = getattr(m, "probe_verified_weights_bytes", None)
+        if verified and m.n_ctx <= int(verified):
+            if verified_w and abs(int(verified_w) - weights_bytes) > 1_000_000:
+                log.warning(
+                    "⚠️ probe verification for n_ctx<=%d is STALE — weights are "
+                    "%.1fGB now, %.1fGB when measured. Falling back to the "
+                    "formula; re-run `--probe-context %s` to re-verify.",
+                    int(verified), weights_bytes / 1e9, int(verified_w) / 1e9,
+                    getattr(m, "name", "this model"),
+                )
+            else:
+                log.info(
+                    "🧮 KV preflight: n_ctx=%d is within the PROBE-VERIFIED "
+                    "ceiling %d (measured to load and decode on this machine) "
+                    "— arithmetic estimate %.1fGB not enforced",
+                    m.n_ctx, int(verified), total_gb,
+                )
+                return
+
         if total_gb > budget_gb:
+            measured = getattr(m, "kv_bytes_per_token_measured", None)
+            basis = "MEASURED bytes/token" if measured else "the header FORMULA"
+            hint = (
+                ""
+                if measured
+                else (
+                    " This estimate is the header formula, which has "
+                    "over-predicted by ~2x on interleaved-SWA and MLA "
+                    "architectures — if you have MEASURED this model's KV, set "
+                    "kv_bytes_per_token_measured and the guard re-arms against "
+                    "real geometry instead of being raised past it."
+                )
+            )
             raise RuntimeError(
-                f"KV preflight REFUSED: swa_full at n_ctx={m.n_ctx} needs "
+                f"KV preflight REFUSED: n_ctx={m.n_ctx} needs "
                 f"{kv_bytes / 1e9:.1f}GB KV + {weights_bytes / 1e9:.1f}GB "
-                f"weights = {total_gb:.1f}GB > {budget_gb:.0f}GB budget "
-                f"(OURO_KV_PREFLIGHT_GB). This allocation would hard-reboot "
-                f"the machine before any tripwire reacts — shrink n_ctx or "
-                f"set swa_full: false (windowed SWA)."
+                f"weights = {total_gb:.1f}GB > {budget_gb:.1f}GB "
+                f"(physical {physical_gb:.1f}GB"
+                f"{', budget CLAMPED to the physical ceiling' if clamped else ''})"
+                f", computed from {basis}. An allocation past physical memory "
+                f"hard-reboots this machine before any error code is returned "
+                f"(measured 2026-07-29 at 4.6% over). Shrink n_ctx.{hint}"
             )
         log.info(
-            "🧮 KV preflight: swa_full n_ctx=%d → %.1fGB KV + %.1fGB weights "
-            "= %.1fGB (budget %.0fGB) — OK",
+            "🧮 KV preflight: n_ctx=%d → %.1fGB KV + %.1fGB weights = %.1fGB "
+            "(budget %.1fGB, physical %.1fGB, swa_full=%s)%s — OK",
             m.n_ctx,
             kv_bytes / 1e9,
             weights_bytes / 1e9,
             total_gb,
             budget_gb,
+            physical_gb,
+            swa_full,
+            " [budget clamped to physical ceiling]" if clamped else "",
         )
 
     def _stream_ctx_limit(self) -> int:
@@ -2978,6 +3221,43 @@ class LlamaCppBackend(BaseBackend):
         if lim:
             return int(lim)
         return int(getattr(m, "n_ctx", 0) or 0)
+
+    @staticmethod
+    def _seq_ctx_limit(ctx_obj: Any, params: Any) -> int:
+        """The TRUE per-sequence window of a built context. 0 = unknown.
+
+        Under ``kv_unified: false`` llama.cpp splits the allocation:
+        ``n_ctx_seq ≈ n_ctx / n_seq_max``. Every historical casualty of NOT
+        knowing this was exactly the stock 12-seq band: OLMo 65,536 → 5,632,
+        qwen3.5 264,192 → 22,016, and the 2026-07-29 hy3 sweep failure
+        (32,768 → 2,730, BELOW its 1,793-token static prefix — decode failed
+        outright). Every per-stream guard keyed off ``inst._n_ctx`` while
+        believing it had ~12× the cells llama.cpp actually gave the seq, so
+        the failure mode was a raw llama_decode error instead of a clean
+        refusal or a well-placed window.
+
+        Ask the context itself (``llama_n_ctx_seq``, exposed by the binding
+        and correct in BOTH modes — it returns n_ctx under kv_unified); fall
+        back to the arithmetic only when the call is unavailable (older
+        binding, test double). 0 means "could not determine" and callers must
+        not clamp on it — an unknown must never masquerade as a measurement.
+        """
+        try:
+            n = int(ctx_obj.n_ctx_seq())
+            if n > 0:
+                return n
+        except Exception:  # noqa: BLE001 — probe, then arithmetic
+            pass
+        try:
+            n_ctx = int(getattr(params, "n_ctx", 0) or 0)
+            n_seq = max(1, int(getattr(params, "n_seq_max", 1) or 1))
+            if not n_ctx:
+                return 0
+            if bool(getattr(params, "kv_unified", False)):
+                return n_ctx
+            return n_ctx // n_seq
+        except Exception:  # noqa: BLE001
+            return 0
 
     async def _release_seat(self, seat: Any) -> None:
         """Batched seat return: clear its seq (control op) and requeue. A
@@ -4167,6 +4447,23 @@ class LlamaCppBackend(BaseBackend):
         # fallback rate is the canary for KV-cache instability under pressure.
         info["flow_cache_entries"] = len(self._flow_states)
         info["resident_active"] = self._resident_active
+        # Session KV strategy, readable without parsing the load log. The probe
+        # needs the EFFECTIVE strategy and the arch answer separately: "requested
+        # but denied" and "never requested" both leave resident inactive, and
+        # only the first is a bug.
+        info["session_strategy"] = self._session_strategy()
+        info["session_can_shift"] = self._session_can_shift
+        info["resident_requested"] = self._resident_requested
+        # The TRUE per-seq window (0 = undetermined). Under kv_unified:false a
+        # fragmented context gives each seq n_ctx/n_seq_max cells; a consumer
+        # sizing work against n_ctx alone repeats the hy3 sweep failure.
+        try:
+            _p = self._primary_instance
+            info["n_ctx_seq"] = self._seq_ctx_limit(
+                getattr(_p, "_ctx", None), getattr(_p, "context_params", None)
+            )
+        except Exception:  # noqa: BLE001
+            info["n_ctx_seq"] = 0
         info["flow_builds"] = self._h_flow_builds
         info["flow_hits"] = self._h_flow_hits
         info["flow_evicts"] = self._h_flow_evicts

@@ -40,7 +40,7 @@ app:
 
 graphql:
   max_query_depth: 10
-  max_tokens: 65536
+  max_tokens: 262144
   max_aliases: 50
   introspection_enabled: true
 
@@ -48,7 +48,15 @@ model:
   name: "laguna-xs-2.1"
   family: "laguna"
   path: /Users/lah-rb/.lmstudio/models/mudler/Laguna-XS-2.1-APEX-GGUF/Laguna-XS-2.1-APEX-I-Balanced.gguf
-  n_ctx: 65536
+  # RAISED 65536 -> 262144 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 40 KiB/token x 262144 = 10.9GB
+  # + 24.3GB weights = 35.2GB resident at boot.
+  n_ctx: 262144
+  # MEASURED 2026-07-29 (--probe-context): 41440 B/tok vs a 163840 formula (3.95x over — swa_full:false keeps the windowed
+  # layers windowed, and the formula assumes a full cache on every layer).
+  kv_bytes_per_token_measured: 41440
+  probe_verified_weights_bytes: 24308693792
+  probe_verified_n_ctx: 262144
   model_max_context: 262144
   kv_preflight_gb: 38
   n_gpu_layers: -1
@@ -67,7 +75,7 @@ prompt:
   system_prompt: "You are a helpful assistant."
 
 generation:
-  max_tokens_default: 65536
+  max_tokens_default: 262144
   temperature_default: 1.0
   top_p: 0.95
   top_k: 20
@@ -91,3 +99,82 @@ resources:
 logging:
   enabled: true
   directory: ./logs
+
+# ── TIER RECORD (doc-only; see DOC_ONLY_KEYS in core/config.py) ──────
+# Two halves, never merged: `judged` comes from a blind judge who saw only a
+# stripped artifact, `observed` from the operator who watched the run. A judge
+# must never see `observed` — TIER_RUBRIC v1.0 §7 — so it stays a sibling key,
+# not a nested note inside the judgement.
+tier:
+  status: awaiting_blind_judgement
+  rubric: TIER_RUBRIC v1.0
+  stars: null
+  judged: null          # absent until a fresh judge scores staged/arm03
+
+  # PRE-REGISTERED (v1.1 §6): before the run, never shown to a judge, never
+  # revised. Note this expectation is for the THINKING rerun owed below, not for
+  # the non-thinking run already recorded in `observed`.
+  expectation:
+    registered: 2026-07-29
+    tier: "2"
+    stars: null
+    basis: experimental
+    why: >
+      EXPERIMENTAL. Thinking should markedly improve the score over the first
+      (non-thinking) run — a promotion to tier 2 is expected.
+
+  observed:
+    run: tier_20260729-010118 arm 3 (2026-07-29)
+    stage: game_challenge_tier · top_phase quality · structural_mode batch · 2h wall
+    artifact: staged/arm03 — 16 files, staged clean (identifier scan passed)
+    boot_s: 91
+    exit: rc=0 at the full 120min backstop, mission parked `paused`
+    goals: 6/37
+    syntax: 9 py_ok / 1 py_fail
+
+    # THE CHARACTERISTIC OF THIS RUN, and the thing a star alone will not carry.
+    # 16 files and 6/37 goals at the 15-MINUTE mark — and exactly the same
+    # numbers at 48min, 119min, and on exit. Everything it shipped, it shipped in
+    # the first quarter-hour; the remaining 105 minutes produced no new file and
+    # closed no new goal.
+    #
+    # It was not idle. At the backstop it was mid-repair — localizing into
+    # engine.py -> GameEngine._handle_command and entering a patch sub-flow with
+    # an 18,060-char file in hand. So: churning without landing, not stalled.
+    front_loaded: all output inside the first 15min; flat for the remaining 105
+    parked_at: engine.py -> GameEngine._handle_command (patch sub-flow)
+
+    # Low event count, not a collapse. One long-cycle abort in two hours.
+    degeneration: 1 server abort — long-cycle ratio 0.1081 (~3539B period) at ~48min
+    gate_events: 1 transfer-shape symbol-kind mismatch on `Command`; 1 empty rewrite
+    decode_tok_s: ~62 at 15min (prompt 17.7k)
+
+    # THIS RESULT IS NOT THE MODEL'S CEILING — it was measured with thinking
+    # OFF (`model.thinking: false` above, the S-series serving default). A
+    # thinking:true rerun is owed before any tier is treated as settled: the
+    # front-loading above is exactly the shape extra deliberation might change,
+    # and a non-thinking number would understate a model that reasons well.
+    #
+    # A thinking variant MUST drop the token-19 ban in generation.logit_bias —
+    # 19 is `</think>`, so leaving it banned bans what the run depends on.
+    rerun_owed: thinking:true (always-on CoT), dropping the token-19 logit_bias ban
+
+    # First UNCONFOUNDED I-Balanced laguna (base model, not the Uncensored
+    # finetune), so unlike the 18/50 S-series result this one is attributable.
+    note: >
+      Contrast with the same batch's gpt-oss arm, which closed 28/36 goals with
+      0 syntax failures over the same 2h and the same mission. Goal counters have
+      inverted against blind play in four consecutive rounds, so that gap is
+      telemetry rather than a predicted ranking — but the front-loading is a
+      throughput observation independent of any judgement.
+
+# ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
+probe_verified_cache:
+  run_id: cells_20260729-232251
+  F2:
+    strategy: full_replay
+    can_shift: False
+    n_ctx_seq: 262144
+    fresh_t2_last: [2678, 17734]
+    prefill_total_s: 174.6
+    needle_at_depth: True
