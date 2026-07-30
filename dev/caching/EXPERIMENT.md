@@ -247,21 +247,22 @@ across seven models.
 - **P-E2 HIT — snapshot-under-batched is a clean refusal, not a hazard.** The
   documented GraphQL error, server healthy after, session recall intact.
   The tier remains UNAVAILABLE in the production shape (corpus §5.11).
-- **P-E3 MISS — and the miss is a BUG, not a verdict.** glm pilot: the flow
-  band engaged perfectly (1 BUILD, 19 HITs, 0 fallbacks, fork logged at 4,041
-  tok) — but hit-arm fresh prefill equalled cold (3,904 vs 3,968 tok) and ran
-  2.3 s SLOWER: the head is forked and then the FULL prompt is prefilled
-  anyway. Two defects: (1) the post-fork eval does not skip the head span on
-  this family (suspect: the double-probe head-boundary tokenization, which
-  works on harmony — 620 real HITs in the terminal-bench retest); (2)
-  `cacheHit=true` / `flowFallbacks=0` report success while the skip silently
-  fails — the telemetry cannot see this failure mode. The 11b question
-  ("does a realistic flow head pay?") is UNANSWERED until the skip works on
-  non-harmony families; the 2026-06 shallow-head verdict was likely never
-  measuring a working skip outside harmony either.
+- **P-E3 — recorded MISS, RESOLVED TO A HIT the same day.** The original
+  pilot showed the flow band engaging perfectly (1 BUILD, 19 HITs, 0
+  fallbacks) while hit-arm fresh prefill equalled cold (3,904 vs 3,968 tok)
+  and ran 2.3 s SLOWER, and was written up as a server bug. **It was a CLIENT
+  contract violation:** `prompt` is the DYNAMIC TAIL ONLY and the server
+  prepends `static_prefix` (`warm_flows.py` is the reference client). The
+  pilot led its prompt with the head too, so the server skipped the pinned
+  copy and dutifully prefilled the duplicate. Corrected pilot (glm, 11/11
+  hits, ~2.25k head): **HIT saves 3.51 s/call = 49% of prefill** — P-E3 HIT.
+  Two fixes landed: a detect-and-strip guard in `run_completion` (a doubled
+  head is wrong on the uncached path too) and the corrected pilot.
+  **The one true residue:** `cacheHit=true` / `flowFallbacks=0` reported
+  success while the skip silently failed — the telemetry still cannot see
+  that failure mode.
 
 ### Still open
 
-- The flow-skip bug above (11b prerequisite).
 - Hash-derived planted facts for the harness (the arithmetic-guessable
   defect), next vintage.

@@ -150,17 +150,27 @@ non-default slots. Batched uses per-seat `static_len` correctly.
 
 ## 3. Composability matrix
 
+> **This matrix is mechanism × mechanism. For the operational view — which
+> features a given MODEL can run, what each buys, and what it costs — see
+> `dev/caching/FEATURE_MATRIX.md` (2026-07-30), which also corrects the batched
+> column below.**
+>
+> **CORRECTED 2026-07-30:** the `batched` row/column said flow_kv was `⊗ ignored`
+> and snapshots `⊗ raises`. Both shipped that day — the flow band (BUILD at
+> retire, HIT via the control inbox) and the snapshot port (capture + hot fork).
+> **Cold snapshot rebuild remains the batched boundary and still raises.**
+
 Legend: ✔ composable · ⊗ mutually exclusive · ~ caveat · ↑ requires.
 
 |  | resident | full_replay | flow_kv | flow_fork | snapshots(hot) | reasoning swap | batched | windowing | refresh |
 |---|---|---|---|---|---|---|---|---|---|
 | **resident** | — | ⊗ (takes precedence) | picks M9 | ↑ req | ↑ req | ↑ req | ↑ req active | ↑ req | ~ wiped |
 | **full_replay** | ⊗ | — | ✔ completions | ⊗ | ⊗ → M12 replay | ⊗ | ⊗ | ⊗ (raises instead) | ✔ history survives |
-| **flow_kv** | M9 | ✔ | — | ~ shares band+LRU | ✔ bands disjoint | **⊗ for completions** | ⊗ ignored | ✔ | wiped |
+| **flow_kv** | M9 | ✔ | — | ~ shares band+LRU | ✔ bands disjoint | **⊗ for completions** | ✔ own band | ✔ | wiped |
 | **flow_fork** | ↑ | ⊗ | ~ shares band | — | ✔ | **⊗ at turn 0 only** | ⊗ forced off | ~ sets n_keep | wiped |
-| **snapshots** | ↑ hot | M12 only | ✔ | ✔ | — | ✔ | **⊗ raises** | **⊗ hard (Overflow)** | hot→cold |
+| **snapshots** | ↑ hot | M12 only | ✔ | ✔ | — | ✔ | ~ hot ✔, cold ⊗ | **⊗ hard (Overflow)** | hot→cold |
 | **reasoning swap** | ↑ | ⊗ | ⊗ compl. | ⊗ t0 | ✔ | — | ✔ own impl | ~ head preserved | re-pinned |
-| **batched** | ↑ | ⊗ | ⊗ | ⊗ | ⊗ | ✔ | — | ✔ per-seat | ✔ needs drain |
+| **batched** | ↑ | ⊗ | ✔ own band | ⊗ forced off | ✔ hot; ⊗ cold rebuild | ✔ own impl | — | ✔ per-seat | ✔ needs drain |
 | **speculative** | ✔ | ✔ | ~ inflates blob | ✔ | ✔ | ✔ | **⊗ validated** | ✔ | ✔ |
 
 **True free variables:** `swa_full`, `kv_unified`, `resident_seq_cache`,
