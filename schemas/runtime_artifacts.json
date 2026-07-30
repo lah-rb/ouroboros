@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "runtime_artifacts",
+  "description": "Files the program CREATES while running (saves, caches, logs), declared by project_ops.declare_artifacts AFTER the code has been written and persisted to architecture.transient_files. These are deleted between behavioural test sessions so one test's leftover state cannot contaminate the next. This is deliberately NOT asked at design time: before the code exists the answer is a guess, and on 2026-07-29 the guess was ['save.json', '*.autosave.json'] for a program that wrote game_state.json — the flush matched nothing 22 times and 91% of test sessions resumed mid-run.",
+  "type": "object",
+  "properties": {
+    "transient_files": {
+      "type": "array",
+      "description": "One entry per file or glob the program writes at runtime. Empty array is a valid, meaningful answer: it asserts the program writes nothing. NEVER list input data files (content definitions, config, world data) — only program-generated output.",
+      "items": {"$ref": "#/$defs/RuntimeArtifact"}
+    }
+  },
+  "required": ["transient_files"],
+  "additionalProperties": false,
+  "$defs": {
+    "RuntimeArtifact": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Exact filename or fnmatch glob, relative to the project root. Must be the name the CODE actually writes, read off the source — not a plausible-sounding name. Relative only: a leading / or ~ or any .. is rejected downstream."
+        },
+        "written_by": {
+          "type": "string",
+          "description": "Where in the source this file is written — the module, and the constant or call that names it (e.g. \"main.py: SAVE_FILE = 'game_state.json', written by save_state() on exit\"). REQUIRED: citing the write site is what forces the pattern to be read rather than guessed, and it is the audit trail when a later flush deletes the file."
+        }
+      },
+      "required": ["pattern", "written_by"],
+      "additionalProperties": false
+    }
+  },
+  "x-example": {
+    "transient_files": [
+      {
+        "pattern": "game_state.json",
+        "written_by": "main.py: SAVE_FILE = 'game_state.json'; save_state(engine.state, SAVE_FILE) on exit, and os.remove(SAVE_FILE) on win/death"
+      },
+      {
+        "pattern": "*.log",
+        "written_by": "engine.py: logging.FileHandler(f'{run_id}.log') in _setup_logging"
+      }
+    ]
+  }
+}

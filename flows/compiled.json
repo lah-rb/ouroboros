@@ -9575,10 +9575,103 @@
           "rules": [
             {
               "condition": "true",
+              "transition": "declare_artifacts"
+            }
+          ]
+        },
+        "terminal": false
+      },
+      "declare_artifacts": {
+        "action": "inference",
+        "description": "Name the files this program writes while running",
+        "context": {
+          "required": [
+            "project_manifest"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "json_document",
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/runtime_artifact_auditor",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.project_listing"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "project_ops/declare_artifacts_rules",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {
+            "schema_id": "runtime_artifacts"
+          },
+          "transitions": {
+            "default": "persist_artifacts",
+            "no_answer": "plan_setup"
+          },
+          "config": {
+            "temperature": "t*0.0"
+          },
+          "retries": 3
+        },
+        "pre_compute": [
+          {
+            "formatter": "format_project_listing",
+            "output_key": "project_listing",
+            "params": {
+              "source": {
+                "$ref": "context.project_manifest"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "persist_artifacts": {
+        "action": "persist_transient_files",
+        "description": "Record the declaration on architecture.transient_files",
+        "context": {
+          "required": [
+            "inference_response"
+          ],
+          "optional": [
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "publishes": [
+          "transient_files"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
               "transition": "plan_setup"
             }
           ]
         },
+        "effects": [],
         "terminal": false
       },
       "plan_setup": {

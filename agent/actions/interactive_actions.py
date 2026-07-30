@@ -1128,11 +1128,16 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
         for p in (getattr(arch, "transient_files", None) or [])
         if str(p).strip()
     ]
-    if not patterns:
-        return StepOutput(
-            result={"flushed": 0},
-            observations="no transient_files declared — nothing to flush",
-        )
+    # NO EARLY RETURN ON AN EMPTY DECLARATION.
+    #
+    # There used to be one here, and it made the tripwire below unreachable for
+    # the case that matters MOST: nothing declared at all. A WRONG declaration
+    # was reported; an ABSENT one was silent. Found while planning to move this
+    # declaration to project_ops, where absent gets more likely — the new step
+    # can fail, the model can omit the field, and brownfield / top_phase runs
+    # never reach it. Moving the declaration onto a backstop with this hole in
+    # it would have been worse than leaving the declaration where it was.
+    declared = bool(patterns)
 
     # Never delete project source or declared input data.
     protected: set[str] = set()
@@ -1178,10 +1183,128 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
         except Exception as e:  # noqa: BLE001 - keep flushing the rest
             logger.warning("flush_transient_files: rm failed for %s: %s", path, e)
 
-    observation = (
-        f"Flushed {len(flushed)} transient file(s): {', '.join(flushed)}"
-        if flushed
-        else f"No transient files matched {safe_patterns}"
-    )
+    if flushed:
+        observation = f"Flushed {len(flushed)} transient file(s): {', '.join(flushed)}"
+    elif not declared:
+        observation = "no transient_files declared — nothing to flush"
+    else:
+        observation = f"No transient files matched {safe_patterns}"
     logger.info("flush_transient_files: %s", observation)
+
+    # ── TRIPWIRE ────────────────────────────────────────────────────────
+    # "No transient files matched" is IDENTICAL whether the workspace is clean
+    # or the declaration is aimed at filenames the program never writes. That
+    # silence cost a full arm on 2026-07-29: the architecture declared
+    # ['save.json', '*.autosave.json'] and the built code wrote
+    # `game_state.json`, so the flush no-oped 22/22 times and 91% of behavioural
+    # sessions RESUMED MID-GAME. One of them resumed in a room where its test
+    # move was legitimately invalid, read the correct refusal as a parser bug,
+    # burned 3 goal attempts, and triggered a 586s diagnosis that concluded the
+    # code was fine.
+    #
+    # So: say what IS sitting there that looks generated. Advisory only —
+    # nothing is deleted on a heuristic.
+    #
+    # NOT gated on `flushed == 0`. A PARTIAL mismatch contaminates just as
+    # surely: declare `state.json`, have the program also write `progress.db`,
+    # and the flush reports success while the second file survives into every
+    # later session. Gating on total failure would have caught 2026-07-29 and
+    # missed its narrower sibling. (Found by mutation testing — the version
+    # gated on `not flushed` passed every test.)
+    stale = _unaccounted_state_files(entries, protected, safe_patterns)
+    if stale:
+        logger.warning(
+            "flush_transient_files: %s and flushed %d, but these look "
+            "program-generated and nothing accounts for them: %s — if the program "
+            "writes any of these, they were NOT cleared and every later session "
+            "inherits their state",
+            f"declared {safe_patterns}" if declared else "NOTHING was declared",
+            len(flushed),
+            ", ".join(stale),
+        )
+        await _note_flush_mismatch(effects, mission, safe_patterns, stale)
+
     return StepOutput(result={"flushed": len(flushed)}, observations=observation)
+
+
+# Extensions that mean "the program wrote this while running", minus the config
+# files that merely share an extension. A false positive here costs one log
+# line; a false negative costs what 2026-07-29 cost.
+_STATE_SUFFIXES = (
+    ".json", ".log", ".db", ".sqlite", ".sqlite3", ".pickle", ".pkl",
+    ".cache", ".tmp", ".bak", ".out", ".dat", ".state", ".sav",
+)
+_CONFIG_NAMES = frozenset({
+    "package.json", "package-lock.json", "tsconfig.json", "composer.json",
+    "compile_commands.json", "pyrightconfig.json", "biome.json", "deno.json",
+    ".eslintrc.json", "env.json", "cargo.json", "angular.json", "nest-cli.json",
+})
+
+
+def _unaccounted_state_files(
+    entries: list[str], protected: set[str], patterns: list[str]
+) -> list[str]:
+    """Files that look program-generated and that nothing accounts for.
+
+    Deliberately NOT "every unmatched file": the scaffolding step writes
+    pyproject.toml, ruff.toml, .gitignore and friends, none of which are in
+    `modules`, so flagging all unmatched files would bury the signal in exactly
+    the noise that trains an operator to ignore a warning."""
+    import fnmatch
+    import posixpath
+
+    out = []
+    for path in entries:
+        if not path or path in protected:
+            continue
+        if any(fnmatch.fnmatch(path, pat) for pat in patterns):
+            continue                                    # already accounted for
+        base = posixpath.basename(path)
+        if base in _CONFIG_NAMES or base.startswith("."):
+            continue
+        if base.endswith(_STATE_SUFFIXES):
+            out.append(path)
+    return sorted(out)
+
+
+async def _note_flush_mismatch(
+    effects, mission, patterns: list[str], stale: list[str]
+) -> None:
+    """Hand the mismatch to whoever diagnoses the next failure.
+
+    The whole point (operator, 2026-07-29): a diagnostician that is TOLD the
+    save was never flushed fixes this in one cycle, instead of investigating
+    game logic for ten PTY turns. `failure_analysis` is one of the three
+    categories `_filter_notes_for_file` surfaces as `relevant_notes`.
+
+    PUSHED ONCE. That list is capped at 8 and sorted newest-first, so a note
+    after each of 22 sessions would evict the real diagnoses it is meant to sit
+    beside — the warning would crowd out the findings."""
+    marker = "TEST-HARNESS CONTAMINATION"
+    try:
+        existing = getattr(mission, "notes", None) or []
+        if any(marker in (getattr(n, "content", "") or "") for n in existing):
+            return
+    except Exception:  # noqa: BLE001 - a note is never worth failing a step
+        pass
+    try:
+        await effects.push_note(
+            content=(
+                f"{marker}: the post-session flush declared {patterns}, and {stale} "
+                f"are present, look program-generated, and are matched by nothing. "
+                f"If the program writes one of those, it was NOT cleared and every "
+                f"later test session starts from the previous session's state "
+                f"(resumed saves, retained inventory, already-defeated enemies). "
+                f"Before diagnosing a behavioural failure, check whether the run "
+                f"under test resumed instead of starting fresh — a 'wrong' "
+                f"response can be correct for the state it was actually in. The "
+                f"fix is the DECLARATION, not the program: name the file the code "
+                f"actually writes."
+            ),
+            category="failure_analysis",
+            tags=stale[:4],
+            source_flow="flush_transient_files",
+        )
+        logger.info("flush_transient_files: pushed contamination note for diagnosis")
+    except Exception:  # noqa: BLE001
+        logger.debug("flush_transient_files: note push failed", exc_info=True)

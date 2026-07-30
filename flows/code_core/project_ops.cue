@@ -53,6 +53,83 @@ project_ops: #FlowDefinition & {
 			params: context_budget: 6
 			resolver: {
 				type: "rule"
+				rules: [{condition: "true", transition: "declare_artifacts"}]
+			}
+		}
+
+		// ── Phase 1b: Declare the files the program CREATES at runtime ──
+		//
+		// This used to be asked in design_architecture, BEFORE any code existed,
+		// which made it a prediction. On 2026-07-29 the prediction was
+		// ['save.json', '*.autosave.json'] for a program that wrote
+		// `game_state.json`: the post-session flush matched nothing 22 times out
+		// of 22, 91% of behavioural sessions resumed mid-run off the unflushed
+		// save, and one read a CORRECT refusal as a parser bug and spent 586s
+		// diagnosing working code. Asked HERE the code already exists, so the
+		// answer can be read instead of guessed.
+		//
+		// FIRST in the flow, deliberately. Installs can fail -> escalate_env ->
+		// build_report_failure, and `environment_verified` is set even on
+		// failure (reporting_actions.py), so project_ops never runs again. A
+		// late step would be skipped exactly when the run is already in trouble.
+		//
+		// Unlike interfaces/data_shapes this is NOT a contract between files —
+		// nothing else in the program has to agree with it — which is why it
+		// does not belong in the pre-authorship design step at all.
+		declare_artifacts: #StepDefinition & {
+			action:      "inference"
+			description: "Name the files this program writes while running"
+			context: required: ["project_manifest"]
+			turn: #Turn & {
+				response_shape: "json_document"
+				sections: [
+					{type: "role", template:        "personas/runtime_artifact_auditor"},
+					{type: "context_files", ref:    {$ref: "context.project_listing"}},
+					{type: "instruction", template: "project_ops/declare_artifacts_rules"},
+					{type: "envelope"},
+				]
+				response: {
+					schema_id: "runtime_artifacts"
+				}
+				transitions: {
+					// A missing answer must not strand the environment phase: the
+					// flush degrades to its tripwire (which reports an ABSENT
+					// declaration since 2026-07-29) and setup proceeds.
+					default:   "persist_artifacts"
+					no_answer: "plan_setup"
+				}
+				config: temperature: "t*0.0"
+				retries: 3
+			}
+			pre_compute: [
+				// format_project_listing, NOT format_project_file_list: the
+				// listing carries each file's docstring, imports, def lines AND
+				// module-level path constants (`SAVE_FILE = "game_state.json"`).
+				// Bare names cannot answer this question — that is the whole bug.
+				{formatter: "format_project_listing", output_key: "project_listing"
+					params: source:                              {$ref: "context.project_manifest"}},
+			]
+			publishes: ["inference_response"]
+		}
+
+		persist_artifacts: #StepDefinition & {
+			action:      "persist_transient_files"
+			description: "Record the declaration on architecture.transient_files"
+			// `mission` is NOT required here. design_and_plan's parse_architecture
+			// can require it because that flow publishes it; project_ops does not,
+			// and the linter is right to refuse. The action loads the mission
+			// through effects instead — safe because the persistence manager's
+			// parse cache hands back the same shared object, so the patch is
+			// visible to everything later in the cycle.
+			context: {
+				required: ["inference_response"]
+				// OPTIONAL, not required: used when an earlier step happens to have
+				// published it, loaded via effects otherwise.
+				optional: ["mission"]
+			}
+			publishes: ["transient_files"]
+			resolver: {
+				type: "rule"
 				rules: [{condition: "true", transition: "plan_setup"}]
 			}
 		}

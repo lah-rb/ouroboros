@@ -115,6 +115,43 @@ async def test_flush_noop_without_declaration():
     out = await action_flush_transient_files(_si(effects))
     assert out.result["flushed"] == 0
     assert "nothing to flush" in out.observations
+    assert effects.call_count("run_command") == 0, "nothing declared, nothing deleted"
+
+
+@pytest.mark.asyncio
+async def test_an_ABSENT_declaration_is_reported_not_just_a_wrong_one():
+    """The hole this file had for an hour. `action_flush_transient_files` used to
+    return early on an empty declaration, ABOVE the tripwire — so a wrong
+    declaration was reported and a missing one was silent. That is backwards:
+    absent is the more likely failure once the declaration moves to project_ops
+    (the step can fail, the model can omit the field, and brownfield /
+    top_phase:structural runs never reach it at all)."""
+    effects = MockEffects(
+        files=_hy3_listing(),
+        commands={"rm": _RM_OK},
+        mission=_mission(transient=[]),          # nothing declared AT ALL
+    )
+    out = await action_flush_transient_files(_si(effects))
+    assert out.result["flushed"] == 0
+    assert "nothing to flush" in out.observations       # contract preserved
+    assert effects.call_count("push_note") == 1, (
+        "an undeclared save file must still reach the diagnostician"
+    )
+    assert "game_state.json" in effects._state["notes"][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_no_declaration_and_a_genuinely_clean_workspace_is_quiet():
+    """The other half of not crying wolf: absent declaration + nothing that looks
+    generated is a legitimate state (a program that writes nothing)."""
+    effects = MockEffects(
+        files={"main.py": "print(1)", "README.md": "# x"},
+        commands={"rm": _RM_OK},
+        mission=_mission(transient=[]),
+    )
+    out = await action_flush_transient_files(_si(effects))
+    assert out.result["flushed"] == 0
+    assert effects.call_count("push_note") == 0
 
 
 @pytest.mark.asyncio
@@ -145,3 +182,145 @@ async def test_parse_architecture_stores_transient_files():
     out = await action_parse_and_store_architecture(si)
     assert out.result["architecture_parsed"] is True
     assert m.architecture.transient_files == ["savegame.json", "*.save.json"]
+
+
+# ── TRIPWIRE: the silent no-op ───────────────────────────────────────────
+#
+# "No transient files matched" reads identically whether the workspace is clean
+# or the declaration names files the program never writes. On 2026-07-29 the
+# architecture declared ['save.json', '*.autosave.json'], the built code wrote
+# `game_state.json`, and the flush no-oped 22/22 times — 91% of behavioural
+# sessions resumed mid-game. One resumed into a room where its test move was
+# legitimately invalid, read the correct refusal as a parser bug, spent 3 goal
+# attempts and a 586-second diagnosis, and concluded the code was fine.
+
+
+def _hy3_listing() -> dict:
+    """The real workspace from that arm."""
+    return {
+        "main.py": "SAVE_FILE = 'game_state.json'",
+        "engine.py": "code",
+        "world.yaml": "rooms: []",
+        "game_state.json": '{"location_id": "forge"}',
+        "pyproject.toml": "[project]",
+        "ruff.toml": "[tool.ruff]",
+        "README.md": "# game",
+    }
+
+
+class TestTripwire:
+    def test_flags_the_real_mismatch(self):
+        from agent.actions.interactive_actions import _unaccounted_state_files
+
+        stale = _unaccounted_state_files(
+            list(_hy3_listing()), {"engine.py", "world.yaml"},
+            ["save.json", "*.autosave.json"],
+        )
+        assert stale == ["game_state.json"]
+
+    def test_silent_when_the_declaration_is_right(self):
+        """The tripwire must not fire on a correctly-declared project, or it
+        becomes the noise that trains an operator to ignore it."""
+        from agent.actions.interactive_actions import _unaccounted_state_files
+
+        assert _unaccounted_state_files(
+            list(_hy3_listing()), {"engine.py", "world.yaml"}, ["game_state.json"]
+        ) == []
+
+    def test_project_config_json_is_not_generated_state(self):
+        from agent.actions.interactive_actions import _unaccounted_state_files
+
+        stale = _unaccounted_state_files(
+            ["package.json", "package-lock.json", "tsconfig.json",
+             ".eslintrc.json", "index.ts", "save.dat"],
+            {"index.ts"}, ["nothing.json"],
+        )
+        assert stale == ["save.dat"]
+
+    def test_canonical_modules_are_never_flagged(self):
+        from agent.actions.interactive_actions import _unaccounted_state_files
+
+        assert _unaccounted_state_files(
+            ["data.json"], {"data.json"}, ["x.json"]
+        ) == []
+
+
+@pytest.mark.asyncio
+async def test_mismatch_pushes_a_note_the_diagnostician_will_see():
+    """The operator's point: a diagnostician TOLD the save was never flushed
+    fixes this in one cycle instead of interrogating game logic for ten PTY
+    turns. `failure_analysis` is one of the three categories that
+    `_filter_notes_for_file` surfaces as `relevant_notes`."""
+    effects = MockEffects(
+        files=_hy3_listing(),
+        commands={"rm": _RM_OK},
+        mission=_mission(transient=["save.json", "*.autosave.json"]),
+    )
+    out = await action_flush_transient_files(_si(effects))
+    assert out.result["flushed"] == 0
+
+    pushes = effects.calls_to("push_note")
+    assert len(pushes) == 1, "the mismatch must be handed to the diagnosis"
+    assert pushes[0].args["category"] == "failure_analysis"
+    note = effects._state["notes"][-1]["content"]
+    assert "game_state.json" in note, "the note must name the actual candidate"
+    assert "DECLARATION" in note, "and say which side is wrong"
+
+
+@pytest.mark.asyncio
+async def test_a_clean_flush_says_nothing():
+    effects = MockEffects(
+        files={"state.json": "{}", "engine.py": "code"},
+        commands={"rm": _RM_OK},
+        mission=_mission(transient=["state.json"]),
+    )
+    out = await action_flush_transient_files(_si(effects))
+    assert out.result["flushed"] == 1
+    assert effects.call_count("push_note") == 0
+
+
+@pytest.mark.asyncio
+async def test_the_note_is_pushed_once_not_once_per_session():
+    """relevant_notes is capped at 8 and sorted newest-first, so a note after
+    each of 22 sessions would EVICT the real diagnoses it is meant to sit
+    beside — the warning would crowd out the findings."""
+    from agent.persistence.models import NoteRecord
+
+    mission = _mission(transient=["save.json"])
+    effects = MockEffects(
+        files=_hy3_listing(), commands={"rm": _RM_OK}, mission=mission
+    )
+    await action_flush_transient_files(_si(effects))
+    assert effects.call_count("push_note") == 1
+
+    # Second session: the note is already in mission state.
+    mission.notes.append(
+        NoteRecord(content=effects._state["notes"][-1]["content"],
+                   category="failure_analysis")
+    )
+    effects2 = MockEffects(
+        files=_hy3_listing(), commands={"rm": _RM_OK}, mission=mission
+    )
+    await action_flush_transient_files(_si(effects2))
+    assert effects2.call_count("push_note") == 0, "must not re-push every session"
+
+
+@pytest.mark.asyncio
+async def test_a_partial_mismatch_still_warns():
+    """Found by mutation testing. Gating the tripwire on `flushed == 0` passed
+    every test and still missed this: the program writes TWO state files, only
+    one is declared, the flush reports success, and the undeclared one survives
+    into every later session. Same contamination, narrower door."""
+    effects = MockEffects(
+        files={
+            "engine.py": "code",
+            "state.json": "{}",        # declared -> flushed
+            "progress.db": "binary",   # NOT declared -> survives silently
+        },
+        commands={"rm": _RM_OK},
+        mission=_mission(transient=["state.json"]),
+    )
+    out = await action_flush_transient_files(_si(effects))
+    assert out.result["flushed"] == 1, "the declared file is still cleared"
+    assert effects.call_count("push_note") == 1, "and the survivor is still reported"
+    assert "progress.db" in effects._state["notes"][-1]["content"]

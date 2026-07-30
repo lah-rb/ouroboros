@@ -170,6 +170,7 @@ def build_action_registry() -> ActionRegistry:
         action_check_architecture_drift,
         action_design_gate,
         action_parse_and_store_architecture,
+        action_persist_transient_files,
         action_ground_design_gate_verdict,
         # Context Contract Architecture
         action_derive_project_goals,
@@ -360,6 +361,7 @@ def build_action_registry() -> ActionRegistry:
         "parse_and_store_architecture", action_parse_and_store_architecture
     )
     registry.register("ground_design_gate_verdict", action_ground_design_gate_verdict)
+    registry.register("persist_transient_files", action_persist_transient_files)
     # Goal derivation
     registry.register("derive_project_goals", action_derive_project_goals)
     registry.register("derive_directive_goals", action_derive_directive_goals)

@@ -401,6 +401,30 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
         transient_files = [
             str(t).strip() for t in data.get("transient_files", []) if str(t).strip()
         ]
+        # CARRY THE PRIOR VALUE FORWARD when the response omits the field.
+        #
+        # This function builds a BRAND-NEW ArchitectureState rather than merging,
+        # and format_existing_architecture never shows the model the current
+        # transient_files — so a reconcile pass silently resets it to whatever
+        # the model re-invents, exactly the way coherence_* gets wiped. Since
+        # 2026-07-29 the value is declared POST-structurally by
+        # project_ops.declare_artifacts (from source, not from a guess), which
+        # means the correction is what would be lost. An omission must mean "no
+        # opinion", not "erase what was measured".
+        #
+        # Only on OMISSION: a response that supplies its own list still wins, so
+        # the design/ingest paths can set and change it normally.
+        if not transient_files:
+            prior = getattr(
+                getattr(mission, "architecture", None), "transient_files", None
+            )
+            if prior:
+                transient_files = [str(t) for t in prior]
+                logger.info(
+                    "architecture: carried forward %d transient_files pattern(s) "
+                    "the response omitted",
+                    len(transient_files),
+                )
 
         arch = ArchitectureState(
             import_scheme=execution.get("import_scheme", "flat"),
@@ -470,6 +494,108 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
         f"scheme={arch.import_scheme}, "
         f"order={', '.join(arch.creation_order)}",
         context_updates={"mission": mission, "architecture": arch},
+    )
+
+
+async def action_persist_transient_files(step_input: StepInput) -> StepOutput:
+    """Store the post-structural runtime-artifact declaration.
+
+    WHY THIS EXISTS AND WHY IT IS HERE. `transient_files` used to be declared in
+    `design_architecture` — before any code existed, so it was a prediction. On
+    2026-07-29 the prediction was ['save.json', '*.autosave.json'] for a program
+    that wrote `game_state.json`; the flush matched nothing 22 times out of 22,
+    91% of behavioural sessions resumed mid-run off the unflushed save, and one
+    of them read a CORRECT refusal as a parser bug and spent 586 seconds
+    diagnosing working code.
+
+    `project_ops` runs after the structural phase and before the first
+    behavioural session, so a declaration made there can see the code it is
+    describing. This action is the persistence half.
+
+    Reads `runtime_artifacts` (schemas/runtime_artifacts.json): a list of
+    {pattern, written_by}. `written_by` is not stored — it exists to force the
+    model to cite the write site rather than guess — but it IS logged, because
+    it is the audit trail for a later deletion.
+
+    Context required: mission, inference_response
+    Publishes: transient_files
+    """
+    from agent.llm_json import parse_llm_json
+
+    effects = step_input.effects
+    mission = step_input.context.get("mission")
+    response = step_input.context.get("inference_response", "")
+
+    if mission is None and effects is not None:
+        mission = await effects.load_mission()
+    arch = getattr(mission, "architecture", None) if mission else None
+    if arch is None:
+        return StepOutput(
+            result={"transient_files": []},
+            observations="no architecture to record runtime artifacts on",
+            context_updates=({"mission": mission} if mission else {}),
+        )
+
+    data = parse_llm_json(response)
+    entries = data.get("transient_files", []) if isinstance(data, dict) else []
+    if not isinstance(entries, list):
+        entries = []
+
+    patterns: list[str] = []
+    evidence: list[str] = []
+    for item in entries:
+        if isinstance(item, dict):
+            pattern = str(item.get("pattern", "") or "").strip()
+            written_by = str(item.get("written_by", "") or "").strip()
+        else:
+            # Tolerate a bare string even though the schema forbids it: a
+            # usable pattern with no citation still beats discarding it.
+            pattern, written_by = str(item or "").strip(), ""
+        if not pattern:
+            continue
+        if pattern.startswith(("/", "~")) or ".." in pattern:
+            logger.warning(
+                "runtime artifacts: refusing non-relative pattern %r", pattern
+            )
+            continue
+        if pattern not in patterns:
+            patterns.append(pattern)
+            evidence.append(f"{pattern} <- {written_by or '(no citation)'}")
+
+    # An EMPTY declaration is meaningful — "this program writes nothing" — and
+    # must be recorded as such. But an unparseable response is not a
+    # declaration, and overwriting a good prior value with [] because the model
+    # returned junk is the failure this whole change exists to prevent.
+    if not isinstance(data, dict):
+        return StepOutput(
+            result={"transient_files": list(arch.transient_files or [])},
+            observations="runtime-artifact response unparseable — prior "
+            "declaration left intact",
+            context_updates={"mission": mission},
+        )
+
+    arch.transient_files = patterns
+    # NO push_note BEFORE save_mission: push_note reloads the mission from disk
+    # and re-saves it, which would drop this architecture edit (see the note in
+    # action_parse_and_store_architecture).
+    if effects is not None:
+        await effects.save_mission(mission)
+
+    if patterns:
+        logger.info(
+            "🧹 runtime artifacts declared (%d): %s", len(patterns), "; ".join(evidence)
+        )
+    else:
+        logger.info("🧹 runtime artifacts: none — this program writes no state")
+
+    return StepOutput(
+        result={"transient_files": patterns},
+        observations=(
+            f"Runtime artifacts: {', '.join(patterns)}"
+            if patterns
+            else "Runtime artifacts: none declared (program writes no state)"
+        ),
+        context_updates={"mission": mission, "transient_files": patterns},
     )
 
 

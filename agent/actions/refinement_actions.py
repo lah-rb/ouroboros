@@ -510,6 +510,42 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
     if imports:
         parts.append("\n".join(imports[:15]))
 
+    # Module-level string constants that name a FILE.
+    #
+    # Docstring + imports + def lines say nothing about the paths a program
+    # reads or writes, and those paths are almost always a module constant:
+    # `SAVE_FILE = "game_state.json"`. Without this, anything asked to declare
+    # the files a program creates from a signature listing is guessing — which
+    # is exactly what happened on 2026-07-29, when the declared
+    # ['save.json', '*.autosave.json'] missed the actual `game_state.json` and
+    # 91% of test sessions resumed mid-run off the unflushed save.
+    #
+    # Filtered to path-LOOKING values (a dotted suffix, no whitespace, no
+    # format placeholders) so prose constants and templates stay out.
+    if depth in ("imports_and_exports", "full"):
+        paths = []
+        for line in lines:
+            if line[:1] in (" ", "\t") or "=" not in line:
+                continue  # module scope only
+            name, _, value = line.partition("=")
+            name, value = name.strip(), value.strip()
+            if not name.isidentifier():
+                continue
+            if len(value) < 3 or value[0] not in "\"'" or value[-1] != value[0]:
+                continue
+            literal = value[1:-1]
+            suffix = literal.rsplit("/", 1)[-1].rpartition(".")[2]
+            if (
+                suffix.isalpha()               # ".json", not the "2" of "1.0.2"
+                and 1 <= len(suffix) <= 6
+                and " " not in literal
+                and "{" not in literal
+                and not literal.startswith((".", "/"))
+            ):
+                paths.append(f"{name} = {value}")
+        if paths:
+            parts.append("\n".join(paths[:10]))
+
     # Class and function definitions
     if depth in ("imports_and_exports", "full"):
         defs = []

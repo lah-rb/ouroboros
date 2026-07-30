@@ -102,13 +102,6 @@ sections:
        Without this, each file's author guesses independently and the
        mismatches surface as runtime crashes that are expensive to trace.
 
-       Also list `transient_files`: every file the program CREATES at
-       runtime (save files, caches, logs), as names or glob patterns
-       relative to the project root. These are automatically deleted
-       between test sessions so one test's leftover state cannot
-       contaminate the next. NEVER list input data files (content
-       definitions, config) here — only program-generated output.
-
     7. **Creation Order**: Dependency-sorted. Files with no project imports
        come first. Entry points come last.
 
@@ -184,7 +177,6 @@ sections:
           "structure": "{decks: {deck_id: Deck}, cards: {card_id: Card}} — exactly these top-level keys, nothing else required"
         }
       ],
-      "transient_files": ["progress.json", "*.session.json"],
       "creation_order": ["models.py", "parser.py", "engine.py", "main.py"],
       "notes": "Brief notes on design rationale"
     }

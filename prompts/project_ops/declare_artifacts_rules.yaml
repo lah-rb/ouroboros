@@ -1,0 +1,64 @@
+id: project_ops/declare_artifacts_rules
+content: |
+  List every file this program creates AT RUNTIME — save files, caches, logs,
+  databases, exported output.
+
+  These are deleted between behavioural test sessions. That is the point: one
+  test's leftover state must not decide the next test's starting conditions.
+
+  ## What counts
+
+  INCLUDE files the program WRITES while running:
+    - save / progress / session state
+    - caches, indexes, scratch files
+    - log files
+    - databases the program creates on first run
+    - anything the program exports or dumps
+
+  EXCLUDE, always:
+    - INPUT data the program READS (content definitions, world data, config,
+      fixtures, seed files). Deleting these breaks the program permanently.
+    - source files, and project config (pyproject.toml, package.json, ruff.toml,
+      .gitignore, lock files, .python-version)
+    - anything a human authored
+
+  The test is direction, not file type: a `.json` the program reads is input; a
+  `.json` the program writes is transient. The same extension appears on both
+  sides, so decide by which way the data flows.
+
+  ## Read it off the code
+
+  The listing gives you, per file, its docstring, its imports, its
+  module-level path constants, and its definitions. The path constants are
+  usually the answer:
+
+      SAVE_FILE = "game_state.json"     <- writes this
+      WORLD_FILE = "world.yaml"         <- READS this; do NOT list it
+
+  A constant alone does not tell you the direction — check the definitions and
+  imports for what the module does with it (a `save_*`/`dump`/`write` import or
+  helper next to the constant is the tell; a `load_*`/`parse` one points the
+  other way).
+
+  ## Cite the write site
+
+  Every entry needs `written_by`: the module, and the constant or call that
+  names the file. A citation you cannot support from the listing means you are
+  guessing, and a guess here is worse than an omission — a wrong pattern
+  silently matches nothing while the real file survives into every later
+  session.
+
+  ## Precision
+
+  Give the EXACT name the code uses. Use a glob only where the name is genuinely
+  variable at runtime (`*.log` for a per-run log file). Never use a glob broad
+  enough to catch input data or source: `*.json` and `*.yaml` are almost always
+  wrong, and `*` is never right.
+
+  Paths are relative to the project root. Absolute paths, `~`, and `..` are
+  rejected.
+
+  ## Nothing to declare
+
+  If the program writes no files, return an empty list. That is a real answer
+  and it is recorded as one — it is not the same as failing to look.
