@@ -1,3 +1,11 @@
+# ── ARCHIVED 2026-07-23 (greenfield blind panel week) ──
+# Retired from the active fleet: the zero-token turn glitch could not be
+# reproduced under characterization (cron-watched game_challenge run), but
+# this was the ONLY model that could not reach the structural stage at all —
+# 5/5 design-gate failures on confabulated entry-point/import claims
+# (MoE-specific: the dense mistral-medium-3.5 cleared the same gate; both
+# share the tekken template + per-model template_bos). Revisit only with a
+# new checkpoint or if the dense line's results justify another look.
 app:
   host: "0.0.0.0"
   port: 8008

@@ -59,7 +59,7 @@ app:
   openai_shim: true
 graphql:
   max_query_depth: 10
-  max_tokens: 65536   # must not bind before generation.max_tokens_default
+  max_tokens: 234496   # must not bind before generation.max_tokens_default
   max_aliases: 50
   introspection_enabled: true
 model:
@@ -69,7 +69,12 @@ model:
   # Matched to laguna-s-2.1-poolside.yaml so the quant is the only variable.
   # 73.9GB weights + 12.9GB KV = 86.8GB against the 113GB wired limit — 22GB
   # more headroom than the poolside config, which itself boots clean.
-  n_ctx: 65536
+  # RAISED 65536 -> 234496 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 192 KiB/token x 234496 = 46.1GB
+  # + 73.9GB weights = 120.0GB resident at boot.
+  n_ctx: 234496
+  probe_verified_weights_bytes: 73932208768
+  probe_verified_n_ctx: 234496
   # Guard set above the computed total, not shaved to fit.
   kv_preflight_gb: 92
   model_max_context: 1048576
@@ -90,7 +95,7 @@ prompt:
 generation:
   # Equal to n_ctx: the window is the only limit. See the poolside config for
   # why an artificial cap was cutting legitimate multi-file work.
-  max_tokens_default: 65536
+  max_tokens_default: 234496
   temperature_default: 1.0
   top_p: 1.0
   top_k: 20              # vendor generation_config.json; NOT 0
@@ -121,3 +126,20 @@ tools:
 logging:
   enabled: true
   directory: ./logs
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v1.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right —
+# it is to make a SURPRISE legible, so an unexpected score prompts a look at
+# the run before the number enters the ledger.
+tier:
+  status: not_yet_run
+  expectation:
+    registered: 2026-07-29
+    tier: "1"
+    stars: null
+    basis: experience
+    why: >
+      The most variable model tested to date, with real reliability concerns.
+      Expected tier 1 PROVIDED nothing goes wrong mid-run — which is the whole
+      question with this model.

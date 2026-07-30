@@ -27,6 +27,7 @@ token it depends on. Sections merge, values replace.
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 import pytest
 import yaml
@@ -230,6 +231,49 @@ class TestDocOnlyKeys:
         cfg = load_config(p)
         assert cfg.model.name == "documented"
 
+    def test_tier_record_does_not_reach_validation(self, configs):
+        """A tier record lives in the config because comments cannot be read
+        back: the star and the run's character are data the next scheduler
+        wants, and the 2026-07-29 batch had to reconstruct every arm's
+        behaviour by grepping run logs."""
+        from core.config import DOC_ONLY_KEYS, load_config
+
+        assert "tier" in DOC_ONLY_KEYS
+        p = configs / "experiments" / "tiered.yaml"
+        write(
+            p,
+            """
+            extends: base-model
+            tier:
+              status: awaiting_blind_judgement
+              stars: null
+              judged: null
+              observed:
+                goals: 6/37
+                degeneration: 1 long-cycle abort at ~48min
+            model: {name: tiered}
+            """,
+        )
+        cfg = load_config(p)
+        assert cfg.model.name == "tiered"
+        assert not hasattr(cfg, "tier"), "tier must be stripped before validation"
+
+    def test_judged_and_observed_stay_separate(self, configs):
+        """TIER_RUBRIC v1.0 §7 forbids a judge from seeing the observed half.
+        They are sibling keys, never one blob, so a packet builder can hand over
+        `judged` without dragging the run telemetry along."""
+        cfg_path = (
+            Path(__file__).resolve().parents[1] / "configs" / "laguna-xs-2.1.yaml"
+        )
+        raw = yaml.safe_load(cfg_path.read_text())
+        tier = raw["tier"]
+        assert "judged" in tier and "observed" in tier
+        assert not isinstance(tier["observed"], str)
+        # The judged half is absent until a FRESH judge scores the artifact —
+        # the operator who watched the run is disqualified (rubric §5).
+        assert tier["judged"] is None and tier["stars"] is None
+        assert tier["status"] == "awaiting_blind_judgement"
+
 
 class TestTheDiffIsActuallyVisible:
     """load_config runs at MODULE IMPORT, before the server calls
@@ -259,3 +303,82 @@ class TestTheDiffIsActuallyVisible:
 
         load_config(configs / "base-model.yaml")
         assert describe_resolution() is None
+
+
+class TestSessionStrategyValidation:
+    """The session FALLBACK must always be armed (OPEN_TASKS §4).
+
+    `session_turn` picks resident -> full_replay -> legacy save_state. Whether
+    resident is granted depends on `memory_can_shift()`, which can only be asked
+    of a LOADED model — so at config time a resident request is never a guarantee.
+    A config that disarms full_replay is therefore one refused gate away from the
+    retired legacy path, and validation must refuse it rather than pass and land
+    there silently.
+    """
+
+    def test_disarming_the_fallback_is_refused(self, configs):
+        from core.config import load_config
+
+        p = configs / "experiments" / "legacy.yaml"
+        write(p, """
+            extends: base-model
+            model: {name: legacy, session_full_replay: false}
+        """)
+        with pytest.raises(ValueError, match="retired legacy save_state"):
+            load_config(p)
+
+    def test_requesting_resident_does_not_excuse_disarming_it(self, configs):
+        """THE THIRD BRANCH. This is the dangerous config: resident is requested,
+        the gate refuses it (iSWA without swa_full, or recurrent), and there is
+        no full_replay left to catch the turn. It must not pass validation."""
+        from core.config import load_config
+
+        p = configs / "experiments" / "resident_no_fallback.yaml"
+        write(p, """
+            extends: base-model
+            model:
+              name: resident-no-fallback
+              resident_seq_cache: true
+              session_full_replay: false
+        """)
+        with pytest.raises(ValueError, match="can_shift gate may"):
+            load_config(p)
+
+    def test_the_refusal_names_the_fix(self, configs):
+        from core.config import load_config
+
+        p = configs / "experiments" / "legacy2.yaml"
+        write(p, """
+            extends: base-model
+            model: {name: legacy2, session_full_replay: false}
+        """)
+        with pytest.raises(ValueError, match="Set session_full_replay: true"):
+            load_config(p)
+
+    def test_the_default_is_already_safe(self, configs):
+        """Nothing needs to be written for a config to be safe — which is why no
+        shipped config was refused when this validator landed."""
+        from core.config import load_config
+
+        p = configs / "experiments" / "quiet.yaml"
+        write(p, """
+            extends: base-model
+            model: {name: quiet}
+        """)
+        assert load_config(p).model.session_full_replay is True
+
+    def test_resident_plus_armed_fallback_is_the_target_shape(self, configs):
+        from core.config import load_config
+
+        p = configs / "experiments" / "good.yaml"
+        write(p, """
+            extends: base-model
+            model:
+              name: good
+              resident_seq_cache: true
+              session_full_replay: true
+              swa_full: true
+              kv_unified: true
+        """)
+        cfg = load_config(p)
+        assert cfg.model.resident_seq_cache and cfg.model.session_full_replay

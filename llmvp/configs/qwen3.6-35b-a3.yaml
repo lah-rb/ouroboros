@@ -38,6 +38,11 @@ model:
   family: "chatml"
   path: /Users/lah-rb/.lmstudio/models/mudler/Qwen3.6-35B-A3B-APEX-GGUF/Qwen3.6-35B-A3B-APEX-I-Balanced.gguf
   n_ctx: 262144
+  # MEASURED 2026-07-29 (--probe-context): 20480 B/tok vs a 81920 formula (4.00x over — swa_full:false keeps the windowed
+  # layers windowed, and the formula assumes a full cache on every layer).
+  kv_bytes_per_token_measured: 20480
+  probe_verified_weights_bytes: 25624957632
+  probe_verified_n_ctx: 262144
   n_gpu_layers: -1
   seed: -1
   verbose: false
@@ -101,3 +106,22 @@ tools:
 logging:
   enabled: true
   directory: "./logs"
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v1.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right —
+# it is to make a SURPRISE legible, so an unexpected score prompts a look at
+# the run before the number enters the ledger.
+tier:
+  status: not_yet_run
+  expectation:
+    registered: 2026-07-29
+    tier: "2"
+    stars: null
+    basis: experience
+    why: >
+      A fast, very verbose thinker that sits consistently under the rest of the
+      qwen family — though its ability to batch might keep it around the 27b.
+      Expected high tier 2.
+
+      FAMILY: the qwen hybrid architecture makes advanced features — cache strategies, instance swarming — markedly harder to adapt than a plain transformer. Applies to every qwen arm.

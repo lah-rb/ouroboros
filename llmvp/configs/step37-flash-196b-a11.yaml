@@ -16,7 +16,7 @@ app:
 
 graphql:
   max_query_depth: 10
-  max_tokens: 32768
+  max_tokens: 138240
   max_aliases: 50
   introspection_enabled: true
 
@@ -35,7 +35,26 @@ model:
   reasoning_head_swap: true
   # Required by the head swap AND the per-turn session splice path
   # (silent no-op without it).
-  resident_seq_cache: true
+  #
+  # OFF as of 2026-07-29 — this model CANNOT HAVE IT and asking costs a full
+  # context build. The boot log is explicit:
+  #
+  #   🧩 resident_seq_cache requested but memory_can_shift=False
+  #      (interleaved-SWA without swa_full, or recurrent memory)
+  #   🧩 un-fragmenting: context was allocated with the resident seq band
+  #      (n_seq_max=14) — rebuilding single-seq
+  #   ggml_metal_free: deallocating
+  #
+  # So every boot allocated the 14-seq context, freed it, and rebuilt
+  # single-seq. Harmless but not free, and the config read as though it got a
+  # feature it never received. It also cost a day of analysis: the probe summed
+  # both KV allocations and reported 360 KiB/token against a 180 KiB formula,
+  # which looked like an architecture whose geometry we could not predict.
+  #
+  # NOTE this means reasoning_head_swap and the per-turn session splice above
+  # are ALSO not getting what they declare they need — that dependency is real
+  # and is deferred deliberately, not resolved by flipping this to false.
+  resident_seq_cache: false
 
   path: /Users/lah-rb/.lmstudio/models/unsloth/Step-3.7-Flash-GGUF/Step-3.7-Flash-UD-IQ4_XS-00001-of-00003.gguf
   # GEOMETRY (2026-07-24 header math): 180KB/token full-KV (45L x 8kvh x
@@ -44,7 +63,12 @@ model:
   # right-sized, lives above the 100GB tripwire convention by design.
   # Full trained context (262144) is reachable only with swa_full: false
   # (window 512), at the cost of resident-session soundness.
-  n_ctx: 32768
+  # RAISED 32768 -> 138240 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 180 KiB/token x 138240 = 25.5GB
+  # + 95.3GB weights = 120.8GB resident at boot.
+  n_ctx: 138240
+  probe_verified_weights_bytes: 95336010208
+  probe_verified_n_ctx: 138240
   # Declared, not left to a launch-time env var. Until 2026-07-25 the
   # preflight measured only shard 1 of this 3-shard GGUF (46.5GB of 105GB),
   # so it computed 52.5GB and waved the config through — it passed the 100GB
@@ -65,7 +89,7 @@ prompt:
   persona_file: "./knowledge/SOUL.md"
 
 generation:
-  max_tokens_default: 32768
+  max_tokens_default: 138240
   temperature_default: 0.6 # try 1.0 at some point
   # Degeneration fix (matches qwen3.6): step37 collapses to bare `<think>`
   # then empties at the low effective temps from t*0.1/t*0.2 steps
@@ -96,3 +120,20 @@ tools:
 logging:
   enabled: true
   directory: "./logs"
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v1.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right —
+# it is to make a SURPRISE legible, so an unexpected score prompts a look at
+# the run before the number enters the ledger.
+tier:
+  status: not_yet_run
+  expectation:
+    registered: 2026-07-29
+    tier: "1"
+    stars: null
+    basis: experience
+    why: >
+      The largest native brain of the suite. Reasonable speed and verbosity in
+      thinking, coupled to caching and decent context, make it the likely
+      strongest available model for this machine. Expected HIGHEST tier 1.

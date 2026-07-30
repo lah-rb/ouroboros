@@ -44,14 +44,19 @@ app:
   openai_shim: true
 graphql:
   max_query_depth: 10
-  max_tokens: 131072
+  max_tokens: 318464
   max_aliases: 50
   introspection_enabled: true
 model:
   name: Laguna-S-2.1
   family: laguna
   path: /Users/lah-rb/.lmstudio/models/unsloth/Laguna-S-2.1-GGUF/Laguna-S-2.1-UD-IQ4_XS-00001-of-00003.gguf
-  n_ctx: 131072
+  # RAISED 131072 -> 318464 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 192 KiB/token x 318464 = 62.6GB
+  # + 57.6GB weights = 120.2GB resident at boot.
+  n_ctx: 318464
+  probe_verified_weights_bytes: 57566704320
+  probe_verified_n_ctx: 318464
   kv_preflight_gb: 96
   model_max_context: 1048576
   n_gpu_layers: -1
@@ -88,7 +93,7 @@ generation:
   # known failure mode IS runaway generation (two >100k-char pure-CoT episodes
   # that never emitted an answer). Matching the other arms' 65536 removes the
   # truncation defect while keeping the blast radius identical to theirs.
-  max_tokens_default: 65536
+  max_tokens_default: 318464
   temperature_default: 1.0
   top_p: 1.0
   # VENDOR-MATCHED (generation_config.json, unsloth/Laguna-S-2.1): temperature

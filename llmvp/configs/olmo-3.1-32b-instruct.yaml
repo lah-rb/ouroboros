@@ -82,3 +82,23 @@ tools:
 logging:
   enabled: true
   directory: "./logs"
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v1.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right —
+# it is to make a SURPRISE legible, so an unexpected score prompts a look at
+# the run before the number enters the ledger.
+tier:
+  status: not_yet_run
+  expectation:
+    registered: 2026-07-29
+    tier: "3"
+    stars: null
+    basis: experience
+    why: >
+      Similar to the think variant but notably under-performant. SKIPPING IS
+      RECOMMENDED as a solo arm.
+
+      The olmo run worth doing instead: load BOTH models and statically route
+      thinking turns (medium, high) to think and everything else to instruct.
+      Tier advancement is plausible in that configuration and not in this one.

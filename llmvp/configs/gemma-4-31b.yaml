@@ -13,7 +13,7 @@ app:
 
 graphql:
   max_query_depth: 10
-  max_tokens: 65536
+  max_tokens: 113664
   max_aliases: 50
   introspection_enabled: true
 
@@ -51,7 +51,12 @@ model:
   # (~32GB margin); tight ceiling ~81920; 98304+ breaches; 262144 = the
   # reboot-#3 death either way. Window-boundary session canary still
   # pending before deep-session workloads at this size.
-  n_ctx: 65536
+  # RAISED 65536 -> 113664 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 850 KiB/token x 113664 = 98.9GB
+  # + 17.3GB weights = 116.2GB resident at boot.
+  n_ctx: 113664
+  probe_verified_weights_bytes: 17287670048
+  probe_verified_n_ctx: 113664
   # The theory-based preflight assumes every layer carries a full-size cache
   # and so over-predicts ~2x for gemma-4 (formula ~1.72MB/token vs the 0.87
   # MEASURED above). At 65536 it computes 130.4GB against a 100GB default and
@@ -85,7 +90,7 @@ prompt:
   persona_file: "./knowledge/SOUL.md"
 
 generation:
-  max_tokens_default: 65536
+  max_tokens_default: 113664
   temperature_default: 1.0
   top_p: 0.95
   top_k: 64
@@ -111,3 +116,22 @@ tools:
 logging:
   enabled: true
   directory: "./logs"
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED under TIER_RUBRIC v1.1 §6: written before the run, never
+# shown to a judge, never revised afterwards. Its job is not to be right —
+# it is to make a SURPRISE legible, so an unexpected score prompts a look at
+# the run before the number enters the ledger.
+tier:
+  status: not_yet_run
+  expectation:
+    registered: 2026-07-29
+    tier: "1"
+    stars: 4
+    basis: experience
+    why: >
+      Strong tier 1 candidate in NON-THINKING mode, likely 4 stars. Its lavish KV
+      architecture makes it expensive to run under swa_full for compatible
+      features; the competent base buys most of what it needs without them. Open
+      question: whether thinking on helps task performance or trades too much
+      speed.

@@ -351,7 +351,43 @@ def main():
         "and added to knowledge/crf/curated.json as FSM regression fixtures.",
     )
 
+    # ── context-ceiling probe ─────────────────────────────────────
+    # Measures the largest n_ctx a model will LOAD AND DECODE on this machine,
+    # then records it as probe_verified_n_ctx so the KV preflight stops having
+    # to guess. The arithmetic sums KV + the weights FILE size, and file size
+    # over-counts an MoE under mmap — step-3.7's real ceiling of 138240
+    # accounts to 146.3GB against 137.4GB physical, i.e. the estimate forbids a
+    # configuration that demonstrably works. A measurement outranks an
+    # estimate; this is how the measurement gets made.
+    parser.add_argument(
+        "--probe-context",
+        metavar="CONFIGS",
+        help="Measure the real n_ctx ceiling for a comma-separated list of "
+        "configs (or 'active') and record probe_verified_n_ctx. Runs instead "
+        "of serving; boots and stops servers itself, leaves none behind.",
+    )
+    parser.add_argument("--probe-resolution", type=int, default=2048,
+                        help="Final step size for --probe-context (default 2048)")
+    parser.add_argument("--probe-gens", type=int, default=3,
+                        help="Generations required per rung (default 3). A rung "
+                        "that loads but cannot decode is a FAILING rung.")
+    parser.add_argument("--probe-no-write", action="store_true",
+                        help="Measure without recording probe_verified_* into configs")
+
     args = parser.parse_args()
+
+    if args.probe_context:
+        from argparse import Namespace
+
+        from core.context_probe import Probe
+
+        names = ([config.model.name] if args.probe_context == "active"
+                 else [c.strip() for c in args.probe_context.split(",") if c.strip()])
+        log.info("🔬 context-ceiling probe: %s", ", ".join(names))
+        return Probe(Namespace(
+            configs=names, resolution=args.probe_resolution, gens=args.probe_gens,
+            boot_timeout=1200, start_fraction=1.0, no_write=args.probe_no_write,
+        )).run()
 
     # Handle stop command
     if args.stop:

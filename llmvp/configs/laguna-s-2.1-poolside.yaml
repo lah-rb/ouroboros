@@ -48,7 +48,7 @@ app:
   openai_shim: true
 graphql:
   max_query_depth: 10
-  max_tokens: 65536   # must not bind before generation.max_tokens_default
+  max_tokens: 124928   # must not bind before generation.max_tokens_default
   max_aliases: 50
   introspection_enabled: true
 model:
@@ -59,7 +59,12 @@ model:
   # conservative estimate (unlike step-3.7, which is genuinely tight at 32k).
   # 96.0GB weights + 12.9GB KV = 108.9GB against the 113GB wired limit.
   # Fallback if it will not boot or wires unstable: 49152 = 105.7GB.
-  n_ctx: 65536
+  # RAISED 65536 -> 124928 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 192 KiB/token x 124928 = 24.6GB
+  # + 96.0GB weights = 120.6GB resident at boot.
+  n_ctx: 124928
+  probe_verified_weights_bytes: 96031829760
+  probe_verified_n_ctx: 124928
   # 108.9GB computed at this n_ctx; guard set above it, not shaved to fit.
   kv_preflight_gb: 112
   model_max_context: 1048576
@@ -86,7 +91,7 @@ generation:
   # written" because the slice counts what survived the cut, not what the model
   # set out to write. llama.cpp still bounds a single generation by the space
   # actually left in the window after the prompt.
-  max_tokens_default: 65536
+  max_tokens_default: 124928
   temperature_default: 1.0
   top_p: 1.0
   top_k: 20              # vendor generation_config.json; NOT 0 (see unsloth cfg)
