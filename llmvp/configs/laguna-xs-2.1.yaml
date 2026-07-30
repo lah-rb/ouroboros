@@ -81,6 +81,12 @@ model:
   kv_unified: true
   session_full_replay: true
   resident_seq_cache: true
+  # ADDED 2026-07-30: the stateless flow cache (M9 seq-ops band). Measured
+  # on glm at realistic head sizes: HIT saves 3.51s/call = 49% of prefill
+  # (corrected pilot, 11/11 hits). The 2026-06 ban hit the M8 save_state
+  # BLOB implementation; this band shares none of that mechanism. Under
+  # kv_unified the band divides nothing.
+  flow_kv_cache: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

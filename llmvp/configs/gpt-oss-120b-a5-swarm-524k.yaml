@@ -62,7 +62,23 @@ model:
   name: "gpt-oss-120b-a5"
   family: "harmony"
   path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
-  n_ctx: 524288
+  # RAISED 524288 -> 744448 on 2026-07-29 from the measured ceiling
+  # (probe_verified_n_ctx below). KV 72 KiB/token x 744448 = 54.9GB
+  # + 65.4GB weights = 120.3GB resident at boot.
+  # 2026-07-30 BOOT-FAILURE POST-MORTEM (measured end-to-end): 744,448 was
+  # probe-verified at n_seq_max=131 and served this morning at 133 — but at
+  # the 141-seq layout (+8 flow band) it Metal-OOMs at the FIRST DECODE
+  # even on a `sudo purge`d box with 118 GB free (status 5, pos 0). The
+  # page-cache theory is falsified; the band seqs genuinely tipped the
+  # knife-edge, so the 744448 record is invalid under the current map.
+  # 524,288@141 boots (measured same day). 589,824@141 is the bisect rung —
+  # every earlier attempt at it died at the formula preflight, never
+  # reaching Metal, so it was UNTESTED until now.
+  n_ctx: 589824
+  probe_verified_weights_bytes: 65369017728
+  # 2026-07-26 ladder measured rung (105.2 GB steady wired, old seq
+  # layout); live-validating under the 141-seq map 2026-07-30.
+  probe_verified_n_ctx: 589824
   # Refuse arithmetically-impossible loads before Metal allocates. Set from
   # the REAL wired limit (113 GB) minus working headroom, not the 116 that
   # was assumed before it was checked.
@@ -80,7 +96,14 @@ model:
   thinking_mode: medium
   swa_full: true
   kv_unified: true
-  flow_kv_cache: false
+  # FLIPPED 2026-07-30: the batched flow band shipped (BUILD = range-copy
+  # off a completed stream's seat on the decode thread; HIT = whole-seq
+  # install via the control inbox). The 2026-06 revert hit the M8 blob
+  # implementation; this shares none of it. Under kv_unified the band
+  # adds 8 seq ids and divides nothing. Measured payout at realistic head
+  # sizes: 3.51s/call = 49% of prefill (glm pilot; gpt-oss prefill is
+  # faster so the absolute saving is smaller, the fraction similar).
+  flow_kv_cache: true
   session_full_replay: true
   resident_seq_cache: true
   context_refresh_drain_s: 300
@@ -132,3 +155,109 @@ tools:
 logging:
   enabled: true
   directory: "./logs"
+
+# ── TIER RECORD (doc-only; see DOC_ONLY_KEYS in core/config.py) ──────
+# Two halves, never merged: `judged` came from a blind judge who saw only a
+# stripped artifact and a redacted rubric; `observed` from the operator who
+# watched the run. A judge must never see `observed` (TIER_RUBRIC §7), so it
+# stays a sibling key rather than a note nested inside the judgement.
+tier:
+  status: recorded
+  rubric: TIER_RUBRIC v1.0        # v1.1 amended after; see its changelog
+  stars: 3                        # ★★★  54/100
+  tier: 1                         # >= 50
+
+  # 3★ is the 40-59 rejudge band, which normally costs two more independent
+  # judgements. WAIVED BY OPERATOR on the strength of tens-to-hundreds of
+  # millions of tokens run through this model while building the framework —
+  # the score matched the pre-registered expectation ("a moderately scoring
+  # tier 1") and there is no genuine uncertainty about where it sits. Recorded
+  # as an override, not as a settled 3-vote result: a later reader must be able
+  # to see that no rejudge happened.
+  rejudge: waived_by_operator
+
+  # PRE-REGISTERED, and stated BEFORE the judge ran (2026-07-29, in session).
+  # Recorded after the fact only because the expectation mechanism was written
+  # later the same day; the wording is the operator's, unchanged.
+  #
+  # IT HIT. Predicted "a moderately scoring tier 1"; judged 54/100 — tier 1 by
+  # two points, and about as mid-band as the scale allows. First live use of the
+  # only drift detector left after anchors were dropped, and it agreed.
+  expectation:
+    registered: 2026-07-29
+    tier: "1"
+    stars: 3
+    basis: experience
+    outcome: hit
+    why: >
+      A moderately scoring tier 1. Notes expected to cover its general
+      flexibility in adapting to new features, its reliability under framework
+      faults, and its speed. Basis is tens to hundreds of millions of tokens run
+      through this model while developing the framework.
+
+  judged:
+    run: tier_20260729-010118 arm 4 · staged/arm04
+    judge_model: claude-opus-5[1m]
+    total: 54
+    # Per-dimension stars are score/max banded 80/60/40/20 — different maxima
+    # normalised so the SHAPE reads at a glance, which is the whole point of
+    # abstracting to stars.
+    dimensions:
+      no_broken_functions: {score: 7,  max: 20, stars: 2}
+      robustness:          {score: 4,  max: 10, stars: 3}
+      ux:                  {score: 6,  max: 10, stars: 4}
+      conformance:         {score: 9,  max: 10, stars: 5}   # 49/53 requirements
+      ambition:            {score: 5,  max: 10, stars: 3}
+      creativity:          {score: 5,  max: 10, stars: 3}
+      org_project:         {score: 4,  max: 5,  stars: 5}
+      org_logic:           {score: 3,  max: 5,  stars: 4}
+      reusability:         {score: 8,  max: 10, stars: 5}
+      documentation:       {score: 3,  max: 10, stars: 2}   # hard-capped, §3.10
+
+    profile: >
+      Strong on conformance, structure and modifiability; weak on working-ness
+      and documentation. The judge's own summary — "finished components,
+      unfinished seams."
+
+    decisive_defect: >
+      WIN BY FLEEING. run_combat returns one boolean for two outcomes, and its
+      own docstring admits it ("Returns True if the player survives (by
+      defeating the monster or fleeing)"); initiate_combat reads it as victory.
+      Six commands from a cold start — no weapon, no armour, no amulet, no NPC
+      contact — print "=== VICTORY ===". Fleeing a regular monster also deletes
+      it from the world and records it as a corpse. This nullifies the
+      two-phase boss, the hidden weakness item and both NPC hint chains, i.e.
+      every part of the design the artifact got right.
+
+    strengths: >
+      NOTHING ORPHANED — every room, item, NPC and monster authored in YAML is
+      reachable in play. That is the failure mode which decided most prior
+      panels and this artifact does not have it. Modification probe landed all
+      three tasks first try, with a new room + item needing ZERO Python edits.
+
+    unmet_requirements: [29, 39, 44, 51]   # 2 regular monsters not 3; no restart
+                                           # after death; 7 rooms not 8; dialogue
+                                           # is a flat list, not branching
+
+  observed:
+    run: tier_20260729-010118 arm 4 (2026-07-29)
+    stage: game_challenge_tier · top_phase quality · structural_mode batch · 2h wall
+    boot_s: 41
+    exit: rc=0 at the full 120min backstop, mission parked `paused`
+    goals: 28/36
+    syntax: 7 py_ok / 0 py_fail
+    degeneration: 0
+    artifact: 17 files, staged clean (identifier scan passed)
+    shutdown: released the server in ~1s at the backstop — bounded generations
+              hand over cleanly, unlike an abandoned one
+    note: >
+      Counters vs play, again. This arm led the batch on goals (28/36 vs 6/37)
+      and shipped zero syntax failures, and still lands mid-band because the
+      thing it built can be won by running away. Goal counters have inverted
+      against blind play in four consecutive rounds; treat them as progress
+      telemetry, never as the instrument.
+    prior_contrast: >
+      On 2026-07-27 this model's decisive defect was the INVERSE — no win
+      condition existed anywhere in the tree while the defeat path shipped
+      complete. The win path now exists and fires too easily. Same seam, opposite
+      failure; worth watching whether that asymmetry recurs.

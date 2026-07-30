@@ -101,6 +101,12 @@ model:
   # rises 6.2->9.7s/turn at flat token deltas — dense attention-depth tax;
   # token-flat is not time-flat on this architecture.
   resident_seq_cache: true
+  # ADDED 2026-07-30: the stateless flow cache (M9 seq-ops band). Measured
+  # on glm at realistic head sizes: HIT saves 3.51s/call = 49% of prefill
+  # (corrected pilot, 11/11 hits). The 2026-06 ban hit the M8 save_state
+  # BLOB implementation; this band shares none of that mechanism. Under
+  # kv_unified the band divides nothing.
+  flow_kv_cache: true
 
 prompt:
   # WITHOUT THIS the static token buffer never builds. resolve_persona("default")

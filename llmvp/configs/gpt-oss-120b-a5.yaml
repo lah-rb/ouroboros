@@ -48,7 +48,14 @@ model:
   # OPT-IN per-flow static-prefix KV cache. Re-enabled 2026-06-16 now that
   # swa_full removes the SWA window-boundary corruption (the `code -3` at pos
   # 1809). Inert unless callers pass static_prefix + flow_cache_key.
-  flow_kv_cache: false
+  # FLIPPED 2026-07-30: the batched flow band shipped (BUILD = range-copy
+  # off a completed stream's seat on the decode thread; HIT = whole-seq
+  # install via the control inbox). The 2026-06 revert hit the M8 blob
+  # implementation; this shares none of it. Under kv_unified the band
+  # adds 8 seq ids and divides nothing. Measured payout at realistic head
+  # sizes: 3.51s/call = 49% of prefill (glm pilot; gpt-oss prefill is
+  # faster so the absolute saving is smaller, the fraction similar).
+  flow_kv_cache: true
   # gpt-oss uses the save_state/load_state session path, which corrupts the 120B
   # KV at deep context. A 6h/80-task sweep crashed the server with `llama_decode
   # code -1` (Invalid input batch at Pos 2174) inside session_turn, right after a

@@ -58,6 +58,12 @@ model:
   # sweep) but every later turn is ~1.1s — the dense prefill-bound profile
   # (boss run: 82% of wall was prefill) is exactly what resident relieves.
   resident_seq_cache: true
+  # ADDED 2026-07-30: the stateless flow cache (M9 seq-ops band). Measured
+  # on glm at realistic head sizes: HIT saves 3.51s/call = 49% of prefill
+  # (corrected pilot, 11/11 hits). The 2026-06 ban hit the M8 save_state
+  # BLOB implementation; this band shares none of that mechanism. Under
+  # kv_unified the band divides nothing.
+  flow_kv_cache: true
   kv_unified: true
   # Verified live 2026-07-22 on a trivial prompt. REQUIRES BOS: character salad without it, correct with it.
   # Both official templates specify <s>; this follows the evidence.

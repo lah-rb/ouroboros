@@ -68,6 +68,12 @@ model:
   # FLIPPED 2026-07-30: replay cost 521.4s of prefill per 16-turn realistic
   # session vs 65.1s resident+unified = 8.2x. MLA needs no swa_full (measured).
   resident_seq_cache: true
+  # ADDED 2026-07-30: the stateless flow cache (M9 seq-ops band). Measured
+  # on glm at realistic head sizes: HIT saves 3.51s/call = 49% of prefill
+  # (corrected pilot, 11/11 hits). The 2026-06 ban hit the M8 save_state
+  # BLOB implementation; this band shares none of that mechanism. Under
+  # kv_unified the band divides nothing.
+  flow_kv_cache: true
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
