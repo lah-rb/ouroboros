@@ -7,6 +7,8 @@ Provides queries, mutations, and subscriptions for LLM inference.
 Uses shared inference logic from core.inference.
 """
 
+import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -390,6 +392,85 @@ def _get_session_manager() -> SessionManager:
     return _session_manager
 
 
+async def _run_retiring_on_disconnect(info, coro_factory):
+    """Run a non-streaming completion; retire it server-side if the HTTP
+    client disconnects mid-generation.
+
+    THE GAP THIS CLOSES (Block E1, 2026-07-30): a POST client that abandons a
+    non-streaming `completion` — agent watchdog cancel, client timeout, crash —
+    was invisible to the server, which decoded to completion for nobody. E1
+    demonstrated it at scale: a client timed out at 10 minutes and all 64
+    abandoned generations ran to the end. The STREAMING path never had this
+    gap (the consumer's cancellation reaches its shielded close-before-release
+    finally); non-streaming just never LEARNED of the disconnect, because
+    nothing polled for it.
+
+    Mechanism: run the completion as a task, poll ``request.is_disconnected()``
+    every 2s, cancel on disconnect. The cancellation lands in machinery that
+    is already built and battle-tested: generate_async's shielded
+    ``agen.aclose()`` → the bridge's ``closed`` flag → the engine's
+    ``_retire_abandoned`` at the next decode step.
+
+    SCOPED TO BATCHED, DELIBERATELY. On the pool path the generation runs in
+    a worker thread (``run_in_threadpool(generate_sync)``): a thread cannot be
+    cancelled, so cancelling the awaiting task would release the generation
+    guard while the thread still decodes on the instance — the exact
+    instance-reuse hazard the streaming path's close-before-release exists to
+    prevent. Pool non-streaming therefore keeps today's run-to-completion
+    behaviour until its generation is routed through the closeable streaming
+    path. Session turns are excluded on purpose too: cancelling mid-turn
+    mutates live session KV, and an abandoned session is already reaped by
+    TTL.
+    """
+    try:
+        http_request = info.context.get("request")
+    except Exception:  # noqa: BLE001 — context shape varies under test
+        http_request = None
+    try:
+        backend = await _get_backend_for_mode()
+        batched = getattr(backend, "_decode_mode", "") == "batched"
+    except Exception:  # noqa: BLE001
+        batched = False
+    if http_request is None or not batched:
+        return await coro_factory()
+
+    task = asyncio.create_task(coro_factory())
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=2.0)
+            if done:
+                return task.result()
+            try:
+                gone = await http_request.is_disconnected()
+            except Exception:  # noqa: BLE001 — never let the poll kill the work
+                gone = False
+            if gone:
+                log.warning(
+                    "🔌 client disconnected mid-generation — retiring the "
+                    "stream server-side (was: decode to completion for nobody)"
+                )
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+                raise RuntimeError(
+                    "client disconnected — generation retired server-side"
+                )
+    except asyncio.CancelledError:
+        # OUR task was cancelled (server shutdown): take the work down with us.
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        raise
+
+
+async def _get_backend_for_mode():
+    """The live backend, for reading decode_mode. Separate helper so tests can
+    monkeypatch it without touching core.inference's private accessor."""
+    from core.inference import _get_backend
+
+    return await _get_backend()
+
+
 async def _serve_remote_if_routed(
     request: CompletionRequest,
 ) -> Optional[CompletionResponse]:
@@ -581,6 +662,10 @@ class Query:
         self,
         request: CompletionRequest,
         use_tools: bool = False,
+        # Injected by strawberry at field execution (detected by the BARE
+        # annotation — Optional[Info] breaks the detection); None under
+        # direct-call tests, where the disconnect watcher stands down.
+        info: strawberry.Info = None,
     ) -> CompletionResponse:
         """
         Non-streaming completion query.
@@ -612,13 +697,16 @@ class Query:
                 "reasoning": request.reasoning,
             }
         )
-        outcome = await run_fn(
-            prompt=request.prompt,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-            grammar=request.grammar,
-            request_id=request.request_id,
-            **extra,
+        outcome = await _run_retiring_on_disconnect(
+            info,
+            lambda: run_fn(
+                prompt=request.prompt,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                grammar=request.grammar,
+                request_id=request.request_id,
+                **extra,
+            ),
         )
         return CompletionResponse(
             text=outcome.text,
