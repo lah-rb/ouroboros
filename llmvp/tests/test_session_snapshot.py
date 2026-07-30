@@ -239,7 +239,7 @@ class FakeSnapBackend:
 def test_manager_snapshot_records_turn_count_and_links_session():
     backend = FakeSnapBackend()
     mgr = SessionManager(backend)
-    sess = SessionState(instance=SimpleNamespace(), current_state=None, turn_count=2)
+    sess = SessionState(instance=SimpleNamespace(), turn_count=2)
     mgr._sessions["s1"] = sess
 
     info = asyncio.run(mgr.session_snapshot("s1", "paper:x"))
@@ -356,7 +356,7 @@ def test_windowing_forbid_on_snapshot_linked_sessions(monkeypatch):
 
     inst = SimpleNamespace(n_tokens=90, _n_ctx=100)
     mgr = SessionManager(_Backend())
-    sess = SessionState(instance=inst, current_state=None, snapshot_forked=True)
+    sess = SessionState(instance=inst, snapshot_forked=True)
     mgr._sessions["s1"] = sess
 
     async def drive():
@@ -472,7 +472,7 @@ def test_end_session_pushes_terminal_event():
     backend = FakeSnapBackend()
     mgr = SessionManager(backend)
     q: asyncio.Queue = asyncio.Queue()
-    sess = SessionState(instance=SimpleNamespace(), current_state=None, listener=q)
+    sess = SessionState(instance=SimpleNamespace(), listener=q)
     mgr._sessions["s1"] = sess
     asyncio.run(mgr.end_session("s1"))
     ev = q.get_nowait()

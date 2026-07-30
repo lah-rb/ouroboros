@@ -181,8 +181,8 @@ def test_session_manager_registers_expirer_and_expires_all():
         return True
 
     sm.end_session = fake_end
-    sm._sessions["s1"] = SessionState(instance=object(), current_state=None)
-    sm._sessions["s2"] = SessionState(instance=object(), current_state=None)
+    sm._sessions["s1"] = SessionState(instance=object())
+    sm._sessions["s2"] = SessionState(instance=object())
     n = asyncio.run(sm.expire_all_sessions("drain deadline test"))
     assert n == 2 and sorted(ended) == ["s1", "s2"]
     assert sm._sessions == {}

@@ -45,9 +45,10 @@ model:
   # it. kv_unified bounds the extra SWA-KV cost on unified (Metal) memory.
   swa_full: true
   kv_unified: true
-  # OPT-IN per-flow static-prefix KV cache. Re-enabled 2026-06-16 now that
-  # swa_full removes the SWA window-boundary corruption (the `code -3` at pos
-  # 1809). Inert unless callers pass static_prefix + flow_cache_key.
+  # OPT-IN per-flow static-prefix KV cache. Inert unless callers pass
+  # static_prefix + flow_cache_key. (The 2026-06-16 "re-enabled" note that
+  # lived here was retracted — that re-enable rode the M8 save_state blob
+  # and was reverted when it corrupted the 120B KV; stop citing it.)
   # FLIPPED 2026-07-30: the batched flow band shipped (BUILD = range-copy
   # off a completed stream's seat on the decode thread; HIT = whole-seq
   # install via the control inbox). The 2026-06 revert hit the M8 blob

@@ -220,11 +220,8 @@ class LlamaCppBackend(BaseBackend):
         # every legacy path keeps working; named personas get their own queue
         # and acquire_instance(persona=...) routes to it.
         self._persona_queues: Dict[str, asyncio.Queue] = {}
-        # Per-flow static-prefix KV cache (opt-in: config.model.flow_kv_cache).
-        # flow_key -> saved LlamaState of [global static + that flow's static
-        # head], so later visits restore it and prefill only the dynamic tail.
-        # LRU-bounded; only populated when the flag is on. See config.py.
-        self._flow_states: "OrderedDict[str, Any]" = OrderedDict()
+        # (The M8 save_state-blob flow cache — self._flow_states — was deleted
+        # 2026-07-30; the seq-ops mechanisms below are the only flow caches.)
         # Resident in-context sequence cache (opt-in: config.model.resident_seq_cache).
         # When active, the pristine static prefix lives on SEQ_STATIC and is forked
         # (memory_seq_cp) onto SEQ_WORKING=0 per request instead of load_state'd from a
@@ -3880,52 +3877,19 @@ class LlamaCppBackend(BaseBackend):
                 getattr(instance, "_resident_flow_hit", False)
             )
         elif flow_eligible:
-            try:
-                if flow_key in self._flow_states:
-                    self._flow_states.move_to_end(flow_key)
-                    instance.load_state(self._flow_states[flow_key])
-                    flow_hit_telemetry = True
-                    self._h_flow_hits += 1
-                    log.info(
-                        "🔁 flow_kv_cache HIT %r (%d tok pinned)",
-                        flow_key,
-                        flow_prefix_len,
-                    )
-                else:
-                    # Build ON TOP of the global static that acquire_instance
-                    # already loaded — eval ONLY the flow-static span and
-                    # snapshot [global + flow_static]. This reproduces the
-                    # uncached path's global base EXACTLY (same warmup snapshot),
-                    # so output is bit-identical; reset()+eval(whole prefix)
-                    # recomputes the global KV and diverges. (eval-on-top of a
-                    # loaded state is what generate() does every request.)
-                    n_global = self._static_state.n_tokens if self._static_state else 0
-                    instance.eval(list(prompt_tokens[n_global:flow_prefix_len]))
-                    self._flow_states[flow_key] = instance.save_state()
-                    cap = max(
-                        1,
-                        int(getattr(self.config.model, "flow_kv_cache_max", 8) or 8),
-                    )
-                    while len(self._flow_states) > cap:
-                        self._flow_states.popitem(last=False)
-                        self._h_flow_evicts += 1
-                    self._h_flow_builds += 1
-                    log.info(
-                        "🆕 flow_kv_cache BUILD %r (%d tok)",
-                        flow_key,
-                        flow_prefix_len,
-                    )
-                flow_n_static = flow_prefix_len
-            except Exception as exc:  # noqa: BLE001 — save_state fragility net
-                self._h_flow_fallbacks += 1
-                log.warning(
-                    "flow_kv_cache failed for %r (%s) — using static base",
-                    flow_key,
-                    exc,
-                )
-                if self._static_state is not None:
-                    instance.load_state(self._static_state)
-                flow_n_static = None
+            # The M8 save_state-BLOB flow cache lived here and was deleted
+            # 2026-07-30 (OPEN_TASKS §4/§11b — rap sheet: save_state churn
+            # corrupts static KV over a run, SWA pruning fragility, multi-GB
+            # blob overflow). Every flow-capable config runs resident (the
+            # seq-ops hot-set above); a non-resident pool config with
+            # flow_kv_cache on serves from the static base and counts a
+            # fallback, so the mismatch is visible in health.
+            self._h_flow_fallbacks += 1
+            log.info(
+                "flow_kv_cache requested for %r but resident cache inactive — "
+                "M8 blob path retired; serving from the static base",
+                flow_key,
+            )
 
         n_static = (
             flow_n_static
@@ -4630,7 +4594,13 @@ class LlamaCppBackend(BaseBackend):
             pass
         # Flow/resident KV-cache health: live size + cumulative churn. A rising
         # fallback rate is the canary for KV-cache instability under pressure.
-        info["flow_cache_entries"] = len(self._flow_states)
+        # flow_cache_entries = live seq-ops pins (per-instance pool hot-sets +
+        # the batched band); the M8 blob registry this used to count was
+        # deleted 2026-07-30.
+        info["flow_cache_entries"] = sum(
+            len(getattr(inst, "_flow_seqs", {}) or {})
+            for inst in self._all_instances
+        ) + len(getattr(getattr(self, "_engine", None), "_flow_pins", {}) or {})
         info["resident_active"] = self._resident_active
         # Session KV strategy, readable without parsing the load log. The probe
         # needs the EFFECTIVE strategy and the arch answer separately: "requested

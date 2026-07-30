@@ -284,7 +284,7 @@ curl -X POST http://localhost:8008/graphql \
 
 ### Static Knowledge (Universal Context)
 
-LLMVP pre-tokenizes a knowledge base file into a binary token buffer (`data/<model>.tokens.bin`) at preprocessing time. At server startup, this buffer is memory-mapped and prepended to every inference call as a static prefix. The model evaluates these tokens once on first use, and the KV cache snapshot is reused for all subsequent calls — making the universal context effectively free at inference time.
+LLMVP pre-tokenizes a knowledge base file into a binary token buffer (`data/<model>.tokens.bin`) at preprocessing time. At server startup, this buffer is memory-mapped and prepended to every inference call as a static prefix. The model evaluates these tokens once on first use and the pinned KV is reused for all subsequent calls, so the universal context costs no prefill per request. (It is not "free" overall — it holds KV cells for the whole server lifetime and its length gates every window budget; see `dev/caching/CORPUS.md` §6 for the measured framing.)
 
 The static stream is composed per PERSONA (llmvp/preprocessing/builder.py): the persona file (`config.prompt.persona_file`, e.g. `llmvp/knowledge/SOUL.md`; alternate personas via the `personas:` map) plus the `llmvp/knowledge/` documents, tokenized into `config.knowledge.tokens_bin`. The bin auto-rebuilds when missing or stale. To force a rebuild after editing the soul or knowledge files:
 

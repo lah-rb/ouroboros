@@ -1,11 +1,13 @@
 """Session Manager — memoryful inference sessions.
 
-Each session pins a pool instance (or batched seat) for its lifetime. Three
+Each session pins a pool instance (or batched seat) for its lifetime. Two
 turn-state mechanisms exist, selected by config: session_full_replay (the
 safe default — re-prefill the token history from the pristine static
-snapshot each turn), resident_seq_cache (the production path — the session
-appends to a live resident sequence, no re-prefill), and the legacy
-save_state/load_state per-turn snapshot splice.
+snapshot each turn) and resident_seq_cache (the production path — the
+session appends to a live resident sequence, no re-prefill). The legacy
+save_state/load_state per-turn snapshot splice was deleted 2026-07-30
+(unreachable: config validation refuses session_full_replay: false; rap
+sheet in OPEN_TASKS §4).
 
 Sessions have a TTL. Expiry behavior:
 - If an active subscription listener exists: push a SessionEvent.
@@ -120,7 +122,6 @@ class SessionState:
     """Internal state for an active memoryful session."""
 
     instance: Any  # Pinned pool instance
-    current_state: Any  # LlamaState from save_state()
     last_assistant_text: str = ""  # Captured generation for next turn prefix
     ttl: int = 300
     listener: Optional[asyncio.Queue] = None  # For expiry event push
@@ -369,18 +370,16 @@ class SessionManager:
         session_id = _generate_session_id()
 
         # Resident-live sessions keep seq 0 live across turns (acquire_instance
-        # already forked the pristine static onto it) — no per-turn save/restore,
-        # so no initial snapshot. Legacy: save the post-static state as turn 0.
+        # already forked the pristine static onto it); full-replay sessions
+        # restore the pristine static and re-prefill history per turn. Neither
+        # takes an initial snapshot — the legacy save_state splice (and its
+        # multi-GB per-session save_state here) was deleted 2026-07-30; the
+        # validator refuses session_full_replay: false, so no loadable config
+        # can reach that path.
         resident = bool(getattr(self._backend, "_resident_active", False))
-        initial_state = None
-        if not resident:
-            # save_state is a multi-GB GPU memcpy — guard it like other GPU work.
-            async with self._generation_guard():
-                initial_state = await run_in_threadpool(instance.save_state)
 
         session = SessionState(
             instance=instance,
-            current_state=initial_state,
             ttl=ttl_seconds,
             created_at=time.monotonic(),
             last_turn_at=time.monotonic(),
@@ -456,14 +455,17 @@ class SessionManager:
         system head is forked onto the live seq, so the whole session runs at that
         reasoning effort. No-op unless enabled + a non-default level + turn 0.
 
-        1. Restore the session's saved KV state.
+        1. Establish the turn's KV base: resident keeps seq 0 live;
+           full replay restores the pristine static and re-prefills the
+           token history.
         2. Build continuation tokens: [close previous assistant turn] +
            [new user turn] + [generation prompt].
         3. Generate with reset=False (KV cache preserved).
-        4. Save the post-generation KV state for next turn.
+        4. Persist the turn: resident leaves KV live; full replay extends
+           token_history.
         5. Yield tokens as they're generated.
 
-        IMPORTANT: The KV cache from load_state already contains the
+        IMPORTANT: The established KV base already contains the
         previous turn's generation.  We must NOT re-inject it as a
         message — that would duplicate it in the context.  Instead,
         for continuation turns (turn_count > 0), we only emit the
@@ -487,8 +489,8 @@ class SessionManager:
 
         instance = session.instance
 
-        # The entire turn — load_state, generation, reasoning strip,
-        # save_state — is one continuous span of GPU work. Hold ONE
+        # The entire turn — KV-base restore, generation, reasoning strip —
+        # is one continuous span of GPU work. Hold ONE
         # generation guard around all of it (the backend's generate
         # wrapper re-enters the guard; nested entries are counter-only)
         # so a JIT scaling operation can neither interleave with the
@@ -497,22 +499,18 @@ class SessionManager:
             # Bound to the backend this manager serves, not the global —
             # correct by construction across model swaps (Phase 2a).
             config = self._backend.config
-            # Hybrid/recurrent policy: per-turn save/load round-trips and
-            # tail seq_rm are unsound for recurrent state (it cannot be
-            # partially rolled back). Full-replay sessions restore the
-            # PRISTINE static snapshot — the one whole-state op the
-            # architecture supports — and re-prefill the accumulated
-            # token history below.
-            # Default true (safety): the save/load path below is the opt-in
-            # fast path. getattr fallback matches the ModelConfig default so a
-            # pre-field serialized config also gets the safe behavior.
+            # Two session strategies remain (the legacy save_state/load_state
+            # per-turn splice was deleted 2026-07-30 — the validator refuses
+            # session_full_replay: false, so no loadable config reached it;
+            # its rap sheet lives in OPEN_TASKS §4).
             # Resident-live takes precedence: seq 0 already holds static + every
             # prior turn (left live from last turn) — NO restore, NO re-prefill.
             # We only capture the live position so a degenerate turn can be
-            # purged back to it. This is what eliminates BOTH the save_state
-            # overflow and the full-replay re-prefill cost.
+            # purged back to it. Otherwise full replay: restore the PRISTINE
+            # static snapshot — the one whole-state op recurrent/hybrid
+            # architectures support — and re-prefill the accumulated token
+            # history below.
             resident = bool(getattr(self._backend, "_resident_active", False))
-            full_replay = bool(getattr(config.model, "session_full_replay", True))
             pre_turn_pos = 0
             flow_turn_suffix = None  # set by the turn-0 flow fork, if any
             if resident:
@@ -547,15 +545,12 @@ class SessionManager:
                             self._backend._splice_reasoning_head, instance, reasoning
                         )
                 pre_turn_pos = int(getattr(instance, "n_tokens", 0) or 0)
-            elif full_replay:
+            else:
                 static = getattr(self._backend, "static_state", None)
                 if static is not None:
                     await run_in_threadpool(instance.load_state, static)
                 else:
                     await run_in_threadpool(instance.reset)
-            else:
-                # Restore session state (includes all prior turns)
-                await run_in_threadpool(instance.load_state, session.current_state)
 
             # Build turn tokens — different paths for first turn vs continuation
             renderer = _get_format_renderer(config.model.family)
@@ -617,11 +612,12 @@ class SessionManager:
                 tokenizer = get_cached_tokenizer()
                 turn_tokens = tokenize_segments(tokenizer, segments)
                 turn_only = turn_tokens
-                if full_replay and not resident:
-                    # Re-prefill everything this session has ever evaluated,
-                    # then this turn — identical token stream to what the KV
-                    # would have held under state splicing, rebuilt exactly.
-                    # (Resident keeps the KV live, so it appends turn_only only.)
+                if not resident:
+                    # Full replay: re-prefill everything this session has ever
+                    # evaluated, then this turn — identical token stream to
+                    # what the KV would have held under state splicing, rebuilt
+                    # exactly. (Resident keeps the KV live, so it appends
+                    # turn_only only.)
                     turn_tokens = list(session.token_history) + turn_only
 
             # Resident windowing: if this turn + its generation won't fit in the
@@ -738,33 +734,18 @@ class SessionManager:
 
                         content = _strip_delimiter("".join(generated_parts))
                         await self._maybe_strip_reasoning(instance, content)
-                elif full_replay:
-                    # No state surgery of any kind: extend the history with
-                    # this turn's exact tokens (turn segments + generated ids
-                    # exposed by the backend) — the next turn re-prefills it.
-                    # strip_reasoning (tail seq_rm) is skipped by design: the
-                    # operation is unsound on recurrent state, and the family
-                    # configs using full replay are non-thinking.
+                else:
+                    # Full replay — no state surgery of any kind: extend the
+                    # history with this turn's exact tokens (turn segments +
+                    # generated ids exposed by the backend) — the next turn
+                    # re-prefills it. strip_reasoning (tail seq_rm) is skipped
+                    # by design: the operation is unsound on recurrent state,
+                    # and the family configs using full replay are non-thinking.
                     gen_ids = list(
                         getattr(instance, "_last_completion_tokens", None) or []
                     )
                     session.token_history.extend(turn_only)
                     session.token_history.extend(gen_ids)
-                else:
-                    # Factor 4: strip THIS turn's reasoning from the KV cache
-                    # before snapshotting, so prior-turn chain-of-thought never
-                    # accumulates across the session (canonical multi-turn: keep
-                    # prior answers, drop prior CoT). Truncate-and-replay (tail
-                    # seq_rm + re-eval the clean answer). Skips non-thinking
-                    # models/turns and truncated turns.
-                    if _think_strip_enabled():
-                        from core.inference import _strip_delimiter
-
-                        content = _strip_delimiter("".join(generated_parts))
-                        await self._maybe_strip_reasoning(instance, content)
-
-                    # Save post-generation state for next turn
-                    session.current_state = await run_in_threadpool(instance.save_state)
                 session.last_assistant_text = "".join(generated_parts)
                 session.last_turn_at = time.monotonic()
                 session.turn_count += 1
@@ -799,26 +780,12 @@ class SessionManager:
                         pre_turn_pos,
                     )
                     raise
-                if full_replay:
-                    # Nothing to purge: the history was never extended, so
-                    # the degenerate span simply doesn't exist as far as the
-                    # next turn's re-prefill is concerned.
-                    log.warning(
-                        "🛑 Session %s degenerate generation (%s) — full-replay "
-                        "mode, degenerate turn dropped from history",
-                        session_id,
-                        e.reason,
-                    )
-                    raise
-                # PURGE: restore the pre-turn KV. session.current_state was never
-                # overwritten (save_state above is skipped on raise), so it still
-                # holds the pre-turn snapshot; reloading it discards the degenerate
-                # span from the live instance. turn_count/current_state stay as they
-                # were before this turn.
-                await run_in_threadpool(instance.load_state, session.current_state)
+                # Full replay: nothing to purge — the history was never
+                # extended, so the degenerate span simply doesn't exist as far
+                # as the next turn's re-prefill is concerned.
                 log.warning(
-                    "🛑 Session %s degenerate generation (%s) — purged KV, "
-                    "restored pre-turn state",
+                    "🛑 Session %s degenerate generation (%s) — full-replay "
+                    "mode, degenerate turn dropped from history",
                     session_id,
                     e.reason,
                 )

@@ -215,16 +215,17 @@ TestSessionStrategyValidation`, 5 tests, 3 mutations bite.
 **POSITION 2026-07-30:** the fleet is now three-valued as this section asked:
 11 configs resident (flat, measured ~8x cheaper at realistic session shape),
 5 replay-by-ARCHITECTURE (both qwen3.6, qwen3.5 — measured refusals — plus
-step37; correctly so), legacy unreachable via validated config. Remaining work
-here is pure deletion: the save_state else-arm in session_turn AND the M8
-legacy flow-blob branch (see 11b position — every flow-capable config is
-resident, so both paths are dead code with a rap sheet).
+step37; correctly so), legacy unreachable via validated config.
 
-**Still owed here:** deleting the save_state branch in
-`core/session_manager.session_turn` (the `else` arm) plus its purge path. The
-validator now makes that arm unreachable from any loadable config, so the deletion
-is dead-code removal rather than a behaviour change — but it is not done, and the
-code is still there.
+**DELETED 2026-07-30 — this task is CLOSED.** The save_state else-arm in
+`core/session_manager.session_turn` (restore + save + degenerate-purge), the
+per-session initial save_state in create_session, the `SessionState.
+current_state` field, and the M8 save_state-BLOB flow branch in
+`llama_cpp_backend` (`self._flow_states`) are all gone. Non-resident sessions
+are full-replay by construction; a non-resident config with flow_kv_cache on
+serves from the static base and counts an `_h_flow_fallbacks` (visible in
+health). Guard tests pin the deletion
+(`test_session_degenerate.py::test_legacy_splice_is_deleted`).
 
 Note also the prior A/B in `config.py`'s comment ("wall-clock-neutral, +44%
 prefill at P90") is NOT contradicted by the hy3 numbers: it compared full_replay
@@ -604,20 +605,17 @@ seq robustness + refresh tooling (windowing, latch-heal, per-seq purge,
 context refresh) that keeps deep sessions healthy applies to flow seqs
 identically.
 
-**What separates it from production:**
-1. **Batched mode ignores the flow band entirely** (`_warm_batched` forces it
-   off; persona heads cover only the GLOBAL static, not per-flow heads) — and
-   production runs batched. THE remaining build: port the flow band to batched
-   using the snapshot-band pattern that shipped 2026-07-30 (band seqs above
-   snapshots in plan_seq_map, control-inbox surgery, seat fork; BUILD = eval
-   the head via a normal stream then capture-style seq_cp). Medium effort,
-   pattern proven.
-2. Fleet configs all carry `flow_kv_cache: false`. The POOL resident configs
-   (glm, hy3, mistral-medium, gemma-26b, laguna-xs) can flip on today's
-   measured evidence; the gpt-oss production flip waits on (1).
-3. The M8 legacy blob path is now dead weight: every flow-capable config is
-   resident, so the save_state flow branch (`_flow_states` blobs) is
-   unreachable in practice — delete with §4's else-arm.
+**CLOSED 2026-07-30 — all three separators landed:**
+1. **The batched flow band SHIPPED and is live-accepted in production**
+   (commit 59ba951): BUILD = decode-thread range-copy `[0, prefix_len)` off a
+   completed stream's seat; HIT = whole-seq `install_flow_sync` via the
+   control inbox; pins LRU to the band, die on rebuild. Live acceptance on
+   gpt-oss swarm: fresh prefill 4,237 → 17 tok, 3,970 ms → 0.1 ms
+   (~4.0 s/call), needle through the pinned head verbatim. The acceptance
+   caught two bugs the 14 unit tests + 8 mutations missed (an unreachable
+   capture guard; a stale-position length check) — both fixed and pinned.
+2. `flow_kv_cache: true` on all 7 servable resident configs (commit 330b9af).
+3. The M8 blob path (`_flow_states`) deleted with §4's else-arm (2026-07-30).
 
 ### 11c. Speculative decoding for swarm decode — GATED on one measurement
 

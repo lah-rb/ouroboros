@@ -2,12 +2,13 @@
 
 Guards the safety-critical invariant: when the backend raises
 DegenerateGenerationError mid-generation, ``session_turn`` must
-  * NOT persist the degenerate KV (skip save_state), and
-  * PURGE the live instance by reloading the pre-turn snapshot,
-  * leave turn_count / current_state untouched,
+  * NOT persist the degenerate turn (history never extended, no state saved),
+  * leave turn_count untouched,
   * re-raise so the failure surfaces cleanly upstream.
 
-And the happy path still saves state + advances the turn.
+And the happy path advances the turn. Non-resident sessions are FULL REPLAY
+by construction since 2026-07-30 — the legacy save_state/load_state splice
+was deleted (OPEN_TASKS §4); guards below pin the deletion.
 
 The tokenizer/renderer/config are stubbed so the test needs no model.
 """
@@ -25,6 +26,7 @@ class FakeInstance:
     def __init__(self):
         self.load_calls = []
         self.save_calls = 0
+        self.reset_calls = 0
 
     def load_state(self, state):
         self.load_calls.append(state)
@@ -32,6 +34,9 @@ class FakeInstance:
     def save_state(self):
         self.save_calls += 1
         return "POST_STATE"
+
+    def reset(self):
+        self.reset_calls += 1
 
 
 class FakeBackend:
@@ -64,9 +69,6 @@ class _FakeRenderer:
 
 class _FakeModel:
     family = "chatml"
-    # save/load is now the opt-in fast path (default is full-replay), so the
-    # save/purge/advance tests below pin it explicitly. _ReplayModel flips it.
-    session_full_replay = False
 
 
 class _FakeConfig:
@@ -83,12 +85,12 @@ def _stub_session_deps(monkeypatch):
 
 def _make_session(mgr):
     inst = FakeInstance()
-    sess = SessionState(instance=inst, current_state="PRE_STATE")
+    sess = SessionState(instance=inst)
     mgr._sessions["s1"] = sess
     return inst, sess
 
 
-def test_degenerate_turn_purges_and_skips_save():
+def test_degenerate_turn_never_persists_and_never_splices():
     async def degen_gen():
         yield "partial-before-collapse"
         raise DegenerateGenerationError("run-length 48 of token 5", tokens_generated=48)
@@ -106,14 +108,14 @@ def test_degenerate_turn_purges_and_skips_save():
     chunks = asyncio.run(drive())
 
     assert chunks == ["partial-before-collapse"]  # partial yielded, then abort
-    assert inst.save_calls == 0, "degenerate KV must NOT be persisted"
-    # load_state called twice with the pre-turn snapshot: restore at start + purge
-    assert inst.load_calls == ["PRE_STATE", "PRE_STATE"]
-    assert sess.current_state == "PRE_STATE", "current_state must stay pre-turn"
+    assert inst.save_calls == 0, "the legacy splice is deleted — nothing saves"
+    assert inst.load_calls == [], "no evolving state may ever be loaded"
+    assert inst.reset_calls == 1, "full-replay restore (no static_state stub)"
+    assert sess.token_history == [], "a degenerate turn never enters history"
     assert sess.turn_count == 0, "a degenerate turn must not advance turn_count"
 
 
-def test_normal_turn_saves_and_advances():
+def test_normal_turn_advances_without_state_surgery():
     async def good_gen():
         for ch in ("hello ", "world"):
             yield ch
@@ -127,10 +129,26 @@ def test_normal_turn_saves_and_advances():
     chunks = asyncio.run(drive())
 
     assert "".join(chunks) == "hello world"
-    assert inst.save_calls == 1, "successful turn must persist state"
-    assert sess.current_state == "POST_STATE"
+    assert inst.save_calls == 0, "the legacy splice is deleted — nothing saves"
+    assert sess.token_history == [1, 2, 3], "the turn enters history instead"
     assert sess.turn_count == 1
     assert sess.last_assistant_text == "hello world"
+
+
+def test_legacy_splice_is_deleted():
+    """The save_state/load_state per-turn splice must stay gone: no
+    current_state field, no load of evolving session state in the source."""
+    import inspect
+
+    assert "current_state" not in {
+        f.name for f in __import__("dataclasses").fields(SessionState)
+    }
+    src = inspect.getsource(sm.SessionManager.session_turn)
+    assert "session.current_state" not in src
+    assert "save_state()" not in src, "no state may be captured mid-turn"
+    assert "instance.load_state" not in src.replace(
+        "instance.load_state, static", ""
+    ), "the only load_state target allowed is the pristine static"
 
 
 # ── session temperature floor ─────────────────────────────────────────
@@ -218,7 +236,7 @@ def test_floored_deep_turn_completes_through_session_turn():
 
 
 class _ReplayModel(_FakeModel):
-    session_full_replay = True
+    pass
 
 
 class _ReplayConfig(_FakeConfig):
@@ -267,7 +285,7 @@ def test_full_replay_reprefills_history_and_skips_state_surgery():
     backend = _SpyBackend(good_gen)
     mgr = SessionManager(backend)
     inst = _ReplayInstance()
-    sess = SessionState(instance=inst, current_state="PRE_STATE")
+    sess = SessionState(instance=inst)
     mgr._sessions["s1"] = sess
 
     def drive():
@@ -311,7 +329,7 @@ def test_full_replay_degenerate_turn_drops_from_history():
     backend = _SpyBackend(gen_factory)
     mgr = SessionManager(backend)
     inst = _ReplayInstance()
-    sess = SessionState(instance=inst, current_state="PRE_STATE")
+    sess = SessionState(instance=inst)
     mgr._sessions["s1"] = sess
 
     def drive():
