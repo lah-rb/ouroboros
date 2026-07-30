@@ -540,6 +540,7 @@ def build_action_registry() -> ActionRegistry:
         action_persist_validation_env,
         action_log_validation_notes,
         # A1: Dependency coverage check
+        action_check_declared_dependencies,
         action_check_dependency_coverage,
         action_parse_dep_check_result,
         action_collect_env_field,
@@ -556,6 +557,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("log_validation_notes", action_log_validation_notes)
     # A1: Dependency coverage check
     registry.register("check_dependency_coverage", action_check_dependency_coverage)
+    registry.register("check_declared_dependencies", action_check_declared_dependencies)
     registry.register("parse_dep_check_result", action_parse_dep_check_result)
     registry.register("collect_env_field", action_collect_env_field)
     registry.register("verify_project_env", action_verify_project_env)

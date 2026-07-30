@@ -22,48 +22,94 @@
       "properties": {
         "install_command": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Install dependencies for this language (e.g. pip install -e . or npm install). Optional."
         },
         "formatter": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Auto-format the file. Optional."
         },
         "syntax": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Syntax / compile check. Required for every extension."
         },
         "import": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Verify the module can be imported/loaded. Optional."
         },
         "cross_import": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Verify cross-file imports resolve against project files. Optional."
         },
         "lint": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Lint / code-quality check, preferably auto-fixing. Optional."
+        },
+        "test_install_command": {
+          "type": "string",
+          "description": "Install the project's TEST dependencies (pytest plugins, [test]/[dev] extras, requirements-dev). Read from the project's own config \u2014 no hardcoded reflex. Best-effort: a failure here must not fail the env phase."
         }
       },
-      "required": ["syntax"],
+      "required": [
+        "syntax"
+      ],
       "additionalProperties": false
     }
   },
   "x-example": {
     "interactive_prompt": "> ",
     "py": {
-      "install_command": ["uv", "pip", "install", "-r", "pyproject.toml"],
-      "formatter": ["ruff", "format", "-q", "{file}"],
-      "syntax": ["python", "-c", "import py_compile; py_compile.compile('{file}', doraise=True)"],
-      "import": ["python", "-c", "import {module}"],
-      "cross_import": ["python", "-c", "from {module} import *"],
-      "lint": ["ruff", "check", "--fix", "{file}"]
+      "install_command": [
+        "uv",
+        "pip",
+        "install",
+        "-r",
+        "pyproject.toml"
+      ],
+      "formatter": [
+        "ruff",
+        "format",
+        "-q",
+        "{file}"
+      ],
+      "syntax": [
+        "python",
+        "-c",
+        "import py_compile; py_compile.compile('{file}', doraise=True)"
+      ],
+      "import": [
+        "python",
+        "-c",
+        "import {module}"
+      ],
+      "cross_import": [
+        "python",
+        "-c",
+        "from {module} import *"
+      ],
+      "lint": [
+        "ruff",
+        "check",
+        "--fix",
+        "{file}"
+      ]
     }
   }
 }

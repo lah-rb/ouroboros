@@ -9479,11 +9479,6 @@
     "description": "Initialize project tooling and structure. Creates config files,\ndirectories, installs dependencies, and detects validation tooling.",
     "context_tier": "flow_directive",
     "returns": {
-      "setup_complete": {
-        "type": "bool",
-        "from": "context.setup_result",
-        "optional": true
-      },
       "files_changed": {
         "type": "list",
         "from": "context.files_changed",
@@ -9787,12 +9782,43 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "result.parse_failed == true",
+              "transition": "build_report_failure"
+            },
+            {
+              "condition": "true",
+              "transition": "check_declared_deps"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "check_declared_deps": {
+        "action": "check_declared_dependencies",
+        "description": "Cross-check the dependency manifest against real imports (advisory)",
+        "context": {
+          "required": [],
+          "optional": [
+            "project_manifest",
+            "mission"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
               "condition": "true",
               "transition": "detect_env"
             }
           ]
         },
-        "publishes": [],
+        "publishes": [
+          "undeclared_dependencies"
+        ],
         "effects": [],
         "terminal": false
       },

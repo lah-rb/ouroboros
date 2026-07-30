@@ -262,10 +262,16 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
     file_blocks = _parse_multi_file_output(raw_text, fallback_path=fallback_path)
 
     if not file_blocks:
+        # parse_failed distinguishes "the response contained no fences at all"
+        # from "the writes were refused/partial" — both leave files_written at
+        # 0, and callers that route on the count alone cannot tell a contract
+        # violation from a protected-file no-op. Additive: existing resolvers
+        # keying on all_written/files_written are unaffected.
         return StepOutput(
             result={
                 "all_written": False,
                 "files_written": 0,
+                "parse_failed": True,
                 "errors": ["No file blocks found"],
             },
             observations="Could not parse any file blocks from the output",
@@ -325,6 +331,7 @@ async def action_apply_multi_file_changes(step_input: StepInput) -> StepOutput:
         result={
             "all_written": all_written,
             "files_written": files_written,
+            "parse_failed": False,
             "total_files": len(file_blocks),
             "skipped_existing": len(skipped_existing),
             "errors": errors,

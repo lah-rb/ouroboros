@@ -7,6 +7,7 @@ alongside existing actions.
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
@@ -1245,6 +1246,184 @@ async def action_check_dependency_coverage(step_input: StepInput) -> StepOutput:
             "dep_check_manifest": manifest_text,
             "dep_check_skipped": False,
         },
+    )
+
+
+# ── the dependency CLAIM, checked deterministically ───────────────────
+#
+# WHY THIS IS SEPARATE FROM check_dependency_coverage ABOVE: that one gathers
+# evidence and hands it to an LLM to interpret, and it runs in quality_gate —
+# i.e. AFTER the code is written, and only as a gate. This one asks the much
+# narrower question the step that AUTHORS the manifest should be able to answer
+# about its own output: does anything the code imports fail to appear in the
+# manifest at all?
+#
+# The failure it exists for: a plan_setup run emitted `requires = []` alongside
+# the claim "PyYAML is stdlib". Both halves were rendered as FILE CONTENT, so
+# nothing could validate either — the claim was smuggled inside a config file.
+# `yaml` is not in sys.stdlib_module_names, and this is a fact, not an opinion,
+# so no inference call is needed to catch it.
+#
+# ADVISORY by design. Import-name to distribution-name is genuinely ambiguous
+# (`import yaml` <- PyYAML, `import bs4` <- beautifulsoup4), so this normalizes
+# both sides and accepts a substring match in either direction. That resolves
+# PyYAML/yaml and python-dateutil/dateutil, and still misses bs4/beautifulsoup4.
+# A miss here is a false alarm on a note, never a blocked phase.
+
+_LOCAL_IMPORT_HINTS = ("src", "lib", "app", "tests", "test")
+
+
+def _declared_names(manifest_text: str) -> set[str]:
+    """Every identifier-ish token in the dependency manifest, normalized."""
+    return {
+        re.sub(r"[^a-z0-9]", "", tok.lower())
+        for tok in re.findall(r"[A-Za-z][A-Za-z0-9._-]{1,}", manifest_text or "")
+    } - {""}
+
+
+def _undeclared_imports(
+    sources: dict[str, str], manifest_text: str, local_stems: set[str]
+) -> list[str]:
+    """Third-party module names imported by the code but absent from the manifest.
+
+    Python only — ``sys.stdlib_module_names`` is what makes the check exact,
+    and there is no equivalent for the other languages, so callers skip them
+    rather than guess.
+    """
+    declared = _declared_names(manifest_text)
+    stdlib = set(sys.stdlib_module_names)
+    missing: set[str] = set()
+    for path, text in sources.items():
+        if not path.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse(text or "")
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                roots = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                # level > 0 is an explicit relative import — always local.
+                if node.level or not node.module:
+                    continue
+                roots = [node.module.split(".")[0]]
+            else:
+                continue
+            for root in roots:
+                norm = re.sub(r"[^a-z0-9]", "", root.lower())
+                if not norm or root in stdlib or root in local_stems:
+                    continue
+                if root in _LOCAL_IMPORT_HINTS:
+                    continue
+                if any(norm in d or d in norm for d in declared):
+                    continue
+                missing.add(root)
+    return sorted(missing)
+
+
+async def action_check_declared_dependencies(step_input: StepInput) -> StepOutput:
+    """Advisory: report imports the dependency manifest does not account for.
+
+    Reads context.project_manifest for the file list; skips cleanly when there
+    is no manifest, no python sources, or nothing to say. Publishes
+    ``undeclared_dependencies`` and pushes at most ONE note per mission, so a
+    re-run of project_ops cannot spam the record.
+    """
+    effects = step_input.effects
+    project_manifest = step_input.context.get("project_manifest") or {}
+    if not effects or not project_manifest:
+        return StepOutput(
+            result={"dep_claim_skipped": True},
+            observations="No effects or project manifest — dependency claim not checked",
+            context_updates={"undeclared_dependencies": []},
+        )
+
+    paths = list(project_manifest.keys())
+    manifest_text = ""
+    for p in paths:
+        if os.path.basename(p) in _DEP_MANIFEST_NAMES:
+            try:
+                fc = await effects.read_file(p)
+                if getattr(fc, "exists", False):
+                    manifest_text += (getattr(fc, "content", "") or "") + "\n"
+            except Exception:  # noqa: BLE001 — unreadable manifest = nothing to check
+                continue
+    if not manifest_text.strip():
+        return StepOutput(
+            result={"dep_claim_skipped": True},
+            observations="No dependency manifest — nothing to cross-check",
+            context_updates={"undeclared_dependencies": []},
+        )
+
+    sources: dict[str, str] = {}
+    for p in paths:
+        if not p.endswith(".py"):
+            continue
+        try:
+            fc = await effects.read_file(p)
+            if getattr(fc, "exists", False):
+                sources[p] = getattr(fc, "content", "") or ""
+        except Exception:  # noqa: BLE001
+            continue
+    if not sources:
+        return StepOutput(
+            result={"dep_claim_skipped": True},
+            observations="No python sources — dependency claim not checked",
+            context_updates={"undeclared_dependencies": []},
+        )
+
+    local_stems = {os.path.basename(p)[:-3] for p in sources}
+    local_stems |= {p.split("/")[0] for p in paths if "/" in p}
+    missing = _undeclared_imports(sources, manifest_text, local_stems)
+    if not missing:
+        return StepOutput(
+            result={"dep_claim_skipped": False, "undeclared_count": 0},
+            observations=f"Dependency claim consistent across {len(sources)} file(s)",
+            context_updates={"undeclared_dependencies": []},
+        )
+
+    summary = (
+        "dependency claim unverified: the code imports "
+        + ", ".join(missing)
+        + " but the dependency manifest does not mention "
+        + ("it" if len(missing) == 1 else "them")
+        + ". Either add the distribution(s) or confirm the import is provided "
+        "another way — 'it is in the standard library' is checkable and these "
+        "are not in it."
+    )
+    logger.warning("📦 %s", summary)
+    mission = step_input.context.get("mission")
+    if mission is None and effects is not None:
+        try:
+            mission = await effects.load_mission()
+        except Exception:  # noqa: BLE001 — advisory only
+            mission = None
+    if mission is not None:
+        from agent.persistence.models import NoteRecord
+
+        marker = "dependency claim unverified"
+        already = any(
+            marker in (getattr(n, "content", "") or "")
+            for n in (getattr(mission, "notes", []) or [])
+        )
+        if not already:
+            mission.notes.append(
+                NoteRecord(
+                    content=summary[:600],
+                    category="failure_analysis",
+                    tags=["dependency_claim"],
+                    source_flow="project_ops",
+                )
+            )
+            try:
+                await effects.save_mission(mission)
+            except Exception:  # noqa: BLE001
+                pass
+    return StepOutput(
+        result={"dep_claim_skipped": False, "undeclared_count": len(missing)},
+        observations=summary,
+        context_updates={"undeclared_dependencies": missing},
     )
 
 

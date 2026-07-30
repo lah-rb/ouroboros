@@ -22,7 +22,13 @@ project_ops: #FlowDefinition & {
 
 	context_tier: "flow_directive"
 	returns: {
-		setup_complete:    {type: "bool", from: "context.setup_result",       optional: true}
+		// `setup_complete` was declared here reading `context.setup_result`,
+		// whose only publisher was the deleted `run_setup_commands` step (see
+		// the removal note below). It could therefore never be present, while
+		// reporting_actions rendered a `Setup: …` line gated on it — a line
+		// this flow could not produce. Removed 2026-07-30 rather than wired,
+		// because installs are handled by collect_installs → run_installs and
+		// there is nothing left for it to mean here.
 		files_changed:     {type: "list", from: "context.files_changed",      optional: true}
 		env_detected:      {type: "bool", from: "context.env_config",         optional: true}
 		directive_report:  {type: "dict", from: "context.directive_report",   optional: true}
@@ -183,8 +189,52 @@ project_ops: #FlowDefinition & {
 			params: protect_existing: true
 			resolver: {
 				type: "rule"
+				rules: [
+					// `plan_setup` declares response_shape: "code" and its
+					// instruction demands `# === FILE: <path> ===` fences, so a
+					// response with no fences is a CONTRACT VIOLATION, not an
+					// empty result — the instruction never sanctions writing
+					// nothing. This used to be an unconditional `true`, which
+					// made a fence-parse failure indistinguishable from success
+					// and let the flow proceed to env detection over files that
+					// were never written. Routed on `parse_failed` rather than
+					// `files_written == 0` deliberately: with
+					// protect_existing: true a re-run can legitimately write
+					// zero files because they all already exist.
+					{condition: "result.parse_failed == true", transition: "build_report_failure"},
+					{condition: "true", transition: "check_declared_deps"},
+				]
+			}
+		}
+
+		// ── The dependency CLAIM, checked where it is made ──────────
+		//
+		// plan_setup emits file BODIES as fences, which is right — TOML inside
+		// JSON means escaped newlines and a second parse, and the scaffolding
+		// parse floor in guarded_write_file is what catches malformed config.
+		// But the same step also decides DEPENDENCIES, and that is structured
+		// data smuggled inside a file it happens to write: one run emitted
+		// `requires = []` alongside "PyYAML is stdlib", a claim rendered as
+		// file content that nothing could validate.
+		//
+		// Split by KIND, not wholesale: bodies stay fences, and the claim gets
+		// checked against the code that has to live with it. Deterministic —
+		// `yaml` is not in sys.stdlib_module_names, which is a fact, so this
+		// costs no inference call.
+		//
+		// ADVISORY on purpose, and the unconditional resolver here is NOT the
+		// write_files bug above: import-name to distribution-name is genuinely
+		// ambiguous, so a mismatch is reported to the next diagnostician rather
+		// than used to fail a phase.
+		check_declared_deps: #StepDefinition & {
+			action:      "check_declared_dependencies"
+			description: "Cross-check the dependency manifest against real imports (advisory)"
+			context: optional: ["project_manifest", "mission"]
+			resolver: {
+				type: "rule"
 				rules: [{condition: "true", transition: "detect_env"}]
 			}
+			publishes: ["undeclared_dependencies"]
 		}
 
 		// ── (removed) Phase 4: run setup commands ───────────────────

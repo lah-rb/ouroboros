@@ -59,13 +59,17 @@ def test_escalate_env_branches_on_resolved_vs_deferred(flows):
     # taken on trust. See test_project_env_verification.py for the loop's
     # termination guarantee.
     assert rules[0]["transition"] == "verify_env_after_escalation"
-    assert rules[-1]["transition"] == "build_report_failure", "deferred → honest failure"
+    assert (
+        rules[-1]["transition"] == "build_report_failure"
+    ), "deferred → honest failure"
 
 
 def test_run_installs_publishes_the_evidence_escalate_consumes(flows):
     # escalate_env reads context.terminal_output; run_installs must publish it,
     # or the escalation would open with an empty brief.
-    assert "terminal_output" in flows["project_ops"]["steps"]["run_installs"]["publishes"]
+    assert (
+        "terminal_output" in flows["project_ops"]["steps"]["run_installs"]["publishes"]
+    )
 
 
 def test_escalate_is_a_subflow_not_tail_callable(flows):
@@ -80,9 +84,9 @@ def test_escalate_is_a_subflow_not_tail_callable(flows):
     assert terminals, "escalate must have terminal steps"
     assert any(s.get("status") == "resolved" for s in terminals)
     assert any(s.get("status") == "deferred" for s in terminals)
-    assert not any("tail_call" in s for s in terminals), (
-        "escalate terminals must not tail-call — it returns to its invoker"
-    )
+    assert not any(
+        "tail_call" in s for s in terminals
+    ), "escalate terminals must not tail-call — it returns to its invoker"
 
 
 # ── The dead setup-commands step ──────────────────────────────────────
@@ -97,9 +101,22 @@ def test_project_ops_no_longer_has_the_dead_setup_step(flows):
     assert "run_setup_commands" not in flows["project_ops"]["steps"]
 
 
-def test_write_files_routes_straight_to_env_detection(flows):
+def test_write_files_never_routes_through_a_setup_command_step(flows):
+    """Originally this pinned the literal list `["detect_env"]`, written when
+    `run_setup_commands` was removed. The intent was "the dead step is not in
+    this path", and that still holds — but the shape changed on 2026-07-30:
+    a fence-parse failure now routes to build_report_failure instead of being
+    indistinguishable from success, and the happy path passes through the
+    advisory dependency-claim check on its way to env detection."""
     rules = flows["project_ops"]["steps"]["write_files"]["resolver"]["rules"]
-    assert [r["transition"] for r in rules] == ["detect_env"]
+    transitions = [r["transition"] for r in rules]
+    assert "run_setup_commands" not in transitions
+    assert transitions[0] == "build_report_failure"
+    assert rules[0]["condition"] == "result.parse_failed == true"
+    # The success path still ends at env detection, one advisory step later.
+    assert transitions[-1] == "check_declared_deps"
+    deps = flows["project_ops"]["steps"]["check_declared_deps"]
+    assert [r["transition"] for r in deps["resolver"]["rules"]] == ["detect_env"]
 
 
 def test_no_dangling_transitions_in_project_ops(flows):
