@@ -8,7 +8,7 @@ leaves residue, replace it with the residue only. Findings worth keeping past
 the task belong in the memory files, `dev/` docs, or a config comment, not here.
 
 *Last audited 2026-07-30 — every section below was checked against the code,
-the run logs, and git history; nine closed items were deleted.*
+the run logs, and git history; ten closed items were deleted.*
 
 ## Standing constraints (read before touching anything)
 
@@ -21,10 +21,9 @@ the run logs, and git history; nine closed items were deleted.*
   -m pytest tests/`. Main suite: `uv run pytest tests/`. (2026-07-30:
   1845 main / 601 llmvp passing — run them, don't trust the number.)
 - Verification fence per change: both suites + `ouroboros.py lint-flows`
-  + `smoke` (44/44) + `cli-smoke` (19/19) + black/ruff clean.
-  **The lint-flows fence is currently RED — 2 errors, see §11.** Until that
-  lands, "no NEW errors" is the fence.  `flows/compiled.json` commits force
-  all touched .cue sources into the same commit.
+  (0 errors / 1 standing advisory) + `smoke` (47/47) + `cli-smoke`
+  (19/19) + black/ruff clean. `flows/compiled.json` commits force all
+  touched .cue sources into the same commit.
 - **Config hygiene:** the last-served config may stay resident between runs —
   the work is varied enough that snapping back to a "production" default has
   no value. What matters is that the active config AND the mission parameters
@@ -84,15 +83,22 @@ records `F821` and `repeat_warn` in its OUTCOME file (lines 136-141), but its
 only log is 336 bytes and ends at "waiting for the quant A/B driver" — there is
 no arm-3 work dir and no OUTCOME sidecar carrying those counters.
 
-**Related, and the reason arm 3 matters:** lint now *asks* but does not *gate*.
+**Related, and the reason arm 3 matters — lint asks, and that is FINAL.**
 `753ccf8` + `9194f7a` made a failed `lint:` check set `structural_block_reason`
 = "lint" until `goal.lint_reviewed` (`reporting_actions.py:402`,
 `models.py:300`), so an F821 blocks for exactly one fix-or-defer pass and is
-then accepted unconditionally. `pipeline_actions.py:757` still reads
-`"required": tier == "syntax"`. Luke's position (2026-07-27) is that ruff should
-gate every structural goal. **Zero live firings** of `Structural sweep: lint
-review` across all runs to date, including post-commit ones — so the shipped
-behaviour is also unobserved.
+then accepted. **This is the settled design, not a half-measure** (operator,
+2026-07-30): hard-gating lint creates inescapable trap surface — a goal whose
+lint finding the model cannot resolve would loop forever with no route out,
+which is precisely the trap class `dev/TRAP_BRIEF.md` exists to document. The
+one-pass ask gets the finding in front of the model at write time without
+manufacturing a new dead end. `pipeline_actions.py:757` keeping
+`"required": tier == "syntax"` is therefore correct and should stay.
+
+What is genuinely owed is only the **measurement**: zero live firings of
+`Structural sweep: lint review` across every run to date, including
+post-commit ones. The behaviour has never been observed in the wild, so we
+know it ships but not what it does. That is what arm 3 would show.
 
 ## 3. TB2: the next measurement
 
@@ -144,15 +150,51 @@ Remaining format work:
   dial. Flags kept as intent; the depth dial self-activates if upstream makes
   step37 shiftable.
 
-## 5. Seam gate: eight WARNING firings nobody has read
+## 5. Seam gate: the fail-open WARNING lies, and the counter is mis-scoped
 
 `_phase_exit_seam_gate` (`mission_actions.py:2063`) is validated live — 156×
-`Seam gate: clean` across the run corpus. But it also fired **8×
-`Seam gate: attempt bound reached (3/3) — failing OPEN`**, and that line is by
-its own definition a defect signal: the phase exited with KNOWN-BAD seams after
-three fix attempts. Nobody has looked at those eight. Pull them from
-`~/ouroboros-runs`, classify what survived, and decide whether the bound is too
-low or the fix loop is ineffective on that shape.
+`Seam gate: clean`. It also fired 8× `attempt bound reached (3/3) — failing
+OPEN, phase exits with UNRESOLVED seams`. **Those eight were read on
+2026-07-30 and the WARNING is mostly wrong.** Three separate defects, in
+priority order:
+
+**1. The bound check runs BEFORE any analysis, so the claim is never
+established.** `mission_actions.py:2100-2110` returns `None` on the attempt
+count without reading a file, without `_transfer_shape_violations`, without
+`action_run_contract_typecheck`. "Phase exits with UNRESOLVED seams" is
+asserted from a stale note, not measured. Verified against the artifacts: of
+the 8 firings, **3 had every seam already fixed** (qwen3-next's `_ask` /
+`_handle_dialogue_choice` / `world_data` all resolved in the final
+`engine.py`; laguna's `_restart` fixed at cycle 33, *before* the first
+WARNING). The other 5 are one devstral run re-reporting a single stale note
+set at five successive phase exits. Fix: re-run the (deterministic, cheap)
+checks before claiming anything, so a fail-open says what is actually broken.
+
+**2. The counter is mission-lifetime, never reset on a clean pass.**
+`attempts` sums every `seam_gate`-tagged note over the whole mission. The qwen
+log is the proof: `Seam gate: clean` at four separate exits interleaved
+between the failures, counter climbing throughout — three *unrelated,
+sequentially-arising* seams, each fixed on the first try, and the mission was
+then permanently locked out of the gate. Key the counter to the seam identity
+(or reset it on a clean pass); the bound is mis-scoped, not too low.
+
+**3. One seam shape the fix loop genuinely cannot resolve: a missing
+self-method.** Devstral hit `GameEngine._handle_flee` three times with
+byte-identical seam text and identical localization, because the dispatch
+localizes to the **calling** symbol and instructs "Fix {target} so its
+cross-module calls match" (`:2194`) — so a missing-*definition* seam gets the
+call site re-edited three times and the definition never written. That one is
+a REAL defect that shipped: `devstral-2-small-24b/engine.py:459` calls
+`self._handle_flee()` and no such method exists. It is latent only by luck —
+it sits in `_handle_command`, a duplicated dispatcher with no callers, while
+the live `handle_command` handles flee inline.
+
+Two smaller things found alongside: the gate is **misnamed for what fires** —
+all 8 surviving seams are intra-module self-attribute errors from the
+typecheck half, while the cross-module transfer-shape half produced zero, yet
+every message and the fix directive say "cross-module"; and the note stores
+`seams[:300]`, truncating mid-token in all 8, while the WARNING tells the
+operator the evidence is in those notes.
 
 Also open: a **prefill-rate-scaled context-diet knob** (server advertises the
 rate via health). Not implemented anywhere — `decode_tps` exists only as a
@@ -321,33 +363,7 @@ is the inadequate result this gate exists to supersede, not the gate. Record
 the measured rate either way; a null result is worth keeping, because
 "speculative decoding on Mac" keeps coming back.
 
-## 11. lint-flows is RED at HEAD — two undeclared-contract errors
-
-Found by the 2026-07-30 audit; **present at HEAD, not from working-tree
-changes** (verified by stashing `flows/`).
-
-    ERROR: file_ops.run_localize — requires context key 'symbol_table' but no
-           step or input in this flow publishes it
-    ERROR: file_ops.run_localize — required context ['symbol_table'] not
-           published on every path reaching this step. Example gap path:
-           check_exists -> read_target -> check_module_fix ->
-           run_module_frame_edit -> reread_after_module_fix -> extract_symbols
-           -> run_localize
-
-**This is a declaration gap, not a broken path.** The `extract_symbols`
-template (`flows/shared/templates.cue:294-301`) declares no `publishes` at all,
-while its action emits `symbol_table` (and `symbol_menu_options`) through
-`context_updates` at runtime (`agent/actions/ast_actions.py:192-263`). That is
-why the localization rung demonstrably fires live (6+ firings across the
-tier runs) despite the linter refusing the path.
-
-Fix = declare what the action actually publishes on the template, then
-recompile (`flows/compiled.json` forces the touched .cue sources into the same
-commit). Worth doing promptly: while this is red, the standing verification
-fence cannot be read as pass/fail, which is how it went unnoticed in the first
-place.
-
-## 12. Transient-file flush — the brownfield gap
+## 11. Transient-file flush — the brownfield gap
 
 The declaration-drift defect is FIXED (2026-07-29): `transient_files` is now
 declared in `project_ops` (`declare_artifacts` → `persist_artifacts`) where the
@@ -364,7 +380,7 @@ better-grounded) declaration and the tripwire alone. Pure observation —
 snapshot at session start, flush what appeared — remains the universal fix if
 that gap ever bites.
 
-### 12a. Three defects found while mapping `project_ops` (unfixed)
+### 11a. Three defects found while mapping `project_ops` (unfixed)
 
 Recorded, not chased:
 
@@ -388,7 +404,7 @@ Related, same run: **7 of 9 failed reports recorded ZERO checks**
 (`checks_passed: [] / checks_failed: []`). A failure verdict with no checkable
 items is unfalsifiable — the vacuous-verification shape again.
 
-## 13. Small items (grab-bag)
+## 12. Small items (grab-bag)
 
 - Agent-side identical-retry backoff: the KV-eviction and anti-gut loops
   both retried the same dispatch unchanged for hours. What exists today is
@@ -396,7 +412,7 @@ items is unfalsifiable — the vacuous-verification shape again.
   dispatch-level "same goal+flow failed N× in a row → backoff/escalate" guard.
 - Standing lint advisory: `add_symbol.generate_new_symbol` string-match
   condition (arguably a linter over-trigger — either exempt emptiness
-  checks in flow_lint or convert the step). Distinct from §11's two errors.
+  checks in flow_lint or convert the step). Distinct from the flow-contract errors fixed 2026-07-30.
 - **Qwen3-Next resident-cache re-verification.** It carries
   `resident_seq_cache: true` on a 2026-07-02 three-turn probe and has no
   `probe_verified_cache:` block; it was not in the Block F sweep, so its
@@ -407,7 +423,7 @@ items is unfalsifiable — the vacuous-verification shape again.
   commits** ahead of `main`, whose tip is `4198104`. The longer this sits the
   less "decision" and the more "migration" it becomes.
 
-## 14. Parked until triggered (do NOT start unprompted)
+## 13. Parked until triggered (do NOT start unprompted)
 
 - **Polish/creativity gate** (rank 60 reserved in PHASE_RANKS): a
   `flows/code_core/polish_gate.cue` modeled on quality_gate.cue (review →
