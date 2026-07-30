@@ -154,5 +154,143 @@
         "wall_s": 211.8
       }
     ]
+  },
+  {
+    "arm": "poolside-Q4KM-nothink",
+    "reps": 4,
+    "tool_call_rate": 0.0,
+    "runaway_rate": 1.0,
+    "usable_rate": 1.0,
+    "median_gen": 8000,
+    "rows": [
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 31224,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 237.3
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 31370,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 235.2
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 30524,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 217.0
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 31498,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 223.6
+      }
+    ]
+  },
+  {
+    "arm": "poolside-Q4KM-THINK",
+    "reps": 4,
+    "tool_call_rate": 0.0,
+    "runaway_rate": 1.0,
+    "usable_rate": 1.0,
+    "median_gen": 8000,
+    "rows": [
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 30918,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 197.6
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 33461,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 227.3
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 30077,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 227.2
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 30634,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 226.0
+      }
+    ]
+  },
+  {
+    "arm": "unsloth-IQ3S-THINK",
+    "reps": 4,
+    "tool_call_rate": 0.0,
+    "runaway_rate": 1.0,
+    "usable_rate": 0.75,
+    "median_gen": 8000,
+    "rows": [
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 33367,
+        "capped": true,
+        "has_fence": false,
+        "wall_s": 237.3
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 32063,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 231.1
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 31747,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 227.3
+      },
+      {
+        "tool_call": false,
+        "gen": 8000,
+        "finished": true,
+        "chars": 28355,
+        "capped": true,
+        "has_fence": true,
+        "wall_s": 231.2
+      }
+    ]
   }
 ]

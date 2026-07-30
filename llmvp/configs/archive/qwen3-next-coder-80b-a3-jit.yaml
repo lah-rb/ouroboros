@@ -1,0 +1,91 @@
+# DESIGNATED JIT SCALING TEST CONFIG — keep permanently.
+#
+# Copy of qwen3-next-coder-80b-a3.yaml with JIT pool scaling enabled and
+# fast scaler timings so scale-up → reap → re-scale cycles are observable
+# in minutes. Qwen3-Next is the model the original JIT validation ran
+# against (proven up to 6 instances on this hardware — hybrid/recurrent
+# state, not quadratic KV, so multi-instance memory stays bounded).
+#
+# ⚠️ Metal-OOM hazard: per-instance context memory scales with n_ctx and
+# allocation failure ABORTS the process via a ggml assert (it presents as
+# a non-OOM crash — no Python traceback). Do NOT raise jit_concurrency_limit
+# or n_ctx here without headroom math for this machine. Attention-heavy
+# models (e.g. gpt-oss at n_ctx 131072) are NOT safe for multi-instance
+# JIT without drastically reducing n_ctx first.
+#
+# Run the scaling gate against this config:
+#   uv run llmvp.py --benchmark --sessions 2 --turns 3 --requests 8 \
+#     --concurrency 4 --idle-wait 130 --max-tokens 128 \
+#     --url http://localhost:8008
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 262144
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "qwen3-next-coder-80b-a3"
+  family: "chatml"
+  path: /Users/lah-rb/.lmstudio/models/noctrex/Qwen3-Coder-Next-MXFP4_MOE-GGUF/Qwen3-Coder-Next-MXFP4_MOE_BF16.gguf
+  n_ctx: 262144
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  thinking: false
+  # Hybrid recurrent state: per-turn save/load splicing is unsound
+  # (upstream llama.cpp #22384) — sessions re-prefill from history.
+  session_full_replay: true
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 262144
+  # Vendor profile + GDN loop posture (2026-07-22) — mirrors
+  # qwen3-next-coder-80b-a3.yaml; see dev/qwen3_loop_research.md.
+  temperature_default: 1.0
+  session_temp_floor: 0.7
+  temperature_floor: 0.7
+  top_p: 0.95
+  top_k: 40
+  min_p: 0.01
+  presence_penalty: 0.0
+  repeat_penalty: 1.0
+  penalty_last_n: 2048
+  # DRY REMOVED 2026-07-22 (isolation test — see qwen3-next-coder config):
+  # DRY converted the catchable coherent orbit into an uncatchable
+  # noise-slot structural loop that blinds the distinct-ratio guard.
+  degen_retry_enabled: true
+  degen_retry_temperature: 1.0
+  degen_retry_presence_penalty: 1.5
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/qwen3-next-coder-80b-a3.tokens.bin"
+  token_limit: 32768
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 3
+  jit_concurrency_limit: 3
+  # Fast scaler timings for observable reap cycles (production defaults
+  # are 600/300 — see core/config.py ResourcesConfig).
+  instance_idle_ttl: 60
+  scale_down_cooldown: 30
+  scale_wait_timeout: 300
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"

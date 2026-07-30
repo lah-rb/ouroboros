@@ -1,0 +1,57 @@
+[
+  {
+    "concurrency": 1,
+    "requests": 32,
+    "elapsed_s": 133.6,
+    "tokens": 6714,
+    "aggregate_tok_s": 50.2,
+    "per_request_tok_s_mean": 49.6,
+    "latency_p50_s": 3.6,
+    "latency_p95_s": 10.4,
+    "errors": 0
+  },
+  {
+    "concurrency": 4,
+    "requests": 32,
+    "elapsed_s": 72.8,
+    "tokens": 5582,
+    "aggregate_tok_s": 76.6,
+    "per_request_tok_s_mean": 19.2,
+    "latency_p50_s": 7.2,
+    "latency_p95_s": 22.2,
+    "errors": 0
+  },
+  {
+    "concurrency": 8,
+    "requests": 32,
+    "elapsed_s": 72.3,
+    "tokens": 6182,
+    "aggregate_tok_s": 85.5,
+    "per_request_tok_s_mean": 11.8,
+    "latency_p50_s": 12.3,
+    "latency_p95_s": 49.3,
+    "errors": 0
+  },
+  {
+    "concurrency": 16,
+    "requests": 32,
+    "elapsed_s": 67.6,
+    "tokens": 6794,
+    "aggregate_tok_s": 100.5,
+    "per_request_tok_s_mean": 7.4,
+    "latency_p50_s": 24.4,
+    "latency_p95_s": 63.2,
+    "errors": 0
+  },
+  {
+    "concurrency": 32,
+    "requests": 32,
+    "elapsed_s": 63.3,
+    "tokens": 6439,
+    "aggregate_tok_s": 101.8,
+    "per_request_tok_s_mean": 4.2,
+    "latency_p50_s": 42.1,
+    "latency_p95_s": 60.0,
+    "errors": 0
+  }
+]
