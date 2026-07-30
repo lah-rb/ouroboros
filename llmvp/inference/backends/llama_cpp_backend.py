@@ -2093,7 +2093,7 @@ class LlamaCppBackend(BaseBackend):
             detail = (" — resident AVAILABLE but not enabled; this model is "
                       "paying full re-prefill per session turn")
         elif strategy == "legacy_save_state":
-            detail = " — LEGACY save_state path (see OPEN_TASKS §4: unsafe)"
+            detail = " — LEGACY save_state path (see dev/caching/CORPUS.md: unsafe)"
 
         log.info(
             "🧩 session strategy: %s (resident_requested=%s, memory_can_shift=%s, "
@@ -3878,7 +3878,7 @@ class LlamaCppBackend(BaseBackend):
             )
         elif flow_eligible:
             # The M8 save_state-BLOB flow cache lived here and was deleted
-            # 2026-07-30 (OPEN_TASKS §4/§11b — rap sheet: save_state churn
+            # 2026-07-30 (dev/caching/CORPUS.md — rap sheet: save_state churn
             # corrupts static KV over a run, SWA pruning fragility, multi-GB
             # blob overflow). Every flow-capable config runs resident (the
             # seq-ops hot-set above); a non-resident pool config with

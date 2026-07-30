@@ -10,17 +10,20 @@ authoritative *snapshot of 2026-07-12* and is pointed here from its header.
 > before citing the mechanism catalog:
 > - **M8 (save_state-blob flow cache) and the legacy save_state session splice
 >   are DELETED**, not merely unreachable. Two session strategies remain,
->   resident and full-replay. OPEN_TASKS §4 and §11b are closed.
+>   resident and full-replay. The OPEN_TASKS items that tracked both
+>   (legacy-save_state retirement, flow-cache revisit) are closed and deleted.
 > - **M9's flow band now works under `decode_mode: batched`** — the shape
 >   production actually runs — and is live-accepted on gpt-oss swarm: fresh
 >   prefill 4,237 → 17 tokens, 3,970 ms → 0.1 ms per call, needle through the
 >   pinned head verbatim. `flow_kv_cache: true` on all 7 servable resident
 >   configs. The 2026-06 ban applied to M8 and does not survive it.
 > - **The wired limit is NOT a memory ceiling** (§4's ledger implied it could
->   be). `iogpu.wired_limit_mb` = 121.6 GB has been crossed by three separate
->   passing measurements — 116.4 GB (2026-07-28 ladder), 121.7 GB and 123.0 GB
->   (2026-07-30 probe rungs). PHYSICAL memory is what kills the machine; both
->   recorded hard reboots ran it out of RAM outright.
+>   be). `iogpu.wired_limit_mb` = 121.6 GB has been crossed by FOUR separate
+>   passing measurements — 116.4 GB (2026-07-28 ladder), then 121.7, 123.0 and
+>   123.6 GB (2026-07-30 probe rungs, each 3/3 generations clean). PHYSICAL
+>   memory is what kills the machine; both recorded hard reboots ran it out of
+>   RAM outright. A clamp to the wired limit was briefly added to the context
+>   probe and retracted the same day for refusing production-proven configs.
 
 Caching was the original concern that fueled building LLMVP. This corpus exists
 because the evidence had fragmented across ~29 sources, "cache hit rate" had

@@ -7,7 +7,7 @@ snapshot each turn) and resident_seq_cache (the production path — the
 session appends to a live resident sequence, no re-prefill). The legacy
 save_state/load_state per-turn snapshot splice was deleted 2026-07-30
 (unreachable: config validation refuses session_full_replay: false; rap
-sheet in OPEN_TASKS §4).
+sheet in dev/caching/CORPUS.md).
 
 Sessions have a TTL. Expiry behavior:
 - If an active subscription listener exists: push a SessionEvent.
@@ -502,7 +502,7 @@ class SessionManager:
             # Two session strategies remain (the legacy save_state/load_state
             # per-turn splice was deleted 2026-07-30 — the validator refuses
             # session_full_replay: false, so no loadable config reached it;
-            # its rap sheet lives in OPEN_TASKS §4).
+            # its rap sheet lives in dev/caching/CORPUS.md).
             # Resident-live takes precedence: seq 0 already holds static + every
             # prior turn (left live from last turn) — NO restore, NO re-prefill.
             # We only capture the live position so a degenerate turn can be
