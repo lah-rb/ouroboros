@@ -11,6 +11,93 @@
 #   - Remove optional fields to use their defaults
 #   - Update active_config.txt to point to your config file
 #
+# =============================================================================
+# SETTING UP A NEW MODEL — the procedure, in order
+# =============================================================================
+# Every step below exists because skipping it cost us something real. Do them
+# in this order: geometry before allocation, the model card before the first
+# run, the strategy before the features.
+#
+# ── 1. READ THE GGUF HEADERS BEFORE ALLOCATING ANYTHING ──────────────
+#   python3 dev/gguf_geometry.py <file.gguf> --template
+# Gives architecture, KV bytes/token, trained context, and the chat template.
+# THREE MACHINE REBOOTS WERE PRECOMPUTABLE from these numbers. Note the
+# attention class — it decides `swa_full` (step 4), and nothing else will tell
+# you: SWA/iSWA (gpt-oss, gemma, laguna) NEED swa_full for any pinned prefix;
+# MLA (glm) and dense (hy3) do not and are correct without it.
+#
+# ── 2. WEB-SEARCH THE MODEL CARD. THIS IS THE STEP THAT GETS SKIPPED ──
+# Look up the vendor/community sampling profile before the first run, and put
+# the URL in the config header. Vendors publish DIFFERENT PROFILES PER TASK
+# SHAPE and the agentic one is rarely the headline.
+#
+# WHAT IT COST US: glm-4.7-flash's card gives three profiles; the agentic one
+# (Terminal-Bench / SWE-bench shaped, which is what Ouroboros runs) is
+# temp 0.7 / top_p 1.0 / max_new_tokens 16384. Its first arm ran temp 0.6,
+# top_p 0.95, top_k 20 — a setting from nowhere, inside no published envelope,
+# and the arm was not a measurement of the model. Copying another model's
+# sampling block is the same mistake with extra steps: `logit_bias` ids are
+# tokenizer-specific, and penalty windows that work on one family blind the
+# degeneration guard on another.
+# Record the profile you chose AND the one you rejected — a config that cannot
+# say why it samples the way it does cannot be defended after a bad arm.
+#
+# ── 3. FAMILY / FORMAT ───────────────────────────────────────────────
+# Does `family:` already exist in llmvp/formats/? If NOT, the new schema must
+# ALSO be registered in core/fsm_labeller.py — olmo shipped unmapped once and
+# `think>` residue corrupted the judged artifact. Verify the turn terminator
+# is in the family's stop set: `dev/stop_token_audit.py` (a missing one burned
+# 83 minutes of a glm arm).
+#
+# ── 4. CHOOSE THE STRATEGY, THEN STATE swa_full ──────────────────────
+#   cache_strategy: replay | resident | batched      (see the shortcut below)
+# Default to `resident` — it is the optimum for any model that supports it.
+# Use `batched` only for concurrent fan-out; it BUYS concurrency by forfeiting
+# the session flow-fork, the CoT strip, sampling overrides and the cold
+# snapshot rebuild. Use `replay` only when the architecture refuses the others.
+# Then set `swa_full` from step 1. The strategy will not set it for you, on
+# purpose — it is architecture-determined and a strategy-level guess would be
+# wrong for half this fleet.
+#
+# ── 5. BOOT ONCE AND READ THE VERDICT ────────────────────────────────
+# `resident_seq_cache` is a REQUEST. Watch for:
+#   🧩 session strategy: resident (resident_requested=True, memory_can_shift=True, …)
+# If can_shift came back False the model is on full replay whatever the config
+# says, and it can layer NO cache features — that is a model-selection fact,
+# not a config bug. Hybrid-recurrent is not automatically disqualifying:
+# qwen3-next (DeltaNet) grants it while the GDN qwens refuse.
+#
+# ── 6. PROBE THE CONTEXT CEILING ─────────────────────────────────────
+#   .venv/bin/python api/main.py --probe-context <config>     (detached:
+#   bash dev/probe_ctx.sh <config>)
+# Writes back probe_verified_n_ctx + probe_verified_weights_bytes so the KV
+# preflight stops guessing. Two rules: never hand-edit those to make a load
+# succeed, and RE-PROBE after any flag change that moves the seq map — a
+# ceiling measured under other flags is invalid (it OOMed the swarm once).
+# NOTE the ceiling is a fraction of PHYSICAL memory; `iogpu.wired_limit_mb` is
+# NOT a ceiling — four passing measurements have crossed it.
+#
+# ── 7. LAYER FEATURES, GUIDED BY THE STRATEGY ────────────────────────
+# See dev/caching/FEATURE_MATRIX.md §2 for what each strategy supports and §3
+# for what each feature buys. Load-bearing gotchas:
+#   • flow_kv_cache needs resident — without it there is nothing to pin onto
+#     and it counts a fallback per request (config validation now warns).
+#   • reasoning_head_swap needs resident AND a family with reasoning levels.
+#   • snapshots: capture and HOT fork work everywhere; the COLD rebuild raises
+#     under batched.
+#   • kv_unified: true unless you have a reason — under `false` the per-seq
+#     window is n_ctx / n_seq_max, which is a /12 division with stock bands
+#     and has silently amputated contexts three times.
+#
+# ── 8. RECORD WHAT YOU MEASURED ──────────────────────────────────────
+# Run a session cell for the ledger so the model is comparable to the fleet:
+#   uv run python dev/cache_compat_matrix.py --label <model> --depth 16 \
+#       --turn-tokens 900
+# Write the result back as a `probe_verified_cache:` block, and pre-register a
+# `tier:` expectation BEFORE the first arm — its job is to make a surprise
+# legible, not to be right.
+# =============================================================================
+#
 # ── SHORTCUT: cache_strategy ─────────────────────────────────────────
 # A top-level `cache_strategy:` names one of the three deployable shapes and
 # expands to the flags it stands for, so a new model needs one decision
@@ -87,6 +174,60 @@ model:
   seed: -1
   # [M] Type: bool — llama.cpp verbose logging
   verbose: false
+
+  # ── Memory budget & measured geometry ───────────────────────────────────
+  # These four are what `--probe-context` WRITES BACK. Never hand-edit them to
+  # make a load succeed: the guard exists because an allocation past physical
+  # memory hard-reboots the machine before any error code is returned.
+  #
+  # [O] Type: int — per-STREAM ceiling, distinct from n_ctx. Under batched,
+  # n_ctx is the shared pool while this bounds any single stream (the swarm
+  # config declares n_ctx 589824 against model_max_context 131072, i.e. four
+  # streams' worth). Default: unset = n_ctx.
+  model_max_context: 131072
+  # [O] Type: float — refuse a load whose predicted weights+KV exceeds this,
+  # BEFORE Metal allocates. Set from the real usable budget, not from hope.
+  # Default: unset = derived from physical memory.
+  kv_preflight_gb: 106
+  # [O] Type: int — MEASURED bytes/token, overriding the header formula. The
+  # formula over-predicts badly on interleaved-SWA and MLA (measured 1.00x to
+  # 22.59x across the fleet), so a config without this is guarded against an
+  # estimate rather than a fact. Written by `--probe-context`.
+  kv_bytes_per_token_measured: 71680
+  # [O] Type: int — an n_ctx OBSERVED to load AND decode on this machine; the
+  # preflight honours it over its own arithmetic. Bound to the weights it was
+  # measured against (below) so a requant invalidates it rather than silently
+  # outliving it. INVALIDATED by any flag change that moves the seq map —
+  # re-probe rather than carrying it forward.
+  probe_verified_n_ctx: 131072
+  # [O] Type: int — weights size when probe_verified_n_ctx was measured.
+  probe_verified_weights_bytes: 65369017728
+
+  # ── RoPE / YaRN context extension ───────────────────────────────────────
+  # Only set these when the model card specifies them. They are silent when
+  # wrong: the model loads and degrades, it does not fail.
+  # [O] Type: float — RoPE base frequency override. Default: unset (GGUF).
+  rope_freq_base: null
+  # [O] Type: float — RoPE frequency scale. Default: unset (GGUF).
+  rope_freq_scale: null
+  # [O] Type: str — "none" | "linear" | "yarn". Default: unset (GGUF).
+  rope_scaling_type: null
+  # [O] Type: int — YaRN: the model's ORIGINAL trained context, the value the
+  # extension scales FROM. Default: unset.
+  yarn_orig_ctx: null
+  # [O] Type: float — YaRN extrapolation mix. Default: unset.
+  yarn_ext_factor: null
+  # [O] Type: float — YaRN attention magnitude scale. Default: unset.
+  yarn_attn_factor: null
+  # [O] Type: float — YaRN low correction dim. Default: unset.
+  yarn_beta_fast: null
+  # [O] Type: float — YaRN high correction dim. Default: unset.
+  yarn_beta_slow: null
+
+  # [O] Type: bool — prepend the family template's BOS. Some GGUF templates
+  # already emit one; doubling it shifts every cached prefix by a token.
+  # Default: unset = the family schema decides.
+  template_bos: null
 
   # ── KV / attention knobs ────────────────────────────────────────────────
   # [O] Type: bool — keep FULL KV for sliding-window-attention layers.
@@ -219,6 +360,15 @@ generation:
   min_p: null
   presence_penalty: null
   repeat_penalty: null
+  # [O] Type: Optional[float] — frequency penalty (llama.cpp penalty_freq),
+  # scaled by how OFTEN a token appeared, where presence_penalty is flat.
+  # Shares the penalty_last_n window below. Default: null => library default.
+  penalty_freq: null
+  # [O] Type: Optional[dict[int, float]] — per-token-id logit bias, e.g.
+  # {19: -100.0} to ban a token outright. Ids are TOKENIZER-specific, so a
+  # bias copied between models bans something unrelated — verify against the
+  # model's own vocab. Default: null.
+  logit_bias: null
   streaming_default: null
 
   # ── Degenerate-repetition guard (inference/repetition.py) ───────────────
@@ -258,6 +408,19 @@ generation:
   # (64 tokens — blind to paragraph-scale cycles; the live qwen3 orbits
   # repeat at ~800 tokens). Set ~2048 on GDN-hybrid configs.
   penalty_last_n: null
+
+  # ── Reasoning-budget controls (thinking families) ───────────────────────
+  # [O] Type: Optional[int] — cap the tokens a model may spend inside its
+  # thinking span before the harness intervenes. Guards the failure where one
+  # 32k-token deliberation burns an hour-long leg. Default: null = uncapped.
+  reasoning_budget: null
+  # [O] Type: Optional[str] — the token/string that OPENS the thinking span,
+  # when it differs from the family schema's. Default: null = family default.
+  reasoning_start: null
+  # [O] Type: Optional[str] — the token/string that CLOSES it. An unclosed
+  # span is the failure that strips a response to empty, so these two are
+  # worth stating explicitly on any new thinking family.
+  reasoning_end: null
   # [O] Type: Optional[float] — DRY sampler multiplier (0/null = disabled,
   # sampler chain untouched). Purpose-built long-period repetition breaker:
   # penalty grows exponentially in matched-sequence length
@@ -372,8 +535,22 @@ logging:
 #   provider: claude_cli | openai_compat   # adapter selection
 #   model: <provider-side model id>        # addressed per-request via the
 #                                          # completion `model` field
-#   claude_bin / base_url: ...             # transport knobs per adapter
+#   system_file: <path>                    # [O] raw text sent as the system
+#                                          # prompt — the persona equivalent,
+#                                          # since a remote entry has no
+#                                          # tokens_bin
+#   claude_bin: claude                     # [O] claude_cli only: binary
+#                                          # override (tests point at a fake)
+#   base_url: http://host:1234/v1          # [O] openai_compat only, INCLUDING
+#                                          # the /v1 suffix
+#   api_key_env: MY_PROVIDER_KEY           # [O] openai_compat only: the ENV
+#                                          # VAR NAME holding the key — never
+#                                          # the key itself
 #   temperature_default / max_tokens_default / timeout_s: request defaults
+#                                          # (0.7 / 1024 / 300.0)
 # Provider entries are ALWAYS available and never swapModel targets; auth
 # lives with the provider (claude CLI login / server-side key).
+#
+# NONE of the cache strategy above applies to a remote entry: no KV sessions,
+# no resident cache, no reasoning head-swap. It is chat/completion only.
 # ══════════════════════════════════════════════════════════════════════
