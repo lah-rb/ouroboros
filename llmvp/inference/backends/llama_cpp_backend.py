@@ -918,6 +918,14 @@ class LlamaCppBackend(BaseBackend):
                 persona_names,
                 self._reasoning_pin_levels if self._reasoning_head_swap else [],
                 snapshots=self._snapshot_max,
+                # The stateless flow cache under batched (2026-07-30): band
+                # sized by flow_kv_cache_max iff the flag is on. Under
+                # kv_unified (a batched requirement) the band divides nothing.
+                flow_slots=(
+                    self._flow_hot_set
+                    if getattr(self.config.model, "flow_kv_cache", False)
+                    else 0
+                ),
             )
         return self._batched_map
 
@@ -1036,6 +1044,13 @@ class LlamaCppBackend(BaseBackend):
             self._engine._persona_heads = heads
             self._engine._reasoning_heads = reasoning_heads
         self._demote_batched_snapshots()
+        # Flow pins die with the context too — clear so the next use BUILDs
+        # fresh instead of forking dead cells.
+        _eng = getattr(self, "_engine", None)
+        if _eng is not None and getattr(_eng, "_flow_pins", None):
+            _n = len(_eng._flow_pins)
+            _eng._flow_pins.clear()
+            log.info("🔁 batched rebuild cleared %d flow pin(s)", _n)
         self._h_context_refreshes += 1
         log.info(
             "🧼 batched context rebuilt + heads re-pinned in %.2fs",
@@ -1056,15 +1071,20 @@ class LlamaCppBackend(BaseBackend):
         seq_map = self._batched_seq_map()
         heads, reasoning_heads = self._pin_batched_heads()
 
-        # Flow-prefix pinning is pool-only in v1: the persona head already
-        # delivers the dominant prefill saving, and the flow LRU is a whole
-        # extra seq-allocator surface. Documented deferral.
-        if self._session_flow_fork or self._flow_band:
+        # Session flow-fork (the per-session resident fork) stays pool-only;
+        # the STATELESS flow band is batched-native as of 2026-07-30 (BUILD
+        # at retire, HIT via install_flow_sync) and lives on the seq map's
+        # flow slots.
+        if self._session_flow_fork:
             log.info(
-                "flow band / session flow-fork are pool-only — disabled in "
-                "batched mode (persona heads cover the static prefix)"
+                "session flow-fork is pool-only — disabled in batched mode"
             )
         self._session_flow_fork = False
+        if self._flow_band:
+            log.info(
+                "flow band ACTIVE in batched mode (%d slots)",
+                self._flow_hot_set,
+            )
 
         # Seats carry the per-STREAM ceiling (min of pool allocation and
         # trained range) — the pool may be far larger than any one stream
@@ -4349,12 +4369,39 @@ class LlamaCppBackend(BaseBackend):
         tracker = get_tracker()
 
         static_in_prompt = kwargs.pop("static_in_prompt", True)
-        # Flow-prefix pinning is pool-only in v1 (documented deferral): the
-        # persona head already delivers the dominant prefill saving.
+        # Stateless flow cache under batched (2026-07-30; was a documented
+        # pool-only deferral). HIT = install the pinned [static + flow head]
+        # onto this fresh seat and prefill only the tail; MISS = request a
+        # BUILD — this stream prefills [head + tail] normally and, on a NORMAL
+        # completion, the decode thread range-copies [0, prefix_len) onto the
+        # flow band. Measured payout on glm (pool, same mechanism):
+        # 3.51s/call = 49% of prefill at realistic head sizes.
         flow_key = kwargs.pop("flow_key", None)
-        kwargs.pop("flow_prefix_len", None)
-        if flow_key:
-            log.debug("flow_kv_cache is pool-only — ignoring flow_key %r", flow_key)
+        flow_prefix_len = int(kwargs.pop("flow_prefix_len", 0) or 0)
+        flow_build = None
+        flow_hit = False
+        if (
+            flow_key
+            and static_in_prompt
+            and 0 < flow_prefix_len <= len(prompt_tokens)
+            and self._engine is not None
+            and len(self._batched_seq_map().flow_seqs)
+        ):
+            _fresh_seat = int(seat.n_tokens or 0) == int(seat.static_len)
+            _pin = self._engine._flow_pins.get(flow_key)
+            if (
+                _pin is not None
+                and _fresh_seat
+                and _pin.n_tokens == flow_prefix_len
+            ):
+                self._engine.install_flow_sync(seat, _pin)
+                flow_hit = True
+            elif _fresh_seat:
+                flow_build = (
+                    flow_key,
+                    flow_prefix_len,
+                    list(prompt_tokens[:flow_prefix_len]),
+                )
         # Sampling overrides are pool-only in v1 (the degen-retry path); the
         # batched engine's per-stream sampling doesn't take them yet.
         if kwargs.pop("sampling_overrides", None):
@@ -4369,6 +4416,12 @@ class LlamaCppBackend(BaseBackend):
         # next request on this seat sees its contract intact.
         _reasoning = kwargs.pop("reasoning", None)
         _restore_head = None
+        if flow_hit and _reasoning:
+            # Pool parity: the reasoning head-swap is refused under a pinned
+            # flow prefix — the flow head REPLACED the seat's whole content and
+            # a whole-seq reasoning install would throw the pin away.
+            log.debug("completion reasoning=%s refused (flow prefix pinned)", _reasoning)
+            _reasoning = None
         if _reasoning and str(_reasoning) != self._reasoning_default_level:
             _level = str(_reasoning)
             _persona_head = self._engine._persona_heads.get(
@@ -4400,7 +4453,10 @@ class LlamaCppBackend(BaseBackend):
                     "completion reasoning=%s refused (batched preconditions)", _level
                 )
 
-        n_static = seat.static_len if static_in_prompt else 0
+        if flow_hit:
+            n_static = flow_prefix_len
+        else:
+            n_static = seat.static_len if static_in_prompt else 0
         if n_static > len(prompt_tokens):
             n_static = 0  # safety fallback (pool parity)
         dynamic_tokens = list(prompt_tokens[n_static:])
@@ -4430,6 +4486,9 @@ class LlamaCppBackend(BaseBackend):
             request_id=request_id,
             temperature=temperature,
             kv_base=kv_base,
+            flow_build=flow_build,
+            flow_hit=flow_hit,
+            flow_key=str(flow_key or "") if (flow_build or flow_hit) else "",
         )
         stream_id = self._engine.submit(req)
         log.info(
@@ -4590,9 +4649,10 @@ class LlamaCppBackend(BaseBackend):
             )
         except Exception:  # noqa: BLE001
             info["n_ctx_seq"] = 0
-        info["flow_builds"] = self._h_flow_builds
-        info["flow_hits"] = self._h_flow_hits
-        info["flow_evicts"] = self._h_flow_evicts
+        _eng = getattr(self, "_engine", None)
+        info["flow_builds"] = self._h_flow_builds + getattr(_eng, "h_flow_builds", 0)
+        info["flow_hits"] = self._h_flow_hits + getattr(_eng, "h_flow_hits", 0)
+        info["flow_evicts"] = self._h_flow_evicts + getattr(_eng, "h_flow_evicts", 0)
         info["flow_fallbacks"] = self._h_flow_fallbacks
         info["runaway_captures"] = self._h_runaway_captures
         info["decode_failures"] = self._h_decode_failures

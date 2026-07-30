@@ -37,6 +37,7 @@ import logging
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
@@ -68,6 +69,12 @@ class SeqMap:
     # range when session_snapshot_max is 0 — the pre-2026-07-30 layout, under
     # which sessionSnapshot raised "pool-only in batched mode v1".
     snap_seqs: range = range(0)
+    # Flow band: seqs above the snapshots holding pinned [static + flow head]
+    # KV for the stateless flow cache (M9 under batched). BUILD = range-copy
+    # [0, prefix_len) off a completed stream's seat, ON the decode thread;
+    # HIT = whole-seq install onto a fresh seat (control op). Empty when
+    # flow_kv_cache is off — the pre-2026-07-30 "flow is pool-only" layout.
+    flow_seqs: range = range(0)
 
     def working_seqs(self) -> range:
         return range(self.n_working)
@@ -78,6 +85,7 @@ def plan_seq_map(
     personas: List[str],
     reasoning_levels: List[str],
     snapshots: int = 0,
+    flow_slots: int = 0,
 ) -> SeqMap:
     """Lay out the seq bands: working seats, persona heads, reasoning heads,
     session snapshots.
@@ -91,18 +99,33 @@ def plan_seq_map(
         raise ValueError(f"n_working must be >= 1, got {n_working}")
     if snapshots < 0:
         raise ValueError(f"snapshots must be >= 0, got {snapshots}")
+    if flow_slots < 0:
+        raise ValueError(f"flow_slots must be >= 0, got {flow_slots}")
     names = list(dict.fromkeys(["default", *personas]))  # ordered, deduped
     persona_seqs = {name: n_working + i for i, name in enumerate(names)}
     base = n_working + len(names)
     reasoning_seqs = {lvl: base + i for i, lvl in enumerate(reasoning_levels)}
     snap_base = base + len(reasoning_levels)
+    flow_base = snap_base + snapshots
     return SeqMap(
         n_working=n_working,
         persona_seqs=persona_seqs,
         reasoning_seqs=reasoning_seqs,
-        n_seq_max=snap_base + snapshots,
+        n_seq_max=flow_base + flow_slots,
         snap_seqs=range(snap_base, snap_base + snapshots),
+        flow_seqs=range(flow_base, flow_base + flow_slots),
     )
+
+
+@dataclass
+class FlowPin:
+    """A pinned [global static + flow head]: its band seq and full token list.
+    tokens[:n_tokens] is what a HIT installs onto a fresh seat."""
+
+    key: str
+    seq: int
+    n_tokens: int
+    tokens: List[int]
 
 
 @dataclass
@@ -251,6 +274,14 @@ class StreamRequest:
     grammar: Any = None
     seed: Optional[int] = None
     request_id: str = ""
+    # Stateless flow cache: (key, prefix_len, head_tokens) requests a BUILD —
+    # on successful completion the decode thread range-copies [0, prefix_len)
+    # off this stream's seat onto a flow-band seq. flow_hit marks a request
+    # whose seat was pre-installed from a pin (telemetry only); flow_key
+    # carries the key on BOTH paths so retire telemetry stays truthful.
+    flow_build: Optional[tuple] = None
+    flow_hit: bool = False
+    flow_key: str = ""
     temperature: float = 0.0
     kv_base: int = 0  # KV skipped (static head / restored session occupancy)
 
@@ -410,6 +441,12 @@ class BatchedEngine:
         self._live_prefill_budget = self._prefill_chunk
         self._persona_heads: Dict[str, PersonaHead] = dict(persona_heads or {})
         self._reasoning_heads: Dict[str, PersonaHead] = {}  # level -> head
+        # Stateless flow cache (batched): key -> FlowPin on the seq map's flow
+        # band. LRU to the band size; cleared on context rebuild (cells die).
+        self._flow_pins: "OrderedDict[str, FlowPin]" = OrderedDict()
+        self.h_flow_builds = 0
+        self.h_flow_hits = 0
+        self.h_flow_evicts = 0
         self._capture_dir = capture_dir
         # Injectable llama_cpp touchpoints (unit tests run without the
         # native lib; production uses the defaults below).
@@ -977,9 +1014,30 @@ class BatchedEngine:
         slot._last_gen_start_pos = s.gen_start_pos
         slot._last_kv_base = int(s.req.kv_base)
         slot._last_dynamic_len = len(s.req.prompt_tokens)
-        slot._last_flow_hit = False
-        slot._last_flow_key = ""
+        slot._last_flow_hit = bool(s.req.flow_hit)
+        slot._last_flow_key = s.req.flow_key or (
+            (s.req.flow_build or ("",))[0] if s.req.flow_build else ""
+        )
         slot._last_end_reason = s.end_reason or ""
+        # Flow BUILD capture: on a NORMAL completion only (an errored,
+        # abandoned, or pressure-truncated stream may hold a partial/poisoned
+        # prefix), range-copy [0, prefix_len) — the tail and the generation
+        # sit above it and are excluded. Runs on the decode thread; no
+        # control op needed. NOTE: every successful retirement carries a
+        # reason ("completed" on EOS, "length" on cap, stop reasons) — the
+        # original `reason is None` guard was unreachable on ALL paths and
+        # the live acceptance caught it (0 builds ever). Discriminate on
+        # error + the known-bad reasons instead; _capture_flow's own
+        # n_tokens >= prefix_len check covers partial prefill.
+        if (
+            s.req.flow_build is not None
+            and error is None
+            and reason not in (_END_KV_PRESSURE, "abandoned")
+        ):
+            try:
+                self._capture_flow(s)
+            except Exception:  # noqa: BLE001 — a cache miss, never a failure
+                logger.exception("flow BUILD capture failed for %s", s.stream_id)
         static_head = self._persona_heads.get(slot.persona)
         slot._last_cache_hit = bool(
             static_head and s.req.kv_base > static_head.n_tokens
@@ -1163,6 +1221,60 @@ class BatchedEngine:
             return slot.n_tokens
 
         return self.control(_do).result(timeout=60)
+
+    def _capture_flow(self, s: "StreamState") -> None:
+        """Pin a completed BUILD stream's [static + flow head] on the band.
+
+        DECODE THREAD ONLY (called from _retire). The range copy [0, prefix_len)
+        excludes the dynamic tail and the generation, which sit above it — the
+        pinned prefix is exactly what a later HIT installs. LRU to the band
+        size; eviction frees the old seq for reuse."""
+        key, plen, head_tokens = s.req.flow_build
+        band = self._seq_map.flow_seqs
+        if not len(band) or key in self._flow_pins:
+            return
+        # The seat's KV position at retire time is s.n_past (slot.n_tokens is
+        # not advanced until AFTER capture in _retire — reading it here made
+        # this guard reject every real stream: the seat still reported the
+        # persona-head length while the full prompt sat decoded above it).
+        if int(s.n_past or 0) < plen:
+            return  # stream never reached the head boundary — nothing sound to pin
+        used = {p.seq for p in self._flow_pins.values()}
+        free = [q for q in band if q not in used]
+        if not free:
+            old_key, old_pin = self._flow_pins.popitem(last=False)
+            self._llama._ctx.memory_seq_rm(old_pin.seq, 0, -1)
+            free = [old_pin.seq]
+            self.h_flow_evicts += 1
+            logger.info("flow LRU evict %r → reuse seq %d", old_key, old_pin.seq)
+        seq = free[0]
+        ctx = self._llama._ctx
+        ctx.memory_seq_rm(seq, 0, -1)
+        ctx.memory_seq_cp(s.slot.seq, seq, 0, plen)
+        self._flow_pins[key] = FlowPin(key, seq, plen, list(head_tokens))
+        self.h_flow_builds += 1
+        logger.info("🆕 batched flow BUILD %r (seq %d, %d tok)", key, seq, plen)
+
+    def install_flow_sync(self, slot: SeqSlot, pin: FlowPin) -> None:
+        """Whole-seq install of a pinned flow prefix onto a FRESH seat —
+        the batched flow HIT. Same soundness contract as install_head_sync
+        (nothing above the head yet). Blocking (control op)."""
+
+        def _do() -> None:
+            ctx = self._llama._ctx
+            ctx.memory_seq_rm(slot.seq, 0, -1)
+            ctx.memory_seq_cp(pin.seq, slot.seq, -1, -1)
+            slot.n_tokens = pin.n_tokens
+            slot.input_ids = list(pin.tokens)
+            # static_len stays the PERSONA head length: the flow prefix sits
+            # above it and the split arithmetic passes flow_prefix_len
+            # explicitly as kv_base.
+
+        self.control(_do).result(timeout=30)
+        self._flow_pins.move_to_end(pin.key)
+        self.h_flow_hits += 1
+        logger.info("🔁 batched flow HIT %r (seat seq %d, %d tok)",
+                    pin.key, slot.seq, pin.n_tokens)
 
     def install_head_sync(self, slot: SeqSlot, head: PersonaHead) -> None:
         """Whole-seq replace of a seat's content with a pinned head (persona
