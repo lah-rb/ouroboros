@@ -228,7 +228,36 @@ across seven models.
   flags differ; follow-up), qwen3.5 (same), qwen3.6-27b/35b + step37
   (architecture-refused; correctly on replay).
 
+### Block E results (2026-07-30, same night)
+
+- **P-E1 HIT — the pool-fit gate over-counts by ~N×static (F12 resolved).**
+  64 × ~9k unique prompts = sum-counted 93% of the 744,448 pool (the gate
+  refuses at 80%) ran to completion with ZERO pressure/eviction/force-window
+  events and zero decode failures — actual occupancy was static-counted-once
+  (~78%). At N=64 the gate refuses ~116k tokens of admissible work. Follow-up:
+  teach the client pool-fit gate to count the shared head once.
+  Bonus observation: the client timed out at 10 min and the server ran all 64
+  abandoned requests to completion — the watchdog plan's abandonment gap,
+  live on the batched path at 78% pool, harmless here because server-side
+  completion was the measurand.
+- **P-E2 HIT — snapshot-under-batched is a clean refusal, not a hazard.** The
+  documented GraphQL error, server healthy after, session recall intact.
+  The tier remains UNAVAILABLE in the production shape (corpus §5.11).
+- **P-E3 MISS — and the miss is a BUG, not a verdict.** glm pilot: the flow
+  band engaged perfectly (1 BUILD, 19 HITs, 0 fallbacks, fork logged at 4,041
+  tok) — but hit-arm fresh prefill equalled cold (3,904 vs 3,968 tok) and ran
+  2.3 s SLOWER: the head is forked and then the FULL prompt is prefilled
+  anyway. Two defects: (1) the post-fork eval does not skip the head span on
+  this family (suspect: the double-probe head-boundary tokenization, which
+  works on harmony — 620 real HITs in the terminal-bench retest); (2)
+  `cacheHit=true` / `flowFallbacks=0` report success while the skip silently
+  fails — the telemetry cannot see this failure mode. The 11b question
+  ("does a realistic flow head pay?") is UNANSWERED until the skip works on
+  non-harmony families; the 2026-06 shallow-head verdict was likely never
+  measuring a working skip outside harmony either.
+
 ### Still open
 
-Block E (three one-cells: F12 pool-fit, snapshot-under-batched smoke,
-flow-band v2 pilot) — different tooling, queued next.
+- The flow-skip bug above (11b prerequisite).
+- Hash-derived planted facts for the harness (the arithmetic-guessable
+  defect), next vintage.

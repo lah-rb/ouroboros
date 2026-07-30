@@ -169,6 +169,61 @@ collision trigger; Luke wants this validated carefully, not assumed).
 
 ## 4. Retire the legacy save_state session path
 
+**See `dev/caching/CORPUS.md` (2026-07-29) — the single reference for all cache
+strategy state; this section's cost framing is folded into its §4/§5.**
+
+**AMENDED 2026-07-29 — "safe" is not one bit, it is two.** The framing below
+(either flag ⇒ fine) is correct about SAFETY and hides an order-of-magnitude
+COST difference. Measured on the hy3 tier arm: full_replay re-prefills the whole
+session every turn, so the 10th PTY command cost **58.8s of prefill for 20
+tokens**, prefill reached **60.8% of run wall**, and goal throughput fell ~5×
+between the first and second half hour. Resident is flat. Both are safe.
+
+So this task's end state is three-valued, not two:
+
+| landing | safe? | cost | verdict |
+|---|---|---|---|
+| legacy save_state | NO | — | delete (this task) |
+| full_replay | yes | **O(n²) per session** | acceptable fallback only |
+| resident | yes | flat | the target |
+
+**9 of 19 configs are on full_replay today** (5 explicitly, 4 by omission —
+`resident_seq_cache` defaults to False). See `dev/CACHE_SWEEP_PLAN.md` for the
+fleet table, pre-registered per-model predictions, and the sweep that decides
+which of the 9 can go flat. That sweep GATES further tier runs and re-runs.
+
+**LANDED 2026-07-29:** `memory_can_shift()` is now asked at every load whether or
+not resident was requested, and the effective strategy is logged in one line with
+`n_ctx_seq` and an explicit "resident AVAILABLE but not enabled" callout. Before
+this, the gate ran only when resident was REQUESTED, so a config with the flag
+off produced no evidence either way — hy3 ran a full arm on the quadratic path
+with its can_shift answer nonexistent. `info["session_strategy"]`,
+`["session_can_shift"]`, `["resident_requested"]` expose it programmatically;
+unknown is `None` and is never collapsed to False.
+(`llmvp/tests/test_session_strategy_report.py`, 19 tests, 7 mutations bite.)
+
+**ALSO LANDED 2026-07-29 — the third branch, enforced.** `Config` now REFUSES
+`session_full_replay: false` at load, because architecture is unknowable from
+config: a resident request is never a guarantee, so disarming the fallback leaves
+a config one refused gate away from the retired path. Requesting resident
+explicitly does NOT excuse it — that is precisely the case that needs a fallback.
+Since resident ignores `session_full_replay` while active, keeping it true costs
+nothing and arms the catch. The refusal names the fix. All 20 shipped configs load
+unchanged (none set it false). `llmvp/tests/test_config_inheritance.py::
+TestSessionStrategyValidation`, 5 tests, 3 mutations bite.
+
+**Still owed here:** deleting the save_state branch in
+`core/session_manager.session_turn` (the `else` arm) plus its purge path. The
+validator now makes that arm unreachable from any loadable config, so the deletion
+is dead-code removal rather than a behaviour change — but it is not done, and the
+code is still there.
+
+Note also the prior A/B in `config.py`'s comment ("wall-clock-neutral, +44%
+prefill at P90") is NOT contradicted by the hy3 numbers: it compared full_replay
+to legacy save_state, not to resident, and its own caveat — cost concentrates in
+deep-session tails — is exactly what agent PTY charters now hit as the common
+case. See `dev/CACHE_SWEEP_PLAN.md` §reconciling.
+
 Every served config now uses a SAFE session path (`session_full_replay: true`
 or `resident_seq_cache: true`), so the legacy save_state/load_state per-turn
 KV-surgery path is effectively dead in production. Its rap sheet: it is what
@@ -399,6 +454,9 @@ manufactured the "busy" in the first place.
 
 ## 11. Shared prefix cache — THE next performance lever (Luke, 2026-07-26)
 
+**See `dev/caching/CORPUS.md` + `EXPERIMENT.md` (2026-07-29): Block E carries
+11a's pilot and the F12 one-cell test; 11b's workload map is corpus §8.**
+
 **PROMOTED on measured evidence.** The swarm-performance study
 (`dev/swarm_performance/FINDINGS.md`) closes with two independent measurements
 that make this the highest-value work available:
@@ -463,6 +521,28 @@ asserts `cachedPrefixTokens ~= 0`, so it is the natural base to extend.
 
 ### 11b. Revisit flow_kv_cache — built before we understood seq shifting
 
+**REPRIORITIZED 2026-07-29, not strengthened.** The hy3 arm measured a third
+reuse regime — the PTY session — and found it costs 60.8% of run wall on the
+full-replay path. But that does NOT argue for 11b, because resident already
+solves sessions on shiftable archs (flat, verified on gpt-oss/Devstral). What it
+changes is the map of what is left:
+
+| workload | shape | today |
+|---|---|---|
+| session, shiftable arch | append-only | **flat** — solved by resident |
+| session, non-shiftable arch | append-only | **O(n²)** — 9 of 19 configs |
+| stateless completion | shared head, varying tail | cold every time — **11b** |
+| swarm fan-out | big shared block × N | cold × N — **11a** |
+
+Row 2 may be fixable by CONFIG rather than by build, and that inverts the order:
+run the `memory_can_shift` sweep (`dev/CACHE_SWEEP_PLAN.md`, free now that the
+query is unconditional) BEFORE building v2. If most of the 9 can flip, 11b
+shrinks to rows 3-4 — its original scope — instead of also carrying row 2.
+Predictions are pre-registered there; the headline ones are that hy3 and
+qwen3.6-35b-a3 can go flat with a one-line change, and that step37 reports
+can_shift=False despite having perfect flags.
+
+
 `flow_kv_cache: false` everywhere today because **save_state churn corrupts the
 120B static KV over a run** (decode -3 at Pos 1809), and the 2026-06 swa_full
 re-enable REGRESSED under game_challenge and was reverted.
@@ -482,6 +562,22 @@ gap in 11 all get it at once.
 **Prerequisite:** stateless completions currently have NO safe reuse path on
 gpt-oss (flow_kv_cache unsafe, resident_seq_cache is session-scoped). That gap
 is the thing 11b would close.
+
+### 11b-BUG (found 2026-07-30, Block E pilot): resident flow HIT forks the
+### head and then prefills the FULL prompt anyway — on glm, and silently
+
+`dev/caching/EXPERIMENT.md` Block E, cachecell-E3 (glm, resident+kv_unified,
+flow_kv_cache: true): BUILD and 19 HITs all logged (`resident flow HIT
+'e3:pilot' (seq 2, 4041 tok)`), fork verified — but hit-arm
+`freshPrefillTokens` equalled the cold arm (3,904 vs 3,968) and each HIT ran
+2.3 s SLOWER than cold. The post-fork eval does not skip the head span.
+Suspect seam: the double-probe head-boundary tokenization
+(`inference/tokenizer.py:310-330`) on non-harmony families; harmony measured
+real savings (620 HITs, terminal-bench retest). Second defect: `cacheHit=true`
++ `flowFallbacks=0` while the skip fails — the telemetry cannot see it. Fix
+the skip AND make the accounting assert `fresh < prompt_tokens - head_len` on
+a claimed HIT. Until then flow_kv_cache is a net LOSS on at least glm, and
+every non-harmony measurement of it is suspect.
 
 ### 11c. Speculative decoding for swarm decode — GATED on one measurement
 
@@ -537,6 +633,103 @@ accepted-vs-proposed tokens. One afternoon, no new engine code, decisive:
 
 Record the measured rate either way — a null result here is worth keeping,
 because "speculative decoding on Mac" keeps coming back up.
+
+## 11d. Transient-file flush defeated by declaration drift — CONTAMINATES EVERY
+## game_challenge ARM (found 2026-07-29, hy3 tier arm)
+
+`flush_transient_files` deletes program-written side-effect files after a test
+session, reading the patterns from `architecture.transient_files`. Its docstring
+names the failure it was built to stop: *"The gemma run's poison class: quitting
+saved `game_over: true` to state.json, main.py auto-loaded it on launch, and
+every later test saw 'game has already ended' — **25 fix rounds against a symptom
+no code change could clear**."*
+
+**It ran 22 times in hy3's arm and matched nothing, all 22 times.** The
+architecture declared `transient_files: ['save.json', '*.autosave.json']` at
+design time; the code that got built writes `game_state.json` (`main.py:10`).
+`fnmatch` matches neither, so the save survived every session:
+
+| | |
+|---|---|
+| reports that launched the game | 22 |
+| **resumed a save instead of starting fresh** | **20 (91%)** |
+| rooms resumed into | Cave Mouth 13, Echoing Hall 11, Quiet Shrine 9, Old Armory 1 |
+| `No transient files matched [...]` | 22/22 |
+
+Downstream cost, traced end to end: an eval resumed in Quiet Shrine, tried
+`go north` (invalid there — the shrine only connects south), got the CORRECT
+rejection, and filed a parser-failure report *whose own summary states "the
+shrine only connects south"*. That false failure consumed 3 goal attempts and
+triggered a 10-turn / 586-second `diagnose_issue` session which concluded the
+code was fine — and investigated `look` while the report was about movement.
+
+**FIXED 2026-07-29 — declare it where the code exists, plus a tripwire.**
+Operator decision: keep the declaration (auditable, reuses an existing step)
+rather than switching to pure observation, and accept that brownfield /
+`top_phase: structural` runs get the tripwire only.
+
+1. **The declaration moved out of `design_architecture` into `project_ops`**
+   (`declare_artifacts` → `persist_artifacts`, first two steps of the flow), which
+   runs after the structural phase and before the first behavioural session — so
+   the answer can be READ instead of predicted. New schema
+   `schemas/runtime_artifacts.json` requires a `written_by` citation per entry,
+   which is what forces the model to look. New action
+   `action_persist_transient_files`. Placed FIRST in the flow deliberately:
+   installs can fail → `build_report_failure`, and `environment_verified` is set
+   even on failure, so a late step would be skipped exactly when the run is
+   already struggling.
+2. **The evidence got fixed at the source.** `_extract_python_signature` now
+   emits module-level path constants, so `format_project_listing` shows
+   `SAVE_FILE = "game_state.json"` — the fact that was invisible. This was
+   cheaper than a new formatter and it improves **every** consumer, including
+   the brownfield `extract_architecture`, which already asked for
+   `transient_files` from these same signatures.
+3. **Reconcile can no longer wipe it.** `action_parse_and_store_architecture`
+   builds a brand-new `ArchitectureState` and never shows the model the current
+   value, so a reconcile pass silently reset the correction (the way
+   `coherence_*` gets wiped). It now carries the prior value forward **on
+   omission only** — a supplied value still wins.
+4. **The tripwire** reports unaccounted program-generated files and pushes ONE
+   `failure_analysis` note so the next diagnostician is told the run may have
+   resumed rather than started fresh. Not gated on `flushed == 0` (a partial
+   mismatch contaminates identically), and it fires when NOTHING is declared —
+   an early return had made that case invisible, which was the more likely
+   failure once the declaration moved.
+
+Verified end to end on the real hy3 artifact: the guess
+`['save.json','*.autosave.json']` is replaced by `['game_state.json']` and the
+flush deletes it. 1845 agent + 550 llmvp green; 17 mutations bite across the two
+test modules; `cue-compile` / `lint` / `lint-flows` clean for `project_ops`.
+
+**Still open here:** brownfield `ingest_workspace` and `top_phase: structural`
+never reach `project_ops`, so they rely on `extract_architecture`'s (now
+better-grounded) declaration and the tripwire. Pure observation — snapshot at
+session start, flush what appeared — remains the universal fix if that gap ever
+bites.
+
+### 11d-adjacent: three defects found while mapping `project_ops` (unfixed)
+
+Recorded, not chased — none is this change's business:
+
+- **`setup_result` is never published.** `project_ops.cue:25`
+  (`returns.setup_complete ← context.setup_result`) and `build_report_success`'s
+  optional context both read it, but the only publisher was the deleted
+  `run_setup_commands` step. So `setup_complete` is permanently absent from the
+  flow's returns, and `reporting_actions.py:333,342-343` renders a `Setup: …`
+  line that can never appear for project_ops.
+- **`test_install_command` is forbidden by its own schema.**
+  `collect_test_installs` (`project_ops.cue`) reads that field and
+  `prompts/set_env/detect_tooling_rules.yaml` asks the model for it at length —
+  but `schemas/validation_env_config.json` sets `additionalProperties: false` on
+  `LanguageCommands`, so a schema-conforming response can never contain it. The
+  step therefore always finds nothing and falls through. Either add the field to
+  the schema or drop the prompt paragraph and the step.
+- **`write_files`' resolver is unconditional** (`{condition: "true"}`), so
+  `all_written == false` or "No file blocks found" routes onward silently.
+
+Related, same run: **7 of 9 failed reports recorded ZERO checks**
+(`checks_passed: [] / checks_failed: []`). A failure verdict with no checkable
+items is unfalsifiable — the vacuous-verification shape again.
 
 ## 12. Small items (grab-bag)
 
