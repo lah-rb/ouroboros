@@ -489,6 +489,12 @@ def new_ledger() -> dict:
             "ws_calls": 0,
         },
         "cache": {"hit": 0, "miss": 0},  # counted only for real-token calls
+        # Server-side cache/feature register, sampled from health. FIRST and
+        # LAST only: the counters are monotonic, so last-minus-first is the
+        # run delta, and the strategy triple is a constant we want recorded
+        # once. Absent when the server does not report it — never zeroed,
+        # because a zero would be indistinguishable from "never fired".
+        "server": {"first": None, "last": None, "samples": 0},
         # Server-measured phase split of the inference bucket (a sub-attribution
         # of `inference` time, not a separate partition category).
         "inf_phase": {"prefill_ms": 0.0, "decode_ms": 0.0},
@@ -596,6 +602,16 @@ def fold_event(ledger: dict, e: dict) -> None:
         ledger["session_span_ms"] += e.get("span_ms", 0.0) or 0.0
     elif et == "note_pushed":
         ledger["counts"]["notes"] += 1
+    elif et == "health_sample":
+        snap = e.get("health") or {}
+        if snap:
+            srv = ledger.setdefault(
+                "server", {"first": None, "last": None, "samples": 0}
+            )
+            if srv.get("first") is None:
+                srv["first"] = snap
+            srv["last"] = snap
+            srv["samples"] = srv.get("samples", 0) + 1
 
 
 def ledger_add_ms(ledger: dict, category: str, ms: float) -> None:
@@ -603,6 +619,70 @@ def ledger_add_ms(ledger: dict, category: str, ms: float) -> None:
     persistence). No-op for unknown categories."""
     if category in ledger["time_ms"]:
         ledger["time_ms"][category] += ms
+
+
+# Counters that accumulate over a run; everything else in the register is a
+# constant we record once (the strategy triple) or a gauge we take as-of-end.
+_SERVER_COUNTERS = (
+    "flowBuilds",
+    "flowHits",
+    "flowEvicts",
+    "flowFallbacks",
+    "contextRefreshes",
+    "runawayCaptures",
+)
+
+
+def _server_block(srv: dict) -> dict | None:
+    """Start/end/delta for the server cache register, or None if unsampled.
+
+    The DELTA is the point: `flowHits` is cumulative across the server's whole
+    lifetime, so the absolute value says nothing about THIS run. A run that
+    shows flow_hits delta 0 while the flag is on is the finding — the band is
+    allocated and never used.
+
+    `contextRefreshes > 0` is a comparability warning, not a metric: a refresh
+    wipes the flow band and demotes hot snapshots, so a run that took one is
+    not measuring the same machine as a run that did not.
+    """
+    first, last = srv.get("first"), srv.get("last")
+    if not first or not last:
+        return None
+    # A SINGLE sample makes first and last the same snapshot, so every counter
+    # differences to 0 — which would read as "the flow cache never fired" when
+    # the truth is "we never measured twice". The strategy triple IS knowable
+    # from one sample (it is a constant); the delta is not. Report the first,
+    # withhold the second.
+    samples = int(srv.get("samples") or 0)
+    delta: dict | None = None
+    if samples >= 2:
+        delta = {}
+        for k in _SERVER_COUNTERS:
+            a, b = first.get(k), last.get(k)
+            if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                delta[k] = b - a
+    return {
+        # The substrate this run actually ran on (OPEN_TASKS §12) — read from
+        # health, never from config: resident is a request the arch can refuse.
+        "strategy": last.get("sessionStrategy") or "",
+        "can_shift": last.get("sessionCanShift"),
+        "resident_requested": last.get("residentRequested"),
+        "resident_active": last.get("residentActive"),
+        "decode_mode": last.get("decodeMode") or "",
+        "n_ctx_seq": last.get("nCtxSeq"),
+        "kv_pool_tokens": last.get("kvPoolTokens"),
+        "samples": samples,
+        "delta": delta,
+        "cache_wiped_mid_run": (
+            bool(delta.get("contextRefreshes", 0)) if delta is not None else None
+        ),
+        "end": {
+            "flow_cache_entries": last.get("flowCacheEntries"),
+            "decode_tps_recent": last.get("decodeTpsRecent"),
+            "prefill_tps_recent": last.get("prefillTpsRecent"),
+            "mem_system_wired_mb": last.get("memSystemWiredMb"),
+        },
+    }
 
 
 def finalize_ledger(ledger: dict, total_wall_ms: float) -> dict:
@@ -697,6 +777,7 @@ def finalize_ledger(ledger: dict, total_wall_ms: float) -> dict:
                 else None
             ),
         },
+        "server": _server_block(ledger.get("server") or {}),
         "cache": {
             "hit": ledger["cache"]["hit"],
             "miss": ledger["cache"]["miss"],

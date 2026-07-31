@@ -122,6 +122,44 @@ query Health {
 }
 """
 
+# The CACHE/FEATURE register. Everything here lives ONLY in health and was
+# never persisted into a run artifact, so a finished run could not answer the
+# questions it was most useful for: did the flow cache actually fire, what
+# strategy did this model land on, and did a context refresh wipe the caches
+# mid-run (which makes two runs incomparable).
+#
+# The strategy triple is the load-bearing part: `resident_seq_cache` is a
+# REQUEST that memory_can_shift() can refuse, so the effective strategy is
+# knowable only from here — which is exactly what OPEN_TASKS §12 needs to tag
+# a tier arm with the substrate it actually ran on.
+#
+# SEPARATE query for the same reason as the two above: an older server rejects
+# unknown fields outright, and a telemetry nicety must never fail a run.
+CACHE_HEALTH_QUERY = """
+query Health {
+    health {
+        status
+        decodeMode
+        sessionStrategy
+        sessionCanShift
+        residentRequested
+        residentActive
+        nCtxSeq
+        flowBuilds
+        flowHits
+        flowEvicts
+        flowFallbacks
+        flowCacheEntries
+        contextRefreshes
+        runawayCaptures
+        decodeTpsRecent
+        prefillTpsRecent
+        memSystemWiredMb
+        kvPoolTokens
+    }
+}
+"""
+
 # Session mutations and queries
 START_SESSION_MUTATION = """
 mutation StartSession($config: SessionConfig!) {
@@ -407,6 +445,31 @@ class InferenceEffect:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+    async def cache_health(self) -> dict:
+        """The cache/feature register, or {} if the server does not report it.
+
+        Best-effort by construction: an older server rejects the unknown
+        fields with GraphQL errors, and a timeout or a transport blip must
+        never fail a run for a telemetry read. Callers treat {} as "not
+        reported" and record nothing rather than recording a zero — a zero
+        here would be indistinguishable from "the flow cache never fired",
+        which is the exact question this exists to answer.
+        """
+        try:
+            client = await self._get_client()
+            response = await client.post(
+                self._endpoint,
+                json={"query": CACHE_HEALTH_QUERY},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if "errors" in data:
+                return {}
+            return data.get("data", {}).get("health", {}) or {}
+        except Exception:  # noqa: BLE001 — telemetry never breaks a run
+            return {}
 
     async def health_check(self) -> dict:
         """Check LLMVP backend health.

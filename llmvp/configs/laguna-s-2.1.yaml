@@ -1,12 +1,21 @@
-# Laguna-S-2.1 (Poolside) — PREPARED, NOT YET LOADABLE.
+# Laguna-S-2.1 (Poolside, unsloth UD-IQ4_XS) — the SMALLEST of three quants.
 #
-# BLOCKER: the `laguna` arch is absent from our llama.cpp build. Shipped lib is
-# b9860 (libllama.0.0.9860.dylib); laguna support lands at b10087 via PR #25165
-# (Poolside's own implementation; S-2.1 shares the `laguna` arch with XS.2/M.1).
-# Sources disagree on whether it merged upstream or still needs the PR branch —
-# CHECK before choosing a build source. Poolside also maintains a fork branch
-# `laguna` carrying DFlash speculative decoding. A rebuild unlocks this model;
-# it does NOT unlock EAGLE (still no C API for it).
+# LOADABLE since the llama.cpp rebuild. The blocker recorded here — "the
+# `laguna` arch is absent from our build, shipped lib is b9860, support lands
+# at b10087" — was true when written and is STALE: the shipped lib is now
+# b10131 (libllama.0.0.10131.dylib), past b10087, and the sibling APEX and XS
+# configs have run many arms on this same `laguna` arch. (The rebuild did NOT
+# unlock EAGLE — still no C API for it.)
+#
+# ── ONE OF THREE QUANTS OF THE SAME MODEL ────────────────────────────
+# laguna-s-2.1 (57.6GB, UD-IQ4_XS) · -apex (73.9GB) · -poolside (96.0GB).
+# They exist to be compared, so the quant should be the only thing chosen
+# differently between them — but n_ctx legitimately DIFFERS (318,464 /
+# 234,496 / 124,928) and must stay that way: KV/token is quant-independent
+# (192KB — cache geometry, not weights), so a smaller quant leaves more room
+# for context. The context advantage is a DIRECT CONSEQUENCE of the quant and
+# part of what choosing it buys. Homogenizing n_ctx would hide the effect,
+# not control for it.
 #
 # KV GEOMETRY (GGUF headers, 2026-07-26, computed BEFORE any load — the rule
 # that exists because reboot #3 was precomputable):

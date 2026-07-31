@@ -60,6 +60,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# How often to sample the server's cache/feature register. The counters are
+# monotonic so first-and-last is enough for a delta; the interval only bounds
+# how much of the tail a crashed run loses. 20 keeps the cost near zero on a
+# structural phase of a few hundred inferences.
+_HEALTH_SAMPLE_EVERY = 20
+
 
 class PathTraversalError(Exception):
     """Raised when a path attempts to escape the working directory."""
@@ -109,6 +115,7 @@ class LocalEffects:
         self._http_transport = http_transport
         # Trace buffer — flushed to JSONL at cycle boundaries
         self._trace_buffer: list[TraceEvent] = []
+        self._health_sample_calls = 0
         self._trace_file_path: str | None = None
         # Finite time + token ledger (the "head"): folded incrementally in
         # emit_trace, serialized to <trace>.summary.json each flush. Run span
@@ -1184,7 +1191,38 @@ class LocalEffects:
                 start,
             )
 
+        await self._maybe_sample_server_health()
         return result
+
+    async def _maybe_sample_server_health(self) -> None:
+        """Fold the server's cache/feature register into the run's trace.
+
+        Sampled on the FIRST inference and every _HEALTH_SAMPLE_EVERY after,
+        so the ledger holds a first and a last and the difference is THIS
+        run's delta — `flowHits` is cumulative over the server's lifetime, so
+        its absolute value says nothing about one run. Without this the
+        register lived only in health and evaporated when the run ended, which
+        is why no run could answer whether the flow cache ever actually fired.
+
+        Best-effort throughout: an unreported register records nothing rather
+        than a zero, because a zero is indistinguishable from "never fired".
+        """
+        self._health_sample_calls += 1
+        n = self._health_sample_calls
+        if n != 1 and n % _HEALTH_SAMPLE_EVERY:
+            return
+        try:
+            snap = await self._get_inference().cache_health()
+            if snap:
+                await self.emit_trace(
+                    TraceEvent(
+                        event_type="health_sample",
+                        mission_id=self._traced_mission_id,
+                        payload={"health": snap},
+                    )
+                )
+        except Exception:  # noqa: BLE001 — telemetry never breaks a run
+            logger.debug("server health sample skipped")
 
     async def inference_pool_health(self) -> dict:
         """Pool-sizing facts from the LLMVP health endpoint ({} when the
