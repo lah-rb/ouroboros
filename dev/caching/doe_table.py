@@ -187,6 +187,12 @@ def main(base: Path) -> int:
                 )
 
     print("\n── did the flow cache FIRE? (delta, not absolute) ──")
+    print("   ⚠️ REGIME: the flow cache is designed for the interact -> diagnose")
+    print("      -> fix cycle, where the SAME flows are re-entered many times.")
+    print("      A `top_phase: structural` run enters each flow about once, so a")
+    print("      low hit count here is EXPECTED and is NOT evidence the feature")
+    print("      does not pay. The question it was built for needs a functional-")
+    print("      phase run. (operator, 2026-07-30)")
     for r in rows:
         if r.get("flow"):
             h = r.get("flow_hits")

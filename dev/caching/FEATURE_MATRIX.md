@@ -238,3 +238,11 @@ shared-prefix fan-out A/B (OPEN_TASKS §10a), against a standing measured waste 
 The highest-value missing measurement is the one that would change a decision:
 **does the flow cache pay on anything but glm**, given it is now on in seven
 configs on the strength of eleven calls against one model.
+
+**Measure it in the RIGHT REGIME (operator, 2026-07-30).** The flow cache was
+designed for the interact → diagnose → fix cycle, where the same flows are
+re-entered many times. A `top_phase: structural` run enters each flow roughly
+once, so its hit counts say nothing either way — the 2026-07-30 fleet smoke
+recorded 0 hits/1 build (gpt-oss) and 1 hit/2 builds (laguna-xs) and neither
+number is evidence. The measurement that decides this feature is a
+FUNCTIONAL-phase run with its diagnose loop, not a structural one.
