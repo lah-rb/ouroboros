@@ -1,0 +1,50 @@
+# gemma-4-26b-a4b under BATCHED (S3) — the collinearity-breaking arm.
+#
+# WHY THIS EXISTS. In the 2026-07-30 fleet factor table, S3 was reachable only
+# by two families: three laguna configs and gpt-oss-swarm. `strategy` was
+# therefore CONFOUNDED WITH FAMILY — any batched-vs-pool difference could
+# equally have been a laguna/harmony difference, and no amount of analysis
+# separates two factors that never vary independently.
+#
+# This adds a THIRD family to S3, and more usefully a SECOND within-model
+# S2/S3 pair. gpt-oss was previously the only model with configs on both sides
+# (and its per-stream window already matches: pool n_ctx 131072 vs swarm
+# model_max_context 131072). Two such pairs, in two families, is what makes
+# the strategy effect estimable rather than merely observed.
+#
+# IT IS AN `extends:` ON PURPOSE. The pair's validity rests on "identical
+# except the strategy", and a hand-copied config decays the first time someone
+# edits one side. Inheritance makes the match STRUCTURAL: everything below is
+# the complete list of differences, and it is three keys.
+#
+# gemma-4-26b qualifies for batched on the preconditions the validator checks
+# (resident + swa_full + kv_unified, all inherited) and is a plain-transformer
+# MoE, so it can host N working sequences — the hybrid/recurrent refusal that
+# blocks the qwen family does not apply.
+extends: gemma-4-26b-a4b
+
+resources:
+  # THE FACTOR UNDER TEST. Everything else is inherited.
+  decode_mode: batched
+
+model:
+  # Under batched, n_ctx is the SHARED cell pool across all seats, not one
+  # stream's window — so it must be re-sized, and that re-sizing is a
+  # consequence of the strategy rather than an independent choice.
+  #
+  # 131,072 at the measured 225,280 B/tok = 29.5GB KV + 14.2GB weights =
+  # 43.7GB resident. Comfortable: this is the cheapest model in the fleet by
+  # weights, which is why it is the right one to spend an extra arm on.
+  n_ctx: 131072
+  # PER-STREAM window pinned to the S2 arm's n_ctx (65,536) so the two arms
+  # give one request exactly the same context. Without this the pair would
+  # compare strategy AND context at once — the confound this config exists to
+  # avoid, not to introduce.
+  model_max_context: 65536
+
+# NOTE for the ledger: probe_verified_n_ctx is INHERITED from the S2 arm,
+# where it was measured at 262,144 in POOL mode. n_ctx here (131,072) is below
+# it so the preflight waives its arithmetic, which is sound — but the record
+# was taken under a different seq map, and per the probe's own rule a ceiling
+# measured under other flags is not evidence for these. Re-probe before ever
+# raising n_ctx on this arm.
