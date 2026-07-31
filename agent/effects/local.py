@@ -65,7 +65,12 @@ logger = logging.getLogger(__name__)
 # monotonic so first-and-last is enough for a delta; the interval only bounds
 # how much of the tail a crashed run loses. 20 keeps the cost near zero on a
 # structural phase of a few hundred inferences.
-_HEALTH_SAMPLE_EVERY = 20
+# Every 5th call, not every 20th. The delta needs TWO samples, and a single
+# empty return (busy server, transport blip) used to cost the whole register:
+# a 37-inference run sampled at call 1, missed at call 20, and reported
+# samples=1 / delta=None — the flow question unanswered on a run that had
+# every chance to answer it. One small GraphQL read per five inferences.
+_HEALTH_SAMPLE_EVERY = 5
 
 
 class PathTraversalError(Exception):
@@ -1218,6 +1223,15 @@ class LocalEffects:
             if snap:
                 await self.emit_trace(
                     HealthSample(mission_id=self._traced_mission_id, health=snap)
+                )
+            elif not self._health_sample_warned:
+                # An EMPTY return is not an exception and was therefore
+                # silently skipped — indistinguishable from "never attempted",
+                # and it is how a run ends with one sample and no delta.
+                self._health_sample_warned = True
+                logger.warning(
+                    "server health register came back EMPTY — this run may end "
+                    "with too few samples to compute a delta"
                 )
         except Exception:  # noqa: BLE001 — telemetry never breaks a run
             # WARNING, not debug, and only on the FIRST failure: the previous
