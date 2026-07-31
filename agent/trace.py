@@ -403,6 +403,23 @@ _NOTE_PREVIEW_CHARS = 400
 
 
 @dataclass
+class HealthSample(TraceEvent):
+    """A snapshot of the server's cache/feature register.
+
+    A REAL dataclass, not a dict smuggled through a `payload=` kwarg —
+    TraceEvent has no such field, so the first version raised TypeError on
+    construction and the emit site's broad `except Exception` swallowed it
+    silently on every call. The result looked exactly like "the server does
+    not report these fields": zero events, no error, nothing to grep. The
+    unit test missed it because it fed fold_event a hand-built dict and never
+    exercised the emission path.
+    """
+
+    event_type: str = "health_sample"
+    health: dict = field(default_factory=dict)
+
+
+@dataclass
 class NotePushed(TraceEvent):
     """Emitted when a note is appended to mission state."""
 

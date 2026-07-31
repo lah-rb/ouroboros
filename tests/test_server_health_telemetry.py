@@ -139,3 +139,59 @@ class TestSamplingCadence:
         src = inspect.getsource(InferenceEffect.cache_health)
         assert "return {}" in src
         assert "except Exception" in src
+
+
+class TestTheEmissionPathItself:
+    """THE TEST THAT WAS MISSING, and its absence cost a sweep.
+
+    The first version of this module only fed `fold_event` a hand-built dict
+    — `{"event_type": "health_sample", "health": {...}}` — which passes
+    happily while the real emit site is broken. It WAS broken: it constructed
+    `TraceEvent(..., payload={...})`, and TraceEvent has no `payload` field,
+    so every call raised TypeError into a broad `except Exception` and the
+    register was silently absent from every trace. Fixture and production
+    disagreed, and only the fixture was tested.
+
+    So: build the event the way the emit site builds it, and require that a
+    real fold of a real serialized event reaches the ledger.
+    """
+
+    def test_healthsample_constructs_and_carries_the_register(self):
+        from agent.trace import HealthSample
+
+        ev = HealthSample(mission_id="m1", health={"flowHits": 3})
+        assert ev.event_type == "health_sample"
+        assert ev.health == {"flowHits": 3}
+
+    def test_a_serialized_event_folds_into_the_ledger(self):
+        """to_dict() is what the trace writer persists — fold what it emits,
+        not what the test imagines it emits."""
+        from agent.trace import HealthSample
+
+        led = new_ledger()
+        for hits in (4, 11):
+            fold_event(led, HealthSample(health={"flowHits": hits}).to_dict())
+        assert finalize_ledger(led, 1000.0)["server"]["delta"]["flowHits"] == 7
+
+    def test_the_emit_site_uses_the_dataclass_not_a_payload_kwarg(self):
+        import inspect
+
+        from agent.effects.local import LocalEffects
+
+        src = inspect.getsource(LocalEffects._maybe_sample_server_health)
+        assert "HealthSample(" in src
+        assert "payload=" not in src, (
+            "TraceEvent has no payload field — that kwarg raises TypeError and "
+            "the handler below swallows it"
+        )
+
+    def test_a_sampling_failure_is_LOUD(self):
+        """It logged at debug, so a construction bug was invisible for a whole
+        sweep. Telemetry must not break a run; it must also not fail quietly."""
+        import inspect
+
+        from agent.effects.local import LocalEffects
+
+        src = inspect.getsource(LocalEffects._maybe_sample_server_health)
+        assert "logger.warning" in src
+        assert "exc_info=True" in src

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent.effects.inference import InferenceEffect
 from agent.trace import (
+    HealthSample,
     CommandRun,
     InferenceCall,
     McpToolCall,
@@ -116,6 +117,7 @@ class LocalEffects:
         # Trace buffer — flushed to JSONL at cycle boundaries
         self._trace_buffer: list[TraceEvent] = []
         self._health_sample_calls = 0
+        self._health_sample_warned = False
         self._trace_file_path: str | None = None
         # Finite time + token ledger (the "head"): folded incrementally in
         # emit_trace, serialized to <trace>.summary.json each flush. Run span
@@ -1215,14 +1217,22 @@ class LocalEffects:
             snap = await self._get_inference().cache_health()
             if snap:
                 await self.emit_trace(
-                    TraceEvent(
-                        event_type="health_sample",
-                        mission_id=self._traced_mission_id,
-                        payload={"health": snap},
-                    )
+                    HealthSample(mission_id=self._traced_mission_id, health=snap)
                 )
         except Exception:  # noqa: BLE001 — telemetry never breaks a run
-            logger.debug("server health sample skipped")
+            # WARNING, not debug, and only on the FIRST failure: the previous
+            # version logged at debug and a TypeError in the event
+            # construction was therefore invisible for a whole sweep. A
+            # telemetry read must not break a run, but it must not fail
+            # quietly either — silence here is indistinguishable from a
+            # server that does not report the fields.
+            if not self._health_sample_warned:
+                self._health_sample_warned = True
+                logger.warning(
+                    "server health sampling FAILED — the run's cache/feature "
+                    "register will be absent from its trace",
+                    exc_info=True,
+                )
 
     async def inference_pool_health(self) -> dict:
         """Pool-sizing facts from the LLMVP health endpoint ({} when the
