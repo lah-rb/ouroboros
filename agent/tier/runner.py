@@ -108,6 +108,12 @@ POLL_S = 30
 # One event, not one line. The shell version grepped `degenerat|long-cycle|
 # repetition guard` and reported 5 for a single abort, because one event writes
 # several matching lines. Anchor on the abort sentence alone.
+#
+# IT IS WRITTEN BY THE AGENT, INTO run.log — not by the server. Both counters
+# below read the RUN log for exactly that reason. They read the SERVER log
+# until 2026-07-30, which made `degen` a dead signal: every tier arm ever
+# recorded degen=0, including one whose long-cycle guard demonstrably fired
+# and wrote a runaway capture. A counter that cannot go up reads as "clean".
 DEGEN_MARKER = "aborted the generation as degenerate"
 
 CONTROL_WORDS = ("skip", "stop", "force-stop", "pause")
@@ -522,7 +528,7 @@ class TierRun:
                 control,
             )
 
-        res = self._tally(config, work, slog, int(elapsed_s / 60))
+        res = self._tally(config, work, rlog, int(elapsed_s / 60))
         res.status = "skipped" if control in ("skip", "force-stop") else "completed"
         self.log(
             f"  done {res.minutes}min files={res.files} "
@@ -537,7 +543,7 @@ class TierRun:
             )
         return res, control
 
-    def _tally(self, config: str, work: Path, slog: Path, minutes: int) -> ArmResult:
+    def _tally(self, config: str, work: Path, rlog: Path, minutes: int) -> ArmResult:
         files = self._authored(work)
         ok = bad = 0
         for p in (f for f in files if f.suffix == ".py"):
@@ -570,7 +576,7 @@ class TierRun:
         except Exception:  # noqa: BLE001 — a status hang must not lose the arm
             goals = "(status unavailable)"
         degen = (
-            slog.read_text(errors="ignore").count(DEGEN_MARKER) if slog.exists() else 0
+            rlog.read_text(errors="ignore").count(DEGEN_MARKER) if rlog.exists() else 0
         )
         return ArmResult(
             config, "completed", minutes, len(files), ok, bad, goals, degen
@@ -581,7 +587,7 @@ class TierRun:
     ) -> None:
         files = self._authored(work)
         degen = (
-            slog.read_text(errors="ignore").count(DEGEN_MARKER) if slog.exists() else 0
+            rlog.read_text(errors="ignore").count(DEGEN_MARKER) if rlog.exists() else 0
         )
         tail = ""
         if rlog.exists():

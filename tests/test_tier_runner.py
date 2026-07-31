@@ -326,3 +326,60 @@ class TestRubricProvenance:
         empty.write_text("")
         monkeypatch.setattr(runner, "RUBRIC", empty)
         assert runner._rubric_version() == "TIER_RUBRIC(unreadable)"
+
+
+class TestDegenCounterReadsTheRightFile:
+    """`degen` was a dead signal until 2026-07-30.
+
+    DEGEN_MARKER ("aborted the generation as degenerate") is written by the
+    AGENT into run.log. Both counters read server.log, so the count could
+    never rise: every tier arm ever recorded degen=0 — 15 arms across every
+    sweep — including a laguna-s-2.1-apex arm whose long-cycle guard
+    demonstrably fired and wrote a runaway capture. A counter that cannot go
+    up is indistinguishable from a clean run, which is the failure shape this
+    session kept finding.
+    """
+
+    def test_both_counters_read_the_run_log(self):
+        import inspect
+
+        from agent.tier import runner
+
+        src = inspect.getsource(runner)
+        # every DEGEN_MARKER count must be against rlog
+        for line in src.splitlines():
+            if "DEGEN_MARKER" in line and ".count(" in line:
+                assert "rlog" in line, f"counts the wrong file: {line.strip()}"
+
+    def test_tally_takes_the_run_log(self):
+        import inspect
+
+        from agent.tier.runner import TierRun
+
+        sig = inspect.signature(TierRun._tally)
+        assert "rlog" in sig.parameters, "_tally must receive the run log"
+        assert "slog" not in sig.parameters
+
+    def test_a_real_abort_line_is_counted(self, tmp_path):
+        from agent.tier.runner import DEGEN_MARKER
+
+        rlog = tmp_path / "arm_run.log"
+        rlog.write_text(
+            "INFO | working\n"
+            "WARNING | Server aborted the generation as degenerate: long-cycle: "
+            "long-cycle repetition: 3886/32737 distinct 32B n-grams\n"
+            "INFO | continuing\n"
+        )
+        assert rlog.read_text().count(DEGEN_MARKER) == 1
+
+    def test_one_event_counts_once_not_per_matching_line(self):
+        """The pre-existing reason the marker is a full sentence: a single
+        abort writes several lines mentioning degeneration."""
+        from agent.tier.runner import DEGEN_MARKER
+
+        blob = (
+            "WARNING | Server aborted the generation as degenerate: long-cycle\n"
+            "INFO | long-cycle repetition detected\n"
+            "INFO | repetition guard tripped\n"
+        )
+        assert blob.count(DEGEN_MARKER) == 1
