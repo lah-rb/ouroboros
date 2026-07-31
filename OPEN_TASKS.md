@@ -537,3 +537,82 @@ the difference between a salvaged arm and a lost one:
 collapsed batch. The smoke's evidence is confounded by the 20-minute cap —
 laguna-apex looked like a total loss there and produced 13 files at 2h.
 
+---
+
+## 17. The design gate rejects a VALID src/ layout — 5 arms lost
+
+**CONFIRMED DEFECT, not a model failure. Fix NOT applied — landing it mid-sweep
+would change which architectures survive for arms 7-18.**
+
+### What happens
+
+gemma-4-26b designs this, three times, across two sampling regimes and two
+decode strategies, in wording that is near-verbatim identical each time:
+
+    import_scheme: package     init_files: True
+    run_command: python main.py    working_directory: project root
+    modules: src/models.py src/loader.py src/parser.py src/io_handler.py
+             src/engine.py main.py
+
+`design_gate_critique` returns incoherent with:
+
+    "run_command `python main.py` is at the project root, but `main.py`
+     attempts to import from `src/engine`, which is not importable as `src`
+     unless `src` is treated as a package, but the import scheme is 'package'
+     and the modules are nested under `src/`"
+
+Three reconcile attempts reproduce the same layout, the budget exhausts, the
+mission dies at 1-2 minutes with ZERO files.
+
+### The claim is false. Verified three ways (2026-07-31)
+
+    scheme=package, init_files=True, `python main.py` from root  -> IMPORTS FINE
+    the same layout with NO __init__.py                          -> IMPORTS FINE
+      (PEP 420 namespace packages, Python 3.3+; this box runs 3.14.6)
+
+`init_files: True` is declared IN THE ARCHITECTURE THE CRITIC IS READING, so
+`src/__init__.py` would exist and `src` is a regular package. The critic's own
+objection is answered by a field in its input.
+
+### Why the over-block guard did not catch it
+
+`action_ground_design_gate_verdict` flips an incoherent verdict to coherent when
+NO CONCRETE CRITERION SURVIVES grounding. This criterion is concrete: it names
+real files and states a specific mechanism. It is simply WRONG. **The guard
+filters UNGROUNDED critiques, not INCORRECT ones**, and nothing anywhere in the
+pipeline ever attempts the import it is adjudicating.
+
+Same class as the acceptance-check permanent veto (fixed 2026-07-18): a
+mis-grounded derived check vetoing correct work.
+
+### Cost so far
+
+    tier_20260730-220500  arm05 gemma-4-26b-a4b          0 files, 2 min
+    tier_20260730-220500  arm06 gemma-4-26b-a4b-batched  0 files, 2 min
+    tier_20260731-050209  arm05 gemma-4-26b-a4b          0 files, 2 min
+    tier_20260731-050209  arm06 gemma-4-26b-a4b-batched  0 files, 1 min
+
+Four arms to this defect. A fifth (gemma-4-31b, smoke arm07) died separately to
+the degen-abort, now fixed.
+
+WARNING FOR THE LEDGER: the 2026-07-31 morning read of the smoke recorded
+"gemma-26b fails identically under both strategies, so the failure is
+model-level with no strategy component." That conclusion is WITHDRAWN. The
+identical wording across independent runs was the tell — models do not usually
+reproduce prose verbatim; a deterministic gate does.
+
+### The fix
+
+Before accepting a layout-incoherence verdict, make the claim decidable:
+materialise the declared module paths in a temp dir with the declared
+`init_files`, and attempt the import implied by `run_command`. If it imports,
+REFUTE the criterion. Milliseconds, and it converts an LLM opinion into a
+deterministic check on the one thing here that is mechanically decidable.
+
+### Timing
+
+Recommended: land AFTER the current sweep, then re-run the three gemma arms —
+they cost ~2 minutes each, so it is a ~6-minute retest rather than a restart.
+Landing mid-sweep changes which architectures survive for arms 7-18, which is a
+larger contamination than the design_initial retry (that only fired where an arm
+was already dead).
