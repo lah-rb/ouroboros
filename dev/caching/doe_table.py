@@ -63,8 +63,16 @@ def factors(cfg: dict) -> dict:
         "swap": bool(m.get("reasoning_head_swap")),
         "swa_full": bool(m.get("swa_full")),
         "kv_unified": bool(m.get("kv_unified")),
-        # Per-STREAM window: under batched, n_ctx is the shared pool.
-        "stream_ctx": m.get("model_max_context") or m.get("n_ctx"),
+        # Per-STREAM window: under batched n_ctx is the shared POOL and
+        # model_max_context bounds one stream — but a stream cannot exceed the
+        # pool it lives in, and several configs declare the model's full
+        # TRAINED range there (laguna: 1,048,576 against an n_ctx of 234,496).
+        # Taking model_max_context alone reported a window 4x the allocation.
+        "stream_ctx": (
+            min(m["model_max_context"], m["n_ctx"])
+            if m.get("model_max_context") and m.get("n_ctx")
+            else (m.get("model_max_context") or m.get("n_ctx"))
+        ),
         "weights_gb": round((m.get("probe_verified_weights_bytes") or 0) / 1e9, 1),
     }
 
