@@ -156,6 +156,25 @@ design_and_plan: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.tokens_generated > 0", transition: "parse_architecture"},
+					// RETRY A BARREN GENERATION before giving up. A degenerate
+					// abort (the server killing a runaway) returns 0 tokens, and
+					// this step used to fall straight through to `failed` — so a
+					// single bad sample on the FIRST inference of the run killed
+					// the whole mission. Observed 2026-07-30: gemma-4-31b lost an
+					// entire tier arm to one run-length abort, 1 minute in, with
+					// zero files written.
+					//
+					// The asymmetry that made it wrong: design_gate_critique below
+					// fails OPEN on exactly this condition, with a comment saying
+					// a critic that could not run must not block. The same reasoning
+					// applies here and had simply never been applied — but this step
+					// cannot fail open (there is no architecture yet to carry
+					// forward), so the equivalent is a bounded retry.
+					//
+					// glm proved the retry works: a degenerate abort at a CONTENT
+					// step retried on the same prompt and completed normally, so
+					// lethality here was positional, not intrinsic.
+					{condition: "meta.attempt <= 2", transition: "design_initial"},
 					{condition: "true", transition: "failed"},
 				]
 			}

@@ -240,3 +240,53 @@ def test_critique_context_is_fresh_and_bundle_is_sufficient():
         "format_prior_rejection",
     ):
         assert f in PRE_COMPUTE_FORMATTERS
+
+
+class TestBarrenGenerationRetries:
+    """A degenerate abort on the FIRST inference must not kill the mission.
+
+    THE BUG (observed 2026-07-30, tier_20260730-220500 arm 7): gemma-4-31b hit
+    a run-length degeneration abort at `design_initial`. A server-side abort
+    returns 0 tokens, `design_initial` had only a `true -> failed` fallback, and
+    the whole arm ended one minute in with zero files written.
+
+    The asymmetry that made it wrong is in this same flow: `design_gate_critique`
+    fails OPEN on the identical condition, with a comment saying a critic that
+    could not run must not BLOCK. `design_initial` cannot fail open — there is no
+    architecture yet to carry forward — so the equivalent is a bounded retry.
+    That a retry is sufficient was shown the same night by glm-4.7-flash, whose
+    degenerate abort at a CONTENT step retried on the same prompt and completed:
+    lethality was positional, not intrinsic.
+    """
+
+    def test_zero_token_generation_retries_before_failing(self):
+        rules = _rules(_compiled()["design_and_plan"]["steps"], "design_initial")
+        assert rules["result.tokens_generated > 0"] == "parse_architecture"
+        assert (
+            rules["meta.attempt <= 2"] == "design_initial"
+        ), "a barren generation must retry the step, not end the mission"
+
+    def test_the_retry_is_bounded_and_still_ends_in_failure(self):
+        """Bounded: the budget must remain, and `failed` must remain reachable.
+        An unbounded self-loop would trade a dead arm for a spinning one."""
+        rules = _rules(_compiled()["design_and_plan"]["steps"], "design_initial")
+        assert rules["true"] == "failed"
+        retry = [c for c, t in rules.items() if t == "design_initial"]
+        assert retry == ["meta.attempt <= 2"], f"retry must stay budgeted: {retry}"
+
+    def test_retry_is_ordered_before_the_failure_fallback(self):
+        """`true` matches everything, so a retry rule placed after it is dead."""
+        order = [
+            r["condition"]
+            for r in _compiled()["design_and_plan"]["steps"]["design_initial"][
+                "resolver"
+            ]["rules"]
+        ]
+        assert order.index("meta.attempt <= 2") < order.index("true")
+
+    def test_the_critic_still_fails_OPEN_not_closed(self):
+        """The counterpart this fix was reasoned from. If someone ever
+        'harmonises' these two steps by making the critic fail closed, an
+        unreachable critic would start blocking missions."""
+        rules = _rules(_compiled()["design_and_plan"]["steps"], "design_gate_critique")
+        assert rules["true"] == "derive_goals"

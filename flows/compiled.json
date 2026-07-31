@@ -2597,6 +2597,10 @@
               "transition": "parse_architecture"
             },
             {
+              "condition": "meta.attempt <= 2",
+              "transition": "design_initial"
+            },
+            {
               "condition": "true",
               "transition": "failed"
             }
