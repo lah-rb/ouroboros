@@ -542,12 +542,27 @@ class BatchedEngine:
         through their existing retry logic. Returns the victim count."""
 
         def _do() -> int:
+            from inference import runaway_capture
+
             victims = [
                 s
                 for s in list(self._streams.values())
                 if s.phase is not StreamPhase.DONE
             ]
             for s in victims:
+                # CAPTURE BEFORE RETIRING. A stream evicted here has produced
+                # real text that no one will ever see: the client gets a
+                # retriable error and the tokens are dropped on the floor.
+                # Only the consumer-abandoned path captured, so the single
+                # most interesting generation of the 2026-07-30 sweep — 60,659
+                # tokens over 33 minutes, guillotined by the 1800s timed
+                # refresh — left NO record anywhere: not in the trace, not in
+                # runaway_captures, not in interactions.jsonl. It could not be
+                # told apart from rambling without its text, which is the
+                # whole question a long generation raises.
+                if len(s.completion_tokens) >= runaway_capture.CHECK_INTERVAL:
+                    self.h_runaway_captures += 1
+                    s.pipeline.dump_capture(f"evicted mid-generation: {reason}")
                 self._retire(s, error=RetriableEngineError(reason))
             return len(victims)
 

@@ -202,3 +202,49 @@ def test_no_served_config_requests_an_inert_flow_cache(path):
             f"{path.name}: flow_kv_cache is on without resident_seq_cache — "
             "it will serve from the static base and count a fallback per request"
         )
+
+
+# ── 7. an evicted generation must not lose its text ───────────────────
+
+
+class TestEvictionCapturesPartialText:
+    """The 2026-07-30 sweep's most interesting generation left NO record.
+
+    laguna-s-2.1 produced 60,659 tokens over 33 minutes on the batch
+    structural step and was guillotined by the 1800s timed context refresh.
+    Only the consumer-abandoned path captured partial text, so an
+    eviction-retired stream dropped its tokens on the floor: nothing in the
+    trace, nothing in runaway_captures, nothing in interactions.jsonl.
+
+    That text is the whole question. Token-level guards (which did not fire)
+    rule out repetition, but they cannot tell "elaborately writing seven
+    files" from "writing forty nobody asked for" — only the output can.
+    """
+
+    def _src(self) -> str:
+        import inspect
+
+        from inference.batched_engine import BatchedEngine
+
+        return inspect.getsource(BatchedEngine.evict_all_streams)
+
+    def test_eviction_dumps_a_capture_before_retiring(self):
+        src = self._src()
+        assert "dump_capture" in src
+        cap = src.index("dump_capture")
+        ret = src.index("self._retire(s, error=RetriableEngineError(reason))")
+        assert cap < ret, "capture BEFORE retire — retire clears the pipeline"
+
+    def test_it_reuses_the_same_threshold_as_the_abandoned_path(self):
+        """Not a new policy — the same CHECK_INTERVAL floor, so a trivial
+        stream does not spam the capture directory."""
+        src = self._src()
+        assert "runaway_capture.CHECK_INTERVAL" in src
+
+    def test_the_reason_names_the_eviction(self):
+        src = self._src()
+        assert "evicted mid-generation" in src
+
+    def test_the_counter_still_moves(self):
+        src = self._src()
+        assert "h_runaway_captures += 1" in src
