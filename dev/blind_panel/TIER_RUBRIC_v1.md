@@ -94,22 +94,35 @@ drift that buys, and §6 describes the one cheap thing that partly replaces them
 
 | stars | score | tier |
 |---|---|---|
-| ★★★★★ | 80–100 | 1 |
-| ★★★★ | 60–79 | 1 |
-| ★★★ | 40–59 | **rejudge to place** (§5) |
-| ★★ | 20–39 | 2 |
-| ★ | 1–19 | 2 |
+| ★★★★★ | 81–100 | 1 |
+| ★★★★ | 61–80 | 1 |
+| ★★★ | 41–60 | tier by score (≥50 → 1); **rejudge to place** (§5) |
+| ★★ | 21–40 | 2 |
+| ★ | 0–20 | 2 |
 | — | no runnable artifact | 3 |
 | — | will not boot | UNSUPPORTED (not a tier) |
+
+**CORRECTED 2026-07-31.** The table above previously read 80–100 / 60–79 /
+40–59 / 20–39 / 1–19 — every boundary one off, and the bands unequal at the
+ends. The stars are **five equal 20-point bands**: 0–20, 21–40, 41–60, 61–80,
+81–100 (operator, 2026-07-31). The error was live: a judge scoring a 60 read
+the old table and reported **4★** when 60 is the TOP of the 3★ band —
+tier-correct, star-wrong. Scores are unaffected; only the label was.
 
 **Tier 1 is ≥ 50.** The original spec said "higher than 50" and "less than 50",
 leaving 50 undefined; integer dimensions will produce it regularly, and "at least
 half the available credit" is the natural reading of the bar.
 
 **The rejudge band and the 3★ band are the same band.** Two rules collapsed into
-one: 40–59 is both "the star that straddles the tier boundary" and "the score
+one: 41–60 is both "the star that straddles the tier boundary" and "the score
 close enough to 50 that a single judgment cannot place it." 4★ and 5★ are tier 1
 on sight; 1★ and 2★ are tier 2 on sight; **only 3★ costs two more judgments.**
+
+**A 3★ score still HAS a tier** — ≥50 is tier 1, below is tier 2. The rejudge
+does not decide whether a tier exists, it decides whether a single judgment can
+be trusted to place one. An operator with deep prior knowledge of the model may
+CORROBORATE instead of spending two judges; record that as a corroboration, not
+as a three-vote result, so a later reader can see which it was.
 This is why solo judging stays cheap — the expensive path is reserved for the
 only case that needs it.
 
@@ -450,6 +463,33 @@ score; the disclosure is provenance.
   the whole of the blinding when there is only one label to assign — and pass 2
   reads source, so a leaked model name in a comment is now *certain* to be seen
   rather than merely likely.
+- **THE MECHANISM: a judge is a freshly spawned SUBAGENT given a packet path and
+  nothing else.** This is what makes the rule above enforceable instead of
+  aspirational — an operator cannot un-know the model, the config, the
+  degeneration events and the goal counters by resolving to be impartial.
+  Per judge: build a packet with `make_judge_packet.py`, then spawn one
+  subagent whose prompt carries the packet path, this protocol, and an explicit
+  wall — read ONLY inside the packet; never `~/ouroboros-runs/`, the repo, any
+  config, log or trace; no git. Each judge gets its own packet and its own
+  scratch directory, so save files and mutated world state cannot collide. The
+  subagent's final message IS the record; it never sees another judgment, the
+  operator's notes, `observed`, or the pre-registered expectation.
+  Added 2026-07-31, the day the operator started playing an artifact personally
+  and had to be stopped — the same failure this section already records from
+  2026-07-29, recurring because the rule named a prohibition and not a method.
+- **A redaction must not read as a defect.** Whatever the packet rewrites to
+  protect blinding has to look like ordinary content. The workdir redaction
+  first wrote `<arm>`; all three judges of arm02 remarked on the "unsubstituted
+  placeholder" and one scored it against organization. Disclose contamination
+  in the record rather than silently correcting it.
+- **THE RESULT IS RECORDED INTO THE MODEL'S CONFIG `tier:` BLOCK.** A judgment
+  that lives only in a transcript is lost: the 2026-07-29 non-thinking
+  laguna-xs run was never written down and its per-dimension scores no longer
+  exist, so the A/B it was run to support cannot be computed. Record the rubric
+  version, every judge's total, the median, the per-dimension score/max/stars,
+  the decisive defect, the unmet requirements, and the expectation's outcome.
+  **One config = one score** — a variant that changes a scoreable property gets
+  its own config via `extends:`, so the experimental delta is the config diff.
 
 ---
 

@@ -259,20 +259,42 @@ class TestDocOnlyKeys:
         assert not hasattr(cfg, "tier"), "tier must be stripped before validation"
 
     def test_judged_and_observed_stay_separate(self, configs):
-        """TIER_RUBRIC v1.0 §7 forbids a judge from seeing the observed half.
+        """TIER_RUBRIC §7 forbids a judge from seeing the observed half.
         They are sibling keys, never one blob, so a packet builder can hand over
-        `judged` without dragging the run telemetry along."""
+        `judged` without dragging the run telemetry along.
+
+        This test used to ALSO assert `judged is None` and
+        `status == "awaiting_blind_judgement"` — true when it was written, and
+        obsolete the moment the artifact was scored (2026-07-31, 48/100). That
+        pinned a transient state beside a durable invariant, so scoring the model
+        broke a test about key separation. Only the invariant is asserted here;
+        the scored/unscored branch is checked on whichever state the file is in.
+        """
         cfg_path = (
             Path(__file__).resolve().parents[1] / "configs" / "laguna-xs-2.1.yaml"
         )
         raw = yaml.safe_load(cfg_path.read_text())
         tier = raw["tier"]
+
+        # THE INVARIANT: siblings, and the telemetry is never nested inside the
+        # judgement — that nesting is exactly how an operator half would leak
+        # into a judge's packet.
         assert "judged" in tier and "observed" in tier
         assert not isinstance(tier["observed"], str)
-        # The judged half is absent until a FRESH judge scores the artifact —
-        # the operator who watched the run is disqualified (rubric §5).
-        assert tier["judged"] is None and tier["stars"] is None
-        assert tier["status"] == "awaiting_blind_judgement"
+        assert "observed" not in (tier.get("judged") or {})
+
+        if tier.get("status") == "awaiting_blind_judgement":
+            assert tier["judged"] is None and tier["stars"] is None
+        else:
+            # Scored: the record must carry what §5 and METHODS step 8 require —
+            # a version string, the judge model, and the score. A `judged` blob
+            # missing these is how a verdict becomes unciteable later.
+            judged = tier["judged"]
+            assert isinstance(judged, dict), "a scored config needs a judged blob"
+            assert tier.get("rubric", "").startswith("TIER_RUBRIC v")
+            assert judged.get("judge_model"), "§5: judge model pinned as a string"
+            assert isinstance(judged.get("total"), int)
+            assert tier.get("stars") is not None
 
 
 class TestTheDiffIsActuallyVisible:

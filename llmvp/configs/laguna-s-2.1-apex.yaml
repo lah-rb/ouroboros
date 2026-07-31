@@ -32,22 +32,33 @@
 # KV GEOMETRY (headers: 48 layers, 8 kv-heads, 128 head-dim -> 192 KiB/token):
 #
 #   n_ctx    KV GB   total GB   verdict
-#    65536    12.9      86.8    <- THIS CONFIG (matches poolside for the A/B)
+#    65536    12.9      86.8    the original A/B setting — HISTORICAL, see below
 #    98304    19.3      93.2    OK
-#   131072    25.8      99.7    OK  <- reachable, unlike poolside
+#   131072    25.8      99.7    OK
+#   234496    46.1     120.0    <- THIS CONFIG, probe_verified_n_ctx
 #
-# The poolside config that boots and runs stable today totals 108.9 GB. APEX at
-# the FULL 131072 is 99.7 GB — 9 GB BELOW a proven-good configuration. So APEX
-# can run unsloth's full context at 5.03 bpw, which poolside cannot. We are NOT
-# doing that here on purpose (see below).
+# (KV rows are n_ctx x 192 KiB/token; total adds the 73.9 GB of weights from
+# probe_verified_weights_bytes. The 234496 row is the same arithmetic, and it
+# is corroborated by measurement, not just formula: probe_verified_n_ctx says
+# the context probe reached 234496 on this build, and the 2026-07-31 tier arm
+# then ran it for a full 120-minute backstop without a KV fault.)
 #
-# WHY 65536 AND NOT 131072. This config's job is a controlled A/B against the
-# 2026-07-27 poolside 2h run, so the quant must be the only variable. Matching
-# n_ctx is free: that run logged ZERO truncation events across 262 flows, so
-# n_ctx never bound and the larger window would buy nothing measurable while
-# costing the comparison. Raising it to 131072 is a one-line change (n_ctx,
-# graphql.max_tokens, generation.max_tokens_default all move together) and is
-# the right follow-up ONCE the quant question is settled.
+# WHY 234496 AND NOT THE ORIGINAL 65536. The 65536 setting existed to hold
+# n_ctx fixed for a controlled A/B against the 2026-07-27 poolside 2h run, so
+# that the quant would be the only variable. THAT COMPARISON IS GONE: the
+# poolside and unsloth-IQ4 builds were deleted from the machine on 2026-07-30
+# after APEX won the quant question outright, so there is no longer a run to
+# match and nothing left to hold constant.
+#
+# The window was then raised deliberately, on the operator's rule that a
+# context advantage is a direct consequence of quant size and should be kept
+# rather than normalised away — matching a dead baseline would throw away real
+# headroom for a comparison that can no longer be made. APEX's small hot path
+# (see the table above) is exactly what buys that headroom.
+#
+# n_ctx, graphql.max_tokens and generation.max_tokens_default move together;
+# all three are 234496 below. Re-probe before raising further — a ceiling
+# measured under one set of flags is not evidence for another.
 
 app:
   host: 0.0.0.0
@@ -133,13 +144,203 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
-  status: not_yet_run
+  status: scored
   expectation:
     registered: 2026-07-29
     tier: "1"
     stars: null
     basis: experience
+    outcome: near_miss_untested
     why: >
       The most variable model tested to date, with real reliability concerns.
       Expected tier 1 PROVIDED nothing goes wrong mid-run — which is the whole
       question with this model.
+    outcome_note: >
+      Scored 46 — four points under the >=50 line used to place within the 3-star
+      band, so tier 2 by the letter and a near miss in substance. NOT counted as
+      a falsification, on the operator's read (2026-07-31): the expectation named
+      no reasoning mode, and this run had thinking OFF. For a quant whose defining
+      trait is behavioural variability, a near-tier-1 non-thinking score is the
+      reasonable outcome rather than a surprising one. The prediction is properly
+      TESTED by a thinking:true variant; until that runs, treat this as
+      consistent-with-expectation and unresolved, not as a hit or a miss.
+  result:
+    scored: 2026-07-31
+    rubric: TIER_RUBRIC v1.2
+    run: tier_20260731-050209 arm01   # game_challenge_tier, top_phase=quality, 2h
+    thinking: false                   # SEE THE THINKING CAVEAT BELOW
+    score: 46
+    stars: "3"
+    tier: "2"
+    judges: [46, 46, 46]              # blind subagents, all claude-opus-5[1m]
+    record: dev/blind_panel/RESULTS_tier_2026-07-31.md
+    run_shape: 120min (backstop), 13 files, 7 py_ok, 4 degenerations, 13/39 goals
+
+    # ⚠️ SCORED UNDER PRE-FIX SAMPLING. This config declares `min_p: 0.0`, but
+    # the loader's `gen.min_p or 0.05` discarded the legitimate zero, so the run
+    # was actually served min_p 0.05. Fixed 2026-07-31 (AFTER this arm ran); the
+    # arm was NOT re-run, so the score stands as measured under the regime below.
+    #
+    # Comparable to: arms 01-03 of the same sweep (identical pre-fix loader).
+    # NOT strictly comparable to: arms 04+ of this sweep and anything scored
+    # later, which get the declared min_p 0.0.
+    #
+    # Judged unlikely to move a band — min_p 0.05 vs 0.0 trims only the deepest
+    # tail — but the decisive defects here were structural (a victory flag never
+    # assigned, a parser/engine verb mismatch), and no sampling setting reaches
+    # those. Recorded rather than assumed away.
+    sampling_regime:
+      status: pre_fix
+      declared_vs_served: "min_p declared 0.0, served 0.05"
+      fixed: 2026-07-31 (llama_cpp_backend._build_generate_kwargs)
+      rerun: not_done (operator decision — annotate, do not re-run)
+
+    # Per-dimension stars are score/max banded 80/60/40/20, so different maxima
+    # normalise and the SHAPE reads at a glance — same convention as the
+    # gpt-oss-120b-a5-swarm-524k block.
+    #
+    # WHICH JUDGE. Judges 2 and 3 returned IDENTICAL dimension vectors, so this
+    # is the modal shape (2 of 3), not an arbitrary pick. Judge 1 differed on
+    # exactly two rows and they offset: no_broken_functions 3 (not 4) and
+    # reusability 8 (not 7). All three totalled 46.
+    dimensions:
+      no_broken_functions: {score: 4, max: 20, stars: 2}   # 8-10 ledger rows
+      robustness:          {score: 2, max: 10, stars: 2}   # one HOST-DAMAGING edge
+      ux:                  {score: 6, max: 10, stars: 4}
+      conformance:         {score: 9, max: 10, stars: 5}   # 46/53 requirements
+      ambition:            {score: 3, max: 10, stars: 2}
+      creativity:          {score: 5, max: 10, stars: 3}
+      org_project:         {score: 4, max: 5,  stars: 5}
+      org_logic:           {score: 3, max: 5,  stars: 4}
+      reusability:         {score: 7, max: 10, stars: 4}
+      documentation:       {score: 3, max: 10, stars: 2}   # hard-capped, §3.10
+
+    profile: >
+      The widest conformance-to-delivery gap recorded: 5 stars on doing what was
+      asked, 2 stars on it working. Strong on structure, modifiability and
+      requirements coverage; the artifact is authored well and assembled wrong.
+      A judge's own phrasing — "each module is individually clean and almost
+      none of them agree with each other."
+
+    decisive_defect: >
+      THE GAME CANNOT BE WON, and no single edit fixes it. `game_won` is never
+      assigned anywhere in the tree, so the victory branch is unreachable dead
+      code — proven by PLAY, not inferred: all three judges independently cut
+      the boss's HP by data edit, killed it, and got the ordinary prompt back.
+      Three further blocks stack underneath, each sufficient on its own: the
+      boss-weakness item is authored only as the boss's own drop (obtainable
+      only after the fight it exists to enable), the sole armour declares a slot
+      the player does not have, and `equip` never applies anything regardless.
+      The DEFEAT path, by contrast, is complete and fires correctly.
+
+    strengths: >
+      The prose and the data design are real. Nine rooms of specific,
+      atmospheric writing; a two-NPC hint chain that is load-bearing rather than
+      decorative; and a genuine data/engine separation — new rooms and items are
+      a world.yaml-only change with ZERO Python edits. Every modification probe
+      landed first try for every judge.
+
+    unmet_requirements: [17, 28, 29, 36, 37, 39, 42]  # no flee verb; no mid-combat
+                                                      # item use; 2 regular monsters
+                                                      # not 3; weakness item in no
+                                                      # room; NO WIN PATH; no restart
+                                                      # after death; save omits all
+                                                      # world state
+                                                      # (judge 3 cited 41 for the last)
+
+    inter_judge: >
+      Three blind judges, three totals of 46. Only two of ten dimensions varied
+      and they offset. All three scored conformance 46/53 and named six of the
+      same seven unmet items. This is v1.2's first three-vote outing since §3.1
+      was made multiplicative — the amendment written because the additive
+      scheme had floored a winnable artifact at 0/20 — and the dimension
+      returned 3/4/4 on an artifact carrying 8-10 ledger rows. It behaved.
+
+# ── THE EXPECTATION, AND WHERE IT ACTUALLY STANDS ────────────────────
+# Registered tier 1, scored 46 = tier 2 — four points short, with thinking OFF.
+# Read as CONSISTENT WITH EXPECTATION AND UNRESOLVED, not as a miss: a
+# near-tier-1 non-thinking score is the reasonable result for a quant whose
+# defining trait is behavioural variability, and the prediction named no
+# reasoning mode. The thinking:true variant is the run that settles it.
+#
+# What the pre-registration DID surface is that the failure mode was not the
+# one it feared. It said "tier 1 PROVIDED nothing goes wrong mid-run." Things
+# did go wrong mid-run — four degeneration events — and the run still produced
+# more files than any other arm in the sweep to that point. The artifact was
+# limited by something the expectation never contemplated: it does not work.
+#
+# 3★ (40–59) is the rejudge band, so this is a MEDIAN OF THREE independent
+# blind judgments, per §5. All three returned 46. Only two of ten dimensions
+# varied at all (§3.1 3/4/4, §3.9 8/7/7) and they offset. Conformance came back
+# 46/53 from all three. That agreement is evidence about the instrument as much
+# as the artifact — it is v1.2's first three-vote outing since §3.1 went
+# multiplicative, and the dimension it was rewritten to fix behaved.
+#
+# The decomposition IS the result: conformance 9/10 beside no-broken-functions
+# 3–4/20. The model did nearly everything the brief asked and delivered almost
+# none of it.
+
+# ── THINKING WAS OFF FOR THIS SCORE ──────────────────────────────────
+# `model.thinking: false` above. This model has a strong reasoning propensity
+# (it is the quant whose failure mode is RAMBLING — see below), so the score is
+# expected to RISE with thinking on: every decisive defect found was a seam bug
+# — parser→engine verb mismatch, dialogue schema mismatch, key-name mismatch,
+# a victory flag nothing assigns — and those are exactly the class of error a
+# model catches by reasoning about its own interfaces before writing them.
+#
+# It could equally be a WASH. The run already parked at the 2h backstop with
+# 13/39 goals, so wall clock is the binding constraint, not capability. CoT
+# spent per turn comes straight out of the budget that produced those 13 files.
+# A thinking variant that reasons its seams straight but reaches fewer of them
+# can easily land in the same band.
+#
+# BEFORE RUNNING A thinking:true VARIANT — remove the token-19 ban from
+# `generation.logit_bias` above. It exists ONLY because thinking is off here
+# (the close-only prefill ends the prompt with a bare `</think>` that laguna
+# reproduces as a separator). Carried into a thinking config it suppresses the
+# model's own reasoning terminator. This is flagged at the logit_bias line too;
+# it is repeated here because this is the note someone will read first.
+
+# ── CHARACTER, from the 2026-07-30/31 runs ───────────────────────────
+# RAMBLING is the signature failure, and it is NOT the loop shape.
+#   * Smoke run (20m backstop): 45,056 tokens, ZERO files. distinct-ratio 0.651
+#     — coherent and non-repetitive, so the long-cycle guard (fires at ≤0.125)
+#     is structurally blind to it. "Let me" x226. The full 201,583-byte capture
+#     was recovered and read: prose, not repetition.
+#   * REPLICATED 2/2 on the same design, so it is a property, not a bad draw.
+#   * SHAPE, not mere presence, is what distinguishes it from XS. An earlier
+#     note here claimed laguna-XS "ran the same mission clean, so rambling is
+#     laguna-S-specific." THAT WAS AN ARTIFACT OF THE 20-MINUTE CAP and is
+#     withdrawn: at the 2h backstop laguna-XS degenerated THIRTEEN times
+#     (tier_20260731-050209 arm02). What actually differs is the shape —
+#     XS produces LONG-CYCLE loops (ratios 0.010–0.108, periods 80–3531 B),
+#     every one of which the guard caught; S produces RAMBLING (distinct-ratio
+#     0.651), which the guard cannot see. Both are APEX-family quants at
+#     different base sizes, so this is a size/base difference, not a quantiser
+#     one. S's failure is the more dangerous of the two precisely because it is
+#     invisible to the detector.
+#
+# MORE WALL CLOCK CONVERTS THE VERBOSITY INTO OUTPUT. The same config that
+# produced 0 files in 25 minutes produced 13 files in 120. Do not read a short
+# backstop as a capability verdict on this model; the 20m smoke result was an
+# artifact of the cap.
+#
+# ARTIFACT CHARACTER: competent modules, wrong seams. Every headline system was
+# authored correctly and wired to a key its counterpart does not use. All three
+# judges independently reached the same reading, and all three proved the game
+# unwinnable by PLAY (each cut the boss's HP, killed it, and got the ordinary
+# prompt back — the victory branch is unreachable dead code).
+#
+# WHAT IS GENUINELY GOOD, per all three judges: the prose (atmospheric and
+# specific), the two-NPC hint design (non-obvious and load-bearing), and a real
+# data/engine separation — new rooms and items are a world.yaml-only change,
+# and every modification probe landed first try.
+#
+# ITS DOCUMENTATION OVERCLAIMS. The README asserts working equipment, branching
+# dialogue, a two-phase boss and "beat the boss to win" — four claims, four
+# contradicted by play, and it is truncated mid-code-fence so it never says how
+# to run the game. Treat this model's self-reports as unverified.
+#
+# SAMPLING. `session_temp_floor: 0.35` here. A 0.7 floor (semi-guided by the
+# poolside recommendation) does fix the known degeneration shape but costs
+# notable quality — do not raise the floor to chase degen without re-scoring.

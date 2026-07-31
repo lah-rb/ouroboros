@@ -41,8 +41,19 @@ MODEL_TOKENS = [
     "laguna-XS", "laguna-S", "laguna", "poolside",
     "glm-4.7-flash", "glm4", "glm", "zhipu",
     "hunyuan3", "hy3", "tencent", "olmo", "mistral", "tekken",
-    "deepseek", "llama", "kimi", "minimax", "apex", "reap", "unsloth",
+    "deepseek", "llama", "kimi", "minimax", "reap", "unsloth",
 ]
+# `apex` was here and was REMOVED (operator decision, 2026-07-31). It is an
+# ordinary English word, and on 2026-07-31 an arm named its game "Apex"
+# (`apex-text-adventure`, plus the console entry point) — tripping the scan on
+# a title that collided with a quant label by coincidence. A quant suffix is
+# assigned by whoever quantised the GGUF and is not present in the weights, so
+# a model cannot self-identify through one; the match carried no true signal
+# about authorship. The two load-bearing sites also made scrubbing unsafe:
+# rewriting a package name changes the artifact being judged.
+# The trade accepted: if a model ever does echo a quant label containing
+# "apex", the scan will no longer catch it. `reap`/`unsloth`/`poolside` stay —
+# they are not words a game would use.
 
 
 # A past arm's TOTAL is an anchor, and §6 dropped anchors deliberately.
@@ -56,6 +67,29 @@ MODEL_TOKENS = [
 # indistinguishable from the outside, so that vote was discarded rather than
 # argued for.
 _SCORE_CITE = re.compile(r"\b\d{1,3}/100\b(\s*\(★+\))?")
+
+
+# A pseudonym that kept a config tail — `Arm D-swarm`. These arise when an
+# EARLIER packet's head-only substitution was pasted back into a source doc, so
+# no model token remains for the loop below to match and the tail rides along.
+# The packet already DETECTS this and refuses to look clean; detecting a defect
+# it can repair is half a tool, so repair it.
+_PSEUDO_TAIL = re.compile(r"\b(Arm [A-Z])-[\w.]+")
+
+# Rows of the band table are scoring CRITERIA and must survive verbatim.
+_BAND_ROW = re.compile(r"^\s*\|")
+# `★★★ tier 1` is a past-score anchor written in stars instead of digits.
+# _SCORE_CITE strips the `54/100` sitting next to it and leaves this behind,
+# which tells the judge the same thing in a notation the regex did not cover.
+_STAR_ANCHOR = re.compile(r"★+(\s*tier\s*\d+)?", re.I)
+
+
+def _scrub_star_anchors(text: str) -> str:
+    """Remove ★/tier anchors from PROSE, keeping the band table intact."""
+    return "\n".join(
+        ln if _BAND_ROW.match(ln) else _STAR_ANCHOR.sub("a band not shown here", ln)
+        for ln in text.splitlines()
+    )
 
 
 def redact(text: str, assigned: dict[str, str]) -> str:
@@ -75,6 +109,8 @@ def redact(text: str, assigned: dict[str, str]) -> str:
         if token.lower() not in assigned:
             assigned[token.lower()] = f"Arm {chr(ord('A') + len(assigned))}"
         text = pattern.sub(assigned[token.lower()], text)
+    text = _PSEUDO_TAIL.sub(r"\1", text)
+    text = _scrub_star_anchors(text)
     return _SCORE_CITE.sub("a score not shown here", text)
 
 
@@ -111,6 +147,58 @@ your total, the star band, and your comments.
 """
 
 
+# The tier runner gives each arm a working directory NAMED AFTER ITS CONFIG
+# (`/private/tmp/tier/<config>/`). Any file the model writes containing its own
+# cwd therefore carries the model name verbatim — arm02 on 2026-07-31 shipped an
+# `explore.sh` whose first line was `ls -la /private/tmp/tier/laguna-xs-2.1/`.
+# That is a total un-blinding, and unlike a coincidental word it is unambiguous.
+#
+# WHY REWRITE RATHER THAN DROP THE FILE. The path is incidental to everything
+# the rubric scores; the script's logic, its correctness and its very existence
+# all survive the substitution, so the judge still sees what the model built.
+# Deleting the file would change the artifact's shape (and its file count);
+# leaving it would end the blinding outright.
+#
+# ONLY the leading directory segment is replaced. Nothing else in the artifact
+# is touched — a model name baked into a package name or an entry point stays,
+# because rewriting THOSE changes what is being judged (see the MODEL_TOKENS
+# note above).
+#
+# THE REPLACEMENT MUST LOOK LIKE A DIRECTORY, NOT A TEMPLATE. The first version
+# substituted "<arm>", and a judge duly reported "a stray explore.sh containing
+# an unsubstituted placeholder path" — reading OUR blinding as the model's
+# sloppiness. A redaction that is legible as a redaction is a defect the
+# artifact did not commit. "run" is an ordinary directory name and reads as one.
+_WORKDIR_PATH = re.compile(r"(/private/tmp/tier/)[^/\s\"'`)\]]+")
+_TEXTISH = {
+    ".py", ".sh", ".md", ".txt", ".yaml", ".yml", ".json", ".toml", ".cfg",
+    ".ini", ".bash", ".zsh", ".rst", ".env", "",
+}
+
+
+def _scrub_workdir_paths(root: Path) -> set[str]:
+    """Neutralise `/private/tmp/tier/<config>/` in artifact text files.
+
+    Returns the relative names of files changed, so the packet can report the
+    edit rather than perform it silently — a judge's artifact differing from
+    what the model wrote is exactly the kind of thing a later reader must be
+    able to see.
+    """
+    touched: set[str] = set()
+    for p in root.rglob("*"):
+        if not p.is_file() or p.suffix.lower() not in _TEXTISH:
+            continue
+        try:
+            original = p.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue  # binary or unreadable — nothing a path can hide in
+        rewritten = _WORKDIR_PATH.sub(r"\1run", original)
+        if rewritten != original:
+            p.write_text(rewritten)
+            touched.add(str(p.relative_to(root)))
+    return touched
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("staged", help="a staged arm dir (…/staged/armNN) or its alpha/")
@@ -131,6 +219,9 @@ def main() -> int:
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     shutil.copytree(art, out / "artifact")
+    scrubbed = _scrub_workdir_paths(out / "artifact")
+    if scrubbed:
+        print(f"  workdir paths : neutralised in {', '.join(sorted(scrubbed))}")
 
     assigned: dict[str, str] = {}
     for name, src_doc in (("RUBRIC.md", "TIER_RUBRIC_v1.md"),

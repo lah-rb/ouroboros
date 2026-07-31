@@ -1,0 +1,66 @@
+# laguna-xs-2.1 with THINKING OFF — the clean half of the thinking A/B.
+#
+# WHY THIS EXISTS. laguna-xs-2.1 scored 48/100 (3 stars, tier 2) with
+# `thinking: true` on 2026-07-31, and the natural question is how much of that
+# thinking bought. The obvious comparison — the 2026-07-29 non-thinking run —
+# CANNOT answer it, for two independent reasons:
+#
+#   1. It was never blind-judged. Its tier record carries `judged: null`; the
+#      only surviving trace of a verdict is the operator's recollection of the
+#      headline (tier 2 / 2 stars). There is no score to difference against.
+#   2. FOUR variables moved between the two runs, not one. On 2026-07-30 this
+#      config flipped `thinking` false->true, `swa_full` false->true,
+#      `resident_seq_cache` false->true, and ADDED `flow_kv_cache`. Any
+#      difference between those runs is attributable to any of the four.
+#
+# This config changes exactly ONE thing against the scored parent, so the
+# difference in score is attributable to thinking and to nothing else.
+#
+# IT IS AN `extends:` ON PURPOSE — operator decision 2026-07-31: score variants
+# as separate configs rather than accumulating multiple results inside one.
+# Inheritance makes the claim STRUCTURAL: everything below is the complete list
+# of differences between the two arms, and it is two keys.
+extends: laguna-xs-2.1
+
+model:
+  # THE VARIABLE UNDER TEST. Everything else is inherited from the scored parent.
+  thinking: false
+
+generation:
+  # NOT a second variable — a REQUIRED consequence of the first, and the reason
+  # this file cannot be a one-line override.
+  #
+  # Token 19 is `</think>`. The parent DROPPED its ban because thinking:true
+  # depends on emitting it. With thinking off, the close-only prefill ends the
+  # prompt with a bare `</think>` which laguna then reproduces as a separator —
+  # the exact failure the ban exists to suppress, and the reason the ban is
+  # present in every non-thinking laguna config in the fleet.
+  #
+  # So: restoring it keeps the two arms comparable rather than introducing a
+  # difference. 25 (`<tool_call>`) stays banned in both, being a property of the
+  # model and our prompt format rather than of the reasoning mode.
+  logit_bias: {25: -100.0, 19: -100.0}
+
+# ── TIER EXPECTATION (doc-only; see DOC_ONLY_KEYS in core/config.py) ─
+# PRE-REGISTERED per TIER_RUBRIC v1.2 §6: written before the run, never shown
+# to a judge, never revised. Its job is to make a SURPRISE legible.
+tier:
+  status: not_yet_run
+  thinking: false          # THE PROPERTY THIS CONFIG SCORES
+  expectation:
+    registered: 2026-07-31
+    tier: "2"
+    stars: 2
+    basis: experimental
+    why: >
+      Expected to score BELOW the thinking parent's 48 (3 stars), landing at
+      2 stars. Reasoning: the parent's decisive defects were all SEAMS — a
+      loader ignoring a key its own data file writes, and a dispatch tower
+      returning before the monster's turn — and deliberation before writing is
+      exactly what catches a contract mismatch between two modules. Removing it
+      should make seams MORE frequent, not fewer.
+      The competing possibility, and the reason this is not a safe prediction:
+      the parent parked at the 2h backstop having closed 8/36 goals with 13
+      degenerations, so wall clock already bound it. CoT comes out of that same
+      budget. A non-thinking arm may simply reach MORE of the brief and score
+      level or higher on conformance while losing on delivery.

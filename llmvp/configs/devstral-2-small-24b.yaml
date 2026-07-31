@@ -82,6 +82,55 @@ tier:
       Minimum viable model. Long native context and reasonably usable output,
       but expected at the bottom of the field.
 
+  # SECOND PRE-REGISTRATION, added 2026-07-31 BEFORE this model's 2h arm was
+  # judged. The 07-29 entry above stands unrevised (§6: never revised); this is
+  # a DIFFERENT and sharper claim — about the MECHANISM behind a metric, not
+  # about placement — and it is recorded separately so both can be scored.
+  #
+  # THE OBSERVATION IT EXPLAINS. In the 2026-07-30 smoke, devstral led the fleet
+  # on files-per-generated-token by a wide margin, on a speed-matched comparison
+  # (29-43 tok/s band, so decode rate is held roughly constant):
+  #
+  #     devstral        7,485 gen tokens ->  9 files   1.20 files/ktok  <- best
+  #     gpt-oss        11,895 gen tokens -> 11 files   0.92
+  #     qwen-next      10,991 gen tokens ->  8 files   0.73
+  #     qwen3.5        20,214 gen tokens -> 12 files   0.59
+  #     step37         53,409 gen tokens ->  8 files   0.15
+  #     qwen3.6-35b    84,659 gen tokens ->  7 files   0.08  <- worst
+  #
+  # It was also mechanically clean: full batch delivery (9/9 declared files),
+  # zero degenerations, completed rather than paused, 8 minutes.
+  expectation_2:
+    registered: 2026-07-31
+    predicts: low_score_despite_top_token_efficiency
+    basis: experience
+    outcome: pending
+    why: >
+      OPERATOR CALL, verbatim in substance: "I guarantee devstral is the best
+      [on files-per-token] because it pushed the least robust work."
+      The claim is that files-per-token is not an efficiency measure at all —
+      it rewards UNDER-DELIVERING, because a model that emits nine thin files
+      beats one that emits eight substantial ones and the ratio cannot tell
+      them apart. Devstral tops that metric by writing less per file, not by
+      writing more per token.
+    confirmed_if: >
+      The blind panel scores this artifact at or near the bottom of the sweep
+      despite its top token efficiency — in particular a low
+      ambition|completeness (3.5) and a low no-broken-functions (3.1) while
+      conformance may still look respectable. That combination means the files
+      exist and are shallow, which is exactly what the ratio cannot see.
+    refuted_if: >
+      It scores mid-field or better with a substantial artifact. That would
+      make files-per-token a defensible first-cut efficiency measure after all,
+      and would mean the 15x spread in that column is measuring something real
+      rather than measuring terseness.
+    why_it_matters: >
+      This is a test OF THE METRIC as much as of the model. The blind panel is
+      the only quality-adjusted instrument available; if it disagrees with
+      files-per-token on the metric's own best case, the column should be
+      retired from the DoE table rather than reported with a caveat.
+      Registered before judging so the answer cannot be rationalised afterwards.
+
 # ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
 probe_verified_cache:
   run_id: cells_20260729-232251
