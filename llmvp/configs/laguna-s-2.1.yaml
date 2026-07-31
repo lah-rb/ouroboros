@@ -43,6 +43,38 @@
 # dev/memguard_boot_probe.sh at this n_ctx. The tekken family shipped with
 # `thinking: true` LYING for weeks because nobody rendered it.
 
+# ── THE BATCH-STRUCTURAL RAMBLE (replicated 2026-07-30, 2/2) ─────────
+# On the batch structural step (`generate_all_files`, 7 files) this config
+# twice produced an enormous single generation and shipped NOTHING:
+#
+#     run 1   60,659 tok / 1,980s / 30.6 tok/s   -> 0 files
+#     run 2   50,497 tok / 1,608s / 31.4 tok/s   -> 0 files
+#
+# Both were killed by the 1800s timed context refresh, which is an UNDECLARED
+# ceiling on generation length — nobody set it for that purpose. The cost is
+# ~33 min of exclusive GPU for zero output, and the refresh also wipes the
+# flow band and demotes hot snapshots, so it degrades the NEXT arm too.
+#
+# IT IS RAMBLING, NOT LOOPING — and that distinction is why nothing caught it.
+# The full 201,583-byte text was recovered (runaway capture on eviction, added
+# the same day). It emitted 10 `# === FILE:` blocks for a 7-file task with
+# main.py written THREE times, 111 ```python fences, a distinct/line ratio of
+# 0.623 (a clean sibling run scores 0.84), and the tell: "This is correct."
+# SEVENTEEN times. It was reasoning IN THE OPEN — hand-tracing boss-phase
+# invulnerability and parser tokenization in prose, then re-emitting files.
+#
+# `thinking: false` here and there is no reasoning span, so this deliberation
+# lands in the CONTENT channel where nothing budgets or strips it, and it is
+# non-repetitive — so the repetition guard and the long-cycle guard both stay
+# silent through 50k tokens. No guard we have can see it.
+#
+# DESIGN-CONDITIONED, not random: both runaways used the same design (33 goals
+# / 7 structural files) — the second was a deliberate replay of the first's
+# mission state into the batch path. A different design (40 goals) completed
+# cleanly in 20 min with 10 files. So the trigger is the plan, not the model
+# alone. OPEN: whether the other two quants ramble on their own designs — if
+# they do not, this is quant-linked; if they do, it is the batch prompt shape.
+
 app:
   host: 0.0.0.0
   port: 8008
