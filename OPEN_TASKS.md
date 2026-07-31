@@ -420,7 +420,39 @@ rather than pooled.
 model cannot be put on S2, that is what S1 *means*. So report the handicap
 alongside the score; never subtract it and never impute a counterfactual.
 
-## 13. Small items (grab-bag)
+## 13. The 1800s context refresh is an undeclared generation ceiling
+
+Found 2026-07-30 while characterizing the laguna ramble. `context_refresh_seconds`
+(default 1800) fires on a WALL CLOCK, and under batched with a drain window it
+fires while busy — so **any generation longer than ~30 minutes is retired**,
+whatever `max_tokens` says. Three separate arms hit it (60,659 / 50,497 /
+39,711 tokens, all evicted mid-generation, all shipping zero files).
+
+Nobody set it as a generation limit. It is invisible in the config, it is not
+mentioned where `max_tokens_default` is chosen, and the failure it produces is
+the expensive one: the work is discarded AND the refresh wipes the flow band
+and demotes hot snapshots, so it degrades the following arm too.
+
+Not obviously wrong — a 30-minute single generation is usually pathological —
+but it should be a DECLARED policy with its own name rather than a side effect
+of a cache-hygiene timer. Options: a real `max_generation_seconds`, or exempting
+an in-flight generation from the timed refresh, or leaving it and documenting
+it where generation budgets are set.
+
+**Caveat on any past reading of `degen`:** the tier degeneration counter read
+the wrong log file and could never rise (fixed 2026-07-30, `5fbe939`). Every
+tier arm on disk — 15 across all sweeps — recorded `degen=0`, including one
+whose long-cycle guard demonstrably fired. Any conclusion resting on a clean
+degen reading is unsupported, not confirmed.
+
+**And `degen` is a LOOP detector, not a waste detector.** It measures distinct
+n-gram ratio against a threshold tuned for repetition (0.125). The two most
+expensive failures measured — 110k+ wasted tokens across two arms — scored
+0.62 and 0.67 and never tripped it, because coherent deliberation is not
+repetitive. Files-per-minute and the presence of an eviction capture are the
+signals that actually discriminated.
+
+## 14. Small items (grab-bag)
 
 - Agent-side identical-retry backoff: the KV-eviction and anti-gut loops
   both retried the same dispatch unchanged for hours. What exists today is
@@ -439,7 +471,7 @@ alongside the score; never subtract it and never impute a counterfactual.
   commits** ahead of `main`, whose tip is `4198104`. The longer this sits the
   less "decision" and the more "migration" it becomes.
 
-## 14. Parked until triggered (do NOT start unprompted)
+## 15. Parked until triggered (do NOT start unprompted)
 
 - **Polish/creativity gate** (rank 60 reserved in PHASE_RANKS): a
   `flows/code_core/polish_gate.cue` modeled on quality_gate.cue (review →
