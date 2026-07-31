@@ -38,8 +38,25 @@ class DegenerateGenerationError(RuntimeError):
     mission_control) rather than an opaque crash.
     """
 
+    # The count goes in the MESSAGE, not just on the attribute. Only the
+    # message survives the GraphQL boundary: the client sees a serialized
+    # error string, so an attribute here is invisible to it. Without this the
+    # agent recorded `tokens_generated=0` for an aborted call and every
+    # token-efficiency figure silently understated the models that degenerate
+    # — laguna-s-2.1-apex traced 2,883 generated tokens for a run whose single
+    # runaway capture alone held 45,056 (2026-07-30).
+    #
+    # The suffix is safe to append: the client's `_degenerate_reason()` takes
+    # the message from its marker onward, so the count rides along into the
+    # logged reason instead of being stripped.
+    _TOKENS_SUFFIX = "aborted after"
+
     def __init__(self, reason: str, tokens_generated: int = 0) -> None:
-        super().__init__(reason)
+        super().__init__(
+            f"{reason} ({self._TOKENS_SUFFIX} {tokens_generated} generated tokens)"
+            if tokens_generated
+            else reason
+        )
         self.reason = reason
         self.tokens_generated = tokens_generated
 

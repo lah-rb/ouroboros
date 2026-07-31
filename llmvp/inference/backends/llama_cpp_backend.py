@@ -3758,13 +3758,43 @@ class LlamaCppBackend(BaseBackend):
         ``stream``, or ``stop`` — those are handled by our own loop.
         """
         gen = self.config.generation
+
+        def _set(value: Any, default: Any) -> Any:
+            """Config value if PRESENT, else the default.
+
+            `x or default` was the idiom here and it silently discarded every
+            legitimate zero — and zero is the MEANINGFUL "disabled" value for
+            two of these knobs, not an absence:
+
+              * `top_k: 0` is llama.cpp's "no top-k limit". Six configs declare
+                it (devstral, glm, both gpt-oss, hy3, mistral) and every one of
+                them was being served a hard 40-token cutoff instead.
+              * `min_p: 0.0` is the Gemma team's own canonical inference config
+                (temp 1.0 / top_k 64 / top_p 0.95 / min_p 0.0). Seven configs
+                declare it and all were silently raised to 0.05.
+
+            So a config could record the vendor-recommended setting, pass
+            review, and be overridden by the loader — the failure mode that
+            broke glm's first run, one layer further down. Only `None` means
+            "not configured"; `Optional[float]` in the schema already said so.
+
+            Found 2026-07-31 while asking why gemma-4-31b and gemma-4-26b
+            declared different penalty knobs. They did not differ in effect;
+            this did.
+            """
+            return default if value is None else value
+
         kwargs: dict[str, Any] = {
             "temp": temperature,
-            "top_p": gen.top_p or 0.95,
-            "top_k": gen.top_k or 40,
-            "min_p": gen.min_p or 0.05,
-            "present_penalty": gen.presence_penalty or 0.0,
-            "repeat_penalty": gen.repeat_penalty or 1.0,
+            "top_p": _set(gen.top_p, 0.95),
+            "top_k": _set(gen.top_k, 40),
+            "min_p": _set(gen.min_p, 0.05),
+            "present_penalty": _set(gen.presence_penalty, 0.0),
+            # Neutral by default. If a model starts jamming on a token run,
+            # a small bump (1.05-1.15) is the first lever to try before
+            # anything structural — vendor guidance offers no default here,
+            # only a remedial range once repetition is actually observed.
+            "repeat_penalty": _set(gen.repeat_penalty, 1.0),
             "reset": False,  # Preserve static state loaded by acquire_instance
         }
         # Penalty lookback window — the library default (64 tokens) is blind

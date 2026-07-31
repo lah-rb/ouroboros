@@ -101,9 +101,34 @@ prompt:
 
 generation:
   max_tokens_default: 113664
+  # THE GEMMA TEAM'S CANONICAL INFERENCE CONFIG, all four values:
+  #   temperature 1.0 · top_k 64 · top_p 0.95 · min_p 0.0
+  # (vendor guidance via the unsloth gemma-4 model cards, checked 2026-07-31.)
   temperature_default: 1.0
   top_p: 0.95
   top_k: 64
+  # ADDED 2026-07-31. It was absent, so the loader supplied 0.05 and this model
+  # ran off-vendor for its whole history. The sibling gemma-4-26b-a4b declared
+  # it correctly and was ALSO overridden, by a separate bug — `gen.min_p or
+  # 0.05` discarded the legitimate zero. Both are fixed; this line is what makes
+  # the setting explicit rather than inherited from a default that happens to
+  # agree.
+  min_p: 0.0
+  # NEUTRAL, and canonical: vendor guidance specifies no repetition penalty for
+  # gemma-4. 1.15-1.25 appears only as REMEDIAL advice once repetition is
+  # actually observed.
+  #
+  # THIS MODEL HAS NOW BEEN OBSERVED TO JAM: tier_20260730-220500 arm 7 aborted
+  # on `run-length 48 of token 715` (a `/` run inside an identifier —
+  # `void_//bane`, then `old_//////...`) at 1,169 tokens into its first
+  # generation, at temperature 0.14. Token 715 had never appeared in any of the
+  # 38 prior run-length captures on this machine.
+  #
+  # IF IT RECURS, bump this a tad — 1.05 first, 1.10 if that does not hold
+  # (operator, 2026-07-31). Deliberately NOT pre-emptive: one occurrence is not
+  # a pattern, penalties truncate code output, and this model is the only gemma
+  # running reasoning_head_swap + thinking, so the cause may not be sampling at
+  # all. Change one thing and re-measure.
   repeat_penalty: 1.0
   # Deep session turns are repetition attractors (gemma-4 token loops are
   # the documented degenerate-purge case); floor sampling from turn 3 on.

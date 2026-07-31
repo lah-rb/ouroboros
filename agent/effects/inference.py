@@ -346,6 +346,20 @@ def _degenerate_reason(error_msg: str) -> str:
     return error_msg[min(starts) :].strip() if starts else ""
 
 
+# The server appends "(aborted after N generated tokens)" to a degenerate
+# abort. Those tokens were really produced and really cost wall clock, but the
+# call returns no text, so without recovering N the trace records the whole
+# generation as 0 and every tokens-per-output figure flatters the models that
+# degenerate most. Absent on an older server → None, never 0: "we did not
+# measure" and "nothing was generated" are the two readings this must not merge.
+_DEGENERATE_TOKENS = re.compile(r"aborted after (\d+) generated tokens")
+
+
+def _degenerate_tokens(error_msg: str) -> int | None:
+    m = _DEGENERATE_TOKENS.search(error_msg or "")
+    return int(m.group(1)) if m else None
+
+
 # FALLBACK-ONLY ceilings on tokens a single generation may produce before the
 # health watchdog cancels it as a runaway. They bound the Qwen3-Next repetition
 # bug (unclamped Gated-DeltaNet decay) which otherwise generates to max_tokens
@@ -808,6 +822,10 @@ class InferenceEffect:
                         error=f"GraphQL errors: {error_msg}",
                         degenerate=bool(reason),
                         degenerate_reason=reason,
+                        # The generation produced no usable text but really did
+                        # burn these tokens; keeping them out of the record made
+                        # degenerating models look token-efficient.
+                        degenerate_tokens=_degenerate_tokens(error_msg),
                     )
 
                 completion = data["data"][response_key]

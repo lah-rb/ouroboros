@@ -167,6 +167,17 @@ class InferenceResult:
     # what lets a flow tell "the model looped" from "the server was busy".
     degenerate: bool = False
     degenerate_reason: str = ""
+    # Tokens the model really produced before the guard killed the generation.
+    # An aborted call returns no text, so `generated_tokens` above is 0 — and a
+    # 0 there made the trace report that nothing was generated, when in fact the
+    # run had burned tens of thousands of tokens and the wall clock to match.
+    # Every tokens-per-output figure therefore flattered exactly the models that
+    # degenerate most (laguna-s-2.1-apex traced 2,883 for a run whose single
+    # capture held 45,056). Recovered from the server's error message.
+    #
+    # None = NOT REPORTED (older server), never 0. "We did not measure" and
+    # "nothing was generated" are the two readings this exists to keep apart.
+    degenerate_tokens: int | None = None
 
 
 # ── Terminal output limits ────────────────────────────────────────────
