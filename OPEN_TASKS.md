@@ -491,3 +491,49 @@ signals that actually discriminated.
 - MTP / speculative decode: NO-GO recorded — the fork exposes the nextn layer
   but hidden-state handoff is absent (0–1% acceptance). Wait for upstream; do
   not re-spike without an upstream change.
+## 16. Batch-creation fallback: session-driven batch or swarm serial
+
+**Not a defect — the CURRENT fallback works and the shape is expected**
+(operator, 2026-07-31). Logged so the option is not re-derived from scratch
+later.
+
+Batch structural delivery is BIMODAL, and that is the normal shape rather
+than a problem. In the 2026-07-30 smoke (18 arms):
+
+| batch outcome | arms |
+|---|---|
+| wrote 100% of declared | devstral 9/9 · gpt-oss 11/11 · gpt-oss-swarm 11/11 · hy3 6/6 · laguna-xs 7/7 · mistral 10/10 · qwen3.6-27b 11/11 · qwen3.6-35b 7/7 · step37 8/8 |
+| near-complete | qwen3.5 11/12 |
+| wrote 0 or 1 | qwen-next 1/8 · glm 1/7 · laguna-s-apex 0/7 · olmo-instruct 0/7 |
+
+Operator reading: the success rate is BETTER than expected. qwen3.6-27b landed
+a batch for the FIRST time. laguna and glm have both batched successfully
+before, so they are FLIPPY on consistency rather than incapable. qwen-next and
+olmo are par for the course. qwen3.6 MoE "always lands like that"; a different
+shape would be the surprising result.
+
+**What serial fallback currently buys**, from the four collapse cases — it is
+the difference between a salvaged arm and a lost one:
+
+    qwen-next    batch 1/8 -> 8 files  (fully recovered)
+    glm          batch 1/7 -> 3 files  (partial; the 14.3k-token long-cycle
+                                        loop happened HERE, in serial)
+    olmo-instr   batch 0/7 -> 2 files
+    laguna-apex  batch 0/7 -> 0 files  (batch failure WAS the run failure at
+                                        the 20m cap; the same config produced
+                                        13 files at 2h)
+
+**The two candidate replacements**, neither worth doing now:
+
+1. **Session-driven batch** — retry the batch inside a live session rather than
+   dropping to per-file serial, so the model keeps the declared file list in
+   context instead of re-deriving each file cold.
+2. **Swarm serial** — fan the missing files out to parallel one-shot workers
+   instead of walking them serially. The arm most damaged by serial (glm) lost
+   its time to ONE file's loop; parallel workers bound that blast radius to a
+   single worker.
+
+**Trigger to revisit:** a 2h arm where serial fallback still fails to recover a
+collapsed batch. The smoke's evidence is confounded by the 20-minute cap —
+laguna-apex looked like a total loss there and produced 13 files at 2h.
+

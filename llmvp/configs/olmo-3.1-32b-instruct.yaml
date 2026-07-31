@@ -34,6 +34,39 @@ model:
   # system message — plain chatml served it slightly off-distribution.
   family: "olmo"
   path: /Users/lah-rb/.lmstudio/models/unsloth/Olmo-3.1-32B-Instruct-GGUF/Olmo-3.1-32B-Instruct-Q6_K.gguf
+  # ── GGUF GEOMETRY (dev/gguf_geometry.py, headers, 2026-07-31) ──────
+  # This pair was the ONLY fleet config with no probe fields at all — it was
+  # onboarded before the "setting up a new model" procedure existed, and step 1
+  # of that procedure (read the headers before anything else) was never done.
+  # olmo has form here: it also shipped unregistered in fsm_labeller, which let
+  # `think>` residue corrupt a judged artifact.
+  #
+  #   arch=olmo2  layers=64  n_head=40  n_kv_head=8  head_dim=128  experts=0
+  #   trained ctx 65536 (yarn x8 from an 8192 original)
+  #   weights 26.4 GB decimal / 24.6 GiB, 1 shard
+  #   KV/token 256 KiB  — EIGHT TIMES gemma-4-26b's 32 KiB, on a 32B dense
+  #                       model. The KV, not the weights, is what sizes this.
+  #
+  #     n_ctx    KV GB   total GB
+  #      16384     4.3       30.7
+  #      32768     8.6       35.0
+  #      65536    17.2       43.6   <- THIS CONFIG
+  #
+  # Binds the (still owed) context verification to these exact weights: if the
+  # file is requantised this no longer describes the model and the preflight
+  # correctly falls back to the formula.
+  probe_verified_weights_bytes: 26448497312
+  # NO CONTEXT PROBE IS OWED (operator, 2026-07-31). `--probe-context` exists to
+  # find the highest n_ctx a model will actually hold, and there is nothing above
+  # this one to find: the GGUF's trained context IS 65536 and n_ctx is already
+  # set to it. A probe could only re-confirm a fit the header arithmetic already
+  # shows with 84 GB of headroom.
+  #
+  # `probe_verified_n_ctx` therefore stays absent by DESIGN, not as a gap — it
+  # would assert a verified ceiling where the ceiling is the model's own trained
+  # limit. Re-probe only if n_ctx is ever pushed past 65536 by rope scaling, at
+  # which point the measured KV/token matters (it has run up to 4x the formula
+  # elsewhere: gemma-4-26b measured 225,280 B/tok against a 21,754 estimate).
   n_ctx: 65536
   n_gpu_layers: -1
   seed: -1

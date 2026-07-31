@@ -27,6 +27,38 @@ model:
   # system message — plain chatml served it slightly off-distribution.
   family: "olmo"
   path: /Users/lah-rb/.lmstudio/models/unsloth/Olmo-3.1-32B-Think-GGUF/Olmo-3.1-32B-Think-Q6_K.gguf
+  # ── GGUF GEOMETRY (dev/gguf_geometry.py, headers, 2026-07-31) ──────
+  # Geometrically identical to olmo-3.1-32b-instruct (same arch, same shapes,
+  # 1.4 KB apart in file size); only the finetune differs.
+  #
+  #   arch=olmo2  layers=64  n_head=40  n_kv_head=8  head_dim=128  experts=0
+  #   trained ctx 65536 (yarn x8 from an 8192 original)
+  #   weights 26.4 GB decimal / 24.6 GiB, 1 shard
+  #   KV/token 256 KiB  — EIGHT TIMES gemma-4-26b's 32 KiB on a 32B dense
+  #                       model; the KV sizes this config, not the weights.
+  #
+  #     n_ctx    KV GB   total GB
+  #      16384     4.3       30.7
+  #      32768     8.6       35.0
+  #      65536    17.2       43.6   <- THIS CONFIG
+  #
+  # WORTH KNOWING FOR THIS VARIANT SPECIFICALLY: as a reasoning model it
+  # generates long. In tier_20260730-220500 it ran 109 MINUTES against a 20m
+  # backstop and produced ZERO files, with one generation exceeding 12k tokens
+  # and no guard firing — coherent-but-long, the shape the runaway detector is
+  # blind to. A generous n_ctx is load-bearing here in a way it is not for the
+  # instruct variant.
+  probe_verified_weights_bytes: 26448495872
+  # NO CONTEXT PROBE IS OWED (operator, 2026-07-31). n_ctx is already the GGUF's
+  # own trained maximum, so there is no higher ceiling for `--probe-context` to
+  # discover; it could only re-confirm a fit the arithmetic above already shows.
+  # `probe_verified_n_ctx` is absent by DESIGN, not as a gap.
+  #
+  # This matters more here than on the instruct sibling: a reasoning model that
+  # generates for 109 minutes wants every token of window it can get, and 65536
+  # is all this one has. If long generations start truncating, the answer is
+  # rope scaling past the trained limit — and THAT would need a real probe,
+  # because measured KV/token has run up to 4x the formula on other models.
   n_ctx: 65536
   n_gpu_layers: -1
   seed: -1

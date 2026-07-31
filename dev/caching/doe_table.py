@@ -25,6 +25,7 @@ nothing per-run.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -52,12 +53,28 @@ def _load_config(name: str) -> dict:
     return {}
 
 
+# `cache_strategy:` is a top-level SHORTHAND that llmvp expands at LOAD time
+# into resident_seq_cache / kv_unified / decode_mode. This script reads raw
+# YAML — llmvp is not importable from this venv (it has its own) — so a config
+# written with the shorthand would read as "not resident, not batched" and be
+# filed silently as S1: the wrong cell, with nothing to show it was wrong.
+# The authoritative table is CACHE_STRATEGIES in llmvp/core/config.py. An
+# unrecognised value yields "?" so drift surfaces as a visible gap, never as a
+# confident misclassification.
+_STRATEGY_SHORTHAND = {"replay": "S1", "resident": "S2", "batched": "S3"}
+
+
 def factors(cfg: dict) -> dict:
     m, r = cfg.get("model") or {}, cfg.get("resources") or {}
     resident = bool(m.get("resident_seq_cache"))
     batched = (r.get("decode_mode") or "pool") == "batched"
+    shorthand = cfg.get("cache_strategy")
     return {
-        "strategy": "S3" if batched else ("S2" if resident else "S1"),
+        "strategy": (
+            _STRATEGY_SHORTHAND.get(str(shorthand).strip().lower(), "?")
+            if shorthand is not None
+            else ("S3" if batched else ("S2" if resident else "S1"))
+        ),
         "family": m.get("family", "?"),
         "flow": bool(m.get("flow_kv_cache")),
         "swap": bool(m.get("reasoning_head_swap")),
@@ -135,44 +152,183 @@ def estimability(rows: list[dict], keys: list[str]) -> list[str]:
             )
         else:
             counts = {lv: sum(1 for r in rows if r[k] == lv) for lv in levels}
-            if min(counts.values()) < 2:
+            # Report EVERY thin level, not just the minimum one. Naming a single
+            # level implies the others are adequately covered — with strategy at
+            # S1=1, S2=7, S3=1 the old form reported only S3, and a reader would
+            # reasonably conclude S1 was fine. Both ends were resting on one arm.
+            thin = sorted(
+                ((lv, c) for lv, c in counts.items() if c < 2), key=lambda kv: str(kv[0])
+            )
+            if thin:
+                shown = ", ".join(f"{lv!r} ({c}x)" for lv, c in thin)
                 notes.append(
-                    f"{k}: level {min(counts, key=counts.get)!r} appears "
-                    f"{min(counts.values())}x — too thin to fit, report descriptively"
+                    f"{k}: level(s) {shown} too thin to fit — report descriptively"
+                )
+    return notes
+
+
+_ARM_RE = re.compile(r"ARM\s+(\d+)\s*/\s*\d+\s*:\s*(\S+)")
+_DONE_RE = re.compile(
+    r"done\s+(\d+)min\s+files=(\d+)\s+py_ok=(\d+)\s+py_fail=(\d+)\s+degen=(\d+)"
+    r"(?:\s*\|\s*Status:\s*(\S+))?(?:.*?Goals\s*\((\d+)/(\d+))?"
+)
+
+
+def outcomes(base: Path) -> dict[str, dict]:
+    """Per-arm WORK OUTPUT, parsed from batch.log's arm markers.
+
+    WHY THE LOG AND NOT STATE.json. The runner computes these with
+    `_authored()` (which excludes .venv/__pycache__/caches — the exclusion
+    that corrected a phantom 7x 'productivity gap') plus a real `compile()`
+    per .py file. But STATE.json only ever holds the CURRENT arm: its
+    `results` list is empty on disk. The log line is therefore the only
+    per-arm record that survives, and it is the same number the operator
+    watched scroll past.
+
+    WHY THIS BELONGS IN THE TABLE AT ALL. Without it the sweep tabulated
+    every cache and throughput factor against no outcome — the responses
+    were all *how* the machine ran and none were *what it produced*. A
+    factor screen with no primary response cannot rank anything.
+    """
+    log = base / "batch.log"
+    if not log.is_file():
+        return {}
+    out, cur = {}, None
+    for line in log.read_text(errors="ignore").splitlines():
+        m = _ARM_RE.search(line)
+        if m:
+            cur = m.group(2)
+            continue
+        d = _DONE_RE.search(line)
+        if d and cur:
+            wall, files, ok, bad, degen = (int(d.group(i)) for i in range(1, 6))
+            out[cur] = {
+                "files": files,
+                "py_ok": ok,
+                "py_fail": bad,
+                "degen": degen,
+                "status": d.group(6) or "",
+                "goals": (
+                    f"{d.group(7)}/{d.group(8)}" if d.group(7) and d.group(8) else ""
+                ),
+                # THE comparable throughput number. Arms do NOT get equal wall
+                # time: the backstop is evaluated at cycle boundaries
+                # (agent/loop.py), so a model with long cycles overruns it
+                # further and is handed MORE time than a fast one. Absolute
+                # file counts therefore flatter slow models, exactly backwards.
+                "files_per_min": round(files / wall, 2) if wall else None,
+                "log_wall_min": wall,
+            }
+            cur = None
+    return out
+
+
+def nested(rows: list[dict], keys: list[str]) -> list[str]:
+    """One-WAY confounds, which the pairwise check above cannot see.
+
+    `estimability` flags PERFECT (bidirectional) confounding: a 1:1 mapping
+    between two factors. The commoner and sneakier case is asymmetric. In the
+    2026-07-30 sweep every S1 arm was a qwen while S2 spanned seven families —
+    not a 1:1 mapping, so the pairwise test stayed silent, yet any "S1 beats
+    S2" claim is equally a "qwen beats everything else" claim and the design
+    cannot separate them.
+
+    Reported when a level of A occurs with exactly ONE level of B and that B
+    level appears nowhere else: the two are then interchangeable as
+    explanations. Levels with a single arm are skipped — "too thin to fit"
+    already covers those and saying both would be noise.
+    """
+    notes = []
+    for a in keys:
+        for b in keys:
+            if a == b:
+                continue
+            for lv in {r[a] for r in rows}:
+                inside = [r for r in rows if r[a] == lv]
+                if len(inside) < 2:
+                    continue  # already reported as too thin
+                bs = {r[b] for r in inside}
+                if len(bs) != 1:
+                    continue
+                only = next(iter(bs))
+                if any(r[b] == only for r in rows if r[a] != lv):
+                    continue  # that B level also occurs elsewhere — separable
+                notes.append(
+                    f"{a}={lv!r} occurs ONLY with {b}={only!r} "
+                    f"({len(inside)} arms) — an effect of one is an effect of "
+                    f"the other; this design cannot separate them"
                 )
     return notes
 
 
 def main(base: Path) -> int:
+    tally = outcomes(base)
     rows = []
     for agent_dir in sorted(base.glob("*_agent")):
         name = agent_dir.name[: -len("_agent")]
-        row = {"arm": name, **factors(_load_config(name)), **responses(agent_dir)}
+        row = {
+            "arm": name,
+            **factors(_load_config(name)),
+            **responses(agent_dir),
+            **tally.get(name, {}),
+        }
         rows.append(row)
     if not rows:
         print(f"no completed arms under {base}")
         return 1
 
-    cols = [
-        "arm",
-        "strategy",
-        "obs_strategy",
-        "family",
-        "flow",
-        "swap",
-        "stream_ctx",
-        "weights_gb",
-        "wall_min",
-        "inferences",
-        "prefix_reuse",
-        "flow_hits",
-        "flow_fallbacks",
-        "wiped",
-    ]
-    widths = {c: max(len(c), *(len(str(r.get(c, ""))) for r in rows)) + 1 for c in cols}
-    print("".join(c.ljust(widths[c]) for c in cols))
-    for r in rows:
-        print("".join(str(r.get(c, "")).ljust(widths[c]) for c in cols))
+    def _emit(title: str, cols: list[str]) -> None:
+        widths = {
+            c: max(len(c), *(len(str(r.get(c, ""))) for r in rows)) + 1 for c in cols
+        }
+        print(f"\n── {title} ──")
+        print("".join(c.ljust(widths[c]) for c in cols))
+        for r in rows:
+            print("".join(str(r.get(c, "")).ljust(widths[c]) for c in cols))
+
+    # Split FACTORS from RESPONSES: one screen was 14 columns wide and mixed
+    # what was SET with what was MEASURED, which is the one distinction a
+    # factor screen exists to keep straight.
+    _emit(
+        "FACTORS (what was set)",
+        [
+            "arm",
+            "strategy",
+            "obs_strategy",
+            "family",
+            "flow",
+            "swap",
+            "stream_ctx",
+            "weights_gb",
+        ],
+    )
+    _emit(
+        "RESPONSES (what was measured)",
+        [
+            "arm",
+            "files",
+            "py_ok",
+            "py_fail",
+            "files_per_min",
+            "wall_min",
+            "degen",
+            "status",
+            "goals",
+            "inferences",
+            "prefix_reuse",
+            "flow_hits",
+            "wiped",
+        ],
+    )
+
+    walls = [r["log_wall_min"] for r in rows if r.get("log_wall_min")]
+    if walls and max(walls) > 1.5 * min(w for w in walls if w):
+        print(
+            f"\n   ⚠️ UNEQUAL WALL TIME: arms ran {min(walls)}–{max(walls)} min against"
+            "\n      a single declared backstop. The limit is checked at CYCLE"
+            "\n      boundaries, so slow models overrun it further and receive MORE"
+            "\n      time. Rank on files_per_min; absolute `files` is not comparable."
+        )
 
     print("\n── requested vs OBSERVED strategy ──")
     for r in rows:
@@ -203,8 +359,26 @@ def main(base: Path) -> int:
             )
 
     print("\n── estimability (read BEFORE any effect claim) ──")
-    for n in estimability(rows, ["strategy", "family", "flow", "swap"]):
+    FACTORS = ["strategy", "family", "flow", "swap"]
+    for n in estimability(rows, FACTORS):
         print(f"   {n}")
+
+    # An arm that produced NOTHING still carries factor levels, so the check
+    # above counts it as coverage. It is not: a run that died before writing a
+    # file cannot inform any claim about what the factors DO. Re-run the same
+    # check over the arms that actually produced work — this is usually the
+    # stricter, and the honest, answer.
+    live = [r for r in rows if (r.get("files") or 0) > 0]
+    dead = [r["arm"] for r in rows if (r.get("files") or 0) == 0]
+    if dead and live:
+        print(
+            f"\n   ── on the OUTCOME-INFORMATIVE subset ({len(live)}/{len(rows)} arms) ──"
+        )
+        print(f"      produced nothing, carry no outcome info: {', '.join(dead)}")
+        for n in estimability(live, FACTORS):
+            print(f"      {n}")
+        for n in nested(live, FACTORS):
+            print(f"      ⚠️ {n}")
     wiped = [r["arm"] for r in rows if r.get("wiped")]
     if wiped:
         print(f"\n   ⚠️ context refresh wiped the caches mid-run: {', '.join(wiped)}")
