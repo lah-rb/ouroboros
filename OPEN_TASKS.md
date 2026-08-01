@@ -761,3 +761,101 @@ on organization. The `-e` suffix is the BSD `sed -i -e` signature, but there is
 no `sed` anywhere in the arm's run log and no `-e` backup writer in our tree, so
 its origin is unexplained. Not chased further; noted so the next occurrence is
 recognised rather than re-investigated.
+
+---
+
+## 19. The seam gate never ran on two arms — including one that shipped the exact defect it exists to catch
+
+**Status:** OPEN. Evidence complete, fix NOT landed (mid-sweep, same reason as §17/§18).
+**Found:** 2026-08-01, arm14 (qwen3.6-27b) of `tier_20260731-050209`.
+**Distinct from §18.** §18 is the gate computing the answer and discarding it.
+This is the gate NOT RUNNING AT ALL.
+
+### The defect it would have caught
+
+arm14 scored 54 (tier 1 by score) with conformance 50/53 — and 4 of its 8 rooms,
+all four monsters, the boss, both terminal states and half its items are
+unreachable, because entering any monster room kills the process:
+
+    File ".../engine.py", line 149, in _cmd_move
+        narration += get_combat_narration(self.active_combat)
+    File ".../combat.py", line 216, in get_combat_narration
+        monster_hp_pct = monster.hp / monster.max_hp ...
+    AttributeError: 'Monster' object has no attribute 'max_hp'
+
+`combat.get_combat_narration` reads `monster.hp`, `monster.max_hp`, `player.hp`,
+`player.max_hp`, `combat.turn` and calls `combat.is_boss()` — SIX attribute
+names that do not exist (the real ones are `monster_health`,
+`monster_max_health`, `health`, `max_health`, `turn_count`, and `is_boss` is a
+property). The judge repaired only those six names on a scratch copy and the
+entire game worked: block/dodge/poison behaviours, armour reduction, the phase-2
+shift, the Sunstone weakness doubling damage, and the victory screen.
+
+**This is a REACHABLE cross-module attribute mismatch — the single class the
+seam gate's transfer-shape and typecheck analyses exist to detect**, and the
+gate's `_missing_attr` parses exactly this shape (`has no attribute/method
+'X'`). It is not a dead-symbol case; `_cmd_move` is live and on the happy path.
+
+### The gate never ran
+
+`_phase_exit_seam_gate`'s docstring is explicit, and it is what makes this
+provable:
+
+> EVERY outcome logs. The gate originally returned None silently on all three
+> pass paths, which made it unobservable in run logs: "no seam-gate lines" could
+> not distinguish *ran and passed* from *never ran* [...] Clean and inert log
+> INFO; the fail-open bound logs WARNING.
+
+`grep -cE "Seam gate:"` over arm14's 1014-line run log returns **0**. Not clean,
+not inert, not fail-open — never invoked. (The lone `Cross-module type check:
+7/7 files clean` at line 138 comes from batch structural creation, and predates
+`combat.py` being patched at lines 187 and 433.) That earlier design decision to
+log every outcome is the only reason this is diagnosable rather than ambiguous —
+it paid for itself here.
+
+### Coverage across the sweep is wildly uneven
+
+| arm | work cycles | seam-gate runs |
+|---|---|---|
+| devstral | 173 | 41 |
+| gpt-oss | 117 | 24 |
+| qwen3-next | 99 | 22 |
+| gpt-oss-swarm | 140 | 19 |
+| hy3 | 64 | 10 |
+| glm | 36 | 8 |
+| laguna-xs | 31 | 8 |
+| laguna-s | 40 | 5 |
+| qwen3.5 | 37 | 5 |
+| mistral-medium | 17 | 2 |
+| **gemma-4-31b** | **109** | **0** |
+| **qwen3.6-27b** | **19** | **0** |
+
+`gemma-4-31b` is the alarming row: 109 work cycles — a full run's worth of
+effort — with no cross-module check ever performed.
+
+### Root cause and the shape of the fix
+
+The gate runs at **serial structural-phase EXIT** only. A run that never exits
+the structural phase is never seam-checked, no matter how much work it does or
+how many files it writes. And the runs that fail to exit the phase are precisely
+the ones shipping half-finished, unintegrated work — so **coverage is
+anti-correlated with need**. arm14 wrote 16 files across 128 minutes and 19
+cycles and was never checked once.
+
+Candidate fixes, none landed:
+
+1. **Run the gate on a cadence, not only at phase exit** — e.g. every N work
+   cycles, or whenever the structural fileset has changed since the last check.
+   Cheap: the analyses are deterministic and already bounded.
+2. **Run it once unconditionally before the wall-clock backstop parks a
+   mission.** A paused run is still an artifact that gets judged, and right now
+   it can be parked having never been integration-checked.
+3. **Log a WARNING when a mission ends with zero gate runs**, so this is visible
+   in the run log rather than requiring a cross-arm grep to discover.
+
+(3) is nearly free and should land regardless of which of (1)/(2) is chosen.
+
+### Timing
+
+After the sweep, with §17 and §18. Changing what blocks — or how often —
+mid-flight makes the remaining arms non-comparable.
