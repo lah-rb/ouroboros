@@ -110,16 +110,105 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
-  status: not_yet_run
+  status: recorded
+  rubric: TIER_RUBRIC v1.2
+  stars: 3                 # 41-60 band
+  tier: 2                  # median 49, below the >=50 line
   expectation:
     registered: 2026-07-29
     tier: "2"
     stars: null
     basis: experience
+    outcome: hit
     why: >
       A dense, competent model that is extremely slow. Expected tier 2 on
       throughput grounds: limited revisions within the window, and a
       correspondingly low goal count.
+    outcome_note: >
+      HIT on the placement, WRONG on the mechanism. Tier 2 was predicted from
+      SPEED — and speed was indeed the fleet's worst (~6 tok/s, one generation
+      ran 24 minutes). But throughput is not what cost it: the arm produced 12
+      files with ZERO syntax failures and 12/37 goals, a clear improvement on
+      its smoke run. It lands at tier 2 because the thing it built cannot be
+      played, not because it built too little.
+
+  judged:
+    run: tier_20260731-050209 arm10 · staged/arm10
+    judge_model: claude-opus-5[1m]
+    votes: [45, 49, 49]
+    total: 49              # MEDIAN of three independent blind judgements
+    record: dev/blind_panel/RESULTS_tier_2026-07-31.md
+    run_shape: 120 min (backstop) · 12 files · 7 py_ok · 0 py_fail · 0 degen · 12/37 goals
+
+    # Judges 2 and 3 independently produced IDENTICAL §3.1 arithmetic
+    # (0.343672 -> 7/20) from separately constructed ledgers. Judge 1 billed the
+    # seam at 5 rather than 7; that one dimension is the whole 45-vs-49 spread.
+    dimensions:
+      no_broken_functions: {score: 7, max: 20, stars: 2}
+      robustness:          {score: 5, max: 10, stars: 3}
+      ux:                  {score: 5, max: 10, stars: 3}
+      conformance:         {score: 9, max: 10, stars: 5}   # 46/53
+      ambition:            {score: 3, max: 10, stars: 2}
+      creativity:          {score: 5, max: 10, stars: 3}
+      org_project:         {score: 4, max: 5,  stars: 5}
+      org_logic:           {score: 2, max: 5,  stars: 3}
+      reusability:         {score: 7, max: 10, stars: 4}
+      documentation:       {score: 2, max: 10, stars: 2}
+
+    decisive_defect: >
+      THE ROOM-GATE / ATTACK DEADLOCK. Movement refuses entry to any room whose
+      monster is not yet defeated; `attack` only engages a monster in the room
+      you are STANDING IN; and world.yaml places every monster INSIDE the room
+      it guards. The two conditions are mutually exclusive, so the game
+      announces "A Goblin blocks the way!" and then answers "There is nothing to
+      attack here." No phrasing opens it — judges tried 11+ attack forms, every
+      direction in long, short and bare-word form, with and without the weapon.
+      Sealed behind it: all three monsters, the two-phase boss, the weakness
+      mechanic, the victory screen, the defeat screen, the armour, and FIVE of
+      the eight authored rooms. What ships is a three-room walking simulator.
+
+    the_second_cause: >
+      Both rejudges disclosed a SECOND, independent fatal defect hidden behind
+      the seam: `combat.py` references `EquipmentSlot` and never imports it, so
+      `monster_turn()` raises NameError unconditionally. Verified by diagnosis
+      (calling it directly; artifact untouched). Repairing the movement seam
+      alone would NOT produce a working fight — every combat would crash the
+      process on the monster's first counter-attack. "Monsters fight back" is
+      dead on arrival, not merely unreachable.
+
+    weakness_item_inversion: >
+      Fifth distinct miswiring of this mechanic in the sweep. Judge 3 forced
+      entry by hand-writing a save.json and using the artifact's OWN `load`
+      command (diagnosis through a supported interface, no repair): there,
+      `use silver arrow` INSTANT-KILLS the 100 HP two-phase boss in one command
+      taking zero damage, while the honest route tracebacks on exchange one. The
+      weakness item is not merely overpowered — it is the ONLY path that works.
+
+    not_a_false_victory: >
+      Worth keeping distinct from the 2026-07-29 gpt-oss case. The victory
+      screen here is CORRECTLY GUARDED — it fires only on a genuine final_boss
+      defeat. The failure is the inverse: a terminal state written properly and
+      made completely unreachable. Those score similarly and are opposite
+      defects.
+
+    unmet_requirements: [23, 29, 32, 39, 42, 45, 51]  # status omits location;
+                                                      # 2 regular monsters not 3;
+                                                      # `behavior` authored on all
+                                                      # three and never read
+                                                      # anywhere; no restart on
+                                                      # defeat; save omits room
+                                                      # state; 4 items not 5;
+                                                      # dialogue linear, not
+                                                      # branching
+
+    also_broken_in_play: >
+      `status`/`inventory`/`inv`/`stats` all CRASH the process (Narrator.
+      show_status called with 3 args, takes 4) — so health, attack, defense and
+      inventory are NEVER observable at any point in play. `save` crashes
+      whenever anything is equipped (EquipmentSlot enum keys are not
+      JSON-serialisable) and leaves a truncated file that the next `load`
+      reports as "No saved game found". Unrecognised input falls through to
+      LOOK, so a typo is indistinguishable from a valid command.
 
 # ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
 probe_verified_cache:
