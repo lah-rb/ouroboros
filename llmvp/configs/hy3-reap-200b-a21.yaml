@@ -186,7 +186,92 @@ tier:
       not severely damage model competence this should be the strongest model
       here. Tempering that: limited context, forced non-thinking, low speed,
       immature llama.cpp support, and REAP pedigree.
-  result:
+  # ── CURRENT: 2026-07-31, TIER_RUBRIC v1.2, 2h quality sweep ─────────
+  # Scored TWICE now. Against the v1.2 REPLAY of the 07-29 ledgers (median 58,
+  # tier 1) this is a 9-point drop to tier 2 — same rubric version, same model,
+  # different run. Both records stand; neither replaces the other.
+  result_2026_07_31:
+    judged: 2026-07-31
+    run: tier_20260731-050209 arm09 · staged/arm09
+    rubric: TIER_RUBRIC v1.2
+    judge_model: "claude-opus-5[1m]"
+    votes: [49, 49, 46]
+    score: 49          # MEDIAN of three independent blind judgements
+    stars: 3           # 41-60 band
+    tier: 2            # by score, <50 — and unanimous: all three votes <50
+    tier3_gate: passed
+    record: dev/blind_panel/RESULTS_tier_2026-07-31.md
+    run_shape: 120 min (backstop) · 14 files · 7 py_ok · 0 py_fail · 2 degen · 16/38 goals
+
+    # Judges 1 and 2 returned IDENTICAL vectors across all ten dimensions.
+    dimensions:
+      no_broken_functions: {score: 4, max: 20, stars: 2}
+      robustness:          {score: 4, max: 10, stars: 3}
+      ux:                  {score: 4, max: 10, stars: 3}
+      conformance:         {score: 9, max: 10, stars: 5}   # 50/53
+      ambition:            {score: 4, max: 10, stars: 3}
+      creativity:          {score: 6, max: 10, stars: 4}
+      org_project:         {score: 4, max: 5,  stars: 5}
+      org_logic:           {score: 3, max: 5,  stars: 4}
+      reusability:         {score: 8, max: 10, stars: 5}
+      documentation:       {score: 3, max: 10, stars: 2}
+
+    decisive_defect: >
+      THE WIN IS UNEARNED AND THE WEAKNESS ITEM IS A STRICT PENALTY. From a
+      deleted save, five commands with an empty inventory — go north, go north,
+      go east, go east, attack — print the victory banner. No weapon, no armour,
+      no healing item, no Relic, zero monsters fought; the three monsters print
+      "blocks the way!" and gate nothing.
+      Worse, the Relic — named by the title screen, both NPCs and the boss data
+      as the weakness — is the ONLY trigger for phase 2, where the boss hits 20
+      instead of 15, while boss HP stays 60 either way. A controlled A/B from an
+      identical save: holding it, 3 rounds ending at 74 HP; dropped, 3 rounds
+      ending at 79. It costs 5 HP and saves nothing. The Crone's line "Without
+      the Relic, the Dark Lord's second phase will end you" is exactly backwards.
+      Confirmed balance, not structure: boss HP 60 -> 200 kills the naked player.
+
+    structural_defect: >
+      THERE IS NO GAME LOOP. `input()` appears nowhere in the tree except inside
+      a comment. Commands arrive only as sys.argv, one quoted token each, with
+      state carried between processes via state.json. The documented invocation
+      (`python main.py`) runs a hardcoded demo — look / take relic / status —
+      and exits, MUTATING the save each time. main.py's own docstring says
+      "title screen, REPL loop, defeat/restart screen"; a comment calls argv an
+      "optional non-interactive driver" for a loop that was never written.
+
+    the_shipped_save: >
+      The artifact ships a committed state.json from the author's own playtest
+      holding NINE duplicate Relics, gear equipped and a monster defeated — so a
+      judge's first invocation starts mid-game. It is the fossil record of the
+      persistence bug: room contents are never saved, every process re-seeds the
+      world from world.yaml, and the no-argument demo banks one more Relic each
+      launch. .gitignore does not exclude it.
+
+    unmet_requirements: [28, 42, 51]   # no mid-combat item use (combat resolves
+                                       # atomically, yet help advertises it);
+                                       # save omits all room/world state;
+                                       # dialogue is linear progression, not
+                                       # branching (out-degree 1, no conditions)
+
+    inter_judge: >
+      49 / 49 / 46. Judges 1 and 2 agreed on every dimension; judge 3 was harsher
+      on ambition, creativity, reusability and documentation and more generous on
+      UX. All three independently proved the naked five-command win, the Relic
+      inversion, the missing REPL and the nine-Relic shipped save. Judge 2 ran
+      the Relic A/B as a controlled experiment; judge 3 additionally found that
+      `restart` is absent from `help` and that deleting an item from world.yaml
+      that a save references raises KeyError.
+
+    versus_the_boss_panel: >
+      The two instruments disagree usefully. The boss-fit panel (2026-07-31,
+      smoke artifacts) ranked this model SECOND of three, winning specification
+      quality and handoff cost — judging what ONE capped generation produced.
+      The tier rubric judges what a 2h run DELIVERS, and delivery is where it
+      loses: a text adventure with no interactive loop. Good one-shot spec
+      author, weak deliverer, on the same day.
+
+  # ── PRIOR: 2026-07-29, v1.1 (with a v1.2 replay) — HISTORY ──────────
+  prior_2026_07_29:
     judged: 2026-07-29
     run: tier_20260729-172119/staged/arm01
     # SCORED UNDER v1.1 AND NOT RECOMPUTED (operator decision 2026-07-29). v1.2
