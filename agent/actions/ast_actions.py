@@ -1618,6 +1618,13 @@ async def action_rewrite_symbol_turn(step_input: StepInput) -> StepOutput:
             content_bytes[:start_byte] + new_body_bytes + content_bytes[end_byte:]
         )
         updated_content = updated_bytes.decode("utf-8", errors="replace")
+        # 1-indexed line span the new body occupies in updated_content — used
+        # by the post-splice gate to tell "this splice is bad" from "this file
+        # was already broken somewhere else".
+        _body_start = content_bytes[:start_byte].decode(
+            "utf-8", errors="replace"
+        ).count("\n") + 1
+        _body_end = _body_start + max(len(new_body.splitlines()) - 1, 0)
     else:
         file_lines = file_content.splitlines(keepends=True)
         # start_line and end_line are 1-indexed; end_line is inclusive
@@ -1630,6 +1637,8 @@ async def action_rewrite_symbol_turn(step_input: StepInput) -> StepOutput:
             new_body += "\n"
 
         updated_content = "".join(before) + new_body + "".join(after)
+        _body_start = len(before) + 1
+        _body_end = _body_start + max(len(new_body.splitlines()) - 1, 0)
 
     # ── Post-splice parse gate ───────────────────────────────────
     #
@@ -1644,33 +1653,82 @@ async def action_rewrite_symbol_turn(step_input: StepInput) -> StepOutput:
     # Only gated on .py today because stdlib ast only parses Python.
     # If tree-sitter grammars for other languages are added later, a
     # corresponding per-language parse check should replace this one.
+    #
+    # NEUTRALISED FOR ALREADY-BROKEN FILES (2026-07-31). Parsing the WHOLE file
+    # and reverting on ANY error made this guard a trap: it also reverted
+    # splices that had genuinely REPAIRED their own symbol, whenever a
+    # pre-existing error survived in a DIFFERENT symbol the editor could not
+    # reach. Progress could never accumulate.
+    #
+    # gemma-4-31b, tier_20260731-050209 arm07: `game_engine.py` carried five
+    # syntax errors — three inside `GameEngine.process_command`, and two that
+    # WERE the `def` lines of two sibling helpers. All 51 repair attempts
+    # targeted process_command, correctly. Fourteen of them fixed it and the
+    # parse advanced to the siblings (lines 140-155); every one was thrown away,
+    # restoring the original, so 37 later attempts restarted from a file an
+    # earlier attempt had already partially repaired. Two hours, zero progress.
+    # The unreachable symbols were also UNNAMEABLE — `def 8_world_rooms_get` —
+    # so no symbol-scoped editor could ever have addressed them.
+    #
+    # The guard's real job is "do not let a splice corrupt a WORKING file", and
+    # that is preserved exactly: if the file parsed before, any post-splice error
+    # still reverts. What changes is the already-broken case — there, a splice is
+    # rejected only when the error falls INSIDE the body it just wrote. An error
+    # elsewhere is pre-existing damage this edit was never scoped to fix, and
+    # keeping the improvement is strictly better than restoring the original.
     if file_path.endswith(".py"):
         try:
             stdlib_ast.parse(updated_content)
         except SyntaxError as e:
-            logger.warning(
-                "Post-splice parse failed for %s (symbol %s): %s — "
-                "rejecting splice, keeping previous file_content",
-                file_path,
-                name,
-                e,
+            pre_broken = False
+            try:
+                stdlib_ast.parse(file_content)
+            except SyntaxError:
+                pre_broken = True
+
+            # Line span the splice actually wrote, set by BOTH assembly
+            # branches above.
+            body_start, body_end = _body_start, _body_end
+            inside_new_body = (
+                e.lineno is not None and body_start <= e.lineno <= body_end
             )
-            has_next = len(queue) > 0
-            return StepOutput(
-                result={"rewrite_success": False, "has_next": has_next},
-                observations=(
-                    f"Splice rejected for {name}: post-splice parse error "
-                    f"({e.msg} at line {e.lineno}). File unchanged."
-                ),
-                context_updates={
-                    **injection_clears,
-                    "current_symbol": queue.pop(0) if queue else None,
-                    "rewrite_queue": queue,
-                    # Preserve the pre-splice content — critical: do NOT
-                    # publish the corrupted updated_content downstream.
-                    "file_content_updated": file_content,
-                },
-            )
+
+            if pre_broken and not inside_new_body:
+                logger.warning(
+                    "Post-splice parse still fails for %s at line %s, but the "
+                    "file was ALREADY broken and the error is OUTSIDE the "
+                    "spliced body (%s, lines %d-%d) — keeping the splice; "
+                    "reverting would discard a real repair",
+                    file_path,
+                    e.lineno,
+                    name,
+                    body_start,
+                    body_end,
+                )
+            else:
+                logger.warning(
+                    "Post-splice parse failed for %s (symbol %s): %s — "
+                    "rejecting splice, keeping previous file_content",
+                    file_path,
+                    name,
+                    e,
+                )
+                has_next = len(queue) > 0
+                return StepOutput(
+                    result={"rewrite_success": False, "has_next": has_next},
+                    observations=(
+                        f"Splice rejected for {name}: post-splice parse error "
+                        f"({e.msg} at line {e.lineno}). File unchanged."
+                    ),
+                    context_updates={
+                        **injection_clears,
+                        "current_symbol": queue.pop(0) if queue else None,
+                        "rewrite_queue": queue,
+                        # Preserve the pre-splice content — critical: do NOT
+                        # publish the corrupted updated_content downstream.
+                        "file_content_updated": file_content,
+                    },
+                )
 
     # Re-parse with tree-sitter to get updated byte offsets for remaining symbols
     if queue:
