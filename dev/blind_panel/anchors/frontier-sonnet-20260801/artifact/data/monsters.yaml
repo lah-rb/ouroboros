@@ -1,0 +1,39 @@
+# Stat templates for every monster. Behavior (how each one actually
+# fights) lives in Python -- see game/monsters.py -- keyed off these same
+# ids via create_monster(). This file only supplies the numbers.
+#
+# The three regular monsters (dire_wolf, skeletal_guardian, bandit_scout)
+# each guard one specific room (see data/rooms.yaml). The Ashwyrm is the
+# final boss and uses a different template shape: two phases instead of
+# a single health/attack/defense triple.
+
+dire_wolf:
+  name: "Dire Wolf"
+  description: "A lean, scarred wolf far too large to be natural, hackles raised and teeth bared."
+  health: 40
+  attack: 9
+  defense: 0
+
+skeletal_guardian:
+  name: "Skeletal Guardian"
+  description: "A rattling skeleton in tarnished plate, a notched blade held ready out of sheer habit."
+  health: 55
+  attack: 7
+  defense: 4
+
+bandit_scout:
+  name: "Bandit Scout"
+  description: "A ragged bandit, more interested in your coin purse than in a fair fight."
+  health: 35
+  attack: 7
+  defense: 1
+
+ashwyrm:
+  name: "Ashwyrm"
+  description: "A vast, scaled wyrm coiled around a bed of cooling embers, eyes like slag glowing in the dark."
+  phase1_health: 90
+  phase1_attack: 11
+  phase1_defense: 8
+  phase2_health: 70
+  phase2_attack: 16
+  phase2_defense: 3

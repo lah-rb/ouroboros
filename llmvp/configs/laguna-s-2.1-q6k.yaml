@@ -1,0 +1,62 @@
+# Laguna-S-2.1 — unsloth UD-Q6_K, the LARGEST quant of the family.
+#
+# WHY THIS EXISTS. The quant ladder is the experiment: base (UD-IQ4_XS,
+# n_ctx 318464), APEX (i-quality, 234496), poolside, and now this. The APEX
+# quant scored 46/100 under TIER_RUBRIC v1.2 (arm01, tier_20260731-050209,
+# three judges, all 46) with the decisive defect "the game cannot be won" and
+# a seam-bug signature across every headline system. This config asks whether
+# the HIGHEST-fidelity quant moves that — same v1.2 brief, same mission, same
+# 2h backstop, non-thinking like the APEX arm, so the quant is the only thing
+# chosen differently.
+#
+# GEOMETRY (kv-geometry-before-swarm discipline — computed BEFORE launch):
+#   weights: 97,912,976,032 B ≈ 97.9 GB (sum of 3 shards, measured on disk)
+#   KV: 192 KiB/token (family constant, quant-independent)
+#   n_ctx 92160 ("safe 90k", operator 2026-08-01) -> 92160 x 196608 B = 18.1 GB
+#   TOTAL ≈ 116.0 GB — under the 120 GB the APEX arm already served
+#   (73.9 GB weights + 46.1 GB KV at 234496), so the margin is proven, not
+#   assumed. Do NOT raise n_ctx without redoing this arithmetic: at this
+#   weight class the ceiling arithmetic that gave the other quants 234k-318k
+#   gives this one far less.
+#
+# extends: ONE CONFIG = ONE SCORE — a re-quant is a scoreable property, so it
+# gets its own config and the experimental delta IS the diff below.
+extends: laguna-s-2.1
+
+model:
+  name: Laguna-S-2.1-Q6K
+  path: /Users/lah-rb/.lmstudio/models/unsloth/Laguna-S-2.1-GGUF/Laguna-S-2.1-UD-Q6_K-00001-of-00003.gguf
+  n_ctx: 92160
+  probe_verified_weights_bytes: 97912976032
+  # NOT probe-verified for this quant: n_ctx here is the operator's safe pick,
+  # not a measured ceiling. Left unset on purpose — first boot refused on the
+  # inherited kv_preflight_gb: 96, WHICH WAS CORRECT BEHAVIOUR (the parent
+  # rides its own probe_verified_n_ctx past the guard; this quant has none).
+  probe_verified_n_ctx: null
+  # Budget raised knowingly, arithmetic above: 97.9 weights + 18.1 KV = 116.0,
+  # vs 120.2 the base quant provably serves and 137.4 physical. 2GB headroom.
+  kv_preflight_gb: 118
+
+graphql:
+  max_tokens: 92160
+
+generation:
+  max_tokens_default: 92160
+
+# ── TIER (doc-only) ──────────────────────────────────────────────────
+tier:
+  status: not_yet_run
+  quant: UD-Q6_K            # THE PROPERTY THIS CONFIG SCORES
+  expectation:
+    registered: 2026-08-01
+    basis: quant-ladder reasoning
+    outcome: pending
+    why: >
+      PRE-REGISTERED before the run, per §6 discipline. The APEX quant landed
+      46 with competent modules wired to wrong seams. If quant fidelity is a
+      real factor in seam coherence, Q6_K should land ABOVE the APEX 46; if
+      the seam failures are model-level (design-time, not token-level), the
+      quant buys nothing and it lands ~46 again. The context axis inverts the
+      usual trade: this quant pays ~145k of context ceiling for its fidelity
+      (92k here vs APEX's 234k), so ANY quality gain must be weighed against
+      that loss before this quant could displace APEX as the serving choice.

@@ -1,0 +1,107 @@
+# The map of The Sunstone Wyrm.
+#
+# Each top-level key is a room id, referenced by exits, by items.yaml's
+# item placements are implicit (via this file's `items:` lists), and by
+# npcs.yaml / monsters.yaml via their `room` / room-`monster` fields.
+#
+# exits: direction -> destination room id. Every exit here has a matching
+# reverse exit on the destination room, so the map is fully connected in
+# both directions.
+
+village_square:
+  name: "Village Square"
+  description: "The heart of a small village clinging to the base of a mountain. A dry fountain stands at its center, and a notice board nailed to a post bears a hand-lettered warning about \"the beast in the high caves.\" Paths lead out in every direction."
+  exits:
+    north: northern_gate
+    east: tavern
+    south: chapel_ruins
+    west: old_mill
+  items: []
+  npc: elder_maren
+  monster: null
+
+tavern:
+  name: "The Cracked Bell Tavern"
+  description: "A low-ceilinged tavern, warm with hearth-light and the smell of woodsmoke. An iron sword hangs above the mantel, clearly more decoration than defense to whoever owns this place -- for now."
+  exits:
+    west: village_square
+  items: [iron_sword]
+  npc: rowan
+  monster: null
+
+old_mill:
+  name: "Old Mill"
+  description: "A disused mill, its great wheel long since seized with rust. Sacks of grain have rotted to dust, but a set of leather armor still hangs from a beam, forgotten by whoever left it here."
+  exits:
+    east: village_square
+  items: [leather_armor]
+  npc: null
+  monster: null
+
+chapel_ruins:
+  name: "Chapel Ruins"
+  description: "A collapsed chapel, its roof open to the sky. Someone -- or something -- has clearly been picking through the rubble recently. A dark stairwell in the corner leads down beneath the floor."
+  exits:
+    north: village_square
+    down: crypt
+  items: []
+  npc: null
+  monster: bandit_scout
+
+crypt:
+  name: "Crypt"
+  description: "A cold burial vault beneath the chapel, lined with sealed alcoves. One alcove stands open, a silver flask glinting inside it -- guarded, it turns out, by something that hasn't rested in a very long time."
+  exits:
+    up: chapel_ruins
+  items: [silver_flask]
+  npc: null
+  monster: skeletal_guardian
+
+northern_gate:
+  name: "Northern Gate"
+  description: "The village's old watch-gate, its guard post empty and its timbers weathered gray. Beyond it, the road narrows and the trees close in."
+  exits:
+    south: village_square
+    north: dark_forest
+  items: []
+  npc: null
+  monster: null
+
+dark_forest:
+  name: "Dark Forest"
+  description: "The canopy here is thick enough to dim midday to dusk. A cluster of pale, fragrant herbs grows undisturbed beside the path, and two routes lead deeper in -- one toward a low, bone-littered den, the other climbing north."
+  exits:
+    south: northern_gate
+    north: forest_shrine
+    east: wolf_den
+  items: [healing_herbs]
+  npc: null
+  monster: null
+
+wolf_den:
+  name: "Wolf Den"
+  description: "A shallow den scattered with cracked bones. Something considerably larger than an ordinary wolf watches from the shadows at the back, hackles already raised."
+  exits:
+    west: dark_forest
+  items: []
+  npc: null
+  monster: dire_wolf
+
+forest_shrine:
+  name: "Forest Shrine"
+  description: "A ring of weathered standing stones opens onto a moss-covered altar. Sunlight seems to linger here longer than it should, gathered in a small amulet resting at the altar's center."
+  exits:
+    south: dark_forest
+    north: dragons_lair
+  items: [sunstone_amulet]
+  npc: null
+  monster: null
+
+dragons_lair:
+  name: "Dragon's Lair"
+  description: "A scorched cavern deep in the mountain, floor heaped with bone and half-melted gold. At its heart, coiled around a bed of cooling embers, the Ashwyrm raises its head as you enter."
+  exits:
+    south: forest_shrine
+  items: []
+  npc: null
+  monster: ashwyrm

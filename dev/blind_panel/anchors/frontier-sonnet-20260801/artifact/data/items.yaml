@@ -1,0 +1,57 @@
+# Every takeable item in the world.
+#
+# type: weapon | armor | trinket | consumable
+# slot: weapon | armor | trinket | null  (null means it can't be equipped --
+#       it's used instead, via the `use` command)
+# special: an optional behavior tag the engine looks for. Currently only
+#          "ashwyrm_weakness" is used, on the sunstone amulet.
+
+iron_sword:
+  name: "Iron Sword"
+  description: "A well-balanced blade, nicked from long use but still sharp. A clear step up from bare fists."
+  type: weapon
+  slot: weapon
+  attack_bonus: 8
+  defense_bonus: 0
+  heal_amount: 0
+  special: null
+
+leather_armor:
+  name: "Leather Armor"
+  description: "A worn but sturdy leather cuirass, patched many times over. Better than nothing against tooth or claw."
+  type: armor
+  slot: armor
+  attack_bonus: 0
+  defense_bonus: 5
+  heal_amount: 0
+  special: null
+
+healing_herbs:
+  name: "Healing Herbs"
+  description: "A bundle of fragrant herbs known to knit wounds when chewed. Not glamorous, but effective."
+  type: consumable
+  slot: null
+  attack_bonus: 0
+  defense_bonus: 0
+  heal_amount: 25
+  special: null
+
+silver_flask:
+  name: "Silver Flask"
+  description: "A small flask of shimmering liquid, cool to the touch, that mends flesh and bone far better than any herb."
+  type: consumable
+  slot: null
+  attack_bonus: 0
+  defense_bonus: 0
+  heal_amount: 40
+  special: null
+
+sunstone_amulet:
+  name: "Sunstone Amulet"
+  description: "A pendant holding a fragment of captured sunlight. It hums faintly, as if aware of the dark -- and of things that live in it."
+  type: trinket
+  slot: trinket
+  attack_bonus: 0
+  defense_bonus: 0
+  heal_amount: 0
+  special: ashwyrm_weakness

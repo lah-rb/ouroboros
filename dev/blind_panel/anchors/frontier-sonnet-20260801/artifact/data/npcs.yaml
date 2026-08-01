@@ -1,0 +1,67 @@
+# NPCs. Each has a one-time `greeting` (shown the first time you `talk to`
+# them), a `repeat_greeting` for every time after, and a `topics` map used
+# by `ask <name> about <topic>`. Between them, Elder Maren and Rowan hint
+# at everything a player needs to beat the Ashwyrm: where the sunstone
+# amulet is, and that it -- not steel -- is what actually hurts the wyrm.
+
+elder_maren:
+  name: "Elder Maren"
+  room: village_square
+  description: "A silver-haired woman leaning on a gnarled staff, eyes sharp despite her age."
+  greeting: >
+    Elder Maren straightens as you approach. "Another soul brave -- or foolish -- enough
+    to wander past the gate," she says. "If you mean to face what sleeps in the mountain,
+    you'd best come prepared. Ask me what you need to know."
+  repeat_greeting: >
+    "Still here, are you?" Elder Maren says. "Or already back from the mountain?"
+  topics:
+    ashwyrm: >
+      "The Ashwyrm sleeps in the mountain north of the shrine. It's taken half our
+      livestock and two good hunters who thought steel alone would do the job. Its hide
+      turns blades like they were twigs -- everything except light itself, or so the old
+      stories say."
+    sunstone: >
+      "There's a shrine north past the forest gate, deeper than most villagers dare go.
+      An old sunstone amulet rests there, they say -- a fragment of captured daylight.
+      Wear it before you face the wyrm, not after."
+    wolves: >
+      "A dire wolf has claimed the den east of the dark forest. Bigger than any wolf
+      should be. Go armed, or go around."
+    crypt: >
+      "Below the chapel ruins sleeps something that never noticed it had died. It's been
+      guarding a silver flask down there for longer than I've been alive."
+    forest: >
+      "The northern gate opens onto the dark forest. Keep to the path and you'll find
+      the old shrine eventually."
+  default_response: >
+    Elder Maren shakes her head. "I don't know anything about that, I'm afraid."
+
+rowan:
+  name: "Rowan"
+  room: tavern
+  description: "A wiry bard restringing a lute behind the bar, always ready to trade a story for company."
+  greeting: >
+    Rowan looks up from the lute. "Traveler! Sit, stay a while -- or don't, if you're one
+    of those wyrm-hunting types. Either way, ask away, I know a thing or two."
+  repeat_greeting: >
+    Rowan grins. "Back again? Careful, or people will start thinking you like my singing."
+  topics:
+    ashwyrm: >
+      "Every hunter who's faced the Ashwyrm says the same thing -- steel just skitters
+      off its scales, like striking a mirror. But there's an old ballad about a stone
+      that remembers the sun. Might be worth more than any sword, if you can find it."
+    sunstone: >
+      "The song goes that a shrine deep past the dark forest holds a sunstone amulet.
+      Never been myself, but the words are specific: wear the light, don't just carry
+      it, before you go anywhere near that mountain."
+    sword: >
+      "That iron sword above the hearth? Old thing's been gathering dust since the last
+      owner didn't come back for it. Take it, it's no use to me."
+    wolves: >
+      "Stay out of the wolf den east of the dark forest unless you've got a blade in
+      hand. I've heard it howling at night from here."
+    song: >
+      Rowan strums a few notes. "That's the one about the sunstone. Ask me about the
+      sunstone if you want the words plain."
+  default_response: >
+    Rowan shrugs. "Can't help you there, friend. Try asking about something else."
