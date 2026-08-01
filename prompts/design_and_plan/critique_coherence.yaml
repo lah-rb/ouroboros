@@ -54,10 +54,37 @@ sections:
     {"coherent": false, "reason": "run_command `python -m regex_engine.cli` needs `regex_engine` importable from the project root, but the modules live under `src/regex_engine/` and the project runs from source with no install", "criteria": ["move the modules from src/regex_engine/ to a top-level regex_engine/ package so `python -m regex_engine.cli` resolves when run from the project root", "or change run_command to set PYTHONPATH=src before `python -m regex_engine.cli`"]}
     ```
 
-    ✅ CORRECT — coherent, nothing to change:
+    ✅ CORRECT — coherent, FLAT layout, nothing to change:
     ```json
     {"coherent": true, "reason": "run_command `python main.py` runs main.py at the project root, matching the flat layout and working directory", "criteria": []}
     ```
+
+    ✅ CORRECT — coherent, NESTED layout, nothing to change:
+    ```json
+    {"coherent": true, "reason": "run_command `python main.py` runs main.py at the project root, and `src` is itself the package, so `from src.engine import ...` resolves with the project root on sys.path", "criteria": []}
+    ```
+
+    NESTING IS NOT ITSELF AN INCOHERENCE. The two nested examples above differ in
+    exactly one way, and it is the only thing that matters:
+    - INCOHERENT: the package root is *inside* `src/` (`src/regex_engine/`) and the
+      run command imports it by that inner name (`python -m regex_engine.cli`).
+      `regex_engine` is not importable from the project root, so the run fails.
+    - COHERENT: `src` is *itself* the package, and the import names it
+      (`from src.engine import ...`). The project root is on `sys.path` when
+      `python main.py` runs from there, so `src` resolves.
+
+    Ask which directory has to be on `sys.path` for the declared import to
+    resolve, and whether the declared `run_command` and `working_directory` put
+    it there. Do not reason from whether a `src/` directory exists.
+
+    Two further facts, both of which have produced false blocks:
+    - `__init__.py` is NOT required for a directory to be importable as a package
+      (PEP 420 namespace packages, Python 3.3+). A layout with no `__init__.py`
+      still imports. If the blueprint declares `init_files: true`, the files will
+      exist as well — check that field before objecting that something "is not a
+      package".
+    - Running `python main.py` from a directory puts THAT directory on `sys.path`,
+      not the script's own directory only. Sibling packages resolve.
 
     ❌ WRONG — do not add explanation outside the JSON:
     Looking at the blueprint, the paths don't line up:
