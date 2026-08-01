@@ -655,7 +655,7 @@ def _project_wide_context(
     for note in sorted(mission.notes, key=lambda n: n.timestamp, reverse=True):
         if note.category in failure_categories:
             relevant_notes.append(f"[{note.category}] {note.content}")
-        if len(relevant_notes) >= 8:
+        if len(relevant_notes) >= 5:  # the last-5 standard (operator, 2026-08-01)
             break
 
     return {
@@ -1180,18 +1180,37 @@ def _filter_notes_for_file(
 ) -> list[str]:
     """Filter notes relevant to a specific file.
 
-    Returns notes that mention the file path, are tagged with the file,
-    or belong to relevant categories (architecture, codebase_observation).
-    Sorted by recency, capped at 5.
+    Returns notes that mention the file path or are tagged with the file,
+    plus the (global-by-nature) architecture blueprint. Sorted by recency,
+    capped at 5.
+
+    Two rules earned by the 2026-08-01 laguna Q6_K degeneration study, where
+    a stale diagnosis fed 4 long-cycle orbits (~150k wasted tokens on one
+    bug):
+
+    * **Supersession**: only the NEWEST failure_analysis note per target is
+      current; older ones are still shown (the last-5 window is the design)
+      but prefixed SUPERSEDED, so a model comparing the file against an aged
+      claim ("line 29 calls prompt() with no arguments" — true at diagnosis
+      time, fixed since) sees the contradiction is resolved instead of
+      orbiting it.
+    * **No category leak**: codebase_observation notes about OTHER files no
+      longer ride in untargeted — "only for the current thing being fixed"
+      (operator intent, 2026-08-01). architecture_blueprint stays global
+      because the blueprint genuinely is.
     """
     relevant = []
+    newest_failure_seen = False
     for note in sorted(mission.notes, key=lambda n: n.timestamp, reverse=True):
-        # Direct file mention in content or tags
-        if target_file in note.content or target_file in note.tags:
-            relevant.append(f"[{note.category}] {note.content}")
-            continue
-        # Architecture and codebase notes are broadly relevant
-        if note.category in ("architecture_blueprint", "codebase_observation"):
+        on_target = target_file in note.content or target_file in note.tags
+        if on_target:
+            label = note.category
+            if note.category == "failure_analysis":
+                if newest_failure_seen:
+                    label = f"{note.category} — SUPERSEDED by a newer diagnosis"
+                newest_failure_seen = True
+            relevant.append(f"[{label}] {note.content}")
+        elif note.category == "architecture_blueprint":
             relevant.append(f"[{note.category}] {note.content}")
 
         if len(relevant) >= 5:
