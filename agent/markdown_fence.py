@@ -195,6 +195,95 @@ def _join_body(lines: list[str]) -> str:
     return "" if content == "\n" else content
 
 
+# ── Markdown truncation re-stitch (OPEN_TASKS §20) ───────────────────
+#
+# CommonMark cannot nest same-length fences: a ```-wrapped markdown FILE whose
+# body contains its own ``` blocks is terminated at the body's FIRST interior
+# close, and everything after — in every observed case the "how to run"
+# section — is silently discarded. 11 of 12 campaign READMEs shipped truncated
+# this way, and blind judges docked the models for it. Both extraction paths
+# (markdown-it and the regex fallback) share the semantics, so the guard runs
+# post-hoc on the raw reply text rather than inside either parser.
+
+_FENCE_LINE_RE = re.compile(r"^\s{0,3}`{3,}")
+_BARE_CLOSE_RE = re.compile(r"^\s{0,3}```\s*$")
+
+
+def _fence_parity_odd(content: str) -> bool:
+    return sum(1 for ln in content.split("\n") if _FENCE_LINE_RE.match(ln)) % 2 == 1
+
+
+def _restitch_truncated_md(
+    text: str, path: str, content: str
+) -> tuple[str, int] | None:
+    """Repair a fence-truncated markdown file from the raw reply.
+
+    Trigger: the extracted content of a ``.md`` target has ODD fence parity —
+    the signature of an interior close having been read as the outer close.
+    Repair: re-read the raw reply from this file's FILE marker up to the next
+    FILE marker (stopping before that marker's own fence opener) or end of
+    reply, then peel the true outer close — the LAST bare ``` in the span —
+    keeping it only if parity demands it (the model never closed the outer
+    fence).
+
+    Returns ``(repaired_content, resume_line_idx)`` where ``resume_line_idx``
+    is the line in ``text`` from which parsing should RESUME — the truncation
+    does not only amputate the markdown file, it re-pairs every fence after it
+    (a bare close swallows the next block's opener), so blocks following the
+    md file are mis-parsed too and must be re-read from the boundary. Returns
+    None to leave the original alone: non-.md targets, even parity, an
+    unlocatable marker, a repair that does not extend the original, or one
+    that cannot reach even parity all decline.
+    """
+    if not path.endswith(".md") or not _fence_parity_odd(content):
+        return None
+
+    lines = text.split("\n")
+    marker_idx = None
+    for i, ln in enumerate(lines):
+        m = _FILE_MARKER_RE.match(ln)
+        if m and m.group(1).strip() == path:
+            marker_idx = i
+            break
+    if marker_idx is None:
+        return None
+
+    # Boundary: the next FILE marker's fence opener (or the marker itself when
+    # no opener precedes it), else end of reply.
+    end = len(lines)
+    for j in range(marker_idx + 1, len(lines)):
+        if _FILE_MARKER_RE.match(lines[j]):
+            end = j - 1 if j > 0 and _FENCE_LINE_RE.match(lines[j - 1]) else j
+            break
+    span = lines[marker_idx + 1 : end]
+    while span and not span[-1].strip():
+        span.pop()
+    if not span:
+        return None
+
+    # Peel the outer close: prefer dropping the LAST bare ``` line; keep it
+    # only if parity needs it (unterminated outer fence at end of reply).
+    last_close = None
+    for k in range(len(span) - 1, -1, -1):
+        if _BARE_CLOSE_RE.match(span[k]):
+            last_close = k
+            break
+    for candidate_lines in (
+        [] if last_close is None else span[:last_close],
+        span,
+    ):
+        if not candidate_lines:
+            continue
+        repaired = _join_body(list(candidate_lines))
+        if _fence_parity_odd(repaired):
+            continue
+        # The repair must EXTEND the truncated content, never replace it —
+        # guards against anchoring on a lookalike marker elsewhere in the reply.
+        if repaired.startswith(content.rstrip("\n")) and len(repaired) > len(content):
+            return repaired, end
+    return None
+
+
 def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str]]:
     """Parse text containing fenced code blocks with `# === FILE: path ===`
     markers as the first comment line inside each fence.
@@ -217,6 +306,10 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
     """
     blocks: list[tuple[str, str]] = []
     seen_paths: set[str] = set()
+    # Line indices to RESUME parsing from after a §20 markdown re-stitch — the
+    # truncation re-pairs every fence after the md file, so blocks following
+    # it were mis-parsed on this pass and are recovered by a re-parse below.
+    restitch_resumes: list[int] = []
 
     for fenced in extract_fenced_blocks(text):
         body = fenced.content
@@ -269,6 +362,18 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
                 # declaration, so emit it. Reject only non-empty content that
                 # is placeholder echo ("# complete modified file content").
                 if not cand_content or _is_meaningful_content(cand_content):
+                    restitched = _restitch_truncated_md(text, cand_path, cand_content)
+                    if restitched is not None:
+                        repaired, resume_at = restitched
+                        logger.info(
+                            "Re-stitched fence-truncated markdown for %r "
+                            "(%d -> %d chars) — see OPEN_TASKS §20",
+                            cand_path,
+                            len(cand_content),
+                            len(repaired),
+                        )
+                        cand_content = repaired
+                        restitch_resumes.append(resume_at)
                     blocks.append((cand_path, cand_content))
                     seen_paths.add(cand_path)
             if len(candidates) > 1:
@@ -304,6 +409,27 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
         if content or _is_meaningful_content(body):
             blocks.append((file_path, content))
             seen_paths.add(file_path)
+
+    # §20 resume: re-parse the reply from each re-stitched md file's true end.
+    # The fence re-pairing after a truncated md mis-parses every subsequent
+    # block on the pass above (a bare close swallows the next block's opener),
+    # so files after the md would otherwise be dropped as unmarked content.
+    # Dedup-by-path makes this safe: only paths not already seen are added.
+    if restitch_resumes:
+        all_lines = text.split("\n")
+        for resume_at in restitch_resumes:
+            tail = "\n".join(all_lines[resume_at:])
+            if not tail.strip():
+                continue
+            for sub_path, sub_content in parse_file_blocks(tail):
+                if sub_path not in seen_paths:
+                    logger.info(
+                        "Recovered %r from the post-restitch tail "
+                        "(mis-paired by the §20 truncation)",
+                        sub_path,
+                    )
+                    blocks.append((sub_path, sub_content))
+                    seen_paths.add(sub_path)
 
     # Final fallback: no fences extracted. Two sub-cases:
     #   - An intentionally empty fence (```lang\n```) — the LLM meant an

@@ -36,4 +36,5 @@ content: |
       # === FILE: relative/path.py ===
       <full file contents>
 
-  Emit nothing outside the fenced file blocks.
+  Emit nothing outside the fenced file blocks. Markdown (.md) files use a
+  FOUR-backtick outer fence (````) so their own ``` blocks survive intact.

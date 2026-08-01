@@ -918,19 +918,28 @@ the wrapping convention is what cannot represent them.
    region; whether truncation and that string share provenance is NOT
    established.
 
-### Fix candidates (land after the sweep)
+### FIXED (2026-08-01) — both halves landed
 
-1. **Prompt-side:** instruct models to wrap .md files in FOUR-backtick fences
-   (CommonMark: a longer fence may enclose shorter ones). One line in the batch
-   prompt; verifiable in the next run.
-2. **Extraction-side:** when a block's FILE marker names *.md and the text
-   following its close contains no new FILE marker before the next fence,
-   re-stitch — extend the block to the last close before the next FILE marker
-   or end-of-reply. Handles models that ignore the prompt instruction.
-3. Both — prompt as primary, re-stitch as the guard. Recommended.
+1. **Prompt-side:** `generate_all_instruction.yaml` now teaches a FOUR-backtick
+   outer fence for .md files with a worked example, and
+   `reconcile_instruction.yaml` + `escalate/work_instruction.yaml` carry the
+   one-line rule. (`author_instruction.yaml` has no md surface — untouched.)
+2. **Extraction-side:** `_restitch_truncated_md` in `agent/markdown_fence.py` —
+   trigger is a .md target with ODD fence parity; repair re-reads the raw reply
+   from the file's marker to the next FILE marker (or EOF) and peels the true
+   outer close; declines unless the repair EXTENDS the truncated content and
+   reaches even parity. AND the fix found a second casualty class while being
+   tested: the truncation RE-PAIRS every fence after the md file (a bare close
+   swallows the next block's opener), silently DROPPING subsequent files —
+   plausibly some of the sweep's "N missing (serial fallback)" batch losses.
+   parse_file_blocks now re-parses the reply from each re-stitched file's true
+   end and recovers those blocks (dedup-by-path keeps it safe).
 
-### Test to write with the fix
+Tests: `tests/test_markdown_fence_md_restitch.py` (12) per the spec — roundtrip
+complete + even parity under markdown-it AND the regex fallback, the
+campaign-signature assertion, the unterminated-outer EOF case, four-backtick
+untouched, non-md odd-parity untouched, extend-never-replace. Main suite 1944
+green.
 
-A README with two interior bash blocks inside a batch reply must round-trip
-complete, with fence parity even, under BOTH the markdown-it path and the regex
-fallback; a mutation restoring first-close termination must fail it.
+RESIDUE: the §3.10 contamination note for the v1.2 sweep stands — scores are
+not revised. The three-arm build-backend string remains a separate open signal.

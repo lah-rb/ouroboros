@@ -33,7 +33,8 @@ content: |
       ```
 
   Partial content is not applied — the fence replaces the whole file, so
-  include everything the file must contain. Guarded writes reject a gutting
+  include everything the file must contain. For a Markdown (.md) file use a
+  FOUR-backtick outer fence (````) so the file's own ``` blocks survive. Guarded writes reject a gutting
   rewrite or a config file that no longer parses; if a write is rejected,
   read the rejection and make a smaller, valid change instead.
 

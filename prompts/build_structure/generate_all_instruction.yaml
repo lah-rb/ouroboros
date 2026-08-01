@@ -33,11 +33,28 @@ content: |
   (The example paths above are from a DIFFERENT project — use only the
   paths in the blueprint.)
 
+  Markdown files are the ONE exception to the fence style: a ``` fence
+  cannot contain the ``` blocks a README needs, so wrap .md files in
+  FOUR backticks:
+
+  ````markdown
+  # === FILE: README.md ===
+  # Study CLI
+
+  ## Run
+
+  ```bash
+  python study.py
+  ```
+  ````
+
   Rules:
   - One fenced block per file; the FILE marker is the first line inside
     the fence, using the comment style of that file's language (`#` for
     Python/YAML, `//` for JS, none needed for JSON — for JSON put the
     marker line directly above the opening brace inside the fence).
+  - Markdown (.md) files use a FOUR-backtick outer fence, as shown
+    above, so their own ``` blocks survive intact.
   - Use the EXACT file paths from the blueprint. Every listed file must
     appear; do not add files the blueprint doesn't list.
   - Honor every interface signature and every data contract. Where a
