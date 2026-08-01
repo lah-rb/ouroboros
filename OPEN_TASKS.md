@@ -859,3 +859,78 @@ Candidate fixes, none landed:
 
 After the sweep, with §17 and §18. Changing what blocks — or how often —
 mid-flight makes the remaining arms non-comparable.
+
+---
+
+## 20. Every README in the sweep was truncated by OUR extraction, and every model was docked for it
+
+**Status:** OPEN. Root cause PROVEN by reproduction; fix NOT landed (one arm still
+running — defer with §17/§18/§19).
+**Found:** 2026-08-01, prompted by the operator's rubric audit.
+**Same class as** [[featurizer-bare-lt-marker-corruption]]: the extraction layer
+corrupting valid model output, systematically misattributed to models.
+
+### The signature
+
+11 of 12 staged arms ship a README that ends at (or just before) an install
+command inside an unterminated code fence:
+
+    arm01  ends 'pip install -e .'    unterminated ```bash
+    arm03  ends 'pip install .'       unterminated
+    arm04  ends 'pip install -r …'    unterminated
+    arm08  ends 'pip install -e.'     unterminated
+    arm10  ends 'cd ouroboros-adventure'  unterminated (INDENTED fence)
+    arm11  ends 'cd text-adventure-game'  unterminated (INDENTED fence)
+    arm12, arm13, arm16  end 'pip install -e .'   unterminated
+    arm14, arm15  end 'python main.py'            unterminated
+
+Every model family. Judges in at least five arms docked §3.10 for "truncated
+mid-fence, never says how to run the game" — the run instructions were always
+in the SECOND fenced block, which never survived.
+
+### Root cause — CommonMark, not the model
+
+Batch structural creation has models emit files as fenced blocks with
+`# === FILE: path ===` markers. A triple-backtick fence CANNOT CONTAIN another
+triple-backtick fence — per CommonMark, the first interior line matching a bare
+close TERMINATES the outer block. So any markdown file whose content includes
+its own ``` blocks is amputated at its first interior close, and the remainder
+is discarded as non-block text.
+
+Reproduction (byte-identical to the field signature):
+
+    reply = fenced batch of [main.py, README.md-with-two-bash-blocks]
+    parse_file_blocks(reply) ->
+      FILE 'README.md': 92B | last_line='pip install -e .' | run section GONE
+
+This is not the regex fallback — markdown-it-py is installed and CommonMark
+semantics produce the same cut. The models' replies were VALID and complete;
+the wrapping convention is what cannot represent them.
+
+### Consequences
+
+1. **§3.10 is contaminated field-wide.** Every documentation score in the
+   campaign partially measures this bug. The dimension was already the weakest
+   (2-4 across the field, hard-capped often) — some unknown fraction of that is
+   ours. Do not draw model conclusions from the docs dimension of this sweep.
+2. Possibly related, unconfirmed: the shared broken build-backend string
+   (§ cross-arm signal) also lives in the same always-truncated packaging
+   region; whether truncation and that string share provenance is NOT
+   established.
+
+### Fix candidates (land after the sweep)
+
+1. **Prompt-side:** instruct models to wrap .md files in FOUR-backtick fences
+   (CommonMark: a longer fence may enclose shorter ones). One line in the batch
+   prompt; verifiable in the next run.
+2. **Extraction-side:** when a block's FILE marker names *.md and the text
+   following its close contains no new FILE marker before the next fence,
+   re-stitch — extend the block to the last close before the next FILE marker
+   or end-of-reply. Handles models that ignore the prompt instruction.
+3. Both — prompt as primary, re-stitch as the guard. Recommended.
+
+### Test to write with the fix
+
+A README with two interior bash blocks inside a batch reply must round-trip
+complete, with fence parity even, under BOTH the markdown-it path and the regex
+fallback; a mutation restoring first-close termination must fail it.
