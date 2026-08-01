@@ -336,6 +336,70 @@ a one-arm test of a campaign-level doubt, so a middling devstral is a REASON TO
 INVESTIGATE, not proof of a broken instrument; and a low devstral removes the
 most obvious alternative explanation without proving the band is meaningful.
 
+### PARTIAL ANSWER — the decomposition, not the designated vehicle (2026-08-01)
+
+**The designated vehicle did not report.** Arm 11 (devstral) gate-failed on a
+leaked decision envelope with ~3 minutes of clock left and was scored VOID, so
+the one-arm test above is still owed a re-run. What follows is an INDEPENDENT
+line of evidence on the same doubt, computed from the per-dimension vectors this
+campaign started recording — not a substitute for the devstral re-run.
+
+**Method.** Every recorded dimension vector from this sweep (n=7 scored arms),
+per dimension: the range across arms as a fraction of that dimension's max.
+Reproduce with `dev/blind_panel/dim_variance.py`.
+
+**Finding 1 — 30 of the 100 points are near-constant.** Three dimensions do not
+move across seven models spanning 24B to 200B:
+
+| dimension | max | values across all 7 arms | spread |
+|---|---|---|---|
+| conformance | 10 | 9,9,9,9,9,9,10 | 1 |
+| creativity | 10 | 5,5,5,5,5,5,6 | 1 |
+| documentation | 10 | 2,2,2,3,3,3,3 | 1 |
+
+Two of the three are pinned **by rubric construction, not by coincidence**:
+
+- §3.10 sets a **hard cap of 3** when any documentation claim is contradicted by
+  play. Every artifact overclaimed; the cap fired on all seven. The dimension is
+  currently a 10-point yes/no question that everyone answers the same way.
+- §3.4 scores `round(10 × met/total)` over the 53-item checklist. The observed
+  population sits at 46–51 met, i.e. 87–96%, so a 10-point scale is being used
+  over 2 of its points. Note this is DELIBERATE — §3.4 explicitly measures
+  presence, not reachability, and the rubric names laguna-S as the case it wants
+  to score high here and destroy on §3.1. The decomposition is informative; it
+  is the SUM that the near-constant absorbs.
+
+**Finding 2 — every artifact banks a 16–18 point pedestal.** Those three
+dimensions contribute a mean of 16.9 points regardless of quality. That is the
+floor nothing has fallen below, and it is the direct mechanical reason no scored
+artifact is under 46. Stripping it, the live range is 29–42 out of 70.
+
+**Finding 3 — the RANKING is not an artifact of the pedestal.** Re-ranking on
+the 70 live points only: of the 18 ordered pairs with distinct totals, **18
+agree and 0 invert.** gpt-oss leads because it leads where the instrument
+actually discriminates — `no_broken_functions` 9 against a next-best 7, and 60%
+of live points against 53% for the runner-up.
+
+**Finding 4 — the pedestal manufactured the three-way tie at 49.** hy3 reached
+49 with 18 pedestal + 31 live; mistral and qwen3-next reached the same 49 with
+16 pedestal + 33 live. Identical totals, different artifacts. The live score
+separates them and the total cannot.
+
+**What this settles, and what it does not.** It settles that *the tightness is
+partly an instrument property* — a large constant is added to every score, and
+the operator's read that the band looks too narrow is CORRECT about the band.
+It does NOT settle the capability question: zero inversions means the ordering
+is trustworthy, but nothing here shows the models are genuinely far apart, and
+the doubt's sharpest form — *would a much weaker model land in this cluster?* —
+still needs a low-capability arm to land ON MERIT. **devstral's re-run remains
+owed and remains the test.**
+
+**Actionable, if the band is to be widened:** §3.10's hard cap should either
+have a lower floor than 3 or scale with how badly the docs overclaim, and §3.4
+should be scored over the range models actually occupy rather than 0–100%.
+Neither changes any recorded total or tier; both change what future totals can
+express. Not landed — recorded for the operator's decision.
+
 ---
 
 ## Cross-arm pattern (running)
