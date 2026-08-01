@@ -532,6 +532,26 @@ file_ops: #FlowDefinition & {
 					// (observed live: one bad edit cascaded into 9 reopened goals).
 					{condition: "result.smoke_failed == true and result.oversized_symbol_fix == true", transition: "check_diagnose_budget"},
 					{condition: "result.smoke_failed == true", transition: "check_retry"},
+					// A BLOCKING non-required finding gets ONE repair pass, the same
+					// contract mission_control applies on the batch path. Both now
+					// read the SAME precedence — `block_reason` is computed by
+					// reporting_actions.block_reason_from_checks, which
+					// structural_block_reason also calls.
+					//
+					// This edge did not exist until 2026-07-31 and the gap cost a
+					// tier-3 artifact. `has_issues` is true for EVERY non-required
+					// finding, so lint was indistinguishable here and fell through to
+					// log_and_report_success: the write was reported a SUCCESS with
+					// `lint: game_engine.py` sitting in checks_failed. glm-4.7-flash
+					// shipped `F821 Undefined name 'Parser'` that way, its goal
+					// "Program starts cleanly and exits without errors" then failed
+					// NINE times with the answer already in its own record, and a
+					// blind judge killed the artifact on the first keystroke.
+					//
+					// Bounded by check_retry's own budget, so an unfixable finding
+					// costs one look and cannot deadlock — the deadlock that made
+					// lint purely advisory in the first place.
+					{condition: "result.block_reason != '' and result.block_reason != 'syntax'", transition: "check_retry"},
 					{condition: "result.has_issues == true", transition: "log_and_report_success"},
 				]
 			}

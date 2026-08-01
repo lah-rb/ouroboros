@@ -5384,6 +5384,10 @@
               "transition": "check_retry"
             },
             {
+              "condition": "result.block_reason != '' and result.block_reason != 'syntax'",
+              "transition": "check_retry"
+            },
+            {
               "condition": "result.has_issues == true",
               "transition": "log_and_report_success"
             }

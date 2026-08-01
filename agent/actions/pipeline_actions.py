@@ -872,6 +872,21 @@ async def action_run_validation_checks_from_env(
         except Exception:
             pass
 
+    # THE SHARED DECISION. `has_issues` is true for EVERY non-required finding,
+    # so a resolver routing on it cannot tell a lint failure from anything else
+    # — which is exactly how the serial path came to report a lint failure as a
+    # success while the batch path blocked on it for one pass. Publishing the
+    # reason lets file_ops route on the same precedence mission_control uses,
+    # from the same function. See block_reason_from_checks for the incident.
+    #
+    # Review flags default False here (this action sees files and commands, not
+    # goals). That is the right default: "not yet reviewed" is what makes the
+    # one-pass contract fire, and the bound is enforced by the retry budget.
+    from agent.actions.reporting_actions import block_reason_from_checks
+
+    failed_names = [r.get("name", "") for r in results if not r.get("passed")]
+    block_reason = block_reason_from_checks(failed_names)
+
     return StepOutput(
         result={
             "all_passing": not syntax_failed and not has_issues and not smoke_failed,
@@ -879,6 +894,8 @@ async def action_run_validation_checks_from_env(
             "smoke_failed": smoke_failed,
             "has_issues": has_issues,
             "oversized_symbol_fix": oversized_symbol_fix,
+            # "syntax" | "import" | "lint" | None — None means nothing blocking.
+            "block_reason": block_reason or "",
         },
         observations=f"Validation: {sum(1 for r in results if r['passed'])}/{len(results)} checks passed",
         context_updates={

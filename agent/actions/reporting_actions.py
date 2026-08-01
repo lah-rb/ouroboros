@@ -393,13 +393,53 @@ def structural_block_reason(goal: Any, checks_failed: list) -> str | None:
     exactly one look. The mini-diagnose that receives it can also decline
     outright (``confident: false``), which is a second, independent bound.
     """
-    if any(c.startswith("syntax:") for c in checks_failed):
+    return block_reason_from_checks(
+        checks_failed,
+        import_reviewed=bool(getattr(goal, "import_reviewed", False)),
+        lint_reviewed=bool(getattr(goal, "lint_reviewed", False)),
+    )
+
+
+def block_reason_from_checks(
+    checks_failed: list,
+    *,
+    import_reviewed: bool = False,
+    lint_reviewed: bool = False,
+) -> str | None:
+    """THE tier precedence, in one place, for every caller.
+
+    Split out of ``structural_block_reason`` on 2026-07-31 because the two
+    write paths had DRIFTED and the drift cost a tier-3 artifact.
+
+    The batch path decided in Python (``structural_block_reason``, which honours
+    the one-pass lint contract). The serial path decided in CUE — file_ops'
+    validate resolver routed on ``has_issues``, which lumps lint together with
+    every other non-required finding, and sent it to ``log_and_report_success``.
+    So a lint failure BLOCKED FOR ONE PASS under batch and was reported as a
+    SUCCESS under serial, for the same finding on the same kind of file.
+
+    It bit glm-4.7-flash on 2026-07-31: its batch collapsed 1-of-11, everything
+    fell to serial fallback, and `game_engine.py` shipped with
+    ``F821 Undefined name 'Parser'`` recorded in ``checks_failed`` and the write
+    reported as a success. The goal "Program starts cleanly and exits without
+    errors" then failed NINE times with the answer sitting in its own record,
+    and the artifact was judged TIER 3 — dead on the first keystroke.
+
+    Callers that hold a goal pass its review flags; callers that do not (the
+    validation action, which sees only files and commands) leave them False,
+    which is the correct default: "not yet reviewed" is what makes the one-pass
+    contract fire. The flags bound the loop, not the detection.
+
+    KEEP BOTH PATHS ON THIS FUNCTION. If a new tier is added or a precedence
+    changes, changing it here is the whole change.
+    """
+    if any(str(c).startswith("syntax:") for c in checks_failed):
         return "syntax"
-    if any(c.startswith("import:") for c in checks_failed):
-        if not getattr(goal, "import_reviewed", False):
+    if any(str(c).startswith("import:") for c in checks_failed):
+        if not import_reviewed:
             return "import"
-    if any(c.startswith("lint:") for c in checks_failed):
-        if not getattr(goal, "lint_reviewed", False):
+    if any(str(c).startswith("lint:") for c in checks_failed):
+        if not lint_reviewed:
             return "lint"
     return None
 
