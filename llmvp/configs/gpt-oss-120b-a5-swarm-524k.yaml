@@ -182,15 +182,15 @@ tier:
     record: dev/blind_panel/RESULTS_tier_2026-07-31.md
     dimensions:
       no_broken_functions: {score: 6, max: 20, stars: 2}
-      robustness:          {score: 6, max: 10, stars: 4}
+      robustness:          {score: 6, max: 10, stars: 3}
       ux:                  {score: 7, max: 10, stars: 4}
       conformance:         {score: 9, max: 10, stars: 5}   # 49/53
-      ambition:            {score: 4, max: 10, stars: 3}
+      ambition:            {score: 4, max: 10, stars: 2}
       creativity:          {score: 5, max: 10, stars: 3}
-      org_project:         {score: 2, max: 5,  stars: 3}
-      org_logic:           {score: 3, max: 5,  stars: 4}
+      org_project:         {score: 2, max: 5,  stars: 2}
+      org_logic:           {score: 3, max: 5,  stars: 3}
       reusability:         {score: 9, max: 10, stars: 5}
-      documentation:       {score: 2, max: 10, stars: 2}
+      documentation:       {score: 2, max: 10, stars: 1}
 
     decisive_defect: >
       THE WIN IS UNEARNED. Victory in FOUR commands from a cold start,
@@ -274,19 +274,21 @@ tier:
     run: tier_20260729-010118 arm 4 · staged/arm04
     judge_model: claude-opus-5[1m]
     total: 54
-    # Per-dimension stars are score/max banded 80/60/40/20 — different maxima
+    # Per-dimension stars are score/max banded per §2 (see below) — different maxima
+    # BANDS (rubric §2, inclusive at the top): 0-20=1, 21-40=2, 41-60=3,
+    # 61-80=4, 81-100=5. So 40%% is 2 stars, 60%% is 3, 80%% is 4.
     # normalised so the SHAPE reads at a glance, which is the whole point of
     # abstracting to stars.
     dimensions:
       no_broken_functions: {score: 7,  max: 20, stars: 2}
-      robustness:          {score: 4,  max: 10, stars: 3}
-      ux:                  {score: 6,  max: 10, stars: 4}
+      robustness:          {score: 4,  max: 10, stars: 2}
+      ux:                  {score: 6,  max: 10, stars: 3}
       conformance:         {score: 9,  max: 10, stars: 5}   # 49/53 requirements
       ambition:            {score: 5,  max: 10, stars: 3}
       creativity:          {score: 5,  max: 10, stars: 3}
-      org_project:         {score: 4,  max: 5,  stars: 5}
-      org_logic:           {score: 3,  max: 5,  stars: 4}
-      reusability:         {score: 8,  max: 10, stars: 5}
+      org_project:         {score: 4,  max: 5,  stars: 4}
+      org_logic:           {score: 3,  max: 5,  stars: 3}
+      reusability:         {score: 8,  max: 10, stars: 4}
       documentation:       {score: 3,  max: 10, stars: 2}   # hard-capped, §3.10
 
     profile: >

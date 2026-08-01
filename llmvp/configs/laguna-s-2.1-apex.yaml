@@ -195,7 +195,9 @@ tier:
       fixed: 2026-07-31 (llama_cpp_backend._build_generate_kwargs)
       rerun: not_done (operator decision — annotate, do not re-run)
 
-    # Per-dimension stars are score/max banded 80/60/40/20, so different maxima
+    # Per-dimension stars are score/max banded per §2 (see below), so different maxima
+    # BANDS (rubric §2, inclusive at the top): 0-20=1, 21-40=2, 41-60=3,
+    # 61-80=4, 81-100=5. So 40%% is 2 stars, 60%% is 3, 80%% is 4.
     # normalise and the SHAPE reads at a glance — same convention as the
     # gpt-oss-120b-a5-swarm-524k block.
     #
@@ -204,14 +206,14 @@ tier:
     # exactly two rows and they offset: no_broken_functions 3 (not 4) and
     # reusability 8 (not 7). All three totalled 46.
     dimensions:
-      no_broken_functions: {score: 4, max: 20, stars: 2}   # 8-10 ledger rows
-      robustness:          {score: 2, max: 10, stars: 2}   # one HOST-DAMAGING edge
-      ux:                  {score: 6, max: 10, stars: 4}
+      no_broken_functions: {score: 4, max: 20, stars: 1}   # 8-10 ledger rows
+      robustness:          {score: 2, max: 10, stars: 1}   # one HOST-DAMAGING edge
+      ux:                  {score: 6, max: 10, stars: 3}
       conformance:         {score: 9, max: 10, stars: 5}   # 46/53 requirements
       ambition:            {score: 3, max: 10, stars: 2}
       creativity:          {score: 5, max: 10, stars: 3}
-      org_project:         {score: 4, max: 5,  stars: 5}
-      org_logic:           {score: 3, max: 5,  stars: 4}
+      org_project:         {score: 4, max: 5,  stars: 4}
+      org_logic:           {score: 3, max: 5,  stars: 3}
       reusability:         {score: 7, max: 10, stars: 4}
       documentation:       {score: 3, max: 10, stars: 2}   # hard-capped, §3.10
 

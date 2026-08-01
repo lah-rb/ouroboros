@@ -103,8 +103,22 @@ which is the direction people forget to check for.
    - `status`, `rubric` (exact version string), `stars`, `tier`
    - `judged:` — run + staged path, judge model as an exact string, every
      judge's total, the recorded median, and a pointer to the RESULTS file
-   - `dimensions:` — score/max/stars per dimension, banded 80/60/40/20 so
-     different maxima normalise and the SHAPE reads at a glance
+   - `dimensions:` — score/max/stars per dimension. Take `score/max` as a
+     PERCENTAGE and read it through the rubric's own §2 band table, so a
+     dimension star means exactly what a total star means, and different
+     maxima normalise:
+
+     | pct | 0–20 | 21–40 | 41–60 | 61–80 | 81–100 |
+     |---|---|---|---|---|---|
+     | stars | ★ | ★★ | ★★★ | ★★★★ | ★★★★★ |
+
+     **Boundaries are inclusive at the TOP: 40% is ★★, not ★★★.** This is
+     easy to get wrong because dimension maxima are mostly 5, 10 and 20, so
+     scores land on 20/40/60/80 constantly. An earlier note here said
+     "banded 80/60/40/20", which reads as *≥40 → ★★★* and disagrees with §2
+     at all four boundaries; 32 recorded rows were normalised on 2026-07-31
+     when the divergence was found. No total or tier ever moved — only the
+     labels — but two scales for one word is how it happened.
    - `decisive_defect`, `strengths`, `unmet_requirements`
    - the `expectation:` block's `outcome:` (hit / miss / near-miss), never
      rewriting what was predicted
