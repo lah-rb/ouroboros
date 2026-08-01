@@ -402,6 +402,84 @@ express. Not landed — recorded for the operator's decision.
 
 ---
 
+## ✅ RESOLVED — devstral answered it (2026-08-01)
+
+The designated vehicle reported after all. Rather than spend a 2h re-run on a
+characterised defect, the operator directed: *"Strip those lines then judge the
+rest. A simple model mistake late in the game is not worth a two hour rerun for
+the same info."* Two lines were removed from `engine.py` (the leaked decision
+envelope and an opening markdown fence) and the artifact was judged blind by
+three independent judges. **Full disclosure of the repair, and of what it costs
+the number, is in `llmvp/configs/devstral-2-small-24b.yaml` under `judged:`.**
+
+### Votes 46 / 44 / 44 → **median 44, tier 2 — BELOW the cluster**
+
+The registration set the decision rule in advance:
+
+> IF devstral lands CLEARLY LOW — below the cluster — the instrument is
+> separating models and the tight band is a real result.
+
+46 was the previous floor (laguna-s-2.1-apex). **Devstral landed at 44, under
+it, and unanimously — every one of the three votes was below 50.** The smallest
+model in the fleet, at roughly a fifth the parameters of the largest, produced
+the lowest-scoring artifact of the campaign. **That branch fires: the instrument
+is discriminating, and the 46–60 band is a real result about these models rather
+than an artefact of the rubric.**
+
+### And it broke the pedestal, which is the sharper finding
+
+The pedestal analysis above said three dimensions were "pinned" — worth 16–18
+points to everybody regardless of quality. Devstral banked **14**:
+
+| | conformance | creativity | documentation | pedestal |
+|---|---|---|---|---|
+| the other nine arms | 9–10 | 5–6 | 2–3 | 16–18 |
+| **devstral** | **8** | **4** | **2** | **14** |
+
+Its conformance 8/10 is the **lowest recorded in the entire campaign**, where
+every other scored arm returned 9 or 10. So the pinned dimensions are **not
+inherently pinned — they were pinned across the cluster because nothing in the
+cluster was weak enough to move them.** The instrument had headroom below all
+along; devstral is the first artifact to use it.
+
+This corrects the emphasis of the partial answer above without retracting its
+arithmetic. The pedestal is real and it *is* a floor for artifacts of cluster
+quality. It is not a floor the rubric imposes on everything.
+
+### One inversion, and it is informative
+
+Re-ranked on the 70 live points across all ten scored arms: **40 ordered pairs
+agree, 1 inverts.**
+
+    total says  laguna-s (46) > devstral (44)
+    live  says  devstral (30) > laguna-s (29)
+
+Devstral's total is last; its *live* score is not. Laguna-s reached 46 carrying
+a 17-point pedestal on a weaker artifact, while devstral reached 44 carrying 14
+on a slightly stronger one. **On the dimensions that measure whether the thing
+works, laguna-s-2.1-apex is the weakest artifact of the sweep** — the totals
+hide that and the decomposition recovers it.
+
+### What is now settled, and what is not
+
+**Settled:** the instrument separates models; the tight band is a real result;
+and the operator's read that the band *looked* too narrow was correct about the
+band while being wrong about the cause — it is not that the rubric cannot
+discriminate, it is that nine of ten artifacts genuinely clustered.
+
+**Not settled, and not tested by this:** whether a 63-point authoring-vs-working
+gap is inevitable for models of this class, or whether contract enforcement
+closes it. That is what OPEN_TASKS §18/§19 are for.
+
+**Retired:** files-per-generated-token. The 2026-07-31 registration in
+`devstral-2-small-24b.yaml` predicted this artifact would top that column while
+scoring at the bottom, and it did — 1.20 files/ktok against a field best of 0.92
+— on thin files, not efficient work. Per that registration's own
+`why_it_matters`, the column comes OUT of the DoE table rather than shipping
+with a caveat.
+
+---
+
 ## Cross-arm pattern (running)
 
 Both arms scored in the ★★★ band with conformance 9/10 and delivery in the

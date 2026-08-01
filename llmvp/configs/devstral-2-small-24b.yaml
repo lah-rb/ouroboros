@@ -72,15 +72,24 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
-  status: not_yet_run
+  status: recorded
+  rubric: TIER_RUBRIC v1.2
+  stars: 3                  # 41-60 band; 44/100
+  tier: 2                   # < 50, and UNANIMOUS — all three votes < 50
+
   expectation:
     registered: 2026-07-29
     tier: "3-2"
     stars: null
     basis: experience
+    outcome: hit
     why: >
       Minimum viable model. Long native context and reasonably usable output,
       but expected at the bottom of the field.
+    scored: >
+      HIT on both clauses. Landed tier 2 (inside the registered "3-2" range)
+      and LOWEST OF THE ENTIRE FIELD at 44 — below laguna-s-2.1-apex's 46,
+      which had been the sweep floor. "Bottom of the field" was exact.
 
   # SECOND PRE-REGISTRATION, added 2026-07-31 BEFORE this model's 2h arm was
   # judged. The 07-29 entry above stands unrevised (§6: never revised); this is
@@ -104,7 +113,22 @@ tier:
     registered: 2026-07-31
     predicts: low_score_despite_top_token_efficiency
     basis: experience
-    outcome: pending
+    outcome: confirmed
+    scored: >
+      CONFIRMED ON EVERY CLAUSE OF confirmed_if, measured 2026-08-01:
+        "at or near the bottom of the sweep"  -> 44, LOWEST of ten scored arms
+        "a low ambition|completeness (3.5)"   -> 3/10, UNANIMOUS, at the floor
+        "a low no-broken-functions (3.1)"     -> 4/20 = 20%, lowest of the sweep
+        "conformance may still look respectable" -> 8/10 (UNANIMOUS)
+      The operator's mechanism was right, not just the direction: devstral
+      topped files-per-generated-token at 1.20 files/ktok (next best 0.92, worst
+      0.08) by writing the THINNEST files in the field, not the most work per
+      token. Note the tell that makes it unambiguous — its conformance 8/10 is
+      the LOWEST conformance recorded in the entire campaign, where every other
+      arm scored 9 or 10, so even the "respectable" half came in under the field.
+      PER why_it_matters, THE COLUMN SHOULD BE RETIRED from the DoE table rather
+      than reported with a caveat: files-per-token rewards under-delivery and
+      cannot distinguish nine thin files from eight substantial ones.
     why: >
       OPERATOR CALL, verbatim in substance: "I guarantee devstral is the best
       [on files-per-token] because it pushed the least robust work."
@@ -180,9 +204,142 @@ tier:
 
     bears_on_the_operator_registration: >
       This arm was the designated test of the score-tightness doubt registered
-      2026-07-31 (dev/blind_panel/RESULTS_tier_2026-07-31.md). It does NOT
-      settle it either way: devstral did not land middling, and did not land low
-      on merit — it landed VOID. The question stays open; the re-run answers it.
+      2026-07-31 (dev/blind_panel/RESULTS_tier_2026-07-31.md). AT THE TIME OF
+      THE GATE FAILURE it settled nothing — devstral did not land middling and
+      did not land low on merit, it landed VOID. RESOLVED 2026-08-01 by the
+      repaired-entry-point judgment below; see `judged:`.
+
+  # ── 2026-08-01: SCORED, after an operator-authorised two-line repair ──
+  judged:
+    run: tier_20260731-050209 arm11 · staged/arm11
+    rubric: TIER_RUBRIC v1.2
+    judge_model: "claude-opus-5[1m]"
+    votes: [46, 44, 44]
+    score: 44          # MEDIAN of three independent blind judgements (§5)
+    stars: 3           # 41-60 band
+    tier: 2            # by score, < 50 — and unanimous: all three votes < 50
+    tier3_gate: passed  # AFTER the repair; it FAILED as shipped — see below
+    record: dev/blind_panel/RESULTS_tier_2026-07-31.md
+    run_shape: 123 min (backstop) · 12 files · 4 py_ok · 1 py_fail · 0 degen · 22/33 goals
+
+    # ── DISCLOSURE — THIS SCORE IS NOT OF THE ARTIFACT AS SHIPPED ──
+    entry_point_repaired: true
+    disclosure: >
+      OPERATOR DECISION, 2026-08-01: "Strip those lines then judge the rest. A
+      simple model mistake late in the game is not worth a two hour rerun for
+      the same info."
+
+      TWO LINES were removed from the head of `engine.py` before packaging:
+      the leaked decision envelope `{"choice": "write_file", "path":
+      "engine.py"}` and the opening ```python fence. Nothing else was touched;
+      249 -> 247 lines; no trailing fence existed; no other file in the tree
+      carried an envelope or fence. The strip script ASSERTS both lines match
+      the characterised content before removing anything, so it cannot
+      blind-truncate. After the strip all five .py files parse and the game
+      boots and plays.
+
+      WHAT THIS COSTS THE NUMBER: the leaked envelope was a REAL DEFECT and it
+      is UNBILLED — no judge saw it, so §3.1 never priced it and the §2 tier-3
+      gate never fired. As shipped this artifact scored TIER 3 (no runnable
+      artifact: main.py imports engine on line 1, so every entry point died with
+      SyntaxError before printing anything). The 44 therefore reads as "what
+      this model built, minus one late formatting error", and is a small
+      courtesy relative to arms that shipped clean. It is NOT a like-for-like
+      comparison with them on that one axis.
+
+      NOT A FRAMEWORK FAULT. Log line 83: batch creation, 9 files, ZERO failed
+      gates — engine.py was clean when written. Line 6720: deterministic re-cert
+      catches it on syntax+import+lint and routes to repair. Line 6739: parked
+      at 173 work cycles, elapsed 7411s against a 7200s limit. The gate worked;
+      an edit late in the run re-emitted the file with the envelope and the
+      backstop fired nineteen log lines later, with about three minutes left.
+
+    # MODAL vector — and it sums exactly to the median total, so no synthesis
+    # was needed (unlike arm13/arm14, where no two judges agreed on a shape).
+    # FIVE dimensions were UNANIMOUS across three strangers.
+    # Stars are score/max banded per §2: 0-20=1, 21-40=2, 41-60=3, 61-80=4,
+    # 81-100=5, inclusive at the TOP.
+    dimensions:
+      no_broken_functions: {score: 4, max: 20, stars: 1}   # votes 6/4/4
+      robustness:          {score: 5, max: 10, stars: 3}   # votes 5/6/5
+      ux:                  {score: 4, max: 10, stars: 2}   # votes 4/4/3
+      conformance:         {score: 8, max: 10, stars: 4}   # UNANIMOUS 8 — 42-43/53
+      ambition:            {score: 3, max: 10, stars: 2}   # UNANIMOUS 3
+      creativity:          {score: 4, max: 10, stars: 2}   # UNANIMOUS 4
+      org_project:         {score: 4, max: 5,  stars: 4}   # votes 4/3/4
+      org_logic:           {score: 3, max: 5,  stars: 3}   # UNANIMOUS 3
+      reusability:         {score: 7, max: 10, stars: 4}   # votes 7/7/8
+      documentation:       {score: 2, max: 10, stars: 1}   # UNANIMOUS 2 — below the §3.10 cap
+
+    profile: >
+      AN EXPLORATION-AND-INVENTORY PROGRAM WEARING THE COSTUME OF AN RPG. The
+      front half works cleanly — movement, take/drop/use/equip/examine/talk,
+      look, status, help, save, and a genuinely extensible YAML data layer where
+      all three judges added a room and an item with no Python at all, first
+      try. Nothing on the happy path crashed across ~250 commands.
+
+    decisive_defect: >
+      THE GAME HAS NO TERMINAL STATE OF EITHER KIND. There is no victory
+      anywhere in the tree — a grep for win|won|victor|congratul|game over
+      returns zero matches — and there is no defeat either, because NOTHING IN
+      THE CODEBASE EVER DECREMENTS PLAYER HEALTH. Combat is a one-shot damage
+      subtraction with no turn loop: monsters never retaliate, their authored
+      `attack`/`defense` are never read, armour has no effect, and `flee` is a
+      one-line stub that prints a sentence. All three judges killed the boss
+      with the correct weakness item and simply kept playing in an empty room,
+      at full health, having taken zero damage all run.
+
+      This is a step PAST the asymmetry the checklist warns about: prior arms
+      shipped a defeat path and no win. Here both are absent.
+
+    other_findings: >
+      - SAVE/LOAD SILENTLY REWRITES THE WORLD (INVALIDATING, all three judges):
+        `load` restores four player fields and re-initialises the world from
+        YAML. `defeated_monsters` is faithfully WRITTEN to the JSON and then
+        never applied, so everything you killed is alive again; room contents
+        are rebuilt while inventory is restored, so every carried item is also
+        back on the floor and can be re-taken indefinitely.
+      - YOU CANNOT ADDRESS ANYTHING BY THE NAME THE GAME PRINTS. `look` says
+        `Items: Rusty Sword`; `take Rusty Sword` is refused. Only the never-
+        displayed YAML id works (`sword`, `old_man`, and the boss answers only
+        to `boss`, a token printed nowhere). One judge traced the cause: the
+        parser assigns `target` the whole lowercased remainder of the line, so
+        NO multi-word display name can ever match an id — which is every named
+        entity in the game. Two judges had to open world/*.yaml to proceed.
+      - FOUR OF NINE ROOMS HAVE NO INBOUND EDGE (secret_room, dungeon, garden,
+        library), orphaning the Wizard NPC who carries the clearest weakness
+        hint, one of three regular monsters, and three items. Boss Room's north
+        AND south both return to the Hallway. One-line data fixes.
+      - `drop` does not clear the equipment slot: dropped sword stays equipped
+        and still deals 5 damage from an empty inventory (unarmed is 1).
+      - Consumables are never consumed and health is uncapped: one potion used
+        four times took health 20 -> 60.
+      - `talk` never advances dialogue: `dialogue_states` is declared, read,
+        saved and loaded but NEVER WRITTEN, so the second node — the one that
+        names the boss weakness — is undeliverable.
+      - The boss weakness does not exist as a mechanic. The Mystical Amulet is
+        simply `type: weapon, value: 10`, so it hits everything equally; the
+        only boss/amulet coupling is an inert hardcoded name check in
+        `handle_equip`.
+
+    unmet_requirements: >
+      42-43 of 53 met — the LOWEST conformance of the campaign, where every
+      other scored arm returned 9 or 10. Agreed unmet: 23 (status omits
+      location), 24 (no turn-based loop), 27 (armour never read by any
+      calculation), 31 (nothing damages the player), 32 (one shared handler;
+      monsters differ only in numbers), 34 (no phase logic), 35 (no weakness
+      mechanic), 37/38/39 (no win, no defeat screen, no restart), and the
+      world-state item (41/42 — the save is not "full").
+
+    instrument_note: >
+      FIVE of ten dimensions came back IDENTICAL across three strangers
+      (conformance 8, ambition 3, creativity 4, org_logic 3, documentation 2),
+      and the modal vector sums exactly to the median total. Judge 2 WITHDREW a
+      billed row in the artifact's favour after discovering in pass 2 that it
+      had run `examine <npc>` from the wrong room — a judge auditing its own
+      probe rather than its target. All three judges disclosed a §4-sanctioned
+      pass-1 source read of world/*.yaml, undertaken only to recover the input
+      vocabulary after observing the refusals in play.
 # ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
 probe_verified_cache:
   run_id: cells_20260729-232251
