@@ -962,3 +962,57 @@ green.
 
 RESIDUE: the §3.10 contamination note for the v1.2 sweep stands — scores are
 not revised. The three-arm build-backend string remains a separate open signal.
+
+---
+
+## 21. Truncation audit — "scope, don't truncate" violations (2026-08-01)
+
+**Status:** OPEN. Audit complete; adopted design recorded; fixes land with the
+epoch batch. Triggered by the laguna Q6_K degeneration study: `prepare_context`
+byte-cuts related files at 3,000 chars, which left `UI.prompt` (byte 9,634 of
+ui.py) INVISIBLE to a rewrite whose entire deliberation hinged on that
+signature — 4 long-cycle orbits, ~150k wasted tokens.
+
+**ADOPTED DESIGN (operator, 2026-08-01):** the Ouroboros standard is SCOPE,
+DON'T TRUNCATE. When a model selects (or is handed) a file larger than the
+context limit, bring it ONE MENU DEEPER: present the file's symbol table and
+let it select FULL symbols from within. Byte-truncation wrecks the workflow;
+symbol selection preserves it. The good patterns already in-tree:
+`data_trace.extract_data_skeleton` (schema skeleton instead of byte-cut),
+repomap (a map is scoped by construction), `analysis_types` stub-fallback,
+`format_session_tail` (tail-keep for terminals).
+
+### Tier A — model-facing evidence cut mid-body (the dangerous shape)
+
+| site | what gets cut | measured bite |
+|---|---|---|
+| `flows/code_core/prepare_context.cue:73` (max_chars 3000) | related files in rewrite/fix context | THE case above. Fix = symbol-menu drill-down. |
+| `agent/projections.py:441` (max_chars 4000) | **the play-tester's world map** — `data_file_contents` in interaction_context | REAL artifacts exceed it: arm01 world.yaml 13,727B (tester saw ~29%), Q6_K 7,477B (~54%). The interact-phase tester navigates and grades with a PARTIAL world. Plausibly affects functional-test coverage and goal counters. Fix = data skeleton + drill-down (the data_trace pattern). |
+| `agent/projections.py:451` (max_chars 3000) | parser modules read for command-vocabulary hints | verb tables past 3KB never contribute to the vocabulary shown to testers |
+| `agent/actions/contract_swarm_actions.py:2238` | diagnose-worker sees `content[:6000]` — the file it is diagnosing, head only | same shape as prepare_context; plus `output[:1200]`, `directive[:1500]` |
+| `agent/actions/mission_actions.py:2331` | seam-gate directive evidence `seams[:800]` TOTAL across all problems | multi-problem gates truncate the later problems out of the fix directive |
+
+### Tier A′ — HEAD-cut on stderr/tracebacks (wrong END kept)
+
+`batch_structural_actions.py:768,772,834,847` (`[:500]`), `:951`
+(`terminal_output[:1000]`): Python tracebacks put the exception LAST, so a
+head-keep can retain the frame list and drop the error line. The tree already
+has the right convention in `format_session_tail` (tail-keep) — these sites
+contradict it. Fix = tail-keep for anything that can contain a traceback.
+
+### Tier B — correct scoping, keep as the house patterns
+
+data_trace skeletons · repomap budgets (design_and_plan/replan/ingest 4000) ·
+analysis_types stubs · session_tail tail-keep · ops terminal_output tail
+formatters · all logger/observation `[:60]`-class display cuts.
+
+### Notes-system inventory (the broader look, same session)
+
+Written categories: failure_analysis (14 sites), codebase_observation (3),
+lint_warning (2), general (2), architecture_blueprint (2). Read filters cover
+failure_analysis / architecture_blueprint / codebase_observation /
+approach_rejected. **Going stale:** `lint_warning` is WRITE-ONLY (no read
+filter consumes it — dead channel); `task_learning`, `requirement_discovered`,
+`dependency_identified` are enum values with ZERO writers. Supersession +
+target scoping + cap-5 landed (b82d77c); the stale channels above are the
+remaining cleanup — wire or prune with the epoch batch.
