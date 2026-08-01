@@ -4,6 +4,12 @@ The instrument for comparing what two agent runs actually BUILT. Established
 across several rounds; this file exists so it is executed rather than
 remembered.
 
+**As of 2026-08-01 this comparative protocol is the ENGINE of
+`TIER_RUBRIC_v2.md`** — v2's placement flights are METHODS flights with v2's
+axes, smoke, anchors and league rules layered on top. The solo-scoring path
+(v1) is retired for future campaigns. Everything below about staging,
+blinding, packets, read-walls and play-first remains binding.
+
 ## Why blind play, and not the goal counters
 
 **Goal counters are not the instrument.** They have inverted against blind play

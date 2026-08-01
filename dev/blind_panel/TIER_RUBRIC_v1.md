@@ -1,6 +1,13 @@
 # TIER_RUBRIC v1.2 — solo artifact scoring for model tiering
 
-**Status: IN USE.** Every record carries its version string. Any change to a
+**Status: SUPERSEDED by `TIER_RUBRIC_v2.md` (2026-08-01) for all future
+campaigns.** The v1.2 records of `tier_20260731-050209` stand as written.
+Retirement rationale is in v2's preamble; the measured failure analysis is in
+`dev/blind_panel/RESULTS_tier_2026-07-31.md` and `dim_variance.py` — usable
+range 44–64 of 100, ~80 points near-constant, 9 of 12 artifacts in the rejudge
+band (30 judge-sessions for 12 artifacts).
+
+Every record carries its version string. Any change to a
 dimension, a band, a probe battery, or the judge prompt bumps the version.
 
 ## Changelog

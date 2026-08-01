@@ -531,3 +531,26 @@ where any of them are weak individually — it is where all of them are weak
 together. Contract enforcement between modules is the intervention this predicts,
 and the tier campaign now has a baseline to measure that intervention against.
 
+
+---
+
+## CAMPAIGN CLOSED — final board (2026-08-01)
+
+All 18 arms complete. Per-arm detail lives in each model's config `tier:`
+block; this is the summary of record.
+
+| tier 1 | tier 2 | tier 3 / void |
+|---|---|---|
+| qwen3.6-35b **64** (65/64/60) · step37 **62** (62/61/62) · gpt-oss **60** (solo, corroborated) · gpt-oss-swarm **53** · qwen3.6-27b **53** (54/51/53) · qwen3.5 **51** (50/55/51) | hy3 **49** (49/49/46) · mistral **49** (45/49/49) · qwen-next **49** (45/49/51) · laguna-xs **48** · laguna-s **46** (46/46/46) · devstral **44** (46/44/44, repaired entry point, disclosed) | olmo-instruct (loop never written) · olmo-think (64k chars of deliberation, "Let's code.") · glm (Parser unbound) · gemma-31b VOID (rerun owed) · gemma-26b ×2 never ran |
+
+Campaign-level findings of record: the seam thesis quantified (91.4%
+conformance vs 28.6% no-broken-functions across the field); the pedestal +
+tightness decomposition (devstral resolved the operator registration — the
+instrument separates, the band was real); files-per-generated-token RETIRED
+(inverted from both extremes on one day); §18/§19 seam-gate coverage gaps;
+§20 README truncation contaminating §3.10 field-wide; the bimodal
+contemplator/grinder strategy split.
+
+**This campaign retired its own instrument.** The rubric audit it forced is
+recorded above; the successor is `TIER_RUBRIC_v2.md` (comparative anchored
+ladder, epoch v2.0), with `LADDER.md` as the standing record.
