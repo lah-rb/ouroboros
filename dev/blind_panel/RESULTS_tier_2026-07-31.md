@@ -288,6 +288,56 @@ star label was, and arms 01–02 were already correct at 46 and 48.
 
 ---
 
+## ⚠️ OPERATOR REGISTRATION — the scores may be too tight (2026-07-31, before arm 11 judged)
+
+Recorded BEFORE devstral (arm 11) was scored, so the answer cannot be
+rationalised afterwards.
+
+**The suspicion.** Six scored artifacts sit in a 14-point band:
+
+| model | median | params |
+|---|---|---|
+| gpt-oss-120b-a5 | 60 | 120B |
+| gpt-oss-swarm | 53 | 120B |
+| hy3-reap-200b | 49 | 200B |
+| mistral-medium | 49 | 128B |
+| laguna-xs-2.1 | 48 | ~30B class |
+| laguna-s-2.1-apex | 46 | ~110B class |
+
+That is a very narrow spread for models separated by an order of magnitude in
+size, and the operator's stated position is that **gpt-oss leading is itself
+surprising** — a strong, fast, reliable model, but "never a frontrunner in my
+mind." A leaderboard whose top entry is a surprise and whose spread is 14
+points invites the question of whether the instrument is discriminating at all,
+or whether every artifact is being scored on the same handful of universal
+failures (seam bugs, unearned wins, inverted weakness items) that swamp real
+differences between models.
+
+**The test, and why devstral is the right vehicle.** devstral-2-small-24b is
+the smallest model in the fleet by a wide margin and has underperformed
+consistently across prior rounds. Its pre-registered expectations (see
+llmvp/configs/devstral-2-small-24b.yaml) already predict a low score.
+
+    IF devstral lands MIDDLING — anywhere near the 46-53 cluster —
+    THAT IS THE TELL that something is not discriminating properly.
+
+A 24B model scoring level with a 200B one is not a plausible capability
+result; it is evidence that the rubric, the mission, or the flow is measuring
+something other than model quality. The most likely candidate is that the
+brief's universal failure modes dominate every artifact's §3.1, compressing
+the range regardless of who wrote it.
+
+    IF devstral lands CLEARLY LOW — below the cluster —
+    the instrument is separating models and the tight band is a real result:
+    these models genuinely are close on this task.
+
+**Do not treat this as settled either way until arm 11's median is in.** It is
+a one-arm test of a campaign-level doubt, so a middling devstral is a REASON TO
+INVESTIGATE, not proof of a broken instrument; and a low devstral removes the
+most obvious alternative explanation without proving the band is meaningful.
+
+---
+
 ## Cross-arm pattern (running)
 
 Both arms scored in the ★★★ band with conformance 9/10 and delivery in the
