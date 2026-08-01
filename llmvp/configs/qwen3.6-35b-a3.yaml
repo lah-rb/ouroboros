@@ -124,15 +124,164 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
-  status: not_yet_run
+  status: recorded
+  rubric: TIER_RUBRIC v1.2
+  stars: 4                  # 61-80 band; 64/100
+  tier: 1                   # >= 50, unanimous — all three votes >= 60
+
   expectation:
     registered: 2026-07-29
     tier: "2"
     stars: null
     basis: experience
+    outcome: miss
     why: >
       A fast, very verbose thinker that sits consistently under the rest of the
       qwen family — though its ability to batch might keep it around the 27b.
       Expected high tier 2.
+    scored: >
+      MISS, and the largest of the campaign — predicted HIGH TIER 2, landed
+      TIER 1 at 64 and the HIGHEST SCORE OF THE SWEEP, four points above
+      gpt-oss. Both halves of the reasoning were wrong: it did not sit under
+      the qwen family (it beat qwen3.6-27b's 53 and qwen3.5-122b's 51), and
+      "very verbose thinker" did not translate into weaker delivery — this is
+      one of only two artifacts in the campaign that can be WON, and all three
+      judges won it.
+
+      THE SURPRISE WAS ACTED ON, per §6's purpose ("its job is not to be right,
+      it is to make a SURPRISE legible, so an unexpected score prompts a look at
+      the run before the number enters the ledger"). 64 is ★★★★, so §5's
+      rejudge-to-place did NOT mandate corroboration — the tier was never in
+      doubt. Two further judges were run anyway BECAUSE the expectation missed
+      and because a new campaign leader rested on one judgment. It held:
+      65/64/60.
+
+      WORTH RECORDING AGAINST THE PRIOR: this is the model whose goal counters
+      inverted maximally in the greenfield panel (8/8 goals, eliminated), and
+      the WORST in the 2026-07-30 smoke on files-per-generated-token at 0.08
+      against devstral's field-topping 1.20. On the same day devstral scored
+      lowest (44) and this scored highest (64) — the files-per-token column
+      inverting end to end, from both extremes, on the day it was retired.
 
       FAMILY: the qwen hybrid architecture makes advanced features — cache strategies, instance swarming — markedly harder to adapt than a plain transformer. Applies to every qwen arm.
+
+  judged:
+    run: tier_20260731-050209 arm15 · staged/arm15
+    rubric: TIER_RUBRIC v1.2
+    judge_model: "claude-opus-5[1m]"
+    votes: [65, 64, 60]
+    score: 64          # MEDIAN of three independent blind judgements (§5)
+    stars: 4           # 61-80 band
+    tier: 1
+    tier3_gate: passed
+    record: dev/blind_panel/RESULTS_tier_2026-07-31.md
+    run_shape: 122 min (backstop) · 9 files · 5 py_ok · 0 py_fail · 2 degen · 11/29 goals
+
+    # THE MEDIAN JUDGE's own vector (the 64); it sums to the recorded score,
+    # where a synthesised per-dimension median would sum to 63.
+    # SIX of ten dimensions were UNANIMOUS across three strangers — the highest
+    # agreement the instrument has produced.
+    # Stars are score/max banded per §2: 0-20=1, 21-40=2, 41-60=3, 61-80=4,
+    # 81-100=5, inclusive at the TOP.
+    dimensions:
+      no_broken_functions: {score: 10, max: 20, stars: 3}  # votes 11/10/9
+      robustness:          {score: 8,  max: 10, stars: 4}  # votes 8/8/6
+      ux:                  {score: 7,  max: 10, stars: 4}  # UNANIMOUS 7
+      conformance:         {score: 9,  max: 10, stars: 5}  # UNANIMOUS 9 — 48-50/53
+      ambition:            {score: 5,  max: 10, stars: 3}  # votes 6/5/5
+      creativity:          {score: 6,  max: 10, stars: 3}  # UNANIMOUS 6
+      org_project:         {score: 4,  max: 5,  stars: 4}  # UNANIMOUS 4
+      org_logic:           {score: 3,  max: 5,  stars: 3}  # UNANIMOUS 3
+      reusability:         {score: 8,  max: 10, stars: 4}  # UNANIMOUS 8
+      documentation:       {score: 4,  max: 10, stars: 2}  # votes 3/4/3 — see the §3.10 note
+
+    profile: >
+      THE CAMPAIGN'S BEST ARTIFACT, and only the second that can be WON — all
+      three judges drove it from a cold start to the VICTORY screen, one of them
+      twice. Roughly twenty verbs work, all 8 rooms are reachable, equipment
+      measurably changes the numbers, consumables work mid-combat, monsters gate
+      rooms, dialogue advances statefully, and save/load round-trips the ENTIRE
+      WORLD — dropped items stay where they were dropped and NPC dialogue
+      resumes at the right line. No traceback, no hang, no unbounded output
+      across three full independent play sessions. Help is accurate, which is
+      rarer in this campaign than it should be.
+
+      It also posts the campaign's best robustness (8/10) and reusability
+      (8/10): all three judges added a room and an item touching ONLY
+      data/world.yaml, first try.
+
+    decisive_defect: >
+      THE BOSS — the brief's centrepiece — IS HOLLOW, and the game instructs you
+      to destroy your own win condition. Both NPCs build a hint chain toward a
+      Sun Shard weakness, and the Scholar gives the exact command:
+
+          "If you find the Shard, you must use it directly against the Knight.
+           Not equip it. USE it."
+
+      Doing precisely that yields `The Sun Shard doesn't seem to do anything.`
+      AND SILENTLY DELETES THE UNIQUE ITEM — `_cmd_use` runs an unconditional
+      `inventory.remove()` after the branch chain, so the fall-through path
+      destroys it. `sun_damage: 50` is authored on the item and read by ZERO
+      lines of code; the boss carries no weakness attribute at all.
+
+      The two-phase mechanic is dead the same way: `Monster.take_damage` halves
+      incoming damage and `_monster_turn` adds +2 attack when `phase == 2`, and
+      NOTHING IN THE TREE EVER ASSIGNS phase = 2. Two judges fought the boss
+      60->0 twice each and saw no transition and no change in incoming damage.
+
+      Net: a boss two NPCs describe as impervious to steel, killed with an
+      ordinary iron sword at full health.
+
+    second_defect: >
+      QUITTING TELLS YOU THAT YOU DIED. `quit` -> `y` prints "Thanks for
+      playing!" and then a full-screen YOU HAVE DIED banner; EOF does the same.
+      `_print_game_over()` is called unconditionally after the loop, keyed only
+      on `self.won`. Its own offer — "Type 'load' to reload your last save" — is
+      a dead letter: the process has already left its input loop, verified by
+      two judges on both a pipe and a real PTY. A false terminal state on every
+      session that does not end in victory.
+
+    unmet_requirements: >
+      48-50 of 53 met. Agreed unmet: 32 (rat and zombie share `behavior:
+      aggressive`, and the field drives only flee odds; `_monster_turn` is one
+      shared function), 39 (the restart is offered in prose, no restart path is
+      authored), and 51 (dialogue is a flat list indexed by an integer — it
+      progresses, it does not branch; the authored `trigger:` key is read by
+      nothing). Judges split on 34/35 (boss phases, boss weakness): two marked
+      them unmet, one marked them MET under §3.4's presence rule since both are
+      authored in data and code and only the trigger is missing. The dimension
+      is 9 either way.
+
+    §3.10_note: >
+      The judges split 3/4/3 on documentation, and the disagreement was
+      PRINCIPLED rather than a severity call. All three found `pip install -e .`
+      fails — `pyproject.toml` names `setuptools.backends._legacy:_Backend`,
+      which does not exist. Judge 2 declined to apply the hard cap, arguing §3.10
+      says "contradicted by PLAY" and every gameplay claim in the README held up
+      under play, the false claim being a packaging instruction verified outside
+      it. Judge 3 applied the cap and answered that objection: it found TWO
+      in-play contradictions — the death screen's "Type 'load'" offer that no
+      prompt can receive, and the Scholar's how-to-win instruction for a
+      mechanic that does not exist. So the cap fires on play-contradicted
+      grounds here regardless.
+
+      The general question judge 2 raised is still OPEN and worth deciding
+      before the next campaign: does §3.10's cap apply to non-gameplay claims
+      (install/packaging) that a player could never falsify? It has not mattered
+      until now because no other README's gameplay claims were all true.
+
+    cross_arm_note: >
+      The broken build backend `setuptools.backends._legacy:_Backend` appears in
+      THREE artifacts from THREE DIFFERENT MODELS (arm14 qwen3.6-27b, arm15,
+      devstral arm11). A shared failure mode across models points at the brief
+      or the scaffolding, not at any one model.
+
+    instrument_note: >
+      HIGHEST AGREEMENT OF THE CAMPAIGN: six of ten dimensions identical across
+      three strangers (ux 7, conformance 9, creativity 6, org_project 4,
+      org_logic 3, reusability 8). The 5-point spread sits almost entirely in
+      no_broken_functions (11/10/9) and robustness (8/8/6), and all three filed
+      §4.1 disclosures predicting their own §3.1 should move DOWN — to 9, 8 and
+      8 respectively. Judge 3's total of 60 exactly ties gpt-oss's recorded 60,
+      which is a useful calibration point: even the harshest judge of this
+      artifact placed it level with the previous campaign leader.
