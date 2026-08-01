@@ -419,3 +419,37 @@ modules in `code_core` — nothing checks that a verb the parser emits is a verb
 the engine dispatches, or that a key the writer uses is the key the reader
 looks for — rather than model selection.
 
+### The seam thesis, quantified across seven models (2026-08-01)
+
+Field utilization — the mean fraction of each dimension EARNED across all seven
+scored arms, 24B to 200B. This is a different question from spread: a dimension
+can be useless for ranking (everyone scores alike) while carrying the campaign's
+main finding (everyone scores alike and LOW). `dev/blind_panel/dim_variance.py`.
+
+| dimension | earned | |
+|---|---|---|
+| conformance | 91.4% | authored what was asked |
+| reusability | 77.1% | |
+| organization: project | 68.6% | and structured it reasonably |
+| UI/UX/utility | 55.7% | |
+| organization: logic | 54.3% | |
+| creativity | 51.4% | |
+| robustness | 50.0% | |
+| ambition/completeness | 35.7% | |
+| **no broken functions** | **28.6%** | **but it does not work** |
+| documentation | 25.7% | (hard-capped, §3.10) |
+
+**A 63-point gap between the top row and `no_broken_functions`.** Every model in
+the field writes the thing the brief asked for, lays it out in sensible modules,
+and ships something that does not run correctly. The dimension carrying the
+single largest point allocation — 20 of 100 — is the one the entire field fails,
+earning under a third of it, with the best arm in the sweep at 9/20.
+
+This is the seam thesis stated as a measurement rather than an anecdote, and it
+holds across five model families and an 8× parameter range. It also says the
+lever is NOT model selection: no model available to this fleet is going to close
+a 63-point authoring-vs-working gap by being smarter, because the gap is not
+where any of them are weak individually — it is where all of them are weak
+together. Contract enforcement between modules is the intervention this predicts,
+and the tier campaign now has a baseline to measure that intervention against.
+

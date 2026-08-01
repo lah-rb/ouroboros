@@ -178,6 +178,35 @@ def pedestal_and_rerank(pop, pinned):
             print(f"  {s}")
 
 
+def utilization(pop, title):
+    """How much of each dimension does the FIELD earn, regardless of ranking?
+
+    Spread answers "does this dimension separate models". This answers the
+    different and equally important question "is the whole field failing here" —
+    a dimension can be useless for ranking (everyone scores the same) while
+    still carrying the campaign's main finding (everyone scores the same LOW).
+    """
+    print(f"\n{'=' * 78}\n{title}\n{'=' * 78}")
+    dims = []
+    for _l, _s, _t, vec in pop:
+        for n, (_sc, mx) in vec.items():
+            if n not in [d for d, _ in dims]:
+                dims.append((n, mx))
+    rows = []
+    for dname, dmax in dims:
+        vals = [vec[dname][0] for _l, _s, _t, vec in pop if dname in vec]
+        if vals and dmax:
+            rows.append((st.mean(vals) / dmax, st.mean(vals), dmax, dname))
+    rows.sort(reverse=True)
+    print(f"{'dimension':22s} {'mean':>6s} {'max':>4s} {'earned':>8s}")
+    print("-" * 46)
+    for frac, mean, dmax, dname in rows:
+        bar = "#" * round(frac * 20)
+        print(f"{dname:22s} {mean:6.2f} {dmax:4g} {frac * 100:7.1f}%  {bar}")
+    print("\nThe field AUTHORS what was asked and STRUCTURES it reasonably;")
+    print("what it builds does not work. Read the top and bottom rows together.")
+
+
 def main():
     pop = collect()
     if not pop:
@@ -186,6 +215,7 @@ def main():
     cur = [r for r in pop if r[1] == "20260731"]
     report(cur, "THE 2026-07-31 SWEEP (v1.2) -- the population under doubt")
     pedestal_and_rerank(cur, {"conformance", "creativity", "documentation"})
+    utilization(cur, "FIELD UTILIZATION -- where is EVERYONE weak? (2026-07-31)")
     report(pop, "ALL RECORDED VECTORS (both sweeps, both rubric versions)")
     return 0
 
