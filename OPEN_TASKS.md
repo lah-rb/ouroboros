@@ -677,7 +677,9 @@ shipped tree it returns **two** symbols:
     adventure/engine.py::GameEngine.initiate_combat     <-- the decisive defect
     adventure/state.py::StateManager.has_save
 
-One of two, no noise. The gate had the finding and threw it away.
+One of two on this arm. (That ratio is arm13-specific -- see the campaign-wide
+check below, which found 47 dead symbols across 12 arms and a real
+false-positive mode.) The gate had the finding and threw it away.
 
 **Why it is invisible.** `dead` is consulted only inside the loop over
 `problems`, and `problems` is populated exclusively from transfer-shape and
@@ -692,22 +694,59 @@ and the shape the campaign's own §3.1 numbers say is the field's dominant
 failure (28.6% earned across seven models, see
 `dev/blind_panel/RESULTS_tier_2026-07-31.md`).
 
-### Two candidate fixes — operator's choice
+### Campaign-wide check — which decides the fix
 
-1. **Advisory (safe).** Add substantial dead symbols to the existing `cruft`
-   channel, which already writes a `seam_gate_advisory` mission note. Costs
-   nothing, changes no control flow, and the agent SEES it. Must stay
-   non-blocking: §2154-2160's comment is explicit that dead seams must not
-   consume the fix budget, and unused helpers are normal in real code.
+**CORRECTION to the paragraph above.** "One of two, no noise" is true of arm13
+and does NOT generalise; it was measured on one arm and should not have been
+written as a property of the signal. Swept across all 12 staged arms
+(`dev/blind_panel/seam_deadcheck.py`):
 
-2. **Blocking on REGRESSION (high signal).** Persist the previous phase-exit
-   dead set on the mission; block when a symbol that was live becomes dead. That
-   is precisely this bug — `initiate_combat` was live at 02:30 and dead at 03:07
-   — and it cannot fire on a helper that was never called, which is the false
-   positive that makes option 1 have to stay advisory.
+| | |
+|---|---|
+| total dead symbols, 12 arms | **47** |
+| dead symbols in the core playable loop | 8 |
+| arms with a core-loop dead symbol | 6 of 12 |
+| arms where the dead set is **CONFOUNDED** | 2 of 12 |
 
-Recommend BOTH: 1 for visibility, 2 for the stop. Option 2 is the one that would
-have caught this.
+Two findings change the recommendation:
+
+1. **Dead code is normal, not exceptional.** 47 symbols across 12 arms, most of
+   them unused accessors and helpers (`WorldState.get_room`,
+   `DialogueEngine.reset`, `Player.get_total_defense`). Blocking on the raw dead
+   set would stall healthy runs constantly.
+
+2. **The dead set has a false-positive mode, and it is not rare.** arm04 reports
+   21 dead symbols including its entire `handle_*` family — yet that arm scored
+   53 and played fine. Cause: `engine.py:58` dispatches with
+   `getattr(self, handler_name, self.handle_unknown)`, a COMPUTED name no static
+   scan can resolve, and the arm ships two complete trees (`engine.py` and
+   `src/engine.py`, each with its own `GameEngine`). `_symbol_reachability`'s
+   docstring says dynamically dispatched symbols are treated as live, but that
+   only holds for literal attribute names. arm07 is confounded too.
+
+### The fix — REGRESSION-BASED, and the sweep is why
+
+1. **Advisory (safe, low value on its own).** Add core-loop dead symbols to the
+   existing `cruft` channel, which already writes a `seam_gate_advisory` note.
+   Changes no control flow. Must stay non-blocking per §2154-2160. With 47
+   symbols across 12 arms this is mostly noise, so treat it as breadcrumbs for a
+   human reading the notes, not as a mechanism.
+
+2. **Blocking on a reachability REGRESSION — this is the one to build.**
+   Persist the previous phase-exit dead set on the mission; block when a symbol
+   that was LIVE becomes DEAD. `initiate_combat` was live at 02:30 and dead at
+   03:07.
+
+   **The sweep supplies the argument that intuition could not:** a static false
+   positive is STABLE ACROSS PHASE EXITS. arm04's `handle_*` methods look dead at
+   every single check, so no live→dead transition ever fires and the confound is
+   structurally invisible to a regression test. Only a genuine change in
+   reachability trips it. The regression formulation is therefore immune to the
+   exact failure mode that makes option 1 unusable as a gate — which is a
+   stronger reason to prefer it than "it is higher signal."
+
+   Scope it to the core loop or to symbols above a size floor if the first
+   trial is noisy, but the transition test is the mechanism.
 
 ### Timing
 
