@@ -142,6 +142,98 @@ tier:
       model. Fast and reliable with outstanding attendance to context; depth of
       reasoning limited by only 3B active parameters and no thinking. Expected
       high tier 2 / low tier 1.
+    outcome: hit
+    outcome_note: >
+      HIT, at the pessimistic end. Predicted "high tier 2 / low tier 1"; scored
+      49 — one point under the tier-1 line, with votes 45/49/51 straddling it.
+      The reasoning was also right about the mechanism: fast and reliable with
+      good context attendance (11 files, 0 py_fail, 0 degenerations, all Python
+      parses), and the failure is a depth-of-reasoning one rather than a
+      throughput one.
+
+  judged:
+    run: tier_20260731-050209 arm12 · staged/arm12
+    judge_model: claude-opus-5[1m]
+    votes: [45, 49, 51]
+    total: 49              # MEDIAN of three independent blind judgements
+    stars: 3               # 41-60 band
+    tier: 2                # §5: the side taken by >=2 of 3 (two votes <50)
+    rubric: TIER_RUBRIC v1.2
+    record: dev/blind_panel/RESULTS_tier_2026-07-31.md
+    run_shape: 121 min (backstop) · 11 files · 6 py_ok · 0 py_fail · 0 degen · 11/33 goals
+
+    # Dimensions are judge 2's vector — a judge whose total equals the recorded
+    # median. Stars: score/max as a percentage through the §2 band table
+    # (0-20=1, 21-40=2, 41-60=3, 61-80=4, 81-100=5), inclusive at the top.
+    dimensions:
+      no_broken_functions: {score: 5, max: 20, stars: 2}
+      robustness:          {score: 7, max: 10, stars: 4}
+      ux:                  {score: 4, max: 10, stars: 2}
+      conformance:         {score: 9, max: 10, stars: 5}   # 46/53
+      ambition:            {score: 3, max: 10, stars: 2}
+      creativity:          {score: 5, max: 10, stars: 3}
+      org_project:         {score: 3, max: 5,  stars: 3}
+      org_logic:           {score: 3, max: 5,  stars: 3}
+      reusability:         {score: 8, max: 10, stars: 4}
+      documentation:       {score: 2, max: 10, stars: 1}
+
+    decisive_defect: >
+      THE GAME BOOTS INTO A SEALED ROOM. `world.yaml` declares
+      `start_room: storage_room`, and that room has `exits: {}` with nothing
+      linking to it. Every direction word, abbreviation and phrasing is refused
+      — judges tried up/down/in/out, bare n/s/e/w, walk/move/go to, enter, leave
+      and ~60 movement attempts between them. From the shipped entry point the
+      reachable game is two items in a closet: 8 of 9 rooms, both NPCs, all
+      three monsters, the lair, the weapon, the armour and both terminal states
+      are unreachable.
+      THE ARTIFACT CARRIES THE EVIDENCE AGAINST ITSELF: a stray
+      `player_state.json` at the tree root, referenced by no code, reads
+      `location: mossy_clearing` — the real hub — and `storage_room` is the only
+      one-line description among eight richly written ones. A one-line data fix
+      separates a closed closet from a substantially working game.
+
+    second_decisive: >
+      Fixing that line would not make it completable. There is NO WIN CONDITION
+      ANYWHERE — `grep -riE 'victor|congratul|you win'` returns nothing, there is
+      no boss entity in code or data, and the room the world calls "Boss's Lair"
+      is guarded by a SECOND PLACEMENT of a regular monster. All three judges
+      killed that occupant and got "You defeated Spectral Hunter!" and a prompt.
+
+    shared_mutable_monsters: >
+      A defect class new to this sweep, found in pass 2 by two judges
+      independently: Monster objects are world-level SINGLETONS and
+      `spectral_hunter` is placed in TWO rooms. Verified in play — three hits on
+      the grove Hunter left the lair occupant at Health 26/35. Killing the grove
+      one would leave the "boss" dead on arrival.
+
+    equipment_is_inert: >
+      Measured by ALL THREE judges as a controlled A/B, with identical numbers:
+      3 damage dealt and 8 taken, with and without the Rusted Cutlass
+      (attack_bonus 3) and Leather Jerkin (defense_bonus 2) equipped.
+      `total_attack()` reads `equipment.get("weapon_bonus")` from a dict that
+      only ever holds {"weapon", "armor"}, so the authored bonuses are dead.
+      The weakness path is dead too: it compares the equipped WEAPON id against
+      `monster.weakness`, while the Moonpetal Amulet is `type: key_item` and
+      `_handle_equip` refuses to equip one. The healing potion is the only item
+      in the game that does anything. SEVENTH consecutive artifact whose
+      weakness item is miswired.
+
+    unmet_requirements: [17, 32, 33, 34, 37, 39, 42]  # no flee anywhere; all
+                                                      # three monsters run one
+                                                      # identical combat script
+                                                      # differing by one integer;
+                                                      # no boss entity; no phase
+                                                      # data or logic; no win
+                                                      # path; no restart on
+                                                      # defeat; save omits room
+                                                      # contents and monster HP
+
+    hygiene_note: >
+      `save`/`load` do no path sanitisation (`f"{save_dir}/{filename}"` plus
+      mkdir(parents=True)), so `save ../../x` would write and create directories
+      outside the workspace. All three judges contained the probe to their own
+      scratch and reported what it WOULD do rather than aiming it anywhere real.
+
 
       FAMILY: the qwen hybrid architecture makes advanced features — cache strategies, instance swarming — markedly harder to adapt than a plain transformer. Applies to every qwen arm.
 
