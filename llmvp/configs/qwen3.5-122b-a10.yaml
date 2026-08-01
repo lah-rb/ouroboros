@@ -126,18 +126,141 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
-  status: not_yet_run
+  status: recorded
+  rubric: TIER_RUBRIC v1.2
+  stars: 3                  # 41-60 band; 51/100
+  tier: 1                   # >= 50, and UNANIMOUS — all three votes >= 50
+
   expectation:
     registered: 2026-07-29
     tier: "1"
     stars: null
     basis: experience+benchmarks
+    outcome: hit_on_tier_miss_on_order
     why: >
       The strongest qwen by benchmark. Expected to score somewhat above gpt-oss
       within tier 1, but generally close — a good combination of speed under fire
       and competence, with slightly verbose thinking.
 
       FAMILY: the qwen hybrid architecture makes advanced features — cache strategies, instance swarming — markedly harder to adapt than a plain transformer. Applies to every qwen arm.
+    scored: >
+      TIER CORRECT, ORDER WRONG. Landed tier 1 as predicted, and "generally
+      close" held — but BELOW gpt-oss, not above it (51 vs 60). The
+      speed-under-fire half of the prediction was right: 25 files, the largest
+      artifact of the sweep, 0 py_fail, 0 degenerations, everything parses.
+      The gap is not competence in the authoring sense — conformance 9/10,
+      49-50 of 53 requirements met by all three judges — it is that one edit
+      severed the artifact's only path into half of itself.
+
+  judged:
+    run: tier_20260731-050209 arm13 · staged/arm13
+    rubric: TIER_RUBRIC v1.2
+    judge_model: "claude-opus-5[1m]"
+    votes: [50, 55, 51]
+    score: 51          # MEDIAN of three independent blind judgements (§5)
+    stars: 3           # 41-60 band
+    tier: 1            # by score, >= 50 — and unanimous: all three votes >= 50
+    tier3_gate: passed
+    record: dev/blind_panel/RESULTS_tier_2026-07-31.md
+    run_shape: 122 min (backstop) · 25 files · 9 py_ok · 0 py_fail · 0 degen · 19/37 goals
+
+    # No two judges returned identical vectors, so there is no modal shape to
+    # record. This is the MEDIAN JUDGE's own vector (the 51), which has the
+    # property that it sums to the recorded score — a synthesised per-dimension
+    # median would not (it sums to 52).
+    # Stars are score/max banded per §2: 0-20=1, 21-40=2, 41-60=3, 61-80=4,
+    # 81-100=5, inclusive at the TOP. So 40% is 2 stars and 80% is 4.
+    dimensions:
+      no_broken_functions: {score: 5, max: 20, stars: 2}   # votes 6/9/5
+      robustness:          {score: 6, max: 10, stars: 3}   # votes 6/5/6
+      ux:                  {score: 5, max: 10, stars: 3}   # votes 5/6/5
+      conformance:         {score: 9, max: 10, stars: 5}   # UNANIMOUS 9 — 49-50/53
+      ambition:            {score: 4, max: 10, stars: 2}   # votes 3/4/4
+      creativity:          {score: 5, max: 10, stars: 3}   # UNANIMOUS 5
+      org_project:         {score: 4, max: 5,  stars: 4}   # UNANIMOUS 4
+      org_logic:           {score: 3, max: 5,  stars: 3}   # UNANIMOUS 3
+      reusability:         {score: 7, max: 10, stars: 4}   # votes 6/7/7
+      documentation:       {score: 3, max: 10, stars: 2}   # UNANIMOUS 3, hard-capped §3.10
+
+    profile: >
+      THE SWEEP'S LARGEST ARTIFACT (25 files) AND ITS SHARPEST DECOMPOSITION:
+      conformance 9/10 against delivery 5/20. A well-built ten-room exploration
+      game with its combat half amputated at a single line. Everything reachable
+      works cleanly — movement, inventory, equipment with correct stat deltas,
+      examine, save/load, help, status — with wrapped prose, ruled headers and a
+      legible status panel. All three judges reached the Boss Chamber in two
+      moves holding the boss's weakness item and could not start the fight.
+
+    decisive_defect: >
+      `attack` and `flee` are recognised verbs with NO branch in
+      `dispatch_command`, and `GameEngine.initiate_combat()` has ZERO CALLERS in
+      the shipped tree. The game instructs the player to type a command it then
+      rejects:
+
+          A Dark Lord blocks your path!
+          Type 'attack' to engage the enemy.
+          > Unknown command: attack
+
+      Everything downstream is dead: three monsters, the two-phase boss, the
+      silver-weakness double-damage path, and fully written victory screen,
+      defeat screen and restart branch. Player health never moved off 50/50 in
+      any of three independent sessions.
+
+    it_shipped_the_fix_beside_the_regression: >
+      `adventure/engine.py-e` (02:30) is a pre-edit copy of the engine; the
+      shipped `engine.py` (03:07) is newer. In the backup `handle_movement`
+      calls `self.initiate_combat(next_room.monster)`. The shipped version
+      replaced that ONE line with two display_message calls telling the player
+      to type `attack` — a verb never added to the dispatcher.
+      JUDGE 3 RESTORED THAT LINE and immediately got a real fight, working
+      phase machinery, the weakness bonus and a real VICTORY banner. This is
+      causal proof, not inference: one line separates this artifact from a
+      completable game.
+
+      PROVENANCE: the same edit also renamed `for i,` to `for _i,` in three
+      loops, and the recorded diagnosis was "Two enumerate() loops in
+      adventure/engine.py use..." — a cosmetic LINT fix, localized to
+      `symbol GameEngine` (the whole class), whose rewrite silently deleted the
+      combat call while satisfying the complaint it was dispatched for. The
+      seam gate then logged "clean — 0 unreachable seam(s)". See OPEN_TASKS §18:
+      the gate's own reachability pass lists initiate_combat as dead (1 of only
+      2 dead symbols) and the result is discarded.
+
+    other_findings: >
+      - SAVE/LOAD DUPLICATES THE WORLD (all three judges, INVALIDATING): the
+        save has no room-contents section, so rooms are rebuilt from YAML and
+        the saved inventory is overlaid. Carry an item through a load and you
+        hold two; drop one elsewhere and it teleports home. Unbounded.
+      - `use` destroys any `consumable` for zero effect, including the torch,
+        with no full-health refusal.
+      - Two SESSION-ENDING edges: EOF/Ctrl-D anywhere (unguarded `input()`), and
+        a shape-valid corrupt save that prints "Game loaded successfully!" and
+        then dies on KeyError.
+      - The attack bonus is DOUBLE-COUNTED in the damage path — found
+        independently by all three judges: `recalculate_stats` bakes the weapon
+        into `player_stats["attack"]`, then `process_turn` adds
+        `equipped_weapon.effect["attack"]` again.
+      - Dead authored data: `player_condition` dialogue gates, room `triggers`,
+        `flags`, `behavior`, and a `rusty_key` with `key_for: vault` placed in
+        no room.
+
+    unmet_requirements: >
+      49-50 of 53 met. Agreed unmet across judges: 28 (mid-combat healing is
+      stubbed in code, not merely unreachable), 29 (three REGULAR monsters —
+      only two exist; dark_lord is the boss), and the world-state item (42/41 —
+      room-content changes are persisted nowhere, the root of the duplication
+      bug). One judge also billed 22 (help advertises attack/flee) and one
+      billed 32 (per-monster `behavior` is read by no code).
+
+    instrument_note: >
+      THE TIGHTEST DISAGREEMENT-PATTERN THIS INSTRUMENT HAS PRODUCED. Five of
+      ten dimensions came back IDENTICAL across three strangers (conformance 9,
+      creativity 5, org_project 4, org_logic 3, documentation 3), and the whole
+      5-point spread is concentrated in `no_broken_functions` (6/9/5) — which is
+      not a disagreement about FACTS but about SEVERITY PRICING of the same
+      defect. All three filed a §4.1 disclosure on that exact row, and all three
+      predicted a rejudge would land in a narrow band. They diverged precisely
+      where each said they were unsure, and agreed everywhere else.
 
 # ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
 probe_verified_cache:
