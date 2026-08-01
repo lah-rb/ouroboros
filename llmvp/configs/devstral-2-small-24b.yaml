@@ -131,6 +131,58 @@ tier:
       retired from the DoE table rather than reported with a caveat.
       Registered before judging so the answer cannot be rationalised afterwards.
 
+
+  # ── 2026-07-31 ARM: RAN, GATE-FAILED, NOT SCORED ────────────────────
+  attempted:
+    run: tier_20260731-050209 arm11 · staged/arm11
+    judge_model: claude-opus-5[1m]
+    rubric: TIER_RUBRIC v1.2
+    tier3_gate: failed
+    scored: false          # gate failure terminates judgment (§2, §9.2)
+    shape: 123 min · 12 files · 4 py_ok · 1 py_fail · 0 degen · 22/33 goals
+
+    what_failed: >
+      `engine.py` begins with a leaked DECISION ENVELOPE and a markdown fence:
+      line 1 is `{"choice": "write_file", "path": "engine.py"}` and line 2 is a
+      ```python fence. Line 1 is a legal dict literal so the parser survives it;
+      line 2 is the hard stop. `main.py` imports engine on its first line, so
+      every entry point — script, module and console-script — dies with
+      SyntaxError before printing anything. The judge stripped exactly those two
+      lines in a separate copy and the program BOOTED and accepted commands:
+      249 lines, parses clean, class closes normally. The artifact underneath is
+      intact.
+
+    a_timing_casualty_not_a_framework_fault: >
+      Stated precisely, because the first read — mine and the judge's — was that
+      this is a write-path fault owed a re-run on those grounds. The log says
+      otherwise. Line 83: batch structural creation, 9 files written, ZERO
+      failed gates, so engine.py was clean. Line 6719: formatter runs on
+      engine.py. Line 6720: engine.py fails deterministic re-cert on syntax,
+      import and lint. Line 6721: routed to repair — the last mention. Line
+      6739: parked at elapsed 7411s against a 7200s limit. So an edit 173 work
+      cycles in re-emitted the file with the envelope, re-cert caught it on the
+      very next check, and the backstop fired nineteen log lines later. THE GATE
+      WORKED; the arm had about three minutes of clock left.
+
+    provenance_of_the_envelope: >
+      `{"choice": ...}` is OUR action schema — interactive_actions.py builds
+      `{"choice": planned_action}` — so the model emitted a decision envelope
+      where file content belonged and the extraction path wrote it verbatim.
+      Model formatting error, framework did not sanitise it, gate caught the
+      consequence. ISOLATED: a scan of every staged arm across both sweeps found
+      no other leaked envelope or fence in any .py or .yaml file.
+
+    rerun_owed: >
+      OWED for an actual score. This is not a tier-3 model: it closed 22 of 33
+      goals — second-highest in the sweep — across 173 work cycles, then broke
+      its own engine in the last three minutes with no time to repair it. A
+      re-run costs one arm and replaces a void datapoint with a real one.
+
+    bears_on_the_operator_registration: >
+      This arm was the designated test of the score-tightness doubt registered
+      2026-07-31 (dev/blind_panel/RESULTS_tier_2026-07-31.md). It does NOT
+      settle it either way: devstral did not land middling, and did not land low
+      on merit — it landed VOID. The question stays open; the re-run answers it.
 # ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
 probe_verified_cache:
   run_id: cells_20260729-232251
