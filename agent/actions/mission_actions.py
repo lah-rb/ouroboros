@@ -6,6 +6,7 @@ adds structured architecture state, removes silent fallbacks.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -1697,6 +1698,11 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                 context_updates={"dispatch_config": dispatch_config},
             )
 
+    # ── §19 cadence: seam-gate every fileset change, not only phase exit ──
+    seam_dispatch = await _seam_gate_cadence(mission, effects, sweep_files)
+    if seam_dispatch is not None:
+        return seam_dispatch
+
     # Walk files in order, find the first incomplete structural goal
     for file_path in sweep_files:
         # Find the goal for this file
@@ -2044,7 +2050,9 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
     # phase exit until the seams clear, bounded by _SEAM_GATE_MAX_ATTEMPTS
     # (then fail-open with a note: a stubborn false positive must not wedge
     # the mission; the gates are conservative so this should be rare).
-    seam_dispatch = await _phase_exit_seam_gate(mission, effects)
+    seam_dispatch = await _seam_gate_cadence(
+        mission, effects, sweep_files, at_exit=True
+    )
     if seam_dispatch is not None:
         return seam_dispatch
 
@@ -2058,6 +2066,75 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
 
 
 _SEAM_GATE_MAX_ATTEMPTS = 3
+
+# ── §18/§19 seam-gate run memory (process-local, per mission) ────────
+# Keyed by mission id. Holds the previous gate run's symbol snapshot (for the
+# live→dead REGRESSION check), the fileset hash (cadence throttle: re-gate
+# only when content actually changed), and the run counter (the §19 zero-run
+# warning at park). Process-local on purpose: a resume rebuilds the baseline
+# on its first gate run, which costs one un-diffed check and nothing else —
+# no persistence-model changes, no migration surface.
+_SEAM_GATE_MEMO: dict[str, dict[str, Any]] = {}
+
+
+def _seam_gate_memo(mission: Any) -> dict[str, Any]:
+    key = str(getattr(mission, "id", "") or id(mission))
+    return _SEAM_GATE_MEMO.setdefault(
+        key, {"defined": set(), "dead": set(), "runs": 0, "fileset_hash": ""}
+    )
+
+
+async def _seam_gate_cadence(
+    mission: Any, effects: Any, sweep_files: list[str], *, at_exit: bool = False
+) -> StepOutput | None:
+    """§19: gate on every FILESET CHANGE, not only at phase exit.
+
+    The exit-only design left coverage anti-correlated with need: a run that
+    never completed the structural phase was never seam-checked at all —
+    gemma-31b did 109 work cycles with zero gate runs, and arm14 shipped a
+    reachable six-attribute mismatch the gate parses for, unchecked, because
+    19 cycles never once exited the phase.
+
+    Throttle is a content hash of the readable structural .py set: unchanged
+    files never re-gate (the gate is deterministic — same input, same answer),
+    and every real edit is gated on the next sweep pass. The hash is stored
+    BEFORE the gate runs so a blocking dispatch cannot re-trigger itself on
+    an unchanged tree.
+    """
+    py = [f for f in sweep_files if str(f).endswith(".py")]
+    if len(py) < 2:
+        # At phase exit, delegate so the gate logs its own inert verdict —
+        # "no seam-gate lines" must keep meaning NEVER RAN, not ran-quietly
+        # (the §19 diagnosability rule). Mid-walk, silence is correct: this
+        # branch recurs every cycle during early serial creation.
+        return await _phase_exit_seam_gate(mission, effects) if at_exit else None
+    h = hashlib.sha256()
+    readable = 0
+    for f in sorted(set(py)):
+        try:
+            fc = await effects.read_file(f)
+        except Exception:  # noqa: BLE001 — unreadable file simply isn't hashed
+            continue
+        if getattr(fc, "exists", False):
+            readable += 1
+            h.update(str(f).encode())
+            h.update(b"\x00")
+            h.update((getattr(fc, "content", "") or "").encode())
+    if readable < 2:
+        return await _phase_exit_seam_gate(mission, effects) if at_exit else None
+    digest = h.hexdigest()
+    memo = _seam_gate_memo(mission)
+    if memo["fileset_hash"] == digest:
+        # Unchanged tree. Mid-walk: never re-gate (deterministic — same
+        # input, same answer). At phase exit: skip only when the last verdict
+        # on this exact content was CLEAN; an unresolved BLOCK keeps its
+        # re-run pressure so the attempts bound can do its job.
+        if not at_exit or memo.get("last_clean", False):
+            return None
+    memo["fileset_hash"] = digest
+    dispatch = await _phase_exit_seam_gate(mission, effects)
+    memo["last_clean"] = dispatch is None
+    return dispatch
 
 
 async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None:
@@ -2161,6 +2238,28 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
     reach = _symbol_reachability(sources)
     _dead: set[str] = reach["dead"]
     _sites: dict[str, set[str]] = reach["access_sites"]
+    _defined: set[str] = reach.get("defined") or set()
+
+    # ── §18 regression check: live at the previous gate run, dead now ──
+    # A symbol whose LAST caller an edit removed. This is the shape the plain
+    # dead set cannot gate on (dead code is normal — 47 symbols across 12
+    # campaign arms — and computed-name dispatch fakes it), but a live→dead
+    # TRANSITION is neither: static false-dead is stable across runs, so it
+    # never transitions, and a genuine severed call does. arm13: a lint fix
+    # rewrote GameEngine and deleted the only initiate_combat() call; the
+    # gate ran, logged clean, and the artifact shipped unwinnable.
+    memo = _seam_gate_memo(mission)
+    prev_live: set[str] = (memo["defined"] - memo["dead"]) if memo["runs"] else set()
+    regressed_by_file: dict[str, list[str]] = {}
+    for q in sorted(_dead & prev_live & _defined):
+        regressed_by_file.setdefault(q.split("::", 1)[0], []).append(q)
+    memo["runs"] += 1
+    memo["defined"] = set(_defined)
+    # Baseline retention: keep currently-flagged symbols in the LIVE baseline
+    # (subtract them from the stored dead set) so an unresolved regression
+    # re-flags on the next run instead of silently becoming the new normal.
+    # It clears only by being called again or by its definition being deleted.
+    memo["dead"] = set(_dead) - {q for qs in regressed_by_file.values() for q in qs}
 
     def _missing_attr(v: str) -> str:
         m = re.search(r"has no attribute/method '([A-Za-z_]\w*)'", v)
@@ -2204,11 +2303,23 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
         )
         await effects.save_mission(mission)
 
+    # §18: regressions are BLOCKING and join after the reachability split —
+    # they are not typecheck mismatches, so the suppression logic above never
+    # sees them (and must not: suppressing a regression because the symbol is
+    # dead would be circular — dead is what the regression IS).
+    for f, qs in regressed_by_file.items():
+        tgt = f if f in sources else sorted(sources)[0]
+        blocking.setdefault(tgt, []).extend(
+            f"REGRESSION: {q} was reachable at the previous seam check and "
+            f"now has no callers — an edit removed the last call to it"
+            for q in qs
+        )
+
     if not blocking:
         logger.info(
-            "Seam gate: clean — %d file(s) checked (transfer-shape + typecheck), "
-            "no reachable mismatches (%d unreachable seam(s), %d cruft item(s) "
-            "reported)",
+            "Seam gate: clean — %d file(s) checked (transfer-shape + typecheck "
+            "+ live-set diff), no reachable mismatches (%d unreachable "
+            "seam(s), %d cruft item(s) reported)",
             len(sources),
             len(unreachable),
             len(cruft),
@@ -2259,18 +2370,35 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
         "target_file_path": target,
         "flow_directive": (
             (
-                f"Interface check failed at structural phase exit. The "
-                f"following members are CALLED but never DEFINED: "
-                f"{', '.join(missing)}. Add the missing definition(s) to the "
-                f"class that should own them in {target}. The call sites are "
-                f"correct — do not edit them, and do not delete the calls:\n"
-                f"{seams}"
+                # §18 regression: the defect is a SEVERED CALL, not a wrong
+                # one — pointing the model at "fix the calls" would have it
+                # re-edit correct code. Name what was orphaned and offer the
+                # deliberate-removal exit (deleting the dead definition also
+                # clears the check), so an intentional cut cannot wedge.
+                f"A recent edit severed the last call to: "
+                f"{', '.join(q for qs in regressed_by_file.values() for q in qs)}. "
+                f"The definition(s) still exist and are now unreachable. "
+                f"Restore the call path the edit removed — look at what "
+                f"recently changed in {target}, not at the definitions. If "
+                f"the removal was intentional, delete the now-dead "
+                f"definition(s) as well:\n{seams}"
             )
-            if missing
+            if any(v.startswith("REGRESSION:") for v in problems.get(target, []))
             else (
-                f"Cross-module interface check failed at structural phase exit. "
-                f"Fix {target} so its cross-module calls match what the other "
-                f"modules actually define and return:\n{seams}"
+                (
+                    f"Interface check failed at structural phase exit. The "
+                    f"following members are CALLED but never DEFINED: "
+                    f"{', '.join(missing)}. Add the missing definition(s) to the "
+                    f"class that should own them in {target}. The call sites are "
+                    f"correct — do not edit them, and do not delete the calls:\n"
+                    f"{seams}"
+                )
+                if missing
+                else (
+                    f"Cross-module interface check failed at structural phase exit. "
+                    f"Fix {target} so its cross-module calls match what the other "
+                    f"modules actually define and return:\n{seams}"
+                )
             )
         ),
         "error_output": seams,

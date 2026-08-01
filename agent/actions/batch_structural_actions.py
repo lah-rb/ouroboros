@@ -563,6 +563,12 @@ def _symbol_reachability(sources: dict[str, str]) -> dict[str, Any]:
         "access_sites": access_sites,
         "orphans": sorted(orphans),
         "dead_dupes": dead_dupes,
+        # Full symbol universe, so a caller can compute LIVE = defined - dead.
+        # The §18 regression check needs the previous run's live set: a symbol
+        # that WAS live and is now dead marks an edit that severed its last
+        # caller — the arm13 failure shape (a lint fix deleted the only call
+        # into the combat system and the artifact shipped unwinnable).
+        "defined": set(defs),
     }
 
 

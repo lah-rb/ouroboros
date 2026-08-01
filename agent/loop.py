@@ -569,6 +569,36 @@ async def run_agent(
                         elapsed_s,
                         mission_id,
                     )
+                    # §19: a parked run still stages an artifact that gets
+                    # judged. If the seam gate never ran once, that artifact
+                    # ships with ZERO cross-module checks — say so in the log
+                    # (both sweeps' zero-run arms were only discovered by a
+                    # cross-arm grep after judging).
+                    try:
+                        from agent.actions.mission_actions import (
+                            _SEAM_GATE_MEMO,
+                        )
+
+                        _runs = _SEAM_GATE_MEMO.get(str(getattr(_m, "id", "")), {}).get(
+                            "runs", 0
+                        )
+                        _py = {
+                            f
+                            for g in (getattr(_m, "goals", []) or [])
+                            if getattr(g, "type", "") == "structural"
+                            for f in (g.associated_files or [])
+                            if str(f).endswith(".py")
+                        }
+                        if _runs == 0 and len(_py) >= 2:
+                            logger.warning(
+                                "Seam gate NEVER RAN this mission (%d "
+                                "structural .py files) — the parked artifact "
+                                "ships with zero cross-module checks "
+                                "(OPEN_TASKS §19)",
+                                len(_py),
+                            )
+                    except Exception:  # noqa: BLE001 — advisory only
+                        pass
             except Exception:
                 logger.exception(
                     "Failed to park mission as paused on budget exhaustion"

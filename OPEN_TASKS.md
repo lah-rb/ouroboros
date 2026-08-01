@@ -724,7 +724,20 @@ Two findings change the recommendation:
    docstring says dynamically dispatched symbols are treated as live, but that
    only holds for literal attribute names. arm07 is confounded too.
 
-### The fix — REGRESSION-BASED, and the sweep is why
+### FIXED (2026-08-01) — regression gate + cadence landed together with §19
+
+`_symbol_reachability` now returns the full `defined` universe; the gate keeps
+a process-local per-mission memo (previous defined/dead sets, run counter,
+fileset hash) and BLOCKS on the live→dead TRANSITION: a symbol reachable at
+the previous check whose last caller an edit removed. The directive names the
+severed call and offers the deliberate-removal exit (deleting the dead
+definition clears it), and baseline retention re-flags an unresolved
+regression instead of adopting it as the new normal. The arm04 confound
+cannot trip it — static false-dead never transitions. Tests:
+`tests/test_seam_gate_regression_and_cadence.py` (the arm13 shape end-to-end,
+stable-dead immunity, deliberate-removal clearing, re-flag persistence).
+
+### The original fix sketch (superseded by the above, kept for the record)
 
 1. **Advisory (safe, low value on its own).** Add core-loop dead symbols to the
    existing `cruft` channel, which already writes a `seam_gate_advisory` note.
@@ -842,18 +855,24 @@ the ones shipping half-finished, unintegrated work — so **coverage is
 anti-correlated with need**. arm14 wrote 16 files across 128 minutes and 19
 cycles and was never checked once.
 
-Candidate fixes, none landed:
+FIXED (2026-08-01), landed together with §18:
 
-1. **Run the gate on a cadence, not only at phase exit** — e.g. every N work
-   cycles, or whenever the structural fileset has changed since the last check.
-   Cheap: the analyses are deterministic and already bounded.
-2. **Run it once unconditionally before the wall-clock backstop parks a
-   mission.** A paused run is still an artifact that gets judged, and right now
-   it can be parked having never been integration-checked.
-3. **Log a WARNING when a mission ends with zero gate runs**, so this is visible
-   in the run log rather than requiring a cross-arm grep to discover.
+1. **Cadence** — `_seam_gate_cadence` runs from the sweep walk on every
+   structural fileset CONTENT CHANGE (sha256 over the readable .py set),
+   throttled so an unchanged tree never re-gates; the phase-exit call now
+   routes through the same throttle (a clean verdict on identical content is
+   not recomputed; an unresolved BLOCK keeps its re-run pressure so the
+   attempts bound still works). A run that loops inside the structural phase
+   is now gated within one cycle of every real edit.
+2. Park-time run: superseded by (1) — every edit is gated when it lands, so a
+   parked artifact has already been checked against its final content.
+3. **Zero-run WARNING at park** — agent/loop.py logs when a mission parks with
+   >=2 structural .py files and zero gate runs, so "never ran" is visible in
+   the run log instead of requiring a cross-arm grep.
 
-(3) is nearly free and should land regardless of which of (1)/(2) is chosen.
+Tests: tests/test_seam_gate_regression_and_cadence.py (hash throttle gates
+once per content change; the <2-file inert verdict stays observable at exit
+per the every-outcome-logs rule).
 
 ### Timing
 
