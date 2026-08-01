@@ -616,3 +616,109 @@ they cost ~2 minutes each, so it is a ~6-minute retest rather than a restart.
 Landing mid-sweep changes which architectures survive for arms 7-18, which is a
 larger contamination than the design_initial retry (that only fired where an arm
 was already dead).
+
+---
+
+## 18. The seam gate holds the decisive defect in its hand and discards it
+
+**Status:** OPEN. Evidence complete, fix NOT landed (mid-sweep — see Timing).
+**Found:** 2026-08-01, arm13 (qwen3.5-122b) of `tier_20260731-050209`.
+**Reproduce:** `uv run python -P dev/blind_panel/seam_deadcheck.py`
+
+### What happened
+
+Arm13 shipped a well-built world attached to a game that cannot be finished. A
+blind judge reached the Boss Chamber in two moves, holding the exact item the
+boss is weak to, and got:
+
+    A Dark Lord blocks your path!
+    Type 'attack' to engage the enemy.
+    > Unknown command: attack
+
+`GameEngine.initiate_combat()` — a complete, working turn-based system with
+phase transitions, a weakness bonus and a flee roll — has **zero callers in the
+shipped tree**. Three monsters are inert, the two-phase boss is inert, and a
+fully-written victory screen, defeat screen and `restart` branch are all
+permanently unreachable. Conformance scored 9/10; `no_broken_functions` scored
+6/20. The gap between reading this artifact and playing it is one missing
+`elif`.
+
+### It was an edit that did it, and the gate watched it happen
+
+`adventure/engine.py-e` (02:30) is the pre-edit copy; the shipped `engine.py`
+(03:07) is newer. The diff is 31 lines and bundles two unrelated changes:
+
+    <             self.initiate_combat(next_room.monster)
+    <         else:
+    <             self.display_current_room()
+    ---
+    >             monster_obj = self.monsters[next_room.monster]
+    >             self.io.display_message(f"A {monster_obj.name} blocks your path!")
+    >             self.io.display_message("Type 'attack' to engage the enemy.")
+
+...alongside `for i,` → `for _i,` in three loops. The lint diagnosis on record is
+*"Root cause: Two enumerate() loops in adventure/engine.py use..."* — so a
+cosmetic lint fix was dispatched, localization selected `symbol GameEngine` (the
+whole god-class), and the rewrite silently deleted the only call into combat
+while satisfying the lint complaint it was sent to fix.
+
+Immediately after, the log reads:
+
+    Cross-module type check: 8/8 files clean
+    Seam gate: clean — 8 file(s) checked (transfer-shape + typecheck),
+               no reachable mismatches (0 unreachable seam(s), 0 cruft item(s))
+
+### The gate already computed the answer
+
+`_phase_exit_seam_gate` calls `_symbol_reachability(sources)`, whose `dead` key
+is documented as *"defined, never referenced anywhere else."* Run over the
+shipped tree it returns **two** symbols:
+
+    adventure/engine.py::GameEngine.initiate_combat     <-- the decisive defect
+    adventure/state.py::StateManager.has_save
+
+One of two, no noise. The gate had the finding and threw it away.
+
+**Why it is invisible.** `dead` is consulted only inside the loop over
+`problems`, and `problems` is populated exclusively from transfer-shape and
+typecheck output — i.e. `has no attribute/method 'X'` mismatches. It is used to
+DECIDE WHETHER A REPORTED MISMATCH IS BLOCKING, never to raise one. A method
+that exists, is correct, and simply has no callers generates no mismatch, so it
+never enters `problems`, `unreachable` stays empty, and the gate reports clean.
+
+The gate detects *"A calls B.x and B has no x."* It cannot detect *"B.x is
+perfect and nobody calls it"* — which is the shape that killed this artifact,
+and the shape the campaign's own §3.1 numbers say is the field's dominant
+failure (28.6% earned across seven models, see
+`dev/blind_panel/RESULTS_tier_2026-07-31.md`).
+
+### Two candidate fixes — operator's choice
+
+1. **Advisory (safe).** Add substantial dead symbols to the existing `cruft`
+   channel, which already writes a `seam_gate_advisory` mission note. Costs
+   nothing, changes no control flow, and the agent SEES it. Must stay
+   non-blocking: §2154-2160's comment is explicit that dead seams must not
+   consume the fix budget, and unused helpers are normal in real code.
+
+2. **Blocking on REGRESSION (high signal).** Persist the previous phase-exit
+   dead set on the mission; block when a symbol that was live becomes dead. That
+   is precisely this bug — `initiate_combat` was live at 02:30 and dead at 03:07
+   — and it cannot fire on a helper that was never called, which is the false
+   positive that makes option 1 have to stay advisory.
+
+Recommend BOTH: 1 for visibility, 2 for the stop. Option 2 is the one that would
+have caught this.
+
+### Timing
+
+Land AFTER the sweep completes. Arms 1-14 ran with the current gate; changing
+what blocks mid-flight makes later arms non-comparable and contaminates the DoE
+table. Same reasoning as §17.
+
+### Loose end (unresolved, low priority)
+
+`adventure/engine.py-e` shipped inside the package and cost the artifact a point
+on organization. The `-e` suffix is the BSD `sed -i -e` signature, but there is
+no `sed` anywhere in the arm's run log and no `-e` backup writer in our tree, so
+its origin is unexplained. Not chased further; noted so the next occurrence is
+recognised rather than re-investigated.
