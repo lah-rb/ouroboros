@@ -43,6 +43,23 @@ the remaining open step:
 | FLOOR | devstral-2-small-24b | `anchors/v2.0/floor-devstral-20260803/` (run `tier_20260801-185254` arm 2) | ✅ compile clean · launches into play · clean quit | 120min grinder park at 21/28 goals, 117 cycles (58.5 cyc/h), 0 degen, scan clean. 5 py + world.yaml — ALSO chose YAML unprompted (2 of 2 fleet arms). NO title screen: one-line welcome straight into the first room — the first v2 checklist miss (item 2) on an anchor |
 | FRONTIER | claude-sonnet (one-shot) | `anchors/v2.0/frontier-sonnet-20260803/` — "The Ashen Keep" | ✅ compile clean · title screen · clean quit | 10 files (9 py + README), 60,305 B; world defined in `adventure/world.py` — pure-Python, NO data files: the first v2 signal that the brief now measures the choice instead of prescribing it |
 
+## Anchor cross-flights (instrument validation, 2026-08-03 — the epoch's first blind flights)
+
+Two blind Opus judges, separate packets, forced choice per axis, keys held
+outside the packets. **Gate verdict: the instrument works** — expected
+ordering, no self-flags, and cross-judge CONVERGENCE: both judges scored the
+GUARDIAN artifact independently at **41/47 with the identical unmet set
+(22, 23, 31, 33, 38, 45)** and found the same three decisive defects.
+
+| flight | result | headline |
+|---|---|---|
+| GUARDIAN vs FLOOR (in-ladder) | **GUARDIAN, 5–0 axes, overall, no self-flag** | Both UNWINNABLE + SIGNIFICANTLY-DEVIATED (core loop); near-tied on presence (41 vs 40 of 47); separated entirely by DELIVERY — devstral's authored content dies at the seams (dead NPC subsystem via a wrong-loop `continue`; room graph in two components — checklist item 38, the re-homed connectivity item, caught it immediately; save/load never wired to a command), gpt-oss's content reaches the player |
+| GUARDIAN vs FRONTIER (scorecard, out-of-band) | **FRONTIER, 5–0 axes, overall, no self-flag** | FRONTIER: **WON** — full legitimate playthrough to the victory screen, **47/47 NEAR-FULL**, clean state round-trip incl. NPC dialogue stage and per-room monster HP. GUARDIAN: UNWINNABLE (no win text anywhere; weakness key unequippable by type), corpse-resume (death autosaved + silently reloaded forever), resurrection-on-load. Caveat stamped per §5: judge is Opus, artifact is Claude — same-family tailwind, direction known; and a one-shot never runs the decomposed write path where the field's seam failures are born |
+
+GUARDIAN repeat signature (2 independent judges + the 2026-07-27 panel): a
+fully-written defeat path and NO win condition — the item-31 asymmetry is now
+a three-sighting pattern for gpt-oss under this brief class.
+
 ## League register (measured, from the v1.2 field)
 
 | model | cyc/h | league | budget |
