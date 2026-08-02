@@ -335,6 +335,45 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
     # str is expected, a bad enum value the coercions don't catch) raises a
     # ValidationError — degrade to architecture_parsed=False so the flow takes
     # its parse-failure branch rather than crashing the cycle into a retry loop.
+    def _salvage_list(raw: Any, label: str, build) -> list:
+        """Per-element SALVAGE for a blueprint list: one malformed element
+        must not nuke the whole architecture.
+
+        The modules loop below established the discipline in 2026-06; the
+        contract lists (interfaces / data_shapes / state_shapes) never got
+        it, so a model emitting `"interfaces": ["main calls loader.load"]`
+        raised `'str' object has no attribute 'get'` INSIDE the blanket
+        try and discarded the entire blueprint — olmo-think, arm18,
+        2026-08-01. A non-list container (str/dict) is treated as empty
+        with a warning rather than iterated into characters/keys.
+        """
+        if not isinstance(raw, list):
+            if raw:
+                logger.warning(
+                    "Architecture salvage: %s is %s, not a list — ignored",
+                    label,
+                    type(raw).__name__,
+                )
+            return []
+        out = []
+        dropped: list[str] = []
+        for el in raw:
+            if not isinstance(el, dict):
+                dropped.append(f"{str(el)[:60]!r} (not an object)")
+                continue
+            try:
+                out.append(build(el))
+            except Exception as ee:  # noqa: BLE001 — salvage the rest
+                dropped.append(str(ee).splitlines()[0][:120])
+        if dropped:
+            logger.warning(
+                "Architecture salvage: dropped %d invalid %s element(s): %s",
+                len(dropped),
+                label,
+                "; ".join(dropped)[:400],
+            )
+        return out
+
     try:
         execution = data.get("execution", {})
         if not isinstance(execution, dict):
@@ -346,7 +385,14 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
         # anything still invalid drops alone, with a note.
         modules = []
         dropped_modules: list[str] = []
-        for m in data.get("modules", []):
+        raw_modules = data.get("modules", [])
+        if not isinstance(raw_modules, list):
+            logger.warning(
+                "Architecture salvage: modules is %s, not a list — ignored",
+                type(raw_modules).__name__,
+            )
+            raw_modules = []
+        for m in raw_modules:
             if not isinstance(m, dict):
                 dropped_modules.append(f"{str(m)[:40]!r} (not an object)")
                 continue
@@ -380,28 +426,32 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
                 ),
             )
 
-        interfaces = []
-        for iface in data.get("interfaces", []):
-            interfaces.append(
-                InterfaceContract(
-                    caller=iface.get("caller", ""),
-                    callee=iface.get("callee", ""),
-                    symbol=iface.get("symbol", ""),
-                    signature=iface.get("signature", ""),
-                )
-            )
+        interfaces = _salvage_list(
+            data.get("interfaces", []),
+            "interfaces",
+            lambda el: InterfaceContract(
+                caller=el.get("caller", ""),
+                callee=el.get("callee", ""),
+                symbol=el.get("symbol", ""),
+                signature=el.get("signature", ""),
+            ),
+        )
 
-        data_shapes = []
-        for ds in data.get("data_shapes", []):
-            data_shapes.append(DataShapeContract.from_llm_dict(ds))
+        data_shapes = _salvage_list(
+            data.get("data_shapes", []), "data_shapes", DataShapeContract.from_llm_dict
+        )
 
-        state_shapes = []
-        for ss in data.get("state_shapes", []):
-            state_shapes.append(StateShapeContract.from_llm_dict(ss))
+        state_shapes = _salvage_list(
+            data.get("state_shapes", []),
+            "state_shapes",
+            StateShapeContract.from_llm_dict,
+        )
 
-        transient_files = [
-            str(t).strip() for t in data.get("transient_files", []) if str(t).strip()
-        ]
+        raw_transient = data.get("transient_files", [])
+        if not isinstance(raw_transient, list):
+            # A bare str would iterate into characters; a dict into keys.
+            raw_transient = [raw_transient] if isinstance(raw_transient, str) else []
+        transient_files = [str(t).strip() for t in raw_transient if str(t).strip()]
         # CARRY THE PRIOR VALUE FORWARD when the response omits the field.
         #
         # This function builds a BRAND-NEW ArchitectureState rather than merging,
@@ -427,6 +477,15 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
                     len(transient_files),
                 )
 
+        raw_order = data.get("creation_order")
+        if isinstance(raw_order, str) and raw_order.strip():
+            raw_order = [raw_order]  # bare-string coercion (pydantic would reject)
+        creation_order = (
+            [str(x) for x in raw_order]
+            if isinstance(raw_order, list) and raw_order
+            else [m.file for m in modules]
+        )
+
         arch = ArchitectureState(
             import_scheme=execution.get("import_scheme", "flat"),
             run_command=execution.get("run_command", ""),
@@ -434,7 +493,7 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
             working_directory=execution.get("working_directory", "project root"),
             init_files=execution.get("init_files", False),
             modules=modules,
-            creation_order=data.get("creation_order", [m.file for m in modules]),
+            creation_order=creation_order,
             interfaces=interfaces,
             data_shapes=data_shapes,
             state_shapes=state_shapes,

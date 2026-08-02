@@ -49,6 +49,8 @@ def format_architecture_listing(params: dict, namespaces: dict) -> str:
     lines = []
     if isinstance(arch, dict):
         ex = arch.get("execution", {})
+        if not isinstance(ex, dict):  # model emitted execution as a str/list
+            ex = {}
         lines.extend(
             [
                 f"Import scheme: {ex.get('import_scheme', '?')}",

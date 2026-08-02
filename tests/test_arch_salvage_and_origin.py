@@ -135,3 +135,66 @@ async def test_sweep_without_arch_and_no_structural_goals_completes(tmp_path):
     mission = _mission(tmp_path, origin="greenfield", goals=[])
     out = await action_structural_sweep_next(_si(mission))
     assert out.result.get("sweep_complete") is True
+
+
+# ── W5 (2026-08-02): contract-list salvage — the olmo-think arm18 crash ──
+#
+# The modules loop got per-element salvage in 2026-06; the contract lists
+# never did, so `"interfaces": ["main calls loader.load"]` raised
+# `'str' object has no attribute 'get'` inside the blanket try and the
+# ENTIRE blueprint (modules included) was discarded.
+
+CONTRACT_SALVAGE_JSON = """```json
+{
+  "execution": {"import_scheme": "flat", "run_command": "python main.py"},
+  "modules": [
+    {"file": "main.py", "responsibility": "entry"},
+    {"file": "engine.py", "responsibility": "loop"}
+  ],
+  "interfaces": [
+    "main calls loader.load",
+    {"caller": "main.py", "callee": "engine.py", "symbol": "run"}
+  ],
+  "data_shapes": ["rooms are dicts"],
+  "state_shapes": [
+    {"name": "GameState.inventory", "owner": "state.py"},
+    "save file is JSON"
+  ],
+  "creation_order": "engine.py",
+  "transient_files": "save.json"
+}
+```"""
+
+
+@pytest.mark.asyncio
+async def test_str_elements_in_contract_lists_salvage_not_discard(tmp_path):
+    mission = _mission(tmp_path)
+    out = await action_parse_and_store_architecture(
+        _si(mission, {"inference_response": CONTRACT_SALVAGE_JSON})
+    )
+    assert out.result.get("architecture_parsed") is True
+    arch = mission.architecture
+    # The valid elements survived; the str elements dropped alone.
+    assert len(arch.modules) == 2
+    assert len(arch.interfaces) == 1 and arch.interfaces[0].symbol == "run"
+    assert len(arch.data_shapes) == 0
+    assert len(arch.state_shapes) == 1
+    assert arch.state_shapes[0].owner == "state.py"
+    # Scalar containers coerced instead of iterated into characters.
+    assert arch.creation_order == ["engine.py"]
+    assert arch.transient_files == ["save.json"]
+
+
+@pytest.mark.asyncio
+async def test_non_list_contract_containers_treated_empty(tmp_path):
+    bad = CONTRACT_SALVAGE_JSON.replace(
+        '"interfaces": [\n    "main calls loader.load",\n    {"caller": "main.py", "callee": "engine.py", "symbol": "run"}\n  ]',
+        '"interfaces": "main -> engine"',
+    )
+    mission = _mission(tmp_path)
+    out = await action_parse_and_store_architecture(
+        _si(mission, {"inference_response": bad})
+    )
+    assert out.result.get("architecture_parsed") is True
+    assert mission.architecture.interfaces == []
+    assert len(mission.architecture.modules) == 2

@@ -160,7 +160,11 @@ tier:
       2 persisting past 4 retries, in a SERIAL sweep where nothing else should
       hold the seat — consistent with the known watchdog-cancel seat-leak;
       (2) one "Architecture validation failed: 'str' object has no attribute
-      'get'" coercion failure. Neither converts 0 files into an artifact, so
+      'get'" coercion failure — root-caused 2026-08-02 to the contract-list
+      element loops (a str element in interfaces/data_shapes/state_shapes
+      discarded the whole blueprint) and FIXED with per-element salvage; see
+      tests/test_arch_salvage_and_origin.py. Neither converts 0 files into an
+      artifact, so
       NO RERUN IS OWED on framework grounds; single run suffices per §2.
 
     v2_note: >
