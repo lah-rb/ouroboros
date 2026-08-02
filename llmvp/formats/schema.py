@@ -103,6 +103,13 @@ class ThinkingSpec(BaseModel):
     # against closer / generation). Default true preserves every existing
     # family byte-for-byte.
     open_tag_newline: bool = True
+    # Exact bytes of the DISABLED prefill, when the flag-composed form cannot
+    # reproduce the family's template. Qwen3.5/3.6's suppressed branch is
+    # '<think>\n\n</think>\n\n' — two newlines inside, two trailing — which
+    # no combination of the flags above emits. When set, the disabled branch
+    # emits this string verbatim and ignores the composition flags.
+    prefill_closed_literal: str = ""
+
 
     # Per-level think GATE (Step-3.7 mechanics, 2026-07-25): for families
     # where thinking only happens when the opener is PREFILLED, the

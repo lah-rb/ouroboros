@@ -38,7 +38,7 @@ graphql:
 
 model:
   name: "qwen3.5-122b-a10"
-  family: "chatml"
+  family: "qwen"  # split from chatml 2026-08-03 (think-dial audit) — see formats/qwen.yaml
   path: /Users/lah-rb/.lmstudio/models/mudler/Qwen3.5-122B-A10B-APEX-GGUF/Qwen3.5-122B-A10B-APEX-I-Balanced.gguf
   # 131072, not the trained 262144: at 262144 this computes to 107.5 GiB
   # (83.5 weights + 24.0 KV at 96 KiB/token) and the 100 GiB preflight refuses

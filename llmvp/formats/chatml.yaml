@@ -1,9 +1,14 @@
-# ChatML format schema — Qwen / DeepSeek model family
+# ChatML format schema — Step-3.7 (+ generic ChatML fallback)
 #
-# Covers Qwen3, Qwen3.5, Qwen3-Next, and DeepSeek R1 variants.
-# All use <|im_start|>/<|im_end|> framing with inline <think> tags.
+# NARROWED 2026-08-03 (fleet think-dial audit): this spec used to serve
+# Qwen3.5/3.6/Next AND Step-3.7 — four different embedded templates whose
+# thinking mechanics are incompatible (see formats/qwen.yaml for the split
+# rationale). Qwen3.5/3.6 now live in `qwen`. qwen3-next stays HERE with
+# thinking:false: its template is dial-less, and this spec's disabled
+# branch renders a bare assistant turn, which matches it. Step-3.7 is this
+# spec's owner: the Reasoning-effort system line + the probe-measured
+# omit-the-opener low gate below.
 #
-# Reference: https://huggingface.co/Qwen/Qwen3.5-35B-A3B
 # Reference: https://huggingface.co/blog/qwen-3-chat-template-deep-dive
 
 family: chatml

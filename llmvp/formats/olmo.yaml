@@ -48,6 +48,8 @@ thinking:
   style: inline_tags
   open_tag: "<think>"
   close_tag: "</think>"
+  # AUDIT 2026-08-03: olmo-think official genprompt is 'assistant\n<think>' — NO trailing newline (template 0c4c4e49)
+  open_tag_newline: false
 
 system_block:
   identity: "You are a helpful assistant."

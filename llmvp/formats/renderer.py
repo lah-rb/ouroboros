@@ -362,6 +362,13 @@ class FormatRenderer:
             elif (
                 self.s.thinking.style == "inline_tags"
                 and not thinking_enabled
+                and self.s.thinking.prefill_closed_literal
+            ):
+                # Exact-bytes disabled form (qwen: '<think>\n\n</think>\n\n').
+                parts.append(self.s.thinking.prefill_closed_literal)
+            elif (
+                self.s.thinking.style == "inline_tags"
+                and not thinking_enabled
                 and self.s.thinking.prefill_closed_when_disabled
                 and self.s.thinking.open_tag
                 and self.s.thinking.close_tag

@@ -1,0 +1,90 @@
+# Qwen format schema — Qwen3.5 / Qwen3.6 (split out of chatml, 2026-08-03)
+#
+# WHY THE SPLIT. `chatml` served four DIFFERENT embedded templates under one
+# spec: qwen3.5 (cb80bd67), qwen3.6 (78c9fe67, x2 quants), qwen3-next
+# (cd2519a9, dial-less), and step-3.7 (3acdf543). Their thinking mechanics
+# are incompatible in one file:
+#
+#   qwen3.5/3.6 official (this file):
+#     enabled  -> '<|im_start|>assistant\n<think>\n'
+#     disabled -> '<|im_start|>assistant\n<think>\n\n</think>\n\n'   (pre-closed)
+#   step-3.7 official (stays in chatml):
+#     ALWAYS   -> '<|im_start|>assistant\n<think>\n'
+#     dial     -> 'Reasoning: <effort>' line atop the system message
+#     our low  -> omits the opener entirely — a DELIBERATE, probe-MEASURED
+#                 deviation (dev/step37_reasoning_probe.py: prefill-gated)
+#
+# Under the shared spec, a per-request `low` on qwen rendered a BARE
+# assistant turn — the official template's shape for... nothing. Qwen's
+# suppressed form was never delivered (the hy3 undefined-branch class), and
+# step-3.7's Reasoning line rode along as off-template system text for qwen.
+#
+# This spec is qwen-faithful: no Reasoning prefix, and the disabled form is
+# the exact template bytes via prefill_closed_literal. Byte-parity pinned by
+# a golden test against dev/qwen36_chat_template.jinja.
+#
+# Reference: https://huggingface.co/Qwen (3.5/3.6 chat templates)
+
+family: qwen
+display_name: "Qwen 3.5/3.6"
+
+tokens:
+  msg_open: "<|im_start|>"
+  msg_content: "\n"
+  # Official template's inter-turn boundary is '<|im_end|>\n' (newline
+  # AFTER the close, before the next opener) — byte-pinned by the golden.
+  # gen_stop stays the bare token (it is a stop SEQUENCE), and the session
+  # path's after_generation stays bare per the measured ">\n"-merge runaway
+  # note in chatml.yaml.
+  msg_close: "<|im_end|>\n"
+  gen_stop: "<|im_end|>"
+  history_close: "<|im_end|>\n"
+
+roles:
+  system: "system"
+  user: "user"
+  assistant: "assistant"
+
+thinking:
+  style: inline_tags
+  open_tag: "<think>"
+  close_tag: "</think>"
+  # Official enabled branch: '<think>\n' — opener + newline (the defaults).
+  # Official disabled branch is byte-exact via the literal below; the
+  # composed flags cannot produce its double newlines.
+  prefill_closed_literal: "<think>\n\n</think>\n\n"
+  # Canonical low = suppressed (the literal above); medium/high = the opener.
+  gate_levels: ["medium", "high"]
+
+system_block:
+  identity: "You are a helpful assistant."
+  reasoning_default: ""
+  # NO Reasoning-effort line: that is step-3.7's mechanic (chatml). Qwen's
+  # official template has no depth dial — thinking is binary on/off.
+  reasoning_prefix: ""
+  channel_directive: ""
+  template: "{identity}\n{persona}"
+
+traits:
+  fold_system_into_first_user: false
+  supports_developer_role: false
+
+generation:
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+turn_transition:
+  needs_close: true
+  # Bare token deliberately (NOT the template's "<|im_end|>\n"): the session
+  # path tokenizes this as plain text, where ">\n" merges into a different
+  # token and caused the measured runaway — see chatml.yaml's note.
+  after_generation: "<|im_end|>"
+
+reasoning:
+  levels:
+    low: "low"
+    medium: "medium"
+    high: "high"

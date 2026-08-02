@@ -86,6 +86,8 @@ thinking:
   style: inline_tags
   open_tag: "<think>"
   close_tag: "</think>"
+  # AUDIT 2026-08-03: official genprompt is '<|assistant|><think>' / '</think>' — NO newline (template 257e6e85)
+  open_tag_newline: false
   # CLOSE-ONLY PREFILL, the same mechanic as laguna. GLM does not suppress
   # reasoning by omitting the opener (step-3.7) or by supplying an empty closed
   # block (gemma-4) — its template emits a BARE </think> after <|assistant|>:

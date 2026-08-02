@@ -66,6 +66,8 @@ thinking:
   style: inline_tags
   open_tag: "<think>"
   close_tag: "</think>"
+  # AUDIT 2026-08-03: official genprompt is '<assistant><think>' / '</think>' — NO newline (template f0ae8663)
+  open_tag_newline: false
   # Laguna's own template defaults enable_thinking=TRUE, and suppression is
   # the close-only prefill rather than omission.
   prefill_closed_when_disabled: true

@@ -75,7 +75,16 @@ def _build_bare_static_tokens() -> list[int]:
     set_model_metadata(metadata)
     log_metadata(metadata)
 
-    needs_bos = metadata.add_bos
+    # BOS OWNERSHIP (2026-08-03 fleet audit). When the format spec declares a
+    # bos token, the RENDERER owns BOS — it is already the first framing
+    # segment — and the tokenizer must not add another. Before this rule,
+    # ownership was split by convention only, and both failure modes were
+    # live: devstral (spec '<s>' AND GGUF add_bos=true) served a DOUBLED BOS,
+    # while unsloth gemma (spec '' AND add_bos=false, template-emitted <bos>
+    # we replaced) served NONE. Spec-declared bos wins; metadata governs only
+    # families that declare none.
+    spec_bos = bool(getattr(renderer.s.tokens, "bos", ""))
+    needs_bos = bool(metadata.add_bos) and not spec_bos
     token_ids = tokenize_segments(tokenizer, bare_segments, add_bos=needs_bos)
     return token_ids
 

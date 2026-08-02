@@ -504,9 +504,10 @@ def test_gemma4_rendering_matches_official_template():
             # Production (build_full_prompt) forwards the per-request level to
             # the generation prompt too — that is where the gate_levels think
             # gate lives, so the golden render must mirror it.
+            # Spec owns BOS as of the 2026-08-03 fleet audit — the first
+            # framing segment IS <bos>; prepending again doubles it.
             return (
-                "<bos>"
-                + system
+                system
                 + r.render_user("Hello")
                 + r.render_generation_prompt(reasoning=reasoning)
             )
@@ -618,8 +619,12 @@ def test_tekken_declares_template_bos():
     assert rendered.count("<s>") == 1
 
 
-@pytest.mark.parametrize("family", ["harmony", "chatml", "gemma"])
+@pytest.mark.parametrize("family", ["harmony", "chatml"])
 def test_other_families_emit_no_bos(family):
+    # gemma left this list 2026-08-03: its official template emits
+    # {{ bos_token }} and the unsloth GGUFs set add_bos_token=false, so the
+    # spec now declares <bos> (see formats/gemma.yaml) — same class as
+    # tekken/hy3.
     """bos is opt-in: families whose tokenizer adds BOS itself must not get a
     duplicate, and their rendering must be unchanged by this feature."""
     from formats.registry import get_renderer, clear_cache
@@ -711,17 +716,15 @@ def test_olmo_rendering_matches_gguf_template():
     #     before the persona; official passes system content through as-is.
     #  2. message boundaries — bare <|im_end|> without the trailing newline
     #     (chatml tokenization-boundary rationale).
-    #  3. "<think>\n" — the shared inline-tags renderer appends a newline
-    #     after the injected opener (production-proven on qwen); official
-    #     ends the generation prompt at bare "<think>".
-    expected = (
-        official.replace(
-            "<|im_start|>system\nPERSONA",
-            "<|im_start|>system\nYou are a helpful assistant.\nPERSONA",
-            1,
-        ).replace("<|im_end|>\n", "<|im_end|>")
-        + "\n"
-    )
+    #  (A third pinned deviation — "<think>\n" with an appended newline —
+    #  was REMOVED 2026-08-03: the fleet audit set open_tag_newline: false,
+    #  so ours now ends at bare "<think>" exactly as the official template
+    #  does.)
+    expected = official.replace(
+        "<|im_start|>system\nPERSONA",
+        "<|im_start|>system\nYou are a helpful assistant.\nPERSONA",
+        1,
+    ).replace("<|im_end|>\n", "<|im_end|>")
     assert ours == expected, f"\nexpected: {expected!r}\nours    : {ours!r}"
     # The load-bearing details, asserted directly so a template rewrite
     # cannot silently drop them:
@@ -939,3 +942,94 @@ def test_hy3_bos_is_the_real_token_and_thinking_gates():
     assert s.thinking.open_tag_newline is False
     assert s.thinking.gate_levels == ["medium", "high"]
     assert s.reasoning.levels["low"] == "no_think"
+
+
+# ── Qwen 3.5/3.6 golden test vs the GGUF-embedded template ────────────
+#
+# Split out of chatml 2026-08-03 (fleet think-dial audit): under the shared
+# spec a per-request `low` rendered a BARE assistant turn — qwen's official
+# suppressed branch is '<think>\n\n</think>\n\n' and was never delivered
+# (the hy3 undefined-branch class) — while step-3.7's Reasoning line rode
+# along as off-template system text. formats/qwen.yaml owns qwen now.
+
+
+def test_qwen_rendering_matches_official_template():
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    jinja2 = pytest.importorskip("jinja2")
+    tpl_path = Path(__file__).resolve().parents[2] / "dev" / "qwen36_chat_template.jinja"
+    if not tpl_path.is_file():
+        pytest.skip("official qwen3.6 template not banked")
+
+    from formats.registry import get_renderer, clear_cache
+
+    env = jinja2.Environment()
+    env.globals["raise_exception"] = lambda m: (_ for _ in ()).throw(Exception(m))
+    tpl = env.from_string(tpl_path.read_text())
+
+    def render_official(enable_thinking):
+        kw = {
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant.\nPERSONA"},
+                {"role": "user", "content": "Hello"},
+            ],
+            "add_generation_prompt": True,
+            "tools": None,
+        }
+        if enable_thinking is not None:
+            kw["enable_thinking"] = enable_thinking
+        return tpl.render(**kw)
+
+    clear_cache()
+    r = get_renderer("qwen")
+    cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+
+    def render_ours(level):
+        with patch("core.config.get_config", return_value=cfg):
+            kw = {"reasoning": level} if level else {}
+            segs = r.render_system_segments(persona="PERSONA", **kw)
+            system = "".join(t for t, _ in segs)
+            return (
+                system
+                + r.render_user("Hello")
+                + r.render_generation_prompt(reasoning=level)
+            )
+
+    # default/medium/high -> official enabled; low -> official DISABLED
+    # (enable_thinking=false), byte-exact pre-closed block included.
+    for canonical, enabled in ((None, None), ("medium", True), ("high", True)):
+        ours, official = render_ours(canonical), render_official(enabled)
+        assert ours == official, (
+            f"canonical={canonical}:\nours    : {ours!r}\nofficial: {official!r}"
+        )
+    ours, official = render_ours("low"), render_official(False)
+    assert ours == official, (
+        f"low/suppressed:\nours    : {ours!r}\nofficial: {official!r}"
+    )
+    assert "<think>\n\n</think>\n\n" in ours  # the exact suppressed bytes
+
+
+def test_genprompt_newline_audit_families():
+    """laguna / glm4 / olmo-think official genprompts carry NO newline after
+    the opener (templates f0ae8663 / 257e6e85 / 0c4c4e49); ours matched the
+    generic '<think>\n' convention until the 2026-08-03 audit."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from formats.registry import get_renderer, clear_cache
+
+    clear_cache()
+    cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+    with patch("core.config.get_config", return_value=cfg):
+        assert get_renderer("laguna").render_generation_prompt() == "<assistant><think>"
+        assert get_renderer("glm4").render_generation_prompt() == "<|assistant|><think>"
+        olmo = get_renderer("olmo").render_generation_prompt()
+        assert olmo.endswith("<think>") and not olmo.endswith("<think>\n")
+    # disabled forms: laguna/glm4 close-only, unchanged by the newline knob
+    cfg_off = SimpleNamespace(model=SimpleNamespace(thinking=False))
+    with patch("core.config.get_config", return_value=cfg_off):
+        clear_cache()
+        assert get_renderer("laguna").render_generation_prompt().endswith("</think>")
+        assert get_renderer("glm4").render_generation_prompt().endswith("</think>")

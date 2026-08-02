@@ -27,7 +27,7 @@ graphql:
 
 model:
   name: "qwen3.6-27b"
-  family: "chatml"
+  family: "qwen"  # split from chatml 2026-08-03 (think-dial audit) — see formats/qwen.yaml
   path: /Users/lah-rb/.lmstudio/models/unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q6_K.gguf
   n_ctx: 262144
   # MEASURED 2026-07-29 (--probe-context): 65536 B/tok vs a 262144 formula (4.00x over — swa_full:false keeps the windowed

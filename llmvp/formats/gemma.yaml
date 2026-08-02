@@ -41,6 +41,12 @@ tokens:
   msg_close: "<turn|>\n"
   gen_stop: "<turn|>"
   history_close: "<turn|>\n"
+  # AUDIT 2026-08-03: the official gemma template emits {{ bos_token }} itself;
+  # unsloth GGUFs carry add_bos_token=false, so before this line the served
+  # sequences had NO <bos> at all (the hy3 BOS bug, second sighting). The
+  # lmstudio Q4_0 carries add_bos=true — lifecycle now gives spec-declared BOS
+  # precedence, so both quants serve exactly one.
+  bos: "<bos>"
 
 roles:
   system: "system"
