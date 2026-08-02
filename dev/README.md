@@ -19,11 +19,13 @@ banked (memories / dev/archive/docs/) — do not let this directory re-rot.
 - `tau_gold_replay.py` / `tau_episode_smoke.py` — τ-bench adapter plumbing validation.
 - `debate_ab.py` — the debate-vs-CoT apparatus (two-Opus-referee blind eval; keeper).
 - `oracle_health.sh` — TB1 grader-health sweep. `reverify_oracles.py` — offline oracle re-scorer over preserved traces.
-- **Tiering** — `ouroboros.py tier` (`agent/tier/`) runs the batch; `blind_panel/TIER_RUBRIC_v1.md`
-  is the instrument and `blind_panel/CHALLENGE_v1_CHECKLIST.md` the judge's half of
-  `missions/game_challenge_tier.yaml`. `blind_panel/stage.py` strips and blind-scans each
-  artifact. `tier_batch.sh` is the SUPERSEDED shell original, kept as the provenance of run
-  `tier_20260729-010118`.
+- **Tiering** — `ouroboros.py tier` (`agent/tier/`) runs the batch; `blind_panel/TIER_RUBRIC_v2.md`
+  is the instrument (epoch v2.0; ladder in `blind_panel/LADDER.md`) and
+  `blind_panel/CHALLENGE_v2_CHECKLIST.md` the judge's half of
+  `missions/game_challenge_tier.yaml` (v2 brief). The `_v1` rubric/checklist are the ARCHIVED
+  pre-epoch instrument for `tier_20260731-050209` and earlier — never used for new placements.
+  `blind_panel/stage.py` strips and blind-scans each artifact. `tier_batch.sh` is the SUPERSEDED
+  shell original, kept as the provenance of run `tier_20260729-010118`.
 - `stop_token_audit.py` — every model's GGUF `eot`/`eom` vs its family's `gen_stop`. Belongs in
   the new-family battery: a model can declare a turn-terminator we never stop on, and **no guard
   we own can see it** — every degeneration detector looks for repetition, and a model

@@ -1,5 +1,10 @@
 # CHALLENGE v1 — conformance checklist (judge's half of the pair)
 
+> **ARCHIVED (2026-08-03).** Pairs with brief version: 1 only — the pre-epoch
+> record of `tier_20260731-050209` and earlier. Superseded by
+> `CHALLENGE_v2_CHECKLIST.md` (47 items, binary verdict) for all epoch-v2.0
+> judging. Never use this list against the v2 brief.
+
 The denominator for `TIER_RUBRIC` §3.4 — deliberately unversioned, because this
 list is the CHALLENGE's contract and does not turn over when the rubric is
 amended. Naming a rubric version here only creates a second place to go stale.

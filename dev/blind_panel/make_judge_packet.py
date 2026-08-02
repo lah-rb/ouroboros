@@ -11,10 +11,11 @@ directory does not close:
    `MANIFEST.txt`, which maps every arm index to its model name. One `ls ../..`
    unblinds the judgement. The packet is copied somewhere with no path back.
 
-2. **THE RUBRIC NAMES MODELS.** TIER_RUBRIC v1.0 argues from real past failures
-   and cites them by model: "the 2026-07-27 panel's decisive gpt-oss defect was
-   exactly this — the two-phase boss died and play simply continued", and the
-   checklist repeats it under item 37. A judge who plays an artifact, finds a
+2. **THE RUBRIC NAMES MODELS.** The rubric (v1.0 then, v2 now) argues from real
+   past failures and cites them by model: "the 2026-07-27 panel's decisive
+   gpt-oss defect was exactly this — the two-phase boss died and play simply
+   continued", and the checklist repeats it (item 37 in v1, 31 in v2). A judge
+   who plays an artifact, finds a
    missing win condition, and then reads that sentence has been handed the
    answer. The citations are what make the bands concrete, so they stay — under
    stable pseudonyms (Arm A, Arm B, ...) assigned in order of first appearance
@@ -124,8 +125,8 @@ to anything and there is nothing else to compare it to.
 - `artifact/` — the complete output of one agent run. Play it.
 - `RUBRIC.md` — {rubric_version}. Read it fully before you start; it defines the
   order of work and which scores lock when.
-- `CHECKLIST.md` — the 53 conformance requirements, each quoting the phrase in
-  the brief it comes from.
+- `CHECKLIST.md` — the 47 conformance requirements behind the binary verdict,
+  each quoting the phrase in the brief it comes from.
 
 ## What you must not do
 
@@ -224,15 +225,16 @@ def main() -> int:
         print(f"  workdir paths : neutralised in {', '.join(sorted(scrubbed))}")
 
     assigned: dict[str, str] = {}
-    for name, src_doc in (("RUBRIC.md", "TIER_RUBRIC_v1.md"),
-                          ("CHECKLIST.md", "CHALLENGE_v1_CHECKLIST.md")):
+    for name, src_doc in (("RUBRIC.md", "TIER_RUBRIC_v2.md"),
+                          ("CHECKLIST.md", "CHALLENGE_v2_CHECKLIST.md")):
         (out / name).write_text(redact((HERE / src_doc).read_text(), assigned))
     # Name the rubric version FROM the rubric. It was hardcoded "v1.0" and went
     # on telling judges that after the instrument became v1.1 — the same stale-
     # provenance defect the tier runner carried in its driver log. A judge told
     # the wrong version has no reason to doubt it.
     head = (out / "RUBRIC.md").read_text().lstrip().splitlines()[0]
-    m = re.search(r"TIER_RUBRIC v\d+\.\d+", head)
+    # v2's headline carries no minor number — the minor is optional.
+    m = re.search(r"TIER_RUBRIC v\d+(?:\.\d+)?", head)
     (out / "INSTRUCTIONS.md").write_text(
         INSTRUCTIONS.format(rubric_version=m.group(0) if m else "the rubric")
     )

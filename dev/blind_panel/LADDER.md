@@ -6,6 +6,11 @@ replayed.*
 
 ## Epoch status: **NOT YET OPEN**
 
+**Epoch id (half-stamped):** brief = `missions/game_challenge_tier.yaml`
+**version: 2** (2026-08-03; YAML opinion removed, "eight CONNECTED rooms",
+`CHALLENGE_v2_CHECKLIST.md` 47 items) · framework = stamped at open with the
+batch's final commit.
+
 Epoch v2.0 opens when the pending batch lands (OPEN_TASKS §17–§20, the
 state-ownership design decision, the YAML-data opinion removal, the league run
 protocol). At open:

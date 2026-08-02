@@ -42,6 +42,11 @@ the brief, the league run protocol below). Until then, no v2 placements are
 made. The v2.0 ladder starts EMPTY except for anchors: the v1.2 field cannot
 seed it (different brief, different framework); it informs expectations only.
 
+**Epoch v2.0 brief = `missions/game_challenge_tier.yaml` version: 2**
+(2026-08-03): YAML-data-files sentence removed, "eight CONNECTED rooms";
+checklist = `CHALLENGE_v2_CHECKLIST.md` (47 items, binary verdict). The
+framework-commit half of the epoch id is stamped in LADDER.md at open.
+
 ## 2. Leagues and the run protocol
 
 Models divide by **measured strategy**, not declaration: cycles per wall-hour
