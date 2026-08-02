@@ -370,6 +370,12 @@ class FormatRenderer:
         gate = self.s.thinking.gate_levels
         if not available:
             thinking_enabled = False
+        elif mode == "off":
+            # Policy off beats the gate. Necessary once a family lists
+            # canonical `low` IN its gate (step-3.7, where low = the shallow
+            # depth): off resolves to effective low, which would otherwise
+            # open the gate it is supposed to close.
+            thinking_enabled = False
         elif gate:
             # Gated family: the EFFECTIVE level decides (Step-3.7 measured
             # mechanics; gemma/hy3/qwen/laguna/glm4 official branches).

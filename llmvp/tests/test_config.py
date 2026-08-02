@@ -286,8 +286,12 @@ def test_format_renderer_chatml():
 
     _cfg = _NS(model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None))
     with _patch("core.config.get_config", return_value=_cfg):
-        # mode "on" would override a low request (always think, never
-        # adapt); the gate is only observable under per_request.
+        # REVISED 2026-08-03 (operator): canonical low maps to STEP-LOW —
+        # shallow thinking WITH the opener; suppression is mode "off"'s job
+        # and beats the gate.
+        assert "<think>" in r.render_generation_prompt(reasoning="low")
+    _off = _NS(model=_NS(thinking="off", thinking_available=True, thinking_mode=None))
+    with _patch("core.config.get_config", return_value=_off):
         assert "<think>" not in r.render_generation_prompt(reasoning="low")
     assert "<think>" in r.render_generation_prompt(reasoning="medium")
     assert "<think>" in r.render_generation_prompt(reasoning="high")

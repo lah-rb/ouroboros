@@ -32,12 +32,17 @@ thinking:
   close_tag: "</think>"
   # Per-level think GATE (measured Step-3.7 mechanics, 2026-07-25,
   # dev/step37_reasoning_probe.py): thinking happens ONLY when the opener
-  # is prefilled — so the adaptive router's `low` closes the gate by
-  # omitting the prefill, and medium/high open it (the Reasoning line
-  # then works as the depth dial inside the opened block). Levels listed
-  # here get the prefill; a request WITHOUT a level keeps the legacy
-  # config-flag behavior, so generic Qwen configs are unchanged.
-  gate_levels: ["medium", "high"]
+  # is prefilled; the Reasoning line dials depth INSIDE the opened block
+  # (measured means: low 961 / medium 1143 / high 2131 think chars).
+  #
+  # REVISED 2026-08-03 (operator): canonical low now maps to STEP-LOW —
+  # shallow thinking with the opener — not to the omitted-opener off
+  # state. All three canonical levels think at their measured depths, and
+  # the unrouted default (None -> low) is shallow thinking. The off state
+  # is the POLICY's job: mode "off" suppresses before the gate is
+  # consulted (see renderer), which is also where the probe-validated
+  # omit-the-opener mechanic now lives.
+  gate_levels: ["low", "medium", "high"]
 
 system_block:
   identity: "You are a helpful assistant."
