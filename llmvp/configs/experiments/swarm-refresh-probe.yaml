@@ -1,0 +1,52 @@
+# EXPERIMENT — accelerated forced-drain repro for the 2026-08-03 swarm kill.
+#
+# NOT a serving config and NOT scoreable. It exists to fire the fatal path in
+# ~2 minutes instead of the 30 it took in production.
+#
+# THE HYPOTHESIS UNDER TEST (operator, 2026-08-03: "Is it a timing issue?").
+# The swarm server died mid-context-rebuild at 09:35 on tier_20260802-043526,
+# after refreshing SUCCESSFULLY on the same config 30 minutes earlier
+# (09:00:09, "batched context rebuilt + heads re-pinned in 9.79s"). So the
+# rebuild's memory geometry is affordable; what differed was the DRAIN:
+#
+#   09:00  proactive-interval   — quiet, drain completed naturally     -> OK
+#   09:30  proactive-timed-drain— 1 seat out, 2 generations live,
+#          drain hit its 300s deadline, force-expired a session and
+#          evicted streams, THEN rebuilt                               -> KILLED
+#
+# `_drain_in_flight` returned True because the Python counters
+# (_checked_out / _active_generations) went to zero after the FORCED clear —
+# but zeroed bookkeeping is not the same fact as Metal having retired the
+# in-flight command buffers and released the old ~41.5 GB of KV. The rebuild
+# then allocated a second full-size KV on top of memory the GPU had not given
+# back. The abort path (llama_cpp_backend.py:1404) only fires when the
+# counters STAY non-zero, so a forced drain sails past the guard.
+#
+# ACCELERATION: cap 1800s -> 120s, drain 300s -> 20s. Nothing else changes;
+# the trigger is made cheap, the mechanism is untouched.
+#
+# PRE-REGISTERED EXPECTATION (before the run, per §6 discipline):
+#   UNFIXED  -> dies mid-rebuild with the production signature: two
+#               "MTL0 KV buffer size = 20736.00 MiB" lines, log ends with no
+#               traceback and NO "Context refresh aborted" warning.
+#   FIXED    -> logs a deferral, server survives, work continues.
+# If the unfixed build SURVIVES this probe, the timing hypothesis is wrong
+# and the cause is elsewhere — record that outcome, do not retune until it
+# reproduces.
+extends: gpt-oss-120b-a5-swarm-524k
+
+model:
+  name: swarm-refresh-probe
+  # Fire the cap fast. 120s is long enough to boot + establish traffic.
+  context_refresh_seconds: 120
+  # Short enough that ANY live generation outlasts it — this is what forces
+  # the force-expire path rather than a natural drain.
+  #
+  # REV 2 (2026-08-03): 20s was NOT short enough. Run 1 fired two refreshes
+  # with a seat out and a generation live, and both drained NATURALLY — the
+  # straggler hit EOS 8s inside the window, counters cleared, and the rebuild
+  # succeeded twice (9.83s / 9.64s). `forced drain: False`: the harness never
+  # created the condition under test, so run 1 is a NULL on the harness, not
+  # evidence about the hypothesis. 5s is below any single decode step, and
+  # the probe now keeps a generation in flight continuously.
+  context_refresh_drain_s: 5
