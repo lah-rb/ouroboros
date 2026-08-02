@@ -135,15 +135,51 @@ tier:
     judged:
       run: tier_20260802-004021
       staged: staged/arm01
-      judge: "claude-opus (blind subagent, flight packet)"
+      judge: "claude-opus-5 (blind subagent, flight packet)"
       flights:
         - opponent: GUARDIAN (gpt-oss anchor)
           result: "WON 5-0 axes + overall, no overall self-flag (per-axis flag on experience only)"
           conformance: "46/47 NEAR-FULL (unmet: 36 world-items-in-save, judge-flagged as the one judgment call)"
           completability: "UNWINNABLE by balance only — win path authored+wired (has_won), boss to 40/150 with phase 2 + shard amplification + 50-pt burst all firing; a balance pass away"
+          why_the_judge_preferred_it: >
+            Working surface: the Guardian's combat loop silently eats every
+            command but `flee` — `use Healing Potion` at 4 HP swings your
+            sword instead — and its weakness mechanic is unreachable because
+            equip refuses the key it checks for; this artifact's failures
+            (two fake aliases, dead specials, unselectable dialogue) are all
+            peripheral to a working core. State: the only consent-based load
+            and working restart in the flight, vs the Guardian's
+            no-new-game-path corpse-resume that can only be reset by deleting
+            a file outside the program. Experience (the CLOSE axis): the HP
+            readouts, a defeat screen that offers restart, a locked door that
+            explains itself — against the Guardian's silent turn-theft and
+            one-line hard-exit death; the Guardian kept better exits/naming.
+            Scope: 9 rooms and a boss whose phases and weakness both fire, vs
+            6 rooms, no restart, no victory. Ambition: the Guardian's YAML
+            externalization is genuine but feeds dead features; this artifact
+            attempted more mechanism and roughly half survived into play.
           notes: "working restart + consent-based load + mid-combat healing (only ones in the flight); dead hasattr-on-dict monster specials; dialogue menu unselectable; fake n/s/e/w aliases in help; pure-Python world (no data files)"
         - opponent: FRONTIER (sonnet one-shot)
-          result: "LOST 0-5 axes + overall, no self-flag (out-of-band scorecard; tier unaffected). Judge 2 tally 45/47 NEAR-FULL (#16 help-vocab, #35 room-state-in-save) — minor cross-judge variance vs judge 1's 46/47; headline findings identical (unwinnable by arithmetic, dead hasattr specials, unselectable dialogue menu). Family-bias caveat stamped (Opus judge / Claude artifact)."
+          result: "LOST 0-5 axes + overall, no self-flag (out-of-band scorecard; tier unaffected). Judge 2 tally 45/47 NEAR-FULL (#16 help-vocab, #35 room-state-in-save) — minor cross-judge variance vs judge 1's 46/47; headline findings identical (unwinnable by arithmetic, dead hasattr specials, unselectable dialogue menu). Family-bias caveat stamped (claude-opus-5 judge / Claude artifact)."
+          why_the_judge_preferred_frontier: >
+            Working surface: every command the Frontier artifact advertises
+            was verified working, including mid-combat use/equip; this
+            artifact ships a dead monster-ability block (hasattr on a dict,
+            0 specials in ~25 rounds, p≈0.03), advertises n/s/e/w and l
+            abbreviations that don't exist, and breaks `use X on Y` on the
+            one target that matters. State: Frontier round-trips room
+            depletion, defeated monsters and NPC dialogue stage across
+            processes; this save carries no room state, so taken and even
+            equipped items respawn on load. Experience: Frontier lists
+            exits, names things properly, refuses in-fiction; this artifact
+            never lists exits (map found by brute force), prints raw
+            snake_case ids, and offers a numbered dialogue menu that accepts
+            no selection. Scope: comparable room counts, but Frontier's
+            two-phase boss, weakness multiplier, distinct monster mechanics
+            and win are all reachable where the equivalents here exist as
+            unexecuted code. Ambition: this artifact reached marginally
+            wider on paper, but its headline ambitions delivered ~0% while
+            Frontier's subtler ambition delivered ~100%.
   # ── EPOCH v1.2 (archived, pre-epoch record) ─────────────────────────
   status: recorded
   rubric: TIER_RUBRIC v1.2

@@ -173,15 +173,53 @@ tier:
     judged:
       run: tier_20260802-043526
       staged: staged/arm01
-      judge: "claude-opus (blind subagent, flight packet)"
+      judge: "claude-opus-5 (blind subagent, flight packet)"
       flights:
         - opponent: GUARDIAN (gpt-oss anchor)
           result: "LOST 0-5 axes + overall, no self-flag"
           conformance: "31/47 SIGNIFICANTLY-DEVIATED (BOTH triggers: 16 unmet >= 10 AND no win path)"
           completability: "UNWINNABLE at room 1 of 9 — parser emits go/take, engine dispatches move/pickup; the whole authored world (9 CONNECTED rooms, 6 items, branching NPC trees both hinting the weakness) is inert behind the seam. drop/use/stats parse to actions with no handler"
-          notes: "First think-LIVE run (36 thought emissions, 10 degen events, 13.4 cyc/h). UNRESOLVED: 4 corrupted parser literals ('//status','//activate','//in','//out') judge-excluded as suspected extraction artifacts — no raw capture survives to attribute (captured_raw stale since June); watch the next gemma artifact. Guardian tally converged for the 4TH independent judge (41/47, identical unmet set)"
+          why_the_judge_preferred_guardian: >
+            Working surface: the Guardian's 14 advertised verbs all work
+            when invoked; this artifact offers ~15 of which 4 are live and 2
+            of those inert — the go/take vs move/pickup seam locks the
+            player in room 1 of 9. State: the Guardian's round-trip was
+            exercised against a genuinely mutated world (location,
+            inventory, equipment, per-room items) and restored exactly; this
+            save is clean but vacuous — nothing can ever change — and its
+            schema silently drops attack_power and max_health. Experience:
+            the Guardian has an accurate help table, informative refusals,
+            and narrated combat; this artifact has no help at all and its
+            title screen advertises save/load while never naming the four
+            verbs that actually work. Scope: a traversable world,
+            equip-driven stat changes and verified persistence, vs richer
+            authored data of which essentially none is reachable. Ambition:
+            this artifact attempted more content (dialogue state machines, 9
+            rooms, behaviour labels) but none survived contact; the Guardian
+            attempted more mechanism and most of it survived.
+          notes: "First think-LIVE run (36 thought emissions, 10 degen events, 13.4 cyc/h). Guardian tally converged for the 4TH independent judge (41/47, identical unmet set)"
         - opponent: FLOOR (devstral anchor)
           result: "LOST 3-2 axes (took state integrity + ambition), overall FLOOR, no self-flag — places BELOW the floor anchor: low tier 2"
+          why_the_judge_preferred_floor: >
+            The FLOOR took the three axes that ask what a player actually
+            gets. Working surface: its 13-verb surface works bar two, while
+            this artifact's movement and take are both dead on the
+            action-name mismatch — nothing past look/inventory/save can be
+            invoked and the player cannot leave room one. Scope: 4
+            explorable rooms, two fightable monsters, a working equip chain
+            (Attack 5→10, Defense 2→5), mid-combat healing and a terminal
+            defeat, vs one room and zero fights. Experience: an accurate
+            help that correctly advertises bare directions and a world you
+            can walk, vs better prose with no help and no discoverable
+            action that advances anything. This artifact took state
+            integrity (save/load on command, restored a hand-written state
+            exactly — the FLOOR's save/load isn't wired to any command) and
+            ambition (the only fully-connected 9-room graph, four distinct
+            behaviour labels, the weakness threaded through two dialogue
+            graphs, and the only ambitious subsystem that survived anywhere
+            in the flight: full-schema persistence). The judge's overall
+            line: "A is a game that can be played; B is a title screen with
+            a look command."
           notes: "The judge RESOLVED the '//' literal question: model-innate stylistic tic (title screen deliberately uses '// Type ...' decoration; the tic bled into parser alias literals) — extraction exonerated. Real strengths on record: the flight's only zero-traceback robustness, honest full-schema persistence (dialogue state + room deltas), the only fully-connected 9-room graph. All behind the one seam."
   # NOT A SETTLED SCORE. A run happened and produced a tier-3 gate failure, but
   # the rubric's own re-run rule applies — "re-run only when the failure looks
