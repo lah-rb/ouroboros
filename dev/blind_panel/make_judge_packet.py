@@ -43,6 +43,7 @@ MODEL_TOKENS = [
     "glm-4.7-flash", "glm4", "glm", "zhipu",
     "hunyuan3", "hy3", "tencent", "olmo", "mistral", "tekken",
     "deepseek", "llama", "kimi", "minimax", "reap", "unsloth",
+    "claude", "sonnet", "anthropic",
 ]
 # `apex` was here and was REMOVED (operator decision, 2026-07-31). It is an
 # ordinary English word, and on 2026-07-31 an arm named its game "Apex"
