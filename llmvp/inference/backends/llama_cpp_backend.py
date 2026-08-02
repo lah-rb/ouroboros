@@ -1875,7 +1875,37 @@ class LlamaCppBackend(BaseBackend):
             return (SEQ_STATIC, toks, hlen) if hlen > 0 else None
         seqs = getattr(inst, "_reasoning_seqs", None) or {}
         if level not in seqs:
-            return None
+            # TEXT-RESOLVED ALIAS (2026-08-03, the gemma-31b silent-off bug).
+            # Pinning dedups by RENDERED TEXT (bimodal families collapse:
+            # gemma high renders the same <|think|> as medium), but this
+            # lookup was by LEVEL NAME — so a request for the deduped level
+            # found nothing, was "ignored", and served the RESTING head,
+            # which under per_request is the OFF state. gemma `high`
+            # measured 6 tokens of empty channel while `medium` thought 20k
+            # chars. Resolve through the family map: if the requested
+            # level's text matches a pinned sibling's (or the default's),
+            # use that head.
+            try:
+                from formats.registry import get_renderer
+
+                _lv = dict(
+                    get_renderer(self.config.model.family).s.reasoning.levels
+                    or {}
+                )
+            except Exception:  # noqa: BLE001 — no map, no alias
+                _lv = {}
+            want = _lv.get(level, level)
+            if _lv.get(self._reasoning_default_level,
+                       self._reasoning_default_level) == want:
+                return self._reasoning_head_source(
+                    inst, self._reasoning_default_level
+                )
+            for sib, seq in seqs.items():
+                if _lv.get(sib, sib) == want:
+                    level = sib
+                    break
+            else:
+                return None
         hlen = int(inst._reasoning_head_len.get(level, 0) or 0)
         toks = inst._reasoning_head_tokens.get(level) or []
         return (seqs[level], toks, hlen) if hlen > 0 else None

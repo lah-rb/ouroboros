@@ -1,0 +1,678 @@
+[
+  {
+    "config": "laguna-xs-2.1",
+    "mode": "per_request",
+    "expect": "None/low: no CoT (close-only). med/high: CoT via <think> opener",
+    "arms": {
+      "None": {
+        "tokens_generated": 89,
+        "content_chars": 262,
+        "raw_chars": 262,
+        "strip_chars": 262,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 1.5,
+        "first60": "I need to calculate the average speed for the entire journey",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 74,
+        "content_chars": 192,
+        "raw_chars": 192,
+        "strip_chars": 192,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 1.2,
+        "first60": "The train travels a total distance of 240 + 180 = 420 km in ",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 130,
+        "content_chars": 394,
+        "raw_chars": 402,
+        "strip_chars": 394,
+        "cot_chars": 8,
+        "truncated": false,
+        "wall_s": 2.4,
+        "first60": "To find the average speed for the whole journey, I need to c",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 8,
+        "content_chars": 11,
+        "raw_chars": 19,
+        "strip_chars": 11,
+        "cot_chars": 8,
+        "truncated": false,
+        "wall_s": 0.3,
+        "first60": "```\n144\n```",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "laguna-s-2.1-apex",
+    "mode": "off",
+    "expect": "ALL levels: no CoT (policy off, close-only always)",
+    "arms": {
+      "None": {
+        "tokens_generated": 41,
+        "content_chars": 86,
+        "raw_chars": 86,
+        "strip_chars": 86,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 1.5,
+        "first60": "Average speed = total distance / total time = (240 + 180) / ",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 12,
+        "content_chars": 26,
+        "raw_chars": 26,
+        "strip_chars": 26,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.6,
+        "first60": "```json\n{\"answer\": 72}\n```",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 19,
+        "content_chars": 42,
+        "raw_chars": 42,
+        "strip_chars": 42,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.8,
+        "first60": "420 km total / 5 hours total = 84 km/h\n\n84",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 2,
+        "content_chars": 2,
+        "raw_chars": 2,
+        "strip_chars": 2,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.4,
+        "first60": "24",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "devstral-2-small-24b",
+    "mode": "unavailable",
+    "expect": "ALL levels: bare answer; no MODEL_SETTINGS, no [THINK]",
+    "arms": {
+      "None": {
+        "tokens_generated": 68,
+        "content_chars": 155,
+        "raw_chars": 155,
+        "strip_chars": 155,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 2.5,
+        "first60": "Total distance = 240 km + 180 km = 420 km\nTotal time = 3 h +",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 160,
+        "content_chars": 510,
+        "raw_chars": 510,
+        "strip_chars": 510,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 5.3,
+        "first60": "To find the average speed for the whole journey, we use the ",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 172,
+        "content_chars": 525,
+        "raw_chars": 525,
+        "strip_chars": 525,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 5.6,
+        "first60": "To find the average speed for the whole journey, we use the ",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 192,
+        "content_chars": 587,
+        "raw_chars": 587,
+        "strip_chars": 587,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 6.3,
+        "first60": "To find the average speed for the whole journey, we use the ",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "olmo-3.1-32b-instruct",
+    "mode": "unavailable",
+    "expect": "ALL levels: bare answer, no think markers",
+    "arms": {
+      "None": {
+        "tokens_generated": 1,
+        "content_chars": 2,
+        "raw_chars": 2,
+        "strip_chars": 2,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.5,
+        "first60": "90",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 1,
+        "content_chars": 2,
+        "raw_chars": 2,
+        "strip_chars": 2,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.4,
+        "first60": "90",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 1,
+        "content_chars": 2,
+        "raw_chars": 2,
+        "strip_chars": 2,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.4,
+        "first60": "90",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 1,
+        "content_chars": 2,
+        "raw_chars": 2,
+        "strip_chars": 2,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.4,
+        "first60": "90",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "olmo-3.1-32b-think",
+    "mode": "on",
+    "expect": "ALL levels: CoT (dial-less think model, opener prefilled)",
+    "arms": {
+      "None": {
+        "tokens_generated": 437,
+        "content_chars": 2,
+        "raw_chars": 1665,
+        "strip_chars": 2,
+        "cot_chars": 1663,
+        "truncated": false,
+        "wall_s": 22.6,
+        "first60": "84",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 666,
+        "content_chars": 28,
+        "raw_chars": 2290,
+        "strip_chars": 28,
+        "cot_chars": 2262,
+        "truncated": false,
+        "wall_s": 36.1,
+        "first60": "```json\n{\"answer\": \"84\"}\n```",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 390,
+        "content_chars": 2,
+        "raw_chars": 1551,
+        "strip_chars": 2,
+        "cot_chars": 1549,
+        "truncated": false,
+        "wall_s": 21.9,
+        "first60": "84",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 552,
+        "content_chars": 26,
+        "raw_chars": 2090,
+        "strip_chars": 26,
+        "cot_chars": 2064,
+        "truncated": false,
+        "wall_s": 28.3,
+        "first60": "```json\n{\"answer\": 84}\n```",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "gemma-4-31b",
+    "mode": "per_request",
+    "expect": "None/low: no CoT (padding + pre-closed). med/high: CoT, model opens channel",
+    "arms": {
+      "None": {
+        "tokens_generated": 2,
+        "content_chars": 2,
+        "raw_chars": 2,
+        "strip_chars": 2,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.6,
+        "first60": "70",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 2,
+        "content_chars": 2,
+        "raw_chars": 2,
+        "strip_chars": 2,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.5,
+        "first60": "60",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 142,
+        "content_chars": 2,
+        "raw_chars": 393,
+        "strip_chars": 2,
+        "cot_chars": 391,
+        "truncated": false,
+        "wall_s": 6.4,
+        "first60": "84",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 6,
+        "content_chars": 2,
+        "raw_chars": 30,
+        "strip_chars": 2,
+        "cot_chars": 28,
+        "truncated": false,
+        "wall_s": 0.7,
+        "first60": "84",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "glm-4.7-flash",
+    "mode": "on",
+    "expect": "ALL levels: CoT (always-think policy)",
+    "arms": {
+      "None": {
+        "tokens_generated": 226,
+        "content_chars": 2,
+        "raw_chars": 941,
+        "strip_chars": 2,
+        "cot_chars": 939,
+        "truncated": false,
+        "wall_s": 6.1,
+        "first60": "84",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 127,
+        "content_chars": 2,
+        "raw_chars": 441,
+        "strip_chars": 2,
+        "cot_chars": 439,
+        "truncated": false,
+        "wall_s": 3.2,
+        "first60": "84",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 147,
+        "content_chars": 2,
+        "raw_chars": 544,
+        "strip_chars": 2,
+        "cot_chars": 542,
+        "truncated": false,
+        "wall_s": 3.7,
+        "first60": "84",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 256,
+        "content_chars": 2,
+        "raw_chars": 1109,
+        "strip_chars": 2,
+        "cot_chars": 1107,
+        "truncated": false,
+        "wall_s": 6.1,
+        "first60": "84",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "qwen3.6-35b-a3",
+    "mode": "on",
+    "expect": "ALL levels: CoT incl. a LOW request (on overrides \u2014 always think, never adapt)",
+    "arms": {
+      "None": {
+        "tokens_generated": 267,
+        "content_chars": 2,
+        "raw_chars": 609,
+        "strip_chars": 2,
+        "cot_chars": 607,
+        "truncated": false,
+        "wall_s": 7.6,
+        "first60": "84",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 167,
+        "content_chars": 2,
+        "raw_chars": 502,
+        "strip_chars": 2,
+        "cot_chars": 500,
+        "truncated": false,
+        "wall_s": 5.1,
+        "first60": "84",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 304,
+        "content_chars": 2,
+        "raw_chars": 814,
+        "strip_chars": 2,
+        "cot_chars": 812,
+        "truncated": false,
+        "wall_s": 8.5,
+        "first60": "84",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 173,
+        "content_chars": 2,
+        "raw_chars": 465,
+        "strip_chars": 2,
+        "cot_chars": 463,
+        "truncated": false,
+        "wall_s": 5.2,
+        "first60": "84",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "qwen3-next-coder-80b-a3",
+    "mode": "unavailable",
+    "expect": "ALL levels: bare answer (dial-less coder)",
+    "arms": {
+      "None": {
+        "tokens_generated": 7,
+        "content_chars": 14,
+        "raw_chars": 14,
+        "strip_chars": 14,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 1.8,
+        "first60": "```json\n84\n```",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 7,
+        "content_chars": 14,
+        "raw_chars": 14,
+        "strip_chars": 14,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 1.7,
+        "first60": "```json\n84\n```",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 2,
+        "content_chars": 2,
+        "raw_chars": 2,
+        "strip_chars": 2,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 1.6,
+        "first60": "84",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 27,
+        "content_chars": 59,
+        "raw_chars": 59,
+        "strip_chars": 59,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 2.1,
+        "first60": "{\"choice\": \"calculate\", \"formula\": \"(240 + 180) / (3 + 2)\"}",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "gpt-oss-120b-a5",
+    "mode": "per_request",
+    "expect": "CoT at every level (harmony always reasons); LENGTH scales low<med<high via head-swap",
+    "arms": {
+      "None": {
+        "tokens_generated": 36,
+        "content_chars": 2,
+        "raw_chars": 182,
+        "strip_chars": 2,
+        "cot_chars": 180,
+        "truncated": false,
+        "wall_s": 1.0,
+        "first60": "84",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 46,
+        "content_chars": 2,
+        "raw_chars": 198,
+        "strip_chars": 2,
+        "cot_chars": 196,
+        "truncated": false,
+        "wall_s": 1.0,
+        "first60": "84",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 57,
+        "content_chars": 2,
+        "raw_chars": 236,
+        "strip_chars": 2,
+        "cot_chars": 234,
+        "truncated": false,
+        "wall_s": 1.2,
+        "first60": "84",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 176,
+        "content_chars": 2,
+        "raw_chars": 725,
+        "strip_chars": 2,
+        "cot_chars": 723,
+        "truncated": false,
+        "wall_s": 3.4,
+        "first60": "84",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "mistral-medium-3.5-128b",
+    "mode": "per_request",
+    "expect": "None/low: direct answer. high: [THINK] CoT via head-swap (med collapses to none)",
+    "arms": {
+      "None": {
+        "tokens_generated": 3,
+        "content_chars": 3,
+        "raw_chars": 3,
+        "strip_chars": 3,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 1.9,
+        "first60": "100",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 3,
+        "content_chars": 3,
+        "raw_chars": 3,
+        "strip_chars": 3,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 1.8,
+        "first60": "300",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 17,
+        "content_chars": 30,
+        "raw_chars": 30,
+        "strip_chars": 30,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 3.9,
+        "first60": "300 km / 5 hours = 60 km/h\n\n60",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 141,
+        "content_chars": 2,
+        "raw_chars": 453,
+        "strip_chars": 2,
+        "cot_chars": 451,
+        "truncated": false,
+        "wall_s": 22.0,
+        "first60": "84",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "step37-flash-196b-a11",
+    "mode": "per_request",
+    "expect": "None/low: NO CoT (gate closed, opener omitted). med/high: CoT, depth scales",
+    "arms": {
+      "None": {
+        "tokens_generated": 106,
+        "content_chars": 26,
+        "raw_chars": 354,
+        "strip_chars": 26,
+        "cot_chars": 328,
+        "truncated": false,
+        "wall_s": 3.6,
+        "first60": "```json\n{\"number\": 84}\n```",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 12,
+        "content_chars": 33,
+        "raw_chars": 33,
+        "strip_chars": 33,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 1.1,
+        "first60": "```json\n{\"average_speed\": 84}\n```",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 60,
+        "content_chars": 2,
+        "raw_chars": 197,
+        "strip_chars": 2,
+        "cot_chars": 195,
+        "truncated": false,
+        "wall_s": 2.6,
+        "first60": "84",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 202,
+        "content_chars": 14,
+        "raw_chars": 807,
+        "strip_chars": 14,
+        "cot_chars": 793,
+        "truncated": false,
+        "wall_s": 6.4,
+        "first60": "```json\n84\n```",
+        "errors": null
+      }
+    },
+    "complete": true
+  },
+  {
+    "config": "hy3-reap-200b-a21",
+    "mode": "per_request",
+    "expect": "None/low: no_think, direct. med: low-effort CoT. high: deep CoT (RE-TEST: None routing changed since the 08-03 validation)",
+    "arms": {
+      "None": {
+        "tokens_generated": 1,
+        "content_chars": 3,
+        "raw_chars": 3,
+        "strip_chars": 3,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.9,
+        "first60": "140",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 1,
+        "content_chars": 3,
+        "raw_chars": 3,
+        "strip_chars": 3,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 0.8,
+        "first60": "140",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 2,
+        "content_chars": 3,
+        "raw_chars": 22,
+        "strip_chars": 3,
+        "cot_chars": 19,
+        "truncated": false,
+        "wall_s": 0.8,
+        "first60": "120",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 2,
+        "content_chars": 3,
+        "raw_chars": 22,
+        "strip_chars": 3,
+        "cot_chars": 19,
+        "truncated": false,
+        "wall_s": 0.8,
+        "first60": "140",
+        "errors": null
+      }
+    },
+    "complete": true
+  }
+]

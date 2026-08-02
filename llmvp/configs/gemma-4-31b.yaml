@@ -40,6 +40,14 @@ model:
   # per_request default (operator): unrouted -> padded head + pre-closed channel (resting off); medium/high -> <|think|> + model opens its channel. 31b's head-swap serves the per-level heads
   thinking_available: true
   thinking: "per_request"
+  # RESTING HEAD = medium (2026-08-03 matrix finding): with the resting level
+  # unset, per_request warmed the static head in the OFF padding — on 26b
+  # (no head-swap) that killed per-request thinking outright, and on 31b it
+  # was the fallback that turned the deduped `high` request silently off.
+  # medium rests the head at <|think|> (the validated pre-redesign posture);
+  # low requests still suppress via the padding head-swap (31b) and the
+  # pre-closed genprompt (both).
+  thinking_mode: medium
   path: /Users/lah-rb/.lmstudio/models/unsloth/gemma-4-31B-it-qat-GGUF/gemma-4-31B-it-qat-UD-Q4_K_XL.gguf
   # Full native context (Luke 2026-07-24): the old 65536 cap guarded a
   # semi-broken early release that blew up memory at full context without

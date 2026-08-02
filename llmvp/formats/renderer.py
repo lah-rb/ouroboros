@@ -36,12 +36,17 @@ def resolve_thinking(requested: str | None) -> tuple:
       mode "off"        -> (True, "off", "low")  always the family's lowest
       mode "per_request"-> (True, "per_request", requested or "low")
                            None -> LOW, never medium — an unrouted request
-                           is a cheap request.
-    thinking_mode (when set) overrides the per_request None-default so a
-    config can pin a different resting level without changing policy.
+                           is a cheap request. ALWAYS: thinking_mode does
+                           NOT reroute requests (2026-08-03 matrix finding —
+                           it briefly did, and hy3's None arm silently
+                           thought 6.7k chars against the operator's
+                           None->no_think table). thinking_mode is the
+                           BACKEND's resident-head choice: which head sits
+                           on SEQ_STATIC between swaps, a performance knob,
+                           never a routing input.
     Config-less contexts (unit tests, tooling) behave as per_request.
     """
-    available, mode, resting = True, "per_request", None
+    available, mode = True, "per_request"
     try:
         from core.config import get_config
 
@@ -51,7 +56,6 @@ def resolve_thinking(requested: str | None) -> tuple:
             mode = getattr(cfg.model, "thinking", "per_request")
             if isinstance(mode, bool):  # config objects predating the ternary
                 mode = "on" if mode else "off"
-            resting = getattr(cfg.model, "thinking_mode", None)
     except Exception:  # noqa: BLE001 — config not initialized
         pass
     if not available:
@@ -60,7 +64,7 @@ def resolve_thinking(requested: str | None) -> tuple:
         return True, mode, "high"
     if mode == "off":
         return True, mode, "low"
-    return True, mode, requested or resting or "low"
+    return True, mode, requested or "low"
 
 
 def join_segments(segments: list) -> str:

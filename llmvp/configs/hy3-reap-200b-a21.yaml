@@ -112,10 +112,17 @@ model:
   # operator table: None->no_think, low->no_think, medium->low, high->high
   thinking_available: true
   thinking: "per_request"
-  # thinking_mode stays UNSET: the family reasoning_default (canonical
-  # `medium` -> hy3 `low`) is the default level, and the reasoning.levels map
-  # owns the vocabulary translation. Setting a raw hy3 word here would bypass
-  # the map's guarantees.
+  # RESTING HEAD = medium (2026-08-03 matrix finding). hy3 has NO head-swap,
+  # so per-request levels only move the GENPROMPT half; the system line stays
+  # at the resting head. With the resting level unset, per_request rested at
+  # canonical low -> reasoning_effort:no_think — and a medium/high request
+  # delivered the think opener under a head that said DON'T think: the model
+  # closed immediately (19-char CoT vs the 7.1k the same prompt produced
+  # when the head rested at 'low'). medium rests the head at
+  # reasoning_effort:low (thinking-capable); None/low requests still
+  # suppress STRUCTURALLY via the pre-closed genprompt (validated: zero CoT
+  # even under a thinking head), and medium/high engage coherently.
+  thinking_mode: medium
   swa_full: false          # dense attention, 81 layers — no SWA to make full
   # FLIPPED 2026-07-30 per run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results): D2 = resident+unified is the
   # recipe — full 32,768 window (no /12 band division), flat ~1141 tok/turn

@@ -111,6 +111,14 @@ model:
   # per_request default (operator): unrouted -> padded head + pre-closed channel (resting off); medium/high -> <|think|> activation
   thinking_available: true
   thinking: "per_request"
+  # RESTING HEAD = medium (2026-08-03 matrix finding): with the resting level
+  # unset, per_request warmed the static head in the OFF padding — on 26b
+  # (no head-swap) that killed per-request thinking outright, and on 31b it
+  # was the fallback that turned the deduped `high` request silently off.
+  # medium rests the head at <|think|> (the validated pre-redesign posture);
+  # low requests still suppress via the padding head-swap (31b) and the
+  # pre-closed genprompt (both).
+  thinking_mode: medium
   swa_full: true
   kv_unified: true
   session_full_replay: true
