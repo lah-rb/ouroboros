@@ -15,6 +15,7 @@ from collections import Counter
 from typing import Any
 
 from agent.models import StepInput, StepOutput
+from agent.actions.pipeline_actions import _cap_diagnostic
 from agent.actions.reporting_actions import (
     is_infrastructure_file,
     structural_block_reason,
@@ -1871,7 +1872,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
                 file_path,
                 ", ".join(per_file.get("checks_failed", []) or []) or "?",
             )
-            recert_gate_output = (per_file.get("output") or "")[:800]
+            recert_gate_output = _cap_diagnostic(per_file.get("output") or "", 800)
         else:
             recert_gate_output = ""
 
@@ -2018,7 +2019,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             goal.lint_reviewed = True
             if effects:
                 await effects.save_mission(mission)
-            lint_out = (getattr(last, "terminal_output", "") or "")[:800]
+            lint_out = _cap_diagnostic(getattr(last, "terminal_output", "") or "", 800)
             fix_directive = (
                 f"{file_path} compiles and imports but FAILS LINT "
                 f"({', '.join(getattr(last, 'checks_failed', []))}). The "
@@ -2054,7 +2055,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             if getattr(rep, "checks_failed", None) and getattr(
                 rep, "terminal_output", ""
             ):
-                gate_output = str(rep.terminal_output)[:800]
+                gate_output = _cap_diagnostic(str(rep.terminal_output), 800)
                 break
         # A failed verify-only re-cert produced FRESH gate output moments ago
         # (and such goals have no reports to scan) — it wins over stale finds.
@@ -2387,7 +2388,15 @@ async def _phase_exit_seam_gate(mission: Any, effects: Any) -> StepOutput | None
     problems = blocking
 
     target = sorted(problems)[0]
-    seams = "\n".join(v for vs in problems.values() for v in vs)[:800]
+    # Per-problem caps (§21): the old global [:800] truncated later problems
+    # out of the fix directive entirely on multi-problem gates. Regressions
+    # lead — they are the highest-signal entries — then everything else,
+    # each capped alone, total bounded.
+    _ordered = sorted(
+        (v for vs in problems.values() for v in vs),
+        key=lambda v: 0 if v.startswith("REGRESSION:") else 1,
+    )
+    seams = "\n".join(v[:300] for v in _ordered)[:1600]
     # Direction: a missing DEFINITION is not a wrong call. The old directive
     # said "fix {target} so its cross-module calls match", which points the
     # model at the call site — so a missing method got its caller re-edited

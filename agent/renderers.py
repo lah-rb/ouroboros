@@ -460,6 +460,25 @@ def render_dependency_excerpts(params: dict, namespaces: dict) -> str:
             lines.append(f"──── {dep_file} (imported symbols) ────")
             for sym_name, body in symbol_bodies.items():
                 lines.append(body)
+            # The FULL signature listing for everything NOT included above —
+            # `_build_import_deps` always attaches `symbols`, and dropping it
+            # here left large deps showing imported bodies while every other
+            # def in the file was invisible (a rewrite deliberated ~150k
+            # tokens over whether UI.prompt took an argument; the signature
+            # answers in one line — OPEN_TASKS §21).
+            included = set(symbol_bodies)
+            other_sigs = [
+                f"  {sym.get('kind', '?')} {sym.get('signature', sym.get('name', '?'))}"
+                for sym in dep.get("symbols", [])
+                if sym.get("name") not in included
+                # methods of an included class ride inside its body already
+                and not any(
+                    str(sym.get("name", "")).startswith(f"{b}.") for b in included
+                )
+            ]
+            if other_sigs:
+                lines.append(f"(all other definitions in {dep_file}:)")
+                lines.extend(other_sigs)
             lines.append("")
         elif content:
             lines.append(f"──── {dep_file} ────")

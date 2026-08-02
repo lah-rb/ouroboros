@@ -31,6 +31,7 @@ from agent.actions.pipeline_actions import (
     _parse_data_file,
     action_run_validation_checks_from_env,
 )
+from agent.actions.pipeline_actions import _cap_diagnostic
 from agent.markdown_fence import parse_file_blocks
 from agent.models import FlowMeta, StepInput, StepOutput
 
@@ -948,7 +949,7 @@ async def action_apply_batch_results(step_input: StepInput) -> StepOutput:
             + ("" if passed else " (gate failed)"),
             files_affected=[file_path],
             checks_failed=checks_failed,
-            terminal_output=(checks.get("output") or "")[:1000],
+            terminal_output=_cap_diagnostic(checks.get("output") or "", 1000),
         )
         goal.reports.append(report)
         if passed and structural_block_reason(goal, checks_failed) is None:

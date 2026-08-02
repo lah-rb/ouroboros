@@ -735,3 +735,52 @@ def _format_data_evidence(path: str, via: str, keys: list[str], scoped: str) -> 
 
 def _format_note(path: str, via: str, note: str) -> str:
     return f"## Connected data: {path} ({via}) — {note}"
+
+
+def render_data_file(content: str, path: str, budget: int) -> str:
+    """Public scope-don't-truncate renderer for a whole data file.
+
+    The interact tester's "map of the territory" was byte-cut at 4,000 chars
+    (OPEN_TASKS §21): arm01's 13.7KB world.yaml reached the play-tester ~29%
+    complete, mid-entry, and every functional test navigated a partial world.
+    This is the ladder that replaces it:
+
+      fits in budget      -> the whole file, verbatim
+      over budget, parses -> COMPLETE head-sampled entries + "(N more items)"
+                             (`_render_within_budget` — an entry is never cut
+                             mid-identifier) with the schema skeleton appended
+                             so the tail's SHAPE stays visible
+      over budget, broken -> schema skeleton alone, else a hard-capped dump
+
+    Never raises; returns "" only for empty content.
+    """
+    if not content:
+        return ""
+    if len(content) <= budget:
+        return content
+    try:
+        doc = Document.read(content, detect_fmt(path, content))
+    except Exception:  # noqa: BLE001 — parse failure takes the skeleton rung
+        skel = extract_data_skeleton(content, path)
+        if skel:
+            return skel
+        return content[:budget].rstrip() + "\n… (truncated)"
+    # Descend through single-key wrappers so sampling happens at the level
+    # that HAS siblings: a file shaped `rooms: {...60 rooms...}` must sample
+    # the rooms, not return the one oversized top-level entry whole (the
+    # sampler keeps >=1 complete child, and one child IS the whole file).
+    label, value = None, doc.root
+    while (
+        isinstance(value, dict)
+        and len(value) == 1
+        and len(_render_subtree(label, value)) > budget
+    ):
+        ((k, v),) = value.items()
+        if not isinstance(v, (dict, list)):
+            break
+        label, value = str(k), v
+    sampled = _render_within_budget(label, value, budget)
+    skel = extract_data_skeleton(content, path)
+    if skel and "more items)" in sampled:
+        return f"{sampled}\n\n(structure of the full file:)\n{skel}"
+    return sampled

@@ -138,7 +138,11 @@ def project_file_context(mission: MissionState, params: dict) -> dict:
             "responsibility": "",
             "defines": [],
             "imports_from": {},
-            "import_deps": [],
+            # Derived from the target's ACTUAL imports — this branch used to
+            # hardcode [] and left brownfield rewrites blind (OPEN_TASKS §21).
+            "import_deps": _build_import_deps(
+                arch, working_dir, None, target_file, target_content
+            ),
             "reverse_deps": [],
             "interfaces": [
                 _interface_to_dict(iface)
@@ -180,7 +184,9 @@ def project_file_context(mission: MissionState, params: dict) -> dict:
         responsibility = f"Data file consumed by {target_data_shape.consumed_by}"
 
     # Import dependencies — smart content selection
-    import_deps = _build_import_deps(arch, working_dir, target_mod)
+    import_deps = _build_import_deps(
+        arch, working_dir, target_mod, target_file, target_content
+    )
 
     # Reverse dependencies — responsibility and needs only
     reverse_deps = _build_reverse_deps(arch, target_file, working_dir)
@@ -438,9 +444,18 @@ def project_interaction_context(mission: MissionState, params: dict) -> dict:
         # config values, save format, etc.
         for ds in arch.data_shapes:
             if ds.file:
-                content = _load_file_content(working_dir, ds.file, max_chars=4000)
+                content = _load_file_content(working_dir, ds.file, max_chars=0)
                 if content:
-                    data_file_contents[ds.file] = content
+                    # Scope, don't truncate (OPEN_TASKS §21): the old
+                    # max_chars=4000 byte-cut gave the play-tester ~29% of
+                    # arm01's world.yaml, mid-entry. Complete-entry sampling
+                    # + skeleton keeps every shown entry whole and the tail's
+                    # shape visible.
+                    from agent.data_trace import render_data_file
+
+                    data_file_contents[ds.file] = render_data_file(
+                        content, ds.file, 4000
+                    )
 
         # Extract command vocabulary from parser/command modules.
         # Look for modules whose responsibility mentions "parse" or "command"
@@ -448,7 +463,9 @@ def project_interaction_context(mission: MissionState, params: dict) -> dict:
         for mod in arch.modules:
             resp_lower = (mod.responsibility or "").lower()
             if any(kw in resp_lower for kw in ["parse", "command", "dispatch"]):
-                content = _load_file_content(working_dir, mod.file, max_chars=3000)
+                # Full read (§21): verb tables past 3KB never contributed
+                # to the vocabulary; the regex scan is cheap.
+                content = _load_file_content(working_dir, mod.file, max_chars=0)
                 if content:
                     # Extract string literals that look like commands
                     import re
@@ -708,39 +725,110 @@ def _build_project_modules(
     return modules
 
 
+def _derive_imports_from_source(
+    target_file: str, target_content: str
+) -> dict[str, list[str]]:
+    """Derive an ``imports_from`` map from the target's ACTUAL import
+    statements when the architecture cannot supply one.
+
+    Missions without an architecture module for the target (brownfield,
+    arch-missed edges) used to degrade to NO import deps at all — the
+    rewrite that could not see ``UI.prompt`` orbited its signature for
+    ~150k tokens (OPEN_TASKS §21). This is the deterministic floor under
+    that hole: stdlib-``ast`` parse of ``import X`` / ``from X import a, b``,
+    keyed by module name exactly like ``ModuleSpec.imports_from``.
+    Python-only by design (the callers' targets are .py); returns {} on any
+    parse failure.
+    """
+    if not target_content or not str(target_file).endswith(".py"):
+        return {}
+    import ast as _ast
+
+    try:
+        tree = _ast.parse(target_content)
+    except SyntaxError:
+        return {}
+    out: dict[str, list[str]] = {}
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.ImportFrom) and node.module:
+            names = [a.name for a in node.names if a.name != "*"]
+            if names:
+                out.setdefault(node.module, []).extend(names)
+        elif isinstance(node, _ast.Import):
+            for a in node.names:
+                out.setdefault(a.name, [])
+    return out
+
+
+def _module_name_to_file(
+    module_name: str, arch: Any, working_dir: str
+) -> tuple[str, str, list[str]]:
+    """Resolve a module name to (file, responsibility, defines).
+
+    Prefers the architecture's module list (same matching as
+    ``_find_module_by_name``); falls back to ``<name>.py`` /
+    ``<pkg>/<name>.py`` existing on disk. Returns ("", "", []) when the
+    module is external (stdlib/third-party) or unresolvable.
+    """
+    import os
+
+    mod = _find_module_by_name(getattr(arch, "modules", []) or [], module_name)
+    if mod:
+        return mod.file, mod.responsibility, list(mod.defines)
+    rel = module_name.replace(".", "/") + ".py"
+    for cand in (rel, os.path.basename(rel)):
+        if working_dir and os.path.isfile(os.path.join(working_dir, cand)):
+            return cand, "", []
+    return "", "", []
+
+
 def _build_import_deps(
     arch: Any,
     working_dir: str,
     target_mod: Any | None,
+    target_file: str = "",
+    target_content: str = "",
 ) -> list[dict]:
     """Build import dependency list with smart content selection.
 
     Strategy: include the specific symbols we import, not the whole file.
     For small files (< 200 lines), include full content.
     Falls back to full content if tree-sitter is unavailable.
+
+    When the architecture has no module (or an empty ``imports_from``) for
+    the target, the map is derived from the target's actual import
+    statements instead of returning [] — see
+    ``_derive_imports_from_source``.
     """
-    if not target_mod:
+    imports_map: dict[str, list[str]] = {}
+    if target_mod and getattr(target_mod, "imports_from", None):
+        imports_map = target_mod.imports_from
+    elif target_content:
+        imports_map = _derive_imports_from_source(target_file, target_content)
+    if not imports_map:
         return []
 
     import_deps = []
-    for dep_module_name, imported_symbols in target_mod.imports_from.items():
-        dep_mod = _find_module_by_name(arch.modules, dep_module_name)
-        if not dep_mod:
-            continue
+    for dep_module_name, imported_symbols in imports_map.items():
+        dep_file, dep_resp, dep_defines = _module_name_to_file(
+            dep_module_name, arch, working_dir
+        )
+        if not dep_file or dep_file == target_file:
+            continue  # external module, unresolvable, or self-import
 
         dep_entry: dict[str, Any] = {
-            "file": dep_mod.file,
-            "responsibility": dep_mod.responsibility,
-            "defines": list(dep_mod.defines),
+            "file": dep_file,
+            "responsibility": dep_resp,
+            "defines": dep_defines,
         }
 
         # Extract field signatures for constructor awareness
-        signatures = _extract_field_signatures(working_dir, dep_mod.file)
+        signatures = _extract_field_signatures(working_dir, dep_file)
         if signatures:
             dep_entry["field_signatures"] = signatures
 
         # Smart content: load full content, then decide what to include
-        dep_content = _load_file_content(working_dir, dep_mod.file, max_chars=0)
+        dep_content = _load_file_content(working_dir, dep_file, max_chars=0)
         if dep_content:
             # Symbol table is always included when content loads,
             # regardless of which content-trimming branch we take
@@ -750,7 +838,7 @@ def _build_import_deps(
             # imports_from only enumerate the public/imported
             # surface. Lightweight (names + signatures, no bodies),
             # so it's fine to attach uniformly.
-            dep_symbols = _extract_symbol_table(dep_mod.file, dep_content)
+            dep_symbols = _extract_symbol_table(dep_file, dep_content)
             if dep_symbols:
                 dep_entry["symbols"] = dep_symbols
 
@@ -761,7 +849,7 @@ def _build_import_deps(
             else:
                 # Large file — extract only the imported symbols' bodies
                 symbol_bodies = _extract_imported_symbol_bodies(
-                    dep_mod.file, dep_content, list(imported_symbols)
+                    dep_file, dep_content, list(imported_symbols)
                 )
                 if symbol_bodies:
                     dep_entry["symbol_bodies"] = symbol_bodies

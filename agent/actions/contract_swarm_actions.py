@@ -21,6 +21,7 @@ import ast as stdlib_ast
 import asyncio
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ from agent.actions.batch_structural_actions import (
     _normalize_path,
 )
 from agent.actions.file_ops_actions import guarded_write_file
+from agent.actions.pipeline_actions import _cap_diagnostic
 from agent.actions.frame_actions import build_frame, splice_frame
 from agent.actions.refinement_actions import extract_code_from_response
 from agent.llm_json import parse_llm_json
@@ -2061,7 +2063,7 @@ async def action_generate_content_batch(step_input: StepInput) -> StepOutput:
                 headline=f"Content batch: {path}" + ("" if passed else " (failed)"),
                 files_affected=[path],
                 checks_failed=[] if passed else [f"syntax: {path}"],
-                terminal_output=detail[:1000],
+                terminal_output=_cap_diagnostic(detail, 1000),
             )
         )
         if passed:
@@ -2193,6 +2195,57 @@ def _diagnose_batch_candidates(mission: Any, working_directory: str) -> list[tup
     return out
 
 
+def _scope_worker_content(path: str, raw: str, gate_output: str) -> str:
+    """Symbol-scoped file view for a stateless diagnose worker (§21).
+
+    Line numbers in the gate output (ruff `file:line:col`, traceback
+    `line N`) are mapped to their enclosing symbols via the rich symbol
+    table; the worker gets those FULL bodies plus a signature listing for
+    everything else. When no line maps (or tree-sitter is unavailable),
+    fall back to head+tail — for a too-long file the ERROR region is as
+    likely at the bottom as the top.
+    """
+    if not raw:
+        return ""
+    if len(raw) <= 6000:
+        return raw
+
+    from agent.actions.ast_actions import _build_symbol_table
+
+    table = _build_symbol_table(path, raw)
+    if table:
+        line_nums: set[int] = set()
+        base = path.rsplit("/", 1)[-1]
+        for m in re.finditer(rf"{re.escape(base)}:(\d+)|\bline (\d+)", gate_output):
+            line_nums.add(int(m.group(1) or m.group(2)))
+        hit_names: list[str] = []
+        for n in sorted(line_nums):
+            best = None
+            for sym in table:
+                ln, el = sym.get("line"), sym.get("end_line")
+                if isinstance(ln, int) and isinstance(el, int) and ln <= n <= el:
+                    span = el - ln
+                    if best is None or span < best[0]:
+                        best = (span, sym)
+            if best and best[1].get("name") not in hit_names:
+                hit_names.append(best[1]["name"])
+        if hit_names:
+            parts = [f"(symbol-scoped view of {path} — implicated by the gate output)"]
+            for sym in table:
+                if sym.get("name") in hit_names and sym.get("body"):
+                    parts.append(sym["body"])
+            parts.append("(all definitions in the file:)")
+            parts.extend(
+                f"  {sym.get('kind', '?')} (lines {sym.get('line', '?')}-"
+                f"{sym.get('end_line', '?')}): {sym.get('signature', sym.get('name'))}"
+                for sym in table
+            )
+            return "\n".join(parts)[:12000]
+
+    # No mappable lines / no table: head+tail beats head-only.
+    return raw[:3000] + "\n… [middle elided] …\n" + raw[-3000:]
+
+
 async def action_swarm_diagnose_batch(step_input: StepInput) -> StepOutput:
     """Fan out one stateless triage completion per gate-failed goal.
 
@@ -2232,17 +2285,24 @@ async def action_swarm_diagnose_batch(step_input: StepInput) -> StepOutput:
 
     prompts: dict[str, str] = {}
     for goal, path, last in targets:
+        gate_output = getattr(last, "terminal_output", "") or ""
         content = ""
         try:
             fc = await effects.read_file(os.path.join(working_directory, path))
-            content = (getattr(fc, "content", "") or "")[:6000]
+            raw = getattr(fc, "content", "") or ""
+            # Scope, don't truncate (OPEN_TASKS §21): the old head-cut
+            # `raw[:6000]` had workers diagnosing files they could only see
+            # the TOP of. Symbol-scope instead: map the gate output's line
+            # numbers to enclosing symbols and give those FULL bodies plus
+            # every signature; head+tail only when nothing maps.
+            content = _scope_worker_content(path, raw, gate_output)
         except Exception:  # noqa: BLE001 — diagnose from gate output alone
             pass
         prompts[goal.id] = _DIAGNOSE_WORKER_PROMPT.format(
             directive=(goal.description or "")[:1500],
             path=path,
             checks=", ".join(getattr(last, "checks_failed", []) or []) or "?",
-            output=(getattr(last, "terminal_output", "") or "")[:1200],
+            output=_cap_diagnostic(gate_output, 1200),
             content=content or "(unreadable)",
         )
 
