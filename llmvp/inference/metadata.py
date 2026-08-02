@@ -92,14 +92,17 @@ def read_metadata(llm_instance) -> ModelMetadata:
     # Chat template — may be absent in older GGUF files
     chat_template = meta.get("tokenizer.chat_template", "") or None
 
-    # Thinking detection — infer from chat template content
+    # Thinking detection — infer from chat template content. The probe set
+    # must cover each family's actual activation literal: gemma-4 uses
+    # <|think|> (the pipe breaks a bare "<think>" substring match), which
+    # produced a false "GGUF lacks thinking tags" warning on a
+    # thinking-capable 26B-A4B and misdirected a debugging session
+    # (2026-08-03).
     has_thinking: bool | None = None
     if chat_template:
         template_lower = chat_template.lower()
-        if "<think>" in template_lower or "[think]" in template_lower:
-            has_thinking = True
-        else:
-            has_thinking = False
+        probes = ("<think>", "[think]", "<|think|>", "enable_thinking")
+        has_thinking = any(p in template_lower for p in probes)
 
     return ModelMetadata(
         name=meta.get("general.name", "unknown"),

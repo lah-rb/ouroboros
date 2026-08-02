@@ -87,6 +87,14 @@ class ThinkingSpec(BaseModel):
     # supplies open+close, laguna supplies close-only), so this cannot be
     # inferred — each family must state it.
     prefill_closed_close_only: bool = False
+    # Gemma-4's ENABLED branch (2026-08-03): the official template emits
+    # NOTHING when thinking is on — the model opens its own thought channel.
+    # Prefilling the opener anyway (the generic inline_tags convention, and
+    # laguna's correct shape) is off-distribution for gemma: it is the
+    # after-tool-response continuation form, and 26B-A4B answered it with an
+    # immediate <channel|> close on every turn — silent thinking-OFF across
+    # two full tier runs. False = enabled turns get a bare generation prompt.
+    open_tag_prefill_when_enabled: bool = True
 
     # Per-level think GATE (Step-3.7 mechanics, 2026-07-25): for families
     # where thinking only happens when the opener is PREFILLED, the

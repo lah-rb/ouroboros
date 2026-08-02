@@ -104,11 +104,16 @@ class _ThinkShape(str, Enum):
 # family -> (shape, reason). ONLY for real spec/FSM disagreements.
 _SHAPE_OVERRIDES: dict[str, tuple["_ThinkShape", str]] = {
     # gemma declares style: inline_tags with <|channel>thought / <channel|>,
-    # but its template PRE-SUPPLIES an already-closed empty thought block, so
-    # in practice generation is pure content from the first token and the
-    # featurizer emits no think markers for those literals. Deriving ANGLE
-    # here would change a working family's start phase on a technicality.
-    "gemma": (_ThinkShape.NONE, "template pre-closes the thought block"),
+    # but the ANGLE machinery expects <word>-shaped tags and shreds gemma's
+    # inverted channel markers into content residue (probed 2026-08-03).
+    # Extraction for gemma is owned by _strip_delimiter's dedicated
+    # rsplit-on-<channel|> path, which handles BOTH trained forms: the
+    # pre-closed empty channel (thinking off) and a CoT-filled preamble
+    # (thinking on, restored by the renderer inverse-family fix). Kept NONE
+    # so the FSM never mangles the markers. KNOWN GAP: gemma CoT is stripped
+    # but not labelled T, so reasoning-token telemetry reads 0 for this
+    # family until proper channel labelling lands.
+    "gemma": (_ThinkShape.NONE, "channel extraction owned by _strip_delimiter"),
 }
 
 

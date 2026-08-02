@@ -501,8 +501,14 @@ def test_gemma4_rendering_matches_official_template():
             kw = {"reasoning": reasoning} if reasoning else {}
             segs = r.render_system_segments(persona="PERSONA", **kw)
             system = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
+            # Production (build_full_prompt) forwards the per-request level to
+            # the generation prompt too — that is where the gate_levels think
+            # gate lives, so the golden render must mirror it.
             return (
-                "<bos>" + system + r.render_user("Hello") + r.render_generation_prompt()
+                "<bos>"
+                + system
+                + r.render_user("Hello")
+                + r.render_generation_prompt(reasoning=reasoning)
             )
 
     def render_official(enable_thinking):
@@ -514,29 +520,28 @@ def test_gemma4_rendering_matches_official_template():
             tools=None,
         )
 
-    # Known deviation, BOTH branches: we prefill the OPEN thought channel
-    # opener in the generation prompt (the inline_tags convention the FSM
-    # keys on); official lets the model emit it. Behaviorally equivalent —
-    # the model's next tokens are exactly these either way (verified live,
-    # dev/gemma_pad_probe.py) — but pinned so any OTHER drift still fails.
-    opener = "<|channel>thought\n"
-
     # ── Thinking ON — the DEFAULT (reasoning_default medium -> <|think|>).
-    # System turn must match the official enable_thinking branch EXACTLY.
-    expected_on = render_official(True) + opener
+    # BYTE-EQUAL to the official enable_thinking branch, generation prompt
+    # included. The old pinned deviation (prefilling the <|channel>thought
+    # opener) claimed behavioral equivalence off a short-prompt probe; two
+    # full tier runs (2026-08-03) falsified it — under production prompts
+    # both 26B-A4B and 31b answered the off-distribution opener with an
+    # immediate <channel|> close on EVERY turn, i.e. silent thinking-OFF.
+    # The renderer now emits nothing when enabled (the model opens its own
+    # channel), matching the official template exactly.
+    expected_on = render_official(True)
     ours_on = render_ours()
     assert ours_on == expected_on, f"\nexpected: {expected_on!r}\nours    : {ours_on!r}"
 
-    # ── Thinking OFF — the router's "low" level. Second known deviation: the
-    # off-state is PADDED ("  \n", token-length-matched to "<|think|>\n") so
-    # the mid-session head splice stays legal; official emits nothing in that
-    # slot. And the opener replaces official's closed-channel prefill (the
-    # model closes it immediately in the off state).
+    # ── Thinking OFF — the router's "low" level. ONE remaining known
+    # deviation: the off-state system slot is PADDED ("  \n",
+    # token-length-matched to "<|think|>\n") so the mid-session head splice
+    # stays legal; official emits nothing there. The generation prompt's
+    # pre-closed empty channel now matches the official disabled branch
+    # exactly.
     official_off = render_official(False)
-    assert official_off.endswith(opener + "<channel|>")
-    expected_off = official_off.replace("<|turn>system\n", "<|turn>system\n  \n", 1)[
-        : -len("<channel|>")
-    ]
+    assert official_off.endswith("<|channel>thought\n<channel|>")
+    expected_off = official_off.replace("<|turn>system\n", "<|turn>system\n  \n", 1)
     ours_off = render_ours(reasoning="low")
     assert (
         ours_off == expected_off

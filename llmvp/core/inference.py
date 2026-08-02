@@ -216,6 +216,18 @@ def _strip_delimiter(text: str) -> str:
         marker = "<channel|>"
         if marker in text:
             return text.rsplit(marker, 1)[-1].strip()
+        if text.lstrip().startswith("<|channel>thought"):
+            # Unclosed thought channel: generation truncated mid-CoT (seen
+            # live 2026-08-03 — a hard prompt spent the whole budget
+            # thinking). The old fallback returned the raw CoT AS content;
+            # downstream that masquerades as an answer. Mirror the session
+            # path's truncated-think convention: no close, no content.
+            log.warning(
+                "gemma thought channel never closed (%d chars) — "
+                "generation truncated mid-CoT; returning empty content",
+                len(text),
+            )
+            return ""
         return text.strip()
 
     delim = _get_delimiter()

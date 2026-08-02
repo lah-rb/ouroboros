@@ -59,6 +59,16 @@ thinking:
   open_tag: "<|channel>thought"
   close_tag: "<channel|>"
   prefill_closed_when_disabled: true
+  # The official enabled branch emits NOTHING — the model opens its own
+  # thought channel. See open_tag_prefill_when_enabled in schema.py.
+  open_tag_prefill_when_enabled: false
+  # The per-turn level IS the on/off switch (bimodal): low must render the
+  # official disabled generation prompt (pre-closed empty channel), and
+  # medium/high the enabled one (bare model turn — the model opens its own
+  # channel; prefilling the opener is off-distribution and made 26B-A4B
+  # close the channel immediately on every turn, 2026-08-03). Same gate
+  # mechanism as Step-3.7.
+  gate_levels: ["medium", "high"]
 
 system_block:
   identity: ""

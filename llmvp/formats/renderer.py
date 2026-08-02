@@ -187,7 +187,24 @@ class FormatRenderer:
                 segs = [(self.s.tokens.bos, True)] + segs
             return segs
 
-        segments = self.render_message_segments("system", system_content)
+        # The reasoning prefix is STRUCTURAL, not content: it can carry a
+        # control token (Gemma-4's `<|think|>`) that must reach the model as
+        # its single special id, not as literal bytes. Tokenized as content
+        # (is_framing=False) the activation NEVER fired — every gemma run
+        # served the head with `<|think|>` byte-split into text, which is why
+        # thinking stayed off no matter what the generation prompt did
+        # (found 2026-08-03; LM Studio parses the template's specials and the
+        # same GGUF thinks out of the box). The prefix is server-controlled
+        # template text — never user input — so specials-on is safe, and for
+        # plain-text prefixes (Step's "Reasoning: high", gemma's whitespace
+        # padding) special parsing tokenizes identically, preserving the
+        # head-splice length parity.
+        if reasoning_prefix and system_content.startswith(reasoning_prefix):
+            body = system_content[len(reasoning_prefix) :]
+            pre, post = self._message_frame("system")
+            segments = pre + [(reasoning_prefix, True), (body, False)] + post
+        else:
+            segments = self.render_message_segments("system", system_content)
 
         # Template-supplied BOS (families whose GGUF sets add_bos_token=false,
         # so llama.cpp does NOT prepend it — the template owns it). Emitted
@@ -318,11 +335,20 @@ class FormatRenderer:
         # <|channel|>…<|message|> header.
         if self.s.thinking.style != "channel":
             parts.append(self.s.tokens.msg_content)
-            # Inject the thinking open tag ONLY for inline-tag thinking models.
+            # Inject the thinking open tag ONLY for inline-tag thinking models
+            # — and only for families whose template actually prefills it
+            # (open_tag_prefill_when_enabled; laguna yes, gemma NO — gemma's
+            # official enabled branch emits nothing and the model opens its
+            # own channel; prefilling anyway is the after-tool-response
+            # continuation form, which 26B-A4B answered with an immediate
+            # <channel|> close on every turn — silent thinking-OFF across two
+            # full tier runs, 2026-08-03. The old "behaviorally equivalent"
+            # claim held only on short probe prompts, dev/gemma_pad_probe.py).
             if (
                 self.s.thinking.style == "inline_tags"
                 and thinking_enabled
                 and self.s.thinking.open_tag
+                and self.s.thinking.open_tag_prefill_when_enabled
             ):
                 parts.append(self.s.thinking.open_tag)
                 parts.append("\n")
