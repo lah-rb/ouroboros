@@ -130,7 +130,46 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
-  league: grinder  # measured cyc/h — see dev/blind_panel/LADDER.md
+  league: grinder  # measured cyc/h — see dev/blind_panel/LADDER.md; v2 re-confirm 54.2 cyc/h
+  v2:
+    status: placed
+    rubric: TIER_RUBRIC v2
+    epoch: "v2.0 (brief v2 / framework ec5d54c)"
+    tier: 2               # lost to GUARDIAN 0-5; FLOOR flight pending
+    judged:
+      run: tier_20260802-043526
+      staged: staged/arm02
+      judge: "claude-opus-5 (blind subagent, flight packet)"
+      flights:
+        - opponent: GUARDIAN (gpt-oss anchor)
+          result: "LOST 0-5 axes + overall, no self-flag"
+          conformance: "35/47 SIGNIFICANTLY-DEVIATED (BOTH triggers: 12 unmet >= 10 AND the boss phase/weakness mechanics never written)"
+          completability: "UNWINNABLE — no terminal state REACHABLE at all: 8 rooms authored in TWO disconnected components (boss/key/dagger all in the far one), zero monsters placed in the reachable four, so combat can never begin and the player can never die"
+          why_the_judge_preferred_guardian: >
+            Working surface: every one of the Guardian's 14 advertised
+            commands executes outside combat and its combat/equipment/
+            dialogue/persistence subsystems all demonstrably run; this
+            artifact's boss/NPC/save layer never executes once — including
+            a wholly dead 244-line commands.py imported by nothing that
+            would KeyError on first call, and an `examine` that consumes
+            input and prints nothing. State: the Guardian genuinely
+            round-trips across processes (with its known resurrection and
+            auto-load defects); this artifact has no reachable persistence,
+            its shipped load_game fails on the very file save_game writes
+            ("Error loading game: 'inventory'"), and restart resets the
+            player while leaving the world permanently stripped.
+            Experience: natural item names, accurate help, case-insensitive
+            input and blow-by-blow narration vs raw ids ("You see:
+            potion_1"), case-sensitivity, and nothing whatever to do in
+            four empty rooms. Scope: six connected rooms with working
+            combat/equipment/persistence vs movement-take-inventory-equip
+            and zero fights. Ambition: comparable paper reach (dual command
+            layer, dialogue graph, victory/defeat screens) but almost none
+            of it survived — half the rooms orphaned, no monster placed,
+            the advertised silver weakness never written.
+          notes: "112 cycles / 124min = 54.2 cyc/h (grinder confirmed). Clean 6/6 batch at cycle 1 (the §20 doc-bug fix hypothesis holds — batches push through now). Judge 5's Guardian tally 42/47 (item 33 scored met) vs the prior four judges' 41/47 — ±1 divergence, decisive findings identical"
+        - opponent: FLOOR (devstral anchor)
+          result: pending  # low-vs-near-boundary separation flight
   status: not_yet_run
   expectation:
     registered: 2026-07-29
