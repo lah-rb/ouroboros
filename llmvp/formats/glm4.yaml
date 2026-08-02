@@ -95,11 +95,16 @@ thinking:
   # i.e. it declares the think block already finished.
   prefill_closed_when_disabled: true
   prefill_closed_close_only: true
-  # UNMEASURED. step-3.7's gate was only correct because a probe established
-  # thinking is prefill-gated there; whether GLM honours a per-level gate is
-  # unknown, and copying the mechanic across families on assumption is how it
-  # goes wrong.
-  gate_levels: []
+  # ROUTING AUDIT 2026-08-03 (was "UNMEASURED"): GLM's own template
+  # (dev/glm4_chat_template.jinja) is binary enable_thinking with STRUCTURAL
+  # suppression — '<|assistant|></think>' close-only when disabled — the
+  # exact mechanic class the gemma/hy3/qwen audits validated as what these
+  # models actually follow. Without the gate the canonical levels were fully
+  # INERT: a per-request `low` changed nothing and there was no per-request
+  # off-switch. low -> the official disabled form; medium/high -> the
+  # enabled opener. AND-gate semantics keep a thinking:false config pinned
+  # off regardless of level.
+  gate_levels: ["medium", "high"]
 
 system_block:
   identity: "You are a helpful assistant."

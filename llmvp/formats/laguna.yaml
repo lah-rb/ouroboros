@@ -72,12 +72,15 @@ thinking:
   # the close-only prefill rather than omission.
   prefill_closed_when_disabled: true
   prefill_closed_close_only: true
-  # Per-level gate, mirroring step-3.7: a routed level outside this list
-  # closes the gate for that turn. Left EMPTY until measured — the step-3.7
-  # gate was only correct because dev/step37_reasoning_probe.py established
-  # that thinking is prefill-gated on that model. Do not copy the mechanic
-  # across families on the assumption it transfers.
-  gate_levels: []
+  # ROUTING AUDIT 2026-08-03 (was "left EMPTY until measured"): the official
+  # template is binary enable_thinking with structural suppression (the
+  # close-only prefill above) — the same mechanic class the gemma/hy3/qwen
+  # audits validated. Without the gate the canonical levels were fully
+  # INERT: a per-request `low` changed nothing and the family had no
+  # per-request off-switch. low -> the official disabled form; medium/high
+  # -> the enabled opener. AND-gate semantics keep thinking:false configs
+  # pinned off regardless of level.
+  gate_levels: ["medium", "high"]
 
 system_block:
   identity: "You are a helpful assistant."
