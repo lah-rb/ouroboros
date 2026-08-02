@@ -108,9 +108,9 @@ model:
   # silently gets neither — it builds the seq-band context, frees it, and
   # rebuilds single-seq every boot.)
   # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
-  # think-canon; the 2026-08-03 fix restored activation — testing posture: always think
+  # per_request default (operator): unrouted -> padded head + pre-closed channel (resting off); medium/high -> <|think|> activation
   thinking_available: true
-  thinking: "on"
+  thinking: "per_request"
   swa_full: true
   kv_unified: true
   session_full_replay: true

@@ -37,9 +37,9 @@ model:
   # closes it immediately (it self-emits the empty channel anyway —
   # dev/gemma_pad_probe.py).
   # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
-  # think-canon; the 2026-08-03 fix restored activation — testing posture: always think
+  # per_request default (operator): unrouted -> padded head + pre-closed channel (resting off); medium/high -> <|think|> + model opens its channel. 31b's head-swap serves the per-level heads
   thinking_available: true
-  thinking: "on"
+  thinking: "per_request"
   path: /Users/lah-rb/.lmstudio/models/unsloth/gemma-4-31B-it-qat-GGUF/gemma-4-31B-it-qat-UD-Q4_K_XL.gguf
   # Full native context (Luke 2026-07-24): the old 65536 cap guarded a
   # semi-broken early release that blew up memory at full context without
