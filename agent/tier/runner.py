@@ -137,7 +137,7 @@ RUNS = Path.home() / "ouroboros-runs"
 ENDPOINT = "http://localhost:8008/graphql"
 PRODUCTION_CONFIG = "gpt-oss-120b-a5-swarm-524k"
 
-RUBRIC = ROOT / "dev/blind_panel/TIER_RUBRIC_v1.md"
+RUBRIC = ROOT / "dev/blind_panel/TIER_RUBRIC_v2.md"
 
 
 def _rubric_version() -> str:
@@ -152,7 +152,8 @@ def _rubric_version() -> str:
         head = RUBRIC.read_text().lstrip().splitlines()[0]
     except (OSError, IndexError):
         return "TIER_RUBRIC(unreadable)"
-    m = re.search(r"\bv(\d+\.\d+)", head)
+    # v2's headline carries no minor number — the minor is optional.
+    m = re.search(r"\bv(\d+(?:\.\d+)?)", head)
     return f"TIER_RUBRIC_v{m.group(1)}" if m else "TIER_RUBRIC(unversioned)"
 
 

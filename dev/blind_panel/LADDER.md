@@ -4,16 +4,16 @@
 epoch; archived whole at epoch close. Historical comparisons are never
 replayed.*
 
-## Epoch status: **NOT YET OPEN**
+## Epoch status: **OPENING — anchor generation in progress (2026-08-03)**
 
-**Epoch id (half-stamped):** brief = `missions/game_challenge_tier.yaml`
-**version: 2** (2026-08-03; YAML opinion removed, "eight CONNECTED rooms",
-`CHALLENGE_v2_CHECKLIST.md` 47 items) · framework = stamped at open with the
-batch's final commit.
+**Epoch id:** brief = `missions/game_challenge_tier.yaml` **version: 2**
+(2026-08-03; YAML opinion removed, "eight CONNECTED rooms",
+`CHALLENGE_v2_CHECKLIST.md` 47 items) · framework = **`d756175`** (the
+epoch-batch closing commit: §17–§21 fixes, scope-don't-truncate, league
+protocol + resumable-point park, state-ownership design, v2 brief).
 
-Epoch v2.0 opens when the pending batch lands (OPEN_TASKS §17–§20, the
-state-ownership design decision, the YAML-data opinion removal, the league run
-protocol). At open:
+The batch landed 2026-08-03 (W5 `7e1cebb` → W8 `d756175`). Anchor runs are
+the remaining open step:
 
 1. Generate the three anchors under the new brief and framework:
    - **GUARDIAN** — gpt-oss, standard grinder run (2h wall, resumable-point park)
