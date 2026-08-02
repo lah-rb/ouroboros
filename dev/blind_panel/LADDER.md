@@ -83,7 +83,9 @@ a three-sighting pattern for gpt-oss under this brief class.
 
 ## Ladder — contemplator league
 
-*(empty — awaiting epoch open)*
+| pos | model | tier | flights | artifact | notes |
+|---|---|---|---|---|---|
+| 1 | qwen3.6-35b-a3 | **1 (provisional — §9 second artifact owed)** | GUARDIAN: **won 5–0** axes+overall (judge self-flag on experience axis only) · FRONTIER: pending | `tier_20260802-004021/staged/arm01` | First placement of the epoch. 46/47 NEAR-FULL (best fleet conformance yet); UNWINNABLE by BALANCE alone — win path authored+wired, boss to 40/150 with phase 2 + shard amplification firing; working restart, consent-based load, mid-combat healing (the only ones in three flights). 30 cycles exactly, 234min = 7.7 cyc/h (HALF its v1.2 rate — v2 cycles run deeper). Pure-Python world, same choice as the Sonnet one-shot. GUARDIAN convergence: 3rd independent judge, identical 41/47 + unmet set |
 
 ## Ladder — grinder league
 

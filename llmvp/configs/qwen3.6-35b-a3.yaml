@@ -125,6 +125,26 @@ logging:
 # the run before the number enters the ledger.
 tier:
   league: contemplator  # measured cyc/h — see dev/blind_panel/LADDER.md
+  # ── EPOCH v2.0 (current) ────────────────────────────────────────────
+  v2:
+    status: placed
+    rubric: TIER_RUBRIC v2
+    epoch: "v2.0 (brief v2 / framework ec5d54c)"
+    tier: 1                 # PROVISIONAL — §9 requires a SECOND artifact
+    league: contemplator    # 30 cycles consumed exactly; 234min (7.7 cyc/h, half its v1.2 rate)
+    judged:
+      run: tier_20260802-004021
+      staged: staged/arm01
+      judge: "claude-opus (blind subagent, flight packet)"
+      flights:
+        - opponent: GUARDIAN (gpt-oss anchor)
+          result: "WON 5-0 axes + overall, no overall self-flag (per-axis flag on experience only)"
+          conformance: "46/47 NEAR-FULL (unmet: 36 world-items-in-save, judge-flagged as the one judgment call)"
+          completability: "UNWINNABLE by balance only — win path authored+wired (has_won), boss to 40/150 with phase 2 + shard amplification + 50-pt burst all firing; a balance pass away"
+          notes: "working restart + consent-based load + mid-combat healing (only ones in the flight); dead hasattr-on-dict monster specials; dialogue menu unselectable; fake n/s/e/w aliases in help; pure-Python world (no data files)"
+        - opponent: FRONTIER (sonnet one-shot)
+          result: pending  # scorecard flight in progress
+  # ── EPOCH v1.2 (archived, pre-epoch record) ─────────────────────────
   status: recorded
   rubric: TIER_RUBRIC v1.2
   stars: 4                  # 61-80 band; 64/100
