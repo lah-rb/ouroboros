@@ -8,9 +8,18 @@ replayed.*
 
 **Epoch id:** brief = `missions/game_challenge_tier.yaml` **version: 2**
 (2026-08-03; YAML opinion removed, "eight CONNECTED rooms",
-`CHALLENGE_v2_CHECKLIST.md` 47 items) · framework = **`d756175`** (the
-epoch-batch closing commit: §17–§21 fixes, scope-don't-truncate, league
-protocol + resumable-point park, state-ownership design, v2 brief).
+`CHALLENGE_v2_CHECKLIST.md` 47 items) · framework = **`ec5d54c`** (the
+epoch-batch closing commit `d756175` + the gemma think-activation fix —
+`<|think|>` had served as literal bytes on every gemma run ever; landed
+INSIDE the epoch-open window, before any placement. The three anchors
+(gpt-oss/devstral/Sonnet) do not touch gemma serving and stand unchanged;
+the gemma trio run was a §17 gate probe, not a placement).
+
+**Gemma league caveat:** every measured gemma figure to date — including
+the 26b arm's 196 cyc/h — is a NON-THINK number. With thinking live,
+gemma cyc/h will drop substantially (a hard prompt burned an entire 6k
+budget inside one thought channel during validation); re-measure league
+assignment at placement time rather than trusting the v1.2 register.
 
 The batch landed 2026-08-03 (W5 `7e1cebb` → W8 `d756175`). Anchor runs are
 the remaining open step:
