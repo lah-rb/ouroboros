@@ -73,7 +73,10 @@ model:
   verbose: false
   flash_attn_type: auto
   n_batch: 2048
-  thinking: false
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # operator: same family behavior as xs, thinking off in config
+  thinking_available: true
+  thinking: "off"
   swa_full: true
   kv_unified: true
   flow_kv_cache: false

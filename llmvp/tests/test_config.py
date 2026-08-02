@@ -203,13 +203,23 @@ def test_format_renderer_harmony():
     clear_cache()
     r = get_renderer("harmony")
 
-    # System + developer split
-    output = r.render_system(persona="Test persona", date="2026-01-01")
+    # Pin the policy: get_config falls through to the ACTIVE production
+    # config, whose "on" would route everything high. per_request + no level
+    # exercises the None->low rule this test asserts.
+    from types import SimpleNamespace as _NS
+    from unittest.mock import patch as _patch
+
+    _cfg = _NS(model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None))
+    with _patch("core.config.get_config", return_value=_cfg):
+        # System + developer split
+        output = r.render_system(persona="Test persona", date="2026-01-01")
     assert "<|start|>system<|message|>" in output
     assert "<|start|>developer<|message|>" in output
     # Channel directive comes from harmony.yaml's system_block.channel_directive.
     assert "# Valid channels: analysis, final" in output
-    assert "Reasoning: medium" in output
+    # None routes to LOW under the 2026-08-03 routing rule (an unrouted
+    # request is a cheap request — never medium).
+    assert "Reasoning: low" in output
     assert "Test persona" in output
 
     # User
@@ -252,15 +262,33 @@ def test_format_renderer_chatml():
     # User
     assert r.render_user("Hi") == "<|im_start|>user\nHi<|im_end|>"
 
-    # Generation prompt includes <think> tag (no level = legacy flag path)
-    gen = r.render_generation_prompt()
+    # Generation prompt includes <think> tag at a THINKING level. (No-level
+    # requests route LOW under the 2026-08-03 rule, and the ambient config
+    # varies with test order — pin both.)
+    from types import SimpleNamespace as _NS0
+    from unittest.mock import patch as _patch0
+
+    _cfg0 = _NS0(
+        model=_NS0(
+            thinking="per_request", thinking_available=True, thinking_mode=None
+        )
+    )
+    with _patch0("core.config.get_config", return_value=_cfg0):
+        gen = r.render_generation_prompt(reasoning="high")
     assert "<|im_start|>assistant" in gen
     assert "<think>" in gen
 
     # Per-level think GATE (Step-3.7 mechanics): chatml declares
     # gate_levels [medium, high] — an explicit low OMITS the prefill for
     # the turn; medium/high keep it; None keeps the config-flag behavior.
-    assert "<think>" not in r.render_generation_prompt(reasoning="low")
+    from types import SimpleNamespace as _NS
+    from unittest.mock import patch as _patch
+
+    _cfg = _NS(model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None))
+    with _patch("core.config.get_config", return_value=_cfg):
+        # mode "on" would override a low request (always think, never
+        # adapt); the gate is only observable under per_request.
+        assert "<think>" not in r.render_generation_prompt(reasoning="low")
     assert "<think>" in r.render_generation_prompt(reasoning="medium")
     assert "<think>" in r.render_generation_prompt(reasoning="high")
 
@@ -306,14 +334,20 @@ def test_thinking_mode_validation():
 
 
 def test_harmony_reasoning_driven_by_config():
-    """Harmony's inline {reasoning} slot reflects the passed level; default=medium."""
+    """Harmony's inline {reasoning} slot reflects the passed level.
+    None routes to LOW under the 2026-08-03 routing rule (an unrouted
+    request is a cheap request); the old family default of medium is gone."""
     from formats.registry import get_renderer, clear_cache
 
     clear_cache()
     r = get_renderer("harmony")
-    assert "Reasoning: high" in r.render_system(reasoning="high")
-    # None falls back to the family reasoning_default ("medium")
-    assert "Reasoning: medium" in r.render_system(reasoning=None)
+    from types import SimpleNamespace as _NS
+    from unittest.mock import patch as _patch
+
+    _cfg = _NS(model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None))
+    with _patch("core.config.get_config", return_value=_cfg):
+        assert "Reasoning: high" in r.render_system(reasoning="high")
+        assert "Reasoning: low" in r.render_system(reasoning=None)
 
 
 def test_chatml_reasoning_prefix_gated():
@@ -324,23 +358,28 @@ def test_chatml_reasoning_prefix_gated():
     clear_cache()
     r = get_renderer("chatml")
 
-    # IDENTITY mapping as of 2026-07-25 (revised after the blind boss panel):
-    # each canonical level renders Step's own dial. The earlier collapse sent
-    # medium -> "low", which left the router able to do nothing but open or
-    # close the gate — every thinking turn thought at the floor. `low` is
-    # inert in practice (its turn has the gate closed anyway) but still
-    # renders, and all three MUST stay equal-length so the mid-session head
-    # splice remains legal.
-    with_level = r.render_system(persona="P", reasoning="medium")
-    assert "Reasoning: medium" in with_level
-    assert "Reasoning: high" in r.render_system(persona="P", reasoning="high")
-    assert "Reasoning: low" in r.render_system(persona="P", reasoning="low")
-    # prefix sits at the very top of the system content (before identity)
-    assert with_level.index("Reasoning: medium") < with_level.index("helpful assistant")
+    from types import SimpleNamespace as _NS
+    from unittest.mock import patch as _patch
 
-    # Qwen path: no thinking_mode → no Reasoning line at all
-    without = r.render_system(persona="P", reasoning=None)
-    assert "Reasoning:" not in without
+    _cfg = _NS(model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None))
+    # IDENTITY mapping as of 2026-07-25 (revised after the blind boss panel):
+    # each canonical level renders Step's own dial; all three MUST stay
+    # equal-length so the mid-session head splice remains legal.
+    with _patch("core.config.get_config", return_value=_cfg):
+        with_level = r.render_system(persona="P", reasoning="medium")
+        assert "Reasoning: medium" in with_level
+        assert "Reasoning: high" in r.render_system(persona="P", reasoning="high")
+        assert "Reasoning: low" in r.render_system(persona="P", reasoning="low")
+        # prefix sits at the very top of the system content (before identity)
+        assert with_level.index("Reasoning: medium") < with_level.index(
+            "helpful assistant"
+        )
+        # None routes LOW under the 2026-08-03 rule — the line now RENDERS at
+        # the floor rather than disappearing. (The qwen family, split out of
+        # this spec, has no Reasoning prefix at all — that is where the old
+        # "no line for generic Qwen" property lives on.)
+        without = r.render_system(persona="P", reasoning=None)
+        assert "Reasoning: low" in without
 
 
 def test_tekken_reasoning_mode_inert():
@@ -496,7 +535,11 @@ def test_gemma4_rendering_matches_official_template():
         # false would prefill the CLOSED empty thought channel and cancel the
         # <|think|> head. The per-turn on/off toggle lives in the reasoning
         # LEVEL (medium/high -> <|think|>, low -> padding), not this flag.
-        cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+        cfg = SimpleNamespace(
+            model=SimpleNamespace(
+                thinking="per_request", thinking_available=True, thinking_mode=None
+            )
+        )
         with patch("core.config.get_config", return_value=cfg):
             kw = {"reasoning": reasoning} if reasoning else {}
             segs = r.render_system_segments(persona="PERSONA", **kw)
@@ -521,18 +564,20 @@ def test_gemma4_rendering_matches_official_template():
             tools=None,
         )
 
-    # ── Thinking ON — the DEFAULT (reasoning_default medium -> <|think|>).
+    # ── Thinking ON (explicit medium/high — under the 2026-08-03 routing
+    # rule an UNROUTED request is LOW, so the enabled branch needs a level).
     # BYTE-EQUAL to the official enable_thinking branch, generation prompt
     # included. The old pinned deviation (prefilling the <|channel>thought
     # opener) claimed behavioral equivalence off a short-prompt probe; two
     # full tier runs (2026-08-03) falsified it — under production prompts
     # both 26B-A4B and 31b answered the off-distribution opener with an
     # immediate <channel|> close on EVERY turn, i.e. silent thinking-OFF.
-    # The renderer now emits nothing when enabled (the model opens its own
-    # channel), matching the official template exactly.
     expected_on = render_official(True)
-    ours_on = render_ours()
-    assert ours_on == expected_on, f"\nexpected: {expected_on!r}\nours    : {ours_on!r}"
+    for lvl in ("medium", "high"):
+        ours_on = render_ours(reasoning=lvl)
+        assert ours_on == expected_on, (
+            f"{lvl}:\nexpected: {expected_on!r}\nours    : {ours_on!r}"
+        )
 
     # ── Thinking OFF — the router's "low" level. ONE remaining known
     # deviation: the off-state system slot is PADDED ("  \n",
@@ -543,10 +588,11 @@ def test_gemma4_rendering_matches_official_template():
     official_off = render_official(False)
     assert official_off.endswith("<|channel>thought\n<channel|>")
     expected_off = official_off.replace("<|turn>system\n", "<|turn>system\n  \n", 1)
-    ours_off = render_ours(reasoning="low")
-    assert (
-        ours_off == expected_off
-    ), f"\nexpected: {expected_off!r}\nours    : {ours_off!r}"
+    for lvl in ("low", None):  # None -> LOW: the unrouted default is off
+        ours_off = render_ours(reasoning=lvl)
+        assert (
+            ours_off == expected_off
+        ), f"{lvl}:\nexpected: {expected_off!r}\nours    : {ours_off!r}"
 
 
 def test_gemma4_uses_turn_framing_not_gemma3():
@@ -705,7 +751,11 @@ def test_olmo_rendering_matches_gguf_template():
 
     clear_cache()
     r = get_renderer("olmo")
-    cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+    cfg = SimpleNamespace(
+        model=SimpleNamespace(
+            thinking="per_request", thinking_available=True, thinking_mode=None
+        )
+    )
     with patch("core.config.get_config", return_value=cfg):
         segs = r.render_system_segments(persona="PERSONA")
         system = "".join(s[0] if isinstance(s, tuple) else str(s) for s in segs)
@@ -903,7 +953,11 @@ def test_hy3_rendering_matches_official_template():
 
     clear_cache()
     r = get_renderer("hunyuan3")
-    cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+    cfg = SimpleNamespace(
+        model=SimpleNamespace(
+            thinking="per_request", thinking_available=True, thinking_mode=None
+        )
+    )
 
     def render_ours(level):
         with patch("core.config.get_config", return_value=cfg):
@@ -916,10 +970,11 @@ def test_hy3_rendering_matches_official_template():
                 + r.render_generation_prompt(reasoning=level)
             )
 
-    # canonical level -> the hy3 effort the official template must agree at.
-    # None (the default) maps through reasoning_default: medium -> low.
+    # canonical level -> the hy3 effort the official template must agree at
+    # (operator routing table, 2026-08-03): None -> no_think, low -> no_think,
+    # medium -> low, high -> high.
     for canonical, hy3_effort in (
-        (None, "low"),
+        (None, "no_think"),
         ("low", "no_think"),
         ("medium", "low"),
         ("high", "high"),
@@ -984,7 +1039,11 @@ def test_qwen_rendering_matches_official_template():
 
     clear_cache()
     r = get_renderer("qwen")
-    cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+    cfg = SimpleNamespace(
+        model=SimpleNamespace(
+            thinking="per_request", thinking_available=True, thinking_mode=None
+        )
+    )
 
     def render_ours(level):
         with patch("core.config.get_config", return_value=cfg):
@@ -997,17 +1056,19 @@ def test_qwen_rendering_matches_official_template():
                 + r.render_generation_prompt(reasoning=level)
             )
 
-    # default/medium/high -> official enabled; low -> official DISABLED
-    # (enable_thinking=false), byte-exact pre-closed block included.
-    for canonical, enabled in ((None, None), ("medium", True), ("high", True)):
+    # medium/high -> official enabled; low AND None -> official DISABLED
+    # (None routes LOW under the 2026-08-03 rule; production qwen configs run
+    # thinking: "on", which routes everything high -> enabled).
+    for canonical, enabled in (("medium", True), ("high", True)):
         ours, official = render_ours(canonical), render_official(enabled)
         assert ours == official, (
             f"canonical={canonical}:\nours    : {ours!r}\nofficial: {official!r}"
         )
-    ours, official = render_ours("low"), render_official(False)
-    assert ours == official, (
-        f"low/suppressed:\nours    : {ours!r}\nofficial: {official!r}"
-    )
+    for canonical in ("low", None):
+        ours, official = render_ours(canonical), render_official(False)
+        assert ours == official, (
+            f"{canonical}/suppressed:\nours    : {ours!r}\nofficial: {official!r}"
+        )
     assert "<think>\n\n</think>\n\n" in ours  # the exact suppressed bytes
 
 
@@ -1021,11 +1082,22 @@ def test_genprompt_newline_audit_families():
     from formats.registry import get_renderer, clear_cache
 
     clear_cache()
-    cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+    cfg = SimpleNamespace(
+        model=SimpleNamespace(
+            thinking="per_request", thinking_available=True, thinking_mode=None
+        )
+    )
     with patch("core.config.get_config", return_value=cfg):
-        assert get_renderer("laguna").render_generation_prompt() == "<assistant><think>"
-        assert get_renderer("glm4").render_generation_prompt() == "<|assistant|><think>"
-        olmo = get_renderer("olmo").render_generation_prompt()
+        # per_request + explicit high = the enabled branch (None routes LOW)
+        assert (
+            get_renderer("laguna").render_generation_prompt(reasoning="high")
+            == "<assistant><think>"
+        )
+        assert (
+            get_renderer("glm4").render_generation_prompt(reasoning="high")
+            == "<|assistant|><think>"
+        )
+        olmo = get_renderer("olmo").render_generation_prompt(reasoning="high")
         assert olmo.endswith("<think>") and not olmo.endswith("<think>\n")
     # disabled forms: laguna/glm4 close-only, unchanged by the newline knob
     cfg_off = SimpleNamespace(model=SimpleNamespace(thinking=False))

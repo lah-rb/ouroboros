@@ -863,9 +863,16 @@ class SessionManager:
             # compounds across turns). Keep the raw generation instead.
             return
         config = self._backend.config
+        # Ternary-aware (2026-08-03): "off" is a truthy STRING — collapse the
+        # policy to the bool this function wants. Availability also gates:
+        # a model that cannot think has no span to strip.
+        _think_on = (
+            bool(getattr(config.model, "thinking_available", True))
+            and config.model.thinking != "off"
+        )
         span = reasoning_span(
             config.model.family,
-            config.model.thinking,
+            _think_on,
             gen_tokens,
             p,
             get_cached_tokenizer(),

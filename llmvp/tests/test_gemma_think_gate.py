@@ -31,10 +31,28 @@ def _fresh():
     return get_renderer("gemma")
 
 
+def _pin():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    cfg = SimpleNamespace(
+        model=SimpleNamespace(
+            thinking="per_request", thinking_available=True, thinking_mode=None
+        )
+    )
+    return patch("core.config.get_config", return_value=cfg)
+
+
 class TestActivationIsFraming:
     def test_think_token_is_its_own_framing_segment(self):
         r = _fresh()
-        segs = r.render_system_segments(persona="You are a test.")
+        # Explicit thinking level: None routes LOW (padding) under the
+        # 2026-08-03 routing rule; the framing-class property is what is
+        # under test here, so ask for the activation form.
+        with _pin():
+            segs = r.render_system_segments(
+                persona="You are a test.", reasoning="medium"
+            )
         framed = [t for t, f in segs if f]
         assert "<|think|>\n" in framed, segs
         # persona stays content — untrusted text must not gain specials
@@ -43,7 +61,8 @@ class TestActivationIsFraming:
 
     def test_low_padding_is_framing_with_identical_shape(self):
         r = _fresh()
-        segs = r.render_system_segments(persona="P", reasoning="low")
+        with _pin():
+            segs = r.render_system_segments(persona="P", reasoning="low")
         framed = [t for t, f in segs if f]
         assert "  \n" in framed, segs
         assert "<|think|>\n" not in "".join(framed)
@@ -57,13 +76,19 @@ class TestGenerationPromptGate:
         from types import SimpleNamespace
         from unittest.mock import patch
 
-        cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+        # per_request: mode "on" would route every request high and hide
+        # the low branch these tests exercise.
+        cfg = SimpleNamespace(
+            model=SimpleNamespace(
+                thinking="per_request", thinking_available=True, thinking_mode=None
+            )
+        )
         return patch("core.config.get_config", return_value=cfg)
 
     def test_enabled_is_bare_model_turn(self):
         r = _fresh()
         with self._cfg():
-            for lvl in (None, "medium", "high"):
+            for lvl in ("medium", "high"):  # None routes LOW (off) now
                 assert (
                     r.render_generation_prompt(reasoning=lvl) == "<|turn>model\n"
                 ), lvl
@@ -80,7 +105,8 @@ class TestGenerationPromptGate:
         clear_cache()
         laguna = get_renderer("laguna")
         with self._cfg():
-            assert "<think>" in laguna.render_generation_prompt()
+            # explicit thinking level: None routes LOW (close-only) now
+            assert "<think>" in laguna.render_generation_prompt(reasoning="high")
 
 
 class TestStripEdges:

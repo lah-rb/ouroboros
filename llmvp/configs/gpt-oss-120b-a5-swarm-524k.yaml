@@ -92,8 +92,13 @@ model:
   verbose: false
   flash_attn_type: auto
   n_batch: 2048
-  thinking: true
-  thinking_mode: medium
+  # per_request, matching the parent (2026-08-03 routing redesign) —
+  # the harmony head-swap serves the per-level heads.
+  thinking: "per_request"
+  # low (2026-08-03): the per_request resting level — None routes LOW, never
+  # medium (operator rule). Also the backend's default-head level: medium and
+  # high get pinned reasoning heads; the resting head is the cheap one.
+  thinking_mode: low
   swa_full: true
   kv_unified: true
   # FLIPPED 2026-07-30: the batched flow band shipped (BUILD = range-copy

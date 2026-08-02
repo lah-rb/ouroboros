@@ -27,6 +27,42 @@ def _today() -> str:
 Segment = tuple  # (text: str, is_framing: bool)
 
 
+def resolve_thinking(requested: str | None) -> tuple:
+    """The single routing rule (operator design, 2026-08-03).
+
+    Returns (available, mode, effective_canonical_level):
+      unavailable       -> (False, "off", None)  every surface suppressed
+      mode "on"         -> (True, "on", "high")  always think, never adapt
+      mode "off"        -> (True, "off", "low")  always the family's lowest
+      mode "per_request"-> (True, "per_request", requested or "low")
+                           None -> LOW, never medium — an unrouted request
+                           is a cheap request.
+    thinking_mode (when set) overrides the per_request None-default so a
+    config can pin a different resting level without changing policy.
+    Config-less contexts (unit tests, tooling) behave as per_request.
+    """
+    available, mode, resting = True, "per_request", None
+    try:
+        from core.config import get_config
+
+        cfg = get_config()
+        if cfg and cfg.model:
+            available = bool(getattr(cfg.model, "thinking_available", True))
+            mode = getattr(cfg.model, "thinking", "per_request")
+            if isinstance(mode, bool):  # config objects predating the ternary
+                mode = "on" if mode else "off"
+            resting = getattr(cfg.model, "thinking_mode", None)
+    except Exception:  # noqa: BLE001 — config not initialized
+        pass
+    if not available:
+        return False, "off", None
+    if mode == "on":
+        return True, mode, "high"
+    if mode == "off":
+        return True, mode, "low"
+    return True, mode, requested or resting or "low"
+
+
 def join_segments(segments: list) -> str:
     """Flatten a segment list back to its plain-text rendering."""
     return "".join(text for text, _ in segments)
@@ -124,12 +160,20 @@ class FormatRenderer:
         framing is special.
         """
         # Build the system message content from the template.
-        # Map the CANONICAL level (low/medium/high, what the agent-side router
-        # speaks) through this family's level map. Empty map = identity, i.e.
-        # harmony's inline `Reasoning: {level}` — so families without the block
-        # render byte-identically to before. Bimodal families collapse two
-        # canonical levels onto one text here (see ReasoningSpec).
-        reasoning_value = reasoning or self.s.system_block.reasoning_default
+        # THE ROUTING RULE (2026-08-03): the head's reasoning line goes
+        # through the same resolver as the generation prompt, so the two
+        # halves of a family's dial cannot disagree. Unavailable -> no
+        # reasoning surface at all (no line, no post_system). The resolved
+        # CANONICAL level then maps through this family's level map
+        # (bimodal families collapse; hy3's low -> 'no_think'). The spec's
+        # reasoning_default remains only as a config-less fallback.
+        _avail, _mode, _effective = resolve_thinking(reasoning)
+        if not _avail:
+            reasoning_value = ""
+        else:
+            reasoning_value = (
+                _effective or self.s.system_block.reasoning_default
+            )
         _level_map = self.s.reasoning.levels
         if _level_map and reasoning_value in _level_map:
             reasoning_value = _level_map[reasoning_value]
@@ -310,24 +354,23 @@ class FormatRenderer:
 
         parts = [self.s.tokens.msg_open, self.s.roles["assistant"]]
 
-        # Check if the model actually supports thinking
-        thinking_enabled = True
-        try:
-            from core.config import get_config
-
-            config = get_config()
-            if config and config.model:
-                thinking_enabled = config.model.thinking
-        except Exception:
-            pass  # Config not initialized — default to enabled
-
-        # Per-level think gate: the turn's level decides the prefill when
-        # the family declares gate_levels (thinking is prefill-GATED on
-        # these models — no opener, no thought; measured Step-3.7
-        # mechanics, dev/step37_reasoning_probe.py).
+        # THE ROUTING RULE (2026-08-03): availability + ternary policy
+        # resolve the request to one effective canonical level; the family
+        # gate then decides the structural prefill from that level. See
+        # resolve_thinking above.
+        available, mode, effective = resolve_thinking(reasoning)
         gate = self.s.thinking.gate_levels
-        if gate and reasoning:
-            thinking_enabled = thinking_enabled and (reasoning in gate)
+        if not available:
+            thinking_enabled = False
+        elif gate:
+            # Gated family: the EFFECTIVE level decides (Step-3.7 measured
+            # mechanics; gemma/hy3/qwen/laguna/glm4 official branches).
+            thinking_enabled = effective in gate
+        else:
+            # Ungated family (olmo, and channel/tekken styles fall through
+            # harmlessly): no per-level form exists — only the policy's
+            # on/off matters.
+            thinking_enabled = mode != "off"
 
         # Non-channel families (ChatML inline-tags, Gemma none) need the
         # content separator after the role to match the template pattern.

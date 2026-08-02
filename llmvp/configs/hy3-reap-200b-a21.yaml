@@ -108,7 +108,10 @@ model:
   # reasoning_effort:low + opener), canonical low = no_think + pre-closed
   # block, high = deep CoT. Per-request toggling works on completions because
   # the generation prompt is rebuilt per request.
-  thinking: true
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # operator table: None->no_think, low->no_think, medium->low, high->high
+  thinking_available: true
+  thinking: "per_request"
   # thinking_mode stays UNSET: the family reasoning_default (canonical
   # `medium` -> hy3 `low`) is the default level, and the reasoning.levels map
   # owns the vocabulary translation. Setting a raw hy3 word here would bypass

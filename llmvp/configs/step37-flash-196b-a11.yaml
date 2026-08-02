@@ -23,7 +23,10 @@ graphql:
 model:
   name: "step37-flash-196b-a11"
   family: "chatml"
-  thinking: true
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # thinking model; official template always prefills the opener
+  thinking_available: true
+  thinking: "on"
   # ADAPTIVE THINKING (wired 2026-07-25, dev/step37_reasoning_probe.py):
   # thinking is prefill-GATED (router low omits the <think> opener via
   # chatml gate_levels) and the Reasoning line is the depth dial inside

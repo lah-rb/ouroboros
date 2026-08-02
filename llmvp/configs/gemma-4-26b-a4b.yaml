@@ -107,7 +107,10 @@ model:
   # (Contrast step-3.7, which asks for resident_seq_cache WITHOUT swa_full and
   # silently gets neither — it builds the seq-band context, frees it, and
   # rebuilds single-seq every boot.)
-  thinking: true
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # think-canon; the 2026-08-03 fix restored activation — testing posture: always think
+  thinking_available: true
+  thinking: "on"
   swa_full: true
   kv_unified: true
   session_full_replay: true

@@ -48,7 +48,10 @@ model:
   # Declaring true would only arm the FSM's [THINK] handling for tags that
   # never arrive (and the unclosed-[THINK] swallow trap). Flip to true only
   # together with actually rendering the MODEL_SETTINGS block.
-  thinking: false
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # TEKKEN ACTIVATION (operator): available + on -> MODEL_SETTINGS reasoning_effort high in the static head (no head-swap needed)
+  thinking_available: true
+  thinking: "on"
   # Re-prefill sessions from history rather than per-turn KV surgery. This is
   # the default (config.py session_full_replay: bool = True) — stated
   # explicitly so the strategy is visible at a glance.

@@ -112,7 +112,10 @@ model:
   # fixed sampling-tail rambling but not this. laguna suppresses thinking by
   # prefilling the CLOSE tag alone (formats/laguna.yaml
   # prefill_closed_close_only), structurally declaring reasoning finished.
-  thinking: false
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # operator: same family behavior as xs, thinking off in config (not availability-pinned)
+  thinking_available: true
+  thinking: "off"
   swa_full: true
   kv_unified: true
   flow_kv_cache: false

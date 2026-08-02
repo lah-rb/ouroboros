@@ -36,7 +36,10 @@ model:
   # `<|channel>thought\n` opener; in the padded-off state the model just
   # closes it immediately (it self-emits the empty channel anyway —
   # dev/gemma_pad_probe.py).
-  thinking: true
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # think-canon; the 2026-08-03 fix restored activation — testing posture: always think
+  thinking_available: true
+  thinking: "on"
   path: /Users/lah-rb/.lmstudio/models/unsloth/gemma-4-31B-it-qat-GGUF/gemma-4-31B-it-qat-UD-Q4_K_XL.gguf
   # Full native context (Luke 2026-07-24): the old 65536 cap guarded a
   # semi-broken early release that blew up memory at full context without

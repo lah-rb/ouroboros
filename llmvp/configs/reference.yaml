@@ -261,8 +261,18 @@ model:
   speculative_num_pred: 10    # [O] int, default 10
 
   # ── Thinking / reasoning ────────────────────────────────────────────────
-  # [O] Type: bool — master gate for the thinking-mode opening. Default: true
-  thinking: true
+  # [O] Type: bool — does the MODEL support thinking at all (a fact about the
+  # weights/template, not a policy). devstral: false, mistral-medium: true.
+  # When false, every reasoning surface is suppressed and `thinking` is
+  # forced to "off". Default: true
+  thinking_available: true
+  # [O] Type: str — the thinking POLICY, ternary (legacy bools coerce:
+  # true->"on", false->"off").
+  #   "on"          -> every request routes to the family's HIGHEST level
+  #   "off"         -> every request routes to the LOWEST (None -> low)
+  #   "per_request" -> request levels honored; no level -> LOW, never medium
+  # Default: per_request
+  thinking: "per_request"
   # [O] Type: Optional[str] — reasoning effort rendered into the system
   # block: "none" | "low" | "medium" | "high" | null (family default).
   # Inert for binary families (tekken). Default: null

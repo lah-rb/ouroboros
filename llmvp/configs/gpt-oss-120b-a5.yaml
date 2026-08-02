@@ -34,8 +34,14 @@ model:
   # speculative: false (default) — A/B verdict 2026-06-29: n-gram draft was 23-33% SLOWER on
   # Metal/MoE (verify + logits_all overhead > accepted-draft gain) and not cleanly lossless
   # (truncated the rewrite output). Code is config-gated + dormant; revisit only with EAGLE-3.
-  thinking: true
-  thinking_mode: medium
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # adaptive/router serving; None routes LOW (operator rule)
+  thinking_available: true
+  thinking: "per_request"
+  # low (2026-08-03): the per_request resting level — None routes LOW, never
+  # medium (operator rule). Also the backend's default-head level: medium and
+  # high get pinned reasoning heads; the resting head is the cheap one.
+  thinking_mode: low
   # gpt-oss-120b uses sliding-window attention (128-tok window on alternating
   # layers). swa_full keeps the FULL KV for those layers so the ~1809-tok static
   # prefix is consistent across save_state/load_state — without it, restoring a

@@ -70,6 +70,10 @@ model:
   # model is CORRECTLY on full_replay; keep its agent sessions shallow by
   # flow design (replay cost at depth 16 realistic turns: 68.7s probe /
   # extrapolates hy3-class on real charters).
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # canon: always-on thinking model — always think, never adapt (operator)
+  thinking_available: true
+  thinking: "on"
   session_full_replay: true
 
 prompt:

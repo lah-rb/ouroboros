@@ -140,11 +140,50 @@ class ModelConfig(BaseModel):
     speculative: bool = False
     speculative_ngram_size: int = 3
     speculative_num_pred: int = 10
-    thinking: bool = True  # Master on/off: gates the <think>/[THINK] opening
+    # ── THE TWO THINKING LEVERS (operator design, 2026-08-03) ──────────
+    # Together these make a config instantly auditable for how it will act
+    # when called, replacing the old ambiguous bool.
+    #
+    # thinking_available: does the MODEL support thinking at all (a fact
+    # about the weights/template, not a policy): devstral false,
+    # mistral-medium true. When false, every reasoning surface is
+    # suppressed — no dial line, no opener, levels inert.
+    thinking_available: bool = True
+    # thinking: the POLICY (ternary).
+    #   "on"          -> every request routes to the family's HIGHEST level
+    #                    (canonical high). Always think; never adapt.
+    #   "off"         -> every request routes to the LOWEST (canonical low:
+    #                    gpt-oss 'Reasoning: low', hy3 'no_think', qwen the
+    #                    pre-closed block).
+    #   "per_request" -> the request's level is honored; a request WITHOUT a
+    #                    level routes to the LOWEST (None -> low, never
+    #                    medium) — adaptive serving consults the router.
+    # Legacy bools are coerced: true -> "on", false -> "off".
+    thinking: str = "per_request"
     # Reasoning effort level rendered as a "Reasoning: <level>" line in the
     # system block (harmony + Step/chatml). None → use the family default.
     # Inert for binary families (tekken/Mistral use the `thinking` bool only).
     thinking_mode: Optional[str] = None
+
+    @field_validator("thinking", mode="before")
+    @classmethod
+    def _coerce_thinking(cls, v):
+        # Legacy bool configs (and YAML true/false) map onto the ternary.
+        if isinstance(v, bool):
+            return "on" if v else "off"
+        if v not in ("on", "off", "per_request"):
+            raise ValueError(
+                f"thinking must be on|off|per_request (or a legacy bool), got {v!r}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _thinking_requires_availability(self):
+        # An unavailable model cannot be "on": force the policy off so the
+        # config cannot claim behavior the model cannot deliver.
+        if not self.thinking_available and self.thinking != "off":
+            self.thinking = "off"
+        return self
     # Session continuity policy. When true (the DEFAULT), sessions keep a
     # token history and FULLY RE-PREFILL each turn from the pristine static
     # snapshot — whole-state restore, the one rollback every architecture

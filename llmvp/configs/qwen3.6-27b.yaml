@@ -38,7 +38,10 @@ model:
   n_gpu_layers: -1   
   seed: -1
   verbose: false
-  thinking: true
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # canon: always-on thinking model — always think, never adapt (operator)
+  thinking_available: true
+  thinking: "on"
   # 2026-07-22: was on the legacy save_state/load_state session path (no
   # replay, no resident_seq_cache) — the same exposure found on
   # mistral-small-4, where a corrupted saved state is reloaded every turn and

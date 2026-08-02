@@ -59,7 +59,10 @@ model:
   verbose: false
   flash_attn_type: auto
   n_batch: 2048
-  thinking: true
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # same treatment as qwen3.6 (operator)
+  thinking_available: true
+  thinking: "on"
   swa_full: false
   # FLIPPED 2026-07-30 per run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results): B08 measured resident+unified
   # flat (9 tok/turn fresh, needles intact, full 202,752 window undivided).

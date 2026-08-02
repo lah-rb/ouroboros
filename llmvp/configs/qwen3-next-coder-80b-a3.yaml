@@ -58,7 +58,10 @@ model:
   n_gpu_layers: -1   
   seed: -1
   verbose: false
-  thinking: false
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # dial-less non-thinking coder: thinking UNAVAILABLE
+  thinking_available: false
+  thinking: "off"
   # Hybrid recurrent state: per-turn save/load splicing is unsound
   # (upstream llama.cpp #22384) — sessions re-prefill from history.
   session_full_replay: true

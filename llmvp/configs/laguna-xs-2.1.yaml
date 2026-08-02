@@ -73,7 +73,10 @@ model:
   # FLIPPED 2026-07-30: the owed thinking:true rerun (tier arm 4 of
   # tier_20260730-082456). The non-thinking arm03 verdict stands as the
   # baseline; this is the variant it called for.
-  thinking: true
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # operator: none -> no_think (per-request dial live)
+  thinking_available: true
+  thinking: "per_request"
   # FLIPPED 2026-07-30 per cell RC1: sliding_window 512, so swa_full is
   # what makes pinned/forked prefixes sound (sibling laguna-s runs it in
   # production batched).

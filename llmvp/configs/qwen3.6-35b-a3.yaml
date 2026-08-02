@@ -66,7 +66,10 @@ model:
   # (observed as multiple concatenated JSON objects per turn, 34% of session
   # turns — which broke the one-object menu contract). Enable thinking so the
   # <think> span is captured/stripped and the answer parses cleanly.
-  thinking: true
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # canon: always-on thinking model — always think, never adapt (operator)
+  thinking_available: true
+  thinking: "on"
   # Re-prefill sessions from history (robust default; avoids the deep-session
   # save_state overflow). Sound for any model.
   session_full_replay: true

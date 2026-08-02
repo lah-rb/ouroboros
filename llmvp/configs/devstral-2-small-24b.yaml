@@ -34,7 +34,10 @@ model:
   n_gpu_layers: -1   
   seed: -1
   verbose: false
-  thinking: false
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # operator: thinking_available false
+  thinking_available: false
+  thinking: "off"
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

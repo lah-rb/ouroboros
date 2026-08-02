@@ -75,7 +75,10 @@ model:
   kv_unified: true
   swa_full: true
   session_full_replay: true
-  thinking: false
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # the non-think model variant: thinking UNAVAILABLE
+  thinking_available: false
+  thinking: "off"
 
 prompt:
   persona_file: "./knowledge/SOUL.md"

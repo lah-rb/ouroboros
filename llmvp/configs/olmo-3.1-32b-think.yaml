@@ -67,7 +67,10 @@ model:
   kv_unified: true
   swa_full: true
   session_full_replay: true
-  thinking: true
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # dedicated think variant — dial-less, always thinks
+  thinking_available: true
+  thinking: "on"
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
