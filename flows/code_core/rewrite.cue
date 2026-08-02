@@ -68,14 +68,117 @@ rewrite: #FlowDefinition & {
 			params: context_budget: 10
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "generate_rewrite"}]
+				rules: [{condition: "true", transition: "offer_context_menu"}]
 			}
+		}
+
+		// ── Scope-don't-truncate drill-down (OPEN_TASKS §21) ─────────
+		// Before generating, the model may pull up to 3 FULL symbol bodies
+		// from related files (the operator's menu-one-deeper design). Options
+		// are EMBEDDED, so resolve_options can never come back empty — the
+		// EmptyMenuError park path is unreachable from this step — and both
+		// default and no_answer fall through to generate_rewrite, so a mute
+		// model costs nothing. Corrections don't consume picks (the diagnose
+		// trace-correction discipline); both are capped at 3 in the action.
+		offer_context_menu: #StepDefinition & {
+			action:      "inference"
+			description: "Optionally pull full symbol bodies from related files before rewriting (max 3)"
+			context: optional: [
+				"file_context",
+				"repo_map_formatted",
+				"target_file",
+				"drilldown_bodies",
+				"drilldown_feedback",
+				"drilldown_picks",
+				"drilldown_corrections",
+			]
+			turn: #Turn & {
+				response_shape: "menu_compound"
+				sections: [
+					{type: "role", template: "personas/code_author"},
+					{type: "problem", template: "rewrite/task_with_validation_errors"},
+					{type: "evidence",
+						ref:   {$ref: "context.repo_map_formatted"},
+						title: "Repository map (signatures only)"},
+					{type: "evidence",
+						ref:   {$ref: "context.menu_file_excerpts"},
+						title: "Dependency context you already have"},
+					{type: "evidence",
+						ref:   {$ref: "context.menu_drilldown_block"},
+						title: "Symbols you already pulled"},
+					{type: "evidence",
+						ref:   {$ref: "context.drilldown_feedback"},
+						title: "Previous request"},
+					{type: "instruction", template: "rewrite/drilldown_instruction"},
+					{type: "options"},
+					{type: "envelope"},
+				]
+				response: {
+					options: {
+						pull_symbol: #MenuOption & {
+							key:         "pull_symbol"
+							description: "Read a related symbol's FULL body before rewriting"
+							arg: {
+								name:        "symbol_ref"
+								description: "file.py:Symbol — e.g. ui.py:UI.prompt"
+							}
+						}
+						proceed: #MenuOption & {
+							key:         "proceed"
+							description: "I have enough context — write the rewrite now"
+						}
+					}
+					publish_selection: "context_request"
+				}
+				transitions: {
+					options: {
+						pull_symbol: "fetch_symbol"
+						proceed:     "generate_rewrite"
+					}
+					default:   "generate_rewrite"
+					no_answer: "generate_rewrite"
+				}
+				config: {temperature: "t*0.3", max_tokens: 4096}
+				retries: 2
+			}
+			pre_compute: [
+				{formatter: "render_dependency_excerpts", output_key: "menu_file_excerpts"
+					params: source:                                  {$ref: "input.file_context"}},
+				{formatter: "render_drilldown_bodies", output_key: "menu_drilldown_block"
+					params: source:                               {$ref: "context.drilldown_bodies", default: []}},
+			]
+		}
+
+		fetch_symbol: #StepDefinition & {
+			action:      "fetch_symbol_body"
+			description: "Load file.py:Symbol via effects; append its body or queue a correction"
+			context: optional: [
+				"context_request_arg",
+				"working_directory",
+				"drilldown_bodies",
+				"drilldown_picks",
+				"drilldown_corrections",
+			]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.budget_exhausted == true", transition: "generate_rewrite"},
+					{condition: "result.exhausted == true", transition: "generate_rewrite"},
+					{condition: "true", transition: "offer_context_menu"},
+				]
+			}
+			publishes: [
+				"drilldown_bodies",
+				"drilldown_picks",
+				"drilldown_feedback",
+				"drilldown_corrections",
+			]
 		}
 
 		generate_rewrite: #StepDefinition & {
 			action:      "inference"
 			description: "Generate complete file replacement"
-			context: optional: ["project_manifest", "repo_map_formatted", "target_file"]
+			context: optional: ["project_manifest", "repo_map_formatted", "target_file", "drilldown_bodies"]
 			turn: #Turn & {
 				response_shape: "code"
 				sections: [
@@ -108,6 +211,9 @@ rewrite: #FlowDefinition & {
 				// (empty when the real file lives in a container).
 				{formatter: "extract_field", output_key: "target_file_content"
 					params: {source:                    {$ref: "context.target_file"}, field: "content"}},
+				// Bodies the model pulled via the §21 drill-down menu.
+				{formatter: "render_drilldown_bodies", output_key: "requested_symbols_block"
+					params: source:                               {$ref: "context.drilldown_bodies", default: []}},
 			]
 			publishes: ["inference_response"]
 		}

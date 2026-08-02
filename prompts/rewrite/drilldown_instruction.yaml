@@ -1,0 +1,22 @@
+# Prompt template: rewrite/drilldown_instruction
+#
+# Instruction for the scope-don't-truncate drill-down menu (OPEN_TASKS §21):
+# before writing a full-file rewrite the model may pull up to three FULL
+# symbol bodies from related files. Static text — the dynamic parts
+# (feedback, already-pulled bodies) ride the evidence sections, so this
+# stays byte-identical every turn and KV-caches.
+
+id: rewrite/drilldown_instruction
+content: |
+  You are about to rewrite the file shown above. Before you do, you may
+  read the FULL body of up to three symbols from related files — use this
+  when the fix depends on exactly how another module behaves (a signature
+  you must call correctly, a return shape you must match).
+
+  - pull_symbol: name one symbol as file.py:Symbol (e.g. ui.py:UI.prompt,
+    or a bare function like loader.py:load_world). You will see its full
+    body and may then pull another or proceed.
+  - proceed: you have enough context — go write the rewrite now.
+
+  Do not pull symbols you can already see above, and do not pull more
+  than you need: verify the one thing the fix hinges on, then proceed.

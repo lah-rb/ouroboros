@@ -5560,7 +5560,8 @@
             "validation_results"
           ],
           "optional": [
-            "mission"
+            "mission",
+            "target_file_path"
           ]
         },
         "params": {},
@@ -12296,10 +12297,185 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "generate_rewrite"
+              "transition": "offer_context_menu"
             }
           ]
         },
+        "terminal": false
+      },
+      "offer_context_menu": {
+        "action": "inference",
+        "description": "Optionally pull full symbol bodies from related files before rewriting (max 3)",
+        "context": {
+          "required": [],
+          "optional": [
+            "file_context",
+            "repo_map_formatted",
+            "target_file",
+            "drilldown_bodies",
+            "drilldown_feedback",
+            "drilldown_picks",
+            "drilldown_corrections"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "menu_compound",
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/code_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "template": "rewrite/task_with_validation_errors",
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.repo_map_formatted"
+              },
+              "title": "Repository map (signatures only)",
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.menu_file_excerpts"
+              },
+              "title": "Dependency context you already have",
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.menu_drilldown_block"
+              },
+              "title": "Symbols you already pulled",
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.drilldown_feedback"
+              },
+              "title": "Previous request",
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "rewrite/drilldown_instruction",
+              "required": false
+            },
+            {
+              "type": "options",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {
+            "options": {
+              "pull_symbol": {
+                "key": "pull_symbol",
+                "description": "Read a related symbol's FULL body before rewriting",
+                "arg": {
+                  "name": "symbol_ref",
+                  "description": "file.py:Symbol \u2014 e.g. ui.py:UI.prompt"
+                },
+                "terminal": false
+              },
+              "proceed": {
+                "key": "proceed",
+                "description": "I have enough context \u2014 write the rewrite now",
+                "terminal": false
+              }
+            },
+            "publish_selection": "context_request"
+          },
+          "transitions": {
+            "default": "generate_rewrite",
+            "no_answer": "generate_rewrite",
+            "options": {
+              "pull_symbol": "fetch_symbol",
+              "proceed": "generate_rewrite"
+            }
+          },
+          "config": {
+            "temperature": "t*0.3",
+            "max_tokens": 4096
+          },
+          "retries": 2
+        },
+        "pre_compute": [
+          {
+            "formatter": "render_dependency_excerpts",
+            "output_key": "menu_file_excerpts",
+            "params": {
+              "source": {
+                "$ref": "input.file_context"
+              }
+            }
+          },
+          {
+            "formatter": "render_drilldown_bodies",
+            "output_key": "menu_drilldown_block",
+            "params": {
+              "source": {
+                "$ref": "context.drilldown_bodies",
+                "default": []
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "fetch_symbol": {
+        "action": "fetch_symbol_body",
+        "description": "Load file.py:Symbol via effects; append its body or queue a correction",
+        "context": {
+          "required": [],
+          "optional": [
+            "context_request_arg",
+            "working_directory",
+            "drilldown_bodies",
+            "drilldown_picks",
+            "drilldown_corrections"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.budget_exhausted == true",
+              "transition": "generate_rewrite"
+            },
+            {
+              "condition": "result.exhausted == true",
+              "transition": "generate_rewrite"
+            },
+            {
+              "condition": "true",
+              "transition": "offer_context_menu"
+            }
+          ]
+        },
+        "publishes": [
+          "drilldown_bodies",
+          "drilldown_picks",
+          "drilldown_feedback",
+          "drilldown_corrections"
+        ],
+        "effects": [],
         "terminal": false
       },
       "generate_rewrite": {
@@ -12310,7 +12486,8 @@
           "optional": [
             "project_manifest",
             "repo_map_formatted",
-            "target_file"
+            "target_file",
+            "drilldown_bodies"
           ]
         },
         "params": {},
@@ -12398,6 +12575,16 @@
                 "$ref": "context.target_file"
               },
               "field": "content"
+            }
+          },
+          {
+            "formatter": "render_drilldown_bodies",
+            "output_key": "requested_symbols_block",
+            "params": {
+              "source": {
+                "$ref": "context.drilldown_bodies",
+                "default": []
+              }
             }
           }
         ],

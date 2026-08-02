@@ -656,7 +656,10 @@ file_ops: #FlowDefinition & {
 			description: "Log non-blocking issues as notes, then compile report"
 			context: {
 				required: ["validation_results"]
-				optional: ["mission"]
+				// target_file_path: the lint_warning note tags the target file
+				// so _filter_notes_for_file surfaces it next time the file is
+				// touched (the 2026-08-02 wire-up of a write-only channel).
+				optional: ["mission", "target_file_path"]
 			}
 			resolver: {
 				type: "rule"

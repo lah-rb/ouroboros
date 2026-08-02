@@ -890,9 +890,26 @@ def render_assembled_package(params: dict, namespaces: dict) -> str:
     return "\n\n".join(parts)
 
 
+def render_drilldown_bodies(params: dict, namespaces: dict) -> str:
+    """Render the drill-down picks (§21 scope-don't-truncate menu) as a
+    titled block for the rewrite prompt. Empty when nothing was pulled."""
+    bodies = params.get("source") or []
+    if not isinstance(bodies, list) or not bodies:
+        return ""
+    lines = []
+    for entry in bodies:
+        if not isinstance(entry, dict) or not entry.get("body"):
+            continue
+        lines.append(f"──── {entry.get('ref', '?')} (requested) ────")
+        lines.append(str(entry["body"]).rstrip())
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 RENDERER_REGISTRY: dict[str, Any] = {
     "render_file_context": render_file_context,
     "render_dependency_excerpts": render_dependency_excerpts,
+    "render_drilldown_bodies": render_drilldown_bodies,
     "render_data_contracts": render_data_contracts,
     "render_director_overview": render_director_overview,
     "render_quality_overview": render_quality_overview,

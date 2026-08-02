@@ -6,6 +6,8 @@ content: |
   ## Architecture & import conventions
   {context.architecture_spec}
 
+  {context.requested_symbols_block}
+
   {context.data_contract_block}
 
   Preserve compatibility with these signatures and conventions when

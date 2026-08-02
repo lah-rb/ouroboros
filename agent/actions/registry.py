@@ -222,6 +222,7 @@ def build_action_registry() -> ActionRegistry:
     # ── AST-aware editing actions ─────────────────────────────────
     from agent.actions.ast_actions import (
         action_extract_symbol_bodies,
+        action_fetch_symbol_body,
         action_start_edit_session,
         action_select_symbol_turn,
         action_prepare_next_rewrite,
@@ -508,6 +509,7 @@ def build_action_registry() -> ActionRegistry:
 
     # ── AST-aware editing actions ─────────────────────────────────
     registry.register("extract_symbol_bodies", action_extract_symbol_bodies)
+    registry.register("fetch_symbol_body", action_fetch_symbol_body)
     registry.register("start_edit_session", action_start_edit_session)
     registry.register("select_symbol_turn", action_select_symbol_turn)
     registry.register("prepare_next_rewrite", action_prepare_next_rewrite)

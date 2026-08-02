@@ -1621,9 +1621,9 @@ async def action_rewrite_symbol_turn(step_input: StepInput) -> StepOutput:
         # 1-indexed line span the new body occupies in updated_content — used
         # by the post-splice gate to tell "this splice is bad" from "this file
         # was already broken somewhere else".
-        _body_start = content_bytes[:start_byte].decode(
-            "utf-8", errors="replace"
-        ).count("\n") + 1
+        _body_start = (
+            content_bytes[:start_byte].decode("utf-8", errors="replace").count("\n") + 1
+        )
         _body_end = _body_start + max(len(new_body.splitlines()) - 1, 0)
     else:
         file_lines = file_content.splitlines(keepends=True)
@@ -2510,4 +2510,111 @@ async def action_prepare_insert_context(step_input: StepInput) -> StepOutput:
             f"name={target_symbol!r} kind={kind!r}"
         ),
         context_updates={"current_symbol": current_symbol},
+    )
+
+
+async def action_fetch_symbol_body(step_input: StepInput) -> StepOutput:
+    """Fetch ONE symbol's full body for the rewrite drill-down menu (§21).
+
+    The operator's scope-don't-truncate design: when a rewrite's context
+    is not enough, the model goes ONE MENU DEEPER and pulls full symbols
+    from related files by ``file.py:Symbol`` reference. This action is the
+    fetch half — reads the CURRENT bytes via effects (container-routed,
+    the rewrite-v3 rationale), resolves the ref through the rich symbol
+    table, and accumulates bodies in context.
+
+    Discipline mirrors diagnose's trace corrections: a malformed or
+    unresolvable ref sets ``drilldown_feedback`` and burns a CORRECTION,
+    never a PICK; both are capped at 3 so the loop is bounded (worst case
+    seven small turns, typical one).
+
+    Context: context_request_arg (the ref), working_directory,
+             drilldown_bodies / drilldown_picks / drilldown_corrections
+    Publishes: drilldown_bodies, drilldown_picks, drilldown_feedback,
+               drilldown_corrections
+    """
+    import os
+
+    ctx = step_input.context
+    effects = step_input.effects
+    ref = str(ctx.get("context_request_arg") or "").strip()
+    working_dir = str(
+        ctx.get("working_directory") or step_input.inputs.get("working_directory") or ""
+    )
+    bodies: list = list(ctx.get("drilldown_bodies") or [])
+    picks = int(ctx.get("drilldown_picks") or 0)
+    corrections = int(ctx.get("drilldown_corrections") or 0)
+
+    def _correct(feedback: str) -> StepOutput:
+        n = corrections + 1
+        return StepOutput(
+            result={
+                "fetched": False,
+                "exhausted": n >= 3,
+                "budget_exhausted": False,
+            },
+            observations=f"Drill-down correction {n}/3: {feedback[:120]}",
+            context_updates={
+                "drilldown_bodies": bodies,
+                "drilldown_picks": picks,
+                "drilldown_corrections": n,
+                "drilldown_feedback": feedback,
+            },
+        )
+
+    if not ref:
+        return _correct(
+            "Your pull_symbol choice carried no symbol_ref. Reply with "
+            '{"choice": "pull_symbol", "symbol_ref": "file.py:Symbol"}.'
+        )
+    if ":" not in ref:
+        return _correct(
+            f"'{ref}' is missing the colon. The form is file.py:Symbol — "
+            "e.g. ui.py:UI.prompt."
+        )
+
+    file_part, _, symbol_part = ref.partition(":")
+    file_part, symbol_part = file_part.strip(), symbol_part.strip()
+    content = ""
+    if effects is not None:
+        try:
+            fc = await effects.read_file(
+                os.path.join(working_dir, file_part) if working_dir else file_part
+            )
+            if getattr(fc, "exists", False):
+                content = getattr(fc, "content", "") or ""
+        except Exception:  # noqa: BLE001 — treated as file-not-found below
+            content = ""
+    if not content:
+        return _correct(
+            f"Could not read '{file_part}'. Use a path exactly as it appears "
+            "in the repository map."
+        )
+
+    table = _build_symbol_table(file_part, content)
+    sym = _lookup_symbol(table, symbol_part)
+    if sym is None or not sym.get("body"):
+        available = ", ".join(
+            s.get("name", "?") for s in table[:20] if isinstance(s, dict)
+        )
+        return _correct(
+            f"No symbol '{symbol_part}' in {file_part}. Available: "
+            f"{available or '(none — file has no extractable symbols)'}"
+        )
+
+    bodies.append({"ref": ref, "body": sym["body"]})
+    picks += 1
+    return StepOutput(
+        result={
+            "fetched": True,
+            "exhausted": False,
+            "budget_exhausted": picks >= 3,
+        },
+        observations=f"Drill-down pick {picks}/3: {ref}",
+        context_updates={
+            "drilldown_bodies": bodies,
+            "drilldown_picks": picks,
+            "drilldown_corrections": corrections,
+            "drilldown_feedback": "",
+        },
     )
