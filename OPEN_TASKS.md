@@ -212,6 +212,10 @@ reporting field (`agent/trace.py:727`), never as an input to a budget.
   watch `checkedOut`/`engineActiveStreams` return to 0 within a reaper sweep.
   The fix is unit-tested (`tests/test_watchdog_identity.py`) and behaved in the
   wild; this is the deliberate drill. No drill script exists yet.
+  (The POOL-mode sibling — CancelledError in `_heal_instance` stranding a
+  limit=1 pool's only instance — is CLOSED 2026-08-03, `9da59d0`:
+  shield + finally-requeue mirroring `_release_seat`, pinned by
+  `llmvp/tests/test_pool_release_hardening.py`.)
 - **deep_research calibration** — extract-step INSUFFICIENT rate was high, and
   the single skeptic returned 26/28 unsupported on the first live run. Run the
   verify panel against a factual brief with known-good answers to calibrate the
@@ -541,8 +545,13 @@ laguna-apex looked like a total loss there and produced 13 files at 2h.
 
 ## 17. The design gate rejects a VALID src/ layout — 5 arms lost
 
-**CONFIRMED DEFECT, not a model failure. Fix NOT applied — landing it mid-sweep
-would change which architectures survive for arms 7-18.**
+**CONFIRMED DEFECT, not a model failure.**
+**Status:** FIX LANDED 2026-07-31 (`5852992`): third exemplar (coherent NESTED)
+plus the sys.path discriminator in the critic prompt. REMAINING = the live
+retest: re-run the three gemma arms (~2 min each) at epoch v2.0 open to
+validate the fix on the exact failing designs. The deterministic
+materialise-and-import refutation below stays as OPTIONAL hardening — land it
+only if the retest still shows a false incoherence.
 
 ### What happens
 
@@ -621,7 +630,10 @@ was already dead).
 
 ## 18. The seam gate holds the decisive defect in its hand and discards it
 
-**Status:** OPEN. Evidence complete, fix NOT landed (mid-sweep — see Timing).
+**Status:** CLOSED 2026-08-02 (`1de18a7`): live→dead seam transitions BLOCK
+(static false-dead never transitions), the gate runs on every fileset change,
+and a zero-gate-run park WARNS (§19's half). Remaining validation is simply the
+v2 field runs exercising it.
 **Found:** 2026-08-01, arm13 (qwen3.5-122b) of `tier_20260731-050209`.
 **Reproduce:** `uv run python -P dev/blind_panel/seam_deadcheck.py`
 
@@ -779,7 +791,9 @@ recognised rather than re-investigated.
 
 ## 19. The seam gate never ran on two arms — including one that shipped the exact defect it exists to catch
 
-**Status:** OPEN. Evidence complete, fix NOT landed (mid-sweep, same reason as §17/§18).
+**Status:** CLOSED 2026-08-02 (`1de18a7`, with §18): the gate cadence keys on
+fileset change (not the old trigger), and a run that parks with ZERO seam-gate
+executions logs a WARNING into the driver record.
 **Found:** 2026-08-01, arm14 (qwen3.6-27b) of `tier_20260731-050209`.
 **Distinct from §18.** §18 is the gate computing the answer and discarding it.
 This is the gate NOT RUNNING AT ALL.
@@ -883,8 +897,10 @@ mid-flight makes the remaining arms non-comparable.
 
 ## 20. Every README in the sweep was truncated by OUR extraction, and every model was docked for it
 
-**Status:** OPEN. Root cause PROVEN by reproduction; fix NOT landed (one arm still
-running — defer with §17/§18/§19).
+**Status:** CLOSED 2026-08-02 (`a0ec769`): batch prompts mandate 4-backtick
+fences for `.md` files, and `_restitch_truncated_md` repairs the legacy shape
+on extraction. The v1.2 judging records remain contaminated as documented —
+scores stand pre-epoch; no rejudge.
 **Found:** 2026-08-01, prompted by the operator's rubric audit.
 **Same class as** [[featurizer-bare-lt-marker-corruption]]: the extraction layer
 corrupting valid model output, systematically misattributed to models.
@@ -967,8 +983,17 @@ not revised. The three-arm build-backend string remains a separate open signal.
 
 ## 21. Truncation audit — "scope, don't truncate" violations (2026-08-01)
 
-**Status:** OPEN. Audit complete; adopted design recorded; fixes land with the
-epoch batch. Triggered by the laguna Q6_K degeneration study: `prepare_context`
+**Status:** CLOSED 2026-08-02/03 (epoch batch W1, `9b0fed5` + `0a46155`).
+Every Tier A site fixed: rewrite got the symbol-menu drill-down
+(offer_context_menu → fetch_symbol_body, cap 3 picks) + AST-derived import
+deps + signature blocks; the interact tester map renders complete entries via
+`render_data_file` (skeleton fallback); command-vocab loads full; the swarm
+diagnose-worker symbol-scopes around implicated line numbers; the seam
+directive caps per-problem (regressions first). Tier A′ head-cuts adopted
+`_cap_diagnostic` (traceback-aware tail-keep) at all five sites. Original
+audit preserved below as the map of the class.
+
+Triggered by the laguna Q6_K degeneration study: `prepare_context`
 byte-cuts related files at 3,000 chars, which left `UI.prompt` (byte 9,634 of
 ui.py) INVISIBLE to a rewrite whose entire deliberation hinged on that
 signature — 4 long-cycle orbits, ~150k wasted tokens.
