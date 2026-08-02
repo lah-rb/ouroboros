@@ -1,0 +1,65 @@
+# Laguna-S-2.1 — bartowski Q6_K_L: the QUANT-PROVENANCE degeneration A/B.
+#
+# WHY THIS EXISTS (operator, 2026-08-03). The unsloth UD-Q6_K degenerated
+# MORE than the lower-fidelity APEX-i-quality (5 degen events vs 4 on the
+# v1.2 brief, plus the Q6_K degeneration study's long-cycle orbits) —
+# backwards if degeneration were purely fidelity-driven, which points at
+# QUANT PROVENANCE (imatrix/recipe differences between quantizers) rather
+# than bits. This config is the third point on that line: same model, same
+# nominal Q6 class, different quantizer. Verified before writing: this GGUF
+# carries the SAME chat template as the other S quants (sha f0ae8663 =
+# dev/laguna_chat_template.jinja) and the same tokenizer facts (bos_id 2 =
+# 〈|EOS|〉, add_bos=true, think tags USER_DEFINED) — the only variable is
+# the quantization.
+#
+# Vendor sampling bounds (huggingface.co/poolside/Laguna-S-2.1-GGUF, read
+# 2026-08-03): temperature <= 0.7, top_p <= 0.95. The family spec serves
+# 0.6 / 0.95, inside bounds.
+#
+# GEOMETRY (kv-geometry-before-swarm discipline):
+#   weights: 39,593,206,240 + 39,441,933,824 + 22,792,942,112
+#          = 101,828,082,176 B ≈ 101.8 GB (3 shards, measured on disk)
+#          (~3.9 GB MORE than unsloth UD-Q6_K's 97.9 — the _L embed/output
+#           tensors are kept at higher precision)
+#   KV: 192 KiB/token (family constant, quant-independent)
+#   n_ctx 73728 -> 73728 x 196608 B = 14.5 GB
+#   TOTAL ≈ 116.3 GB — the same envelope the unsloth Q6_K proved at 116.0.
+#   The extra 3.9 GB of weights is paid for with ~18k of context vs the
+#   unsloth quant's 92160. Do NOT raise n_ctx without redoing this.
+#
+# extends: ONE CONFIG = ONE SCORE — quant provenance is the scored property.
+extends: laguna-s-2.1
+
+model:
+  name: Laguna-S-2.1-Q6KL-bartowski
+  path: /Users/lah-rb/.lmstudio/models/bartowski/Laguna-S-2.1-GGUF/Laguna-S-2.1-Q6_K_L-00001-of-00003.gguf
+  n_ctx: 73728
+  probe_verified_weights_bytes: 101828082176
+  # No ceiling probe for this file yet — the safe pick above is arithmetic,
+  # not measurement (the q6k precedent: parent's probe must not ride).
+  probe_verified_n_ctx: null
+  # 101.8 weights + 14.5 KV = 116.3, vs 137.4 physical.
+  kv_preflight_gb: 119
+
+graphql:
+  max_tokens: 73728
+
+generation:
+  max_tokens_default: 73728
+
+# ── TIER (doc-only) ──────────────────────────────────────────────────
+tier:
+  league: contemplator
+  status: not_yet_run
+  quant: Q6_K_L (bartowski)   # THE PROPERTY THIS CONFIG SCORES
+  expectation:
+    registered: 2026-08-03
+    basis: quant-provenance reasoning (operator degeneration A/B)
+    outcome: pending
+    why: >
+      PRE-REGISTERED. The unsloth UD-Q6_K degenerated MORE than the
+      lower-bit APEX-i-quality — if degeneration tracks quantizer recipe
+      rather than bit-width, this bartowski Q6_K_L should degenerate LESS
+      than the unsloth Q6_K at equal-or-better fidelity. If it degenerates
+      the same, the propensity is model-level at Q6-class fidelity and the
+      APEX recipe's stability is the anomaly worth studying instead.
