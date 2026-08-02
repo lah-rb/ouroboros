@@ -1,4 +1,4 @@
-# TIER_RUBRIC v2 — comparative anchored-ladder protocol
+# TIER_RUBRIC v2.1 — comparative anchored-ladder protocol
 
 **An epoch-scoped comparative instrument. The record is a tier, a ladder
 position, a set of facts, and a paragraph — there is no total score.**
@@ -7,6 +7,52 @@ Adopted 2026-08-01 (operator + assistant design sessions, in-chat drafts rev
 1–3). Supersedes `TIER_RUBRIC_v1.md` for all future campaigns; the v1.2
 records of `tier_20260731-050209` stand as written and are pre-epoch
 reference, not ladder members.
+
+## Changelog
+
+- **v2.1 (2026-08-03) — THE PANEL SPLIT.** v2.0 inverted its own stated
+  purpose. Measured on its own first eight flights, **six were 5–0 sweeps**:
+  four of five axes (working surface, state integrity, delivered scope, and a
+  function-gated ambition) resolve one question, so the instrument measured
+  delivery five times and reported it with five labels. Three specific
+  crossings, all fixed here:
+
+  1. **Ambition was gated on delivery.** §7 said the goal was ambition
+     "understood on its own merits" and then defined the axis as "weighted by
+     what survived" — a contradiction one line apart. Judges read it as
+     written ("almost none of A's survived, so the axis goes to B"), which is
+     the anti-ambition selection bias v2 was built to REMOVE, now codified.
+     The gate is gone.
+  2. **UX and UI were conflated, and UI won.** One "experience" axis absorbed
+     v1.2's `ux` *and* `creativity`; judges spent it on help accuracy, status
+     blocks, naming and case handling. Flight 6 is the proof: *"B writes
+     better prose and has the real title banner, but it has no help
+     whatsoever"* → the axis went against the better-written artifact. Split
+     into felt play (UX) and surface craft (UI), with imagination its own
+     axis.
+  3. **Categories with no home.** `reusability` was declared "real again"
+     with nothing built to catch it; `org` was dropped or demoted to "the
+     judge's paragraph"; `documentation` was excluded as framework-coupled
+     "until OPEN_TASKS §20 lands" — §20 landed 2026-08-02 (`a0ec769`) and
+     nothing propagated, so eight flights excluded it on an expired
+     condition.
+
+  The deeper inheritance: v1.2's function coupling was already over-dominant
+  (`creativity` required the choice to have "PAID OFF"; `ambition` was merged
+  with `completeness` by design), and v2.0 amplified it by removing nearly
+  every decoupled dimension. v1.2 §3.4 had written the correct principle for
+  conformance alone — *"Conformance measures whether the model did what was
+  asked; the other dimensions measure whether it delivered. Keeping them
+  separate is what makes the decomposition informative."* **v2.1 generalises
+  that split to every model-strength category**, via two panels that are
+  reported separately and never summed.
+
+  Cost is unchanged. v2.0 conflated *fewer sessions* with *fewer dimensions*;
+  only the first was ever the driver (30 sessions for 12 artifacts came from
+  ★★★ rejudges and full-judging obvious tier 3s). Ten forced choices in one
+  session cost marginal tokens, not a second session.
+
+- **v2.0 (2026-08-01)** — initial comparative instrument; superseded v1.2.
 
 ## Why v1 was retired — the two-sentence version
 
@@ -136,12 +182,19 @@ evidence:
   rewriting the world?
 - **Robustness battery** — the ten probes, reported as a fact table with the
   worst impact named; not banded, not scored.
+- **Premise line** (v2.1) — two sentences on what this game *is*, in the
+  judge's own words, plus **one quoted line of its prose**. Recorded before
+  any axis is voted, never ranked. It exists because a record made only of
+  verdicts tells you how an artifact worked and nothing about what it was;
+  the field's own operator could not recognise his models from their records.
 - **Attribution labels** on every observation:
   `model-innate / interaction / framework-coupled`. Framework-coupled
-  observations (project layout; documentation until OPEN_TASKS §20 lands) are
-  recorded and **excluded from comparison**. The cautionary example is
-  §20 itself: v1.2 judges docked every artifact's docs for a truncation OUR
-  extraction caused.
+  observations are recorded and **excluded from comparison**. At this brief
+  size that is **project layout only** — the scaffold dictates it. The
+  cautionary example is OPEN_TASKS §20: v1.2 judges docked every artifact's
+  docs for a truncation OUR extraction caused. **§20 landed 2026-08-02
+  (`a0ec769`), so documentation is IN comparison as of v2.1** (axis B10) —
+  the expiring condition v2.0 wrote and never propagated.
 
 ## 5. Anchors
 
@@ -180,30 +233,99 @@ smoke → facts → **flight vs GUARDIAN (always first, every candidate)** →
   optional nearest-neighbour flight only at a standing boundary.
 
 **Flights:** one blind judge (subagent, packet, read-wall — METHODS.md is the
-engine), plays both artifacts, **forced choice per axis** with a one-line
-justification each (per-axis ties forbidden), then an overall forced choice
-(overall tie allowed, recorded as a tied cluster).
+engine), plays both artifacts, records a premise line for each, then makes a
+**forced choice on every axis of both panels** with a one-line justification
+each (per-axis ties forbidden), then an overall forced choice (overall tie
+allowed, recorded as a tied cluster).
 
-**Escalation is exception-driven.** A 3-judge panel fires only when:
+**The two panel tallies are reported separately and never summed**, e.g.
+`Delivery A 4–0 · Character B 5–1 · Overall —`. The overall remains its own
+judgment and still decides the tier.
+
+**A PANEL SPLIT HALTS THE PLACEMENT.** When the panels disagree on direction,
+the judge flags it and the record is written, but **no tier is recorded and
+no ladder row moves** until the operator rules. The operator chooses: accept
+the judge's overall as called, make the call directly, or escalate to a
+3-judge panel. This is the most informative outcome the instrument can
+produce — an artifact that delivers more while reaching for less, or the
+reverse — and under v2.0 it was structurally impossible, because every axis
+voted the same question. It is a decision for a person, not a default.
+
+**Escalation is otherwise exception-driven.** A 3-judge panel fires only when:
 (a) the judge self-flags the overall as CLOSE;
 (b) the flight decides a tier boundary or a league-top position;
-(c) a transitivity cycle appears — the panel takes the whole triplet.
+(c) a transitivity cycle appears — the panel takes the whole triplet;
+(d) the operator escalates a panel split.
 
 **The middle stays coarse.** Tied clusters are an accepted output; ordering a
 tier's interior changes no decision and buys no information for its cost.
 
-## 7. The axes
+## 7. The axes — two panels
 
-1. **working surface** — how much of what it offers works when invoked
-2. **state integrity** — persistence/reset round-trips without rewriting the world
-3. **experience** — UX, writing, discoverability
-4. **delivered scope** — how much landed, absolute
-5. **ambition** — which attempted more, weighted by what survived
+Ten forced choices in two panels. **Panel A asks whether it works. Panel B
+asks what it is.** They are tallied separately and never summed. A judge who
+finds themselves writing the same sentence on both panels has made an error
+on Panel B.
 
-Overall is its own forced choice, not a sum. Axes 4 and 5 deliberately pull
-against each other: that tension is the anti-ambition bias made visible
-instead of baked in, and reading them as a pair is how ambition is understood
-on its own merits.
+### PANEL A — DELIVERY *(does it work)*
+
+- **A1 · working surface** — how much of what it offers works when invoked.
+- **A2 · state integrity** — does persistence/reset round-trip without
+  rewriting the world?
+- **A3 · robustness** — behaviour under the ten probes: clean refusal vs
+  traceback vs silent misinterpretation. The facts table is kept as well;
+  this axis is the comparative read of it.
+- **A4 · delivered scope** — how much landed, absolute.
+
+These four are expected to correlate; that is not a defect, it is the same
+question asked from four sides. **A 4–0 Panel A is ordinary and carries no
+special weight.**
+
+### PANEL B — CHARACTER *(what is it)*
+
+- **B5 · ambition** — which artifact **reached further**, judged on the design
+  it set out to build, **not on how much of it works**. An artifact that
+  attempted a two-phase boss with a hidden weakness and failed to wire it
+  reached further than one that shipped a single-phase boss cleanly.
+  Delivery is charged on Panel A; charging it again here is double-counting.
+  **If you are writing "but none of it survived", you are voting on the wrong
+  panel.**
+
+- **B6 · imagination — world & voice** — premise, place, prose, the
+  non-obvious idea, **ignoring whether it works**. v1.2 required the choice to
+  have "PAID OFF"; that gate is removed, because whether it paid off is
+  precisely what Panel A measures. **A vivid unreachable world beats a
+  generic reachable one on this axis**, and that inversion is the point:
+  it is the only place in the instrument where imagination can win.
+
+- **B7 · experience (UX) — felt play** — pacing, discoverability, feedback,
+  tension, sense of place. Does the world reveal itself at a decent rate? Is
+  combat tense or arithmetic? Are the NPCs worth talking to? **This is not
+  the help text.**
+
+- **B8 · craft (UI) — surface** — help accuracy, status legibility, naming,
+  error messages, input tolerance, prompt hygiene. Separated from B7 because
+  in v2.0 it silently outvoted felt experience: a checkbox layer is easy to
+  audit and therefore dominates a merged axis.
+
+- **B9 · workability** — could a person work in this? Logic organisation
+  (module boundaries, whether the seams are where you would put them),
+  project organisation, and reusability as one question, because they
+  compound into a single property rather than trading against each other.
+  **Mandatory modification probe:** add a ninth room, or change a weapon's
+  damage, without touching unrelated code — report what broke. Project
+  *layout* stays labeled framework-coupled at this brief size; logic
+  organisation does not.
+
+- **B10 · documentation** — accuracy against play first (a claim contradicted
+  by play is worse than no claim), then completeness: would this let a
+  stranger run and extend the thing? In comparison as of v2.1 (§4).
+
+### Reading the panels
+
+Panel A and Panel B are designed to be able to disagree, and the disagreement
+is the finding — see §6. Facts (completability, binary conformance, the
+robustness battery, the premise lines) are never ranked and never voted.
 
 ## 8. Tiers
 
@@ -239,20 +361,33 @@ two artifacts each) + panels only on exceptions. Versus v1.2's measured 30
 judge-sessions for 12 artifacts: roughly 3–4× cheaper, and adding a model
 never replays the field. The duel is 2 uncapped runs + 1 flight per epoch.
 
+**v2.1 changes nothing here, and that is the correction.** v2.0 cut the
+instrument from ten dimensions to five believing dimension count was a cost;
+it never was. The 30 sessions came from ★★★ rejudges and full-judging obvious
+tier 3s — *session* count. A judge in a flight has already read the rubric,
+built the packet, played both artifacts and probed them; ten forced choices
+instead of five is marginal tokens inside one session. **Coverage is cheap;
+sessions are expensive.** v2.1 buys back v1.2's full coverage at v2.0's price.
+
 ## 12. Where the v1 dimensions went
 
-| v1 dimension | v2 disposition |
-|---|---|
-| no_broken_functions (20) | **working surface** axis |
-| robustness (10) | facts table (worst impact named) |
-| ux (10) | **experience** axis |
-| conformance (10) | **binary fact** (near-full / significantly-deviated) |
-| ambition (10) | **ambition** axis (forced choice, own merits) |
-| creativity (10) | **experience** axis |
-| org: project (5) | dropped — scaffold-dictated at this brief size; labeled observation only |
-| org: logic (5) | judge's paragraph |
-| reusability (10) | real again after the YAML opinion is removed; modification probe stays as facts |
-| documentation (10) | framework-coupled observation until §20 lands; then experience |
-| completability (buried in 3.1 multipliers) | **the headline fact** |
-| tier-3 gate (§2) | the smoke, with documentation and the courtesy fix |
-| ★★★ rejudge (§5) | exception-driven escalation (CLOSE / boundary / cycle) |
+Every v1.2 dimension has a home in v2.1. Where v2.0 dropped, merged or
+deferred one, the v2.1 column is the repair.
+
+| v1.2 dimension | v2.0 disposition | **v2.1** |
+|---|---|---|
+| no_broken_functions (20) | working surface axis | **A1** working surface |
+| robustness (10) | demoted to facts table | **A3** + facts table retained |
+| ux (10) | merged with creativity | **split: B7** felt play + **B8** surface craft |
+| conformance (10) | binary fact | **binary fact** (unchanged — v1.2 §3.4 got this right first) |
+| ambition (10) | axis, but "weighted by what survived" | **B5**, delivery gate REMOVED |
+| creativity (10) | absorbed into experience | **B6** imagination, "PAID OFF" gate REMOVED |
+| org: project (5) | dropped | **B9** (layout still labeled framework-coupled) |
+| org: logic (5) | "judge's paragraph" | **B9** |
+| reusability (10) | declared real, nothing built | **B9**, modification probe MANDATORY |
+| documentation (10) | excluded on a condition that expired | **B10**, in comparison |
+| completability (in 3.1 multipliers) | the headline fact | **headline fact** (unchanged) |
+| tier-3 gate (§2) | the smoke + courtesy fix | unchanged |
+| ★★★ rejudge (§5) | exception-driven escalation | unchanged, plus the operator's panel-split call |
+| — | state integrity (new) | **A2** — a v2.0 addition that earned its place |
+| — | delivered scope (new) | **A4** — likewise |

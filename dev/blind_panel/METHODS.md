@@ -87,13 +87,20 @@ which is the direction people forget to check for.
 5. **Probe robustness deliberately** — unknown commands, empty input, invalid
    moves, EOF/Ctrl-D. Distinguish a clean refusal from a traceback.
 
-6. **Score against the CURRENT rubric — `TIER_RUBRIC_v1.md`, which owns the
-   dimensions and the arithmetic.** (This step used to specify "/50 across five
-   dimensions"; that was the v1.0 scheme and went stale when the instrument
-   became 100 points across ten. Naming the dimensions in two places is how a
-   second source of truth is born — the rubric is the one.) Require a quoted
-   transcript excerpt for every decisive finding, and the concrete furthest
-   point reached.
+6. **Judge against the CURRENT rubric — `TIER_RUBRIC_v2.md` (v2.1), which
+   owns the axes and the verdict form.** (This step has now gone stale twice:
+   it once specified "/50 across five dimensions" from v1.0, and then went on
+   naming `TIER_RUBRIC_v1.md` through the whole first epoch-v2.0 campaign.
+   Naming the dimensions — or the rubric FILE — in two places is how a second
+   source of truth is born. The rubric is the one; this line points at it and
+   says nothing else about its contents.) Require a quoted transcript excerpt
+   for every decisive finding, and the concrete furthest point reached.
+
+6a. **The flight prompt is a file, not a retype.** `FLIGHT_PROMPT.md` in this
+   directory is the canonical judge prompt; fill its placeholders and send it
+   verbatim. Prompts composed fresh per flight drift silently — the v2.0
+   campaign's eight flights were prompted from chat and none of them carried
+   the documentation change the rubric had already scheduled.
 
 7. **Unblind once, at the end**, after all judges report.
 
