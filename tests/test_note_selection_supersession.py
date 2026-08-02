@@ -85,3 +85,48 @@ class TestScoping:
         out = _filter_notes_for_file(_mission(notes), "engine.py")
         assert len(out) == 5
         assert "n6" in out[0]  # newest kept
+
+
+class TestLintWarningChannel:
+    """2026-08-02 wire-up: lint_warning was WRITE-ONLY (two writers, zero
+    readers). Target-tagged notes now surface through the same filter."""
+
+    def test_on_target_lint_warning_surfaces(self):
+        m = _mission(
+            [
+                _note(
+                    "Validation issues (non-blocking):\n  - lint: engine.py: F841",
+                    category="lint_warning",
+                    tags=["lint", "non_blocking", "engine.py"],
+                )
+            ]
+        )
+        out = _filter_notes_for_file(m, "engine.py")
+        assert len(out) == 1 and out[0].startswith("[lint_warning]")
+
+    def test_untagged_lint_warning_stays_out_of_other_targets(self):
+        m = _mission([_note("F841 in parser", category="lint_warning", tags=["lint"])])
+        assert _filter_notes_for_file(m, "engine.py") == []
+
+
+class TestRetiredCategories:
+    """Pruned enum values must LOAD (archives carry them), coerced to general."""
+
+    def test_retired_category_coerces_to_general(self):
+        n = NoteRecord(content="x", category="task_learning")
+        assert n.category == "general"
+        n2 = NoteRecord(content="y", category="dependency_identified")
+        assert n2.category == "general"
+
+    def test_unknown_category_coerces_to_general(self):
+        n = NoteRecord.model_validate({"content": "z", "category": "made_up"})
+        assert n.category == "general"
+
+    def test_live_categories_untouched(self):
+        assert (
+            NoteRecord(content="a", category="lint_warning").category == "lint_warning"
+        )
+        assert (
+            NoteRecord(content="b", category="failure_analysis").category
+            == "failure_analysis"
+        )

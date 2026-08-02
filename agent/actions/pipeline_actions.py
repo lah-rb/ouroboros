@@ -1076,11 +1076,15 @@ async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
 
     note_content = "\n".join(lines)
 
+    # Tag the target file so _filter_notes_for_file surfaces these next time
+    # the file is touched — the channel was WRITE-ONLY until 2026-08-02
+    # (notes written, persisted, never selected into any prompt).
+    target = str(step_input.context.get("target_file_path") or "").strip()
     try:
         await effects.push_note(
             content=note_content,
             category="lint_warning",
-            tags=["lint", "non_blocking"],
+            tags=["lint", "non_blocking"] + ([target] if target else []),
         )
     except Exception as e:
         logger.warning("Failed to save validation notes: %s", e)

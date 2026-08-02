@@ -1011,8 +1011,13 @@ formatters · all logger/observation `[:60]`-class display cuts.
 Written categories: failure_analysis (14 sites), codebase_observation (3),
 lint_warning (2), general (2), architecture_blueprint (2). Read filters cover
 failure_analysis / architecture_blueprint / codebase_observation /
-approach_rejected. **Going stale:** `lint_warning` is WRITE-ONLY (no read
-filter consumes it — dead channel); `task_learning`, `requirement_discovered`,
-`dependency_identified` are enum values with ZERO writers. Supersession +
-target scoping + cap-5 landed (b82d77c); the stale channels above are the
-remaining cleanup — wire or prune with the epoch batch.
+approach_rejected.
+
+RESOLVED 2026-08-02 (epoch batch W6): `lint_warning` WIRED — both writers now
+tag the target file, so the existing per-file filter surfaces them in the
+last-5 window (the channel was write-only). `task_learning` and
+`dependency_identified` PRUNED from the enum with a before-validator mapping
+retired/unknown categories to "general" so archived mission.json files still
+load. CORRECTION to the original audit: `requirement_discovered` is NOT
+writer-less — `mission create --task` writes it (ouroboros.py:188); the
+channel stays.

@@ -536,7 +536,7 @@ def _extract_python_signature(lines: list[str], depth: str) -> str:
             literal = value[1:-1]
             suffix = literal.rsplit("/", 1)[-1].rpartition(".")[2]
             if (
-                suffix.isalpha()               # ".json", not the "2" of "1.0.2"
+                suffix.isalpha()  # ".json", not the "2" of "1.0.2"
                 and 1 <= len(suffix) <= 6
                 and " " not in literal
                 and "{" not in literal
@@ -1028,10 +1028,14 @@ async def action_log_validation_notes(step_input: StepInput) -> StepOutput:
         )
 
     note_content = "Lint/quality warnings to fix:\n" + "\n".join(warnings)
+    # Target tag makes the channel READABLE: _filter_notes_for_file matches on
+    # tags, so these surface in the file's next fix context (2026-08-02 wire-up
+    # of a previously write-only channel).
+    target = str(step_input.context.get("target_file_path") or "").strip()
     saved = await effects.push_note(
         content=note_content,
         category="lint_warning",
-        tags=["lint", "quality", "auto-captured"],
+        tags=["lint", "quality", "auto-captured"] + ([target] if target else []),
         source_flow="validate_output",
     )
 

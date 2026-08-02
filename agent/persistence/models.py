@@ -402,20 +402,37 @@ class NoteRecord(BaseModel):
 
     id: str = Field(default_factory=lambda: _new_id()[:8])
     content: str
+    # task_learning / dependency_identified PRUNED 2026-08-02: zero writers,
+    # zero archived uses (audited). The coercion validator below maps any
+    # retired/unknown category to "general" so old mission.json files load —
+    # a strict Literal here otherwise makes a whole archive unreadable
+    # (manager.load raises PersistenceError on the first bad note).
     category: Literal[
         "general",
-        "task_learning",
         "codebase_observation",
         "failure_analysis",
         "requirement_discovered",
         "approach_rejected",
-        "dependency_identified",
         "lint_warning",
         "architecture_blueprint",
     ] = "general"
     tags: list[str] = Field(default_factory=list)
     source_flow: str = "unknown"
     timestamp: str = Field(default_factory=_now_iso)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _coerce_category(cls, v: Any) -> str:
+        known = {
+            "general",
+            "codebase_observation",
+            "failure_analysis",
+            "requirement_discovered",
+            "approach_rejected",
+            "lint_warning",
+            "architecture_blueprint",
+        }
+        return v if v in known else "general"
 
 
 # ── Architecture State ─────────────────────────────────────────────────
