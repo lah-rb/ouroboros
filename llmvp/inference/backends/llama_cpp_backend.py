@@ -1310,13 +1310,26 @@ class LlamaCppBackend(BaseBackend):
 
         Phase 1 (finish period): new acquires queue on the admission gate;
         in-flight work gets ``_refresh_drain_s`` to finish naturally.
-        Phase 2 (force-clear): remaining sessions are expired through the
-        SessionManager's normal expiry path (listener event + clean seat
-        release), then any still-live streams are retired with a retriable
-        error — the agent-side flow retry recovers on the fresh context.
+        Phase 2 (force-clear) — RECOVERY REASONS ONLY: remaining sessions
+        are expired through the SessionManager's normal expiry path, then
+        any still-live streams are retired with a retriable error.
+
+        PROACTIVE refreshes are POLITE (operator, 2026-08-03): a rot-
+        clearing rebuild is never worth killing live work. When the finish
+        period expires with a generation still running, a proactive refresh
+        DEFERS — returns False, the caller aborts, and the cap re-fires at
+        the next request boundary, which on a sequential agent workload is
+        the natural between-turns quiet point. The bartowski laguna run
+        made the cost concrete: the 30-min cap evicted a 52k-token batch
+        generation — coherent, win-path-analyzing work — 2/3 of the way
+        through, and the retry was doomed to the same wall. Force-clear
+        remains for recovery reasons (decode-fatal latch heal), where the
+        context is already broken and there is no work worth preserving.
+
         Returns True when the pool is clear (caller refreshes); the gate is
         REOPENED BY THE CALLER's finally, not here.
         """
+        polite = reason.startswith("proactive")
         self._refresh_admission_gate.clear()
         log.info(
             "🧼 refresh drain (%s): admissions gated; %d seat(s) out, "
@@ -1332,7 +1345,20 @@ class LlamaCppBackend(BaseBackend):
                 return True
             await asyncio.sleep(1.0)
 
-        # Force-clear stragglers.
+        # Polite deferral: proactive refreshes never force. Live work wins;
+        # the cap re-fires at the next request boundary.
+        if polite:
+            log.info(
+                "🧼 refresh deferred (%s): %d seat(s) out, %d generation(s) "
+                "live at the finish deadline — live work wins; retrying at "
+                "the next quiet boundary",
+                reason,
+                self._checked_out,
+                self._active_generations,
+            )
+            return False
+
+        # Force-clear stragglers (recovery reasons only).
         if self._session_expirer is not None and self._checked_out > 0:
             try:
                 n = await self._session_expirer(

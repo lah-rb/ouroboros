@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast as stdlib_ast
 import logging
+import re
 from typing import Any
 
 from agent import languages
@@ -605,6 +606,7 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
                     "missing": list(declared),
                     "extra": [],
                     "truncated": truncated,
+                    "deliberation_chars": 0,
                 },
                 "files_changed": [],
                 "primary_code_file": "",
@@ -613,6 +615,25 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
 
     declared_set = set(declared)
     blocks = parse_file_blocks(raw)
+
+    # DELIBERATION MEASUREMENT (operator, 2026-08-03). Some models plan in
+    # the open BETWEEN file blocks — the bartowski laguna capture showed 52k
+    # tokens of interleaved design prose (win-path analysis, interface
+    # tracing) that conditioned every later file, then vanished without a
+    # log line. The prompt now expressly PERMITS this; the framework's end
+    # of the bargain is to acknowledge it: count it, log it, and carry it
+    # in the manifest so a trace can tell a deliberative batch from a
+    # code-dense one. Text inside ANY fence is excluded (files, and the
+    # 4-backtick .md fences).
+    _defenced = re.sub(r"````.*?````", "", raw, flags=re.S)
+    _defenced = re.sub(r"```.*?```", "", _defenced, flags=re.S)
+    deliberation_chars = len(_defenced.strip())
+    if deliberation_chars > 200:
+        logger.info(
+            "🗒 batch deliberation: %d chars outside file blocks "
+            "(sanctioned; conditions later files in-context; not written)",
+            deliberation_chars,
+        )
 
     # A TRUNCATED response's last file is very likely severed mid-body, and
     # CommonMark closes an unterminated fence implicitly at end of input — so
@@ -683,11 +704,17 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
         "missing": missing,
         "extra": extra,
         "truncated": truncated,
+        "deliberation_chars": deliberation_chars,
     }
     obs = (
         f"Batch slice: wrote {len(written)}/{len(declared)} declared files"
         + (f", {len(missing)} missing" if missing else "")
         + (f", {len(extra)} undeclared skipped" if extra else "")
+        + (
+            f", {deliberation_chars} chars of open deliberation"
+            if deliberation_chars > 200
+            else ""
+        )
         + (" — generation TRUNCATED" if truncated else "")
     )
     logger.info(obs)

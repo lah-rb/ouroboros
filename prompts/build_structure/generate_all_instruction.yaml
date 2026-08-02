@@ -65,3 +65,9 @@ content: |
     sections like "... rest as before".
   - Code that reads a data file must match the data file you write
     here, key for key.
+  - You MAY write brief working notes between file blocks — tracing an
+    interface, checking that the game is winnable, deciding a data
+    shape before writing the file that uses it. These notes are never
+    saved anywhere: only the fenced file blocks are kept. Use notes
+    when they help you keep the files coherent with each other; the
+    files themselves are the deliverable.

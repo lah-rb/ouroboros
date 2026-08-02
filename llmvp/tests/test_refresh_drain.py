@@ -86,6 +86,35 @@ def test_drain_deadline_force_clears_sessions_and_streams():
     assert len(evicted) == 1
 
 
+def test_proactive_drain_defers_instead_of_forcing():
+    """POLITE REFRESH (operator, 2026-08-03): a proactive reason at the
+    finish deadline with work still live must DEFER — no session expiry, no
+    stream eviction. The bartowski laguna run made the cost of forcing
+    concrete: a 52k-token coherent batch generation evicted 2/3 through by
+    the 30-min cap, with the retry doomed to the same wall."""
+    be = _backend(drain_s=0.2)
+    be._checked_out = 1
+    be._active_generations = 1
+    expired, evicted = [], []
+
+    async def expirer(reason):  # pragma: no cover — must NOT fire
+        expired.append(reason)
+        return 1
+
+    be._session_expirer = expirer
+
+    class FakeEngine:
+        def evict_all_streams(self, reason):  # pragma: no cover — must NOT fire
+            evicted.append(reason)
+            return 1
+
+    be._engine = FakeEngine()
+    assert asyncio.run(be._drain_for_refresh("proactive-timed-drain")) is False
+    assert expired == [] and evicted == []
+    # recovery reasons still force (the existing force test covers "test",
+    # which does not carry the proactive prefix)
+
+
 def test_drain_gives_up_when_pool_never_clears():
     be = _backend(drain_s=0.2)
     be._checked_out = 1  # nothing ever releases; no expirer registered
