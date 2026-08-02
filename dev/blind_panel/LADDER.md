@@ -30,9 +30,9 @@ the remaining open step:
 
 | role | model | artifact | smoke | facts |
 |---|---|---|---|---|
-| GUARDIAN | gpt-oss-120b-a5 | — pending epoch open | — | — |
-| FLOOR | devstral-2-small-24b | — pending epoch open | — | — |
-| FRONTIER | claude-sonnet (one-shot) | — pending epoch open | — | — |
+| GUARDIAN | gpt-oss-120b-a5 | run `tier_20260801-185254` arm 1 — in flight | — | — |
+| FLOOR | devstral-2-small-24b | run `tier_20260801-185254` arm 2 — queued | — | — |
+| FRONTIER | claude-sonnet (one-shot) | `anchors/v2.0/frontier-sonnet-20260803/` — "The Ashen Keep" | ✅ compile clean · title screen · clean quit | 10 files (9 py + README), 60,305 B; world defined in `adventure/world.py` — pure-Python, NO data files: the first v2 signal that the brief now measures the choice instead of prescribing it |
 
 ## League register (measured, from the v1.2 field)
 
