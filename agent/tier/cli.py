@@ -197,6 +197,23 @@ def _run(args) -> None:
         print("no models given — use --models a,b,c")
         raise SystemExit(2)
 
+    if not getattr(args, "worker", False):
+        # League:both models (hy3) run in BOTH leagues — expand to two
+        # labeled arms here, in the NON-worker branch, so STATE.json's arm
+        # list, the resume queue, workspaces and logs all carry the labels
+        # natively (the worker and `tier resume` re-emit them verbatim).
+        from agent.tier.runner import config_league
+
+        expanded: list[str] = []
+        for m in arms:
+            if m.endswith(("[c]", "[g]")):
+                expanded.append(m)
+            elif config_league(m) == "both":
+                expanded.extend([f"{m}[c]", f"{m}[g]"])
+            else:
+                expanded.append(m)
+        arms = expanded
+
     if getattr(args, "worker", False):
         consumed = float(getattr(args, "resume_consumed_s", 0) or 0)
         resume = None

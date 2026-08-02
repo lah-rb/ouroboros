@@ -306,6 +306,14 @@ async def run_agent(
                 mission_id,
                 cycle,
             )
+            # League accounting: `tier pause` rides this path — book the
+            # cycles this process ran so a contemplator resume subtracts
+            # them from its 30-cycle budget.
+            try:
+                _m.cycles_consumed = int(getattr(_m, "cycles_consumed", 0) or 0) + cycle
+                await effects.save_mission(_m)
+            except Exception:  # noqa: BLE001 — accounting must not kill the drain
+                logger.exception("Failed to book cycles on paused drain")
             # Return a real FlowResult: callers (cmd_start, mission_runner)
             # read .status/.steps_executed off the return value — a bare
             # break fell off the function returning None and crashed the
@@ -432,6 +440,9 @@ async def run_agent(
                 _m = await effects.load_mission()
                 if _m is not None and getattr(_m, "status", "") == "active":
                     _m.status = "paused"
+                    _m.cycles_consumed = (
+                        int(getattr(_m, "cycles_consumed", 0) or 0) + cycle
+                    )
                     await effects.save_mission(_m)
             except Exception:
                 logger.exception(
@@ -541,15 +552,28 @@ async def run_agent(
         out_of_cycles = max_cycles is not None and cycle >= max_cycles
         elapsed_s = time.monotonic() - started_at
         out_of_time = max_wall_clock_s is not None and elapsed_s >= max_wall_clock_s
-        if (out_of_cycles or out_of_time) and outcome.target_flow != entry_flow:
-            # Budget exhausted with work still pending. Park the mission as
-            # paused so `mission resume` / `start` can pick it up later, rather
+        if (out_of_cycles or out_of_time) and outcome.target_flow == entry_flow:
+            # Budget exhausted. Park the mission as paused so
+            # `mission resume` / `start` can pick it up later, rather
             # than leaving it 'active' after the error exit. General by design:
             # a budget-exhausted mission being resumable is strictly better than
             # erroring + left active — applies to any long sweep, and is what
             # lets the quality-fix loop continue across `--max-cycles` windows.
-            # Wall clock takes the same exit: it only ever fires at a work-flow
-            # boundary, so an in-flight dispatch always finishes and records.
+            #
+            # PARK AT THE NEXT RESUMABLE POINT (epoch v2.0, 2026-08-02): the
+            # guard used to be `!= entry_flow`, which meant "let one more
+            # entry-flow pass run" — and that pass DECIDES: it re-certifies,
+            # commits a dispatch_config, and only then parks, systematically
+            # stopping at the worst possible instant (devstral shipped a
+            # broken engine with its repair dispatched and undone; the v2
+            # smoke's courtesy-fix rule exists because of it). Parking at the
+            # work→entry boundary instead stops BEFORE anything is decided:
+            # the finished work flow's tail-call inputs are persisted as
+            # `pending_return`, and resume replays them into the entry flow so
+            # the report books exactly as if the process had continued.
+            # Wall clock still only fires at a work-flow boundary — an
+            # in-flight dispatch always finishes (overshoot ≤ one work flow);
+            # a work→work chain defers the park to its first entry return.
             if out_of_cycles:
                 budget_msg = f"Cycle limit: {max_cycles}."
             else:
@@ -561,6 +585,21 @@ async def run_agent(
                 _m = await effects.load_mission()
                 if _m is not None and getattr(_m, "status", "") == "active":
                     _m.status = "paused"
+                    # The park lands at the work→entry boundary, BEFORE the
+                    # entry flow books the finished flow's report. Persist the
+                    # tail-call inputs so resume can replay them and the report
+                    # books exactly as if the process had continued.
+                    try:
+                        _m.pending_return = dict(outcome.inputs or {})
+                    except Exception:  # noqa: BLE001 — additive, best-effort
+                        pass
+                    # Lifetime work-cycle accounting for the league protocol:
+                    # the in-process counter resets every run_agent, so the
+                    # contemplator cap (30 cycles) needs a persisted total the
+                    # tier runner can subtract from on resume.
+                    _m.cycles_consumed = (
+                        int(getattr(_m, "cycles_consumed", 0) or 0) + cycle
+                    )
                     await effects.save_mission(_m)
                     logger.info(
                         "Budget exhausted (%d cycles, %.0fs) — parked mission "

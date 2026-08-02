@@ -144,6 +144,7 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
+  league: contemplator  # measured cyc/h — see dev/blind_panel/LADDER.md
   status: scored
   expectation:
     registered: 2026-07-29

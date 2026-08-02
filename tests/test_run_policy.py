@@ -188,10 +188,18 @@ def test_wall_clock_parks_mission_as_paused():
     mission, fx = _extractor_scenario()
     with pytest.raises(RuntimeError, match="Wall-clock limit"):
         _run(mission, fx, max_cycles=None, max_wall_clock_s=1e-9)
-    # Parked before any work flow executed; resumable, never left active.
-    assert fx._state["mission"].status == "paused"
+    # Resumable, never left active — parked at the WORK→ENTRY boundary
+    # (epoch v2.0): the already-decided first dispatch EXECUTES and records
+    # (overshoot ≤ one work flow), and the park lands on its return with the
+    # tail-call inputs persisted for replay. The old guard parked one step
+    # later — after the NEXT entry pass had re-decided and committed a fresh
+    # dispatch that would never run (the devstral void).
+    saved = fx._state["mission"]
+    assert saved.status == "paused"
     bank = fx._files["databank/papers.jsonl"]
-    assert "extracted" not in bank
+    assert "extracted" in bank  # the in-flight work flow finished and recorded
+    assert saved.cycles_consumed == 1
+    assert saved.pending_return  # replay inputs survived the park
 
 
 def test_paused_mission_drains_cleanly():

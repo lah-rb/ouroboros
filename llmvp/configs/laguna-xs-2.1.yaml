@@ -132,6 +132,7 @@ logging:
 # rerun, and a variant whose difference IS the config diff.
 # This config is the THINKING:TRUE variant. See experiments/laguna-xs-2.1-nothink.yaml.
 tier:
+  league: contemplator  # measured cyc/h — see dev/blind_panel/LADDER.md
   status: recorded
   rubric: TIER_RUBRIC v1.2
   stars: 3

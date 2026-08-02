@@ -77,6 +77,62 @@ from typing import Optional
 from agent.mission_config import parse_duration
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# ── League run protocol (TIER_RUBRIC v2 §2, epoch v2.0) ──────────────
+# Contemplators (<20 cyc/h measured) get a HARD 30-work-cycle cap — the
+# budget is the model's central-tendency work allotment, not its clock —
+# plus a 4h SAFETY wall that never binds a healthy arm (jam protection:
+# gemma-4-31b has jammed a generation indefinitely). Grinders keep the
+# stage wall. League lives in the model config's doc-only `tier:` block;
+# absent/unreadable defaults to grinder, which preserves pre-league
+# behaviour for every existing config.
+CONTEMPLATOR_CYCLES = 30
+CONTEMPLATOR_SAFETY_WALL = "4h"
+
+
+def config_league(config: str) -> str:
+    """Read tier.league from the model's llmvp config (doc-only namespace)."""
+    import yaml as _yaml
+
+    for sub in ("", "boss", "experiments"):
+        p = ROOT / "llmvp" / "configs" / sub / f"{config}.yaml"
+        if not p.is_file():
+            continue
+        try:
+            doc = _yaml.safe_load(p.read_text()) or {}
+            league = str((doc.get("tier") or {}).get("league", "") or "")
+            return (
+                league if league in ("contemplator", "grinder", "both") else "grinder"
+            )
+        except Exception:  # noqa: BLE001 — unreadable config = default league
+            return "grinder"
+    return "grinder"
+
+
+def arm_league(arm: str) -> tuple[str, str]:
+    """(bare_config, league) for an arm label.
+
+    `name[c]` / `name[g]` are the explicit labels the CLI expands a
+    league:both model into (two arms, two workspaces, one config); a bare
+    name resolves through its config.
+    """
+    if arm.endswith("[c]"):
+        return arm[:-3], "contemplator"
+    if arm.endswith("[g]"):
+        return arm[:-3], "grinder"
+    league = config_league(arm)
+    return arm, ("grinder" if league == "both" else league)
+
+
+def cycles_consumed(work: Path) -> int:
+    """Lifetime work cycles a parked arm already used (mission.json)."""
+    try:
+        data = json.loads((work / ".agent" / "mission.json").read_text())
+        return max(0, int(data.get("cycles_consumed", 0) or 0))
+    except Exception:  # noqa: BLE001 — fresh arm / unreadable = 0
+        return 0
+
+
 RUNS = Path.home() / "ouroboros-runs"
 ENDPOINT = "http://localhost:8008/graphql"
 PRODUCTION_CONFIG = "gpt-oss-120b-a5-swarm-524k"
@@ -331,14 +387,19 @@ class TierRun:
             fh.write(f"{dest}  {config}  {status}\n")
 
     # ── one arm ───────────────────────────────────────────────────
-    def _remaining_wall_s(self, consumed_s: float) -> float:
+    def _remaining_wall_s(
+        self, consumed_s: float, backstop: str | None = None
+    ) -> float:
         """Wall clock this arm has LEFT, never a fresh backstop.
 
         A resumed arm that got the full window again would inflate the per-arm
         budget by one backstop per pause, and arms tiered against a 2h stage
         would no longer be comparable — an arm paused three times would have had
-        eight hours. Floored at 60s so a resume is never a no-op."""
-        return max(60.0, parse_duration(self.wall) - consumed_s)
+        eight hours. Floored at 60s so a resume is never a no-op.
+
+        ``backstop`` overrides the stage wall — contemplator arms compute
+        against their 4h SAFETY wall, not the grinder stage wall."""
+        return max(60.0, parse_duration(backstop or self.wall) - consumed_s)
 
     def _pause_arm(self, work: Path, proc: subprocess.Popen, started: float) -> None:
         """Park the arm via the mission's own pause, then wait for it to drain.
@@ -378,6 +439,11 @@ class TierRun:
     def _run_arm(
         self, idx: int, config: str, resume: Optional[dict] = None
     ) -> tuple[ArmResult, Optional[str]]:
+        # `config` is the ARM LABEL (may carry a [c]/[g] league suffix for a
+        # league:both model); `cfg` is the bare llmvp config the server and
+        # mission consume. Workspace/logs/results key by the LABEL so a both-
+        # model's two arms stay distinct.
+        cfg, league = arm_league(config)
         work = Path("/tmp/tier") / config
         if resume is None:
             subprocess.run(["rm", "-rf", str(work)])
@@ -400,7 +466,7 @@ class TierRun:
 
         if not self._stop_server():
             return ArmResult(config, "skipped", detail="server would not stop"), None
-        if not self._boot_server(config, slog):
+        if not self._boot_server(cfg, slog):
             txt = slog.read_text(errors="ignore") if slog.exists() else ""
             why = next(
                 (
@@ -460,14 +526,33 @@ class TierRun:
                 timeout=120,
             )
 
-        remaining = self._remaining_wall_s(consumed)
+        if league == "contemplator":
+            backstop = CONTEMPLATOR_SAFETY_WALL
+            remaining_cycles = max(1, CONTEMPLATOR_CYCLES - cycles_consumed(work))
+        else:
+            backstop = self.wall
+            remaining_cycles = None
+        remaining = self._remaining_wall_s(consumed, backstop)
         if resume:
             self.log(
                 f"  resuming at {int(consumed/60)}min consumed — "
-                f"{int(remaining/60)}min of the {self.wall} backstop left"
+                f"{int(remaining/60)}min of the {backstop} backstop left"
+                + (
+                    f", {remaining_cycles}/{CONTEMPLATOR_CYCLES} cycles left"
+                    if remaining_cycles is not None
+                    else ""
+                )
             )
         else:
-            self.log("  mission running")
+            self.log(
+                "  mission running"
+                + (
+                    f" (league={league}, cap {CONTEMPLATOR_CYCLES} cycles, "
+                    f"safety wall {backstop})"
+                    if league == "contemplator"
+                    else f" (league={league}, wall {backstop})"
+                )
+            )
 
         env = {**os.environ, "OURO_LLMVP": ENDPOINT}
         started = time.time() - consumed  # so elapsed reads as total arm time
@@ -482,7 +567,12 @@ class TierRun:
                     "--max-wall-clock",
                     str(int(remaining)),
                     "--trace-thinking",
-                ],
+                ]
+                + (
+                    ["--max-cycles", str(remaining_cycles)]
+                    if remaining_cycles is not None
+                    else []
+                ),
                 cwd=ROOT,
                 env=env,
                 stdout=fh,

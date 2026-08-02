@@ -180,6 +180,7 @@ probe_verified_cache:
 # ONE CONFIG = ONE SCORE (operator, 2026-07-31). A variant that changes a
 # scoreable property gets its own config via `extends:`.
 tier:
+  league: grinder  # measured cyc/h — see dev/blind_panel/LADDER.md
   status: recorded
   rubric: TIER_RUBRIC v1.2
   stars: 3                 # 41-60 band; 60 is its TOP — borderline 4 star

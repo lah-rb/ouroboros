@@ -45,6 +45,7 @@ generation:
 
 # ── TIER (doc-only) ──────────────────────────────────────────────────
 tier:
+  league: contemplator  # measured cyc/h — see dev/blind_panel/LADDER.md
   status: not_yet_run
   quant: UD-Q6_K            # THE PROPERTY THIS CONFIG SCORES
   expectation:

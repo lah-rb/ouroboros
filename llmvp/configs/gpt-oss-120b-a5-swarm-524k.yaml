@@ -170,6 +170,7 @@ logging:
 # rounds against different rubric versions. One point apart. That is the
 # strongest reproducibility evidence the instrument has produced.
 tier:
+  league: grinder  # measured cyc/h — see dev/blind_panel/LADDER.md
   status: recorded
   rubric: TIER_RUBRIC v1.2        # CURRENT score; the v1.0 record is below
   stars: 3                        # 41-60 band; 53/100

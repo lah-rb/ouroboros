@@ -961,6 +961,16 @@ class MissionState(BaseModel):
     # seeds. Additive default keeps old mission.json files loading.
     workspace_ledger: list[WorkspaceLedgerEntry] = Field(default_factory=list)
     environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
+    # ── League run protocol (epoch v2.0, 2026-08-02) — both additive ──
+    # The budget park now lands at the work→entry boundary, BEFORE the entry
+    # flow books the finished flow's report; these tail-call inputs are
+    # replayed into the entry flow on resume so the report books exactly as
+    # if the process had continued. Cleared by cmd_start on consumption.
+    pending_return: dict = Field(default_factory=dict)
+    # Lifetime work-cycle total across park/resume — the in-process counter
+    # resets every run_agent (loop.py), so the contemplator 30-cycle cap
+    # needs a persisted number the tier runner can subtract from on resume.
+    cycles_consumed: int = 0
     # The phase ceiling this mission COMPLETED at (config.top_phase at
     # finalize time; "" for deadlocked/aborted/legacy). The continuance key
     # for phase stacking: `mission resume` reopens a completed mission when

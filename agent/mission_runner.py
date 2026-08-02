@@ -103,6 +103,7 @@ def run_mission_isolated(
     max_wall_clock_s: Optional[float] = None,
     flows_dir: Optional[str] = None,
     prompts_dir: Optional[str] = None,
+    entry_inputs: Optional[dict] = None,
 ) -> MissionRunOutcome:
     """Run one mission to termination on a dedicated thread + event loop.
 
@@ -123,6 +124,7 @@ def run_mission_isolated(
                 flows_dir=flows,
                 prompts_dir=prompts,
                 entry_flow=entry_flow,
+                entry_inputs=entry_inputs,
                 max_cycles=max_cycles,
                 max_wall_clock_s=max_wall_clock_s,
             )

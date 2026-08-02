@@ -158,6 +158,7 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
+  league: grinder  # measured cyc/h — see dev/blind_panel/LADDER.md
   # NOT A SETTLED SCORE. A run happened and produced a tier-3 gate failure, but
   # the rubric's own re-run rule applies — "re-run only when the failure looks
   # like a framework or config fault rather than the model" (§2) — and it does.

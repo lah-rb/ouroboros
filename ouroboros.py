@@ -623,6 +623,20 @@ def cmd_start(args: argparse.Namespace) -> None:
     # event loop + drain; see agent/mission_runner.py).
     from agent.mission_runner import run_mission_isolated
 
+    # Resumable-park replay (epoch v2.0): a budget park lands at the
+    # work→entry boundary BEFORE the entry flow books the finished flow's
+    # report; the tail-call inputs were persisted as pending_return. Replay
+    # them here (clearing first, so a crash mid-run cannot replay twice) and
+    # the report books exactly as if the process had continued.
+    entry_inputs = None
+    pending = dict(getattr(mission, "pending_return", {}) or {})
+    if pending:
+        mission.pending_return = {}
+        pm.save_mission(mission)
+        pending["mission_id"] = mission.id
+        entry_inputs = pending
+        print(f"   Resuming with pending return ({len(pending)} key(s))")
+
     try:
         outcome = run_mission_isolated(
             effects,
@@ -632,6 +646,7 @@ def cmd_start(args: argparse.Namespace) -> None:
             max_wall_clock_s=max_wall_clock_s,
             flows_dir=flows_dir,
             prompts_dir=prompts_dir,
+            entry_inputs=entry_inputs,
         )
         if outcome.parked:
             # Budget stop, not a crash — the mission is parked as paused and
