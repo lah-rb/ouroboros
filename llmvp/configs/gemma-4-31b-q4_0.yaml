@@ -1,0 +1,47 @@
+# Gemma-4 31B IT QAT — lmstudio-community Q4_0, the OPERATOR-RECALLED quant.
+#
+# WHY THIS EXISTS. The 2026-08-03 epoch-v2.0 placement of gemma-4-31b (unsloth
+# UD-Q4_K_XL) landed LOW TIER 2 — below the FLOOR anchor — on a parser↔engine
+# vocabulary seam, in the model's first think-LIVE run. The operator recalls
+# gemma-31b's historically solid performance was on THIS file
+# (lmstudio-community QAT-Q4_0), not the unsloth re-quant, and requested the
+# redo: "I did not think the change would be that meaningful, but given the
+# perceived performance drop it is worth a try."
+#
+# GEOMETRY (kv-geometry-before-swarm discipline):
+#   weights: 17,651,001,280 B ≈ 17.65 GB (measured on disk; unsloth parent
+#   is 17.29 GB — +0.36 GB)
+#   KV: quant-independent, family constant (swa_full) — parent's arithmetic
+#   holds: ~850 KiB/token × 113,664 ≈ 98.9 GB
+#   TOTAL ≈ 116.6 GB vs parent's 116.2 — margin unchanged in kind.
+#
+# extends: ONE CONFIG = ONE SCORE — a re-quant is a scoreable property.
+extends: gemma-4-31b
+
+model:
+  name: gemma-4-31b-q4_0
+  path: /Users/lah-rb/.lmstudio/models/lmstudio-community/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf
+  probe_verified_weights_bytes: 17651001280
+  # The parent's probe_verified_n_ctx belongs to the parent FILE — this quant
+  # has no ceiling probe of its own, so the guard must not ride the parent's.
+  probe_verified_n_ctx: null
+  # Parent preflight 112 + 0.4 GB weights delta, arithmetic above.
+  kv_preflight_gb: 113
+
+# ── TIER (doc-only) ──────────────────────────────────────────────────
+tier:
+  league: contemplator      # inherited from the think-live re-measure (13.4 cyc/h)
+  status: not_yet_run
+  quant: QAT-Q4_0 (lmstudio-community)   # THE PROPERTY THIS CONFIG SCORES
+  expectation:
+    registered: 2026-08-03
+    basis: operator recall of historically solid runs on this exact file
+    outcome: pending
+    why: >
+      PRE-REGISTERED before the run. The unsloth UD-Q4_K_XL placed below the
+      FLOOR anchor (seam-class failure, first think-live run). If the quant
+      difference is real, this file should place ABOVE that — clearing the
+      FLOOR at minimum. If it lands below-floor again, the seam class is
+      model-level (or think-live-level) and the quant recall was a red
+      herring; either way the pair is a clean A/B on quant provenance with
+      thinking, league, brief, and framework held fixed.
