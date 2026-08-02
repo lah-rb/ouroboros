@@ -169,7 +169,28 @@ tier:
             the advertised silver weakness never written.
           notes: "112 cycles / 124min = 54.2 cyc/h (grinder confirmed). Clean 6/6 batch at cycle 1 (the §20 doc-bug fix hypothesis holds — batches push through now). Judge 5's Guardian tally 42/47 (item 33 scored met) vs the prior four judges' 41/47 — ±1 divergence, decisive findings identical"
         - opponent: FLOOR (devstral anchor)
-          result: pending  # low-vs-near-boundary separation flight
+          result: "LOST 4-1 axes (took state integrity only), overall FLOOR, no self-flag — places BELOW the floor anchor: low tier 2"
+          why_the_judge_preferred_floor: >
+            Working surface: the FLOOR's 12 of 13 advertised verbs work live
+            with only `talk to` dead; this artifact is missing
+            drop/talk-to/flee/status entirely, its examine is a silent
+            no-op, and combat is never invocable because no monster is
+            placed in any room. Experience: the FLOOR names things, ships
+            honest categorized help, a real status block, case-insensitive
+            input and narrated combat with damage numbers — vs raw ids,
+            "You don't have ." blank-noun errors, and a status command the
+            game's own vocabulary rejects. Scope: two fought-and-killed
+            monsters, mid-combat equip/heal/flee and a reachable ending vs
+            four rooms with no combat, no NPC, no reachable terminal state.
+            Ambition: the FLOOR attempted more AND most survived; this
+            artifact's extra reach (orphaned half-map, second command
+            module) survived not at all. The one axis won — state
+            integrity — was decided on full-schema serialization plus a
+            live round-tripping restart, i.e. largely on code no player can
+            invoke. Shared headline failure: BOTH artifacts strand their
+            authored boss in a disconnected component; the FLOOR delivers a
+            playable narrated loop up to that wall, this artifact never
+            reaches a single fight.
   status: not_yet_run
   expectation:
     registered: 2026-07-29

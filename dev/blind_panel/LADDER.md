@@ -90,7 +90,9 @@ a three-sighting pattern for gpt-oss under this brief class.
 
 ## Ladder — grinder league
 
-*(empty — awaiting epoch open)*
+| pos | model | tier | flights | artifact | notes |
+|---|---|---|---|---|---|
+| 1 | qwen3-next-coder-80b-a3 | **2, LOW (below the FLOOR anchor)** | GUARDIAN: lost 0–5 · FLOOR: **lost 4–1** (took state integrity only) | `tier_20260802-043526/staged/arm02` | Run shape was the epoch's cleanest (6/6 batch at cycle 1, 54.2 cyc/h, 0 degen — the §20-doc-bug hypothesis holds) but the artifact never reaches a fight: 8 rooms in two components, zero monsters placed, dead 244-line commands.py, examine a silent no-op, save/load incompatible with its own file. Judge 5's Guardian tally 42/47 (±1 vs the four prior 41/47s) |
 
 ## Frontier scorecards
 
