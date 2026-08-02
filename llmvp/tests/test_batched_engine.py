@@ -275,7 +275,7 @@ class FakeLlama:
         self._seed = 42
         self._n_ctx = 4096
 
-    def detokenize(self, tokens, prev_tokens=None):
+    def detokenize(self, tokens, prev_tokens=None, special=False):
         # token N -> b"<N>"; token 999 -> invalid UTF-8 continuation byte
         out = b""
         for t in tokens:

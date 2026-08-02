@@ -26,7 +26,12 @@ class FakeLlama:
         self.pieces = pieces
         self.detok_calls: list[tuple[list[int], list[int]]] = []
 
-    def detokenize(self, tokens, prev_tokens=None):
+    def detokenize(self, tokens, prev_tokens=None, special=False):
+        # The pipeline MUST request special rendering: the binding default
+        # (False) deleted mistral's emitted [THINK]/[/THINK] from every pool
+        # stream (2026-08-03). A fake that tolerates special=False would let
+        # that regress silently.
+        assert special is True, "pipeline must detokenize with special=True"
         self.detok_calls.append((list(tokens), list(prev_tokens or [])))
         return b"".join(self.pieces[t] for t in tokens)
 
@@ -102,7 +107,8 @@ def test_guard_verdict_short_circuits_before_detok():
 
 def test_detok_failure_becomes_degenerate_verdict():
     class BrokenLlama:
-        def detokenize(self, tokens, prev_tokens=None):
+        def detokenize(self, tokens, prev_tokens=None, special=False):
+            assert special is True
             raise ValueError("Negative size passed")
 
     p = TokenPipeline(BrokenLlama(), [])

@@ -54,7 +54,9 @@ def build_capture_meta(
         "prompt_tokens": len(prompt_tokens),
     }
     try:
-        meta["prompt_tail"] = llama.detokenize(list(prompt_tokens[-768:])).decode(
+        meta["prompt_tail"] = llama.detokenize(
+            list(prompt_tokens[-768:]), special=True
+        ).decode(
             "utf-8", errors="replace"
         )
     except Exception:  # noqa: BLE001 — forensics must not break the request
@@ -130,7 +132,18 @@ class TokenPipeline:
         # passed to PyBytes_FromStringAndSize" on a degenerate token) is
         # converted to the same controlled-abort path as the guards.
         try:
-            piece: bytes = self._llama.detokenize([token], prev_tokens=self._prior_tail)
+            # special=True (2026-08-03): the binding's default (False) SKIPS
+            # tokens carrying the special render attribute — which silently
+            # DELETED mistral's emitted [THINK]/[/THINK] (ids 34/35) from
+            # every pool stream, making reasoning look tagless. Byte-
+            # identical for the rest of the fleet: harmony's CONTROL markers
+            # render under either flag (verified against the gpt-oss vocab),
+            # and hy3/qwen/gemma think tags are USER_DEFINED. This pipeline's
+            # contract is the FULL raw stream — downstream (FSM labeller,
+            # capture log) owns interpretation.
+            piece: bytes = self._llama.detokenize(
+                [token], prev_tokens=self._prior_tail, special=True
+            )
         except Exception as e:  # noqa: BLE001 — convert to controlled abort
             return Verdict(degenerate=f"detokenization failed: {e}")
         self._prior_tail.append(token)
