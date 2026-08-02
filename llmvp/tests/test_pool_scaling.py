@@ -704,7 +704,9 @@ def test_prior_abandoned_stream_retired_before_reuse():
 # ── adaptive head-swap beyond harmony ─────────────────────────────────
 
 
-def _backend_with_family(family, levels, *, head_swap=True, resident=True):
+def _backend_with_family(
+    family, levels, *, head_swap=True, resident=True, thinking_mode="medium"
+):
     from unittest.mock import patch
     from types import SimpleNamespace
 
@@ -712,7 +714,7 @@ def _backend_with_family(family, levels, *, head_swap=True, resident=True):
     backend.config.model = SimpleNamespace(
         family=family,
         reasoning_head_swap=head_swap,
-        thinking_mode="medium",
+        thinking_mode=thinking_mode,
         resident_seq_cache=resident,
     )
     spec = SimpleNamespace(reasoning=SimpleNamespace(levels=levels))
@@ -732,6 +734,22 @@ def test_head_swap_enabled_for_family_declaring_levels():
     # padded off-state): high renders identically to the medium default, so
     # only ONE extra head is pinned, not two.
     assert b._reasoning_pin_levels == ["low"]
+
+
+def test_head_swap_tekken_pins_only_high():
+    """Tekken activation (2026-08-03): mistral-medium's dial is head-borne
+    ([MODEL_SETTINGS] reasoning_effort), so per-request levels need the head
+    swap. Parity is natural — both rendered heads tokenize to 12 tokens
+    ("none" and "high" are single tokens in the tekken vocab), no padding
+    trick required. With thinking_mode low (default text 'none'), medium
+    collapses onto the default and only the 'high' head is pinned."""
+    b = _backend_with_family(
+        "tekken",
+        {"low": "none", "medium": "none", "high": "high"},
+        thinking_mode="low",
+    )
+    assert b._reasoning_head_swap is True
+    assert b._reasoning_pin_levels == ["high"]
 
 
 def test_head_swap_still_enabled_for_harmony_without_map():

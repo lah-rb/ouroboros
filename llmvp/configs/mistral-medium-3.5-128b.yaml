@@ -49,9 +49,18 @@ model:
   # never arrive (and the unclosed-[THINK] swallow trap). Flip to true only
   # together with actually rendering the MODEL_SETTINGS block.
   # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
-  # per_request (operator). KNOWN LIMIT: the dial is head-borne ([MODEL_SETTINGS]) and tekken has no head-swap, so per-request levels cannot move the static head yet — resting renders reasoning_effort:none; wiring the swap is the follow-up
+  # per_request (operator), WITH the head swap wired (the dial is head-borne:
+  # [MODEL_SETTINGS] reasoning_effort in the static head). Parity is natural —
+  # the "none" and "high" heads both tokenize to 12 tokens (single-token level
+  # words in the tekken vocab), so no padding trick is needed; the splice's
+  # equal-length check passes as-is.
   thinking_available: true
   thinking: "per_request"
+  # The resting head level: default renders reasoning_effort:none, and only
+  # the 'high' head gets pinned on the reasoning band (medium collapses onto
+  # none). Requires resident_seq_cache (on, above... below).
+  thinking_mode: low
+  reasoning_head_swap: true
   # Re-prefill sessions from history rather than per-turn KV surgery. This is
   # the default (config.py session_full_replay: bool = True) — stated
   # explicitly so the strategy is visible at a glance.
