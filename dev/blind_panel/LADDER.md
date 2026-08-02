@@ -93,7 +93,9 @@ a three-sighting pattern for gpt-oss under this brief class.
 
 ## Frontier scorecards
 
-*(none yet)*
+| candidate | axes | overall | headline |
+|---|---|---|---|
+| qwen3.6-35b-a3 (flight 4, 2026-08-03) | FRONTIER 5–0 | FRONTIER, no self-flag | "The Ashen Keep" WON again (47/47, second judge, full round-trip incl. room depletion + NPC stage); qwen UNWINNABLE by arithmetic (boss best 80/150), NEAR-FULL **carried wholly by the presence rule** — win path, phase 2, monster specials (`hasattr` on a dict, p≈0.03 empirical), and dialogue branching all authored, none reachable. Position-bias check passed (A-slot won after three B-slot verdicts). Family-bias caveat stamped per §5 |
 
 ## Pre-epoch reference: the v1.2 field (NOT ladder members)
 

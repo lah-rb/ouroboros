@@ -143,7 +143,7 @@ tier:
           completability: "UNWINNABLE by balance only — win path authored+wired (has_won), boss to 40/150 with phase 2 + shard amplification + 50-pt burst all firing; a balance pass away"
           notes: "working restart + consent-based load + mid-combat healing (only ones in the flight); dead hasattr-on-dict monster specials; dialogue menu unselectable; fake n/s/e/w aliases in help; pure-Python world (no data files)"
         - opponent: FRONTIER (sonnet one-shot)
-          result: pending  # scorecard flight in progress
+          result: "LOST 0-5 axes + overall, no self-flag (out-of-band scorecard; tier unaffected). Judge 2 tally 45/47 NEAR-FULL (#16 help-vocab, #35 room-state-in-save) — minor cross-judge variance vs judge 1's 46/47; headline findings identical (unwinnable by arithmetic, dead hasattr specials, unselectable dialogue menu). Family-bias caveat stamped (Opus judge / Claude artifact)."
   # ── EPOCH v1.2 (archived, pre-epoch record) ─────────────────────────
   status: recorded
   rubric: TIER_RUBRIC v1.2
