@@ -3496,25 +3496,42 @@ class LlamaCppBackend(BaseBackend):
                 return
             await self._release_seat(seat)
             return
-        if getattr(inst, "_needs_context_refresh", False):
-            await self._heal_instance(inst)
-        if self._pool_queue is not None:
-            queue = self._persona_queues.get(
-                getattr(inst, "_persona", "default"), self._pool_queue
+        # Cancellation-proof, mirroring _release_seat: the requeue + counter
+        # decrement run in a ``finally`` so a CancelledError landing in the
+        # heal (a BaseException that sails past ``except Exception``) can no
+        # longer skip them — on a limit=1 pool that stranded the ONLY
+        # instance until restart. The shield covers anyio-delivered cancels;
+        # a native task.cancel() still interrupts the heal coroutine, which
+        # is recoverable BY DESIGN: _heal_instance leaves the flag set on
+        # any failure, and the next release/acquire retries it.
+        try:
+            if getattr(inst, "_needs_context_refresh", False):
+                with anyio.CancelScope(shield=True):
+                    await self._heal_instance(inst)
+        except Exception as exc:  # noqa: BLE001 — return the instance regardless
+            log.warning("⚠️ instance heal failed on release: %s", exc)
+        finally:
+            if self._pool_queue is not None:
+                queue = self._persona_queues.get(
+                    getattr(inst, "_persona", "default"), self._pool_queue
+                )
+                try:
+                    queue.put_nowait(inst)
+                except asyncio.QueueFull:
+                    # Only reachable on a double-release; a second requeue
+                    # would hand the same instance to two streams.
+                    log.warning("⚠️ duplicate instance release ignored")
+            self._checked_out = max(0, self._checked_out - 1)
+            meta = self._instance_meta.get(id(inst))
+            if meta is not None:
+                meta.last_released_at = time.monotonic()
+
+            log.debug(
+                "🔧 Released instance (idle=%d, total=%d, checked_out=%d)",
+                self._pool_queue.qsize() if self._pool_queue else 0,
+                len(self._all_instances),
+                self._checked_out,
             )
-            await queue.put(inst)
-
-        self._checked_out = max(0, self._checked_out - 1)
-        meta = self._instance_meta.get(id(inst))
-        if meta is not None:
-            meta.last_released_at = time.monotonic()
-
-        log.debug(
-            "🔧 Released instance (idle=%d, total=%d, checked_out=%d)",
-            self._pool_queue.qsize() if self._pool_queue else 0,
-            len(self._all_instances),
-            self._checked_out,
-        )
 
     # ------------------------------------------------------------------
     # JIT scaling operations
