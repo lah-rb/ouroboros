@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "text-adventure-game"
+version = "0.1.0"
+description = "A fun text adventure game with combat, exploration, and NPC interactions."
+authors = [{name = "Your Name", email = "your.email@example.com"}]
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+text-adventure = "main:main"
+
+[tool.setuptools]
+packages = ["."]
