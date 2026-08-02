@@ -258,8 +258,12 @@ class FormatRenderer:
             segments = [(self.s.tokens.bos, True)] + segments
 
         # Post-system control block (tekken's [MODEL_SETTINGS]) — outside the
-        # system message, before the first user turn.
-        if self.s.system_block.post_system:
+        # system message, before the first user turn. Gated on the resolved
+        # reasoning value: thinking_available:false resolves it to "" (see
+        # above), and a control block with an EMPTY effort is off-template
+        # for everyone — devstral's template has no MODEL_SETTINGS at all,
+        # and mistral's raises on efforts outside none|high.
+        if self.s.system_block.post_system and reasoning_value:
             segments = segments + [
                 (
                     self.s.system_block.post_system.format(reasoning=reasoning_value),
