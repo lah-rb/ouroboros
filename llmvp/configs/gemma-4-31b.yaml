@@ -181,7 +181,8 @@ tier:
           completability: "UNWINNABLE at room 1 of 9 — parser emits go/take, engine dispatches move/pickup; the whole authored world (9 CONNECTED rooms, 6 items, branching NPC trees both hinting the weakness) is inert behind the seam. drop/use/stats parse to actions with no handler"
           notes: "First think-LIVE run (36 thought emissions, 10 degen events, 13.4 cyc/h). UNRESOLVED: 4 corrupted parser literals ('//status','//activate','//in','//out') judge-excluded as suspected extraction artifacts — no raw capture survives to attribute (captured_raw stale since June); watch the next gemma artifact. Guardian tally converged for the 4TH independent judge (41/47, identical unmet set)"
         - opponent: FLOOR (devstral anchor)
-          result: pending  # low-vs-near-boundary separation flight
+          result: "LOST 3-2 axes (took state integrity + ambition), overall FLOOR, no self-flag — places BELOW the floor anchor: low tier 2"
+          notes: "The judge RESOLVED the '//' literal question: model-innate stylistic tic (title screen deliberately uses '// Type ...' decoration; the tic bled into parser alias literals) — extraction exonerated. Real strengths on record: the flight's only zero-traceback robustness, honest full-schema persistence (dialogue state + room deltas), the only fully-connected 9-room graph. All behind the one seam."
   # NOT A SETTLED SCORE. A run happened and produced a tier-3 gate failure, but
   # the rubric's own re-run rule applies — "re-run only when the failure looks
   # like a framework or config fault rather than the model" (§2) — and it does.
