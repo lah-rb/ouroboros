@@ -83,6 +83,23 @@ class HealthStatus:
     mem_system_used_percent: Optional[float] = None
     mem_system_available_mb: Optional[float] = None
     mem_system_wired_mb: Optional[float] = None
+    # Rebuild memory black box (2026-08-03 swarm kill). The scalars above are
+    # a spot reading; a context rebuild frees multi-GB of KV and immediately
+    # allocates more, and the fatal transient lives inside that window. These
+    # are sampled every 250ms FOR THE LIFE OF the rebuild, so a spike between
+    # the free and the allocation cannot hide between two readings.
+    # TOTAL is the measure, not wired (operator, 2026-08-03): on unified
+    # memory the wired figure is bimodal and cache-inflated — four healthy
+    # rebuilds read 112.5/117.0/112.6/114.2 GB with nothing wrong, so a
+    # "limit breach" read into it is noise. Alarm on `rebuild_used_peak_max_mb`
+    # (peak committed, total - available) climbing, and on
+    # `rebuild_headroom_low_mb` (smallest floor seen) falling.
+    rebuilds_recorded: int = 0
+    rebuild_headroom_low_mb: Optional[float] = None
+    rebuild_headroom_last_mb: Optional[float] = None
+    rebuild_used_peak_mb: Optional[float] = None
+    rebuild_used_peak_max_mb: Optional[float] = None
+    rebuild_total_mb: Optional[float] = None
     flow_cache_entries: int = 0
     resident_active: bool = False
     # Which per-turn KV mechanism is ACTUALLY in use, and whether the arch could
@@ -520,6 +537,11 @@ class Query:
         tracker = get_tracker()
         tracker_status = tracker.get_status()
         trend_status = tracker.get_trend()
+        # Flattened for GraphQL: the backend carries the full nested record
+        # (marks, extremes, per-rebuild trend) — surface the scalars a poller
+        # can alarm on. The full block stays in the backend dict for anything
+        # reading it directly.
+        _rebuild_mem = status.get("rebuild_memory") or {}
 
         return HealthStatus(
             status=status["status"],
@@ -545,6 +567,16 @@ class Query:
             mem_system_used_percent=status.get("mem_system_used_percent"),
             mem_system_available_mb=status.get("mem_system_available_mb"),
             mem_system_wired_mb=status.get("mem_system_wired_mb"),
+            rebuilds_recorded=_rebuild_mem.get("rebuilds_recorded", 0),
+            rebuild_headroom_low_mb=_rebuild_mem.get("headroom_low_mb_min"),
+            rebuild_headroom_last_mb=(_rebuild_mem.get("last_rebuild") or {}).get(
+                "headroom_low_mb"
+            ),
+            rebuild_used_peak_mb=(_rebuild_mem.get("last_rebuild") or {}).get(
+                "used_peak_mb"
+            ),
+            rebuild_used_peak_max_mb=_rebuild_mem.get("used_peak_mb_max"),
+            rebuild_total_mb=(_rebuild_mem.get("last_rebuild") or {}).get("total_mb"),
             flow_cache_entries=status.get("flow_cache_entries", 0),
             resident_active=status.get("resident_active", False),
             session_strategy=status.get("session_strategy", ""),

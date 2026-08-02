@@ -143,6 +143,7 @@ def main() -> int:
         "drain failed to clear",
         "context rebuilt",
         "MTL0 KV buffer size",
+        "rebuild memory",
     )
     while time.monotonic() < deadline:
         try:

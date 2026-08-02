@@ -1010,6 +1010,19 @@ class LlamaCppBackend(BaseBackend):
 
         primary = self._primary_instance
         started = time.perf_counter()
+        # Memory black box (2026-08-03). The swarm kill died 2.5s into this
+        # exact window with nothing recorded; the sampler runs for the life of
+        # the rebuild so a transient between close and allocate cannot hide.
+        # Best-effort by construction — instrumentation must never be what
+        # breaks a rebuild.
+        _memwatch = None
+        try:
+            from core.mem_probe import RebuildWatch
+
+            _memwatch = RebuildWatch("batched", backend=self)
+            _memwatch.__enter__()
+        except Exception:  # noqa: BLE001
+            _memwatch = None
         try:
             if primary._ctx is not None:
                 primary._ctx.close()
@@ -1020,6 +1033,8 @@ class LlamaCppBackend(BaseBackend):
                 primary._batch.close()
         except Exception:
             log.exception("⚠️ batch close FAILED during batched rebuild")
+        if _memwatch is not None:
+            _memwatch.mark("closed")
         primary._ctx = internals.LlamaContext(
             model=primary._model, params=primary.context_params, verbose=False
         )
@@ -1029,6 +1044,8 @@ class LlamaCppBackend(BaseBackend):
             n_seq_max=primary.context_params.n_seq_max,
             verbose=False,
         )
+        if _memwatch is not None:
+            _memwatch.mark("allocated")
         primary.input_ids = np.ndarray((primary._n_ctx,), dtype=np.intc)
         logits_rows = primary._n_ctx if primary._logits_all else 1
         primary.scores = np.ndarray((logits_rows, primary._n_vocab), dtype=np.single)
@@ -1053,6 +1070,8 @@ class LlamaCppBackend(BaseBackend):
             "🧼 batched context rebuilt + heads re-pinned in %.2fs",
             time.perf_counter() - started,
         )
+        if _memwatch is not None:
+            _memwatch.__exit__(None, None, None)
 
     def _warm_batched(self) -> None:
         """Warm the batched context: pin every persona's static head on its
@@ -1185,6 +1204,15 @@ class LlamaCppBackend(BaseBackend):
         from llama_cpp import internals
 
         started = time.perf_counter()
+        # Memory black box — see the batched twin and core/mem_probe.py.
+        _memwatch = None
+        try:
+            from core.mem_probe import RebuildWatch
+
+            _memwatch = RebuildWatch("pool", backend=self)
+            _memwatch.__enter__()
+        except Exception:  # noqa: BLE001
+            _memwatch = None
         # Drop the old context + batch — frees the accumulated/rotted KV state.
         # A failed close here silently leaks a multi-GB Metal KV allocation
         # once per refresh (48/day at the time cap) — log it loudly; the
@@ -1207,6 +1235,8 @@ class LlamaCppBackend(BaseBackend):
         _override = getattr(inst, "_persona_n_ctx", None)
         if _override:
             _params.n_ctx = int(_override)
+        if _memwatch is not None:
+            _memwatch.mark("closed")
         try:
             inst._ctx = internals.LlamaContext(
                 model=inst._model, params=_params, verbose=False
@@ -1219,6 +1249,8 @@ class LlamaCppBackend(BaseBackend):
             n_seq_max=inst.context_params.n_seq_max,
             verbose=False,
         )
+        if _memwatch is not None:
+            _memwatch.mark("allocated")
         # Re-derive the per-stream ceiling from the REBUILT context. A refresh
         # can change the seq geometry (the resident-denial un-fragment path
         # rebuilds with n_seq_max=1 through here), and a stale _n_ctx would
@@ -1270,6 +1302,8 @@ class LlamaCppBackend(BaseBackend):
             "(rebuild + re-warm, weights kept)",
             time.perf_counter() - started,
         )
+        if _memwatch is not None:
+            _memwatch.__exit__(None, None, None)
 
     async def _drain_for_refresh(self, reason: str) -> bool:
         """Close admissions and drain the batched pool for a refresh.
@@ -4673,6 +4707,19 @@ class LlamaCppBackend(BaseBackend):
             if wired is not None:
                 info["mem_system_wired_mb"] = round(wired / 1e6, 1)
         except Exception:
+            pass
+        # Rebuild memory black box (2026-08-03 swarm kill). The scalars above
+        # are a spot reading; this is the windowed record around each context
+        # rebuild — the one interval where a multi-GB free and a multi-GB
+        # allocation happen back to back, and the only place a fatal transient
+        # can hide. `headroom_low_mb_trend` is the load-bearing field: a floor
+        # walking downward across rebuilds is the shape that precedes a death
+        # and is invisible in any single record.
+        try:
+            from core.mem_probe import health_block
+
+            info["rebuild_memory"] = health_block(self)
+        except Exception:  # noqa: BLE001 — health must never fail on telemetry
             pass
         # Flow/resident KV-cache health: live size + cumulative churn. A rising
         # fallback rate is the canary for KV-cache instability under pressure.
