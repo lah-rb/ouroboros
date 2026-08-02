@@ -132,7 +132,7 @@ def main() -> int:
         try:
             if not wait_ready(log_path, proc, 1200):
                 rec["error"] = "boot failed/timeout"
-                print(f"  !! boot failed")
+                print("  !! boot failed")
                 continue
             for lvl in LEVELS:
                 req: dict = {"prompt": TASK, "maxTokens": 4096,
