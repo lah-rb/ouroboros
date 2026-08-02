@@ -1,0 +1,169 @@
+rooms:
+  - id: entrance
+    title: Entrance
+    description: You stand at the entrance of a dark cave. The air is damp and cold.
+    exits:
+      north: hallway
+    items: [sword]
+    monsters: []
+    npcs: [guard]
+  - id: hallway
+    title: Hallway
+    description: A long hallway stretches before you, lit by flickering torches.
+    exits:
+      south: entrance
+      east: treasure_room
+      west: armory
+    items: [health_potion]
+    monsters: [goblin]
+    npcs:
+      - guard
+  - id: treasure_room
+    title: Treasure Room
+    description: A room filled with glittering treasures and gold coins.
+    exits:
+      west: hallway
+    items: [magic_amulet]
+    monsters: [dragon]
+    npcs: []
+  - id: armory
+    title: Armory
+    description: Weapons and armor are displayed on the walls.
+    exits:
+      east: hallway
+    items: [shield]
+    monsters: []
+    npcs: []
+  - id: dungeon
+    title: Dungeon
+    description: A dark and foreboding dungeon, home to a fearsome boss.
+    exits:
+      north: boss_room
+    items: []
+    monsters: []
+    npcs: []
+  - id: boss_room
+    title: Boss Room
+    description: The air is thick with dark energy. A massive boss stands before you.
+    exits:
+      south: dungeon
+    items: []
+    monsters: [boss]
+    npcs: []
+  - id: secret_room
+    title: Secret Room
+    description: A hidden room with ancient artifacts.
+    exits:
+      east: dungeon
+    items: [legendary_sword]
+    monsters: []
+    npcs: [wise_man]
+  - id: garden
+    title: Garden
+    description: A peaceful garden with blooming flowers.
+    exits:
+      south: armory
+    items: [healing_herbs]
+    monsters: []
+    npcs: [gardener]
+  - id: library
+    title: Library
+    description: Shelves filled with ancient tomes line the walls.
+    exits:
+      north: hallway
+    items: [book_of_knowledge]
+    monsters: []
+    npcs: [librarian]
+
+items:
+  sword:
+    name: Rusty Sword
+    type: weapon
+    description: A simple sword with some rust on the blade.
+    stats:
+      attack: 5
+  shield:
+    name: Wooden Shield
+    type: armor
+    description: A sturdy wooden shield that can block attacks.
+    stats:
+      defense: 3
+  health_potion:
+    name: Health Potion
+    type: healing
+    description: A red potion that restores health.
+    stats:
+      hp: 10
+  magic_amulet:
+    name: Magic Amulet
+    type: weapon
+    description: An amulet that glows with magical energy.
+    stats:
+      attack: 8
+  legendary_sword:
+    name: Legendary Sword
+    type: weapon
+    description: A sword of legend, said to be the only weapon that can defeat the boss.
+    stats:
+      attack: 15
+  healing_herbs:
+    name: Healing Herbs
+    type: healing
+    description: Herbs that can restore health when consumed.
+    stats:
+      hp: 5
+  book_of_knowledge:
+    name: Book of Knowledge
+    type: misc
+    description: A book containing ancient knowledge.
+    stats: {}
+
+monsters:
+  goblin:
+    name: Goblin
+    hp: 10
+    attack: 3
+    defense: 1
+    behaviour: aggressive
+  dragon:
+    name: Dragon
+    hp: 20
+    attack: 6
+    defense: 4
+    behaviour: aggressive
+  boss:
+    name: Dark Lord
+    hp: 50
+    attack: 10
+    defense: 8
+    behaviour: aggressive
+
+npcs:
+  guard:
+    name: Guard
+    dialogue:
+      - text: You are not allowed to pass without permission.
+        condition: none
+      - text: Prove yourself worthy to enter further.
+        condition: talked_once
+      - text: You have proven yourself. You may pass.
+        condition: has_sword
+      - text: Your shield is impressive, but not enough to pass.
+        condition: has_shield
+  wise_man:
+    name: Wise Man
+    dialogue:
+      - text: Greetings, adventurer. Seek the legendary sword to defeat the boss.
+        condition: none
+      - text: The legendary sword is hidden in this very room.
+        condition: talked_once
+  gardener:
+    name: Gardener
+    dialogue:
+      - text: These herbs can heal you if you need them.
+        condition: none
+  librarian:
+    name: Librarian
+    dialogue:
+      - text: The book of knowledge holds secrets about the boss.
+        condition: none
