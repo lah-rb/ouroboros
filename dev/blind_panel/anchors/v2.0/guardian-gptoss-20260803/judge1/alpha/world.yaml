@@ -1,0 +1,127 @@
+rooms:
+  - id: start
+    name: "Entrance Hall"
+    description: "A dimly lit hall with stone walls. A faint draft whispers from the north."
+    exits:
+      north: corridor
+    items: []
+    monsters: []
+    npcs: [old_man]
+
+  - id: corridor
+    name: "Long Corridor"
+    description: "The corridor stretches east and west, torches flickering on the walls."
+    exits:
+      south: start
+      east: armory
+      west: garden
+      north: library
+    items: []
+    monsters: [goblin]
+    npcs: []
+
+  - id: armory
+    name: "Armory"
+    description: "Racks of old weapons line the walls. Dust covers everything."
+    exits:
+      west: corridor
+    items: [sword, shield]
+    monsters: [orc]
+    npcs: []
+
+  - id: garden
+    name: "Overgrown Garden"
+    description: "Weeds choke a once-beautiful garden. A glint catches your eye among the vines."
+    exits:
+      east: corridor
+    items: [potion]
+    monsters: []
+    npcs: []
+
+  - id: library
+    name: "Ancient Library"
+    description: "Shelves of ancient tomes tower above you. Knowledge hangs heavy in the air."
+    exits:
+      south: corridor
+      north: throne
+    items: []
+    monsters: []
+    npcs: [librarian]
+
+  - id: throne
+    name: "Throne Room"
+    description: "An ominous throne dominates the room, draped in shadows. The final guardian awaits."
+    exits:
+      south: library
+    items: [boss_key]
+    monsters: [dragon]
+    npcs: []
+
+items:
+  - id: sword
+    name: "Rusty Sword"
+    type: weapon
+    description: "A dull blade, but still sharp enough to hurt."
+    stats:
+      attack: 3
+
+  - id: shield
+    name: "Iron Shield"
+    type: armor
+    description: "A sturdy shield that adds confidence to your strikes."
+    stats:
+      attack: 2
+
+  - id: potion
+    name: "Healing Potion"
+    type: healing
+    description: "A small vial of red liquid. Restores health when used."
+    stats:
+      heal: 15
+
+  - id: boss_key
+    name: "Obsidian Key"
+    type: key
+    description: "An ancient key pulsing with dark energy. Legends say it can weaken the dragon."
+    stats: {}
+
+  - id: amulet
+    name: "Silver Amulet"
+    type: key
+    description: "A simple amulet, a keepsake from distant lands."
+    stats: {}
+
+monsters:
+  - id: goblin
+    name: "Goblin Guard"
+    health: 10
+    attack: 3
+    behavior: aggressive
+    location: corridor
+
+  - id: orc
+    name: "Orc Warrior"
+    health: 20
+    attack: 5
+    behavior: defensive
+    location: armory
+
+  - id: dragon
+    name: "Shadow Dragon"
+    health: 50
+    attack: 8
+    behavior: boss
+    location: throne
+
+npcs:
+  - id: old_man
+    name: "Old Man"
+    dialogue:
+      start: "Beware the darkness ahead, traveler. The key to the dragon's heart lies hidden."
+    triggers: {}
+
+  - id: librarian
+    name: "Librarian"
+    dialogue:
+      start: "Knowledge is power. Seek the obsidian key; it may turn the tide."
+    triggers: {}

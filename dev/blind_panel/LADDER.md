@@ -30,8 +30,8 @@ the remaining open step:
 
 | role | model | artifact | smoke | facts |
 |---|---|---|---|---|
-| GUARDIAN | gpt-oss-120b-a5 | run `tier_20260801-185254` arm 1 — in flight | — | — |
-| FLOOR | devstral-2-small-24b | run `tier_20260801-185254` arm 2 — queued | — | — |
+| GUARDIAN | gpt-oss-120b-a5 | `anchors/v2.0/guardian-gptoss-20260803/` (run `tier_20260801-185254` arm 1) | ✅ compile clean · ASCII title screen · game starts | 120min grinder park at 20/30 goals, 147 cycles (73.5 cyc/h), 0 degen, scan clean. 5 py + world.yaml — chose YAML UNPROMPTED (the v1 opinion, now voluntary). Quirks: ships its own `savegame.json` and auto-loads it at boot (playtest state leaked into the demo); `judge1/alpha/` byte-identical duplicate of the artifact in-tree. First live validation of the W2 park: `cycles_consumed=147` + `pending_return` persisted at the work→entry boundary |
+| FLOOR | devstral-2-small-24b | run `tier_20260801-185254` arm 2 — in flight | — | — |
 | FRONTIER | claude-sonnet (one-shot) | `anchors/v2.0/frontier-sonnet-20260803/` — "The Ashen Keep" | ✅ compile clean · title screen · clean quit | 10 files (9 py + README), 60,305 B; world defined in `adventure/world.py` — pure-Python, NO data files: the first v2 signal that the brief now measures the choice instead of prescribing it |
 
 ## League register (measured, from the v1.2 field)
