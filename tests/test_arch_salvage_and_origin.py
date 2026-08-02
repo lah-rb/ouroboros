@@ -185,6 +185,73 @@ async def test_str_elements_in_contract_lists_salvage_not_discard(tmp_path):
     assert arch.transient_files == ["save.json"]
 
 
+# ── W4 (2026-08-03): state_shapes carry-forward on omission ──────────
+#
+# parse_architecture builds a BRAND-NEW ArchitectureState, so a reconcile
+# response that omits state_shapes used to silently wipe every state
+# contract (the DATA CONTRACTS block downstream). Mirror of the
+# transient_files guard: omission means "no opinion", not "erase".
+
+RECONCILE_OMITS_STATE_SHAPES = """```json
+{
+  "execution": {"import_scheme": "flat", "run_command": "python main.py"},
+  "modules": [{"file": "main.py", "responsibility": "entry"}],
+  "state_shapes": [],
+  "creation_order": ["main.py"]
+}
+```"""
+
+
+def _mission_with_state_shapes(tmp_path):
+    from agent.persistence.models import ArchitectureState, StateShapeContract
+
+    mission = _mission(tmp_path)
+    mission.architecture = ArchitectureState(
+        run_command="python main.py",
+        creation_order=["main.py"],
+        modules=[ModuleSpec(file="main.py", responsibility="entry")],
+        state_shapes=[
+            StateShapeContract(
+                name="GameState.inventory",
+                owner="state.py",
+                consumed_by="engine.py",
+                structure="list of item_id strings",
+            )
+        ],
+    )
+    return mission
+
+
+@pytest.mark.asyncio
+async def test_state_shapes_carried_forward_on_omission(tmp_path):
+    mission = _mission_with_state_shapes(tmp_path)
+    out = await action_parse_and_store_architecture(
+        _si(mission, {"inference_response": RECONCILE_OMITS_STATE_SHAPES})
+    )
+    assert out.result.get("architecture_parsed") is True
+    shapes = mission.architecture.state_shapes
+    assert len(shapes) == 1
+    assert shapes[0].name == "GameState.inventory"
+    assert shapes[0].owner == "state.py"
+
+
+@pytest.mark.asyncio
+async def test_state_shapes_supplied_list_still_wins(tmp_path):
+    mission = _mission_with_state_shapes(tmp_path)
+    supplied = RECONCILE_OMITS_STATE_SHAPES.replace(
+        '"state_shapes": []',
+        '"state_shapes": [{"name": "save file JSON", "owner": "engine.py"}]',
+    )
+    out = await action_parse_and_store_architecture(
+        _si(mission, {"inference_response": supplied})
+    )
+    assert out.result.get("architecture_parsed") is True
+    shapes = mission.architecture.state_shapes
+    assert len(shapes) == 1
+    assert shapes[0].name == "save file JSON"
+    assert shapes[0].owner == "engine.py"
+
+
 @pytest.mark.asyncio
 async def test_non_list_contract_containers_treated_empty(tmp_path):
     bad = CONTRACT_SALVAGE_JSON.replace(

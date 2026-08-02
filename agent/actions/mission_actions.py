@@ -447,6 +447,22 @@ async def action_parse_and_store_architecture(step_input: StepInput) -> StepOutp
             "state_shapes",
             StateShapeContract.from_llm_dict,
         )
+        # CARRY-FORWARD on omission, mirroring transient_files below: this
+        # function builds a brand-new ArchitectureState, so a reconcile pass
+        # that leaves out state_shapes would silently wipe the state contracts
+        # every downstream renderer (DATA CONTRACTS block) depends on. An empty
+        # list must mean "no opinion", not "erase the contracts".
+        if not state_shapes:
+            prior_shapes = getattr(
+                getattr(mission, "architecture", None), "state_shapes", None
+            )
+            if prior_shapes:
+                state_shapes = list(prior_shapes)
+                logger.info(
+                    "architecture: carried forward %d state_shapes contract(s) "
+                    "the response omitted",
+                    len(state_shapes),
+                )
 
         raw_transient = data.get("transient_files", [])
         if not isinstance(raw_transient, list):

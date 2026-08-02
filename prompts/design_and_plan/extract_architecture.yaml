@@ -77,11 +77,14 @@ sections:
        every key at every level, matching how the loader reads it. Omit
        this section entirely if the project reads no such files.
 
-    5. **State Contracts** — any runtime/persisted state shared across more
-       than one module (the canonical in-memory representation, and the
-       schema of any save/output file the program writes). Also list
-       `transient_files`: files the program CREATES at runtime (saves,
-       caches, logs) as names/globs — never input data files.
+    5. **State Contracts** — enumerate the mutable runtime state the code
+       actually holds (fields that change during a run, whether one module
+       touches them or many; the canonical in-memory representation), and
+       the schema of any save/output file the program writes. Give each
+       entry exactly ONE `owner`: the module that defines and resets its
+       canonical form. Also list `transient_files`: files the program
+       CREATES at runtime (saves, caches, logs) as names/globs — never
+       input data files.
 
     6. **Creation Order** — the existing files dependency-sorted: files
        with no project imports first, entry points last.
