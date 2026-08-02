@@ -848,3 +848,94 @@ def test_laguna_gets_think_marker_handling_in_the_fsm():
 
     assert _shape_for("laguna") is _ThinkShape.ANGLE
     assert _structural_cats_for("laguna") == _structural_cats_for("chatml")
+
+
+# ── Hunyuan-3 golden test vs the GGUF-embedded template ───────────────
+#
+# The think dial was broken for a reason the gemma family already taught:
+# the official template gates the GENERATION PROMPT on reasoning_effort
+# (low/high prefill the opener, no_think prefills the pre-closed empty
+# block, undefined renders a bare assistant token), and our serving ran
+# thinking:false + no prefill flags = the UNDEFINED branch — so all levels
+# behaved identically and the 2026-07-28 "dial does not work" conclusion
+# measured an undelivered control. Also corrected here: bos was "" on the
+# belief the template supplies it — but we replace the template, and the
+# GGUF's add_bos_token is absent (BPE -> no auto-BOS), so sequences had no
+# begin-of-sentence token at all. This pins ours byte-equal to the real
+# template (dev/hy3_chat_template.jinja, banked from the served GGUF) at
+# every canonical level including the default.
+
+
+def test_hy3_rendering_matches_official_template():
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    jinja2 = pytest.importorskip("jinja2")
+    tpl_path = Path(__file__).resolve().parents[2] / "dev" / "hy3_chat_template.jinja"
+    if not tpl_path.is_file():
+        pytest.skip("official hy3 template not banked")
+
+    from formats.registry import get_renderer, clear_cache
+
+    env = jinja2.Environment()
+    env.globals["raise_exception"] = lambda m: (_ for _ in ()).throw(Exception(m))
+    tpl = env.from_string(tpl_path.read_text())
+
+    def render_official(effort):
+        kw = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant.\nPERSONA",
+                },
+                {"role": "user", "content": "Hello"},
+            ],
+            "add_generation_prompt": True,
+            "tools": None,
+        }
+        if effort is not None:
+            kw["reasoning_effort"] = effort
+        return tpl.render(**kw)
+
+    clear_cache()
+    r = get_renderer("hunyuan3")
+    cfg = SimpleNamespace(model=SimpleNamespace(thinking=True))
+
+    def render_ours(level):
+        with patch("core.config.get_config", return_value=cfg):
+            kw = {"reasoning": level} if level else {}
+            segs = r.render_system_segments(persona="PERSONA", **kw)
+            system = "".join(t for t, _ in segs)
+            return (
+                system
+                + r.render_user("Hello")
+                + r.render_generation_prompt(reasoning=level)
+            )
+
+    # canonical level -> the hy3 effort the official template must agree at.
+    # None (the default) maps through reasoning_default: medium -> low.
+    for canonical, hy3_effort in (
+        (None, "low"),
+        ("low", "no_think"),
+        ("medium", "low"),
+        ("high", "high"),
+    ):
+        ours, official = render_ours(canonical), render_official(hy3_effort)
+        assert ours == official, (
+            f"canonical={canonical} vs effort={hy3_effort}:\n"
+            f"ours    : {ours!r}\nofficial: {official!r}"
+        )
+
+
+def test_hy3_bos_is_the_real_token_and_thinking_gates():
+    """The two corrected fields, pinned independently of the golden render."""
+    from formats.registry import load_schema, clear_cache
+
+    clear_cache()
+    s = load_schema("hunyuan3")
+    assert s.tokens.bos == "<｜hy_begin_of_sentence:opensource｜>"
+    assert s.thinking.prefill_closed_when_disabled is True
+    assert s.thinking.open_tag_newline is False
+    assert s.thinking.gate_levels == ["medium", "high"]
+    assert s.reasoning.levels["low"] == "no_think"

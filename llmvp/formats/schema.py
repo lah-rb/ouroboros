@@ -95,6 +95,14 @@ class ThinkingSpec(BaseModel):
     # immediate <channel|> close on every turn — silent thinking-OFF across
     # two full tier runs. False = enabled turns get a bare generation prompt.
     open_tag_prefill_when_enabled: bool = True
+    # Whether a newline follows the prefilled opener (and separates opener
+    # from closer in the pre-closed form). Byte fidelity to the family's own
+    # template is the lesson the gemma golden test taught: gemma's official
+    # forms carry the newline ('<|channel>thought\n<channel|>'), Hunyuan-3's
+    # carry NONE ('<think:opensource></think:opensource>', opener directly
+    # against closer / generation). Default true preserves every existing
+    # family byte-for-byte.
+    open_tag_newline: bool = True
 
     # Per-level think GATE (Step-3.7 mechanics, 2026-07-25): for families
     # where thinking only happens when the opener is PREFILLED, the

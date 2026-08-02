@@ -351,11 +351,14 @@ class FormatRenderer:
                 and self.s.thinking.open_tag_prefill_when_enabled
             ):
                 parts.append(self.s.thinking.open_tag)
-                parts.append("\n")
+                if self.s.thinking.open_tag_newline:
+                    parts.append("\n")
             # Gemma-4 inverse: with thinking DISABLED, pre-supply an already
             # CLOSED empty thought channel so reasoning is structurally
             # foreclosed (what the official template does) instead of letting
-            # the model emit the empty channel itself.
+            # the model emit the empty channel itself. Hunyuan-3 shares the
+            # mechanic with different bytes: opener directly against closer,
+            # no newline (open_tag_newline: false).
             elif (
                 self.s.thinking.style == "inline_tags"
                 and not thinking_enabled
@@ -365,7 +368,8 @@ class FormatRenderer:
             ):
                 if not self.s.thinking.prefill_closed_close_only:
                     parts.append(self.s.thinking.open_tag)
-                    parts.append("\n")
+                    if self.s.thinking.open_tag_newline:
+                        parts.append("\n")
                 parts.append(self.s.thinking.close_tag)
 
         return "".join(parts)

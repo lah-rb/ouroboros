@@ -97,13 +97,22 @@ model:
   verbose: false
   flash_attn_type: auto
   n_batch: 2048
-  thinking: false
-  # thinking_mode is UNSET, deliberately. Our vocabulary (high/low/medium/none)
-  # does not map onto Tencent's (no_think/low/high) — see the OPEN GAP note in
-  # formats/hunyuan3.yaml. Unset makes the renderer fall back to the family's
-  # reasoning_default, which is the literal `no_think` the template expects.
-  # Setting it to `none` here would render `reasoning_effort:none`, which the
-  # model's own template raises on.
+  # FLIPPED 2026-08-03 with the think-dial fix (formats/hunyuan3.yaml,
+  # corrected note 3): Hunyuan's dial is structural — the official template
+  # gates the GENERATION PROMPT on reasoning_effort (low/high prefill the
+  # opener; no_think prefills the pre-closed empty block; undefined renders a
+  # bare assistant token). thinking:false with both prefill flags false served
+  # the UNDEFINED branch, which is why the model "did not honor thinking
+  # levels": the structural half of the dial was never delivered. With true,
+  # the default state is low-effort thinking (reasoning_default: medium ->
+  # reasoning_effort:low + opener), canonical low = no_think + pre-closed
+  # block, high = deep CoT. Per-request toggling works on completions because
+  # the generation prompt is rebuilt per request.
+  thinking: true
+  # thinking_mode stays UNSET: the family reasoning_default (canonical
+  # `medium` -> hy3 `low`) is the default level, and the reasoning.levels map
+  # owns the vocabulary translation. Setting a raw hy3 word here would bypass
+  # the map's guarantees.
   swa_full: false          # dense attention, 81 layers — no SWA to make full
   # FLIPPED 2026-07-30 per run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results): D2 = resident+unified is the
   # recipe — full 32,768 window (no /12 band division), flat ~1141 tok/turn

@@ -23,14 +23,23 @@
 #    will not fire. This is why the family cannot be a chatml/laguna alias
 #    despite the shape looking identical.
 #
-# 3. REASONING EFFORT IS A SYSTEM-PROMPT SUFFIX, NOT A PREFILL. The template
-#    appends `<｜reasoning_mode:opensource｜>reasoning_effort:<level>` to the
-#    SYSTEM prompt, with levels no_think / low / high — and raises on anything
-#    else. That is Tencent's own dial and it is a third suppression mechanic
-#    beyond the three already catalogued (step-3.7 omits the opener, gemma-4
-#    pre-supplies an empty closed block, laguna prefills close-only). Hunyuan
-#    instead ASKS, in the system block, and lets the model decide.
-#    Template default when unset: `no_think`.
+# 3. REASONING EFFORT IS A SYSTEM-PROMPT SUFFIX *AND* A PREFILL — the dial
+#    has two coupled halves (CORRECTED 2026-08-03; the earlier reading of
+#    this file claimed the system line was the whole mechanic, and that
+#    reading is FALSE). The template appends
+#    `<｜reasoning_mode:opensource｜>reasoning_effort:<level>` to the SYSTEM
+#    prompt (levels no_think / low / high, raises on anything else) AND gates
+#    the generation prompt on the same value:
+#
+#        low|high  -> assistant_token + <think:opensource>            (opener prefilled)
+#        no_think  -> assistant_token + <think:opensource></think:opensource>
+#        undefined -> assistant_token                                 (bare)
+#
+#    No newline anywhere in those forms. Read from THIS GGUF's own template
+#    (banked at dev/hy3_chat_template.jinja) and consistent with Tencent's
+#    docs (reasoning_effort via chat_template_kwargs; no_think default).
+#    The structural prefill is the half the model actually follows — the
+#    same lesson gemma-4 taught.
 #
 # ── STATUS: UNVALIDATED, AND UNRUNNABLE ON THIS BOX ──────────────────
 # Nothing here has been rendered against the live model, because the IQ4_XS
@@ -57,10 +66,13 @@ tokens:
   msg_close: ""
   gen_stop: "<｜hy_eos:opensource｜>"
   history_close: "<｜hy_eos:opensource｜>"
-  # tokenizer.ggml.add_bos_token — the template emits bos_token itself, so the
-  # renderer must not also supply one. See the tekken BOS note in schema.py for
-  # what a duplicate costs.
-  bos: ""
+  # CORRECTED 2026-08-03: the OFFICIAL template emits bos_token itself — but
+  # we REPLACE that template, and the GGUF's add_bos_token key is ABSENT
+  # (BPE tokenizer -> llama.cpp defaults to NO auto-BOS). The old reasoning
+  # ("the template emits it, so we must not") therefore produced sequences
+  # with no begin-of-sentence token AT ALL, on every hy3 request ever served.
+  # The renderer emits this once, as framing, at the very front (id 120000).
+  bos: "<｜hy_begin_of_sentence:opensource｜>"
 
 # ⚠️ CAPITALISATION IS LOAD-BEARING. render_generation_prompt rebuilds the
 # assistant opener as `tokens.msg_open + roles["assistant"] + tokens.msg_content`
@@ -100,24 +112,32 @@ thinking:
   style: inline_tags
   open_tag: "<think:opensource>"
   close_tag: "</think:opensource>"
-  # Suppression is NOT structural here — no prefilled close, no omitted opener.
-  # It is the reasoning_effort:no_think line in the system block (see note 3),
-  # which is why both prefill flags are false: setting either would fight the
-  # template's own mechanic.
-  prefill_closed_when_disabled: false
+  # Suppression IS structural (corrected 2026-08-03 — see note 3): the
+  # official no_think branch prefills the pre-closed empty block, exactly
+  # gemma's disabled shape with Hunyuan bytes.
+  prefill_closed_when_disabled: true
   prefill_closed_close_only: false
-  # Left EMPTY deliberately. step-3.7's gate was only correct because a probe
-  # established that thinking is prefill-gated on that model; whether Hunyuan
-  # honours reasoning_effort as a hard gate or a hint is UNMEASURED. Do not
-  # copy the mechanic across families on the assumption it transfers.
-  gate_levels: []
+  # The official forms carry NO newline: `<think:opensource></think:opensource>`
+  # closed-up, opener directly against generation when thinking.
+  open_tag_newline: false
+  # Canonical levels that THINK. low maps to no_think (below) and renders the
+  # pre-closed block; medium/high prefill the opener — the official template's
+  # own gate, keyed the same way.
+  gate_levels: ["medium", "high"]
 
 system_block:
   identity: "You are a helpful assistant."
   # Tencent's dial, appended to the system prompt by the template. Levels are
   # exactly no_think | low | high — the template RAISES on anything else, so a
   # typo here is a hard failure at render rather than a silent downgrade.
-  reasoning_default: "no_think"
+  #
+  # Expressed in CANONICAL vocabulary (it feeds the reasoning.levels map):
+  # `medium` -> renders reasoning_effort:low. The default state is therefore
+  # LOW-EFFORT THINKING, coherent with the generation prompt's default branch
+  # (no per-request level -> config thinking:true -> opener prefilled). The
+  # old default `no_think` + a bare assistant opener was the INCOHERENT pair
+  # that made the 2026-07-28 measurement unreadable.
+  reasoning_default: "medium"
   # EMPTY DELIBERATELY — see post_system below. reasoning_prefix is folded into
   # system_content, which tokenize_segments treats as CONTENT (special parsing
   # OFF, so untrusted text cannot forge a control token). That is the right
@@ -152,31 +172,36 @@ system_block:
   #    i.e. appended AFTER the system content — which is exactly where
   #    post_system emits, before the first user turn.
   #
-  # MEASURED 2026-07-28, and worth stating so nobody re-runs it: with the token
-  # canonical and correctly placed, no_think / low / high produced IDENTICAL
-  # behaviour (empty think block, 9 generations). The dial does not appear to
-  # work on this REAP build. Kept correct anyway — a control that is right and
-  # ignored is a different problem from one that was never delivered, and only
-  # the first can be re-tested against a future build.
+  # THE 2026-07-28 MEASUREMENT IS RETRACTED (2026-08-03). It concluded "the
+  # dial does not work on this REAP build" from no_think/low/high behaving
+  # identically (empty think block, 9 generations) — but that serving ran
+  # thinking:false with both prefill flags false, i.e. a BARE assistant
+  # opener: the official template's UNDEFINED-effort branch. The structural
+  # half of the dial was never delivered on any of the nine generations, so
+  # they measured the model's reflex to "no instruction", not the dial. The
+  # empty think block it emitted unprompted is its trained no_think shape.
   post_system: "<｜reasoning_mode:opensource｜>reasoning_effort:{reasoning}"
 
 # The canonical router speaks low/medium/high; Hunyuan's template accepts ONLY
-# no_think | low | high and RAISES on anything else. That is exactly what this
-# map is for — routing `medium` without it would emit `reasoning_effort:medium`
-# and hard-fail at render.
+# no_think | low | high and RAISES on anything else.
 #
-# medium collapses onto `low` rather than `high`: Hunyuan is effectively
-# trimodal-with-a-gap, and the conservative reading of a middle level is the
-# cheaper side. UNMEASURED — revisit once the model runs.
+# REMAPPED 2026-08-03 to the full trimodal dial: canonical low IS the off
+# state (`no_think` + the pre-closed block via gate_levels), medium is cheap
+# thinking (hy3 `low`), high is deep thinking. The old map sent canonical low
+# to hy3 `low` — a THINKING level — leaving the router no way to switch
+# thinking off at all.
 #
 # LENGTH INVARIANT (see ReasoningSpec): the mid-session head splice needs the
 # rendered levels to tokenize to the SAME length, and `no_think`/`low`/`high`
 # plainly do not. The splice verifies per call and refuses a mismatch, so this
-# degrades to "no mid-session swap" rather than corruption — but per-turn
-# reasoning routing will NOT work on this family until the off-state is padded.
+# degrades to "no mid-session swap" rather than corruption. Per-REQUEST
+# control on the completions path is a different story: the STRUCTURAL half
+# of the dial lives in the generation prompt, which is rebuilt per request —
+# so think/no-think toggling works per-request today; only the system-line
+# half stays at the static head's default between head swaps.
 reasoning:
   levels:
-    low: "low"
+    low: "no_think"
     medium: "low"
     high: "high"
 
