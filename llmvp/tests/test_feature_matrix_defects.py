@@ -193,10 +193,25 @@ def _served_configs():
 @pytest.mark.parametrize("path", _served_configs(), ids=lambda p: p.stem)
 def test_no_served_config_requests_an_inert_flow_cache(path):
     """The fleet-wide form of the validation above. qwen3.6-35b-a3 carried
-    flow_kv_cache: true with resident off until 2026-07-30."""
+    flow_kv_cache: true with resident off until 2026-07-30.
+
+    READS THE EFFECTIVE CONFIG, NOT THE SPELLING (2026-08-03). This used to
+    read `model.resident_seq_cache` straight out of the raw YAML, which made
+    it blind to `cache_strategy:` — the canned S1/S2/S3 key whose whole point
+    is that a config STOPS restating the flags it implies. The first config to
+    adopt the canned form (gemma-4-31b -> `cache_strategy: resident`) failed
+    this test while being correct. The invariant is about what gets SERVED,
+    so resolve the strategy first."""
     import yaml
 
-    m = (yaml.safe_load(path.read_text()) or {}).get("model", {}) or {}
+    from core.config import CACHE_STRATEGIES
+
+    raw = yaml.safe_load(path.read_text()) or {}
+    m = dict(raw.get("model") or {})
+    strategy = raw.get("cache_strategy")
+    if strategy in CACHE_STRATEGIES:
+        m = {**CACHE_STRATEGIES[strategy].get("model", {}), **m}
+
     if m.get("flow_kv_cache"):
         assert m.get("resident_seq_cache"), (
             f"{path.name}: flow_kv_cache is on without resident_seq_cache — "

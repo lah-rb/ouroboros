@@ -25,6 +25,17 @@ save_state splice was deleted 2026-07-30. That leaves:
 | **S2** | pool + resident | `resident_seq_cache: true` + can_shift | 11 models |
 | **S3** | batched + resident | `decode_mode: batched` (+ resident, swa_full, kv_unified) | 4 configs (production) |
 
+**Head-swap belongs to RESIDENT, not to swa_full (2026-08-03).** The gate is
+`_reasoning_head_swap and _resident_active` (`llama_cpp_backend.py:2057`) — no
+swa_full term — so **S2 keeps the head swap on every architecture**, SWA
+included. Do not reach for S1 to shed an SWA model's swa_full KV: S1 makes the
+swap inert, and on **gemma** that is not a partial loss but a collapsed dial,
+because `open_tag_prefill_when_enabled: false` means gemma's ENABLED branch
+emits nothing in the generation prompt — the system head is the ONLY per-level
+signal at medium/high, so without the swap medium and high become identical.
+The swa_full KV is the *price of the resident feature set* on a windowed model,
+not an accident to be optimised away.
+
 **S1 is not a choice — it is a verdict.** `resident_seq_cache` is a *request*;
 `memory_can_shift()` is asked at every load and decides
 (`llama_cpp_backend.py:2739-2757`). Read the answer from
@@ -57,6 +68,7 @@ contradicts the strategy raises at load. `core/config.py:CACHE_STRATEGIES`.
 | Stateless flow cache | 🔇 fallback counter | ✅ | ✅ *(new)* | `flow_kv_cache` (false) |
 | Session flow-fork (turn 0) | ❌ | ✅ | 🔇 **force-disabled** | `resident_session_flow_fork` (**true**) |
 | Reasoning head-swap (all 3 forms) | ❌ inert | ✅ | ✅ | `reasoning_head_swap` (false) |
+<!-- head-swap gate, stated so nobody re-derives it: `_reasoning_head_swap and _resident_active` (llama_cpp_backend.py:2057). RESIDENT is the whole condition — there is NO swa_full term, so S2 keeps head-swap on every architecture including SWA ones. -->
 | CoT strip (`resident_strip_reasoning`) | ❌ skipped by design | ✅ | 🔇 **pool-only** | `resident_strip_reasoning` (false) |
 | Degenerate-turn purge | ✅ n/a (never entered history) | ✅ | ✅ | always armed |
 | Deep-session windowing | ❌ raises instead | ✅ | ✅ | knobless |

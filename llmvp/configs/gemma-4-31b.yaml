@@ -20,8 +20,12 @@ graphql:
 model:
   name: "gemma-4-31b"
   family: "gemma"
-  # RESIDENT cache economics (dev/CACHE_STATE.md matrix): SWA dense — measured full-stack 2026-07-02 (resident-live 37/46 tok turns, hot snapshot forks 1.2s).
-  resident_seq_cache: true
+  # STRATEGY: S2 (`cache_strategy: resident` at the foot of this file).
+  # resident_seq_cache / session_full_replay / kv_unified / decode_mode are
+  # IMPLIED by it and deliberately not restated here.
+  # RESIDENT cache economics (dev/CACHE_STATE.md matrix): SWA dense —
+  # measured full-stack 2026-07-02 (resident-live 37/46 tok turns, hot
+  # snapshot forks 1.2s).
   # Per-turn adaptive reasoning via the head swap. Gemma-4 is BIMODAL — the
   # levels map in formats/gemma.yaml renders high -> <|think|> and low/medium
   # -> a token-length-MATCHED padding, so the mid-session splice stays legal
@@ -62,12 +66,23 @@ model:
   # (~32GB margin); tight ceiling ~81920; 98304+ breaches; 262144 = the
   # reboot-#3 death either way. Window-boundary session canary still
   # pending before deep-session workloads at this size.
-  # RAISED 65536 -> 113664 on 2026-07-29 from the measured ceiling
-  # (probe_verified_n_ctx below). KV 850 KiB/token x 113664 = 98.9GB
-  # + 17.3GB weights = 116.2GB resident at boot.
-  n_ctx: 113664
-  probe_verified_weights_bytes: 17287670048
-  probe_verified_n_ctx: 113664
+  # RETURNED 113664 -> 65536 on 2026-08-03 (operator): gemma has no reason
+  # to carry a bespoke context-limiting strategy now that it runs the S2
+  # path (pool + resident + swa_full + kv_unified) and gets every feature
+  # from it. The 113664 ceiling was a 2026-07-29 special case that sat
+  # 116.2GB deep on a 137.4GB machine — no margin, and it stopped booting
+  # the moment the quant changed. 65536 is this config's OWN documented
+  # sweet spot (81GB peak, ~32GB margin) and the fleet's common setting.
+  n_ctx: 65536
+  # RE-STAMPED for the lmstudio-community QAT-Q4_0 (the operator repoint;
+  # the unsloth UD-Q4_K_XL this used to describe is deleted).
+  probe_verified_weights_bytes: 17651001280
+  # INVALIDATED, not carried: 113664 was measured on the OLD quant and the
+  # OLD binary (b10131). The staleness guard already refused to honour it
+  # once the weights changed — which is exactly how the 2026-08-03 fleet
+  # smoke caught this config failing to boot at all. Re-probe with
+  # --probe-context on the current quant + b10243 before raising n_ctx.
+  probe_verified_n_ctx: null
   # The theory-based preflight assumes every layer carries a full-size cache
   # and so over-predicts ~2x for gemma-4 (formula ~1.72MB/token vs the 0.87
   # MEASURED above). At 65536 it computes 130.4GB against a 100GB default and
@@ -88,8 +103,15 @@ model:
   verbose: false
   flash_attn_type: auto   # REAL knob (old flash_attention: true was a silent no-op)
   n_batch: 2048           # REAL knob (old batch_size: 512 was a silent no-op)
+  # swa_full is ARCHITECTURE-determined, never strategy-determined — the
+  # canned strategies deliberately leave it alone (FEATURE_MATRIX §1).
+  # gemma-4 is interleaved-SWA, and CORPUS.md:298 scopes the requirement
+  # exactly: resident corrupts at the window boundary on SWA models, so
+  # TRUE is mandatory here. (glm/MLA and hy3/dense run resident with it
+  # false and are correct; they are not windowed.) It is also what makes
+  # the KV lavish — 0.87 MB/token measured — which is the price of the
+  # resident feature set on this model, paid deliberately.
   swa_full: true
-  kv_unified: true
   # ON 2026-07-30. The "off" verdict above was about M8 — the save_state BLOB
   # implementation, whose churn corrupted deep-session KV (the gpt-oss `code -3`
   # class). That path was DELETED 2026-07-30; the flow cache is now M9 seq-ops
@@ -103,9 +125,7 @@ model:
   # evidence is the same call already made for the other seven configs — worth
   # stating plainly rather than implying a per-model measurement exists.
   flow_kv_cache: true
-  # Full re-prefill per turn from the pristine static snapshot — the safe
-  # session path on every model until resident is validated per-model.
-  session_full_replay: true
+  # (session_full_replay + kv_unified are implied by cache_strategy: resident.)
 
 prompt:
   persona_file: "./knowledge/SOUL.md"
@@ -149,6 +169,26 @@ generation:
 knowledge:
   tokens_bin: "./data/gemma-4-31b.tokens.bin"
   token_limit: 32768
+
+# ── CANNED CACHE STRATEGY (2026-08-03) ───────────────────────────────
+# This config hand-spelled resident/full_replay/kv_unified/decode_mode
+# across two sections; the fleet's answer is one named strategy that
+# expands to them (core/config.py CACHE_STRATEGIES, FEATURE_MATRIX §1):
+#
+#   replay   = S1  pool + full_replay
+#   resident = S2  pool + resident + kv_unified   <- THIS CONFIG
+#   batched  = S3  batched + resident + kv_unified
+#
+# S2 is the feature optimum and keeps everything this config depends on —
+# most importantly the REASONING HEAD SWAP, whose gate is
+# `_reasoning_head_swap and _resident_active` (llama_cpp_backend.py:2057),
+# with no swa_full term. S1 was briefly considered to shed the swa_full KV
+# and is WRONG here: head-swap is inert without resident, and gemma's
+# enabled branch emits nothing in the generation prompt
+# (open_tag_prefill_when_enabled: false), so the system head is the ONLY
+# per-level signal at medium/high — losing it would collapse the dial from
+# three states to two.
+cache_strategy: resident
 
 resources:
   cpu_threads: 15
