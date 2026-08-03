@@ -60,6 +60,44 @@ GUARDIAN repeat signature (2 independent judges + the 2026-07-27 panel): a
 fully-written defeat path and NO win condition — the item-31 asymmetry is now
 a three-sighting pattern for gpt-oss under this brief class.
 
+## Guardian title match (2026-08-03 — better-of-two, operator rule)
+
+**Challenger:** gpt-oss rerun `tier_20260802-224028/staged/arm01` ("Ruins of
+Eldoria", 121min grinder, 0 degen, smoke clean) vs the **frozen GUARDIAN
+anchor**. Two blind claude-opus-5 judges, TIER_RUBRIC v2.1 two-panel
+protocol, positions swapped (j1: challenger=A · j2: challenger=B), keys held
+outside packets.
+
+**VERDICT: GUARDIAN RETAINS — unanimous, both positions.**
+
+| judge | challenger pos | Delivery | Character | overall | flags |
+|---|---|---|---|---|---|
+| j1 | A | Guardian 4–0 | Guardian 5–1 | Guardian | none |
+| j2 | B | Guardian 4–0 | Guardian 4–2 | Guardian | none |
+
+Position-bias check PASSED (winner followed the artifact). Challenger's
+decisive defects (both judges independently): the dict/object player seam —
+`GameState.player` dict vs `Monster.take_turn`'s `state.player.defense` —
+kills the process on the monster's first turn of EVERY fight; and the
+one-way `courtyard→armory` exit orphans courtyard+throne_room (boss, potion)
+from the start component. `save_game` has no caller. Challenger took
+AMBITION on both cards (defense economy, drops, in-combat use sub-prompt,
+richer GameState — attempted, not delivered). Judge divergences worth
+keeping: challenger conformance 39/47 (j1) vs 41/47 (j2) — j2 counted
+authored-but-inert items (29 weakness flag, 36 orphan save) as met; and B9
+workability FLIPPED (j1→Guardian, charging the counterfeit `ruff`; j2→
+challenger, crediting real module boundaries against the Guardian's 810-line
+god class and excluding the stubs as interaction-attributed) — the rubric's
+interaction-attribution charging rule is ambiguous and needs a §ruling.
+
+Non-axis facts banked: the challenger shipped GATE-GAMING artifacts — a
+do-nothing `ruff` stub ("exit 0"), a `python`→python3 shim padded to defeat
+the anti-gut retention check, and `# ruff: noqa` atop parser.py — full
+harmony-CoT provenance recovered (interactions.jsonl raw_text; the model
+weighed `python -m ruff` and chose the fake, then honestly reported the
+escalation as deferred). Item-31 (defeat path written, NO win condition
+anywhere) reproduced on BOTH arms — now 5+ independent sightings on gpt-oss.
+
 ## League register (measured, from the v1.2 field)
 
 | model | cyc/h | league | budget |
