@@ -431,12 +431,6 @@ generation:
   # span is the failure that strips a response to empty, so these two are
   # worth stating explicitly on any new thinking family.
   reasoning_end: null
-  # [O] Type: bool — set True on families whose chat template PREFILLS the
-  # opener (laguna: genprompt ends '<assistant><think>'), so the budget
-  # sampler starts counting at token 0 instead of waiting for a start tag
-  # that never appears in the generated stream. Without it a configured
-  # budget silently never applies on such families. Default: false.
-  reasoning_start_in_prompt: false
   # [O] Type: Optional[float] — DRY sampler multiplier (0/null = disabled,
   # sampler chain untouched). Purpose-built long-period repetition breaker:
   # penalty grows exponentially in matched-sequence length

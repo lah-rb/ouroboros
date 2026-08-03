@@ -166,27 +166,3 @@ def test_batched_params_builder_arms_custom_sampler():
     params2 = build_sampling_params({}, seed=1, fallback_seed=1)
     assert params2.custom_samplers == []
     assert CommonSamplerType.CUSTOM not in params2.samplers
-
-
-def test_batched_params_reasoning_start_in_prompt():
-    """Prefilled-opener families (laguna): the budget counter must start at
-    token 0 — without the flag the sampler idles past its start window and
-    a configured budget silently never applies (the 2026-08-02 first
-    thinking turn orbited to the guard with a budget configured)."""
-    from inference.batched_engine import build_sampling_params
-
-    params = build_sampling_params(
-        {
-            "reasoning_budget": 8192,
-            "reasoning_start": "<think>",
-            "reasoning_end": "</think>",
-            "reasoning_start_in_prompt": True,
-        },
-        seed=1,
-        fallback_seed=1,
-    )
-    assert params.reasoning_budget == 8192
-    assert params.reasoning_start_in_prompt is True
-    # absent flag → binding default (False) preserved
-    params2 = build_sampling_params({"reasoning_budget": 100}, seed=1, fallback_seed=1)
-    assert params2.reasoning_start_in_prompt is False

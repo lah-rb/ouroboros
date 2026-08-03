@@ -393,14 +393,6 @@ class GenerationConfig(BaseModel):
     # Reasoning delimiters the budget forces; default to the chatml-family tags.
     reasoning_start: Optional[str] = None
     reasoning_end: Optional[str] = None
-    # True when the chat template PREFILLS the opener (laguna: the genprompt
-    # ends '<assistant><think>'), so the budget sampler never sees the start
-    # tag in the generated stream and must start COUNTING at token 0.
-    # Without it the sampler idles waiting for the opener, gives up after
-    # its start window, and the budget silently never applies — the
-    # 2026-08-02 first thinking turn orbited to the long-cycle guard with a
-    # configured budget doing nothing.
-    reasoning_start_in_prompt: bool = False
     # {token_id: bias} applied at sampling; large negative effectively BANS a
     # token. Present for models that emit native tool-call tokens unprompted
     # (laguna emits <tool_call> = id 25 in 41% of turns against an explicit
