@@ -193,6 +193,28 @@ tier:
   # this model's deep per-cycle reasoning drags the rate under ~20 cyc/h.
   league: grinder
   status: not_yet_run
+  # ⚠️ THE FIRST RUN IS A HARD-MODE TEST, NOT THIS MODEL'S CEILING
+  # (operator, 2026-08-03; run tier_20260803-151411).
+  # Its batch structural step emitted all six declared files correctly —
+  # right markers, all compiling — but WITHOUT markdown fences, and the
+  # slicer of the day only parsed fenced blocks. It wrote 0/6 and the run
+  # was demoted to SERIAL fallback: six files rebuilt one at a time,
+  # 10,220 tokens of good code discarded, and the cycles that rebuild cost
+  # taken out of the same 2h wall.
+  # Serial is the handicapped path by design — files are authored in
+  # isolation rather than in one mutually-consistent pass, which is where
+  # cross-file seam bugs are born, and it is the expensive path per file.
+  # So whatever this artifact scores, read it as a FLOOR for this model,
+  # not a measurement of it.
+  # FIXED 2026-08-03 (bf78236): the slicer now recovers unfenced
+  # marker responses (verified 6/6 on this exact response). A re-run
+  # keeps its batch and should be strictly better.
+  # PER THE OPERATOR'S OWN FIX-AND-DISCARD DOCTRINE (TIER_RUBRIC v2.1
+  # attribution ruling: a confirmed framework fault is remedied by fixing
+  # the framework and DISCARDING the run) this arm is a discard candidate.
+  # Left standing pending an operator call — it is also a genuinely
+  # interesting worst-case datapoint, which the doctrine does not forbid
+  # keeping so long as it is not read as the model's level.
   quant: UD-IQ3_XXS (unsloth)
   # ── LIVE INTAKE, 2026-08-03 (server up, before any tier run) ───────
   # LOADS AND DECODES. n_ctx 65536, KV preflight landed on the computed
