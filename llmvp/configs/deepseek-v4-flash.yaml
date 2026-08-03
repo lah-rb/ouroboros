@@ -8,7 +8,7 @@
 # formats/deepseek4.yaml, template banked at dev/deepseek4_chat_template.jinja.
 #
 # ── ARCH SUPPORT VERIFIED BEFORE DOWNLOAD-TO-BOOT (the laguna lesson) ─
-# Our llama.cpp is b10131 and DOES carry `deepseek4`. It ships three
+# Our llama.cpp carried `deepseek4` even at b10131 (now b10243). It ships three
 # loader preconditions as literal abort strings; all three were checked
 # against this file's header rather than discovered at boot:
 #   1. "compress_ratios is shorter than block_count" — 46 >= 43   PASS
@@ -24,7 +24,9 @@
 #
 #     n_ctx     KV GB   weights+KV    vs 137.4 GB physical
 #      32768      2.9        107.1    safe
-#      65536      5.8        110.0    <- THIS CONFIG
+#      65536      5.8        110.0    (the first-contact setting)
+#     196608     17.3        121.5    <- THIS CONFIG (formula; real KV
+#                                     is ~1.3 GB, see the measurement below)
 #     131072     11.5        115.8    reachable (cf. the 116.3 GB laguna
 #                                     bartowski run, which held)
 #     262144     23.1        127.3    over the practical ceiling
@@ -47,15 +49,17 @@
 #   hyper-connection state). Buying context here is nearly free; the machine
 #   is full before the cache matters.
 #
-#   n_ctx STAYS AT 65,536 pending an operator call. The probe proves ~200k
-#   is reachable, but 65,536 is exactly rope original_context_length (no
-#   YaRN stretch) and running near the verified ceiling would leave ~14 GB
-#   of headroom on a 137.4 GB machine for a first campaign.
-#
-#   65536 chosen for first contact deliberately: it is EXACTLY
-#   rope.scaling.original_context_length, so YaRN applies no stretch at all
-#   (factor 16.0 would take it to the 1,048,576 trained ceiling). A novel
-#   arch's first boot should not also be a rope-extrapolation experiment.
+#   RAISED 65,536 -> 196,608 on 2026-08-03 (operator: "that number is not
+#   even close to the measured max"). 65,536 was first-contact caution —
+#   exactly rope original_context_length, so YaRN applied no stretch — and
+#   it was never revised after the probe. The caution does not survive the
+#   measurement: KV here is ~7 KiB/token, so peak barely moves across the
+#   whole range (122.8 GB at n_ctx 198,656, of which only 1.3 GB is cache).
+#   The weights dominate; context is nearly free on this model, which makes
+#   65,536 pure waste rather than prudence.
+#   196,608 sits under the verified 203,776 with a small margin, and the
+#   probe already generated 3/3 at 178k/188k/198k/203k — so the YaRN stretch
+#   (3x from the 65,536 original) is exercised, not assumed.
 
 app:
   host: "0.0.0.0"
@@ -67,7 +71,7 @@ app:
 
 graphql:
   max_query_depth: 10
-  max_tokens: 65536
+  max_tokens: 196608
   max_aliases: 50
   introspection_enabled: true
 
@@ -75,13 +79,15 @@ model:
   name: "deepseek-v4-flash"
   family: "deepseek4"
   path: /Users/lah-rb/.lmstudio/models/unsloth/DeepSeek-V4-Flash-0731-GGUF/DeepSeek-V4-Flash-0731-UD-IQ3_XXS-00001-of-00004.gguf
-  n_ctx: 65536
+  n_ctx: 196608
   model_max_context: 1048576
   probe_verified_weights_bytes: 104207848032
-  # NO ceiling probe yet — the ladder above is arithmetic, not measurement.
+  # MEASURED 2026-08-03 (--probe-context, b10243). GUARD-BOUND: a lower
+  # bound, since every failing rung was an arithmetic refusal.
   probe_verified_n_ctx: 203776
-  # 104.2 weights + 5.8 KV = 110.0; headroom for a first boot of an arch
-  # whose real KV footprint is unmeasured.
+  # Kept at 118 even though n_ctx is now 196,608: the preflight is SKIPPED
+  # while n_ctx <= the probed ceiling, and the budget only re-arms if that
+  # verification is ever invalidated (a re-quant, per the staleness guard).
   kv_preflight_gb: 118
   n_gpu_layers: -1
   seed: -1
@@ -103,7 +109,10 @@ model:
   # whose sliding_window is 128 would inflate KV toward the naive 86
   # KiB/token upper bound. Prove it loads and decodes on the pool path
   # first, then evaluate batched with a measured KV figure.
-  decode_mode_note: "pool for intake; revisit batched after a context probe"
+  # Probe done; batched still deferred — it REQUIRES swa_full, which on a
+  # 128-token sliding window would inflate KV toward the 86 KiB/token
+  # upper bound and throw away the 12x the compression buys.
+  decode_mode_note: "pool; batched deferred — swa_full would forfeit the KV win"
   swa_full: false
   kv_unified: false
   session_full_replay: true
@@ -115,7 +124,7 @@ prompt:
   system_prompt: "You are a helpful assistant."
 
 generation:
-  max_tokens_default: 65536
+  max_tokens_default: 196608
   # Vendor sampling not yet read from the model card — these are the
   # cautious DeepSeek-family defaults. CONFIRM before scoring anything.
   temperature_default: 0.6
