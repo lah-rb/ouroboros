@@ -1,0 +1,50 @@
+# Laguna-XS-2.1 — poolside BF16: the DECISIVE thinking-isolation arm.
+#
+# WHY THIS EXISTS (operator, 2026-08-02). The fleet think-matrix found
+# laguna-xs DECLINES in-channel thought at med/high — the <think> opener is
+# prefilled, the model closes it immediately — at both sampling points, on
+# the APEX I-Balanced quant. The vendor template defaults
+# enable_thinking=false, which reads like a model fact, but a quant can also
+# damage exactly this kind of narrow behavior. BF16 is the unquantized
+# weights: no recipe, no imatrix, no bits argument left.
+#
+#   BF16 declines too  -> model-level fact (matches the template default);
+#                         close the XS thinking question for the fleet.
+#   BF16 thinks        -> the decline was quant damage OR our llama.cpp /
+#                         LLMVP path — split those next with the same
+#                         prompt on vendor tooling.
+#
+# GEOMETRY (kv-geometry-before-swarm discipline):
+#   weights: 66,930,226,304 B ≈ 66.9 GB (single file, measured on disk;
+#            2.75x the APEX I-Balanced's 24.3 GB)
+#   KV: 160 KiB/token full-cache (family constant — 40 layers x 8 kv-heads
+#       x 128 head-dim; swa_full:true keeps every layer full)
+#   n_ctx 65536 -> 65536 x 163840 B = 10.7 GB
+#   TOTAL ≈ 77.6 GB vs 137.4 physical — comfortable.
+#   Parent's n_ctx kept for comparability; do not raise without re-probing.
+#
+# extends: ONE CONFIG = ONE SCORE — quant fidelity is the scored property.
+extends: laguna-xs-2.1
+
+model:
+  name: Laguna-XS-2.1-BF16
+  path: /Users/lah-rb/.lmstudio/models/poolside/Laguna-XS-2.1-GGUF/Laguna-XS-2.1-BF16.gguf
+  probe_verified_weights_bytes: 66930226304
+  kv_preflight_gb: 80
+
+# ── TIER (doc-only) ──────────────────────────────────────────────────
+tier:
+  league: contemplator
+  status: not_yet_run
+  quant: BF16 (poolside)      # THE PROPERTY THIS CONFIG SCORES
+  expectation:
+    registered: 2026-08-02
+    basis: thinking-isolation reasoning (operator directive)
+    outcome: pending
+    why: >
+      PRE-REGISTERED. The APEX I-Balanced XS declined in-channel thought at
+      med/high in the fleet think-matrix, and the vendor template defaults
+      enable_thinking=false — so the expectation is that BF16 ALSO declines,
+      confirming a model-level fact. If BF16 thinks, the APEX decline was
+      quant damage or a llama.cpp/LLMVP path issue, and the next test is the
+      same prompt on vendor tooling to split those two.

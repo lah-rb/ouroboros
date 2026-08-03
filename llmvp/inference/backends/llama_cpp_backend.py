@@ -1326,6 +1326,21 @@ class LlamaCppBackend(BaseBackend):
         remains for recovery reasons (decode-fatal latch heal), where the
         context is already broken and there is no work worth preserving.
 
+        A POLITE drain clears on ``_active_generations == 0`` ALONE — idle
+        checked-out seats do NOT block it. A memoryful session holds its
+        seat for its whole life, so requiring ``_checked_out == 0`` made
+        the predicate unsatisfiable on any session workload: every drain
+        was a guaranteed full-window admission blackout followed by a
+        deferral, re-fired seconds later (bartowski retry, 2026-08-02:
+        ~5min blocked per ~15s worked from 17:53 on, with the GPU idle
+        long enough for Metal to unwire the weights each cycle). Held-but-
+        idle seats are safe to rebuild under: the admission gate is closed
+        and ``generation_guard`` waits on it BEFORE incrementing, so no
+        new GPU work can start; session seq state demotes to cold and the
+        next fork re-prefills (the same path the fatal latch-heal rebuild
+        has always exercised mid-session). Recovery drains keep the full
+        both-zero predicate — force-clear genuinely empties the pool.
+
         Returns True when the pool is clear (caller refreshes); the gate is
         REOPENED BY THE CALLER's finally, not here.
         """
@@ -1341,7 +1356,13 @@ class LlamaCppBackend(BaseBackend):
         )
         deadline = time.monotonic() + self._refresh_drain_s
         while time.monotonic() < deadline:
-            if self._checked_out == 0 and self._active_generations == 0:
+            if self._active_generations == 0 and (polite or self._checked_out == 0):
+                if polite and self._checked_out > 0:
+                    log.info(
+                        "🧼 polite drain clear with %d idle seat(s) held — "
+                        "sessions demote to cold and re-fork after the rebuild",
+                        self._checked_out,
+                    )
                 return True
             await asyncio.sleep(1.0)
 
@@ -1404,7 +1425,9 @@ class LlamaCppBackend(BaseBackend):
         if self._decode_mode == "batched":
             # Batched refresh: park the decode thread at a step boundary,
             # rebuild the shared context + re-pin heads, resume. Only sound
-            # with no pinned seats and no live streams. When busy:
+            # with no live streams; idle checked-out seats are fine (gate
+            # closed + generation_guard means they cannot start work, and
+            # session seq state demotes to cold / re-forks). When busy:
             # - drain disabled (legacy): defer — the caller retries later.
             # - drain enabled: close the admission gate, give in-flight work
             #   the drain window to finish, then force-clear stragglers

@@ -115,6 +115,37 @@ def test_proactive_drain_defers_instead_of_forcing():
     # which does not carry the proactive prefix)
 
 
+def test_proactive_drain_clears_over_idle_seats():
+    """POLITE PREDICATE (2026-08-02, the bartowski starvation): a memoryful
+    session holds its seat for its whole life, so requiring _checked_out==0
+    made polite drains unsatisfiable on session workloads — every drain was
+    a full-window admission blackout then a deferral, re-fired seconds
+    later (~5min blocked per ~15s worked). A polite drain must clear on
+    _active_generations==0 ALONE: the gate is closed and generation_guard
+    waits on it before incrementing, so an idle held seat cannot start
+    work, and session seq state demotes to cold / re-forks post-rebuild."""
+    be = _backend(drain_s=2.0)
+    be._checked_out = 1  # session-held seat, never released
+    be._active_generations = 1
+
+    async def scenario():
+        async def finish_generation():
+            await asyncio.sleep(0.15)
+            be._active_generations = 0  # seat stays out
+
+        asyncio.create_task(finish_generation())
+        return await be._drain_for_refresh("proactive-timed-drain")
+
+    assert asyncio.run(scenario()) is True
+    # RECOVERY drains keep the strict both-zero predicate: same pool state
+    # (idle seat out, no generations) must NOT clear politely — it goes to
+    # the force path, and with no expirer registered it gives up False.
+    be2 = _backend(drain_s=0.2)
+    be2._checked_out = 1
+    be2._active_generations = 0
+    assert asyncio.run(be2._drain_for_refresh("latch-heal")) is False
+
+
 def test_drain_gives_up_when_pool_never_clears():
     be = _backend(drain_s=0.2)
     be._checked_out = 1  # nothing ever releases; no expirer registered
