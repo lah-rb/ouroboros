@@ -10,6 +10,17 @@ axes, smoke, anchors and league rules layered on top. The solo-scoring path
 (v1) is retired for future campaigns. Everything below about staging,
 blinding, packets, read-walls and play-first remains binding.
 
+> **SMOKE ON A COPY — always.** Never play an artifact inside its staged or
+> frozen tree. Programs under test write save files, caches and logs into
+> their own directory, and whatever you leave behind becomes something the
+> judges charge to the model. This is not hypothetical: the v2.0 GUARDIAN
+> anchor carried a `savegame.json` that six judges docked gpt-oss for, and
+> it was written by our own smoke-and-facts playthrough thirteen seconds
+> after the staging copy (LADDER.md, "ANCHOR CORRECTION 2026-08-03"). The
+> agent's own cleanup had worked perfectly. `cp -r` the artifact to scratch,
+> play the copy, keep the tree pristine. `make_judge_packet.py`'s
+> runtime-state scan is the backstop, not the rule.
+
 ## Why blind play, and not the goal counters
 
 **Goal counters are not the instrument.** They have inverted against blind play

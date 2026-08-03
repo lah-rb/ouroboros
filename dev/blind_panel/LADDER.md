@@ -59,6 +59,33 @@ with unearned gear and a pre-looted armory).
 | GUARDIAN vs FLOOR (in-ladder) | GUARDIAN 4–0 | GUARDIAN 6–0 | **GUARDIAN**, no split, no close flag | Character is NOT a re-vote of Delivery: the Guardian took imagination, felt play, craft, workability and documentation on their own merits. **INVERSION worth keeping**: the FLOOR holds the BETTER binary verdict — NEAR-FULL 40/47 vs the Guardian's SIGNIFICANTLY-DEVIATED 41/47 — while losing all ten axes, because devstral has a win flag in code (unreachable behind a split room graph) where the Guardian has no victory text anywhere. §3.4's conformance/delivery split doing exactly its job. Both anchors ship an ORPHANED module-level function (Guardian's inert `__init__` — a fix for its own auto-load bug written at the wrong indentation; devstral's `equip_item`) — the same seam failure from two directions |
 | FRONTIER vs GUARDIAN (scorecard, out-of-band) | FRONTIER 4–0 | FRONTIER 6–0 | **FRONTIER**, no split, no close flag | FRONTIER WON again (3rd independent judge to complete "The Ashen Keep"), 47/47, exact round-trip incl. per-room monster_hp + poison counter + NPC stage, and its README verified claim-by-claim against play. GUARDIAN: no win path in the tree (confirmed by a judge who RAISED the sword damage in a copy, killed the boss, and got no terminal state — the room still lists the dead dragon), death autosaves a `-1 HP` corpse that auto-loads into an unrecoverable run, mid-combat `use healing potion` silently executes as an attack. §5 family caveat stands (judge Opus, artifact Claude) |
 
+### ⚠️ ANCHOR CORRECTION 2026-08-03 — the `savegame.json` was OURS
+
+The GUARDIAN anchor shipped a `savegame.json` that **six judges charged
+against gpt-oss** (it auto-loads on launch, dropping a stranger into the
+Long Corridor pre-equipped with unearned gear and a looted armory). **The
+agent never wrote it, and the framework was working correctly**: the run's
+architecture declared `transient_files: ['savegame.json']` — exact
+filename — and `flush_transient_files` ran **91 times**, once per PTY
+session close, truthfully reporting no match each time. Proof of the real
+source: every anchor source file is stamped 20:54:26 and the save 20:54:39
+— *thirteen seconds after the staging copy* — and deleting it, running
+`printf 'quit\n' | python main.py`, reproduces it exactly. **Our own
+post-staging smoke-and-facts playthrough created it**, and the saved state
+(location `corridor`, sword+shield equipped, garden potion untouched) is
+that session's, not the agent's.
+
+Neither gpt-oss's fault nor Ouroboros's. **The file has been deleted from
+the anchor** (operator, 2026-08-03); the artifact's CODE is untouched, so
+the anchor's identity is intact and the six conformance tallies stand — no
+verdict turned on it (the Guardian beat FLOOR, lost to FRONTIER, and lost
+to hy3 regardless; it was cited as a defect, never as a decider). Fixes:
+`make_judge_packet.py` now runs a runtime-state scan that prints the mtime
+discriminator (newer than every source = harness contamination; equal =
+model-shipped evidence), and anchor smoke must run on a COPY. This is the
+OPEN_TASKS §20 class arriving from a direction the attribution clause did
+not cover — judges docking an artifact for what the harness did.
+
 **GUARDIAN conformance convergence — now SIX independent judges: 41/47,
 unmet {22, 23, 31, 33, 38, 45}, byte-identical every time.** Across two
 epochs' worth of packets, three different opponents, and both slot
