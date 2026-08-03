@@ -43,7 +43,28 @@ the remaining open step:
 | FLOOR | devstral-2-small-24b | `anchors/v2.0/floor-devstral-20260803/` (run `tier_20260801-185254` arm 2) | ✅ compile clean · launches into play · clean quit | 120min grinder park at 21/28 goals, 117 cycles (58.5 cyc/h), 0 degen, scan clean. 5 py + world.yaml — ALSO chose YAML unprompted (2 of 2 fleet arms). NO title screen: one-line welcome straight into the first room — the first v2 checklist miss (item 2) on an anchor |
 | FRONTIER | claude-sonnet (one-shot) | `anchors/v2.0/frontier-sonnet-20260803/` — "The Ashen Keep" | ✅ compile clean · title screen · clean quit | 10 files (9 py + README), 60,305 B; world defined in `adventure/world.py` — pure-Python, NO data files: the first v2 signal that the brief now measures the choice instead of prescribing it |
 
-## Anchor cross-flights (instrument validation, 2026-08-03 — the epoch's first blind flights)
+## Anchor cross-flights — v2.1 RE-FLIGHTS (2026-08-03, the authoritative pair)
+
+Both v2.0 gate flights re-flown under the two-panel instrument, fresh blind
+Opus judges, positions mixed (GUARDIAN sat A in one and B in the other).
+**Both reproduce v2.0's direction with WIDER margins** — Character voting
+independently did not soften the orderings, it sharpened them. These are the
+first flights carrying the CHARGE-WHAT-SHIPS ruling, and both judges applied
+it: the GUARDIAN's shipped `savegame.json` was labelled interaction and
+charged in full (it hijacks every first launch, dropping a stranger mid-map
+with unearned gear and a pre-looted armory).
+
+| flight | Delivery | Character | overall | headline |
+|---|---|---|---|---|
+| GUARDIAN vs FLOOR (in-ladder) | GUARDIAN 4–0 | GUARDIAN 6–0 | **GUARDIAN**, no split, no close flag | Character is NOT a re-vote of Delivery: the Guardian took imagination, felt play, craft, workability and documentation on their own merits. **INVERSION worth keeping**: the FLOOR holds the BETTER binary verdict — NEAR-FULL 40/47 vs the Guardian's SIGNIFICANTLY-DEVIATED 41/47 — while losing all ten axes, because devstral has a win flag in code (unreachable behind a split room graph) where the Guardian has no victory text anywhere. §3.4's conformance/delivery split doing exactly its job. Both anchors ship an ORPHANED module-level function (Guardian's inert `__init__` — a fix for its own auto-load bug written at the wrong indentation; devstral's `equip_item`) — the same seam failure from two directions |
+| FRONTIER vs GUARDIAN (scorecard, out-of-band) | FRONTIER 4–0 | FRONTIER 6–0 | **FRONTIER**, no split, no close flag | FRONTIER WON again (3rd independent judge to complete "The Ashen Keep"), 47/47, exact round-trip incl. per-room monster_hp + poison counter + NPC stage, and its README verified claim-by-claim against play. GUARDIAN: no win path in the tree (confirmed by a judge who RAISED the sword damage in a copy, killed the boss, and got no terminal state — the room still lists the dead dragon), death autosaves a `-1 HP` corpse that auto-loads into an unrecoverable run, mid-combat `use healing potion` silently executes as an attack. §5 family caveat stands (judge Opus, artifact Claude) |
+
+**GUARDIAN conformance convergence — now SIX independent judges: 41/47,
+unmet {22, 23, 31, 33, 38, 45}, byte-identical every time.** Across two
+epochs' worth of packets, three different opponents, and both slot
+positions. The checklist is behaving as an instrument, not an opinion.
+
+## Anchor cross-flights (v2.0 originals — SUPERSEDED by the pair above, kept as history)
 
 Two blind Opus judges, separate packets, forced choice per axis, keys held
 outside the packets. **Gate verdict: the instrument works** — expected
