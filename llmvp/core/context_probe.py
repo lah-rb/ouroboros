@@ -290,11 +290,28 @@ def live_kv_mib(server_log: str) -> float:
 
 
 def weights_gb(model_path: str) -> float:
-    import glob as _g
+    """Total weight bytes for THIS model, in GB.
 
-    d = os.path.dirname(model_path)
-    return sum(os.path.getsize(s) for s in _g.glob(os.path.join(d, "*.gguf"))
-               if "mmproj" not in os.path.basename(s).lower()) / 1e9
+    Delegates to the backend's shard-aware ``weights_bytes_total``, which
+    follows the ``-00001-of-000NN`` shard set (or the GGUF's split.count)
+    rather than globbing the directory.
+
+    IT USED TO GLOB (2026-08-03 fix). The glob summed every ``*.gguf``
+    beside the model and excluded only ``mmproj``, so a sibling MODEL was
+    counted as part of ours — the exact failure the backend's own
+    docstring warns about ("anything that switches this to a directory
+    glob must re-exclude it by name"). Found on the first subject that
+    had a neighbour: DeepSeek-V4-Flash ships four shards totalling
+    104.2GB and sits beside an unrelated 10.9GB Q8_0 build, so the probe
+    computed 115.1GB of weights, found NEGATIVE headroom under the
+    ceiling, and clamped its opening rung to n_ctx 2048 — unusable.
+    The over-count direction is fail-safe (it refuses rather than
+    over-allocates), which is why this hid until a model with a
+    room-mate turned up.
+    """
+    from inference.backends.llama_cpp_backend import LlamaCppBackend
+
+    return LlamaCppBackend.weights_bytes_total(model_path) / 1e9
 
 
 def calc_start(model_path: str, measured: Optional[int], trained: int,
