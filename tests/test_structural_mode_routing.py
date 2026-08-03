@@ -429,3 +429,46 @@ async def test_serial_fix_dispatch_threads_gate_output(tmp_path):
     cfg = out.context_updates["dispatch_config"]
     assert cfg["flow"] == "file_ops"
     assert "circular import" in cfg["error_output"]
+
+
+@pytest.mark.asyncio
+async def test_parallel_diagnosis_project_ops_recommendation_is_honored(tmp_path):
+    """2026-08-03 title-match root cause: a diagnosis that correctly said
+    "environment, not code" (recommended_flow=project_ops) was forced into
+    a file_ops patch, and the module-frame editor reified "provision the
+    env" as `assert shutil.which('python') ...` — converting soft gate
+    failures into a hard import failure. The structural sweep must honor
+    project_ops exactly as the functional sweep has since b75."""
+    (tmp_path / "parser.py").write_text("import shlex\n")
+    diagnosis = DirectiveReport(
+        flow="diagnose_issue",
+        status="diagnosed",
+        summary=(
+            "Validation steps fail because the execution environment lacks "
+            "the Python interpreter and Ruff linter executables."
+        ),
+        target_file="project_config.py",
+        change_spec=(
+            "Ensure the project environment provides a usable Python "
+            "executable named 'python' and installs the 'ruff' linter."
+        ),
+        diagnosis_kind="enhancement",
+        recommended_flow="project_ops",
+    )
+    goals = [
+        GoalRecord(
+            description="parser",
+            type="structural",
+            associated_files=["parser.py"],
+            reports=[_failed_report("parser.py"), diagnosis],
+        ),
+    ]
+    mission = _mission(tmp_path, "batch", goals=goals)
+    out = await action_structural_sweep_next(_si(mission))
+    assert out.result.get("needs_fix") is True
+    cfg = out.context_updates["dispatch_config"]
+    assert cfg["flow"] == "project_ops"
+    assert cfg["goal_type"] == "structural"
+    assert cfg["target_file_path"] == ""
+    assert "environment/tooling" in cfg["flow_directive"]
+    assert "no code defect" in cfg["flow_directive"]

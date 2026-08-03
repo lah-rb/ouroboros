@@ -1934,6 +1934,46 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             # as diagnose_issue (one-shot triage burst) — both map to a
             # file_ops patch here.
             if last_flow in ("diagnose_issue", "diagnose_batch"):
+                # HONOR recommended_flow=project_ops (2026-08-03, the title-
+                # match root cause). The functional sweep has honored it since
+                # b75; THIS branch forced every diagnosis into a file_ops
+                # patch — so a diagnosis that correctly said "environment,
+                # not code" (env.json's bare-`python` syntax gate on a
+                # python3-only machine) was routed into the module-frame
+                # editor, whose schema can only express a code statement, and
+                # "ensure the environment provides python and ruff" was
+                # reified as `assert shutil.which('python') ...` in
+                # parser.py — converting soft gate failures into a hard
+                # import failure and costing ~10 cycles of thrash.
+                if (getattr(last, "recommended_flow", "") or "") == "project_ops":
+                    diag_summary = getattr(last, "summary", "") or "no details"
+                    dispatch_config = {
+                        "goal_id": goal.id,
+                        "goal_description": goal.description,
+                        "goal_type": "structural",
+                        "goal_files": [file_path],
+                        "flow": "project_ops",
+                        "target_file_path": "",
+                        "flow_directive": (
+                            f"Fix the environment/tooling issue blocking "
+                            f"{file_path}'s validation gate — the diagnosis "
+                            f"found no code defect.\n"
+                            f"Diagnosis: {diag_summary[:500]}"
+                        ),
+                        "recent_reports": [],
+                    }
+                    logger.info(
+                        "Structural sweep: dispatching project_ops from "
+                        "diagnosis for %s (env/tooling, not code)",
+                        file_path,
+                    )
+                    return StepOutput(
+                        result={"sweep_complete": False, "needs_fix": True},
+                        observations=(
+                            f"Structural sweep: project_ops fix for {file_path}"
+                        ),
+                        context_updates={"dispatch_config": dispatch_config},
+                    )
                 fileops = _fileops_dispatch_from_quality_diagnosis(
                     last, goal_id=goal.id, goal_description=goal.description
                 )

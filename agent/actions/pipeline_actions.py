@@ -991,11 +991,70 @@ async def action_check_data_file(step_input: StepInput) -> StepOutput:
     )
 
 
+def _sanitize_env_commands(env_config: dict) -> list:
+    """Resolve interpreters and verify tools in model-proposed check commands.
+
+    Mutates ``env_config`` in place; returns human-readable adjustment notes.
+    Walks every language block's command lists (syntax/import/lint/formatter/
+    install_command — anything shaped like [argv0, ...]):
+
+    - argv0 ``python``/``python3`` not on PATH → rewritten to
+      ``sys.executable`` (the interpreter the agent itself runs under —
+      guaranteed present, has py_compile, and ``-c`` imports resolve
+      against the workspace cwd exactly as before).
+    - any other argv0 not on PATH → the entry is REMOVED, but ONLY for
+      gate-check keys (syntax/import/lint/formatter/typecheck): the gate
+      skips a check it could never run instead of failing every file with
+      FileNotFoundError. Non-check commands (install_command etc.) are
+      left verbatim — installs have their own normalization machinery and
+      may become runnable after provisioning.
+
+    ``{file}``-style placeholders and non-command values are untouched.
+    """
+    import shutil as _shutil
+    import sys as _sys
+
+    check_keys = {"syntax", "import", "lint", "formatter", "typecheck"}
+    notes: list = []
+
+    def _fix_cmd(key, cmd):
+        """Returns (new_cmd_or_None, note_or_None); None cmd = drop entry."""
+        if not (isinstance(cmd, list) and cmd and isinstance(cmd[0], str)):
+            return cmd, None
+        tok0 = cmd[0]
+        if _shutil.which(tok0) is not None:
+            return cmd, None
+        if tok0 in ("python", "python3"):
+            return [_sys.executable] + cmd[1:], (
+                f"interpreter {tok0!r} not on PATH — rewrote to sys.executable"
+            )
+        if key in check_keys:
+            return None, (
+                f"tool {tok0!r} not on PATH — dropped the check entry "
+                f"(gate will skip it)"
+            )
+        return cmd, None
+
+    for lang, block in list(env_config.items()):
+        if not isinstance(block, dict):
+            continue
+        for key, val in list(block.items()):
+            new_cmd, note = _fix_cmd(key, val)
+            if note:
+                notes.append(f"[{lang}.{key}] {note}")
+            if new_cmd is None:
+                del block[key]
+            elif new_cmd is not val:
+                block[key] = new_cmd
+    return notes
+
+
 async def action_persist_validation_env(step_input: StepInput) -> StepOutput:
     """Parse LLM-generated validation config and save to .agent/env.json.
 
     The inference response should be a JSON object mapping extensions
-    to validation commands (syntax, import, lint).
+    to validation commands (syntax, import, lint). Commands are sanitized
+    before persisting — see _sanitize_env_commands.
     """
     raw = step_input.context.get("inference_response", "")
 
@@ -1013,6 +1072,20 @@ async def action_persist_validation_env(step_input: StepInput) -> StepOutput:
             result={"env_saved": False},
             observations="Could not parse validation config",
         )
+
+    # SANITIZE BEFORE PERSISTING (2026-08-03, the title-match root cause).
+    # These commands are model-proposed and were persisted verbatim; a
+    # config that named bare `python` on a python3-only macOS made every
+    # syntax/import gate fail with "No such file or directory: 'python'" —
+    # ten cycles of misdiagnosis, then an environment-assert reified into
+    # the module frame. Resolve the interpreter and verify every tool at
+    # WRITE time, so the gate never records a command this machine cannot
+    # run: a missing python/python3 argv0 is rewritten to sys.executable;
+    # any other missing tool drops that check entry loudly (the gate skips
+    # what it cannot run — degraded validation beats false failure).
+    notes = _sanitize_env_commands(env_config)
+    for note in notes:
+        logger.warning("env sanitize: %s", note)
 
     # Persist through the effects layer so .agent/env.json lands in the mission
     # working_directory (NOT the agent process cwd, which leaked a stray .agent/
@@ -1041,7 +1114,8 @@ async def action_persist_validation_env(step_input: StepInput) -> StepOutput:
 
     return StepOutput(
         result={"env_saved": True},
-        observations=f"Saved validation config for: {', '.join(env_config.keys())}",
+        observations=f"Saved validation config for: {', '.join(env_config.keys())}"
+        + (f" ({len(notes)} command(s) sanitized)" if notes else ""),
         context_updates={"env_config": existing},
     )
 
