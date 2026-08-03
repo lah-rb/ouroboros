@@ -125,9 +125,46 @@ logging:
 
 # ── TIER (doc-only) ──────────────────────────────────────────────────
 tier:
-  league: unmeasured        # no cyc/h yet — assign from the first run
+  # ── LEAGUE: CONTEMPLATOR (placed 2026-08-03 from measured throughput) ─
+  # Decode measured at 4.2-5.4 tok/s across six probes — the SLOWEST in the
+  # fleet by a wide margin (hy3 ~20, laguna ~30). Prefill is fast (1,800
+  # tokens evaluated in 0.5-1.0s, so ~2-3k tok/s); the cost is entirely in
+  # decode: 104 GB of weights plus i-quant dequant kernels on an
+  # architecture llama.cpp has no optimised Metal path for yet.
+  # Rough projection from hy3's 31.7 cyc/h at ~20 tok/s: ~8 cyc/h here, so
+  # the 30-cycle contemplator budget lands near 3.5-4h — INSIDE the 4h
+  # safety wall but not by much. If the first run trips that wall instead
+  # of the cycle cap, the wall is the finding, not the model.
+  league: contemplator
   status: not_yet_run
   quant: UD-IQ3_XXS (unsloth)
+  # ── LIVE INTAKE, 2026-08-03 (server up, before any tier run) ───────
+  # LOADS AND DECODES. n_ctx 65536, KV preflight landed on the computed
+  # numbers exactly (5.8 GB KV + 104.2 GB weights = 110.0 GB), no loader
+  # abort — all three header-verified preconditions held in practice.
+  # COHERENT AT 2.93 BPW, including on the axis the quant analysis flagged
+  # as the risk: asked for a PyYAML loader it produced correct
+  # `yaml.safe_load`, correct `FileNotFoundError`, an unprompted
+  # empty-file guard, and an accurate account of why safe_load is
+  # preferred (arbitrary-code execution via Python-specific object tags).
+  # No confabulated API names in 573 tokens.
+  # THINK DIAL VERIFIED AT EVERY LEVEL, and — unlike laguna-XS — it works
+  # UNDER OUR SOUL PERSONA, so the persona-conditioned trap does not
+  # apply here (17x24 probe):
+  #     None    1 tok, no CoT   (close-only prefill)   408 correct
+  #     low     1 tok, no CoT   (close-only prefill)   408 correct
+  #     medium 16 tok, 14 reasoning + 2 content        408 correct
+  #     high   15 tok, 13 reasoning + 2 content        408 correct
+  # CHARACTER NOTE — the no-think mode is genuinely weak, not merely
+  # terse. On a two-leg average-speed problem it emitted a single token,
+  # "240", which is the FIRST NUMBER IN THE PROMPT rather than an answer;
+  # the same prompt at high produced 32 tokens of correct in-channel
+  # arithmetic and "84". Single-step multiplication is fine at no-think;
+  # anything multi-step is not. Route this model's real work at medium+.
+  # STILL OWED: the BOS falsification declared in formats/deepseek4.yaml
+  # (costs a 104 GB reload, so deferred — nothing observed suggests the
+  # declared BOS is wrong, and coherence rules out the salad failure the
+  # tekken precedent warned about).
   # ── QUANT STRATEGY, read from the tensor table (2026-08-03) ────────
   # 284.3 B params in 104.2 GB = 2.93 BITS/WEIGHT EFFECTIVE — by a wide
   # margin the most aggressive quant the fleet has ever served. The name
