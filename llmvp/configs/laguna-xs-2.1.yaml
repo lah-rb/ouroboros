@@ -1,18 +1,19 @@
-# Laguna-XS-2.1 (Poolside) — mudler APEX I-Balanced.
+# Laguna-XS-2.1 (Poolside) — BF16, the production XS.
 #
-# The small sibling of Laguna-S, and the FIRST I-Balanced laguna that is not
-# confounded: the only S-series I-Balanced build available was the Uncensored
-# finetune, which scored 18/50 blind against i-quality's 35 and could never
-# separate recipe from finetune. This is a base model, so an XS result is
-# attributable to the model and the recipe rather than to a tune.
+# REPOINTED 2026-08-03 (operator): XS runs the poolside BF16 from now on.
+# The previous base (mudler APEX I-Balanced) is archived WITH its notes and
+# its v1.2 tier record at configs/archive/laguna-xs-2.1-apex.yaml; the
+# thinking-isolation config that first served this file is archived at
+# configs/archive/laguna-xs-2.1-bf16.yaml (its full trail lives there).
+# Primary config values are carried over unchanged — only the weights differ.
 #
-# ── GEOMETRY, AND A ROPE DIFFERENCE FROM LAGUNA-S ────────────────────
-#   40 layers x 8 kv-heads x 128 head-dim = 160 KiB/token
-#   24.3 GB weights (256 experts, 8 active — S uses 10)
+# ── GEOMETRY (kv-geometry-before-swarm discipline) ───────────────────
+#   40 layers x 8 kv-heads x 128 head-dim = 160 KiB/token full-cache
+#   66.9 GB weights (BF16, single file, measured on disk; 2.75x the APEX
+#   I-Balanced's 24.3 GB — the reason kv_preflight moved 38 -> 80)
 #
 #   n_ctx    KV GB   weights+KV
-#    65536    10.5        34.8   <- THIS CONFIG
-#   131072    21.0        45.3   comfortably reachable
+#    65536    10.7        77.6   <- THIS CONFIG (vs 137.4 physical)
 #
 # The YaRN declaration is NOT the same as Laguna-S. XS declares
 # scaling.factor 32.0 and yarn_attn_factor 1.3466; S declares 128.0 and 1.4852.
@@ -27,8 +28,7 @@
 # for the same reason.
 #
 # FAMILY: laguna, unchanged — same arch, same tags, same close-only
-# thinking-off prefill. thinking:false matches the S-series serving default;
-# every laguna result the fleet holds was measured that way.
+# thinking-off prefill.
 
 app:
   host: "0.0.0.0"
@@ -47,7 +47,7 @@ graphql:
 model:
   name: "laguna-xs-2.1"
   family: "laguna"
-  path: /Users/lah-rb/.lmstudio/models/mudler/Laguna-XS-2.1-APEX-GGUF/Laguna-XS-2.1-APEX-I-Balanced.gguf
+  path: /Users/lah-rb/.lmstudio/models/poolside/Laguna-XS-2.1-GGUF/Laguna-XS-2.1-BF16.gguf
   # RAISED 65536 -> 262144 on 2026-07-29 from the measured ceiling
   # (probe_verified_n_ctx below). KV 40 KiB/token x 262144 = 10.9GB
   # + 24.3GB weights = 35.2GB resident at boot.
@@ -61,10 +61,10 @@ model:
   # kv_bytes_per_token_measured RETIRED 2026-07-30: 41,440 was measured
   # under swa_full:false; invalid under the flipped flags.
   # probe_verified_n_ctx likewise. Re-probe before raising n_ctx.
-  probe_verified_weights_bytes: 24308693792
+  probe_verified_weights_bytes: 66930226304
   # (probe_verified_n_ctx retired with the flag flip — see above)
   model_max_context: 262144
-  kv_preflight_gb: 38
+  kv_preflight_gb: 80
   n_gpu_layers: -1
   seed: -1
   verbose: false
@@ -132,234 +132,11 @@ logging:
   enabled: true
   directory: ./logs
 
-# ── TIER RECORD (doc-only; see DOC_ONLY_KEYS in core/config.py) ──────
-# Two halves, never merged: `judged` comes from a blind judge who saw only a
-# stripped artifact, `observed` from the operator who watched the run. A judge
-# must never see `observed` — TIER_RUBRIC v1.0 §7 — so it stays a sibling key,
-# not a nested note inside the judgement.
-# ONE CONFIG = ONE SCORE. A variant that changes a property worth scoring
-# (thinking on/off, a flag flip, a re-quant) gets its OWN config via `extends:`
-# rather than a second result inside this one — operator decision 2026-07-31.
-# Costs some redundancy; buys a record that cannot be overwritten by its own
-# rerun, and a variant whose difference IS the config diff.
-# This config is the THINKING:TRUE variant. See experiments/laguna-xs-2.1-nothink.yaml.
+# ── TIER (doc-only) ──────────────────────────────────────────────────
+# ONE CONFIG = ONE SCORE. The v1.2 record that used to live here was measured
+# on the APEX I-Balanced weights and moved WITH them to
+# configs/archive/laguna-xs-2.1-apex.yaml. This config scores the BF16.
 tier:
   league: contemplator  # measured cyc/h — see dev/blind_panel/LADDER.md
-  status: recorded
-  rubric: TIER_RUBRIC v1.2
-  stars: 3
-  tier: 2                 # all three votes < 50; §5 "side taken by >=2 of 3"
-  thinking: true          # THE PROPERTY THIS CONFIG SCORES
-
-  judged:
-    run: tier_20260731-050209 arm02 · staged/arm02
-    judge_model: claude-opus-5[1m]
-    judges: [46, 48, 48]  # 3-star band -> §5 rejudge; recorded score = MEDIAN
-    total: 48
-    record: dev/blind_panel/RESULTS_tier_2026-07-31.md
-
-    # ⚠️ SCORED UNDER PRE-FIX SAMPLING. This config declares `min_p: 0.0`, but
-    # the loader's `gen.min_p or 0.05` discarded the legitimate zero, so the run
-    # was served min_p 0.05. Fixed 2026-07-31 (AFTER this arm ran); NOT re-run,
-    # so the score stands as measured under the regime below.
-    #
-    # Comparable to: arms 01-03 of the same sweep. NOT strictly comparable to
-    # arms 04+ or anything scored later, which get the declared min_p 0.0.
-    #
-    # Note this arm ALSO degenerated 13 times, all long-cycle. A tighter min_p
-    # truncates the tail the sampler can reach, so it is not irrelevant to
-    # repetition — if a re-run is ever done, the degeneration count is the
-    # number to watch, more than the score.
-    sampling_regime:
-      status: pre_fix
-      declared_vs_served: "min_p declared 0.0, served 0.05"
-      fixed: 2026-07-31 (llama_cpp_backend._build_generate_kwargs)
-      rerun: not_done (operator decision — annotate, do not re-run)
-
-    # Dimensions are judge 2's vector — a judge whose TOTAL equals the recorded
-    # median. Judge 3 also totalled 48 by a different route (3.1=6, 3.9=6);
-    # the two offset. Judge 1 (46) had 3.6=4, 3.9=6.
-    # Stars are score/max banded per §2 (see below).
-    # BANDS (rubric §2, inclusive at the top): 0-20=1, 21-40=2, 41-60=3,
-    # 61-80=4, 81-100=5. So 40%% is 2 stars, 60%% is 3, 80%% is 4.
-    dimensions:
-      no_broken_functions: {score: 5, max: 20, stars: 2}
-      robustness:          {score: 5, max: 10, stars: 3}
-      ux:                  {score: 6, max: 10, stars: 3}
-      conformance:         {score: 9, max: 10, stars: 5}   # 49/53 requirements
-      ambition:            {score: 3, max: 10, stars: 2}
-      creativity:          {score: 5, max: 10, stars: 3}
-      org_project:         {score: 3, max: 5,  stars: 3}
-      org_logic:           {score: 2, max: 5,  stars: 2}
-      reusability:         {score: 7, max: 10, stars: 4}
-      documentation:       {score: 3, max: 10, stars: 2}
-
-    profile: >
-      Conformance 5 stars against delivery 2 — the model authored 8 rooms, a
-      two-phase boss, three monster AIs, a weakness item and both terminal
-      screens, and shipped a program in which roughly half of it has no path.
-
-    decisive_defect: >
-      `world.py:load_world` builds reachability from each room's own `exits:`
-      and IGNORES the file's top-level `connections:` block, orphaning 4 of 8
-      rooms — and with them the Crystal Shard, the third monster, the boss and
-      the only win condition. Both NPCs spend their entire dialogue directing
-      the player to a basement with no entrance. A judge proved the content was
-      sound by adding THREE exit lines to world.yaml and nothing else: the boss
-      appeared, phase two triggered, `=== VICTORY! ===` printed. A second judge
-      found the block could not have worked even if read — it maps Hallway-south
-      to three different rooms.
-      CO-DECISIVE: every branch of `process_command` returns before the shared
-      monster-turn block, so `CombatEngine.monster_attack`, the whole `MonsterAI`
-      class and `show_defeat()` are unreachable for any input. The player never
-      lost a hit point in ~20 unarmoured fights. The artifact is UNWINNABLE AND
-      UNLOSEABLE — no reachable terminal state of any kind.
-
-    design_inversion: >
-      Distinct from the seams and worth tracking separately: the boss's phase 2
-      triggers on merely HOLDING the Crystal Shard and sets
-      `current_health = 1.5 x max_health`, `attack x 1.5`. The item designed to
-      make the fight winnable heals and buffs the boss.
-
-    strengths: >
-      Data cleanly separated from code; `help` accurate and complete; every
-      action confirms what changed; case-insensitive; save/load round-trips
-      player state correctly. The modification probe was the strongest part —
-      a new room and item, world.yaml only, first try, for every judge.
-
-    unmet_requirements: [39, 42, 45, 51]   # no restart after defeat; save omits
-                                           # world state; 4 items authored not 5;
-                                           # dialogue is linear, not branching
-
-    caveat_packet_contamination: >
-      The blind packet's workdir redaction wrote the literal string `<arm>` into
-      `explore.sh`. ALL THREE judges remarked on it and judge 3 cited it as one
-      of three reasons for org_project = 3/5. Our blinding was read as the
-      model's sloppiness. All three saw the identical packet so the votes stay
-      internally comparable, and that dimension was unanimous at 3 regardless —
-      but org_project here is worth one point less of trust than elsewhere. The
-      substitution now writes `run`; arms 03+ are unaffected.
-
-  # PRE-REGISTERED (v1.1 §6): before the run, never shown to a judge, never
-  # revised. Note this expectation is for the THINKING rerun owed below, not for
-  # the non-thinking run already recorded in `observed`.
-  expectation:
-    registered: 2026-07-29
-    tier: "2"
-    stars: null
-    basis: experimental
-    outcome: hit
-    why: >
-      EXPERIMENTAL. Thinking should markedly improve the score over the first
-      (non-thinking) run — a promotion to tier 2 is expected.
-    outcome_note: >
-      HIT on its own terms — predicted tier 2, scored tier 2 (48/100, 3 stars).
-      The "markedly improve" half is supported but NOT measured: the 2026-07-29
-      non-thinking run was never blind-judged (`judged: null` on that record),
-      so there is no score for 48 to be an improvement over. The operator recalls
-      its headline as tier 2 / 2 stars, which would make this a full band —
-      2 stars (20-39) to 3 stars (40-59) — but that is RECOLLECTION, not a
-      preserved record, and is marked as such.
-      A CLEAN thinking A/B does not yet exist: `thinking`, `swa_full`,
-      `resident_seq_cache` and `flow_kv_cache` were ALL flipped on 2026-07-30,
-      so four variables moved between the two runs. See
-      experiments/laguna-xs-2.1-nothink.yaml, which isolates thinking against
-      today's flags and is the run that would actually settle it.
-
-  # The OPERATOR half of the scored run. A sibling of `judged`, never nested
-  # inside it — §7 forbids a judge from seeing this, and sibling keys are what
-  # let a packet builder hand over `judged` without dragging telemetry along.
-  observed:
-    run: tier_20260731-050209 arm 2 (2026-07-31)
-    stage: game_challenge_tier · top_phase quality · 2h wall
-    exit: parked `paused` at the full 120min backstop
-    goals: 8/36
-    syntax: 6 py_ok / 0 py_fail
-    artifact: 8 files, staged — workdir path in explore.sh redacted (see caveat)
-    thinking: true
-
-    # THIRTEEN aborts, all LONG-CYCLE (ratios 0.0098–0.1079, periods 80–3531B),
-    # every one caught by the guard. The same config was CLEAN — degen=0,
-    # completed in 17 minutes — under the 20-minute smoke backstop the previous
-    # night, so "laguna-XS does not degenerate" was an artifact of the cap.
-    # Contrast the sibling laguna-s-2.1-apex, whose failure is RAMBLING at
-    # distinct-ratio 0.651 and therefore invisible to this guard: same quantiser
-    # family, different base size, opposite detectability.
-    degeneration: 13 server aborts, all long-cycle (guard caught every one)
-
-    note: >
-      Degenerating 13 times and still scoring 48 is the shape worth remembering:
-      the aborts cost throughput, not correctness. What limited the artifact was
-      a loader that ignores its own data file's `connections:` block, which no
-      amount of sampling discipline would have prevented.
-
-  # ── PRIOR NON-THINKING RUN — HISTORY, NOT THIS CONFIG'S SCORE ──────
-  # Kept because its throughput SHAPE (front-loading) is the observation the
-  # thinking rerun was built to test, and that is worth more than the number it
-  # never got. It was NEVER blind-judged. It also predates the 2026-07-30 flag
-  # flip, so it is not a controlled baseline for anything.
-  prior_non_thinking:
-    judged: NEVER — staged clean, no blind judgement was ever run
-    operator_recollection: tier 2 / 2 stars (headline only; individual scores lost)
-    flags_then: "thinking:false, swa_full:false, resident:false, flow_kv_cache:absent"
-    run: tier_20260729-010118 arm 3 (2026-07-29)
-    stage: game_challenge_tier · top_phase quality · structural_mode batch · 2h wall
-    artifact: staged/arm03 — 16 files, staged clean (identifier scan passed)
-    boot_s: 91
-    exit: rc=0 at the full 120min backstop, mission parked `paused`
-    goals: 6/37
-    syntax: 9 py_ok / 1 py_fail
-
-    # THE CHARACTERISTIC OF THIS RUN, and the thing a star alone will not carry.
-    # 16 files and 6/37 goals at the 15-MINUTE mark — and exactly the same
-    # numbers at 48min, 119min, and on exit. Everything it shipped, it shipped in
-    # the first quarter-hour; the remaining 105 minutes produced no new file and
-    # closed no new goal.
-    #
-    # It was not idle. At the backstop it was mid-repair — localizing into
-    # engine.py -> GameEngine._handle_command and entering a patch sub-flow with
-    # an 18,060-char file in hand. So: churning without landing, not stalled.
-    front_loaded: all output inside the first 15min; flat for the remaining 105
-    parked_at: engine.py -> GameEngine._handle_command (patch sub-flow)
-
-    # Low event count, not a collapse. One long-cycle abort in two hours.
-    degeneration: 1 server abort — long-cycle ratio 0.1081 (~3539B period) at ~48min
-    gate_events: 1 transfer-shape symbol-kind mismatch on `Command`; 1 empty rewrite
-    decode_tok_s: ~62 at 15min (prompt 17.7k)
-
-    # THIS RESULT IS NOT THE MODEL'S CEILING — it was measured with thinking
-    # OFF (`model.thinking: false` above, the S-series serving default). A
-    # thinking:true rerun is owed before any tier is treated as settled: the
-    # front-loading above is exactly the shape extra deliberation might change,
-    # and a non-thinking number would understate a model that reasons well.
-    #
-    # A thinking variant MUST drop the token-19 ban in generation.logit_bias —
-    # 19 is `</think>`, so leaving it banned bans what the run depends on.
-    rerun_owed: thinking:true (always-on CoT), dropping the token-19 logit_bias ban
-
-    # First UNCONFOUNDED I-Balanced laguna (base model, not the Uncensored
-    # finetune), so unlike the 18/50 S-series result this one is attributable.
-    note: >
-      Contrast with the same batch's gpt-oss arm, which closed 28/36 goals with
-      0 syntax failures over the same 2h and the same mission. Goal counters have
-      inverted against blind play in four consecutive rounds, so that gap is
-      telemetry rather than a predicted ranking — but the front-loading is a
-      throughput observation independent of any judgement.
-
-# ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
-probe_verified_cache:
-  run_id: cells_20260729-232251
-  # ⚠️ PRE-FLIP. F2 was measured on 2026-07-29 with swa_full:false, BEFORE this
-  # config was flipped to swa_full:true + resident on 2026-07-30. Its
-  # `can_shift: False` is a property of the old flags, NOT of this model — read
-  # as history. swa_full is exactly what makes pinned/forked prefixes sound at
-  # sliding_window 512, and the sibling laguna-s runs resident in production
-  # batched. No post-flip cell has been recorded here yet; until one is, this
-  # config's resident claim is unverified on this model.
-  F2:
-    strategy: full_replay
-    can_shift: False
-    n_ctx_seq: 262144
-    fresh_t2_last: [2678, 17734]
-    prefill_total_s: 174.6
-    needle_at_depth: True
+  status: not_yet_run
+  quant: BF16 (poolside)   # THE PROPERTY THIS CONFIG SCORES

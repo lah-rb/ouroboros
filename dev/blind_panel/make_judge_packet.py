@@ -310,6 +310,50 @@ def main() -> int:
             print(f"    {f}:{line}  {s!r}")
         return 1
     print("  identifier scan: no model names in artifact or docs")
+
+    # FOURTH SCAN: runtime state (2026-08-03, the savegame contamination).
+    #
+    # The GUARDIAN anchor shipped a `savegame.json` that SIX judges charged
+    # against it — and the agent never wrote it. Its architecture declared
+    # `transient_files: ['savegame.json']` correctly and the framework's
+    # flush ran 91 times and matched nothing, because the file did not exist
+    # during the run: OUR OWN post-staging smoke test played the game, typed
+    # `quit`, and the game autosaved into the frozen tree (proven by mtime —
+    # every source file 20:54:26, the save 20:54:39). That is OPEN_TASKS §20
+    # all over again: judges docking an artifact for something the harness
+    # did. Smoke must run on a COPY; this scan is the backstop that catches
+    # it when someone forgets.
+    #
+    # ADVISORY, never blocking: a save file the MODEL genuinely shipped (an
+    # undeclared transient the flush could not know about) is real evidence
+    # and must reach the judge. The operator decides which it is — the mtime
+    # spread printed below is the discriminator (newer than the sources =
+    # written after staging = ours).
+    state_pat = re.compile(
+        r"(save|savegame|game_?state|autosave)[^/]*\.(json|dat|sav|pkl)$"
+        r"|\.(sav|save|autosave)$",
+        re.I,
+    )
+    art = out / "artifact"
+    files = [p for p in art.rglob("*") if p.is_file()]
+    state_hits = [p for p in files if state_pat.search(p.name)]
+    if state_hits:
+        import datetime
+
+        others = [p.stat().st_mtime for p in files if p not in state_hits]
+        newest_src = max(others) if others else 0
+        print("\n  ?? RUNTIME-STATE FILES in the artifact — confirm provenance:")
+        for p in state_hits:
+            mt = p.stat().st_mtime
+            when = datetime.datetime.fromtimestamp(mt).strftime("%H:%M:%S")
+            verdict = (
+                "NEWER than every source file — probably written by a smoke "
+                "test AFTER staging (harness contamination; remove it)"
+                if mt > newest_src
+                else "contemporaneous with the sources — probably shipped by "
+                "the model (real evidence; keep it)"
+            )
+            print(f"    {p.relative_to(art)}  (mtime {when}) — {verdict}")
     return 0
 
 

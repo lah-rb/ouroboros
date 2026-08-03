@@ -48,7 +48,7 @@ model:
   # low requests still suppress via the padding head-swap (31b) and the
   # pre-closed genprompt (both).
   thinking_mode: medium
-  path: /Users/lah-rb/.lmstudio/models/unsloth/gemma-4-31B-it-qat-GGUF/gemma-4-31B-it-qat-UD-Q4_K_XL.gguf
+  path: /Users/lah-rb/.lmstudio/models/lmstudio-community/gemma-4-31B-it-QAT-GGUF/gemma-4-31B-it-QAT-Q4_0.gguf
   # Full native context (Luke 2026-07-24): the old 65536 cap guarded a
   # semi-broken early release that blew up memory at full context without
   # warning — not observed with the QAT GGUF on the current llama-cpp bin,

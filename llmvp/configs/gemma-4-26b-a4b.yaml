@@ -161,6 +161,15 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
+  # GRINDER (operator, 2026-08-03): added to the v2 create queue now that the
+  # kinks are worked out — the gemma think-activation fix (ec5d54c: <|think|>
+  # had served as literal bytes on every gemma run ever) plus the batched-mode
+  # boot this config runs. NOTE the v1.2 register's 196 cyc/h for this arm is a
+  # NON-THINK number; with thinking live the rate drops substantially (a hard
+  # prompt burned a whole 6k budget inside one thought channel during
+  # validation), so re-measure the league from THIS run rather than trusting
+  # the old figure — it may prove a contemplator.
+  league: grinder  # provisional — see the re-measure note above
   status: not_yet_run
   expectation:
     registered: 2026-07-29
