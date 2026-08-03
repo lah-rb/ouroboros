@@ -146,7 +146,21 @@ logging:
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
 tier:
-  league: contemplator  # measured cyc/h — see dev/blind_panel/LADDER.md
+  # PROVISIONALLY GRINDER (operator, 2026-08-03). The v1.2 register put
+  # step37 at 7.5 cyc/h — the fleet's lowest — and that read as a
+  # contemplator. But decode is 36.5-37.1 tok/s (measured today on
+  # b10243, faster than most of the fleet), so the low cycle rate is DEEP
+  # PER-CYCLE REASONING, not slow serving. A wall-clock budget is the
+  # fairer test of a model that thinks hard per cycle, so it runs grinder
+  # first.
+  # THE PROTOCOL IF IT FALLS SHORT: a 2h wall at ~7.5 cyc/h yields ~15
+  # cycles, half a contemplator budget. If the run ends well under 30,
+  # RESUME it for the remaining 30-N cycles (the runner carries
+  # cycles_consumed and computes remaining_cycles = max(1, 30 - N)) and
+  # move this config to contemplator. That way the arm is not wasted: it
+  # becomes a complete contemplator artifact rather than a truncated
+  # grinder one.
+  league: grinder  # see dev/blind_panel/LADDER.md
   status: recorded
   rubric: TIER_RUBRIC v1.2
   stars: 4                  # 61-80 band; 62/100
