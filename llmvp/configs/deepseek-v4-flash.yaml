@@ -151,6 +151,26 @@ tier:
   # the 30-cycle contemplator budget lands near 3.5-4h — INSIDE the 4h
   # safety wall but not by much. If the first run trips that wall instead
   # of the cycle cap, the wall is the finding, not the model.
+  # ⚠️ PROVISIONAL — THE 5 tok/s IS A BUILD ARTIFACT, NOT THE MODEL.
+  # Our llama.cpp (b10131, built Jul 26) has NO METAL KERNELS for
+  # DeepSeek-V4's fused ops. The boot log says so directly:
+  #     resolve_fused_ops: Lightning Indexer not supported, set to disabled
+  #     resolve_fused_ops: fused DeepSeek V4 HC pre/comb/post not supported
+  #     sched_reserve: graph splits = 44
+  # 44 splits on a 43-layer model is ONE SPLIT PER LAYER — the graph falls
+  # off the GPU and round-trips activations 43x per token. Confirmed by
+  # string scan: DSV4_HC symbols exist in libggml-base (op registry) and
+  # libllama (graph builder) but are ABSENT from libggml-metal, and Metal
+  # resolves pipelines by name at runtime.
+  # Peer 128GB Macs report 20-35 tok/s on this model; one M1 Ultra report
+  # went 5-6 -> 15-16 tok/s after a Metal patch. Upstream has since landed
+  # SIMD-optimised DSV4_HC Metal kernels.
+  # ACTION: rebuild llama-cpp-python against llama.cpp >= b10240 and
+  # re-measure. Verify with: strings -a libggml-metal.dylib | grep -i dsv4
+  # (must be non-empty) and check graph splits fall from 44.
+  # RE-MEASURE THE LEAGUE AFTER THE REBUILD — if decode lands at 15-25
+  # tok/s this is a GRINDER, not a contemplator, and the placement below
+  # is an artifact of a stale binary.
   league: contemplator
   status: not_yet_run
   quant: UD-IQ3_XXS (unsloth)
