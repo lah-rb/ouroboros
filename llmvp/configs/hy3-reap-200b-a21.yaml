@@ -196,6 +196,47 @@ logging:
 tier:
   league: both  # measured cyc/h — see dev/blind_panel/LADDER.md
   status: judged
+
+  # ── EPOCH v2.0 · CONTEMPLATOR ARM [c] — TIER 1 (beat the GUARDIAN) ──
+  # First think-LIVE hy3 artifact (dial fixed 17462a2; routing per-request).
+  v2_contemplator:
+    run: tier_20260802-224028 arm02 · staged/arm02 · "THE SHADOW REALM"
+    judge_model: claude-opus-5   # single blind judge, v2.1 two-panel flight
+    rubric: TIER_RUBRIC v2.1
+    tier: 1                      # boundary rule: beat the Guardian anchor
+    flight: "GUARDIAN — Delivery 4-0, Character 5-1, overall WIN (hy3 sat B; no split, no close flag)"
+    headline: >
+      FIRST field artifact of the epoch a judge PLAYED TO VICTORY, and first
+      field 47/47 NEAR-FULL (zero unmet). The weakness mechanic verified
+      COUNTERFACTUALLY: with the Star Amulet the two-phase boss falls to the
+      victory screen; without it the boss is invulnerable and the run ends in
+      an honest defeat screen with a WORKING restart to a pristine world.
+    why_the_judge_preferred_it: >
+      "B reached less far and closed the loop." Delivery swept 4-0: 9 rooms /
+      3 monsters / reachable victory vs the Guardian's 6 rooms and no win
+      state anywhere; working mid-combat healing; instructive refusals that
+      name the object and the fix. Character 5-1: named realm, two
+      differentiated NPC voices whose hints are load-bearing and pay off,
+      parser->engine->main seams the judge called "a testable boundary at
+      every seam". The Guardian took only B5 ambition (nested combat REPL,
+      typed entity layer, wield-the-key loadout sacrifice) — the axis
+      designed to be able to dissent.
+    defects_on_record: >
+      Save is WRITE-ONLY (engine.load exists, no caller — checklist 37
+      met-by-presence; no load command, no load-on-start). Boss phase HP
+      pools are decorative: _boss_turn recomputes health from phase data
+      every call, so the ±40 amulet modifier carries the fight, not damage
+      accumulation. `talk to <npc>` mis-targets to room.npcs[0] (the parser
+      keeps the `to` particle; bare `talk <npc>` works and reaches content
+      the help's own phrasing hides). EOF at the save prompt tracebacks.
+      Declining the restart offer lands in a dead prompt loop.
+    observed: >
+      Contemplator protocol: 30 cycles in 74min (24.3 cyc/h), 6 files
+      (5 py + world.json — the fleet's THIRD data-format choice under the
+      unopinionated v2 brief), 0 degen, 0 py_fail. Think-dial live: one
+      explicit-high step measured 2798 reasoning + 2249 content tokens
+      (55% thought); remaining steps routed none/low -> no_think per the
+      hy3 routing map. hy3[g] grinder arm still owed.
   expectation:
     registered: 2026-07-29
     tier: "1?"
