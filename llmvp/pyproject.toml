@@ -43,7 +43,7 @@ dependencies = [
 # LLAMA_MAX_SEQ, llama_state_seq_get_size) still present. NOTE the MTP/nextn
 # symbols went missing (binding declares, vendor no longer exports) — MTP was
 # already NO-GO at 0-1% acceptance, but dev/mtp_spike.py will not run on this pin.
-llama-cpp-python = { git = "https://github.com/JamePeng/llama-cpp-python.git", rev = "998b7b5a5318ab6d53c66a7cf79f7760e5b9f83c" }
+llama-cpp-python = { git = "https://github.com/JamePeng/llama-cpp-python.git", rev = "9af4ec3" }
 
 [dependency-groups]
 dev = [
