@@ -77,12 +77,25 @@ model:
   # RE-STAMPED for the lmstudio-community QAT-Q4_0 (the operator repoint;
   # the unsloth UD-Q4_K_XL this used to describe is deleted).
   probe_verified_weights_bytes: 17651001280
-  # INVALIDATED, not carried: 113664 was measured on the OLD quant and the
-  # OLD binary (b10131). The staleness guard already refused to honour it
-  # once the weights changed — which is exactly how the 2026-08-03 fleet
-  # smoke caught this config failing to boot at all. Re-probe with
-  # --probe-context on the current quant + b10243 before raising n_ctx.
-  probe_verified_n_ctx: null
+  # RE-PROBED 2026-08-03 on the QAT-Q4_0 + b10243 -> 112,640, and the old
+  # 113,664 turns out to have been genuinely (if marginally) too high: the
+  # ladder FAILED at 116,736 with a real llama.cpp decode code — caught by
+  # the guard, hardware-bound rather than arithmetic-refused — and the
+  # probe measured 6.4GB of overhead above the formula. So the staleness
+  # guard was not merely bureaucratic; restoring 113,664 would have been a
+  # boot failure waiting to happen.
+  #
+  # THE CEILING IS NOT THE SETTING. n_ctx stays at the operator's 65,536.
+  # Every 100k+ rung the probe passed peaked at ~123GB — 106,496 at 122.9,
+  # 111,616 at 122.8, 112,640 at 123.7 — i.e. ~14GB of headroom on a
+  # 137.4GB machine, and all three cost about the same because KV
+  # dominates. That is the margin the operator rejected when returning
+  # this config to 65,536 (~81GB peak, ~32GB spare), and today's step37
+  # smoke is the cautionary case: it ran AT its verified ceiling and
+  # OOM'd the moment the binary changed. The probe also does not exercise
+  # the resident bands (snapshots, flow, reasoning heads) that S2 adds on
+  # top. 112,640 is available if a workload ever needs it.
+  probe_verified_n_ctx: 112640
   # The theory-based preflight assumes every layer carries a full-size cache
   # and so over-predicts ~2x for gemma-4 (formula ~1.72MB/token vs the 0.87
   # MEASURED above). At 65536 it computes 130.4GB against a 100GB default and
@@ -91,10 +104,13 @@ model:
   # launch site gets it — an unattended batch that did not know to export the
   # env var lost this arm outright (overnight tier run, 2026-07-27).
   kv_preflight_gb: 112
-  # 0.87 MB/token, measured 2026-07-25 by dev/context_pressure_probe.py
-  # across the 32k/48k/64k rungs. 65536 * 0.87MB = 57GB KV + 17.7GB weights
-  # = ~75GB, against the ~81GB peak the probe observed.
-  kv_bytes_per_token_measured: 870000
+  # RE-MEASURED 2026-08-03 by --probe-context on the QAT-Q4_0 + b10243:
+  # 880 KiB/token = 901,120 B, slightly ABOVE the 870,000 that
+  # dev/context_pressure_probe.py measured on 2026-07-25 (old quant, old
+  # binary). Taking the higher figure: it is the fresher measurement and
+  # the conservative direction for a preflight whose job is refusing an
+  # allocation that would hard-reboot the machine.
+  kv_bytes_per_token_measured: 901120
   # The trained per-stream range (the swarm/model context split): the
   # stream limit is min(n_ctx, this) = 32768 here.
   model_max_context: 262144
