@@ -66,12 +66,28 @@ model:
   # right-sized, lives above the 100GB tripwire convention by design.
   # Full trained context (262144) is reachable only with swa_full: false
   # (window 512), at the cost of resident-session soundness.
-  # RAISED 32768 -> 138240 on 2026-07-29 from the measured ceiling
-  # (probe_verified_n_ctx below). KV 180 KiB/token x 138240 = 25.5GB
-  # + 95.3GB weights = 120.8GB resident at boot.
-  n_ctx: 138240
+  # LOWERED 138240 -> 128000 on 2026-08-03. The 138240 was the measured
+  # ceiling on 2026-07-29 and it was honest then — the weights never
+  # changed (the stamp below still matches to the byte). THE BINARY
+  # CHANGED: on b10243 this config OOM'd in the fleet smoke with
+  # kIOGPUCommandBufferCallbackErrorOutOfMemory, and the re-probe found
+  # 4.2GB of overhead above the formula that was not there before, moving
+  # the ceiling 138240 -> 133120. This is the cleanest evidence we have
+  # that a HARDWARE CEILING MOVES WITH THE BINARY, independent of model,
+  # quant or config.
+  #
+  # 128000 rather than the 133120 ceiling, deliberately: this config's
+  # previous setting WAS its ceiling exactly, and that is precisely why a
+  # binary bump broke it outright instead of merely tightening it. 128000
+  # passed at the lowest peak of any passing rung and leaves the margin
+  # that a ceiling-hugging setting does not. 130048 also passed if the
+  # extra 2k is ever wanted.
+  #   ladder: 133120 PASS · 143360/138240/133120 refused once overhead was
+  #           known · 128000 PASS · 130048 PASS · 132096 refused
+  # KV 180 KiB/token x 128000 = 23.6GB + 95.3GB weights = 118.9GB.
+  n_ctx: 128000
   probe_verified_weights_bytes: 95336010208
-  probe_verified_n_ctx: 138240
+  probe_verified_n_ctx: 133120
   # Declared, not left to a launch-time env var. Until 2026-07-25 the
   # preflight measured only shard 1 of this 3-shard GGUF (46.5GB of 105GB),
   # so it computed 52.5GB and waved the config through — it passed the 100GB
