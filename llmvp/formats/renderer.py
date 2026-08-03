@@ -587,6 +587,12 @@ class FormatRenderer:
         """
         stops = [self.s.tokens.gen_stop]
 
+        # Family-declared extra terminators (e.g. glm4's <|observation|> —
+        # the eom the fake-turn derivation below cannot reach).
+        for extra in getattr(self.s.tokens, "extra_gen_stops", None) or []:
+            if extra and extra not in stops:
+                stops.append(extra)
+
         # Collect all role-framing tokens that should never appear
         # in the assistant's own output. If the model generates these,
         # it's producing a fake turn and should be stopped.

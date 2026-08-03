@@ -53,15 +53,75 @@ def find(node, key):
     return None
 
 
-def main() -> int:
-    families = {}
+def _family_stop_sets():
+    """family -> the FULL serving stop set, from the renderer itself.
+
+    The first audit compared only the raw ``tokens.gen_stop`` field and
+    flagged terminators the LIVE stop set already covers — glm4's eot
+    <|user|> is caught by stop_tokens()'s fake-turn-opener derivation,
+    so the audit cried wolf on it forever while the genuinely missing
+    eom <|observation|> hid in the noise. Measure what serving measures.
+    """
+    import sys as _sys
+
+    _sys.path.insert(0, os.path.join(ROOT, "llmvp"))
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    import core.config as ccfg
+    from formats.registry import clear_cache, get_renderer
+
+    stop_sets = {}
     for f in sorted(glob.glob(os.path.join(ROOT, "llmvp/formats/*.yaml"))):
         d = yaml.safe_load(open(f)) or {}
-        families[d.get("family")] = (d.get("tokens", {}) or {}).get("gen_stop", "")
+        fam = d.get("family")
+        if not fam:
+            continue
+        cfg = SimpleNamespace(
+            model=SimpleNamespace(
+                thinking="per_request", thinking_available=True, family=fam
+            )
+        )
+        try:
+            with patch.object(ccfg, "get_config", lambda c=cfg: c):
+                clear_cache()
+                stop_sets[fam] = list(get_renderer(fam).stop_tokens())
+        except Exception:  # noqa: BLE001 — a family that fails to render
+            stop_sets[fam] = [(d.get("tokens", {}) or {}).get("gen_stop", "")]
+    return stop_sets
+
+
+def _resolve_config(path: str, depth: int = 0) -> dict:
+    """Load a config, following `extends:` for missing keys (family/path).
+    The first audit reported every extends-child as FAMILY NOT FOUND."""
+    d = yaml.safe_load(open(path)) or {}
+    parent = d.get("extends")
+    if parent and depth < 4:
+        for cand in (
+            os.path.join(os.path.dirname(path), f"{parent}.yaml"),
+            os.path.join(ROOT, "llmvp/configs", f"{parent}.yaml"),
+        ):
+            if os.path.exists(cand):
+                base = _resolve_config(cand, depth + 1)
+                # Capture the parent's model block BEFORE the top-level
+                # update overwrites it with the child's partial one — the
+                # child declares only `path`/`name`, so a naive update
+                # dropped the inherited `family` and every extends-child
+                # audited as FAMILY NOT FOUND.
+                merged_model = dict(base.get("model") or {})
+                merged_model.update(dict(d.get("model") or {}))
+                base.update({k: v for k, v in d.items() if v is not None})
+                base["model"] = merged_model
+                return base
+    return d
+
+
+def main() -> int:
+    stop_sets = _family_stop_sets()
 
     rows, seen = [], set()
     for c in sorted(glob.glob(os.path.join(ROOT, "llmvp/configs/*.yaml"))):
-        d = yaml.safe_load(open(c)) or {}
+        d = _resolve_config(c)
         path, family = find(d, "path"), find(d, "family")
         if not path or not os.path.exists(path) or path in seen:
             continue
@@ -77,13 +137,20 @@ def main() -> int:
             return toks[i] if isinstance(i, int) and i < len(toks) else None
 
         name = os.path.basename(c)[:-5]
-        stop = families.get(family)
-        if stop is None:
+        stops = stop_sets.get(family)
+        if stops is None:
             rows.append((name, family or "?", "FAMILY NOT FOUND", None, None, ["?"]))
             continue
         eot, eom = tok("eot_token_id"), tok("eom_token_id")
-        rows.append((name, family, stop, eot, eom,
-                     [t for t in (eot, eom) if t and t not in stop]))
+        # Covered when any serving stop is a substring of the terminator or
+        # vice versa (generation breaks on substring match).
+        missing = [
+            t
+            for t in (eot, eom)
+            if t and not any(s and (s in t or t in s) for s in stops)
+        ]
+        stop = ",".join(stops)
+        rows.append((name, family, stop, eot, eom, missing))
 
     print(f"{'config':<30}{'family':<11}{'gen_stop':<22}{'eot':<17}{'eom':<17}")
     for n, f, s, eot, eom, miss in rows:

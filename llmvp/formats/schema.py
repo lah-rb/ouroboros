@@ -39,6 +39,14 @@ class TokenSpec(BaseModel):
     history_close: (
         str  # what replaces gen_stop when re-rendering history, e.g. "<|end|>"
     )
+    # Additional turn-terminators beyond gen_stop and the fake-user/system
+    # openers stop_tokens() derives. For families whose GGUF declares extra
+    # end-of-generation tokens the derivation cannot reach — glm4's eom
+    # <|observation|>: after a hallucinated tool call the model writes the
+    # tool's reply itself, the same both-sides-of-the-chat failure the
+    # 2026-07-29 incident burned 70k tokens on via <|user|>. Audited by
+    # dev/stop_token_audit.py against GGUF eot/eom headers.
+    extra_gen_stops: list = []
 
 
 class RoleTokens(BaseModel):

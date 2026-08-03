@@ -55,6 +55,12 @@ tokens:
   msg_content: "|>"
   msg_close: ""
   gen_stop: "<|endoftext|>"
+  # GGUF eom (2026-08-03, closing the stop_token_audit flag): after a
+  # hallucinated tool call GLM writes the observation itself — the same
+  # both-sides failure the 2026-07-29 <|user|> incident burned 70k tokens
+  # on. <|user|> (the eot) is already covered by the fake-turn opener
+  # derivation in stop_tokens(); this eom is the half it cannot derive.
+  extra_gen_stops: ["<|observation|>"]
   history_close: "<|endoftext|>"
   # EMPTY ON PURPOSE — see the [gMASK] note above. The document prefix is
   # emitted once, by the system role, so it cannot be doubled.
