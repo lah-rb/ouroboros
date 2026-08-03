@@ -1216,3 +1216,32 @@ def test_deepseek4_is_registered_in_the_fsm_labeller():
 
     assert _shape_for("deepseek4") is _ThinkShape.ANGLE
     assert _structural_cats_for("deepseek4") == _structural_cats_for("chatml")
+
+
+def test_deepseek4_ternary_depth_dial(monkeypatch):
+    """OPERATOR WIRING 2026-08-03: the model is effectively TERNARY —
+    off / high / max — because the template has a reasoning_effort branch
+    for 'high' and 'max' and nothing else. Canonical levels compress:
+    none/low -> no thinking, medium -> HIGH directive, high -> MAX
+    directive. Both HALVES must agree: the structural prefill (opener vs
+    close-only) AND the prose directive prepended to the system block.
+    Wiring one half only is how gemma shipped a dead dial."""
+    r = _deepseek4_renderer(monkeypatch)
+
+    for level in (None, "low"):
+        assert r.render_generation_prompt(reasoning=level).endswith("</think>")
+        body = r.render_system(persona="P", reasoning=level)
+        assert "Reasoning Effort" not in body, f"{level} must add no directive"
+
+    med = r.render_system(persona="P", reasoning="medium")
+    high = r.render_system(persona="P", reasoning="high")
+    assert r.render_generation_prompt(reasoning="medium").endswith("<think>")
+    assert r.render_generation_prompt(reasoning="high").endswith("<think>")
+    assert med.count("Reasoning Effort") == 1 and high.count("Reasoning Effort") == 1
+    # medium -> the template's HIGH paragraph; high -> its MAX paragraph.
+    assert "Absolute maximum with no shortcuts" in med, med[:80]
+    assert "Beyond maximum" in high, high[:80]
+    # The em-dash survived extraction (a naive unescape mangles it, and a
+    # directive off by one character is off-distribution).
+    assert "—" in high, "max directive lost its em-dash"
+    assert med != high, "medium and high must not collapse to one directive"
