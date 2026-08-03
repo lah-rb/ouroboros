@@ -29,12 +29,28 @@
 #                                     bartowski run, which held)
 #     262144     23.1        127.3    over the practical ceiling
 #
-#   86 KiB/token is an UPPER BOUND. `attention.compress_ratios` gives most
-#   layers a 4x or 128x compressed cache and sliding_window is 128 with a
-#   512-way indexer (DeepSeek sparse attention), so the true figure is very
-#   likely far lower — the same over-prediction gemma-4 showed. Re-probe
-#   with --probe-context before raising n_ctx; do not trust the formula
-#   upward.
+#   ⚠️ MEASURED 2026-08-03 (--probe-context): the formula is a 12x
+#   OVER-ESTIMATE. Real KV is ~7 KiB/token, not 86 — at n_ctx 198,656 the
+#   entire cache is 1,340 MiB. The prediction above was right in direction
+#   and badly wrong in size: compress_ratios gives most layers a 4x or 128x
+#   cache and the 128-token sliding window with a 512-way indexer means
+#   almost nothing is held at full width.
+#
+#   MEASURED CEILING: probe_verified_n_ctx = 203,776 (from a 178,176 start,
+#   +14.4%). Marked GUARD-BOUND by the probe: every failing rung was an
+#   ARITHMETIC refusal that never booted, so 203,776 is a LOWER BOUND on the
+#   hardware and says nothing about the band above it.
+#
+#   CONTEXT IS NOT THE BINDING CONSTRAINT — THE WEIGHTS ARE. Peak wired at
+#   198,656 was 122.8 GB of which only 1.3 GB is KV: 104.2 GB of weights
+#   plus ~17 GB of runtime overhead (compute buffers, the sparse indexer,
+#   hyper-connection state). Buying context here is nearly free; the machine
+#   is full before the cache matters.
+#
+#   n_ctx STAYS AT 65,536 pending an operator call. The probe proves ~200k
+#   is reachable, but 65,536 is exactly rope original_context_length (no
+#   YaRN stretch) and running near the verified ceiling would leave ~14 GB
+#   of headroom on a 137.4 GB machine for a first campaign.
 #
 #   65536 chosen for first contact deliberately: it is EXACTLY
 #   rope.scaling.original_context_length, so YaRN applies no stretch at all
@@ -63,7 +79,7 @@ model:
   model_max_context: 1048576
   probe_verified_weights_bytes: 104207848032
   # NO ceiling probe yet — the ladder above is arithmetic, not measurement.
-  probe_verified_n_ctx: null
+  probe_verified_n_ctx: 203776
   # 104.2 weights + 5.8 KV = 110.0; headroom for a first boot of an arch
   # whose real KV footprint is unmeasured.
   kv_preflight_gb: 118
