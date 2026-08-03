@@ -100,7 +100,12 @@ build_structure: #FlowDefinition & {
 			description: "Slice FILE blocks, diff against the blueprint, write declared files"
 			context: {
 				required: ["inference_response", "mission"]
-				optional: ["inference_truncated"]
+				// degenerate + request_id: the salvage keys — a server-aborted
+				// generation returns no text, but its partial work sits in the
+				// runaway capture keyed by request id, and completed FILE
+				// blocks slice out of it (bartowski 2026-08-02: 8/9 files
+				// discarded whole, rebuilt serially for nothing).
+				optional: ["inference_truncated", "inference_degenerate", "inference_request_id"]
 			}
 			resolver: {
 				type: "rule"

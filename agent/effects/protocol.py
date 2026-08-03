@@ -178,6 +178,15 @@ class InferenceResult:
     # None = NOT REPORTED (older server), never 0. "We did not measure" and
     # "nothing was generated" are the two readings this exists to keep apart.
     degenerate_tokens: int | None = None
+    # The correlation id the client minted for this request ("ouro-<hex>").
+    # A degenerate abort returns no text, but the server dumped the partial
+    # generation to its runaway-capture log keyed by this id — so carrying
+    # it back is what lets the batch slicer ask `runawayCapture(requestId)`
+    # and salvage completed FILE blocks out of an aborted mega-turn
+    # (bartowski laguna 2026-08-02: all 8 files complete in the first 42%
+    # of a 45k-token orbit, discarded whole). Empty = no id was minted
+    # (remote passthrough or older path).
+    request_id: str = ""
 
 
 # ── Terminal output limits ────────────────────────────────────────────

@@ -596,6 +596,41 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
     truncated = bool(ctx.get("inference_truncated", False))
 
     declared = _declared_files(mission) if mission else []
+
+    # DEGENERATE-ABORT SALVAGE (2026-08-02, the bartowski orbit). A server
+    # degeneration abort returns NO text — but the partial generation sits
+    # in the server's runaway-capture log, and the work is often complete:
+    # laguna emitted all 8 declared files, properly marked, in the first
+    # 42% of a 45k-token turn, then orbited on a readiness couplet; the
+    # whole thing was discarded and rebuilt serially at far greater cost.
+    # Fetch the capture and slice it like any other response. The tail is
+    # severed by construction (the abort landed mid-loop) so the salvaged
+    # text is treated as TRUNCATED — the fence-parity check drops an
+    # unterminated last block, and every salvaged file still passes the
+    # same write guard and per-file gates as a normal slice.
+    salvaged = False
+    if (
+        not raw
+        and declared
+        and effects
+        and ctx.get("inference_degenerate")
+        and ctx.get("inference_request_id")
+        and hasattr(effects, "fetch_runaway_capture")
+    ):
+        capture = await effects.fetch_runaway_capture(ctx["inference_request_id"])
+        if capture and capture.get("text"):
+            raw = capture["text"]
+            truncated = True
+            salvaged = True
+            logger.warning(
+                "🩹 batch salvage: recovered %d chars from the runaway capture "
+                "of aborted generation %s (%s) — slicing for completed FILE "
+                "blocks; %s elided bytes",
+                len(raw),
+                ctx["inference_request_id"],
+                (capture.get("reason") or "")[:80],
+                capture.get("elided_bytes", 0),
+            )
     if not effects or not raw or not declared:
         return StepOutput(
             result={"files_written": 0, "wrote_any": False},
@@ -606,6 +641,7 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
                     "missing": list(declared),
                     "extra": [],
                     "truncated": truncated,
+                    "salvaged": False,
                     "deliberation_chars": 0,
                 },
                 "files_changed": [],
@@ -704,6 +740,7 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
         "missing": missing,
         "extra": extra,
         "truncated": truncated,
+        "salvaged": salvaged,
         "deliberation_chars": deliberation_chars,
     }
     obs = (
@@ -715,7 +752,11 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
             if deliberation_chars > 200
             else ""
         )
-        + (" — generation TRUNCATED" if truncated else "")
+        + (
+            " — SALVAGED from a degenerate-aborted generation's capture"
+            if salvaged
+            else (" — generation TRUNCATED" if truncated else "")
+        )
     )
     logger.info(obs)
     return StepOutput(
@@ -990,7 +1031,11 @@ async def action_apply_batch_results(step_input: StepInput) -> StepOutput:
         f"{completed} goals completed, {len(failed_files)} failed gates"
         + (f", {len(missing)} missing (serial fallback)" if missing else "")
         + (f", {len(extra)} undeclared blocks skipped" if extra else "")
-        + (", generation truncated" if truncated else "")
+        + (
+            ", SALVAGED from aborted generation"
+            if manifest.get("salvaged")
+            else (", generation truncated" if truncated else "")
+        )
         + (f". Generation cost: {tokens} tokens." if tokens else ".")
     )
     # LOG IT, not just note it. This summary is the only place that says whether

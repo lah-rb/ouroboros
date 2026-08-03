@@ -663,3 +663,92 @@ async def test_checks_transfer_gate_inert_single_file():
     )
     out = await action_run_batch_file_checks(_si(fx, {"files_changed": ["engine.py"]}))
     assert out.context_updates["batch_check_results"]["engine.py"]["passed"] is True
+
+
+# ── degenerate-abort salvage (2026-08-02, the bartowski orbit) ────────
+#
+# A server degeneration abort returns no text, but the partial turn sits
+# in the server's runaway capture — and the work is often complete (all 8
+# declared files marked and whole in the first 42% of the discarded 45k-
+# token turn). The slicer fetches the capture by request id and slices it
+# as a TRUNCATED response: the severed tail's unterminated block drops,
+# salvaged files pass the same guards and gates as a normal slice.
+
+
+class _SalvageEffects(MockEffects):
+    def __init__(self, capture: dict | None, **kw):
+        super().__init__(**kw)
+        self._capture = capture
+        self.capture_requests: list[str] = []
+
+    async def fetch_runaway_capture(self, request_id: str) -> dict | None:
+        self.capture_requests.append(request_id)
+        return self._capture
+
+
+@pytest.mark.asyncio
+async def test_slice_salvages_file_blocks_from_degenerate_capture():
+    complete = _batch_response(
+        ("models.py", "class Deck: pass"),
+        ("engine.py", "import models"),
+    )
+    # The orbit sits after the complete blocks; the abort severs mid-fence.
+    capture_text = (
+        complete
+        + "\n\nOK, I'm truly ready now. Let me output all the files.\n\n"
+        + "```python\n# === FILE: main.py ===\nfrom engine import"  # severed
+    )
+    fx = _SalvageEffects(
+        {"text": capture_text, "reason": "long-cycle: test", "elided_bytes": 0},
+        mission=_mission(),
+    )
+    out = await action_slice_batch_files(
+        _si(
+            fx,
+            {
+                "inference_response": "",
+                "mission": _mission(),
+                "inference_degenerate": True,
+                "inference_request_id": "ouro-test1234",
+            },
+        )
+    )
+    manifest = out.context_updates["batch_manifest"]
+    assert fx.capture_requests == ["ouro-test1234"]
+    assert manifest["salvaged"] is True
+    assert manifest["written"] == ["models.py", "engine.py"]
+    # The severed trailing block stays MISSING for the serial sweep.
+    assert "main.py" in manifest["missing"]
+    assert "SALVAGED" in out.observations
+
+
+@pytest.mark.asyncio
+async def test_slice_no_salvage_without_degenerate_flag():
+    fx = _SalvageEffects(
+        {"text": "should not be fetched", "reason": "r", "elided_bytes": 0},
+        mission=_mission(),
+    )
+    out = await action_slice_batch_files(
+        _si(fx, {"inference_response": "", "mission": _mission()})
+    )
+    assert fx.capture_requests == []
+    assert out.result["files_written"] == 0
+
+
+@pytest.mark.asyncio
+async def test_slice_salvage_handles_missing_capture():
+    fx = _SalvageEffects(None, mission=_mission())
+    out = await action_slice_batch_files(
+        _si(
+            fx,
+            {
+                "inference_response": "",
+                "mission": _mission(),
+                "inference_degenerate": True,
+                "inference_request_id": "ouro-gone",
+            },
+        )
+    )
+    assert fx.capture_requests == ["ouro-gone"]
+    assert out.result["files_written"] == 0
+    assert out.context_updates["batch_manifest"]["salvaged"] is False

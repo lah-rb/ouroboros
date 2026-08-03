@@ -12,10 +12,13 @@ import json
 from pathlib import Path
 
 from inference.runaway_capture import (
+    CAPTURE_HEAD_SPLIT,
+    CAPTURE_TAIL_BYTES,
     CHECK_INTERVAL,
     WINDOW_BYTES,
     detect_long_cycle,
     dump_capture,
+    find_capture,
 )
 
 
@@ -130,3 +133,45 @@ def test_check_interval_sane():
     # The loop hooks fire on completion_tokens % CHECK_INTERVAL == 0;
     # guard against someone setting it to 0 and dividing by zero.
     assert CHECK_INTERVAL >= 256
+
+
+def test_dump_capture_over_cap_keeps_head_and_tail(tmp_path: Path):
+    """SALVAGE SHAPE (2026-08-02, the bartowski orbit): the head is where
+    completed FILE blocks live, the tail is where the loop shows. A
+    tail-only capture of an over-cap generation destroys the salvageable
+    half. Over the cap: head + elision marker + tail, elided_bytes
+    accounted."""
+    head_sig = b"# === FILE: models.py ===\n" + b"H" * 1000
+    tail_sig = b"T" * 1000 + b"I'm truly ready now."
+    filler = b"x" * (CAPTURE_TAIL_BYTES * 2)
+    text = head_sig + filler + tail_sig
+    path = dump_capture(tmp_path, "long-cycle: test", text, tokens_generated=9)
+    rec = json.loads(Path(path).read_text())
+    assert rec["text"].startswith("# === FILE: models.py ===")
+    assert rec["text"].endswith("I'm truly ready now.")
+    assert "elided" in rec["text"]
+    assert rec["elided_bytes"] > 0
+    assert rec["bytes_total"] == len(text)
+    assert rec["bytes_captured"] == len(text) - rec["elided_bytes"]
+    assert rec["bytes_captured"] <= CAPTURE_TAIL_BYTES
+    assert CAPTURE_HEAD_SPLIT < CAPTURE_TAIL_BYTES
+
+
+def test_dump_capture_under_cap_is_complete(tmp_path: Path):
+    text = b"short generation, fully captured"
+    path = dump_capture(tmp_path, "r", text, tokens_generated=4)
+    rec = json.loads(Path(path).read_text())
+    assert rec["text"] == text.decode()
+    assert rec["elided_bytes"] == 0
+
+
+def test_find_capture_matches_by_request_id(tmp_path: Path):
+    dump_capture(tmp_path, "old", b"old text", 1, meta={"request_id": "ouro-aaa"})
+    dump_capture(tmp_path, "new", b"new text", 2, meta={"request_id": "ouro-bbb"})
+    rec = find_capture(tmp_path, "ouro-aaa")
+    assert rec is not None and rec["text"] == "old text"
+    rec = find_capture(tmp_path, "ouro-bbb")
+    assert rec is not None and rec["reason"] == "new"
+    assert find_capture(tmp_path, "ouro-missing") is None
+    assert find_capture(tmp_path, "") is None
+    assert find_capture("/dev/null/not-a-dir", "ouro-aaa") is None

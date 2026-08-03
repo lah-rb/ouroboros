@@ -226,6 +226,18 @@ query Thinking($requestId: String) {
 }
 """
 
+RUNAWAY_CAPTURE_QUERY = """
+query RunawayCapture($requestId: String!) {
+    runawayCapture(requestId: $requestId) {
+        found
+        reason
+        text
+        tokensGenerated
+        elidedBytes
+    }
+}
+"""
+
 
 class InferenceError(Exception):
     """Raised when an inference call fails."""
@@ -578,6 +590,49 @@ class InferenceEffect:
             logger.debug("Failed to fetch thinking: %s", e)
             return ""
 
+    async def fetch_runaway_capture(self, request_id: str) -> dict | None:
+        """Fetch the server's partial-text capture of an aborted generation.
+
+        When the server kills a generation as degenerate it discards the
+        stream but dumps the partial text to its runaway-capture log,
+        keyed by the correlation id we minted. The batch slicer uses this
+        to salvage completed FILE blocks out of an aborted mega-turn
+        instead of regenerating everything serially.
+
+        Returns {"text", "reason", "tokens_generated", "elided_bytes"} or
+        None when no capture matched (older server, capture rotation, or
+        a dump that failed server-side). Never raises.
+        """
+        if not request_id:
+            return None
+        client = await self._get_client()
+        try:
+            response = await client.post(
+                self._endpoint,
+                json={
+                    "query": RUNAWAY_CAPTURE_QUERY,
+                    "variables": {"requestId": request_id},
+                },
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if "errors" in data:
+                logger.debug("Runaway capture query errors: %s", data["errors"])
+                return None
+            cap = (data.get("data") or {}).get("runawayCapture") or {}
+            if not cap.get("found"):
+                return None
+            return {
+                "text": cap.get("text", "") or "",
+                "reason": cap.get("reason", "") or "",
+                "tokens_generated": int(cap.get("tokensGenerated") or 0),
+                "elided_bytes": int(cap.get("elidedBytes") or 0),
+            }
+        except Exception as e:  # noqa: BLE001 — salvage is best-effort
+            logger.debug("Failed to fetch runaway capture: %s", e)
+            return None
+
     @staticmethod
     def _guard_prompt_size(prompt: str, static_prefix: str | None) -> str:
         """Last-resort prompt-size backstop (Guard G1). The per-source guards keep
@@ -905,6 +960,10 @@ class InferenceEffect:
             except asyncio.CancelledError:
                 pass
 
+        # Stamp the correlation id on every outcome. On a degenerate abort
+        # this is what lets the caller fetch the server's runaway capture
+        # (partial text) for salvage — see fetch_runaway_capture.
+        result.request_id = request_id
         return result
 
     async def _poll_health(self, query: str) -> dict:

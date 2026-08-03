@@ -71,3 +71,8 @@ content: |
     saved anywhere: only the fenced file blocks are kept. Use notes
     when they help you keep the files coherent with each other; the
     files themselves are the deliverable.
+  - There is NO execution environment in this step. You cannot run the
+    program, run tests, or observe any output here — do not write shell
+    commands to "run" anything and do not narrate imagined results.
+    Verification happens in a later step that really executes the code.
+    When every blueprint file has been emitted, end your response.

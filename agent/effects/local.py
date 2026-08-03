@@ -1279,6 +1279,20 @@ class LocalEffects:
             logger.debug("fetch_thinking failed: %s", e)
             return ""
 
+    async def fetch_runaway_capture(self, request_id: str) -> dict | None:
+        """Partial text of an aborted generation, by correlation id.
+
+        Delegates to the LLMVP runawayCapture endpoint; the batch slicer
+        uses it to salvage FILE blocks from a degenerate-aborted turn.
+        None when nothing matched or the fetch failed. Never raises.
+        """
+        try:
+            inference = self._get_inference()
+            return await inference.fetch_runaway_capture(request_id)
+        except Exception as e:  # noqa: BLE001 — salvage is best-effort
+            logger.debug("fetch_runaway_capture failed: %s", e)
+            return None
+
     # ── Memoryful inference sessions ──────────────────────────────
 
     async def start_inference_session(

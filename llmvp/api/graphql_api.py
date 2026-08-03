@@ -188,6 +188,32 @@ class ThinkingResponse:
 
 
 @strawberry.type
+class RunawayCaptureResponse:
+    """Partial text of an aborted generation, looked up by request id.
+
+    When a generation dies degenerate (long-cycle orbit, repetition
+    guard) the server discards the stream but dumps the partial text to
+    ``logs/runaway_captures/``. Only the error MESSAGE crosses the
+    GraphQL boundary on the abort itself, so a client that wants the
+    partial work back — e.g. the batch slicer salvaging marked FILE
+    blocks from an orbit that completed its files before looping
+    (bartowski laguna, 2026-08-02: all 8 files marked and complete in
+    the first 42% of a 45k-token turn, discarded whole) — asks here
+    with the correlation id it minted for the request.
+
+    ``found=False`` means no capture matched: not every abort dumps
+    (the dump is best-effort), and captures rotate.
+    """
+
+    found: bool
+    request_id: str
+    reason: str
+    text: str
+    tokens_generated: int
+    elided_bytes: int
+
+
+@strawberry.type
 class CompletionResponse:
     """Non-streaming completion response.
 
@@ -633,6 +659,30 @@ class Query:
             content=data["content"],
             complete=data["complete"],
             active=data["active"],
+        )
+
+    @strawberry.field
+    def runaway_capture(self, request_id: str) -> RunawayCaptureResponse:
+        """Partial text of an aborted generation (see RunawayCaptureResponse)."""
+        from inference.runaway_capture import find_capture
+
+        record = find_capture(config.logging.directory, request_id)
+        if record is None:
+            return RunawayCaptureResponse(
+                found=False,
+                request_id=request_id,
+                reason="",
+                text="",
+                tokens_generated=0,
+                elided_bytes=0,
+            )
+        return RunawayCaptureResponse(
+            found=True,
+            request_id=request_id,
+            reason=str(record.get("reason") or ""),
+            text=str(record.get("text") or ""),
+            tokens_generated=int(record.get("tokens_generated") or 0),
+            elided_bytes=int(record.get("elided_bytes") or 0),
         )
 
     @strawberry.field

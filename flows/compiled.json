@@ -393,7 +393,9 @@
             "mission"
           ],
           "optional": [
-            "inference_truncated"
+            "inference_truncated",
+            "inference_degenerate",
+            "inference_request_id"
           ]
         },
         "params": {},

@@ -69,9 +69,17 @@ WINDOW_TIERS = (
     (32768, MAX_DISTINCT_RATIO),
 )
 
-# Capture at most this much tail text per dump — enough to see the loop
-# and its onset without writing 130k-token files.
+# Capture at most this much text per dump — enough to see the loop
+# and its onset without writing 130k-token files. When a generation
+# exceeds the cap, the dump keeps HEAD + TAIL rather than tail-only:
+# the head is where salvageable work lives (the 2026-08-02 bartowski
+# orbit carried all 8 marked FILE blocks in its first 42%, with the
+# degenerate couplet at the tail), and the tail is where the loop
+# shows. Tail-only capture would have destroyed exactly the half a
+# salvage needs on any generation past the cap.
 CAPTURE_TAIL_BYTES = 262_144
+CAPTURE_HEAD_SPLIT = 196_608  # head share when splitting (tail gets the rest)
+ELISION_MARKER = "\n\n[... runaway capture elided {n} bytes ...]\n\n"
 
 
 def detect_long_cycle(acc_bytes: bytes) -> Optional[str]:
@@ -116,19 +124,64 @@ def dump_capture(
         dest.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f")
         path = dest / f"{stamp}.json"
-        tail = acc_bytes[-CAPTURE_TAIL_BYTES:]
+        if len(acc_bytes) <= CAPTURE_TAIL_BYTES:
+            text = acc_bytes.decode("utf-8", errors="replace")
+            elided = 0
+        else:
+            head = acc_bytes[:CAPTURE_HEAD_SPLIT]
+            tail = acc_bytes[-(CAPTURE_TAIL_BYTES - CAPTURE_HEAD_SPLIT) :]
+            elided = len(acc_bytes) - len(head) - len(tail)
+            text = (
+                head.decode("utf-8", errors="replace")
+                + ELISION_MARKER.format(n=elided)
+                + tail.decode("utf-8", errors="replace")
+            )
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "reason": reason,
             "tokens_generated": tokens_generated,
             "bytes_total": len(acc_bytes),
-            "bytes_captured": len(tail),
+            "bytes_captured": len(acc_bytes) - elided,
+            "elided_bytes": elided,
             "meta": meta or {},
-            "text": tail.decode("utf-8", errors="replace"),
+            "text": text,
         }
         path.write_text(json.dumps(record, ensure_ascii=False, indent=1))
         log.warning("📼 Runaway capture written: %s (%s)", path, reason)
         return str(path)
     except Exception:  # noqa: BLE001 - capture must never break generation
         log.warning("Runaway capture failed", exc_info=True)
+        return None
+
+
+# Bound the by-request lookup: captures are written moments before the
+# client asks, so the match is virtually always in the newest handful.
+FIND_SCAN_LIMIT = 50
+
+
+def find_capture(logs_dir: Any, request_id: str) -> Optional[dict]:
+    """Newest capture whose ``meta.request_id`` matches, else None.
+
+    The salvage path (agent-side batch slicer) asks for the partial text
+    of its own aborted generation by the correlation id it minted. Scans
+    the newest ``FIND_SCAN_LIMIT`` files only; never raises.
+    """
+    if not request_id:
+        return None
+    try:
+        dest = Path(logs_dir) / "runaway_captures"
+        if not dest.is_dir():
+            return None
+        files = sorted(dest.glob("*.json"), reverse=True)[:FIND_SCAN_LIMIT]
+        for path in files:
+            try:
+                record = json.loads(path.read_text())
+            except Exception:  # noqa: BLE001 — one bad file must not end the scan
+                continue
+            if (record.get("meta") or {}).get("request_id") == request_id:
+                record["path"] = str(path)
+                return record
+        return None
+    except Exception:  # noqa: BLE001 — a forensics reader must never raise
+        log.warning("Runaway capture lookup failed", exc_info=True)
         return None

@@ -1430,6 +1430,15 @@ async def _execute_turn_inference(
         # of being misread as the model omitting them.
         "inference_truncated": bool(getattr(result, "truncated", False)),
         "inference_tokens_generated": result.tokens_generated if result else 0,
+        # Degenerate-abort salvage keys. When the server killed the turn
+        # as degenerate the text is empty HERE, but the partial generation
+        # sits in the server's runaway-capture log keyed by the request id
+        # — the batch slicer fetches it and salvages completed FILE blocks
+        # (bartowski 2026-08-02: 8/9 files complete in the discarded 45k-
+        # token orbit). Published for every turn; non-degenerate turns
+        # simply never use them.
+        "inference_degenerate": bool(getattr(result, "degenerate", False)),
+        "inference_request_id": str(getattr(result, "request_id", "") or ""),
     }
     # Drain the session_injections queue once it's been consumed —
     # otherwise the seed prompt would replay on every subsequent
