@@ -237,6 +237,17 @@ tier:
       explicit-high step measured 2798 reasoning + 2249 content tokens
       (55% thought); remaining steps routed none/low -> no_think per the
       hy3 routing map. hy3[g] grinder arm still owed.
+    frontier_scorecard: >
+      OUT-OF-BAND (does not move the tier). Lost to the Sonnet one-shot
+      Delivery 4-0 / Character 6-0 — but FIRST field candidate to enter
+      the flight with a WON game (the judge won both artifacts; the
+      ceiling gap is now depth, not completability). Judge divergence:
+      this judge scored 46/47 (charged item 45 — flat topic dicts, no
+      player choice) vs the Guardian flight's 47/47 (staged progression
+      counted met). New findings: winnable in 7 commands with no combat
+      (monsters never block movement), no-enemy `flee` teleports one
+      room, save payload lacks room state. §5 family-bias caveat stamped
+      (judge claude-opus-5, Frontier artifact Claude-authored).
   expectation:
     registered: 2026-07-29
     tier: "1?"
