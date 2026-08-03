@@ -234,3 +234,76 @@ class TestSingleFenceMultipleFileMarkers:
             "```"
         )
         assert parse_file_blocks(text) == [("a.py", "FIRST = 1\n")]
+
+
+# ── unfenced FILE markers (2026-08-03, the DeepSeek-V4 batch) ─────────
+#
+# A model can honour the marker protocol and omit the fences. DeepSeek-V4's
+# first batch emitted all six declared files under correct markers, every
+# one compiling, with zero backticks — and the slicer wrote nothing, so
+# 10,220 tokens of correct code were rebuilt serially. The wrapper stays
+# the instruction (most models cannot delimit a file without it); this is
+# recovery, not a relaxation.
+
+
+class TestUnfencedFileMarkers:
+    def test_recovers_multiple_files_without_fences(self):
+        text = (
+            "# === FILE: models.py ===\n"
+            "class Item:\n    pass\n\n"
+            "# === FILE: main.py ===\n"
+            "def main():\n    print('hi')\n"
+        )
+        blocks = parse_file_blocks(text)
+        assert [p for p, _ in blocks] == ["models.py", "main.py"]
+        assert "class Item" in blocks[0][1]
+        assert "def main" in blocks[1][1]
+        # bodies must not carry the marker line
+        assert "=== FILE:" not in blocks[0][1]
+
+    def test_fenced_input_is_unchanged(self):
+        """The recovery must never alter the normal path."""
+        text = "```python\n# === FILE: a.py ===\nx = 1\n```"
+        assert parse_file_blocks(text) == [("a.py", "x = 1\n")]
+
+    def test_prose_without_markers_recovers_nothing(self):
+        """A multi-file site (no fallback_path) must still get nothing from
+        deliberation — otherwise the recovery would write prose to disk."""
+        assert parse_file_blocks("Let me think about the design first...") == []
+
+    def test_marker_text_inside_a_body_does_not_split(self):
+        """renderers.py legitimately emits this syntax. _FILE_MARKER_RE is
+        anchored, so only a line that is NOTHING BUT a marker separates."""
+        text = (
+            "# === FILE: renderers.py ===\n"
+            'MARKER = "# === FILE: {path} ==="\n'
+            "def render():\n    return MARKER\n"
+        )
+        blocks = parse_file_blocks(text)
+        assert len(blocks) == 1 and blocks[0][0] == "renderers.py"
+        assert "MARKER =" in blocks[0][1]
+
+    def test_recovery_requires_a_leading_marker(self):
+        """Text that merely CONTAINS a marker further down is not in the
+        protocol — refusing it keeps prose-then-code out of the writer."""
+        text = "Here is my plan.\n\n# === FILE: a.py ===\nx = 1\n"
+        assert parse_file_blocks(text) == []
+
+    def test_the_deepseek_shape_end_to_end(self):
+        """The real failure, reduced: six markers, no fences, real bodies."""
+        names = [
+            "models.py",
+            "world.py",
+            "parser.py",
+            "save.py",
+            "engine.py",
+            "main.py",
+        ]
+        text = "".join(
+            f"# === FILE: {n} ===\n" + f"# module {n}\nVALUE = {i}\n\n"
+            for i, n in enumerate(names)
+        )
+        blocks = parse_file_blocks(text)
+        assert [p for p, _ in blocks] == names
+        for path, body in blocks:
+            compile(body, path, "exec")  # every recovered file must be valid

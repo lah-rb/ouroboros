@@ -431,6 +431,48 @@ def parse_file_blocks(text: str, fallback_path: str = "") -> list[tuple[str, str
                     blocks.append((sub_path, sub_content))
                     seen_paths.add(sub_path)
 
+    # UNFENCED MULTI-FILE RECOVERY (2026-08-03). A model can honour the FILE
+    # marker protocol and omit the fences: DeepSeek-V4's first batch emitted
+    # all six declared files, each under a correct `# === FILE: path ===`
+    # marker, every one of them compiling — and zero backticks. The slicer
+    # found no fenced blocks, wrote nothing, and 10,220 tokens of correct
+    # code were rebuilt serially. Worse, `deliberation_chars` measures text
+    # OUTSIDE fences, so with no fences it reported the six source files as
+    # 42,795 chars of "open deliberation" — a metric reading its own blind
+    # spot back as a behavioural finding.
+    #
+    # The wrapper exists because most models cannot reliably delimit a file
+    # without it, so it stays the instruction. This is recovery, not a
+    # relaxation.
+    #
+    # SAFETY — the same gate the fenced path uses. Only fires when the text
+    # carries NO fence at all AND its first substantive line IS a marker,
+    # which puts it unambiguously in multi-file protocol. _FILE_MARKER_RE is
+    # fully anchored, so a generated line like `MARKER = "# === FILE: ..."`
+    # cannot split a file (renderers.py emits exactly that syntax); only a
+    # line that is nothing but a marker separates.
+    if not blocks and "```" not in text:
+        _lines = text.split("\n")
+        _first = next((i for i, ln in enumerate(_lines) if ln.strip()), None)
+        if _first is not None and _FILE_MARKER_RE.match(_lines[_first]):
+            recovered = [
+                (path, body)
+                for path, body in _segment_lines(_lines, _first)
+                if _is_meaningful_content(body)
+            ]
+            if recovered:
+                logger.warning(
+                    "Unfenced FILE markers: recovered %d file(s) from a "
+                    "response that used the marker protocol without fences "
+                    "(%s)",
+                    len(recovered),
+                    ", ".join(p for p, _ in recovered),
+                )
+                for path, body in recovered:
+                    if path not in seen_paths:
+                        blocks.append((path, body))
+                        seen_paths.add(path)
+
     # Final fallback: no fences extracted. Two sub-cases:
     #   - An intentionally empty fence (```lang\n```) — the LLM meant an
     #     empty file. Detected via _looks_like_empty_fence.
