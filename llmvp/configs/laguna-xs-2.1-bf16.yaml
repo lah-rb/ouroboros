@@ -40,7 +40,9 @@ tier:
   expectation:
     registered: 2026-08-02
     basis: thinking-isolation reasoning (operator directive)
-    outcome: hit — MODEL-LEVEL FACT CONFIRMED (probe 2026-08-02)
+    outcome: >
+      CORRECTED (operator counter-evidence, 2026-08-02): the decline is
+      CONTEXT-CONDITIONAL, not model-level — see outcome_note.
     why: >
       PRE-REGISTERED. The APEX I-Balanced XS declined in-channel thought at
       med/high in the fleet think-matrix, and the vendor template defaults
@@ -49,14 +51,25 @@ tier:
       quant damage or a llama.cpp/LLMVP path issue, and the next test is the
       same prompt on vendor tooling to split those two.
     outcome_note: >
-      BF16 declined IDENTICALLY to APEX (think_matrix_results.json, both
-      rows): at med and high the prefilled <think> opener is closed after
-      exactly ~8 chars (the bare close tag) on BOTH quants, every arm;
-      None/low answer directly with 0 CoT. The med/high terse-vs-verbose
-      flip between quants (one arm each answered '```\n<n>\n```' in ~8
-      tokens, and both terse arms got the arithmetic WRONG — 144 and 102
-      vs the correct 84) is sampling noise, not a quant difference. Quant
-      exonerated, serving path exonerated (the same path elicits CoT from
-      laguna-S and glm). XS thinking question CLOSED: Laguna-XS does not
-      reason in-channel regardless of prefill; med/high requests are
-      harmless no-ops on this model.
+      TWO-STAGE RESOLUTION. Stage 1 (the probe): BF16 declined IDENTICALLY
+      to APEX — at med/high the prefilled <think> opener is closed after
+      exactly ~8 chars (the bare close tag) on BOTH quants, every arm.
+      That correctly EXONERATES THE QUANT but was over-read as a model
+      fact. Stage 2 (operator: "the thinking toggle is honored in LM
+      Studio" — correct): logit probes on APEX with the EXACT served
+      context isolated the real variable. After ...<assistant><think>
+      with a bare "You are a helpful assistant." system prompt, the next
+      token is 'Okay' at p=0.994 (the model dives into CoT; with a bare
+      <assistant> it OPENS <think> itself at p~1.0). After the identical
+      tail with OUR real static prefix (SOUL.md = "# Ouroboros Agent
+      Framework...", 1841 tokens, verified byte-equal serving: template,
+      single-token specials, no head-swap all checked), p(</think>)=0.96.
+      THE SYSTEM PROMPT FLIPS THE MODEL'S THINK CHOICE: Laguna-XS treats
+      the prefilled opener as advisory and decides from context — the
+      agent-framework operational doc pushes it to the no-think branch;
+      vanilla chat leaves it thinking. Matches the community "model
+      decides when to think" reports (unsloth discussion #6). So: quant
+      exonerated, template/tokenization/serving exonerated, model CAN
+      think — under OUR persona it won't, and med/high remain effectively
+      inert FOR THIS FRAMEWORK unless the persona is reworked or the
+      choice is sampler-forced (e.g. ban token 19 for the first N tokens).

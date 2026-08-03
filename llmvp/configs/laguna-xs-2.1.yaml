@@ -75,12 +75,15 @@ model:
   # baseline; this is the variant it called for.
   # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
   # operator: none -> no_think (per-request dial live)
-  # BF16-ISOLATED 2026-08-02 (laguna-xs-2.1-bf16.yaml probe): the model
-  # DECLINES in-channel thought at med/high — closes the prefilled
-  # <think> opener after ~8 chars on BOTH the APEX quant and unquantized
-  # BF16. Model-level fact; med/high requests are harmless no-ops here.
-  # The dial stays per_request for fleet-uniform routing, but expect no
-  # CoT from this model at any level.
+  # BF16-ISOLATED then CORRECTED 2026-08-02 (laguna-xs-2.1-bf16.yaml,
+  # full trail there): the med/high decline is CONTEXT-CONDITIONAL, not
+  # model-level. Under a vanilla system prompt the model thinks eagerly
+  # (p('Okay')=0.994 after the opener); under OUR SOUL.md agent-framework
+  # persona it closes the opener at p(</think>)=0.96. Quant, template,
+  # tokenization and head-swap all exonerated by direct probes. Under
+  # THIS persona, med/high are effectively inert; the model itself can
+  # think. Levers if CoT is ever wanted here: rework the persona opening,
+  # or sampler-force the branch (ban token 19 early in the turn).
   thinking_available: true
   thinking: "per_request"
   # FLIPPED 2026-07-30 per cell RC1: sliding_window 512, so swa_full is
