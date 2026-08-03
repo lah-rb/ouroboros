@@ -151,7 +151,15 @@ tier:
   # the 30-cycle contemplator budget lands near 3.5-4h — INSIDE the 4h
   # safety wall but not by much. If the first run trips that wall instead
   # of the cycle cap, the wall is the finding, not the model.
-  # ⚠️ PROVISIONAL — THE 5 tok/s IS A BUILD ARTIFACT, NOT THE MODEL.
+  # ✅ RESOLVED 2026-08-03 — THE REBUILD FIXED IT, 4.2x DECODE.
+  # llama-cpp-python rebuilt to JamePeng 9af4ec3 / llama.cpp b10243:
+  #     graph splits  44 -> 2      (one per layer -> none)
+  #     fused ops     4 disabled -> all 4 ENABLED
+  #     decode        4.2-5.4 -> 21.2 tok/s   (4.2x)
+  # gpt-oss regression check held at 48-49.6 tok/s (baseline 48.7-50.7),
+  # splits 2 before and after; llmvp suite 854 green on the new binding.
+  #
+  # ── the diagnosis, kept because the METHOD generalises ──────────
   # Our llama.cpp (b10131, built Jul 26) has NO METAL KERNELS for
   # DeepSeek-V4's fused ops. The boot log says so directly:
   #     resolve_fused_ops: Lightning Indexer not supported, set to disabled
@@ -168,10 +176,13 @@ tier:
   # ACTION: rebuild llama-cpp-python against llama.cpp >= b10240 and
   # re-measure. Verify with: strings -a libggml-metal.dylib | grep -i dsv4
   # (must be non-empty) and check graph splits fall from 44.
-  # RE-MEASURE THE LEAGUE AFTER THE REBUILD — if decode lands at 15-25
-  # tok/s this is a GRINDER, not a contemplator, and the placement below
-  # is an artifact of a stale binary.
-  league: contemplator
+  # RE-MEASURED at 21.2 tok/s: just above hy3 (~20 tok/s, 31.7 cyc/h) and
+  # far above the contemplator band (step37 7.5, laguna-s-apex 19.7
+  # cyc/h). hy3 is the closest neighbour AND a documented straddler, so
+  # this is a boundary case, not a clear grinder. Assigned GRINDER on
+  # throughput; confirm from the first run's measured cyc/h and move it if
+  # this model's deep per-cycle reasoning drags the rate under ~20 cyc/h.
+  league: grinder
   status: not_yet_run
   quant: UD-IQ3_XXS (unsloth)
   # ── LIVE INTAKE, 2026-08-03 (server up, before any tier run) ───────
