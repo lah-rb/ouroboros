@@ -39,7 +39,7 @@ PROTOCOL — play first, in this order:
    - the conformance tally per CHECKLIST.md (met/47, unmet item numbers, then the binary verdict with its trigger)
    - a state-integrity note, the robustness table, the modification-probe result, the furthest point reached
    - a quoted transcript excerpt for every decisive finding
-   - attribution labels: model-innate / interaction / framework-coupled. At this brief size, framework-coupled means PROJECT LAYOUT ONLY — documentation IS in comparison (axis B10). Framework-coupled observations are recorded and excluded from the comparison.
+   - attribution labels: model-innate / interaction / framework-coupled. CHARGE WHAT SHIPS: everything in the artifact tree is IN comparison regardless of label — record the label, never exclude on it. Interaction-attributed observations (how the artifact's author behaved with its build harness: workaround shims, stub tools, shipped save files) are comparison-relevant, as advantage or handicap. The ONE exclusion is PROJECT LAYOUT, which the scaffold dictates identically for both artifacts — documentation IS in comparison (axis B10).
 
 FLIGHT VERDICT — ten forced choices, A or B, one line of justification each. Per-axis ties are FORBIDDEN.
 

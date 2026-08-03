@@ -244,7 +244,10 @@ tier:
       ceiling gap is now depth, not completability). Judge divergence:
       this judge scored 46/47 (charged item 45 — flat topic dicts, no
       player choice) vs the Guardian flight's 47/47 (staged progression
-      counted met). New findings: winnable in 7 commands with no combat
+      counted met) — RESOLVED by operator ruling 2026-08-03: item 45 is
+      presence-lenient, staged progression meets it, 47/47 STANDS; the
+      gradation (fixed line < staged < state/choice-conditional) is
+      comparative on axes B6/B7. New findings: winnable in 7 commands with no combat
       (monsters never block movement), no-enemy `flee` teleports one
       room, save payload lacks room state. §5 family-bias caveat stamped
       (judge claude-opus-5, Frontier artifact Claude-authored).

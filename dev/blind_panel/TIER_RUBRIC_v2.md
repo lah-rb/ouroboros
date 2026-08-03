@@ -10,6 +10,25 @@ reference, not ladder members.
 
 ## Changelog
 
+- **v2.1 §rulings (2026-08-03) — two ambiguities caught by judge divergence,
+  ruled by the operator.**
+  (1) **CHARGE WHAT SHIPS**: the attribution clause had defined exclusion
+  only for framework-coupled and left `interaction` undefined — the Guardian
+  title match's B9 flipped on exactly that (j1 charged a shipped counterfeit
+  `ruff`; j2 excluded it as harness-relationship). Ruled: everything in the
+  tree is in comparison; interaction observations are among the most
+  important (harness-fit is a scored property — the campaign selects models
+  FOR this framework); layout stays excluded (scaffold-dictated, zero
+  discrimination); confirmed framework faults are handled by fix-and-discard
+  at the operator level, never judge-side exclusion. Attribution clause in
+  §4 rewritten; FLIGHT_PROMPT updated to match.
+  (2) **Item 45 is presence-lenient; strength is comparative.** hy3's staged
+  topic progression split two judges (47/47 vs 46/47). Ruled: staged
+  progression MEETS the checklist item (weaker showing in play); the
+  gradation — fixed single line < staged progression < state/choice-
+  conditional dialogue — is judged comparatively on the axes (B6/B7), where
+  it already lives. hy3's 47/47 stands. Checklist item annotated.
+
 - **v2.1 (2026-08-03) — THE PANEL SPLIT.** v2.0 inverted its own stated
   purpose. Measured on its own first eight flights, **six were 5–0 sweeps**:
   four of five axes (working surface, state integrity, delivered scope, and a
@@ -188,13 +207,28 @@ evidence:
   verdicts tells you how an artifact worked and nothing about what it was;
   the field's own operator could not recognise his models from their records.
 - **Attribution labels** on every observation:
-  `model-innate / interaction / framework-coupled`. Framework-coupled
-  observations are recorded and **excluded from comparison**. At this brief
-  size that is **project layout only** — the scaffold dictates it. The
-  cautionary example is OPEN_TASKS §20: v1.2 judges docked every artifact's
-  docs for a truncation OUR extraction caused. **§20 landed 2026-08-02
-  (`a0ec769`), so documentation is IN comparison as of v2.1** (axis B10) —
-  the expiring condition v2.0 wrote and never propagated.
+  `model-innate / interaction / framework-coupled`.
+  **CHARGE WHAT SHIPS (operator ruling, 2026-08-03).** Everything in the
+  artifact tree is IN comparison regardless of attribution — the label is
+  recorded so the operator can weigh cause, never a ground for a judge to
+  exclude. In particular, `interaction` observations (how the model behaved
+  WITH the harness — gate-gaming stubs, shipped saves, workaround shims)
+  are among the MOST important comparisons this ladder makes: the campaign
+  is looking for strong models FOR this framework, and harness-fit is a
+  scored property, advantage or handicap. (Laguna-S is the canonical
+  example: a genuinely interesting model that is handicapped under the
+  framework because it cannot escape its own agentic priors — that is
+  signal, not noise.) The one exception stands on its original ground:
+  **project layout is excluded** because the scaffold dictates it
+  identically for every arm, so it discriminates nothing. A suspected
+  FRAMEWORK FAULT is the operator's business, not the judge's: when one is
+  confirmed (the 2026-08-03 env-assert trap), the remedy is fix the
+  framework and DISCARD the run — never per-observation exclusion inside a
+  comparison. The cautionary example is OPEN_TASKS §20: v1.2 judges docked
+  every artifact's docs for a truncation OUR extraction caused. **§20
+  landed 2026-08-02 (`a0ec769`), so documentation is IN comparison as of
+  v2.1** (axis B10) — the expiring condition v2.0 wrote and never
+  propagated.
 
 ## 5. Anchors
 

@@ -108,7 +108,7 @@ why it is a checklist and not a judgement.
 | 42 | A healing item among the items | "a healing item" |
 | 43 | The boss-weakness item among the items | "and the boss-weakness item" |
 | 44 | Two NPCs | "plus two NPCs" |
-| 45 | NPC dialogue branches | "whose branching dialogue" |
+| 45 | NPC dialogue branches — PRESENCE-LENIENT (operator ruling 2026-08-03): staged topic progression MEETS this item; the strength gradation (fixed single line < staged progression < state/choice-conditional dialogue) is judged comparatively on axes B6/B7, not here | "whose branching dialogue" |
 | 46 | NPC dialogue hints at the boss weakness | "hints at what the boss is vulnerable to" |
 | 47 | Combat is narrated | "narrates combat clearly" |
 
