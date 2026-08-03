@@ -1,0 +1,142 @@
+# DeepSeek-V4-Flash-0731 — unsloth UD-IQ3_XXS. INTAKE 2026-08-03.
+#
+# The largest weights the fleet has ever carried (104.2 GB across 4 shards)
+# and the first genuinely NEW architecture since onboarding began:
+# `general.architecture = deepseek4`, with hyper-connections, a sparse
+# attention indexer, and per-layer KV compression. Family spec derived and
+# golden-tested against the GGUF's own template before any load —
+# formats/deepseek4.yaml, template banked at dev/deepseek4_chat_template.jinja.
+#
+# ── ARCH SUPPORT VERIFIED BEFORE DOWNLOAD-TO-BOOT (the laguna lesson) ─
+# Our llama.cpp is b10131 and DOES carry `deepseek4`. It ships three
+# loader preconditions as literal abort strings; all three were checked
+# against this file's header rather than discovered at boot:
+#   1. "compress_ratios is shorter than block_count" — 46 >= 43   PASS
+#   2. "only supports compression ratios 0, 4, and 128" — {0,4,128} PASS
+#   3. "expects sqrtsoftplus MoE scoring" — expert_gating_func=4   PASS
+# (Contrast laguna, which sat undeployable for weeks because the arch was
+# absent from the build and nobody read the header first.)
+#
+# ── KV GEOMETRY (computed from headers, BEFORE any load) ─────────────
+#   43 layers · k_len 512 · v_len 512 · kv_heads 1 (MLA-style latent)
+#   -> (512+512) x 1 x 2B = 2 KiB/layer/token x 43 = 86 KiB/token
+#   weights 104,207,848,032 B = 104.2 GB (4 shards, measured on disk)
+#
+#     n_ctx     KV GB   weights+KV    vs 137.4 GB physical
+#      32768      2.9        107.1    safe
+#      65536      5.8        110.0    <- THIS CONFIG
+#     131072     11.5        115.8    reachable (cf. the 116.3 GB laguna
+#                                     bartowski run, which held)
+#     262144     23.1        127.3    over the practical ceiling
+#
+#   86 KiB/token is an UPPER BOUND. `attention.compress_ratios` gives most
+#   layers a 4x or 128x compressed cache and sliding_window is 128 with a
+#   512-way indexer (DeepSeek sparse attention), so the true figure is very
+#   likely far lower — the same over-prediction gemma-4 showed. Re-probe
+#   with --probe-context before raising n_ctx; do not trust the formula
+#   upward.
+#
+#   65536 chosen for first contact deliberately: it is EXACTLY
+#   rope.scaling.original_context_length, so YaRN applies no stretch at all
+#   (factor 16.0 would take it to the 1,048,576 trained ceiling). A novel
+#   arch's first boot should not also be a rope-extrapolation experiment.
+
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 65536
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "deepseek-v4-flash"
+  family: "deepseek4"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/DeepSeek-V4-Flash-0731-GGUF/DeepSeek-V4-Flash-0731-UD-IQ3_XXS-00001-of-00004.gguf
+  n_ctx: 65536
+  model_max_context: 1048576
+  probe_verified_weights_bytes: 104207848032
+  # NO ceiling probe yet — the ladder above is arithmetic, not measurement.
+  probe_verified_n_ctx: null
+  # 104.2 weights + 5.8 KV = 110.0; headroom for a first boot of an arch
+  # whose real KV footprint is unmeasured.
+  kv_preflight_gb: 118
+  n_gpu_layers: -1
+  seed: -1
+  verbose: false
+  flash_attn_type: auto
+  n_batch: 2048
+
+  # ── THINKING LEVERS ───────────────────────────────────────────
+  # Template default is enable_thinking=FALSE, and suppression is the
+  # close-only prefill (laguna's third form). per_request so the fleet
+  # routing rule applies: none/low -> the disabled form, medium/high ->
+  # the opener, with high/max additionally prepending the effort paragraph.
+  thinking_available: true
+  thinking: "per_request"
+
+  # FIRST CONTACT = SINGLE STREAM. Novel attention (hyper-connections,
+  # sparse indexer, per-layer compression) has never met our batched
+  # engine, and batched additionally REQUIRES swa_full — which on a model
+  # whose sliding_window is 128 would inflate KV toward the naive 86
+  # KiB/token upper bound. Prove it loads and decodes on the pool path
+  # first, then evaluate batched with a measured KV figure.
+  decode_mode_note: "pool for intake; revisit batched after a context probe"
+  swa_full: false
+  kv_unified: false
+  session_full_replay: true
+  resident_seq_cache: false
+  flow_kv_cache: false
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+  system_prompt: "You are a helpful assistant."
+
+generation:
+  max_tokens_default: 65536
+  # Vendor sampling not yet read from the model card — these are the
+  # cautious DeepSeek-family defaults. CONFIRM before scoring anything.
+  temperature_default: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  repeat_penalty: 1.0
+
+knowledge:
+  # MUST be generated for this model — knowledge is PRE-TOKENIZED and this
+  # is a 129,280-entry gpt2-style vocab (pre: joyai-llm). Feeding another
+  # family's tokens.bin is silent garbage, not an error.
+  tokens_bin: ./data/deepseek-v4-flash.tokens.bin
+  token_limit: 32768
+
+resources:
+  decode_mode: pool
+  cpu_threads: 16
+
+logging:
+  enabled: true
+  directory: ./logs
+
+# ── TIER (doc-only) ──────────────────────────────────────────────────
+tier:
+  league: unmeasured        # no cyc/h yet — assign from the first run
+  status: not_yet_run
+  quant: UD-IQ3_XXS (unsloth)
+  expectation:
+    registered: 2026-08-03
+    basis: intake — architecture and size class only, no live behaviour seen
+    outcome: pending
+    why: >
+      PRE-REGISTERED. A 256-expert/6-active MoE at IQ3_XXS is the fleet's
+      first sub-4-bit arm, and quantisation that aggressive is where the
+      laguna work found degeneration risk concentrates — so the first
+      question is not tier but STABILITY (degen events, coherence at depth).
+      Size class and DeepSeek's reasoning pedigree argue for tier 1
+      capability if it serves cleanly; the IQ3_XXS quant and an untested
+      arch argue for surprises. Expect a stability finding before a score.

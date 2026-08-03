@@ -1109,3 +1109,110 @@ def test_genprompt_newline_audit_families():
         clear_cache()
         assert get_renderer("laguna").render_generation_prompt().endswith("</think>")
         assert get_renderer("glm4").render_generation_prompt().endswith("</think>")
+
+
+# ── DeepSeek-V4 golden test vs the GGUF-embedded template ─────────────
+#
+# INTAKE 2026-08-03. Every prior family that shipped broken did so because
+# nobody rendered it against its own template: tekken's `thinking: true`
+# lied for weeks, gemma served <|think|> as literal bytes on every run, hy3
+# served the undefined-effort branch with no BOS. This test renders the
+# real template and asserts ours matches byte-for-byte at every level.
+#
+# It already earned its place: it caught the generation prompt rendering
+# '<｜assistant｜>' where the template says '<｜Assistant｜>' — the family's
+# roles were spelled lower-case, producing an off-distribution token
+# sequence that no log would have shown.
+
+
+def _deepseek4_official(**kw):
+    """Render the banked GGUF template. Skips if it is not present."""
+    import re
+    from pathlib import Path
+
+    import pytest
+
+    tpl_path = (
+        Path(__file__).parent.parent.parent / "dev" / "deepseek4_chat_template.jinja"
+    )
+    if not tpl_path.exists():
+        pytest.skip("deepseek4 template not banked")
+    jinja2 = pytest.importorskip("jinja2")
+    src = re.sub(r"\{%-?\s*(end)?generation\s*-?%\}", "", tpl_path.read_text())
+    env = jinja2.Environment(keep_trailing_newline=True)
+    env.globals["strftime_now"] = lambda f: "2026-08-03"
+    return env.from_string(src).render(
+        messages=[
+            {"role": "system", "content": "SYS"},
+            {"role": "user", "content": "Q?"},
+        ],
+        add_generation_prompt=True,
+        **kw,
+    )
+
+
+def _deepseek4_renderer(monkeypatch, policy="per_request"):
+    from types import SimpleNamespace
+
+    import core.config as ccfg
+    from formats.registry import clear_cache, get_renderer
+
+    cfg = SimpleNamespace(
+        model=SimpleNamespace(
+            thinking=policy, thinking_available=True, family="deepseek4"
+        )
+    )
+    monkeypatch.setattr(ccfg, "get_config", lambda: cfg)
+    clear_cache()
+    return get_renderer("deepseek4")
+
+
+def test_deepseek4_rendering_matches_official_template(monkeypatch):
+    r = _deepseek4_renderer(monkeypatch)
+    # The template supplies no BOS and the GGUF sets add_bos_token=false, so
+    # we DECLARE one (see formats/deepseek4.yaml). Compare on the remainder.
+    bos = "<｜begin▁of▁sentence｜>"
+    for level, kw in (
+        (None, dict(thinking=False)),
+        ("low", dict(thinking=False)),
+        ("medium", dict(thinking=True)),
+        ("high", dict(thinking=True)),
+    ):
+        ours = r.render_system(persona="SYS") + r.render_user("Q?")
+        ours += r.render_generation_prompt(reasoning=level)
+        assert ours.startswith(bos), f"{level}: BOS must lead — {ours[:30]!r}"
+        official = _deepseek4_official(**kw)
+        # high/max prepend an effort paragraph to the system block; compare
+        # the structural tail, which is what the dial actually changes.
+        assert ours[len(bos) :].endswith(official[-40:]), (
+            f"level {level}: ours {ours[-40:]!r} != official {official[-40:]!r}"
+        )
+
+
+def test_deepseek4_thinking_dial_is_close_only_when_off(monkeypatch):
+    """Laguna's third suppression form: the disabled branch prefills the
+    CLOSE tag ALONE — no opener — and the enabled branch prefills the
+    opener. Getting this backwards is silent thinking-OFF."""
+    r = _deepseek4_renderer(monkeypatch)
+    off = r.render_generation_prompt(reasoning="low")
+    on = r.render_generation_prompt(reasoning="high")
+    assert off == "<｜Assistant｜></think>", repr(off)
+    assert on == "<｜Assistant｜><think>", repr(on)
+    assert "<think>" not in off.replace("</think>", ""), "opener leaked into OFF"
+
+
+def test_deepseek4_role_casing_is_exact(monkeypatch):
+    """CASE IS LOAD-BEARING — '<｜Assistant｜>', never '<｜assistant｜>'."""
+    r = _deepseek4_renderer(monkeypatch)
+    assert r.render_user("x") == "<｜User｜>x"
+    assert r.render_generation_prompt(reasoning=None).startswith("<｜Assistant｜>")
+
+
+def test_deepseek4_is_registered_in_the_fsm_labeller():
+    """The OLMo lesson: an unregistered thinking family leaves a 'think>'
+    residue at the head of extracted CONTENT. Registration is DERIVED from
+    the format yaml — this asserts the outcome, not table membership."""
+    from core.fsm_labeller import _shape_for, _structural_cats_for, _ThinkShape
+
+    assert _shape_for("deepseek4") is _ThinkShape.ANGLE
+    assert _structural_cats_for("deepseek4") == _structural_cats_for("chatml")

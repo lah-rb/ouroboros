@@ -1,0 +1,116 @@
+# DeepSeek-V4 (deepseek4 arch) — INTAKE 2026-08-03.
+#
+# Derived from the GGUF-embedded template (banked byte-for-byte at
+# dev/deepseek4_chat_template.jinja, sha e643c31f) and rendered at every
+# level before a single token was served — the discipline the tekken family
+# bought by shipping `thinking: true` LYING for weeks.
+#
+# ── WHY THIS IS A REAL FAMILY, NOT AN ALIAS ──────────────────────────
+# Per-role CJK-bracket tokens (U+FF5C FULLWIDTH VERTICAL LINE, NOT ASCII |)
+# with NO closing role tags — the next role token is the delimiter, and an
+# assistant turn closes on EOS. The system block is emitted RAW, with no
+# wrapper of any kind. Nothing in chatml/harmony/laguna/hunyuan3 has that
+# shape.
+#
+# OFFICIAL FORMS (rendered, verbatim):
+#   thinking OFF : SYS<｜User｜>Q?<｜Assistant｜></think>
+#   thinking ON  : SYS<｜User｜>Q?<｜Assistant｜><think>
+#   history      : …<｜Assistant｜></think>A1<｜end▁of▁sentence｜><｜User｜>Q2…
+#
+# ── THE THINKING DIAL IS TWO MECHANISMS, NOT ONE ─────────────────────
+# 1. STRUCTURAL (laguna's third form): thinking off prefills the CLOSE tag
+#    ALONE — no opener — structurally declaring reasoning finished. On
+#    prefills the opener. Hence prefill_closed_close_only below.
+# 2. PROSE DEPTH (step-3.7's mechanic): `reasoning_effort` high|max
+#    PREPENDS a directive paragraph to the system block. There is no low or
+#    medium branch in the template — undefined effort renders nothing, so
+#    only high and max are real. gate_levels reflects exactly that: medium
+#    routes to the plain enabled form, high/max add their paragraph.
+#    Serving the undefined branch by accident is precisely how hy3's dial
+#    was inert for weeks; here the branch is enumerated from the source.
+#
+# ⚠️ REASONING IS DROPPED FROM HISTORY. The template's own
+# _drop_thinking_messages renders prior assistant turns close-only even in
+# thinking mode (unless tools are present or the turn follows the last user
+# turn). Our assistant-history rendering matches: content only, no replayed
+# CoT. Poolside/laguna preserve reasoning; this family deliberately does not.
+#
+# ⚠️ BOS — THE LOAD-BEARING DEVIATION FROM THE TEMPLATE.
+# The template emits NO begin-of-sentence token AND
+# tokenizer.ggml.add_bos_token=false, so a sequence would carry no BOS at
+# all. The vocab defines one (id 0, '<｜begin▁of▁sentence｜>') and every
+# shipped DeepSeek chat format opens with it. We declare it here, which
+# core/lifecycle.py's spec_bos precedence honours over the GGUF flag. This
+# is the hunyuan-3 repair (17462a2: "no BOS ever") and the tekken lesson
+# (a Mistral fed no BOS degenerates into character salad) applied ahead of
+# the failure rather than after it.
+# FALSIFY IT CHEAPLY: serve one short completion with bos declared and one
+# with bos "", and compare coherence. If the no-BOS arm is clean, delete
+# this line and record why.
+
+family: "deepseek4"
+display_name: "DeepSeek-V4 Flash"
+
+tokens:
+  # Generic fallbacks; every real role overrides these in role_tokens.
+  msg_open: "<｜"
+  msg_content: "｜>"
+  msg_close: ""
+  # An assistant turn ends on EOS — the vocab declares no eot and no eom
+  # (verified against the GGUF header; the stop-token audit agrees).
+  gen_stop: "<｜end▁of▁sentence｜>"
+  history_close: "<｜end▁of▁sentence｜>"
+  bos: "<｜begin▁of▁sentence｜>"   # see the BOS note above
+
+# CASE IS LOAD-BEARING. The generic opener is msg_open + roles[x] +
+# msg_content, so these must be the template's EXACT casing —
+# '<｜Assistant｜>', not '<｜assistant｜>'. The intake golden test caught the
+# lowercase form: a different token sequence, off-distribution, invisible
+# in a log. (Do not "fix" this by special-casing the renderer — the
+# generic path is correct for every family that spells its roles right.)
+roles:
+  system: "system"
+  user: "User"
+  assistant: "Assistant"
+
+# Per-role framing. The system block is RAW — no open, no close — which is
+# why msg_open is empty for it rather than inheriting the generic pattern.
+role_tokens:
+  system:
+    msg_open: ""
+    msg_content: ""
+    msg_close: ""
+  user:
+    msg_open: "<｜User｜>"
+    msg_content: ""
+    msg_close: ""
+  assistant:
+    msg_open: "<｜Assistant｜>"
+    msg_content: ""
+    msg_close: "<｜end▁of▁sentence｜>"
+
+thinking:
+  style: inline_tags
+  # PLAIN STRINGS, not special tokens: the vocab has no <think> entry (only
+  # ordinary word-pieces). They tokenize as several tokens each, so any
+  # future think-hold or logit_bias on this family must NOT assume a single
+  # id — inference/think_hold.py already refuses a multi-token close tag.
+  open_tag: "<think>"
+  close_tag: "</think>"
+  # AUDIT 2026-08-03: official genprompt is '<｜Assistant｜><think>' /
+  # '<｜Assistant｜></think>' — NO newline either side (template e643c31f).
+  open_tag_newline: false
+  prefill_closed_when_disabled: true
+  prefill_closed_close_only: true
+  open_tag_prefill_when_enabled: true
+  # Only high and max have a template branch; medium falls through to the
+  # plain enabled opener. None/low take the disabled close-only form, which
+  # matches the fleet routing rule (none -> lowest, never medium).
+  gate_levels: ["medium", "high", "max"]
+
+system_block:
+  identity: ""
+  reasoning_default: ""
+  reasoning_prefix: ""
+  channel_directive: ""
+  template: "{persona}"
