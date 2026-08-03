@@ -75,6 +75,12 @@ model:
   # baseline; this is the variant it called for.
   # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
   # operator: none -> no_think (per-request dial live)
+  # BF16-ISOLATED 2026-08-02 (laguna-xs-2.1-bf16.yaml probe): the model
+  # DECLINES in-channel thought at med/high — closes the prefilled
+  # <think> opener after ~8 chars on BOTH the APEX quant and unquantized
+  # BF16. Model-level fact; med/high requests are harmless no-ops here.
+  # The dial stays per_request for fleet-uniform routing, but expect no
+  # CoT from this model at any level.
   thinking_available: true
   thinking: "per_request"
   # FLIPPED 2026-07-30 per cell RC1: sliding_window 512, so swa_full is

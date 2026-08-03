@@ -43,6 +43,7 @@ TASK = (
 # (config, mode, per-level expectation summary — PRE-REGISTERED)
 MATRIX = [
     ("laguna-xs-2.1",          "per_request", "None/low: no CoT (close-only). med/high: CoT via <think> opener"),
+    ("laguna-xs-2.1-bf16",     "per_request", "DECISIVE ISOLATION (2026-08-02): APEX XS declined in-channel thought at med/high. BF16 declines too -> model-level fact (template defaults enable_thinking false). BF16 thinks -> the APEX decline was quant damage or our llama.cpp/LLMVP path"),
     ("laguna-s-2.1-apex",      "off",         "ALL levels: no CoT (policy off, close-only always)"),
     ("devstral-2-small-24b",   "unavailable", "ALL levels: bare answer; no MODEL_SETTINGS, no [THINK]"),
     ("olmo-3.1-32b-instruct",  "unavailable", "ALL levels: bare answer, no think markers"),

@@ -674,5 +674,57 @@
       }
     },
     "complete": true
+  },
+  {
+    "config": "laguna-xs-2.1-bf16",
+    "mode": "per_request",
+    "expect": "DECISIVE ISOLATION (2026-08-02): APEX XS declined in-channel thought at med/high. BF16 declines too -> model-level fact (template defaults enable_thinking false). BF16 thinks -> the APEX decline was quant damage or our llama.cpp/LLMVP path",
+    "arms": {
+      "None": {
+        "tokens_generated": 101,
+        "content_chars": 284,
+        "raw_chars": 284,
+        "strip_chars": 284,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 2.6,
+        "first60": "I need to calculate the average speed for the whole journey.",
+        "errors": null
+      },
+      "low": {
+        "tokens_generated": 66,
+        "content_chars": 171,
+        "raw_chars": 171,
+        "strip_chars": 171,
+        "cot_chars": 0,
+        "truncated": false,
+        "wall_s": 1.5,
+        "first60": "The train travels a total distance of 240 + 180 = 420 km in ",
+        "errors": null
+      },
+      "medium": {
+        "tokens_generated": 8,
+        "content_chars": 11,
+        "raw_chars": 19,
+        "strip_chars": 11,
+        "cot_chars": 8,
+        "truncated": false,
+        "wall_s": 0.3,
+        "first60": "```\n102\n```",
+        "errors": null
+      },
+      "high": {
+        "tokens_generated": 142,
+        "content_chars": 424,
+        "raw_chars": 432,
+        "strip_chars": 424,
+        "cot_chars": 8,
+        "truncated": false,
+        "wall_s": 3.0,
+        "first60": "To find the average speed for the whole journey, I need to c",
+        "errors": null
+      }
+    },
+    "complete": true
   }
 ]

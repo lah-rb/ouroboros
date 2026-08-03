@@ -40,7 +40,7 @@ tier:
   expectation:
     registered: 2026-08-02
     basis: thinking-isolation reasoning (operator directive)
-    outcome: pending
+    outcome: hit — MODEL-LEVEL FACT CONFIRMED (probe 2026-08-02)
     why: >
       PRE-REGISTERED. The APEX I-Balanced XS declined in-channel thought at
       med/high in the fleet think-matrix, and the vendor template defaults
@@ -48,3 +48,15 @@ tier:
       confirming a model-level fact. If BF16 thinks, the APEX decline was
       quant damage or a llama.cpp/LLMVP path issue, and the next test is the
       same prompt on vendor tooling to split those two.
+    outcome_note: >
+      BF16 declined IDENTICALLY to APEX (think_matrix_results.json, both
+      rows): at med and high the prefilled <think> opener is closed after
+      exactly ~8 chars (the bare close tag) on BOTH quants, every arm;
+      None/low answer directly with 0 CoT. The med/high terse-vs-verbose
+      flip between quants (one arm each answered '```\n<n>\n```' in ~8
+      tokens, and both terse arms got the arithmetic WRONG — 144 and 102
+      vs the correct 84) is sampling noise, not a quant difference. Quant
+      exonerated, serving path exonerated (the same path elicits CoT from
+      laguna-S and glm). XS thinking question CLOSED: Laguna-XS does not
+      reason in-channel regardless of prefill; med/high requests are
+      harmless no-ops on this model.
