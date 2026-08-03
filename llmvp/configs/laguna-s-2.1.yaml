@@ -172,6 +172,20 @@ generation:
   # model close naturally). The old ban existed solely for thinking-off
   # separator-reproduction (see laguna-s-2.1-apex.yaml for that history).
   logit_bias: {25: -100.0}
+  # REASONING BUDGET (2026-08-02, added after the first thinking turn):
+  # think-hold got the model INTO genuine CoT, but the first design turn
+  # then couldn't STOP — 89.5k chars of in-channel thought, zero </think>,
+  # a ~3KB "this looks correct, now let me re-check X" cycle, guard-killed
+  # at 24.5k tokens (the 2026-07-26 circling regression, now visible
+  # inside the channel). The fork's budget sampler forces </think> at the
+  # cap so the thought-so-far is KEPT and an answer follows.
+  # start_in_prompt is REQUIRED here: laguna's opener is prefilled, so the
+  # counter must start at token 0 (without it the sampler idles waiting
+  # for <think> and the budget never applies).
+  reasoning_budget: 8192
+  reasoning_start: "<think>"
+  reasoning_end: "</think>"
+  reasoning_start_in_prompt: true
   session_temp_floor: 0.35
   streaming_default: true
 knowledge:

@@ -3953,6 +3953,10 @@ class LlamaCppBackend(BaseBackend):
                 kwargs["reasoning_start"] = str(gen.reasoning_start)
             if gen.reasoning_end:
                 kwargs["reasoning_end"] = str(gen.reasoning_end)
+            if getattr(gen, "reasoning_start_in_prompt", False):
+                # Prefilled-opener families (laguna): count from token 0 —
+                # the start tag never appears in the generated stream.
+                kwargs["reasoning_start_in_prompt"] = True
         if gen.logit_bias:
             kwargs["logit_bias"] = dict(gen.logit_bias)
         return kwargs

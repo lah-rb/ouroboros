@@ -344,6 +344,11 @@ def build_sampling_params(
         for key in ("reasoning_start", "reasoning_end"):
             if sampling_kwargs.get(key):
                 setattr(params, key, str(sampling_kwargs[key]))
+        if sampling_kwargs.get("reasoning_start_in_prompt"):
+            # Prefilled-opener families (laguna): the start tag is in the
+            # PROMPT, never the stream — start the budget counter at token 0
+            # or the sampler idles past its start window and never applies.
+            params.reasoning_start_in_prompt = True
 
     # Logit bias — {token_id: bias}; -inf effectively bans a token. Used to
     # suppress native tool-call tokens on models that emit them unprompted.
