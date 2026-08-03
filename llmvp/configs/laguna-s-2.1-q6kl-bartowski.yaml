@@ -50,12 +50,12 @@ generation:
 # ── TIER (doc-only) ──────────────────────────────────────────────────
 tier:
   league: contemplator
-  status: not_yet_run
+  status: degen_ab_answered   # never blind-judged; both runs operator-stopped
   quant: Q6_K_L (bartowski)   # THE PROPERTY THIS CONFIG SCORES
   expectation:
     registered: 2026-08-03
     basis: quant-provenance reasoning (operator degeneration A/B)
-    outcome: pending
+    outcome: answered_early — propensity is MODEL-LEVEL (operator call, 2026-08-02)
     why: >
       PRE-REGISTERED. The unsloth UD-Q6_K degenerated MORE than the
       lower-bit APEX-i-quality — if degeneration tracks quantizer recipe
@@ -63,3 +63,24 @@ tier:
       than the unsloth Q6_K at equal-or-better fidelity. If it degenerates
       the same, the propensity is model-level at Q6-class fidelity and the
       APEX recipe's stability is the anomaly worth studying instead.
+    outcome_note: >
+      The quant DOES degenerate, in the same long-cycle family as the
+      unsloth Q6_K — verdict called by the operator at 68min of run 2
+      rather than at protocol end, so there is no rate-comparable full-run
+      count. Evidence: run 1 (tier_20260802-172245, killed for the drain
+      starvation it exposed) hit a 45,056-token act-boundary orbit at
+      ~30min — dissected end-to-end: all 8 files complete+marked in the
+      first 42%, then 7 SIMULATED sh smoke-test runs, then a 5-site
+      readiness couplet x73 (period ~777B). Run 2 (tier_20260802-181146,
+      healthy serving after the f3e71fc drain fix) delivered the same
+      batch clean at 19k tokens with the SAME verification attractor
+      entered and exited in 2,531 chars, then threw one ~3.9KB-period
+      paragraph orbit on a fix turn at 68min (guard-caught at 14.3k tok).
+      Operator reading: degeneration here is EXTRAORDINARILY STRONG AGENT
+      PRIORS (tool-interleave transfer — reason/act/observe transplanted
+      into single turns; laguna emits <tool_call> unprompted in 41% of S
+      turns) EXAGGERATED BY QUANT CHOICE, not a recipe artifact per se —
+      the APEX recipe's relative stability remains the anomaly. Next
+      probe: same protocol under the e59eb9e levers (no-execution-
+      environment clause + salvage-on-abort) to see whether starving the
+      verification-prose runway moves the shape.
