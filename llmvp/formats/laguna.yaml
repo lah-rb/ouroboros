@@ -81,6 +81,15 @@ thinking:
   # -> the enabled opener. AND-gate semantics keep thinking:false configs
   # pinned off regardless of level.
   gate_levels: ["medium", "high"]
+  # THINK-HOLD 2026-08-02: laguna treats the prefilled opener as ADVISORY
+  # and decides from context — under the SOUL.md agent persona it closed
+  # the opener at p(</think>)=0.96 (vanilla chat: thinks at p=0.994; full
+  # isolation trail in configs/laguna-xs-2.1-bf16.yaml). Banning the close
+  # tag for the first 10 tokens deflects exactly one close attempt and the
+  # model thinks properly: 115 tokens of clean CoT, self-chosen close,
+  # correct answer where the un-held run was wrong. Applies only when the
+  # genprompt prefills the opener (thinking enabled + med/high gate).
+  force_open_hold_tokens: 10
 
 system_block:
   identity: "You are a helpful assistant."

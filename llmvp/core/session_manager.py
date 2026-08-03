@@ -703,6 +703,19 @@ class SessionManager:
             # amputating the prompt head (the model saw only the tail).
             gen_kwargs["static_in_prompt"] = False
 
+            # Think-hold: when THIS turn's genprompt prefills the think opener
+            # on a family that treats the opener as advisory (laguna), ban the
+            # close tag for the first N tokens so the model commits to the
+            # thinking branch instead of closing under persona pressure. See
+            # inference/think_hold.py; no-op for every other family/level.
+            from inference.think_hold import resolve_think_hold_kwargs
+
+            _hold = resolve_think_hold_kwargs(
+                renderer, get_cached_tokenizer(), reasoning
+            )
+            if _hold:
+                gen_kwargs["think_hold"] = _hold
+
             # We already hold this turn's generation guard — the wrapper's
             # own guard entry must only balance the counter, not re-wait
             # the scaling gate (deadlock against a draining scaler).

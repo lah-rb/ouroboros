@@ -443,6 +443,32 @@ class FormatRenderer:
         s = self.render_generation_prompt(reasoning=reasoning)
         return [(s, True)] if s else []
 
+    def think_hold(self, reasoning: str | None = None) -> tuple | None:
+        """(close_tag, hold_tokens) when THIS request should think-hold.
+
+        Engages iff the family declares ``force_open_hold_tokens`` AND the
+        generation prompt this request would render actually PREFILLS the
+        opener — decided by inspecting the rendered string rather than
+        re-deriving the enablement branch, so it can never drift from
+        ``render_generation_prompt``. A thinking-off config, a gate-closed
+        level, or a family that never prefills (gemma) returns None. See
+        inference/think_hold.py for the mechanism and the laguna evidence.
+        """
+        t = self.s.thinking
+        n = int(getattr(t, "force_open_hold_tokens", 0) or 0)
+        if (
+            n <= 0
+            or t.style != "inline_tags"
+            or not t.open_tag
+            or not t.close_tag
+        ):
+            return None
+        rendered = self.render_generation_prompt(reasoning=reasoning)
+        tail = t.open_tag + ("\n" if t.open_tag_newline else "")
+        if rendered.endswith(tail):
+            return (t.close_tag, n)
+        return None
+
     def render_assistant_history_segments(
         self,
         content: str,

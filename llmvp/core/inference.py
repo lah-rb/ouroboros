@@ -174,6 +174,25 @@ def _render_dynamic_prompt(user_prompt: str) -> str:
     return renderer.render_user(user_prompt) + renderer.render_generation_prompt()
 
 
+def _resolve_think_hold(reasoning: "str | None") -> "dict | None":
+    """Request-level think-hold payload (see inference/think_hold.py), or None.
+
+    Best-effort by construction: a failure here must never fail a request.
+    """
+    try:
+        from inference.think_hold import resolve_think_hold_kwargs
+        from inference.tokenizer import get_cached_tokenizer
+
+        return resolve_think_hold_kwargs(
+            _get_format_renderer(config.model.family),
+            get_cached_tokenizer(),
+            reasoning,
+        )
+    except Exception:  # noqa: BLE001
+        log.debug("think_hold resolution failed", exc_info=True)
+        return None
+
+
 def _get_fsm_family() -> str:
     """Return the model family name to drive FSM phase transitions.
 
@@ -454,6 +473,13 @@ async def run_completion(
         if reasoning and not flow_kwargs:
             gen_kwargs["reasoning"] = str(reasoning)
 
+        # Think-hold (inference/think_hold.py): when this request's genprompt
+        # prefills an advisory think opener (laguna), ban the close tag for
+        # the first N tokens. No-op for every other family/level.
+        _hold = _resolve_think_hold(reasoning)
+        if _hold:
+            gen_kwargs["think_hold"] = _hold
+
         # Use backend's async generation. gen_target is where the backend
         # stashes per-request cache telemetry (_last_*) — the pooled instance,
         # or the backend itself when not manually pooled.
@@ -650,6 +676,9 @@ async def run_raw_completion(
         # no flow-prefix case on the raw path, so no pinned-KV guard is needed.
         if reasoning:
             gen_kwargs["reasoning"] = str(reasoning)
+        _hold = _resolve_think_hold(reasoning)
+        if _hold:
+            gen_kwargs["think_hold"] = _hold
 
         answer = await backend.generate_async(
             instance=instance or backend,

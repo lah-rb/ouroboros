@@ -1,23 +1,17 @@
-# Laguna-S-2.1 (Poolside, unsloth UD-IQ4_XS) — the SMALLEST of three quants.
+# Laguna-S-2.1 — APEX i-quality, THINKING ON (the CoT-enabled arm).
 #
-# LOADABLE since the llama.cpp rebuild. The blocker recorded here — "the
-# `laguna` arch is absent from our build, shipped lib is b9860, support lands
-# at b10087" — was true when written and is STALE: the shipped lib is now
-# b10131 (libllama.0.0.10131.dylib), past b10087, and the sibling APEX and XS
-# configs have run many arms on this same `laguna` arch. (The rebuild did NOT
-# unlock EAGLE — still no C API for it.)
+# REPOINTED 2026-08-02 (operator quant consolidation): the APEX i-quality
+# is the only S quant kept — the unsloth IQ4_XS this config originally
+# described, the unsloth UD-Q6_K, poolside Q4_K_M and bartowski Q6_K_L are
+# all deleted from disk. Their configs are archived under configs/archive/
+# with their score records intact. laguna-s-2.1-apex.yaml remains the
+# thinking:OFF record for this same file; THIS config is the thinking:ON
+# arm (with think-hold — see the THINKING LEVERS block below).
 #
-# ── ONE OF THREE QUANTS OF THE SAME MODEL ────────────────────────────
-# laguna-s-2.1 (57.6GB, UD-IQ4_XS) · -apex (73.9GB) · -poolside (96.0GB).
-# They exist to be compared, so the quant should be the only thing chosen
-# differently between them — but n_ctx legitimately DIFFERS (318,464 /
-# 234,496 / 124,928) and must stay that way: KV/token is quant-independent
-# (192KB — cache geometry, not weights), so a smaller quant leaves more room
-# for context. The context advantage is a DIRECT CONSEQUENCE of the quant and
-# part of what choosing it buys. Homogenizing n_ctx would hide the effect,
-# not control for it.
-#
-# KV GEOMETRY (GGUF headers, 2026-07-26, computed BEFORE any load — the rule
+# KV GEOMETRY (STALE TABLE — IQ4_XS-era, kept as history; the LIVE numbers
+# are in model: below, from the APEX probe recorded in laguna-s-2.1-apex.yaml.
+# Family constants still true: 192 KB/token with swa_full, sliding_window 512.)
+# (GGUF headers, 2026-07-26, computed BEFORE any load — the rule
 # that exists because reboot #3 was precomputable):
 #   48 layers, MoE 256 experts / 10 used, kv_heads 8, k=v=128,
 #   per-layer heterogeneous head_count [48,72,72,72,48,72] x8,
@@ -74,6 +68,15 @@
 # cleanly in 20 min with 10 files. So the trigger is the plan, not the model
 # alone. OPEN: whether the other two quants ramble on their own designs — if
 # they do not, this is quant-linked; if they do, it is the batch prompt shape.
+#
+# RESOLVED 2026-08-02: the mechanism behind all of this is now understood —
+# laguna deliberates by trained agentic prior (tool-interleave transfer),
+# and with thinking suppressed the deliberation lands untagged in CONTENT
+# (the bartowski Q6_K_L dissections, configs/archive/). Answered: NOT
+# quant-linked. The levers landed: no-execution-environment batch clause +
+# salvage-on-abort (e59eb9e), polite refresh (f3e71fc), and THINKING ON
+# with think-hold in this config — CoT now has a sanctioned channel that
+# the budget/strip machinery can see, instead of leaking into content.
 
 app:
   host: 0.0.0.0
@@ -85,37 +88,42 @@ app:
   openai_shim: true
 graphql:
   max_query_depth: 10
-  max_tokens: 318464
+  max_tokens: 234496
   max_aliases: 50
   introspection_enabled: true
 model:
   name: Laguna-S-2.1
   family: laguna
-  path: /Users/lah-rb/.lmstudio/models/unsloth/Laguna-S-2.1-GGUF/Laguna-S-2.1-UD-IQ4_XS-00001-of-00003.gguf
-  # RAISED 131072 -> 318464 on 2026-07-29 from the measured ceiling
-  # (probe_verified_n_ctx below). KV 192 KiB/token x 318464 = 62.6GB
-  # + 57.6GB weights = 120.2GB resident at boot.
-  n_ctx: 318464
-  probe_verified_weights_bytes: 57566704320
-  probe_verified_n_ctx: 318464
-  kv_preflight_gb: 96
+  # QUANT CONSOLIDATION (operator, 2026-08-02): the APEX i-quality is the
+  # only S quant kept (relatively balanced size/quality); the unsloth
+  # IQ4_XS/UD-Q6_K, poolside Q4_K_M and bartowski Q6_K_L files are deleted
+  # from disk. This base config now points at the APEX file with the APEX
+  # measured geometry (probe run recorded in laguna-s-2.1-apex.yaml, which
+  # remains as the thinking:off score record for the same file).
+  path: /Users/lah-rb/.lmstudio/models/Myric/Laguna-S-2.1-APEX-GGUF/Laguna-S-2.1-APEX-i-quality.gguf
+  n_ctx: 234496
+  probe_verified_weights_bytes: 73932208768
+  probe_verified_n_ctx: 234496
+  kv_preflight_gb: 92
   model_max_context: 1048576
   n_gpu_layers: -1
   seed: -1
   verbose: false
   flash_attn_type: auto
   n_batch: 2048
-  # THINKING-OFF ARM (2026-07-26). With thinking on, the two deepest agent
-  # prompts (architecture design, functional-goal decomposition) reasoned to
-  # the 32768 max_tokens cap without ever emitting </think> or an answer —
-  # 133k and 125k chars of circling CoT, truncated mid-sentence. top_k 0->20
-  # fixed sampling-tail rambling but not this. laguna suppresses thinking by
-  # prefilling the CLOSE tag alone (formats/laguna.yaml
-  # prefill_closed_close_only), structurally declaring reasoning finished.
-  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
-  # operator: same family behavior as xs, thinking off in config (not availability-pinned)
+  # ── THINKING LEVERS ───────────────────────────────────────────
+  # THINKING ON (operator, 2026-08-02): the reasoning channel is enabled
+  # via the new THINK-HOLD (formats/laguna.yaml force_open_hold_tokens 10,
+  # inference/think_hold.py) — the S family shows the same advisory-opener
+  # behavior as XS (closes the prefilled <think> under the agent persona;
+  # one deflected close attempt yields clean, correct CoT). History: a
+  # 2026-07-26 thinking-on attempt on the unsloth quant circled CoT to the
+  # token cap (133k/125k chars, never closed) — that was pre-top_k-fix and
+  # pre-hold, on a different quant; this run is the re-examination. If
+  # circling recurs, the fork's reasoning_budget sampler is the next lever
+  # (needs reasoning_start_in_prompt=True for prefill families).
   thinking_available: true
-  thinking: "off"
+  thinking: "on"
   swa_full: true
   kv_unified: true
   flow_kv_cache: false
@@ -137,7 +145,7 @@ generation:
   # known failure mode IS runaway generation (two >100k-char pure-CoT episodes
   # that never emitted an answer). Matching the other arms' 65536 removes the
   # truncation defect while keeping the blast radius identical to theirs.
-  max_tokens_default: 318464
+  max_tokens_default: 234496
   temperature_default: 1.0
   top_p: 1.0
   # VENDOR-MATCHED (generation_config.json, unsloth/Laguna-S-2.1): temperature
@@ -158,15 +166,12 @@ generation:
   # an explicit prohibition in SOUL.md; we do not support per-model tool
   # protocols, so those turns produce nothing usable.
   #
-  # 19 = </think>, added 2026-07-27 to match the poolside config. Banned ONLY
-  # because thinking is off here: the close-only prefill
-  # (formats/laguna.yaml prefill_closed_close_only) ends the prompt with a bare
-  # </think> to declare reasoning finished, and laguna reads that as a
-  # separator to REPRODUCE — 64 emissions in one 2048-token generation, each
-  # restating the same intent, until the long-cycle detector killed the stream.
-  # That is a property of the MODEL and our prompt format, not of the quant, so
-  # it applies to this build too. Do NOT carry to a thinking:true variant.
-  logit_bias: {25: -100.0, 19: -100.0}
+  # Token-19 (</think>) ban DROPPED 2026-08-02: thinking is ON now, and a
+  # standing ban would fight both the model's own close AND the think-hold
+  # mechanism (which bans 19 for only the first 10 tokens, then lets the
+  # model close naturally). The old ban existed solely for thinking-off
+  # separator-reproduction (see laguna-s-2.1-apex.yaml for that history).
+  logit_bias: {25: -100.0}
   session_temp_floor: 0.35
   streaming_default: true
 knowledge:

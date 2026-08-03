@@ -95,6 +95,15 @@ class ThinkingSpec(BaseModel):
     # immediate <channel|> close on every turn — silent thinking-OFF across
     # two full tier runs. False = enabled turns get a bare generation prompt.
     open_tag_prefill_when_enabled: bool = True
+    # THINK-HOLD (laguna, 2026-08-02): ban the close tag for the first N
+    # generated tokens whenever the generation prompt prefills the opener.
+    # For families that treat the prefilled opener as ADVISORY and decide
+    # from context (laguna closed it at p=0.96 under the agent persona,
+    # p=0.006 under vanilla chat), one deflected token drops the model into
+    # its thinking basin: the greedy probe blocked exactly ONE close
+    # attempt, got 115 tokens of clean CoT, a self-chosen close, and the
+    # correct answer. 0 = disabled. See inference/think_hold.py.
+    force_open_hold_tokens: int = 0
     # Whether a newline follows the prefilled opener (and separates opener
     # from closer in the pre-closed form). Byte fidelity to the family's own
     # template is the lesson the gemma golden test taught: gemma's official

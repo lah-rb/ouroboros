@@ -4032,6 +4032,30 @@ class LlamaCppBackend(BaseBackend):
                 instance, prompt_tokens, str(_reasoning)
             )
 
+        # Think-hold on the POOL path: forwarded to Llama.generate() as a
+        # logits processor (the fork wraps it into a CustomSampler in the
+        # chain — same seam the batched path uses directly). The closure's
+        # counter increments once per sampled token, so the ban covers the
+        # first N generated tokens of THIS stream only.
+        _think_hold = kwargs.pop("think_hold", None)
+        if _think_hold:
+            _th_token = int(_think_hold["token_id"])
+            _th_n = int(_think_hold["n"])
+            _th_state = {"count": 0}
+
+            def _think_hold_processor(_input_ids, scores):
+                if _th_state["count"] < _th_n:
+                    scores[_th_token] = -1e30
+                _th_state["count"] += 1
+                return scores
+
+            kwargs["logits_processor"] = _think_hold_processor
+            log.info(
+                "🤔 think-hold armed (pool): ban token %d for first %d tokens",
+                _th_token,
+                _th_n,
+            )
+
         # Split prompt into static (already in KV cache) and dynamic parts.
         #
         # COMPLETION path: prompt_tokens = [static prefix] + [dynamic], so we
@@ -4149,6 +4173,11 @@ class LlamaCppBackend(BaseBackend):
         _sampling_overrides = kwargs.pop("sampling_overrides", None)
         if _sampling_overrides:
             gen_kwargs.update(_sampling_overrides)
+        # Think-hold processor built earlier in this call (kwargs carry it as
+        # "logits_processor") — forward to Llama.generate.
+        _lp = kwargs.pop("logits_processor", None)
+        if _lp is not None:
+            gen_kwargs["logits_processor"] = _lp
         from formats.registry import get_renderer
 
         # Use caller-provided stops when given (session mode) — otherwise
@@ -4627,6 +4656,12 @@ class LlamaCppBackend(BaseBackend):
 
         sampling_kwargs = self._build_generate_kwargs(temperature)
         sampling_kwargs.pop("reset", None)
+        # Think-hold: request-level close-tag ban for the first N tokens
+        # (inference/think_hold.py). Consumed by _build_sampling_params as a
+        # per-stream CustomSampler.
+        _think_hold = kwargs.pop("think_hold", None)
+        if _think_hold:
+            sampling_kwargs["think_hold"] = dict(_think_hold)
         grammar = kwargs.pop("grammar", None)
         request_id = kwargs.get("request_id", "")
 

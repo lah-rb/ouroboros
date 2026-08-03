@@ -356,6 +356,27 @@ def build_sampling_params(
             for tok, val in dict(bias).items()
         ]
 
+    # Think-hold — request-level close-tag ban for the first N generated
+    # tokens (inference/think_hold.py; the laguna advisory-opener finding).
+    # A fresh sampler instance per stream: the token counter is stream state.
+    th = sampling_kwargs.get("think_hold")
+    if th:
+        from llama_cpp._internals import CommonSamplerType
+
+        from inference.think_hold import ThinkHoldSampler
+
+        hold = ThinkHoldSampler(int(th["token_id"]), int(th["n"]))
+        params.custom_samplers.append(hold.as_custom_sampler())
+        if CommonSamplerType.CUSTOM not in params.samplers:
+            # Same slot the fork gives logits_processor customs (llama.py):
+            # after penalties/DRY, before the distribution truncators.
+            params.samplers.insert(3, CommonSamplerType.CUSTOM)
+        logger.info(
+            "🤔 think-hold armed (batched): ban token %d for first %d tokens",
+            int(th["token_id"]),
+            int(th["n"]),
+        )
+
     return params
 
 
