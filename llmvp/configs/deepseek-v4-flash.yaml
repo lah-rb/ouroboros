@@ -128,6 +128,42 @@ tier:
   league: unmeasured        # no cyc/h yet — assign from the first run
   status: not_yet_run
   quant: UD-IQ3_XXS (unsloth)
+  # ── QUANT STRATEGY, read from the tensor table (2026-08-03) ────────
+  # 284.3 B params in 104.2 GB = 2.93 BITS/WEIGHT EFFECTIVE — by a wide
+  # margin the most aggressive quant the fleet has ever served. The name
+  # UNDERSTATES it: 37.8% of parameters are IQ2_XS (~2.3 bpw), not IQ3.
+  #
+  # It is Unsloth DYNAMIC per-tensor allocation, not a uniform bit depth,
+  # and the split is sharp:
+  #   ROUTED EXPERT FFN carries ~99% of params and ALL of the compression
+  #     ffn_down_exps  IQ3_XXS x41  (+MXFP4 x2)
+  #     ffn_gate/up    IQ2_XS  x25 · IQ3_XXS x17 · IQ3_S x1
+  #     (down keeps 3 bits everywhere while gate/up drop to 2 on 25 of 43
+  #      layers — the standard down-projection-is-more-sensitive result)
+  #   EVERYTHING STRUCTURAL IS PROTECTED at 6-8 bits
+  #     all attention (attn_output_a/b, attn_q_b)  Q8_0 x43 each
+  #     attn_q_a, shared-expert FFN, embeddings, output   Q6_K
+  #     the sparse-attention indexer + compressor gate    Q8_0
+  #     ffn_gate_inp (the ROUTER)  BF16, untouched on all 43 layers
+  #
+  # Cheap layers cluster early and at 35-41; layers 27-34 are a contiguous
+  # PROTECTED band, and 26 is special-cased entirely (MXFP4 down, IQ3_S
+  # gate/up). Layer 42 (last) also protected.
+  #
+  # ⚠️ THE MXFP4 IS NOT A QAT FREEZE. Only 2 of 129 expert tensors are
+  # MXFP4 (blk.26 and blk.42 ffn_down_exps, 1.5% of params). A published
+  # MXFP4-QAT would carry MXFP4 across expert weights UNIFORMLY, the way
+  # gpt-oss does; two isolated tensors read as the dynamic quantiser
+  # picking a format per tensor. Not decidable from the GGUF alone —
+  # settle it against the upstream repo's own tensor dtypes if it matters.
+  #
+  # WHAT THIS PREDICTS FOR FAILURE MODE (sharpens `why` below): the
+  # attention path is near-lossless and the router is EXACT, so expert
+  # selection and structural coherence should hold. Risk concentrates in
+  # expert-resident KNOWLEDGE at ~2 bits — expect wrong API names,
+  # confabulated specifics and precision loss BEFORE incoherence or
+  # looping. If we instead see degeneration/orbits, that is a finding
+  # ABOUT the arch or our serving, not about the bit depth.
   expectation:
     registered: 2026-08-03
     basis: intake — architecture and size class only, no live behaviour seen
