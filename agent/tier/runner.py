@@ -222,6 +222,22 @@ def next_free_slot(base: Path) -> int:
     return max(used) + 1 if used else 1
 
 
+def run_epoch(base: Path) -> str:
+    """The rubric MAJOR version a batch ran under, e.g. "v1" / "v2".
+
+    The brief changes with the epoch, and LADDER.md is explicit that
+    cross-epoch comparisons are never valid. A batch records its rubric in
+    batch.log; major version is the right granularity because v2 -> v2.1
+    was a rubric refinement on an unchanged brief.
+    """
+    try:
+        text = (base / "batch.log").read_text(errors="ignore")
+    except OSError:
+        return ""
+    m = re.search(r"rubric=TIER_RUBRIC_?v(\d+)", text)
+    return f"v{m.group(1)}" if m else ""
+
+
 def extend_candidates(base: Path) -> list[dict]:
     """Every arm of a finished batch, with a verdict on whether it can extend.
 
@@ -245,6 +261,7 @@ def extend_candidates(base: Path) -> list[dict]:
     except Exception:  # noqa: BLE001 — unreadable run
         return out
 
+    epoch, today = run_epoch(base), _rubric_epoch_today()
     for label in state.get("arms") or []:
         if not isinstance(label, str):
             continue
@@ -274,6 +291,12 @@ def extend_candidates(base: Path) -> list[dict]:
             row["verdict"] = "grinder"
         elif not (work / ".agent").is_dir():
             row["verdict"] = "workspace_gone"
+        elif epoch and today and epoch != today:
+            # Cross-epoch: the brief itself differs, so extending would
+            # splice this epoch's cycles onto a previous epoch's artifact.
+            # LADDER.md: "Historical comparisons are never" valid.
+            row["verdict"] = "foreign_epoch"
+            row["epoch"] = epoch
         else:
             snap, live = snapshot_mission_id(base, label), mission_id(work)
             status, cycles = mission_state(work)
@@ -283,6 +306,11 @@ def extend_candidates(base: Path) -> list[dict]:
                 row["snapshot_id"], row["live_id"] = snap, live
             elif status != "paused":
                 row["verdict"] = f"mission_{status or 'unknown'}"
+            elif "cycles_consumed" not in _mission_doc(work):
+                # The field postdates these missions, so it reads 0 and
+                # `30 - 0` grants a FULL fresh budget while presenting as a
+                # top-up. An unknown is not a zero.
+                row["verdict"] = "no_cycle_record"
             elif cycles >= CONTEMPLATOR_CYCLES:
                 row["verdict"] = "budget_spent"
             else:
@@ -291,7 +319,16 @@ def extend_candidates(base: Path) -> list[dict]:
     return out
 
 
+def _rubric_epoch_today() -> str:
+    m = re.search(r"v(\d+)", _rubric_version())
+    return f"v{m.group(1)}" if m else ""
+
+
 VERDICT_HELP = {
+    "foreign_epoch": "ran under a PREVIOUS brief epoch — cross-epoch "
+    "comparisons are never valid, so there is nothing to finish",
+    "no_cycle_record": "its mission predates cycles_consumed, so the budget "
+    "left is unknown — 30-0 would grant a full fresh run, not a top-up",
     "no_config": "no llmvp config by that name — renamed or removed",
     "grinder": "ran GRINDER; a wall-bound finish is the contract, not a shortfall",
     "workspace_gone": "/tmp workspace was reaped — nothing left to resume",

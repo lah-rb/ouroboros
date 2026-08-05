@@ -238,50 +238,84 @@ class TestTheWorkspaceIdentityGuard:
 
 
 class TestVerdictLadder:
-    @pytest.mark.parametrize(
-        "status,cycles,expect",
-        [
-            ("paused", 15, "eligible"),
-            ("paused", 30, "budget_spent"),
-            ("completed", 12, "mission_completed"),
-            ("active", 12, "mission_active"),
-            ("", 0, "mission_unknown"),
-        ],
-        ids=["eligible", "spent", "completed", "active", "unknown"],
-    )
-    def test_status_and_budget(self, tmp_path, monkeypatch, status, cycles, expect):
+    """Every rung, in order. Order is load-bearing twice over: no_config
+    before grinder (a deleted config defaults to grinder and would give the
+    wrong remedy), and workspace_reused before the status/cycle checks (a
+    reused workspace's numbers belong to someone else)."""
+
+    def _one(
+        self,
+        tmp_path,
+        monkeypatch,
+        *,
+        status="paused",
+        cycles=15,
+        league="contemplator",
+        config=True,
+        epoch="v2",
+        cycles_field=True,
+        live_id="X",
+        snap_id="X",
+    ):
         base = tmp_path / "r"
         _state(base, arms=["m"], finished=True, results=[])
+        base.joinpath("batch.log").write_text(f"rubric=TIER_RUBRIC_{epoch}.1\n")
         (base / "m_agent").mkdir(parents=True)
-        (base / "m_agent" / "mission.json").write_text(json.dumps({"mission_id": "X"}))
-        monkeypatch.setattr(tr, "arm_league", lambda a: (a, "contemplator"))
-        monkeypatch.setattr(tr, "mission_id", lambda w: "X")
-        monkeypatch.setattr(tr, "mission_state", lambda w: (status, cycles))
+        (base / "m_agent" / "mission.json").write_text(
+            json.dumps({"mission_id": snap_id})
+        )
+        work = tmp_path / "work" / "m"
+        doc = {"mission_id": live_id, "status": status}
+        if cycles_field:
+            doc["cycles_consumed"] = cycles
+        _mission(work, **doc)
+        monkeypatch.setattr(tr, "TIER_WORK_ROOT", tmp_path / "work")
+        monkeypatch.setattr(tr, "arm_league", lambda a: (a, league))
         monkeypatch.setattr(tr, "ROOT", tmp_path)
-        (tmp_path / "llmvp" / "configs").mkdir(parents=True)
-        (tmp_path / "llmvp" / "configs" / "m.yaml").write_text("x: 1\n")
-        monkeypatch.setattr(Path, "is_dir", lambda self: True)
-        assert tr.extend_candidates(base)[0]["verdict"] == expect
+        (tmp_path / "llmvp" / "configs").mkdir(parents=True, exist_ok=True)
+        if config:
+            (tmp_path / "llmvp" / "configs" / "m.yaml").write_text("x: 1\n")
+        return tr.extend_candidates(base)[0]
 
-    def test_a_grinder_is_refused(self, tmp_path, monkeypatch):
-        base = tmp_path / "r"
-        _state(base, arms=["g"], finished=True, results=[])
-        monkeypatch.setattr(tr, "arm_league", lambda a: (a, "grinder"))
-        monkeypatch.setattr(tr, "ROOT", tmp_path)
-        (tmp_path / "llmvp" / "configs").mkdir(parents=True)
-        (tmp_path / "llmvp" / "configs" / "g.yaml").write_text("x: 1\n")
-        assert tr.extend_candidates(base)[0]["verdict"] == "grinder"
+    @pytest.mark.parametrize(
+        "kw,expect",
+        [
+            ({}, "eligible"),
+            ({"cycles": 30}, "budget_spent"),
+            ({"status": "completed"}, "mission_completed"),
+            ({"status": "active"}, "mission_active"),
+            ({"league": "grinder"}, "grinder"),
+            ({"config": False}, "no_config"),
+            ({"epoch": "v1"}, "foreign_epoch"),
+            ({"cycles_field": False}, "no_cycle_record"),
+            ({"live_id": "OTHER"}, "workspace_reused"),
+        ],
+        ids=[
+            "eligible",
+            "spent",
+            "completed",
+            "active",
+            "grinder",
+            "no_config",
+            "foreign_epoch",
+            "no_cycle_record",
+            "reused",
+        ],
+    )
+    def test_the_ladder(self, tmp_path, monkeypatch, kw, expect):
+        assert self._one(tmp_path, monkeypatch, **kw)["verdict"] == expect
 
-    def test_a_missing_config_reports_as_such_not_as_a_grinder(
-        self, tmp_path, monkeypatch
-    ):
-        """Order matters: config_league defaults a missing config to grinder,
-        so checking league first would give a misleading remedy."""
-        base = tmp_path / "r"
-        _state(base, arms=["ghost"], finished=True, results=[])
-        monkeypatch.setattr(tr, "ROOT", tmp_path)
-        (tmp_path / "llmvp" / "configs").mkdir(parents=True)
-        assert tr.extend_candidates(base)[0]["verdict"] == "no_config"
+    def test_a_missing_config_beats_the_grinder_rung(self, tmp_path, monkeypatch):
+        """Both conditions true at once: the message must name the config,
+        not send the operator to re-league something that does not exist."""
+        row = self._one(tmp_path, monkeypatch, config=False, league="grinder")
+        assert row["verdict"] == "no_config"
+
+    def test_a_reused_workspace_beats_the_cycle_rung(self, tmp_path, monkeypatch):
+        """Its cycle count belongs to a different mission — reporting it as
+        this arm's is how the wrong mission gets extended."""
+        row = self._one(tmp_path, monkeypatch, live_id="OTHER", cycles=30)
+        assert row["verdict"] == "workspace_reused"
 
 
 class TestBaseClaim:
