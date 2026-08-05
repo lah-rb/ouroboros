@@ -391,7 +391,7 @@ async def execute_flow(
                     # dispatch. The inference action path runs this
                     # internally (see _execute_inference_action line
                     # 837); custom action wrappers (rewrite_symbol_turn,
-                    # select_symbol_turn, etc.) need it here or their
+                    # the rewrite turn, etc.) need it here or their
                     # declared pre_compute formatters never fire. b75
                     # regression: pre_compute was declared on the
                     # rewrite_symbol step but silently ignored — the

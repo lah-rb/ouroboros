@@ -590,8 +590,8 @@ class TurnRenderer:
         # Merge order: options_from (projection/context) first, then
         # embedded `options` (flow-specific declarations), then stock.
         # The three are ADDITIVE — not mutually exclusive. pick_action
-        # is the canonical three-way case: options_from yields the
-        # symbol list from the context-published symbol_menu_options,
+        # is the canonical three-way case: options_from yields its
+        # list from a projection or a context key,
         # embedded `options` declares examine_another_file, stock
         # carries __all_symbols__ and __conclude__. Before this fix
         # the resolver used `if options_from else embedded`, silently

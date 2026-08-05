@@ -224,7 +224,6 @@ def build_action_registry() -> ActionRegistry:
         action_extract_symbol_bodies,
         action_fetch_symbol_body,
         action_start_edit_session,
-        action_select_symbol_turn,
         action_prepare_next_rewrite,
         action_load_next_file,
         action_write_patched_file,
@@ -511,7 +510,6 @@ def build_action_registry() -> ActionRegistry:
     registry.register("extract_symbol_bodies", action_extract_symbol_bodies)
     registry.register("fetch_symbol_body", action_fetch_symbol_body)
     registry.register("start_edit_session", action_start_edit_session)
-    registry.register("select_symbol_turn", action_select_symbol_turn)
     registry.register("prepare_next_rewrite", action_prepare_next_rewrite)
     registry.register("load_next_file", action_load_next_file)
     registry.register("write_patched_file", action_write_patched_file)

@@ -4873,8 +4873,7 @@
           ]
         },
         "publishes": [
-          "symbol_table",
-          "symbol_menu_options"
+          "symbol_table"
         ],
         "effects": [],
         "terminal": false

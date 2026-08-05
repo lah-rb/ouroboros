@@ -306,7 +306,7 @@ _templates: {
 		// two of the two errors lint-flows reported at HEAD. The rung worked
 		// live the whole time — the runtime supplies what the contract did not
 		// declare — so this is the contract catching up with the behaviour.
-		publishes: ["symbol_table", "symbol_menu_options"]
+		publishes: ["symbol_table"]
 		...
 	}
 

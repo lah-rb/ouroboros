@@ -1177,31 +1177,6 @@ def select_rewrite_instruction_template(params: dict, namespaces: dict) -> str:
     return "patch/rewrite_function_instruction"
 
 
-def format_selection_state(params: dict, namespaces: dict) -> str:
-    """Site #11: running "Selected so far" list rendered as evidence.
-
-    Reads `selected_symbols` from params and emits a short
-    human-readable list. Returns empty string when nothing is
-    selected yet — the evidence section's ref will then omit
-    naturally.
-    """
-    selected = params.get("selected") or []
-    if not selected:
-        return ""
-    names: list[str] = []
-    for entry in selected:
-        if isinstance(entry, dict):
-            name = entry.get("name") or entry.get("id") or ""
-        else:
-            name = str(entry)
-        if name:
-            names.append(name)
-    if not names:
-        return ""
-    return ", ".join(names)
-
-
 PRE_COMPUTE_FORMATTERS["select_rewrite_instruction_template"] = (
     select_rewrite_instruction_template
 )
-PRE_COMPUTE_FORMATTERS["format_selection_state"] = format_selection_state

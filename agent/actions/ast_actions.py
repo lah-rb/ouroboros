@@ -152,10 +152,10 @@ def _lookup_symbol(symbol_table: list, qname: str) -> dict | None:
 
 
 async def action_extract_symbol_bodies(step_input: StepInput) -> StepOutput:
-    """Extract symbols from target file and build selection menu.
+    """Extract the editable symbol table from the target file.
 
     Reads: context.target_file (path + content)
-    Publishes: symbol_table (list of dicts), symbol_menu_options (list for dynamic menu)
+    Publishes: symbol_table (list of dicts)
 
     Each symbol_table entry:
         {
@@ -170,16 +170,6 @@ async def action_extract_symbol_bodies(step_input: StepInput) -> StepOutput:
             "parent": "GameEngine"
         }
 
-    Each symbol_menu_options entry (for dynamic LLM menu):
-        {
-            "id": "GameEngine.process_command",
-            "description": "method (lines 30-85): def process_command(self, raw_input: str) -> str:"
-        }
-
-    Step C Batch E: escape-hatch options (__full_rewrite__, __bail__,
-    __done__) are declared as stock options on the select_symbols turn
-    declaration, not appended here. This action publishes ONLY real
-    symbol entries.
     """
     target_file = step_input.context.get("target_file", {})
     file_path = target_file.get("path", "")
@@ -189,7 +179,7 @@ async def action_extract_symbol_bodies(step_input: StepInput) -> StepOutput:
         return StepOutput(
             result={"symbols_extracted": 0},
             observations="No target file content available for symbol extraction",
-            context_updates={"symbol_table": [], "symbol_menu_options": []},
+            context_updates={"symbol_table": []},
         )
 
     if not is_tree_sitter_available():
@@ -199,7 +189,7 @@ async def action_extract_symbol_bodies(step_input: StepInput) -> StepOutput:
                 "data_patch_eligible": _data_patch_eligible(file_path),
             },
             observations="tree-sitter not available — falling back to full rewrite",
-            context_updates={"symbol_table": [], "symbol_menu_options": []},
+            context_updates={"symbol_table": []},
         )
 
     # Extract the editable symbol table (shared helper with load_next_file).
@@ -212,23 +202,8 @@ async def action_extract_symbol_bodies(step_input: StepInput) -> StepOutput:
                 "data_patch_eligible": _data_patch_eligible(file_path),
             },
             observations=f"No editable symbols found in {file_path}",
-            context_updates={"symbol_table": [], "symbol_menu_options": []},
+            context_updates={"symbol_table": []},
         )
-
-    symbol_menu_options: list[dict[str, str]] = [
-        {
-            "id": sym["name"],
-            "description": (
-                f"{sym['kind']} (lines {sym['line']}-{sym['end_line']}): "
-                f"{sym['signature']}"
-            ),
-        }
-        for sym in symbol_table
-    ]
-
-    # Step C Batch E: escape-hatch options (__full_rewrite__, __bail__)
-    # no longer appended here. The select_symbols turn declares them
-    # as stock options — a single authoritative source.
 
     # Phase D (patch redesign): check whether the diagnose-named
     # target_symbol is actually present in this file's AST. file_ops
@@ -259,10 +234,7 @@ async def action_extract_symbol_bodies(step_input: StepInput) -> StepOutput:
                 else ""
             )
         ),
-        context_updates={
-            "symbol_table": symbol_table,
-            "symbol_menu_options": symbol_menu_options,
-        },
+        context_updates={"symbol_table": symbol_table},
     )
 
 
@@ -426,9 +398,10 @@ async def action_start_edit_session(step_input: StepInput) -> StepOutput:
     # producing outputs like
     # ``"We need to respond with 'eady' as per instruction..."``.
     #
-    # We queue the seed as a session injection; select_symbol_turn
-    # (the next step) consumes it via session_injections.consume()
-    # so one real inference combines seed + menu. See
+    # We queue the seed as a session injection; the next real
+    # inference in this session (begin_rewrite -> the rewrite turn)
+    # consumes it via session_injections.consume(), so the seed and
+    # that turn's prompt arrive as ONE inference. See
     # agent/session_injections.py for the pattern.
     from agent.session_injections import queue as queue_injection
 
@@ -446,11 +419,12 @@ async def action_start_edit_session(step_input: StepInput) -> StepOutput:
         "file_content" in step_input.context,
     )
 
-    # Queue the seed for the next real inference — select_symbol_turn
-    # will prepend it to its first menu prompt via consume().
+    # Queue the seed for the next real inference, which prepends it
+    # via consume(). `selected_symbols` was seeded here for the
+    # select_symbols menu loop; Phase C eliminated that loop
+    # (patch.cue:76-79) and nothing reads the key any more.
     context_updates: dict[str, Any] = {
         "edit_session_id": session_id,
-        "selected_symbols": [],
         "file_content": file_content,
         "file_path": file_path,
         "mode": mode,
@@ -461,294 +435,6 @@ async def action_start_edit_session(step_input: StepInput) -> StepOutput:
         result={"session_started": True},
         observations=f"Edit session started: {session_id}",
         context_updates=context_updates,
-    )
-
-
-# ── select_symbol_turn ────────────────────────────────────────────────
-
-
-async def action_select_symbol_turn(step_input: StepInput) -> StepOutput:
-    """One turn of the symbol selection loop.
-
-    Presents the symbol menu to the memoryful session. Model responds
-    with a JSON {"choice": "..."} picking a symbol letter or DONE to
-    finish; the choice is parsed by the standard llm_menu extract_choice
-    with retry (no grammar constraint — see agent/resolvers/llm_menu.py).
-    If >50% of symbols are selected, routes to full rewrite.
-    """
-    effects = step_input.effects
-    session_id = step_input.context.get("edit_session_id", "")
-    menu_options = _ensure_parsed(step_input.context.get("symbol_menu_options", []))
-    selected = list(
-        _ensure_parsed(step_input.context.get("selected_symbols", [])) or []
-    )
-
-    if not effects or not session_id or not menu_options:
-        return StepOutput(
-            result={
-                "selection_complete": True,
-                "full_rewrite_requested": False,
-                "symbol_selected": False,
-                "symbols_selected": len(selected),
-            },
-            observations="Missing session or menu options — finishing selection",
-            context_updates={"selected_symbols": selected},
-        )
-
-    # Safety: auto-complete if all selectable symbols are already selected
-    selectable_ids = [o["id"] for o in menu_options if o["id"] != "__full_rewrite__"]
-    if selected and all(sid in selected for sid in selectable_ids):
-        return StepOutput(
-            result={
-                "selection_complete": True,
-                "full_rewrite_requested": False,
-                "symbol_selected": False,
-                "symbols_selected": len(selected),
-            },
-            observations=f"All {len(selected)} symbols already selected — auto-completing",
-            context_updates={"selected_symbols": selected},
-        )
-
-    # Safety: hard cap — if >50% of symbols are selected, the model
-    # is trying to rewrite most of the file. Route to full rewrite
-    # instead of editing symbols one at a time.
-    selectable_count = len(selectable_ids)
-    half_cap = max(1, selectable_count // 2)
-    selection_turn = int(step_input.context.get("selection_turn", 0)) + 1
-
-    if len(selected) >= half_cap and selectable_count > 2:
-        logger.info(
-            "Selection hit 50%% cap (%d/%d symbols) — routing to full rewrite",
-            len(selected),
-            selectable_count,
-        )
-        return StepOutput(
-            result={
-                "selection_complete": False,
-                "full_rewrite_requested": True,
-                "symbol_selected": False,
-                "symbols_selected": len(selected),
-            },
-            observations=f"Selected {len(selected)}/{selectable_count} symbols (>50%) — full rewrite more efficient",
-            context_updates={
-                "selected_symbols": selected,
-                "selection_turn": selection_turn,
-            },
-        )
-
-    # Secondary safety: hard turn cap prevents runaway loops from
-    # invalid responses that don't match any option.
-    max_turns = selectable_count + 4  # generous but bounded
-    if selection_turn > max_turns:
-        logger.warning(
-            "Selection exceeded %d turns — routing to full rewrite",
-            max_turns,
-        )
-        return StepOutput(
-            result={
-                "selection_complete": False,
-                "full_rewrite_requested": True,
-                "symbol_selected": False,
-                "symbols_selected": len(selected),
-            },
-            observations=f"Max selection turns ({max_turns}) exceeded — full rewrite",
-            context_updates={
-                "selected_symbols": selected,
-                "selection_turn": selection_turn,
-            },
-        )
-
-    # Append explicit "done" option — stock option from turn declaration
-    # is automatically included by the renderer, but we need it in the
-    # choice-validation list for extract_turn_menu_choice below.
-
-    # Render the menu prompt from the attached #Turn declaration.
-    # Step input carries the turn (Step C Batch E pattern). Fall back
-    # to a bare menu prompt if called outside the runtime (tests).
-    from agent.runtime import (
-        render_turn_prompt,
-        extract_turn_menu_choice,
-    )
-    from agent.session_injections import consume as consume_injections
-
-    # The turn's problem section references input.flow_directive to
-    # render the "## Task" block. If input is empty, that section
-    # silently omits — the model then sees "Pick the symbol(s) you
-    # need to modify to satisfy the Task..." with no Task visible and
-    # 902 regression fix — use step_input.inputs. Previously this
-    # site did a manual one-field forward of flow_directive from
-    # context to input; that was a workaround for the same
-    # underlying bug (custom actions couldn't reach flow inputs).
-    # Now that StepInput.inputs is populated by _build_step_input,
-    # every input-namespace ref in the turn template resolves
-    # automatically.
-    namespaces = {
-        "input": (
-            dict(step_input.inputs)
-            if step_input.inputs
-            else {
-                # Backward-compat fallback: if inputs aren't populated
-                # (older trace replays, misconfigured tests), preserve
-                # the prior minimal surface so the template still renders.
-                "flow_directive": step_input.context.get("flow_directive", ""),
-            }
-        ),
-        "context": dict(step_input.context),
-        "meta": {},
-    }
-
-    turn = step_input.turn
-    if turn is not None:
-        menu_prompt = render_turn_prompt(turn, namespaces)
-    else:
-        # Legacy fallback path — should not fire in normal runtime since
-        # patch.cue declares the turn. Kept for test compatibility.
-        menu_prompt = "Pick a symbol to rewrite, or __done__ to finish."
-
-    prompt, injection_clears = consume_injections(step_input.context, menu_prompt)
-
-    # Temperature from the turn config (resolved t* specifier); fallback
-    # to 0.3 matching the Site #11 menu-regime calibration.
-    temp_spec = turn.config.get("temperature") if turn and turn.config else None
-    try:
-        from agent.runtime import _safe_float_temp
-
-        temperature = _safe_float_temp(temp_spec) if temp_spec else 0.3
-    except Exception:
-        temperature = 0.3
-
-    try:
-        result = await effects.session_inference(
-            session_id,
-            prompt,
-            {"temperature": temperature},
-        )
-        response = result.text.strip() if result.text else ""
-    except Exception as e:
-        logger.error("Symbol selection turn failed: %s", e)
-        return StepOutput(
-            result={
-                "selection_complete": True,
-                "full_rewrite_requested": False,
-                "symbol_selected": False,
-                "symbols_selected": len(selected),
-            },
-            observations=f"Selection turn failed: {e}",
-            context_updates={
-                **injection_clears,
-                "selected_symbols": selected,
-            },
-        )
-
-    # Extract the choice against the turn's resolved option set (symbol
-    # IDs + the three stock options: __full_rewrite__, __bail__,
-    # __done__). Falls back to a local extract_choice if no turn.
-    chosen_id: str | None = None
-    if turn is not None:
-        chosen_id = extract_turn_menu_choice(turn, namespaces, response)
-    else:
-        from agent.resolvers.llm_menu import extract_choice
-
-        chosen_id = extract_choice(
-            response,
-            [o["id"] for o in menu_options]
-            + ["__done__", "__full_rewrite__", "__bail__"],
-        )
-
-    if not chosen_id:
-        # Could not parse — treat as done
-        return StepOutput(
-            result={
-                "selection_complete": True,
-                "full_rewrite_requested": False,
-                "symbol_selected": False,
-                "symbols_selected": len(selected),
-            },
-            observations=f"Could not parse selection from '{response[:60]}' — finishing",
-            context_updates={
-                **injection_clears,
-                "selected_symbols": selected,
-                "selection_turn": selection_turn,
-            },
-        )
-
-    # "Done" stock option — finish selection
-    if chosen_id == "__done__":
-        return StepOutput(
-            result={
-                "selection_complete": True,
-                "full_rewrite_requested": False,
-                "symbol_selected": False,
-                "symbols_selected": len(selected),
-            },
-            observations=f"Model selected 'Done': {len(selected)} symbols selected",
-            context_updates={
-                **injection_clears,
-                "selected_symbols": selected,
-                "selection_turn": selection_turn,
-            },
-        )
-
-    if chosen_id == "__full_rewrite__":
-        return StepOutput(
-            result={
-                "selection_complete": False,
-                "full_rewrite_requested": True,
-                "bail_requested": False,
-                "symbol_selected": False,
-                "symbols_selected": len(selected),
-            },
-            observations="Full rewrite requested by model",
-            context_updates={**injection_clears, "selected_symbols": selected},
-        )
-
-    if chosen_id == "__bail__":
-        return StepOutput(
-            result={
-                "selection_complete": False,
-                "full_rewrite_requested": False,
-                "bail_requested": True,
-                "symbol_selected": False,
-                "symbols_selected": 0,
-            },
-            observations="Model bailed — file does not need changes or task targets wrong file",
-            context_updates={**injection_clears, "selected_symbols": selected},
-        )
-
-    # Validate choice is actually a selectable symbol ID
-    if chosen_id not in [o["id"] for o in menu_options]:
-        return StepOutput(
-            result={
-                "selection_complete": True,
-                "full_rewrite_requested": False,
-                "symbol_selected": False,
-                "symbols_selected": len(selected),
-            },
-            observations=f"Selection '{chosen_id}' not in options — finishing",
-            context_updates={
-                **injection_clears,
-                "selected_symbols": selected,
-                "selection_turn": selection_turn,
-            },
-        )
-
-    # Add to selected (avoid duplicates)
-    if chosen_id not in selected:
-        selected.append(chosen_id)
-
-    return StepOutput(
-        result={
-            "selection_complete": False,
-            "full_rewrite_requested": False,
-            "symbol_selected": True,
-            "symbols_selected": len(selected),
-        },
-        observations=f"Selected symbol: {chosen_id} (total: {len(selected)})",
-        context_updates={
-            **injection_clears,
-            "selected_symbols": selected,
-            "selection_turn": selection_turn,
-        },
     )
 
 
