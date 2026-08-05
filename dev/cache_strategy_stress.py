@@ -19,6 +19,7 @@ Usage:
   python dev/cache_strategy_stress.py --model PATH [--swa-full] [--label NAME]
                                       [--n-ctx 4096] [--prefix-tokens 200] [--gen 8]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -40,7 +41,8 @@ def _logits_argmax(llm: Llama) -> int:
 
 def _hard_reset(llm: Llama) -> None:
     """Llama.reset() only zeroes the Python n_tokens counter; it leaves the C-level KV cells
-    occupied, so a re-prefill at position 0 conflicts ('Invalid input batch'). Also clear KV."""
+    occupied, so a re-prefill at position 0 conflicts ('Invalid input batch'). Also clear KV.
+    """
     llm.n_tokens = 0
     llm._ctx.memory_clear(True)
 
@@ -55,7 +57,9 @@ def greedy_after_eval(llm: Llama, n: int) -> list[int]:
     return out
 
 
-def fresh_reference(llm: Llama, prefix: list[int], tail: list[int], n: int) -> list[int]:
+def fresh_reference(
+    llm: Llama, prefix: list[int], tail: list[int], n: int
+) -> list[int]:
     _hard_reset(llm)
     llm.eval(prefix + tail)
     return greedy_after_eval(llm, n)
@@ -101,19 +105,27 @@ def _set_position(llm: Llama, tokens: list[int]) -> None:
 
 # ── T3: whole-context save_state/load_state ────────────────────────────────
 def test_full_save_state(llm, prefix, tail, n, ref):
-    res = {"tier": "T3 full_save_state", "run": False, "correct": None, "state_mb": None, "detail": ""}
+    res = {
+        "tier": "T3 full_save_state",
+        "run": False,
+        "correct": None,
+        "state_mb": None,
+        "detail": "",
+    }
     try:
         _hard_reset(llm)
         llm.eval(prefix)
-        st = llm.save_state()                          # whole-context blob
+        st = llm.save_state()  # whole-context blob
         res["state_mb"] = round(st.llama_state_size / (1024 * 1024), 2)
         _hard_reset(llm)
-        llm.load_state(st)                             # restores KV + n_tokens
+        llm.load_state(st)  # restores KV + n_tokens
         llm.eval(tail)
         got = greedy_after_eval(llm, n)
         res["run"] = True
-        res["correct"] = (got == ref)
-        res["detail"] = "match" if got == ref else f"DIVERGED ref={ref[:4]} got={got[:4]}"
+        res["correct"] = got == ref
+        res["detail"] = (
+            "match" if got == ref else f"DIVERGED ref={ref[:4]} got={got[:4]}"
+        )
     except Exception as e:  # noqa: BLE001
         res["detail"] = f"CRASH: {type(e).__name__}: {str(e)[:160]}"
     return res
@@ -121,7 +133,13 @@ def test_full_save_state(llm, prefix, tail, n, ref):
 
 # ── T2: per-sequence state get/set on seq 0 ────────────────────────────────
 def test_per_seq_state(llm, prefix, tail, n, ref):
-    res = {"tier": "T2 per_seq_state", "run": False, "correct": None, "state_mb": None, "detail": ""}
+    res = {
+        "tier": "T2 per_seq_state",
+        "run": False,
+        "correct": None,
+        "state_mb": None,
+        "detail": "",
+    }
     try:
         ctx = _ctx_ptr(llm)
         _hard_reset(llm)
@@ -130,7 +148,7 @@ def test_per_seq_state(llm, prefix, tail, n, ref):
         buf = (ctypes.c_uint8 * int(size))()
         nbytes = llama_cpp.llama_state_seq_get_data(ctx, buf, size, 0)
         res["state_mb"] = round(int(nbytes) / (1024 * 1024), 2)
-        _hard_reset(llm)                                    # clears seq 0 KV
+        _hard_reset(llm)  # clears seq 0 KV
         nread = llama_cpp.llama_state_seq_set_data(ctx, buf, nbytes, 0)
         if int(nread) == 0:
             raise RuntimeError("state_seq_set_data returned 0 (restore rejected)")
@@ -138,8 +156,10 @@ def test_per_seq_state(llm, prefix, tail, n, ref):
         llm.eval(tail)
         got = greedy_after_eval(llm, n)
         res["run"] = True
-        res["correct"] = (got == ref)
-        res["detail"] = "match" if got == ref else f"DIVERGED ref={ref[:4]} got={got[:4]}"
+        res["correct"] = got == ref
+        res["detail"] = (
+            "match" if got == ref else f"DIVERGED ref={ref[:4]} got={got[:4]}"
+        )
     except Exception as e:  # noqa: BLE001
         res["detail"] = f"CRASH: {type(e).__name__}: {str(e)[:160]}"
     return res
@@ -147,7 +167,13 @@ def test_per_seq_state(llm, prefix, tail, n, ref):
 
 # ── T1: resident seq_cp fork (copy seq 0 -> seq 1, verify via restore into seq 0) ──
 def test_seq_cp(llm, prefix, tail, n, ref):
-    res = {"tier": "T1 seq_cp", "run": False, "correct": None, "state_mb": None, "detail": ""}
+    res = {
+        "tier": "T1 seq_cp",
+        "run": False,
+        "correct": None,
+        "state_mb": None,
+        "detail": "",
+    }
     try:
         ctx = _ctx_ptr(llm)
         mem = llama_cpp.llama_get_memory(ctx)
@@ -158,7 +184,7 @@ def test_seq_cp(llm, prefix, tail, n, ref):
         llama_cpp.llama_memory_seq_cp(mem, 0, 1, -1, -1)
         sz1 = llama_cpp.llama_state_seq_get_size(ctx, 1)
         res["state_mb"] = round(int(sz1) / (1024 * 1024), 2)
-        size_match = (int(sz1) == int(sz0) and int(sz1) > 0)
+        size_match = int(sz1) == int(sz0) and int(sz1) > 0
         # correctness: pull seq 1's state, restore into a cleared seq 0, decode tail there.
         buf = (ctypes.c_uint8 * int(sz1))()
         nbytes = llama_cpp.llama_state_seq_get_data(ctx, buf, sz1, 1)
@@ -170,9 +196,11 @@ def test_seq_cp(llm, prefix, tail, n, ref):
         llm.eval(tail)
         got = greedy_after_eval(llm, n)
         res["run"] = True
-        res["correct"] = (got == ref)
-        res["detail"] = (f"seq0_size={int(sz0)} seq1_size={int(sz1)} size_match={size_match}; "
-                         + ("match" if got == ref else f"DIVERGED ref={ref[:4]} got={got[:4]}"))
+        res["correct"] = got == ref
+        res["detail"] = (
+            f"seq0_size={int(sz0)} seq1_size={int(sz1)} size_match={size_match}; "
+            + ("match" if got == ref else f"DIVERGED ref={ref[:4]} got={got[:4]}")
+        )
     except Exception as e:  # noqa: BLE001
         res["detail"] = f"CRASH: {type(e).__name__}: {str(e)[:160]}"
     return res
@@ -181,8 +209,15 @@ def test_seq_cp(llm, prefix, tail, n, ref):
 # ── Multi-seq concurrency: the resident hot-set (fork prefix -> 2 seqs, decode different tails) ──
 def test_multiseq(llm, prefix, tail_a, tail_b, n):
     """Prefill prefix on seq 0, seq_cp -> seq 1, then decode DIFFERENT tails on each seq and
-    check both match their own fresh-prefill reference (faithful + no cross-contamination)."""
-    res = {"tier": "MULTISEQ seq_cp", "run": False, "correct": None, "state_mb": None, "detail": ""}
+    check both match their own fresh-prefill reference (faithful + no cross-contamination).
+    """
+    res = {
+        "tier": "MULTISEQ seq_cp",
+        "run": False,
+        "correct": None,
+        "state_mb": None,
+        "detail": "",
+    }
     try:
         ctx = _ctx_ptr(llm)
         mem = llama_cpp.llama_get_memory(ctx)
@@ -190,8 +225,10 @@ def test_multiseq(llm, prefix, tail_a, tail_b, n):
         ref_b = fresh_reference(llm, prefix, tail_b, n)
 
         _hard_reset(llm)
-        llm.eval(prefix)                                  # prefix on seq 0
-        llama_cpp.llama_memory_seq_cp(mem, 0, 1, -1, -1)  # fork -> seq 1 (resident clone)
+        llm.eval(prefix)  # prefix on seq 0
+        llama_cpp.llama_memory_seq_cp(
+            mem, 0, 1, -1, -1
+        )  # fork -> seq 1 (resident clone)
         # branch B on seq 1 (manual batch), fully, first
         next1 = _decode_on_seq(llm, 1, tail_b, len(prefix))
         got_b = greedy_on_seq(llm, 1, next1, n)
@@ -203,9 +240,11 @@ def test_multiseq(llm, prefix, tail_a, tail_b, n):
         ok_a, ok_b = (got_a == ref_a), (got_b == ref_b)
         res["run"] = True
         res["correct"] = ok_a and ok_b
-        res["detail"] = (f"seq0(A) {'ok' if ok_a else f'BAD got={got_a[:4]} ref={ref_a[:4]}'} | "
-                         f"seq1(B) {'ok' if ok_b else f'BAD got={got_b[:4]} ref={ref_b[:4]}'} | "
-                         f"distinct_refs={ref_a != ref_b}")
+        res["detail"] = (
+            f"seq0(A) {'ok' if ok_a else f'BAD got={got_a[:4]} ref={ref_a[:4]}'} | "
+            f"seq1(B) {'ok' if ok_b else f'BAD got={got_b[:4]} ref={ref_b[:4]}'} | "
+            f"distinct_refs={ref_a != ref_b}"
+        )
     except Exception as e:  # noqa: BLE001
         res["detail"] = f"CRASH: {type(e).__name__}: {str(e)[:160]}"
     return res
@@ -214,7 +253,8 @@ def test_multiseq(llm, prefix, tail_a, tail_b, n):
 # ── Depth sweep: how the whole-context save_state blob (T3) grows toward the multi-GB overflow ──
 def test_depth_sweep(llm, depths, vocab_filler):
     """At increasing prefill depths, report the T3 whole-context save_state blob size (and whether
-    it crashes) vs the T2 per-sequence size — grounds the deep-session overflow trajectory."""
+    it crashes) vs the T2 per-sequence size — grounds the deep-session overflow trajectory.
+    """
     rows = []
     for d in depths:
         row = {"depth": d, "t3_mb": None, "t2_mb": None, "detail": ""}
@@ -230,11 +270,16 @@ def test_depth_sweep(llm, depths, vocab_filler):
                 row["t3_mb"] = round(st.llama_state_size / (1024 * 1024), 2)
                 row["detail"] = "ok"
             except Exception as e:  # noqa: BLE001
-                row["detail"] = f"T3 save_state CRASH: {type(e).__name__}: {str(e)[:90]}"
+                row["detail"] = (
+                    f"T3 save_state CRASH: {type(e).__name__}: {str(e)[:90]}"
+                )
         except Exception as e:  # noqa: BLE001
             row["detail"] = f"prefill failed: {type(e).__name__}: {str(e)[:90]}"
         rows.append(row)
-        print(f"  depth={d:>6}: T3_whole={row['t3_mb']} MB  T2_perseq={row['t2_mb']} MB  {row['detail']}", flush=True)
+        print(
+            f"  depth={d:>6}: T3_whole={row['t3_mb']} MB  T2_perseq={row['t2_mb']} MB  {row['detail']}",
+            flush=True,
+        )
     return rows
 
 
@@ -247,33 +292,46 @@ def main() -> int:
     ap.add_argument("--prefix-tokens", type=int, default=200)
     ap.add_argument("--gen", type=int, default=8)
     ap.add_argument("--n-gpu-layers", type=int, default=-1)
-    ap.add_argument("--mode", default="tiers", choices=["tiers", "multiseq", "depth", "all"])
+    ap.add_argument(
+        "--mode", default="tiers", choices=["tiers", "multiseq", "depth", "all"]
+    )
     ap.add_argument("--depths", default="1000,4000,16000,32000")
     args = ap.parse_args()
 
     label = args.label or args.model.split("/")[-1]
-    print(f"== cache-strategy stress: {label} | swa_full={args.swa_full} | n_ctx={args.n_ctx} ==", flush=True)
+    print(
+        f"== cache-strategy stress: {label} | swa_full={args.swa_full} | n_ctx={args.n_ctx} ==",
+        flush=True,
+    )
     print("loading model… (large GGUF, may take minutes)", flush=True)
     llm = Llama(
         model_path=args.model,
         n_ctx=args.n_ctx,
         n_gpu_layers=args.n_gpu_layers,
-        n_seq_max=2,                       # need seq 0 + seq 1 for T1
+        n_seq_max=2,  # need seq 0 + seq 1 for T1
         swa_full=bool(args.swa_full),
-        kv_unified=True,                   # single unified KV (Metal); pairs with swa_full
+        kv_unified=True,  # single unified KV (Metal); pairs with swa_full
         logits_all=False,
         verbose=False,
     )
-    print(f"loaded. n_swa={llm._model.n_swa()} is_recurrent={llm._model.is_recurrent()} "
-          f"is_hybrid={llm._model.is_hybrid()} memory_can_shift={llm._ctx.memory_can_shift()}", flush=True)
+    print(
+        f"loaded. n_swa={llm._model.n_swa()} is_recurrent={llm._model.is_recurrent()} "
+        f"is_hybrid={llm._model.is_hybrid()} memory_can_shift={llm._ctx.memory_can_shift()}",
+        flush=True,
+    )
 
     def fill(n_tokens: int) -> list[int]:
-        words = "You are a meticulous operator. " + " ".join(f"item{i}" for i in range(n_tokens))
+        words = "You are a meticulous operator. " + " ".join(
+            f"item{i}" for i in range(n_tokens)
+        )
         return llm.tokenize(words.encode(), add_bos=True)[:n_tokens]
 
     if args.mode in ("tiers", "all"):
         prefix = fill(args.prefix_tokens)
-        tail = llm.tokenize(b"\nNow answer in one short sentence: what is the capital of France?", add_bos=False)
+        tail = llm.tokenize(
+            b"\nNow answer in one short sentence: what is the capital of France?",
+            add_bos=False,
+        )
         ref = fresh_reference(llm, prefix, tail, args.gen)
         print(f"reference greedy[{args.gen}] = {ref}", flush=True)
         results = [
@@ -282,25 +340,41 @@ def main() -> int:
             test_seq_cp(llm, prefix, tail, args.gen, ref),
         ]
         print("\n== TIERS (shallow save/restore correctness) ==", flush=True)
-        print(f"{'tier':<20} {'run':<5} {'correct':<8} {'state_MB':<9} detail", flush=True)
+        print(
+            f"{'tier':<20} {'run':<5} {'correct':<8} {'state_MB':<9} detail", flush=True
+        )
         for r in results:
-            print(f"{r['tier']:<20} {str(r['run']):<5} {str(r['correct']):<8} "
-                  f"{str(r['state_mb']):<9} {r['detail']}", flush=True)
+            print(
+                f"{r['tier']:<20} {str(r['run']):<5} {str(r['correct']):<8} "
+                f"{str(r['state_mb']):<9} {r['detail']}",
+                flush=True,
+            )
 
     if args.mode in ("multiseq", "all"):
         # Coherent prefix so distinct tails yield DISTINCT answers (so contamination is detectable).
-        pre = (b"You are a precise geography assistant. Reply with only the city name. "
-               b"Context: the quarterly review is complete and all systems are nominal.")
+        pre = (
+            b"You are a precise geography assistant. Reply with only the city name. "
+            b"Context: the quarterly review is complete and all systems are nominal."
+        )
         prefix = llm.tokenize(pre, add_bos=True)
         tail_a = llm.tokenize(b"\nQ: What is the capital of France? A:", add_bos=False)
         tail_b = llm.tokenize(b"\nQ: What is the capital of Japan? A:", add_bos=False)
-        print("\n== MULTISEQ (resident hot-set: fork prefix to 2 seqs, decode different tails) ==", flush=True)
+        print(
+            "\n== MULTISEQ (resident hot-set: fork prefix to 2 seqs, decode different tails) ==",
+            flush=True,
+        )
         r = test_multiseq(llm, prefix, tail_a, tail_b, args.gen)
-        print(f"{r['tier']:<20} run={r['run']} correct={r['correct']}  {r['detail']}", flush=True)
+        print(
+            f"{r['tier']:<20} run={r['run']} correct={r['correct']}  {r['detail']}",
+            flush=True,
+        )
 
     if args.mode in ("depth", "all"):
         depths = [int(x) for x in args.depths.split(",")]
-        print("\n== DEPTH SWEEP (T3 whole-context blob growth → multi-GB overflow trajectory) ==", flush=True)
+        print(
+            "\n== DEPTH SWEEP (T3 whole-context blob growth → multi-GB overflow trajectory) ==",
+            flush=True,
+        )
         test_depth_sweep(llm, depths, fill)
 
     return 0

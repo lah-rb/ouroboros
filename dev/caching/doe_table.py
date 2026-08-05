@@ -157,7 +157,8 @@ def estimability(rows: list[dict], keys: list[str]) -> list[str]:
             # S1=1, S2=7, S3=1 the old form reported only S3, and a reader would
             # reasonably conclude S1 was fine. Both ends were resting on one arm.
             thin = sorted(
-                ((lv, c) for lv, c in counts.items() if c < 2), key=lambda kv: str(kv[0])
+                ((lv, c) for lv, c in counts.items() if c < 2),
+                key=lambda kv: str(kv[0]),
             )
             if thin:
                 shown = ", ".join(f"{lv!r} ({c}x)" for lv, c in thin)

@@ -58,8 +58,14 @@ def test_venv_overrides_activate_when_venv_present(tmp_path):
     bindir = tmp_path / ".venv" / "bin"
     bindir.mkdir(parents=True)
     (bindir / "python").write_text("#!/bin/sh\n")
-    (tmp_path / ".venv" / "lib" / "python3.12" / "site-packages"
-     / "PyYAML-6.0.3.dist-info").mkdir(parents=True)
+    (
+        tmp_path
+        / ".venv"
+        / "lib"
+        / "python3.12"
+        / "site-packages"
+        / "PyYAML-6.0.3.dist-info"
+    ).mkdir(parents=True)
 
     eff = LocalEffects(working_directory=str(tmp_path))
     ov = eff.venv_env_overrides()
@@ -155,7 +161,9 @@ async def test_collect_env_field_uvizes_python_install():
 
 def test_no_install_command_creates_NO_venv():
     """THE core regression. An empty venv is strictly worse than no venv."""
-    out = _uvize_install_commands([], {"py": {"syntax": ["python", "-m", "py_compile"]}})
+    out = _uvize_install_commands(
+        [], {"py": {"syntax": ["python", "-m", "py_compile"]}}
+    )
     assert out == [], f"a py section alone must not create a venv, got {out!r}"
 
 
@@ -247,8 +255,9 @@ def test_venv_becomes_usable_once_a_distribution_lands(tmp_path):
     eff = LocalEffects(working_directory=wd)
     assert eff.venv_env_overrides() == {}
     os.makedirs(
-        os.path.join(wd, ".venv", "lib", "python3.12", "site-packages",
-                     "PyYAML-6.0.3.dist-info"),
+        os.path.join(
+            wd, ".venv", "lib", "python3.12", "site-packages", "PyYAML-6.0.3.dist-info"
+        ),
         exist_ok=True,
     )
     assert eff.venv_env_overrides() != {}, "must re-evaluate after an install"

@@ -102,9 +102,9 @@ class TestSeveredTrailingBlock:
 
     def test_it_stays_missing_so_the_create_path_regenerates_it(self, tmp_path):
         manifest, _ = _run(tmp_path, _SEVERED, truncated=True)
-        assert "engine.py" in manifest["missing"], (
-            "dropping must hand the file to the serial create path, not lose it"
-        )
+        assert (
+            "engine.py" in manifest["missing"]
+        ), "dropping must hand the file to the serial create path, not lose it"
 
     def test_the_truncation_is_recorded(self, tmp_path):
         manifest, _ = _run(tmp_path, _SEVERED, truncated=True)

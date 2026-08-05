@@ -80,16 +80,24 @@ class TestSeqCtxLimit:
         assert got == 0, "an exception must yield UNKNOWN, never a fabricated window"
 
     def test_zero_from_the_binding_falls_through_to_arithmetic(self):
-        got = LlamaCppBackend._seq_ctx_limit(_Ctx(0), _params(n_ctx=65536, n_seq_max=12))
+        got = LlamaCppBackend._seq_ctx_limit(
+            _Ctx(0), _params(n_ctx=65536, n_seq_max=12)
+        )
         assert got == 65536 // 12
 
     def test_the_two_historical_amputations(self):
-        assert LlamaCppBackend._seq_ctx_limit(
-            _Ctx(raises=True), _params(n_ctx=65536, n_seq_max=12)
-        ) == 5461  # OLMo (llama.cpp rounded up to 5,632; the guard needs <=)
-        assert LlamaCppBackend._seq_ctx_limit(
-            _Ctx(raises=True), _params(n_ctx=264192, n_seq_max=12)
-        ) == 22016  # qwen3.5 — exact
+        assert (
+            LlamaCppBackend._seq_ctx_limit(
+                _Ctx(raises=True), _params(n_ctx=65536, n_seq_max=12)
+            )
+            == 5461
+        )  # OLMo (llama.cpp rounded up to 5,632; the guard needs <=)
+        assert (
+            LlamaCppBackend._seq_ctx_limit(
+                _Ctx(raises=True), _params(n_ctx=264192, n_seq_max=12)
+            )
+            == 22016
+        )  # qwen3.5 — exact
 
 
 class TestClampSites:
@@ -120,7 +128,9 @@ class TestClampSites:
         TOTAL allocation — before this, a session pinned to slot 0 on a
         fragmented context had no guard at all."""
         src = self._src()
-        assert "_p._n_ctx = min(c for c in (int(_p._n_ctx), _lim, _seq_lim) if c)" in src
+        assert (
+            "_p._n_ctx = min(c for c in (int(_p._n_ctx), _lim, _seq_lim) if c)" in src
+        )
 
     def test_health_reports_the_real_window(self):
         src = self._src()

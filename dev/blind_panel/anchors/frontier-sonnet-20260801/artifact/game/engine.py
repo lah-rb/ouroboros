@@ -32,8 +32,17 @@ SAVE_PATH = Path(__file__).resolve().parent.parent / "savegame.json"
 # Verbs that still make sense while a fight is underway. Everything else
 # is refused with a reminder while self.combat is set.
 COMBAT_ALLOWED_VERBS = {
-    "attack", "flee", "use", "equip", "unequip",
-    "examine", "look", "inventory", "status", "help", "quit",
+    "attack",
+    "flee",
+    "use",
+    "equip",
+    "unequip",
+    "examine",
+    "look",
+    "inventory",
+    "status",
+    "help",
+    "quit",
 }
 
 HELP_TEXT = """
@@ -148,7 +157,11 @@ class GameEngine:
 
     def post_game_menu(self):
         while True:
-            choice = input("\nType 'restart' to play again, or 'quit' to exit: ").strip().lower()
+            choice = (
+                input("\nType 'restart' to play again, or 'quit' to exit: ")
+                .strip()
+                .lower()
+            )
             if choice in ("restart", "r", "new", "new game"):
                 self.new_game()
                 print(ui.divider())
@@ -164,12 +177,16 @@ class GameEngine:
         if not verb:
             return
         if self.combat and verb not in COMBAT_ALLOWED_VERBS:
-            print(f"You're locked in combat with {self.combat.monster.name}! "
-                  f"(try: attack, flee, use <item>, equip <item>)")
+            print(
+                f"You're locked in combat with {self.combat.monster.name}! "
+                f"(try: attack, flee, use <item>, equip <item>)"
+            )
             return
         handler = self.dispatch.get(verb)
         if not handler:
-            print(f"I don't understand '{cmd.raw}'. Type 'help' for a list of commands.")
+            print(
+                f"I don't understand '{cmd.raw}'. Type 'help' for a list of commands."
+            )
             return
         handler(cmd.args_text)
 
@@ -235,7 +252,10 @@ class GameEngine:
         if not room.exits:
             print("There are no obvious paths from here.")
             return
-        bits = [f"{d} (to {self.world.get_room(r).name})" for d, r in sorted(room.exits.items())]
+        bits = [
+            f"{d} (to {self.world.get_room(r).name})"
+            for d, r in sorted(room.exits.items())
+        ]
         print("From here you can go: " + ", ".join(bits))
 
     # -- movement -------------------------------------------------------------
@@ -304,12 +324,16 @@ class GameEngine:
             return
         item = self.world.get_item(item_id)
         if item.type != "consumable":
-            print(f"The {item.name} isn't something you use like that. Maybe 'equip' it instead?")
+            print(
+                f"The {item.name} isn't something you use like that. Maybe 'equip' it instead?"
+            )
             return
         self.player.remove_item(item_id, 1)
         healed = self.player.heal(item.heal_amount)
-        print(f"You use the {item.name} and recover {healed} health. "
-              f"({self.player.health}/{self.player.max_health} HP)")
+        print(
+            f"You use the {item.name} and recover {healed} health. "
+            f"({self.player.health}/{self.player.max_health} HP)"
+        )
         if self.combat:
             self.run_monster_turn()
 
@@ -341,8 +365,10 @@ class GameEngine:
         bonus_text = f" ({', '.join(bonuses)})" if bonuses else ""
         print(f"You equip the {item.name}.{bonus_text}")
         if item.special == "ashwyrm_weakness":
-            print("The stone feels warm against your skin, humming faintly, as if it "
-                  "recognizes an old enemy.")
+            print(
+                "The stone feels warm against your skin, humming faintly, as if it "
+                "recognizes an old enemy."
+            )
         if previous:
             print(f"You put away the {self.world.get_item(previous).name}.")
 
@@ -485,8 +511,10 @@ class GameEngine:
         for line in lines:
             print(line)
         if fled:
-            print(f"{monster_name} has fled the fight! It may still be found here, "
-                  f"wounded, if you go looking for it again.")
+            print(
+                f"{monster_name} has fled the fight! It may still be found here, "
+                f"wounded, if you go looking for it again."
+            )
             self.combat = None
             return
         if not self.player.is_alive:
@@ -539,11 +567,15 @@ class GameEngine:
         print(f"Location: {room.name}")
         print(f"Health: {self.player.health}/{self.player.max_health}")
         print(f"Attack: {self.player.total_attack()} (base {self.player.base_attack})")
-        print(f"Defense: {self.player.total_defense()} (base {self.player.base_defense})")
+        print(
+            f"Defense: {self.player.total_defense()} (base {self.player.base_defense})"
+        )
         weapon = self.player.equipment.get("weapon")
         armor = self.player.equipment.get("armor")
         trinket = self.player.equipment.get("trinket")
-        print(f"Weapon: {self.world.get_item(weapon).name if weapon else 'none (bare fists)'}")
+        print(
+            f"Weapon: {self.world.get_item(weapon).name if weapon else 'none (bare fists)'}"
+        )
         print(f"Armor: {self.world.get_item(armor).name if armor else 'none'}")
         print(f"Trinket: {self.world.get_item(trinket).name if trinket else 'none'}")
         print(f"Monsters defeated: {len(self.player.defeated_monsters)}")

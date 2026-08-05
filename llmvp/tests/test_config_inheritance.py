@@ -150,12 +150,16 @@ class TestMergeSemantics:
     def test_a_section_merges_key_by_key(self, configs):
         """Sections are the one thing that DOES merge — otherwise every child
         would restate the whole model block and we are back to copies."""
-        raw = self._resolved(configs, "extends: base-model\ngeneration: {temperature_default: 0.4}\n")
+        raw = self._resolved(
+            configs, "extends: base-model\ngeneration: {temperature_default: 0.4}\n"
+        )
         assert raw["generation"]["temperature_default"] == 0.4
         assert raw["generation"]["max_tokens_default"] == 4096
 
     def test_a_list_replaces(self, configs):
-        raw = self._resolved(configs, "extends: base-model\napp: {cors_origins: ['a']}\n")
+        raw = self._resolved(
+            configs, "extends: base-model\napp: {cors_origins: ['a']}\n"
+        )
         assert raw["app"]["cors_origins"] == ["a"]
 
     def test_the_overridden_paths_are_reported(self, configs):
@@ -304,9 +308,9 @@ class TestDocOnlyKeys:
             telemetry = [k for k in ("observed", "attempted") if k in tier]
             for k in telemetry:
                 assert not isinstance(tier[k], str), f"{name}.{k} must be a blob"
-                assert k not in (tier.get("judged") or {}), (
-                    f"{name}: {k} is NESTED inside judged — §7 leak"
-                )
+                assert k not in (
+                    tier.get("judged") or {}
+                ), f"{name}: {k} is NESTED inside judged — §7 leak"
 
             # A scored record must carry what §5 and METHODS step 8 require:
             # a rubric version, the judge model, a score, and a star band —
@@ -324,8 +328,7 @@ class TestDocOnlyKeys:
             # terminate judgement at the gate, so `scored: false` with a null
             # star band is the correct record, not a missing one.
             gate_failed = (
-                judged.get("scored") is False
-                or judged.get("tier3_gate") == "failed"
+                judged.get("scored") is False or judged.get("tier3_gate") == "failed"
             )
             if not gate_failed:
                 score = judged.get("total", judged.get("score"))
@@ -381,10 +384,13 @@ class TestSessionStrategyValidation:
         from core.config import load_config
 
         p = configs / "experiments" / "legacy.yaml"
-        write(p, """
+        write(
+            p,
+            """
             extends: base-model
             model: {name: legacy, session_full_replay: false}
-        """)
+        """,
+        )
         with pytest.raises(ValueError, match="retired legacy save_state"):
             load_config(p)
 
@@ -395,13 +401,16 @@ class TestSessionStrategyValidation:
         from core.config import load_config
 
         p = configs / "experiments" / "resident_no_fallback.yaml"
-        write(p, """
+        write(
+            p,
+            """
             extends: base-model
             model:
               name: resident-no-fallback
               resident_seq_cache: true
               session_full_replay: false
-        """)
+        """,
+        )
         with pytest.raises(ValueError, match="can_shift gate may"):
             load_config(p)
 
@@ -409,10 +418,13 @@ class TestSessionStrategyValidation:
         from core.config import load_config
 
         p = configs / "experiments" / "legacy2.yaml"
-        write(p, """
+        write(
+            p,
+            """
             extends: base-model
             model: {name: legacy2, session_full_replay: false}
-        """)
+        """,
+        )
         with pytest.raises(ValueError, match="Set session_full_replay: true"):
             load_config(p)
 
@@ -422,17 +434,22 @@ class TestSessionStrategyValidation:
         from core.config import load_config
 
         p = configs / "experiments" / "quiet.yaml"
-        write(p, """
+        write(
+            p,
+            """
             extends: base-model
             model: {name: quiet}
-        """)
+        """,
+        )
         assert load_config(p).model.session_full_replay is True
 
     def test_resident_plus_armed_fallback_is_the_target_shape(self, configs):
         from core.config import load_config
 
         p = configs / "experiments" / "good.yaml"
-        write(p, """
+        write(
+            p,
+            """
             extends: base-model
             model:
               name: good
@@ -440,6 +457,7 @@ class TestSessionStrategyValidation:
               session_full_replay: true
               swa_full: true
               kv_unified: true
-        """)
+        """,
+        )
         cfg = load_config(p)
         assert cfg.model.resident_seq_cache and cfg.model.session_full_replay

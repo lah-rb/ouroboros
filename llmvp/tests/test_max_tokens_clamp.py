@@ -81,7 +81,10 @@ def test_it_only_ever_lowers(cfg):
 
 def test_an_explicit_request_is_clamped_too(cfg):
     """A caller asking for more than the window gets the window, not its ask."""
-    assert resolve_max_tokens(60000, prepopulated=40000) == 65536 - 40000 - _GENERATION_SLACK
+    assert (
+        resolve_max_tokens(60000, prepopulated=40000)
+        == 65536 - 40000 - _GENERATION_SLACK
+    )
 
 
 def test_the_result_always_leaves_slack(cfg):

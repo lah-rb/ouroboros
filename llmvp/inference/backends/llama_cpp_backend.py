@@ -112,14 +112,20 @@ def _physical_memory_gb() -> float:
         try:
             import subprocess
 
-            out = subprocess.run(["sysctl", "-n", "hw.memsize"],
-                                 capture_output=True, text=True, timeout=5)
+            out = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
             return int(out.stdout.strip()) / 1e9
         except Exception:  # noqa: BLE001
             # Unknown physical memory must not silently disable the ceiling.
             # 128GB is this fleet's floor; a wrong-but-present bound beats none.
-            log.warning("⚠️ could not read physical memory — KV preflight "
-                        "ceiling assuming 128GB")
+            log.warning(
+                "⚠️ could not read physical memory — KV preflight "
+                "ceiling assuming 128GB"
+            )
             return 128.0
 
 
@@ -1127,7 +1133,9 @@ class LlamaCppBackend(BaseBackend):
                 "resident_strip_reasoning (prior-turn CoT will ACCUMULATE in "
                 "the live seq across every turn)"
             )
-        if getattr(getattr(self.config, "generation", None), "degen_retry_enabled", None):
+        if getattr(
+            getattr(self.config, "generation", None), "degen_retry_enabled", None
+        ):
             _ignored.append(
                 "degen_retry sampling overrides (the retry still fires, but at "
                 "temperature only — presence penalty and penalty window dropped)"
@@ -1743,7 +1751,8 @@ class LlamaCppBackend(BaseBackend):
             "not how the load is made to fit.",
             self._consecutive_unhealed_decode_failures,
             getattr(getattr(self, "config", None), "model", None)
-            and getattr(self.config.model, "name", "the model") or "the model",
+            and getattr(self.config.model, "name", "the model")
+            or "the model",
         )
         try:
             import signal as _signal
@@ -1938,17 +1947,16 @@ class LlamaCppBackend(BaseBackend):
                 from formats.registry import get_renderer
 
                 _lv = dict(
-                    get_renderer(self.config.model.family).s.reasoning.levels
-                    or {}
+                    get_renderer(self.config.model.family).s.reasoning.levels or {}
                 )
             except Exception:  # noqa: BLE001 — no map, no alias
                 _lv = {}
             want = _lv.get(level, level)
-            if _lv.get(self._reasoning_default_level,
-                       self._reasoning_default_level) == want:
-                return self._reasoning_head_source(
-                    inst, self._reasoning_default_level
-                )
+            if (
+                _lv.get(self._reasoning_default_level, self._reasoning_default_level)
+                == want
+            ):
+                return self._reasoning_head_source(inst, self._reasoning_default_level)
             for sib, seq in seqs.items():
                 if _lv.get(sib, sib) == want:
                     level = sib
@@ -2231,20 +2239,30 @@ class LlamaCppBackend(BaseBackend):
         except Exception:  # noqa: BLE001
             n_ctx, n_seq, seq_win = 0, 1, 0
 
-        shift = ("unknown" if self._session_can_shift is None
-                 else str(self._session_can_shift))
+        shift = (
+            "unknown"
+            if self._session_can_shift is None
+            else str(self._session_can_shift)
+        )
         detail = ""
         if strategy != "resident" and self._session_can_shift is True:
             # THE ACTIONABLE CASE: a flat path is available and unused. This is
             # exactly hy3 — quadratic re-prefill by omission, not by necessity.
-            detail = (" — resident AVAILABLE but not enabled; this model is "
-                      "paying full re-prefill per session turn")
+            detail = (
+                " — resident AVAILABLE but not enabled; this model is "
+                "paying full re-prefill per session turn"
+            )
 
         log.info(
             "🧩 session strategy: %s (resident_requested=%s, memory_can_shift=%s, "
             "n_ctx=%d, n_seq_max=%d, n_ctx_seq=%d)%s",
-            strategy, self._resident_requested, shift,
-            n_ctx, n_seq, seq_win or (n_ctx // n_seq), detail,
+            strategy,
+            self._resident_requested,
+            shift,
+            n_ctx,
+            n_seq,
+            seq_win or (n_ctx // n_seq),
+            detail,
         )
 
     def _pool_seq_map(self):
@@ -2478,7 +2496,10 @@ class LlamaCppBackend(BaseBackend):
         }
         log.info(
             "📸 batched snapshot %r pinned: seq %d, %d tokens (%d dynamic)",
-            key, snap_seq, n_tokens, n_tokens - static_len,
+            key,
+            snap_seq,
+            n_tokens,
+            n_tokens - static_len,
         )
         return {"tokens": n_tokens, "resident": True}
 
@@ -2517,7 +2538,9 @@ class LlamaCppBackend(BaseBackend):
         seat.n_tokens = n_total
         log.info(
             "🌿 batched snapshot %r forked onto seat seq %d (%d tokens)",
-            key, seat.seq, n_total,
+            key,
+            seat.seq,
+            n_total,
         )
         return n_total
 
@@ -3454,7 +3477,9 @@ class LlamaCppBackend(BaseBackend):
                     "⚠️ probe verification for n_ctx<=%d is STALE — weights are "
                     "%.1fGB now, %.1fGB when measured. Falling back to the "
                     "formula; re-run `--probe-context %s` to re-verify.",
-                    int(verified), weights_bytes / 1e9, int(verified_w) / 1e9,
+                    int(verified),
+                    weights_bytes / 1e9,
+                    int(verified_w) / 1e9,
                     getattr(m, "name", "this model"),
                 )
             else:
@@ -3462,7 +3487,9 @@ class LlamaCppBackend(BaseBackend):
                     "🧮 KV preflight: n_ctx=%d is within the PROBE-VERIFIED "
                     "ceiling %d (measured to load and decode on this machine) "
                     "— arithmetic estimate %.1fGB not enforced",
-                    m.n_ctx, int(verified), total_gb,
+                    m.n_ctx,
+                    int(verified),
+                    total_gb,
                 )
                 return
 
@@ -4577,11 +4604,7 @@ class LlamaCppBackend(BaseBackend):
         ):
             _fresh_seat = int(seat.n_tokens or 0) == int(seat.static_len)
             _pin = self._engine._flow_pins.get(flow_key)
-            if (
-                _pin is not None
-                and _fresh_seat
-                and _pin.n_tokens == flow_prefix_len
-            ):
+            if _pin is not None and _fresh_seat and _pin.n_tokens == flow_prefix_len:
                 self._engine.install_flow_sync(seat, _pin)
                 flow_hit = True
             elif _fresh_seat:
@@ -4608,7 +4631,9 @@ class LlamaCppBackend(BaseBackend):
             # Pool parity: the reasoning head-swap is refused under a pinned
             # flow prefix — the flow head REPLACED the seat's whole content and
             # a whole-seq reasoning install would throw the pin away.
-            log.debug("completion reasoning=%s refused (flow prefix pinned)", _reasoning)
+            log.debug(
+                "completion reasoning=%s refused (flow prefix pinned)", _reasoning
+            )
             _reasoning = None
         if _reasoning and str(_reasoning) != self._reasoning_default_level:
             _level = str(_reasoning)
@@ -4841,8 +4866,7 @@ class LlamaCppBackend(BaseBackend):
         # the batched band); the M8 blob registry this used to count was
         # deleted 2026-07-30.
         info["flow_cache_entries"] = sum(
-            len(getattr(inst, "_flow_seqs", {}) or {})
-            for inst in self._all_instances
+            len(getattr(inst, "_flow_seqs", {}) or {}) for inst in self._all_instances
         ) + len(getattr(getattr(self, "_engine", None), "_flow_pins", {}) or {})
         info["resident_active"] = self._resident_active
         # Session KV strategy, readable without parsing the load log. The probe

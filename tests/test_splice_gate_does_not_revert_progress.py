@@ -66,7 +66,7 @@ class TestAnAlreadyBrokenFileKeepsRealProgress:
     PRE = (
         "class E:\n"
         "    def process(self):\n"
-        "        x = self.8_get(1)\n"      # line 3 - in scope, broken
+        "        x = self.8_get(1)\n"  # line 3 - in scope, broken
         "        return x\n"
         "    def 8_get(self, i): return i\n"  # line 5 - SIBLING, unnameable
     )
@@ -75,7 +75,7 @@ class TestAnAlreadyBrokenFileKeepsRealProgress:
         post = (
             "class E:\n"
             "    def process(self):\n"
-            "        x = self.get(1)\n"    # repaired
+            "        x = self.get(1)\n"  # repaired
             "        return x\n"
             "    def 8_get(self, i): return i\n"  # line 5 still broken, OUT of scope
         )

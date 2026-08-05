@@ -29,7 +29,11 @@ def _schema_fields() -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for name in dir(C):
         obj = getattr(C, name)
-        if isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel:
+        if (
+            isinstance(obj, type)
+            and issubclass(obj, BaseModel)
+            and obj is not BaseModel
+        ):
             for field in obj.model_fields:
                 out.append((obj.__name__, field))
     return sorted(set(out))
@@ -69,10 +73,19 @@ class TestTheNewModelGuide:
     @pytest.mark.parametrize(
         "step,why",
         [
-            ("gguf_geometry.py", "geometry before allocation — three reboots were precomputable"),
-            ("WEB-SEARCH THE MODEL CARD", "glm's first arm ran a sampling profile from nowhere"),
+            (
+                "gguf_geometry.py",
+                "geometry before allocation — three reboots were precomputable",
+            ),
+            (
+                "WEB-SEARCH THE MODEL CARD",
+                "glm's first arm ran a sampling profile from nowhere",
+            ),
             ("fsm_labeller", "olmo shipped unmapped and corrupted a judged artifact"),
-            ("cache_strategy", "the strategy decides which features are even available"),
+            (
+                "cache_strategy",
+                "the strategy decides which features are even available",
+            ),
             ("memory_can_shift", "resident is a request the arch can refuse"),
             ("--probe-context", "the ceiling must be measured, not guessed"),
             ("FEATURE_MATRIX", "feature selection is strategy-dependent"),

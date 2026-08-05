@@ -11,7 +11,9 @@ and no brace-expansion surface — and it's independently testable.
   stdout: "<goals>,<gate>,<complete>,<highcand> <stub_rate>"   (two fields: stats, stub)
   side effect: writes <W>/.agent/.health  {slug, stub_rate, rewrites, state}
 """
+
 import json, glob, os, sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent.trace_health import classify  # single source of truth for the stub shape
 
@@ -35,7 +37,11 @@ if fs:
         if e.get("step") == "generate_rewrite":
             rw += 1
             resp = e.get("response_content") or ""
-            is_stub = (classify(resp) == "stub") if resp else ((e.get("generated_tokens") or 999) < 250)
+            is_stub = (
+                (classify(resp) == "stub")
+                if resp
+                else ((e.get("generated_tokens") or 999) < 250)
+            )
             if is_stub:
                 st += 1
 

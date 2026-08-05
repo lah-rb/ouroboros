@@ -42,20 +42,68 @@ TASK = (
 
 # (config, mode, per-level expectation summary — PRE-REGISTERED)
 MATRIX = [
-    ("laguna-xs-2.1",          "per_request", "None/low: no CoT (close-only). med/high: CoT via <think> opener"),
-    ("laguna-xs-2.1-bf16",     "per_request", "DECISIVE ISOLATION (2026-08-02): APEX XS declined in-channel thought at med/high. BF16 declines too -> model-level fact (template defaults enable_thinking false). BF16 thinks -> the APEX decline was quant damage or our llama.cpp/LLMVP path"),
-    ("laguna-s-2.1-apex",      "off",         "ALL levels: no CoT (policy off, close-only always)"),
-    ("devstral-2-small-24b",   "unavailable", "ALL levels: bare answer; no MODEL_SETTINGS, no [THINK]"),
-    ("olmo-3.1-32b-instruct",  "unavailable", "ALL levels: bare answer, no think markers"),
-    ("olmo-3.1-32b-think",     "on",          "ALL levels: CoT (dial-less think model, opener prefilled)"),
-    ("gemma-4-31b",            "per_request", "None/low: no CoT (padding + pre-closed). med/high: CoT, model opens channel"),
-    ("glm-4.7-flash",          "on",          "ALL levels: CoT (always-think policy)"),
-    ("qwen3.6-35b-a3",         "on",          "ALL levels: CoT incl. a LOW request (on overrides — always think, never adapt)"),
-    ("qwen3-next-coder-80b-a3","unavailable", "ALL levels: bare answer (dial-less coder)"),
-    ("gpt-oss-120b-a5",        "per_request", "CoT at every level (harmony always reasons); LENGTH scales low<med<high via head-swap"),
-    ("mistral-medium-3.5-128b","per_request", "None/low: direct answer. high: [THINK] CoT via head-swap (med collapses to none)"),
-    ("step37-flash-196b-a11",  "per_request", "None/low: NO CoT (gate closed, opener omitted). med/high: CoT, depth scales"),
-    ("hy3-reap-200b-a21",      "per_request", "None/low: no_think, direct. med: low-effort CoT. high: deep CoT (RE-TEST: None routing changed since the 08-03 validation)"),
+    (
+        "laguna-xs-2.1",
+        "per_request",
+        "None/low: no CoT (close-only). med/high: CoT via <think> opener",
+    ),
+    (
+        "laguna-xs-2.1-bf16",
+        "per_request",
+        "DECISIVE ISOLATION (2026-08-02): APEX XS declined in-channel thought at med/high. BF16 declines too -> model-level fact (template defaults enable_thinking false). BF16 thinks -> the APEX decline was quant damage or our llama.cpp/LLMVP path",
+    ),
+    ("laguna-s-2.1-apex", "off", "ALL levels: no CoT (policy off, close-only always)"),
+    (
+        "devstral-2-small-24b",
+        "unavailable",
+        "ALL levels: bare answer; no MODEL_SETTINGS, no [THINK]",
+    ),
+    (
+        "olmo-3.1-32b-instruct",
+        "unavailable",
+        "ALL levels: bare answer, no think markers",
+    ),
+    (
+        "olmo-3.1-32b-think",
+        "on",
+        "ALL levels: CoT (dial-less think model, opener prefilled)",
+    ),
+    (
+        "gemma-4-31b",
+        "per_request",
+        "None/low: no CoT (padding + pre-closed). med/high: CoT, model opens channel",
+    ),
+    ("glm-4.7-flash", "on", "ALL levels: CoT (always-think policy)"),
+    (
+        "qwen3.6-35b-a3",
+        "on",
+        "ALL levels: CoT incl. a LOW request (on overrides — always think, never adapt)",
+    ),
+    (
+        "qwen3-next-coder-80b-a3",
+        "unavailable",
+        "ALL levels: bare answer (dial-less coder)",
+    ),
+    (
+        "gpt-oss-120b-a5",
+        "per_request",
+        "CoT at every level (harmony always reasons); LENGTH scales low<med<high via head-swap",
+    ),
+    (
+        "mistral-medium-3.5-128b",
+        "per_request",
+        "None/low: direct answer. high: [THINK] CoT via head-swap (med collapses to none)",
+    ),
+    (
+        "step37-flash-196b-a11",
+        "per_request",
+        "None/low: NO CoT (gate closed, opener omitted). med/high: CoT, depth scales",
+    ),
+    (
+        "hy3-reap-200b-a21",
+        "per_request",
+        "None/low: no_think, direct. med: low-effort CoT. high: deep CoT (RE-TEST: None routing changed since the 08-03 validation)",
+    ),
 ]
 
 LEVELS = [None, "low", "medium", "high"]
@@ -128,16 +176,20 @@ def main() -> int:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-        rec = {"config": config, "mode": mode, "expect": expect, "arms": {},
-               "complete": False}
+        rec = {
+            "config": config,
+            "mode": mode,
+            "expect": expect,
+            "arms": {},
+            "complete": False,
+        }
         try:
             if not wait_ready(log_path, proc, 1200):
                 rec["error"] = "boot failed/timeout"
                 print("  !! boot failed")
                 continue
             for lvl in LEVELS:
-                req: dict = {"prompt": TASK, "maxTokens": 4096,
-                             "temperature": 0.7}
+                req: dict = {"prompt": TASK, "maxTokens": 4096, "temperature": 0.7}
                 if lvl:
                     req["reasoning"] = lvl
                 t0 = time.monotonic()
@@ -160,17 +212,22 @@ def main() -> int:
                         "truncated": bool(data.get("truncated")),
                         "wall_s": round(time.monotonic() - t0, 1),
                         "first60": text[:60],
-                        "errors": (str(r.get("errors"))[:160]
-                                   if r.get("errors") else None),
+                        "errors": (
+                            str(r.get("errors"))[:160] if r.get("errors") else None
+                        ),
                     }
                 except Exception as exc:  # noqa: BLE001 — record and continue
-                    arm = {"errors": str(exc)[:200],
-                           "wall_s": round(time.monotonic() - t0, 1)}
+                    arm = {
+                        "errors": str(exc)[:200],
+                        "wall_s": round(time.monotonic() - t0, 1),
+                    }
                 rec["arms"][str(lvl)] = arm
-                print(f"  {str(lvl):7} tok={arm.get('tokens_generated','?'):>5} "
-                      f"cot_chars={arm.get('cot_chars','?'):>6} "
-                      f"content={arm.get('content_chars','?'):>5} "
-                      f"err={arm.get('errors')}")
+                print(
+                    f"  {str(lvl):7} tok={arm.get('tokens_generated','?'):>5} "
+                    f"cot_chars={arm.get('cot_chars','?'):>6} "
+                    f"content={arm.get('content_chars','?'):>5} "
+                    f"err={arm.get('errors')}"
+                )
             rec["complete"] = True
         finally:
             try:

@@ -83,9 +83,9 @@ class TestTheRefreshIsOnTheArc:
         recent thing to touch the file, and effects.read_file has no cache."""
         step = steps["reread_after_module_fix"]
         assert step["action"] == "read_files"
-        assert "target_file" in step["publishes"], (
-            "it must republish the key extract_symbols and run_patch read"
-        )
+        assert (
+            "target_file" in step["publishes"]
+        ), "it must republish the key extract_symbols and run_patch read"
 
     def test_a_vanished_file_still_reports_the_module_half(self, steps):
         """The module edit DID land and files_changed is already published, so

@@ -184,9 +184,7 @@ def log_metadata_vs_config(metadata: ModelMetadata) -> None:
     # the template-fact (the ternary `thinking` is POLICY and has no business
     # here; comparing it to a bool was the old shape).
     if metadata.has_thinking is not None:
-        config_thinking = bool(
-            getattr(config.model, "thinking_available", True)
-        )
+        config_thinking = bool(getattr(config.model, "thinking_available", True))
         if config_thinking != metadata.has_thinking:
             log.warning(
                 "⚠️  Thinking mismatch: config says thinking=%s but GGUF "

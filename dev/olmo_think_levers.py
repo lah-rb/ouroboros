@@ -59,7 +59,12 @@ def grade(name: str, answer: str) -> bool:
             d = json.loads(m.group(0))
         except Exception:
             return False
-        return d.get("choice") in {"read_file", "patch_line", "rewrite_file", "run_lint"}
+        return d.get("choice") in {
+            "read_file",
+            "patch_line",
+            "rewrite_file",
+            "run_lint",
+        }
     if name == "code":
         m = re.search(r"```(?:python)?\n(.*?)```", answer, re.S)
         src = m.group(1) if m else answer

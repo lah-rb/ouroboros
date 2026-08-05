@@ -280,7 +280,9 @@ class TestRuntimeOwnedTurnsCarryNoResolver:
         import json
 
         return json.loads(
-            (Path(__file__).resolve().parent.parent / "flows" / "compiled.json").read_text()
+            (
+                Path(__file__).resolve().parent.parent / "flows" / "compiled.json"
+            ).read_text()
         )
 
     def test_no_inference_turn_step_declares_a_resolver(self):

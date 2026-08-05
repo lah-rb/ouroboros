@@ -1019,7 +1019,9 @@ class TestSuffixedThinkTags:
         from core.featurizer import featurize
         from core.fsm_labeller import label_atoms
 
-        return "".join(t for t, lab in label_atoms(featurize(raw), family=family) if lab == "C")
+        return "".join(
+            t for t, lab in label_atoms(featurize(raw), family=family) if lab == "C"
+        )
 
     def test_the_suffix_never_reaches_content(self):
         got = self._content(
@@ -1063,7 +1065,5 @@ class TestSuffixedThinkTags:
     def test_content_that_merely_resembles_the_suffix_survives(self):
         """The tail is matched by TEXT and only right after the marker word, so
         prose containing the same characters elsewhere is still content."""
-        got = self._content(
-            "</think:opensource>see the :opensource notes", "hunyuan3"
-        )
+        got = self._content("</think:opensource>see the :opensource notes", "hunyuan3")
         assert got == "see the :opensource notes", repr(got)

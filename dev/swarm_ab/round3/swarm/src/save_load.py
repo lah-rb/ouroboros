@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from src.models import GameState, Player, Item, Room, NPC, Monster
 
+
 def save_game(state: GameState, path: str) -> None:
     """Write the current GameState to ``path`` as a JSON document.
 
@@ -20,6 +21,7 @@ def save_game(state: GameState, path: str) -> None:
     Raises:
         OSError: If the file cannot be written.
     """
+
     def _serialize(obj):
         """Recursively turn dataclass instances into JSON‑serialisable dicts."""
         # Primitive types
@@ -90,7 +92,9 @@ def save_game(state: GameState, path: str) -> None:
                 "player": _serialize(obj.player),
                 "rooms": {rid: _serialize(room) for rid, room in obj.rooms.items()},
                 "npcs": {nid: _serialize(npc) for nid, npc in obj.npcs.items()},
-                "monsters": {mid: _serialize(monster) for mid, monster in obj.monsters.items()},
+                "monsters": {
+                    mid: _serialize(monster) for mid, monster in obj.monsters.items()
+                },
             }
 
         # Fallback – should not occur with the defined model
@@ -102,6 +106,7 @@ def save_game(state: GameState, path: str) -> None:
     # Write JSON to the specified path; any OSError propagates as required
     with open(path, "w", encoding="utf-8") as fp:
         json.dump(data, fp, indent=2)
+
 
 def load_game(path: str) -> GameState:
     """Read a JSON save file and reconstruct the GameState.
@@ -126,7 +131,9 @@ def load_game(path: str) -> GameState:
 
     equipped_raw = player_data.get("equipped", {})
     equipped = {
-        "weapon": Item(**equipped_raw["weapon"]) if equipped_raw.get("weapon") else None,
+        "weapon": (
+            Item(**equipped_raw["weapon"]) if equipped_raw.get("weapon") else None
+        ),
         "armor": Item(**equipped_raw["armor"]) if equipped_raw.get("armor") else None,
     }
 

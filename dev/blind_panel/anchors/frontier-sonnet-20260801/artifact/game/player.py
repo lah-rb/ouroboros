@@ -18,14 +18,14 @@ class Player:
         self.base_attack = 6
         self.base_defense = 0
 
-        self.inventory = {}                          # item_id -> count
+        self.inventory = {}  # item_id -> count
         self.equipment = {slot: None for slot in EQUIP_SLOTS}
         self.current_room = "village_square"
 
-        self.defeated_monsters = set()                # monster ids
-        self.met_npcs = set()                          # npc ids
+        self.defeated_monsters = set()  # monster ids
+        self.met_npcs = set()  # npc ids
 
-        self.world = None                              # set by the engine, not saved
+        self.world = None  # set by the engine, not saved
 
     # -- derived stats ----------------------------------------------------
 

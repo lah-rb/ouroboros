@@ -15,8 +15,7 @@ class Monster:
     combat behaviour (take_turn) is meant to be overridden.
     """
 
-    def __init__(self, key, name, max_hp, attack, description,
-                 intro_text, defeat_text):
+    def __init__(self, key, name, max_hp, attack, description, intro_text, defeat_text):
         self.key = key
         self.name = name
         self.max_hp = max_hp
@@ -141,7 +140,9 @@ class RavenousCur(Monster):
             lines.append(f"Bloodied and frenzied, the cur lunges for {dmg1} damage!")
             if player.is_alive():
                 dmg2 = self._deal_damage(player, max(1, self.attack - 2))
-                lines.append(f"It snaps again before you can recover -- {dmg2} more damage!")
+                lines.append(
+                    f"It snaps again before you can recover -- {dmg2} more damage!"
+                )
         else:
             dmg = self._deal_damage(player, self.attack)
             lines.append(f"The cur bites savagely for {dmg} damage!")
@@ -179,7 +180,9 @@ class CaveWidow(Monster):
         if player.is_alive() and random.random() < 0.6:
             if player.poisoned_turns < 3:
                 player.poisoned_turns = 3
-            lines.append("A venomous chill spreads through your veins. You are poisoned!")
+            lines.append(
+                "A venomous chill spreads through your veins. You are poisoned!"
+            )
         return lines
 
 
@@ -204,7 +207,7 @@ class AshenKing(Monster):
             ),
             intro_text=(
                 "The Ashen King rises from his throne of fused bone. "
-                "\"Another fool comes to warm my hall,\" he rasps, ash "
+                '"Another fool comes to warm my hall," he rasps, ash '
                 "sifting from his shoulders like grey snow."
             ),
             defeat_text=(
@@ -227,14 +230,18 @@ class AshenKing(Monster):
             self.attack += 4
             lines.append(
                 "The Ashen King's crown cracks apart, spilling grey fire! "
-                "\"THEN BURN WITH ME!\" His wounds knit shut with ember "
+                '"THEN BURN WITH ME!" His wounds knit shut with ember '
                 "and smoke -- he grows more savage!"
             )
         dmg = self._deal_damage(player, self.attack)
         if self.phase == 1:
-            lines.append(f"The Ashen King strikes with his ashen blade for {dmg} damage!")
+            lines.append(
+                f"The Ashen King strikes with his ashen blade for {dmg} damage!"
+            )
         else:
-            lines.append(f"The Ashen King, wreathed in cinders, cleaves at you for {dmg} damage!")
+            lines.append(
+                f"The Ashen King, wreathed in cinders, cleaves at you for {dmg} damage!"
+            )
             if player.is_alive() and random.random() < 0.4:
                 dmg2 = self._deal_damage(player, max(1, self.attack - 3))
                 lines.append(f"Ash swirls into a second blow -- {dmg2} more damage!")

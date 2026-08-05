@@ -150,14 +150,16 @@ _PROBE_PHYSICAL_SAFETY = float(os.environ.get("OURO_PROBE_PHYSICAL_SAFETY", "0.9
 # the actual failure mechanism (see rung(): a latched context must never
 # be generated into).
 
-PROBE_PROMPT = "Write a Python function that merges two sorted lists. Return only the code."
+PROBE_PROMPT = (
+    "Write a Python function that merges two sorted lists. Return only the code."
+)
 
 
 @dataclass
 class Rung:
     n_ctx: int
-    verdict: str          # pass | boot_fail | preflight_refused | decode_code
-    detail: str = ""      # | guard_sigterm | no_output | server_gone
+    verdict: str  # pass | boot_fail | preflight_refused | decode_code
+    detail: str = ""  # | guard_sigterm | no_output | server_gone
     kv_mib: float = 0.0
     peak_wired_gb: float = 0.0
     gens_ok: int = 0
@@ -185,8 +187,10 @@ class ModelResult:
 
 def q(query: str, timeout: int = 10) -> dict:
     req = urllib.request.Request(
-        ENDPOINT, data=json.dumps({"query": query}).encode(),
-        headers={"Content-Type": "application/json"})
+        ENDPOINT,
+        data=json.dumps({"query": query}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
@@ -207,8 +211,9 @@ def health_flags() -> dict:
 
 
 def server_pids() -> list[int]:
-    out = subprocess.run(["pgrep", "-f", "api/main.py"],
-                         capture_output=True, text=True).stdout.split()
+    out = subprocess.run(
+        ["pgrep", "-f", "api/main.py"], capture_output=True, text=True
+    ).stdout.split()
     return [int(p) for p in out if p.isdigit()]
 
 
@@ -284,8 +289,9 @@ def live_kv_mib(server_log: str) -> float:
     allocated anything. Last NON-EMPTY rather than simply last, because a log
     read after shutdown ends with a free and no allocations after it.
     """
-    groups = [sum(float(x) for x in _KV_LINE.findall(seg))
-              for seg in server_log.split(_FREED)]
+    groups = [
+        sum(float(x) for x in _KV_LINE.findall(seg)) for seg in server_log.split(_FREED)
+    ]
     return next((g for g in reversed(groups) if g), 0.0)
 
 
@@ -314,8 +320,13 @@ def weights_gb(model_path: str) -> float:
     return LlamaCppBackend.weights_bytes_total(model_path) / 1e9
 
 
-def calc_start(model_path: str, measured: Optional[int], trained: int,
-               ceiling_gb: float, resolution: int) -> tuple[int, float]:
+def calc_start(
+    model_path: str,
+    measured: Optional[int],
+    trained: int,
+    ceiling_gb: float,
+    resolution: int,
+) -> tuple[int, float]:
     """The ARITHMETIC's own answer: the largest n_ctx whose weights + KV fits
     under the physical ceiling.
 
@@ -419,8 +430,7 @@ class Probe:
         csvs = sorted(RUNS.glob("wired_ctxprobe_*.csv"))
         if not csvs:
             return []
-        return [ln for ln in csvs[-1].read_text().splitlines()
-                if ln.startswith("S,")]
+        return [ln for ln in csvs[-1].read_text().splitlines() if ln.startswith("S,")]
 
     def mark_wired(self) -> None:
         """Watermark the sampler before a rung starts, so peak_wired() reports
@@ -438,7 +448,7 @@ class Probe:
     def peak_wired(self) -> float:
         """Peak wired GB since the last mark_wired()."""
         try:
-            rows = self._wired_rows()[getattr(self, "_wired_mark", 0):]
+            rows = self._wired_rows()[getattr(self, "_wired_mark", 0) :]
             return max((float(ln.split(",")[3]) for ln in rows), default=0.0)
         except Exception:  # noqa: BLE001
             return 0.0
@@ -448,24 +458,31 @@ class Probe:
         t0 = time.time()
         self.log(f"  ── rung n_ctx={n}")
         stop_server(self.log)
-        self.mark_wired()   # this rung's peak, not the run's
+        self.mark_wired()  # this rung's peak, not the run's
         set_n_ctx(cfg_path, n)
         (LLMVP / "active_config.txt").write_text(cfg)
         slog = self.base / f"{cfg}_{n}_server.log"
 
-        env = {**os.environ,
-               # Neutralise the ARITHMETIC guard: this probe measures the
-               # machine, not the header formula. The error-code guard stays on
-               # — it has no off switch and that is the point.
-               "OURO_KV_PREFLIGHT_GB": "9999",
-               # Raise the guard's own clamp for the child server, so a rung
-               # between the production ceiling and the hardware boundary is
-               # actually attempted rather than refused on arithmetic.
-               "OURO_PHYSICAL_SAFETY": str(_PROBE_PHYSICAL_SAFETY)}
+        env = {
+            **os.environ,
+            # Neutralise the ARITHMETIC guard: this probe measures the
+            # machine, not the header formula. The error-code guard stays on
+            # — it has no off switch and that is the point.
+            "OURO_KV_PREFLIGHT_GB": "9999",
+            # Raise the guard's own clamp for the child server, so a rung
+            # between the production ceiling and the hardware boundary is
+            # actually attempted rather than refused on arithmetic.
+            "OURO_PHYSICAL_SAFETY": str(_PROBE_PHYSICAL_SAFETY),
+        }
         with open(slog, "w") as fh:
-            subprocess.Popen([sys.executable, "api/main.py"],
-                             cwd=LLMVP, stdout=fh, stderr=subprocess.STDOUT,
-                             env=env, start_new_session=True)
+            subprocess.Popen(
+                [sys.executable, "api/main.py"],
+                cwd=LLMVP,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
+            )
 
         deadline = time.time() + self.args.boot_timeout
         up = False
@@ -474,7 +491,7 @@ class Probe:
                 up = True
                 break
             if not server_pids():
-                break                      # died during load
+                break  # died during load
             txt = slog.read_text(errors="ignore") if slog.exists() else ""
             if "Startup failed" in txt or "KV preflight REFUSED" in txt:
                 break
@@ -486,13 +503,27 @@ class Probe:
         kv = live_kv_mib(txt)
 
         if not up:
-            why = ("preflight_refused" if "KV preflight REFUSED" in txt
-                   else "decode_code" if saw_code else "boot_fail")
+            why = (
+                "preflight_refused"
+                if "KV preflight REFUSED" in txt
+                else "decode_code" if saw_code else "boot_fail"
+            )
             m = re.search(r"(KV preflight REFUSED.*|Startup failed.*)", txt)
-            r = Rung(n, why, (m.group(1)[:160] if m else "no healthy server"),
-                     kv, self.peak_wired(), 0, 0, int(time.time() - t0),
-                     saw_code, acted)
-            self.log(f"     FAIL/{why}  guard_saw={saw_code} acted={acted}  {r.detail[:80]}")
+            r = Rung(
+                n,
+                why,
+                (m.group(1)[:160] if m else "no healthy server"),
+                kv,
+                self.peak_wired(),
+                0,
+                0,
+                int(time.time() - t0),
+                saw_code,
+                acted,
+            )
+            self.log(
+                f"     FAIL/{why}  guard_saw={saw_code} acted={acted}  {r.detail[:80]}"
+            )
             stop_server(self.log)
             return r
 
@@ -511,13 +542,23 @@ class Probe:
         # is a FAILING rung, full stop. Report it and stop the server without
         # ever asking it to generate.
         if saw_code or "Warm-up failed" in txt:
-            r = Rung(n, "decode_code",
-                     "latched during warm-up — not generated into "
-                     "(heal churn is what reboots the machine)",
-                     kv, self.peak_wired(), 0, 0, int(time.time() - t0),
-                     saw_code, acted)
-            self.log(f"     FAIL/decode_code  latched at warm-up; skipped "
-                     f"generations  guard_saw={saw_code} acted={acted}")
+            r = Rung(
+                n,
+                "decode_code",
+                "latched during warm-up — not generated into "
+                "(heal churn is what reboots the machine)",
+                kv,
+                self.peak_wired(),
+                0,
+                0,
+                int(time.time() - t0),
+                saw_code,
+                acted,
+            )
+            self.log(
+                f"     FAIL/decode_code  latched at warm-up; skipped "
+                f"generations  guard_saw={saw_code} acted={acted}"
+            )
             stop_server(self.log)
             return r
 
@@ -528,9 +569,12 @@ class Probe:
                 self.log(f"     gen{i+1}: SERVER GONE — the guard SIGTERMed it")
                 break
             try:
-                d = q('{completion(request:{prompt:"%s",maxTokens:200}){text}}'
-                      % PROBE_PROMPT, timeout=600)
-                t = (((d.get("data") or {}).get("completion") or {}).get("text") or "")
+                d = q(
+                    '{completion(request:{prompt:"%s",maxTokens:200}){text}}'
+                    % PROBE_PROMPT,
+                    timeout=600,
+                )
+                t = ((d.get("data") or {}).get("completion") or {}).get("text") or ""
                 if d.get("errors") or not t.strip():
                     bad += 1
                 else:
@@ -544,14 +588,27 @@ class Probe:
         acted = "UNSERVABLE" in txt
         flags = health_flags()
         gone = not server_pids()
-        verdict = ("pass" if ok > 0 and not saw_code and not gone else
-                   "server_gone" if gone else
-                   "decode_code" if saw_code else "no_output")
-        r = Rung(n, verdict,
-                 f"health={flags}", kv, self.peak_wired(), ok, bad,
-                 int(time.time() - t0), saw_code, acted)
-        self.log(f"     {verdict.upper()}  ok={ok} fail={bad} kv={kv:.0f}MiB "
-                 f"peak_wired={r.peak_wired_gb:.1f}GB guard_saw={saw_code} acted={acted}")
+        verdict = (
+            "pass"
+            if ok > 0 and not saw_code and not gone
+            else "server_gone" if gone else "decode_code" if saw_code else "no_output"
+        )
+        r = Rung(
+            n,
+            verdict,
+            f"health={flags}",
+            kv,
+            self.peak_wired(),
+            ok,
+            bad,
+            int(time.time() - t0),
+            saw_code,
+            acted,
+        )
+        self.log(
+            f"     {verdict.upper()}  ok={ok} fail={bad} kv={kv:.0f}MiB "
+            f"peak_wired={r.peak_wired_gb:.1f}GB guard_saw={saw_code} acted={acted}"
+        )
         stop_server(self.log)
         return r
 
@@ -573,8 +630,10 @@ class Probe:
             return
         path = LLMVP / "configs" / f"{res.config}.yaml"
         text = path.read_text()
-        pairs = (("probe_verified_n_ctx", res.ceiling),
-                 ("probe_verified_weights_bytes", res.weights_bytes))
+        pairs = (
+            ("probe_verified_n_ctx", res.ceiling),
+            ("probe_verified_weights_bytes", res.weights_bytes),
+        )
         for key, val in pairs:
             pat = re.compile(rf"^(\s*{key}:\s*).*$", re.M)
             if pat.search(text):
@@ -587,8 +646,10 @@ class Probe:
                 insert = f"{anchor.group(0)}\n{indent}{key}: {val}"
                 text = text.replace(anchor.group(0), insert, 1)
         path.write_text(text)
-        self.log(f"    config updated: probe_verified_n_ctx={res.ceiling} "
-                 f"weights={res.weights_bytes / 1e9:.1f}GB")
+        self.log(
+            f"    config updated: probe_verified_n_ctx={res.ceiling} "
+            f"weights={res.weights_bytes / 1e9:.1f}GB"
+        )
 
     # ── one model ─────────────────────────────────────────────────
     def model(self, cfg: str) -> ModelResult:
@@ -598,11 +659,13 @@ class Probe:
             return ModelResult(cfg, 0, 0, note="config not found")
 
         import yaml
+
         raw = yaml.safe_load(cfg_path.read_text())
         m = raw["model"]
         orig = int(m["n_ctx"])
-        trained = trained_context(str(m["path"]),
-                                  int(m.get("model_max_context") or orig))
+        trained = trained_context(
+            str(m["path"]), int(m.get("model_max_context") or orig)
+        )
         # POOL BUDGETS ARE NOT CAPPED BY THE TRAINED RANGE. Under batched decode
         # `n_ctx` is the SUM across streams while `model_max_context` bounds each
         # ONE — gpt-oss-swarm declares n_ctx 524288 against a 131072 trained
@@ -614,12 +677,17 @@ class Probe:
         # that claim, so the only real bound left is memory: the arithmetic max
         # under the probe ceiling.
         if orig > trained:
-            pool_max, _ = calc_start(str(m["path"]),
-                                     m.get("kv_bytes_per_token_measured"),
-                                     10 ** 9, self.ceiling_gb / _PROBE_START_MARGIN,
-                                     self.args.resolution)
-            self.log(f"    POOL config (n_ctx {orig} > trained {trained}): "
-                     f"per-stream cap does not apply, memory bound {pool_max}")
+            pool_max, _ = calc_start(
+                str(m["path"]),
+                m.get("kv_bytes_per_token_measured"),
+                10**9,
+                self.ceiling_gb / _PROBE_START_MARGIN,
+                self.args.resolution,
+            )
+            self.log(
+                f"    POOL config (n_ctx {orig} > trained {trained}): "
+                f"per-stream cap does not apply, memory bound {pool_max}"
+            )
             trained = pool_max
         backup = self.base / f"{cfg}.yaml.orig"
         shutil.copy2(cfg_path, backup)
@@ -629,14 +697,20 @@ class Probe:
         self.log(f"\n═══ {cfg} — trained {trained}, config {orig} ═══")
         self.log(f"    config backup: {backup}")
 
-        start, kib = calc_start(str(m["path"]),
-                                m.get("kv_bytes_per_token_measured"),
-                                trained, self.ceiling_gb, self.args.resolution)
+        start, kib = calc_start(
+            str(m["path"]),
+            m.get("kv_bytes_per_token_measured"),
+            trained,
+            self.ceiling_gb,
+            self.args.resolution,
+        )
         res.calc_start = start
         res.weights_bytes = int(weights_gb(str(m["path"])) * 1e9)
-        self.log(f"    KV {kib:.0f} KiB/token "
-                 f"({'measured' if m.get('kv_bytes_per_token_measured') else 'formula'})"
-                 f" · arithmetic says {start} fits under {self.ceiling_gb:.1f}GB")
+        self.log(
+            f"    KV {kib:.0f} KiB/token "
+            f"({'measured' if m.get('kv_bytes_per_token_measured') else 'formula'})"
+            f" · arithmetic says {start} fits under {self.ceiling_gb:.1f}GB"
+        )
 
         try:
             # ── REFINE THE ARITHMETIC, DO NOT SEARCH FOR IT ──────────
@@ -664,8 +738,10 @@ class Probe:
             _pred0 = w_gb + kib * 1024 * start / 1e9
             if rung0.peak_wired_gb > _pred0:
                 overhead_gb = rung0.peak_wired_gb - _pred0
-                self.log(f"    measured overhead {overhead_gb:.1f}GB over the "
-                         f"formula — carried into every later rung's gate")
+                self.log(
+                    f"    measured overhead {overhead_gb:.1f}GB over the "
+                    f"formula — carried into every later rung's gate"
+                )
             # peak_wired is the run-wide max (monotone across rungs), so an
             # overhead re-measure is only attributable when the rung is a new
             # n_ctx high — a smaller rung inherits an earlier rung's peak.
@@ -675,41 +751,48 @@ class Probe:
                     nxt = current + direction * step
                     nxt = max(self.args.resolution, min(nxt, trained))
                     if nxt == current:
-                        break                       # pinned at trained or floor
+                        break  # pinned at trained or floor
                     # Arithmetic gate on EVERY rung, not just the opener. The
                     # opener respected the ceiling and the ladder then stepped
                     # blind — on hy3 (324 KiB/token) one 10k step was +3.3GB,
                     # from wired-saturation straight into the hard-reboot band.
                     predicted = w_gb + kib * 1024 * nxt / 1e9 + overhead_gb
                     if predicted > self.ceiling_gb:
-                        self.log(f"  ── rung n_ctx={nxt} ARITH-REFUSED "
-                                 f"(predicted {predicted:.1f}GB incl. "
-                                 f"{overhead_gb:.1f}GB measured overhead > "
-                                 f"ceiling {self.ceiling_gb:.1f}GB — never booted)")
-                        r = Rung(nxt, "arith_refused",
-                                 f"predicted {predicted:.1f}GB > "
-                                 f"ceiling {self.ceiling_gb:.1f}GB")
+                        self.log(
+                            f"  ── rung n_ctx={nxt} ARITH-REFUSED "
+                            f"(predicted {predicted:.1f}GB incl. "
+                            f"{overhead_gb:.1f}GB measured overhead > "
+                            f"ceiling {self.ceiling_gb:.1f}GB — never booted)"
+                        )
+                        r = Rung(
+                            nxt,
+                            "arith_refused",
+                            f"predicted {predicted:.1f}GB > "
+                            f"ceiling {self.ceiling_gb:.1f}GB",
+                        )
                     else:
                         r = self.rung(cfg, cfg_path, nxt)
                         if nxt > max_booted:
                             max_booted = nxt
                             if r.peak_wired_gb > predicted:
                                 overhead_gb += r.peak_wired_gb - predicted
-                                self.log(f"    overhead re-measured: "
-                                         f"+{r.peak_wired_gb - predicted:.1f}GB "
-                                         f"(now {overhead_gb:.1f}GB)")
+                                self.log(
+                                    f"    overhead re-measured: "
+                                    f"+{r.peak_wired_gb - predicted:.1f}GB "
+                                    f"(now {overhead_gb:.1f}GB)"
+                                )
                     res.rungs.append(r)
                     self.save()
                     now = r.verdict == "pass"
                     if now:
                         best = max(best or 0, nxt)
                     current = nxt
-                    if now != passed:               # state swapped
+                    if now != passed:  # state swapped
                         passed = now
                         direction = -direction
                         break
                     if nxt in (trained, self.args.resolution):
-                        break                       # ran out of room, not flipped
+                        break  # ran out of room, not flipped
 
             # WHICH LIMIT DID WE HIT? A ceiling whose failures were all
             # `preflight_refused` measured OUR OWN GUARD, not the machine —
@@ -719,25 +802,32 @@ class Probe:
             # buy anything, and whether the 0.87 constant is being confirmed or
             # merely re-measured.
             fails = [g.verdict for g in res.rungs if g.verdict != "pass"]
-            res.bound_by = ("guard" if fails and all(
-                                f in ("preflight_refused", "arith_refused")
-                                for f in fails)
-                            else "hardware" if fails else "trained-range")
+            res.bound_by = (
+                "guard"
+                if fails
+                and all(f in ("preflight_refused", "arith_refused") for f in fails)
+                else "hardware" if fails else "trained-range"
+            )
             res.ceiling = best
             hit = [g for g in res.rungs if g.verdict == "pass" and g.n_ctx == best]
             if hit and hit[0].kv_mib:
                 res.kv_bytes_per_token_actual = int(
-                    hit[0].kv_mib * 1048576 / hit[0].n_ctx)
+                    hit[0].kv_mib * 1048576 / hit[0].n_ctx
+                )
             if best == trained:
                 res.note = "ceiling is the trained range — nothing here limits it"
             elif best:
                 delta = best - start
-                where = ("GUARD-BOUND (all failures were preflight refusals — "
-                         "this is a lower bound, the hardware was never reached)"
-                         if res.bound_by == "guard"
-                         else "hardware-bound (failures were decode errors)")
-                res.note = (f"start {start} -> measured {best} "
-                            f"({delta:+d}, {abs(delta)/start*100:.1f}%) · {where}")
+                where = (
+                    "GUARD-BOUND (all failures were preflight refusals — "
+                    "this is a lower bound, the hardware was never reached)"
+                    if res.bound_by == "guard"
+                    else "hardware-bound (failures were decode errors)"
+                )
+                res.note = (
+                    f"start {start} -> measured {best} "
+                    f"({delta:+d}, {abs(delta)/start*100:.1f}%) · {where}"
+                )
             else:
                 res.note = f"nothing decoded at or below {start}"
             return res
@@ -746,19 +836,25 @@ class Probe:
             self.log(f"    config restored from {backup}")
 
     def run(self) -> int:
-        self.log(f"=== context ceiling probe · {len(self.args.configs)} models "
-                 f"· resolution {self.args.resolution} ===")
-        self.log(f"    config KV budget bypassed; ceiling {self.ceiling_gb:.1f}GB "
-                 f"({_PROBE_PHYSICAL_SAFETY} x physical), enforced on EVERY rung")
+        self.log(
+            f"=== context ceiling probe · {len(self.args.configs)} models "
+            f"· resolution {self.args.resolution} ==="
+        )
+        self.log(
+            f"    config KV budget bypassed; ceiling {self.ceiling_gb:.1f}GB "
+            f"({_PROBE_PHYSICAL_SAFETY} x physical), enforced on EVERY rung"
+        )
         self.log("    ERROR-CODE guard ON — it is the instrument under test")
         self.log(f"    base: {self.base}")
 
         rec = ROOT / "dev/wired_mem_recorder.py"
         if rec.exists():
             self.rec = subprocess.Popen(
-                [sys.executable, str(rec),
-                 "--label", "ctxprobe", "--hz", "10"],
-                cwd=self.base, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                [sys.executable, str(rec), "--label", "ctxprobe", "--hz", "10"],
+                cwd=self.base,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             self.log(f"    wired recorder pid {self.rec.pid}")
 
         try:
@@ -777,16 +873,29 @@ class Probe:
 
         self.log("\n=== SUMMARY ===")
         for r in self.results:
-            kvt = (f"  KV {r.kv_bytes_per_token_actual / 1024:.0f} KiB/tok measured"
-                   if r.kv_bytes_per_token_actual else "")
-            self.log(f"  {r.config:<28} trained {r.trained_ctx:>7}  "
-                     f"config {r.original_n_ctx:>7}  CEILING "
-                     f"{str(r.ceiling):>7}   {r.note}{kvt}")
+            kvt = (
+                f"  KV {r.kv_bytes_per_token_actual / 1024:.0f} KiB/tok measured"
+                if r.kv_bytes_per_token_actual
+                else ""
+            )
+            self.log(
+                f"  {r.config:<28} trained {r.trained_ctx:>7}  "
+                f"config {r.original_n_ctx:>7}  CEILING "
+                f"{str(r.ceiling):>7}   {r.note}{kvt}"
+            )
         self.log("\n=== GUARD OBSERVATIONS (NOT a retirement verdict) ===")
-        missed = [(r.config, g) for r in self.results for g in r.rungs
-                  if g.verdict != "pass" and not g.guard_saw]
-        caught = sum(1 for r in self.results for g in r.rungs
-                     if g.verdict != "pass" and g.guard_saw)
+        missed = [
+            (r.config, g)
+            for r in self.results
+            for g in r.rungs
+            if g.verdict != "pass" and not g.guard_saw
+        ]
+        caught = sum(
+            1
+            for r in self.results
+            for g in r.rungs
+            if g.verdict != "pass" and g.guard_saw
+        )
         self.log(f"  failing rungs caught by an llama.cpp error code: {caught}")
         if missed:
             self.log("  Rungs that FAILED WITHOUT the guard seeing anything:")
@@ -808,10 +917,14 @@ class Probe:
         # The counter-evidence is permanent and lives outside this run:
         # ctx_probe_20260729-095541 died at step-3.7 n_ctx 262144 with an empty
         # error log. Nothing measured under the ceiling can overturn it.
-        self.log("  NOTE: every rung here was chosen to sit under the physical "
-                 "ceiling, so this says nothing about the band above it.")
-        self.log("  The arithmetic preflight is NOT retirable — see "
-                 "ctx_probe_20260729-095541 (reboot, zero error codes).")
+        self.log(
+            "  NOTE: every rung here was chosen to sit under the physical "
+            "ceiling, so this says nothing about the band above it."
+        )
+        self.log(
+            "  The arithmetic preflight is NOT retirable — see "
+            "ctx_probe_20260729-095541 (reboot, zero error codes)."
+        )
         self.log(f"\nresults: {self.base / 'RESULTS.json'}")
         return 0
 
@@ -822,10 +935,17 @@ def main() -> int:
     ap.add_argument("--resolution", type=int, default=2048)
     ap.add_argument("--gens", type=int, default=3)
     ap.add_argument("--boot-timeout", type=int, default=1200)
-    ap.add_argument("--start-fraction", type=float, default=1.0,
-                    help="Open below the trained range for a cautious first pass")
-    ap.add_argument("--no-write", action="store_true",
-                    help="Measure without recording probe_verified_* into configs")
+    ap.add_argument(
+        "--start-fraction",
+        type=float,
+        default=1.0,
+        help="Open below the trained range for a cautious first pass",
+    )
+    ap.add_argument(
+        "--no-write",
+        action="store_true",
+        help="Measure without recording probe_verified_* into configs",
+    )
     return Probe(ap.parse_args()).run()
 
 

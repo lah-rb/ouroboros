@@ -25,15 +25,35 @@ import sys
 from collections import defaultdict
 
 GGML = {
-    0: ("F32", 1, 4), 1: ("F16", 1, 2), 2: ("Q4_0", 32, 18), 3: ("Q4_1", 32, 20),
-    6: ("Q5_0", 32, 22), 7: ("Q5_1", 32, 24), 8: ("Q8_0", 32, 34), 9: ("Q8_1", 32, 36),
-    10: ("Q2_K", 256, 84), 11: ("Q3_K", 256, 110), 12: ("Q4_K", 256, 144),
-    13: ("Q5_K", 256, 176), 14: ("Q6_K", 256, 210), 15: ("Q8_K", 256, 292),
-    16: ("IQ2_XXS", 256, 66), 17: ("IQ2_XS", 256, 74), 18: ("IQ3_XXS", 256, 98),
-    19: ("IQ1_S", 256, 50), 20: ("IQ4_NL", 32, 18), 21: ("IQ3_S", 256, 110),
-    22: ("IQ2_S", 256, 82), 23: ("IQ4_XS", 256, 136), 24: ("I8", 1, 1),
-    25: ("I16", 1, 2), 26: ("I32", 1, 4), 27: ("I64", 1, 8), 28: ("F64", 1, 8),
-    29: ("IQ1_M", 256, 56), 30: ("BF16", 1, 2),
+    0: ("F32", 1, 4),
+    1: ("F16", 1, 2),
+    2: ("Q4_0", 32, 18),
+    3: ("Q4_1", 32, 20),
+    6: ("Q5_0", 32, 22),
+    7: ("Q5_1", 32, 24),
+    8: ("Q8_0", 32, 34),
+    9: ("Q8_1", 32, 36),
+    10: ("Q2_K", 256, 84),
+    11: ("Q3_K", 256, 110),
+    12: ("Q4_K", 256, 144),
+    13: ("Q5_K", 256, 176),
+    14: ("Q6_K", 256, 210),
+    15: ("Q8_K", 256, 292),
+    16: ("IQ2_XXS", 256, 66),
+    17: ("IQ2_XS", 256, 74),
+    18: ("IQ3_XXS", 256, 98),
+    19: ("IQ1_S", 256, 50),
+    20: ("IQ4_NL", 32, 18),
+    21: ("IQ3_S", 256, 110),
+    22: ("IQ2_S", 256, 82),
+    23: ("IQ4_XS", 256, 136),
+    24: ("I8", 1, 1),
+    25: ("I16", 1, 2),
+    26: ("I32", 1, 4),
+    27: ("I64", 1, 8),
+    28: ("F64", 1, 8),
+    29: ("IQ1_M", 256, 56),
+    30: ("BF16", 1, 2),
 }
 
 
@@ -123,7 +143,9 @@ def main() -> int:
     n_head = g("attention.head_count")
     n_kv_head = g("attention.head_count_kv", n_head)
     embd = g("embedding_length")
-    head_dim = g("attention.key_length") or (embd // n_head if isinstance(n_head, int) and n_head else 0)
+    head_dim = g("attention.key_length") or (
+        embd // n_head if isinstance(n_head, int) and n_head else 0
+    )
     if isinstance(n_kv_head, list):
         kvh = max(n_kv_head)
         kvnote = f"  (per-layer, max {kvh}; interleaved-SWA — expect the formula to OVER-predict)"
@@ -138,22 +160,32 @@ def main() -> int:
     wb = sum(os.path.getsize(s) for s in shards)
 
     print(f"\n{os.path.basename(args.path)}")
-    print(f"  arch={arch}  layers={layers}  n_head={n_head if not isinstance(n_head, list) else 'per-layer'}"
-          f"  n_kv_head={kvh}{kvnote}")
-    print(f"  embd={embd}  head_dim={head_dim}  experts={g('expert_count', 0)} (used {g('expert_used_count', 0)})")
+    print(
+        f"  arch={arch}  layers={layers}  n_head={n_head if not isinstance(n_head, list) else 'per-layer'}"
+        f"  n_kv_head={kvh}{kvnote}"
+    )
+    print(
+        f"  embd={embd}  head_dim={head_dim}  experts={g('expert_count', 0)} (used {g('expert_used_count', 0)})"
+    )
     print(f"  trained ctx={g('context_length')}  rope_freq_base={g('rope.freq_base')}")
     for k in sorted(kv):
         if "rope.scaling" in k:
             print(f"    {k} = {kv[k]}")
-    print(f"  bos={kv.get('tokenizer.ggml.bos_token_id')} eos={kv.get('tokenizer.ggml.eos_token_id')} "
-          f"add_bos={kv.get('tokenizer.ggml.add_bos_token')}")
+    print(
+        f"  bos={kv.get('tokenizer.ggml.bos_token_id')} eos={kv.get('tokenizer.ggml.eos_token_id')} "
+        f"add_bos={kv.get('tokenizer.ggml.add_bos_token')}"
+    )
 
     per_tok = 2 * layers * kvh * head_dim * 2
     total_b = sum((n // GGML[t][1]) * GGML[t][2] for _, t, n in tensors if t in GGML)
     # Tensors are only in THIS shard; scale by the on-disk total for the real figure.
     w_gb = wb / 1e9
-    print(f"\n  weights: {w_gb:.1f} GB decimal ({wb/1024**3:.1f} GiB, {len(shards)} shard(s))")
-    print(f"  KV/token: {per_tok/1024:.0f} KiB   -> DECIMAL GB below, matching _kv_preflight")
+    print(
+        f"\n  weights: {w_gb:.1f} GB decimal ({wb/1024**3:.1f} GiB, {len(shards)} shard(s))"
+    )
+    print(
+        f"  KV/token: {per_tok/1024:.0f} KiB   -> DECIMAL GB below, matching _kv_preflight"
+    )
     print(f"  {'n_ctx':>9} {'KV GB':>8} {'total GB':>10}")
     for n_ctx in (8192, 16384, 32768, 65536, 131072, 262144):
         kvg = per_tok * n_ctx / 1e9
@@ -173,11 +205,15 @@ def main() -> int:
             hot += b
     ne, nu = g("expert_count", 0) or 0, g("expert_used_count", 0) or 0
     frac = (nu / ne) if ne else 1.0
-    print(f"\n  dense+attn {hot/1024**3:6.2f} GiB · experts {cold/1024**3:6.2f} GiB"
-          f" · read/token {(hot + cold*frac)/1024**3:.2f} GiB"
-          f" · avg {total_b*8/max(1,sum(n for _,_,n in tensors)):.3f} bpw  (this shard)")
-    print("  NOTE: read/token has NOT predicted decode speed on this hardware "
-          "(laguna: 36 GiB file spread, same tok/s). Measure.")
+    print(
+        f"\n  dense+attn {hot/1024**3:6.2f} GiB · experts {cold/1024**3:6.2f} GiB"
+        f" · read/token {(hot + cold*frac)/1024**3:.2f} GiB"
+        f" · avg {total_b*8/max(1,sum(n for _,_,n in tensors)):.3f} bpw  (this shard)"
+    )
+    print(
+        "  NOTE: read/token has NOT predicted decode speed on this hardware "
+        "(laguna: 36 GiB file spread, same tok/s). Measure."
+    )
 
     if args.vocab:
         toks = kv.get("tokenizer.ggml.tokens", [])

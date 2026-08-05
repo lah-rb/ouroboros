@@ -27,7 +27,6 @@ from src.world_loader import load_world  # Callable[[], Dict]
 from src.save_load import save_game, load_game  # (state: Dict) -> None / () -> Dict
 from src.models import GameState  # Alias for the canonical state dict type
 
-
 # --------------------------------------------------------------------------- #
 # Helper types
 # --------------------------------------------------------------------------- #

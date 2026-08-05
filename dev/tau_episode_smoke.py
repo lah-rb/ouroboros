@@ -5,6 +5,7 @@ crash is diagnosable without a re-run.
 
 Usage: PYTHONPATH=<repo> .venv/bin/python dev/tau_episode_smoke.py [task=0] [max_turns=4]
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -38,18 +39,27 @@ async def main() -> int:
 
     bridge = ToolBridge(handle)
     bridge.start()
-    boss_session = PersonaSession("http://localhost:8008/graphql", "tau_boss",
-                                  temperature=0.35, max_tokens=400)
+    boss_session = PersonaSession(
+        "http://localhost:8008/graphql", "tau_boss", temperature=0.35, max_tokens=400
+    )
     worker = None
     try:
-        worker = MissionWorker(handle.wiki, handle.tools_info, bridge.url,
-                               llmvp_endpoint="http://localhost:8008/graphql")
-        boss = MenuBoss(boss_session, _BOSS_MENU,
-                        briefing=_boss_briefing("retail", handle.tools_info),
-                        default_choice="instruct",
-                        default_arg="Address the customer per policy; then reply.")
-        rec = await ChatEnv(boss, worker, _RespondChannel(handle),
-                            max_turns=max_turns).run_episode(opening)
+        worker = MissionWorker(
+            handle.wiki,
+            handle.tools_info,
+            bridge.url,
+            llmvp_endpoint="http://localhost:8008/graphql",
+        )
+        boss = MenuBoss(
+            boss_session,
+            _BOSS_MENU,
+            briefing=_boss_briefing("retail", handle.tools_info),
+            default_choice="instruct",
+            default_arg="Address the customer per policy; then reply.",
+        )
+        rec = await ChatEnv(
+            boss, worker, _RespondChannel(handle), max_turns=max_turns
+        ).run_episode(opening)
         dump["termination"] = rec.termination
         dump["turns"] = rec.turns
         dump["transcript"] = rec.transcript
@@ -57,8 +67,9 @@ async def main() -> int:
             {"choice": d.choice, "arg": d.arg, "fallback": d.fallback}
             for d in boss.decisions
         ]
-        dump["reward"] = handle.reward if handle.done else \
-            float(env.calculate_reward().reward)
+        dump["reward"] = (
+            handle.reward if handle.done else float(env.calculate_reward().reward)
+        )
     except Exception as e:  # noqa: BLE001 — capture EVERYTHING
         dump["crash"] = f"{type(e).__name__}: {e}"
         dump["traceback"] = traceback.format_exc()
@@ -69,8 +80,11 @@ async def main() -> int:
         dump["handle_max_steps"] = handle._max_steps
         dump["bridge_calls"] = bridge.calls
         dump["tau_transcript"] = [
-            {"source": e.get("source"), "action": e.get("action"),
-             "text": str(e.get("text", ""))[:200]}
+            {
+                "source": e.get("source"),
+                "action": e.get("action"),
+                "text": str(e.get("text", ""))[:200],
+            }
             for e in handle.transcript
         ]
         await boss_session.close()
@@ -85,9 +99,23 @@ async def main() -> int:
     with open(OUT, "w") as f:
         json.dump(dump, f, indent=1)
     print(f"dumped → {OUT}")
-    print(json.dumps({k: dump.get(k) for k in
-                      ("termination", "turns", "reward", "crash",
-                       "handle_steps", "handle_done", "bridge_calls")}, indent=1))
+    print(
+        json.dumps(
+            {
+                k: dump.get(k)
+                for k in (
+                    "termination",
+                    "turns",
+                    "reward",
+                    "crash",
+                    "handle_steps",
+                    "handle_done",
+                    "bridge_calls",
+                )
+            },
+            indent=1,
+        )
+    )
     return 0
 
 

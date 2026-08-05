@@ -127,7 +127,6 @@ class ThinkingSpec(BaseModel):
     # emits this string verbatim and ignores the composition flags.
     prefill_closed_literal: str = ""
 
-
     # Per-level think GATE (Step-3.7 mechanics, 2026-07-25): for families
     # where thinking only happens when the opener is PREFILLED, the
     # per-turn reasoning level decides the prefill — levels listed here

@@ -28,16 +28,28 @@ from agent.persistence.models import DirectiveReport, GoalRecord
 def _goal_with_env_history() -> GoalRecord:
     """A functional goal that failed a startup test, was diagnosed, and has just
     had an environment fix applied."""
-    g = GoalRecord(description="Program starts cleanly and exits without errors",
-                   type="functional", interaction_mode="deterministic")
+    g = GoalRecord(
+        description="Program starts cleanly and exits without errors",
+        type="functional",
+        interaction_mode="deterministic",
+    )
     g.reports = [
-        DirectiveReport(flow="interact", status="failure",
-                   headline="ModuleNotFoundError: No module named 'yaml'",
-                   summary="startup failed"),
-        DirectiveReport(flow="diagnose_issue", status="success",
-                   summary="PyYAML is declared but not installed"),
-        DirectiveReport(flow="project_ops", status="success",
-                   summary="setup complete; install commands exited 0"),
+        DirectiveReport(
+            flow="interact",
+            status="failure",
+            headline="ModuleNotFoundError: No module named 'yaml'",
+            summary="startup failed",
+        ),
+        DirectiveReport(
+            flow="diagnose_issue",
+            status="success",
+            summary="PyYAML is declared but not installed",
+        ),
+        DirectiveReport(
+            flow="project_ops",
+            status="success",
+            summary="setup complete; install commands exited 0",
+        ),
     ]
     return g
 
@@ -138,7 +150,7 @@ class TestRepeatWarningWording:
         assert "editing engine.py:resolve_turn has failed" in w
 
     def test_environment_attempts_get_their_own_phrasing(self):
-        """"editing <environment>" would be nonsense, and the mechanical reading
+        """ "editing <environment>" would be nonsense, and the mechanical reading
         to rule out is different: those commands ran, and exited clean."""
         from agent.actions.diagnosis_session_actions import (
             ENV_ATTEMPT_TARGET,

@@ -160,7 +160,9 @@ class Game:
         elif verb == "flee":
             print("\nThere's nothing to flee from right now.")
         else:
-            print(f"\nI don't know how to '{verb}'. Type 'help' for a list of commands.")
+            print(
+                f"\nI don't know how to '{verb}'. Type 'help' for a list of commands."
+            )
 
     def dispatch_combat(self, verb, rest):
         monster = self.current_monster
@@ -176,7 +178,9 @@ class Game:
             self.cmd_examine(rest)
         elif verb == "go":
             name = monster.name if monster else "something"
-            print(f"\nYou can't just walk away -- the {name} won't let you. (Try 'flee'.)")
+            print(
+                f"\nYou can't just walk away -- the {name} won't let you. (Try 'flee'.)"
+            )
         elif verb in ("take", "drop", "talk"):
             print("\nNot while you're fighting for your life! (attack or flee)")
         else:
@@ -285,13 +289,17 @@ class Game:
             return
         item = ITEMS[key]
         if item.item_type != "consumable":
-            print(f"\nYou can't use the {item.name} like that. (Try 'equip' or 'examine'.)")
+            print(
+                f"\nYou can't use the {item.name} like that. (Try 'equip' or 'examine'.)"
+            )
             return
         if in_combat and self._apply_poison():
             return
         healed = self.player.heal(item.heal_amount)
         self.player.inventory.remove(key)
-        print(f"\nYou drink the {item.name}, recovering {healed} HP. ({self.player.hp}/{self.player.max_hp} HP)")
+        print(
+            f"\nYou drink the {item.name}, recovering {healed} HP. ({self.player.hp}/{self.player.max_hp} HP)"
+        )
         if in_combat:
             self._monster_turn_and_check()
 
@@ -311,10 +319,14 @@ class Game:
             return
         if item.item_type == "weapon":
             self.player.weapon = key
-            print(f"\nYou equip the {item.name}. (Attack power: {self.player.total_attack()})")
+            print(
+                f"\nYou equip the {item.name}. (Attack power: {self.player.total_attack()})"
+            )
         else:
             self.player.armor = key
-            print(f"\nYou equip the {item.name}. (Defense: {self.player.total_defense()})")
+            print(
+                f"\nYou equip the {item.name}. (Defense: {self.player.total_defense()})"
+            )
         if in_combat:
             self._monster_turn_and_check()
 
@@ -334,11 +346,17 @@ class Game:
         if room.npc and self._npc_matches(rest_l, room.npc):
             print(f"\n{room.npc.description}")
             return
-        if room.monster and room.monster.is_alive() and rest_l in room.monster.name.lower():
+        if (
+            room.monster
+            and room.monster.is_alive()
+            and rest_l in room.monster.name.lower()
+        ):
             print(f"\n{room.monster.description}")
             return
 
-        key = self._resolve_item(rest_l, room.items) or self._resolve_item(rest_l, self.player.inventory)
+        key = self._resolve_item(rest_l, room.items) or self._resolve_item(
+            rest_l, self.player.inventory
+        )
         if key:
             item = ITEMS[key]
             tags = []
@@ -412,8 +430,10 @@ class Game:
         self.current_monster = monster
         print()
         print(monster.intro_text)
-        print(f"({monster.name}: {monster.hp}/{monster.max_hp} HP) "
-              f"-- attack, flee, use <item>, or equip <item>")
+        print(
+            f"({monster.name}: {monster.hp}/{monster.max_hp} HP) "
+            f"-- attack, flee, use <item>, or equip <item>"
+        )
 
     def _apply_poison(self):
         """Tick poison damage at the start of a combat action. Returns
@@ -449,12 +469,18 @@ class Game:
         base = max(1, self.player.total_attack() + variance)
         dmg = max(1, int(round(base * mult)))
         monster.take_hit(dmg)
-        weapon_name = ITEMS[self.player.weapon].name if self.player.weapon else "bare fists"
+        weapon_name = (
+            ITEMS[self.player.weapon].name if self.player.weapon else "bare fists"
+        )
         print()
         if mult > 1.0:
-            print(f"Your {weapon_name} flares bright -- a searing strike for {dmg} damage!")
+            print(
+                f"Your {weapon_name} flares bright -- a searing strike for {dmg} damage!"
+            )
         elif 0 < mult < 1.0:
-            print(f"Your {weapon_name} connects, but the blow feels blunted -- {dmg} damage.")
+            print(
+                f"Your {weapon_name} connects, but the blow feels blunted -- {dmg} damage."
+            )
         else:
             print(f"You strike with your {weapon_name} for {dmg} damage!")
         print(f"({monster.name}: {monster.hp}/{monster.max_hp} HP)")
@@ -509,8 +535,10 @@ class Game:
             "broken roof and touches the floor for the first time since "
             "the Keep fell."
         )
-        print(f"\nYou defeated {len(self.player.defeated_monsters)} foes in "
-              f"{self.player.turns_taken} combat rounds.")
+        print(
+            f"\nYou defeated {len(self.player.defeated_monsters)} foes in "
+            f"{self.player.turns_taken} combat rounds."
+        )
         print("=" * WIDTH)
         print("\nThanks for playing THE ASHEN KEEP.")
 

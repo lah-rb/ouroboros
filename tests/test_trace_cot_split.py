@@ -54,9 +54,9 @@ class TestSplitAggregation:
 
     def test_coverage_reports_how_much_of_the_run_the_ratio_describes(self):
         led = new_ledger()
-        fold_event(led, _inference(gen=1000, reasoning=500))   # reported
-        fold_event(led, _inference(gen=1000, reasoning=0))     # did not report
-        fold_event(led, _inference(gen=1000, reasoning=0))     # did not report
+        fold_event(led, _inference(gen=1000, reasoning=500))  # reported
+        fold_event(led, _inference(gen=1000, reasoning=0))  # did not report
+        fold_event(led, _inference(gen=1000, reasoning=0))  # did not report
         tok = finalize_ledger(led, total_wall_ms=3000.0)["tokens"]
         assert tok["reasoning_calls"] == 1
         assert tok["real_calls"] == 3

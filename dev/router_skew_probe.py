@@ -37,6 +37,7 @@ static prefix never entered at all. v3 and grow stored full text, so the
 training set is length-bimodal: 490 short rows at 24.7% medium, 1639 long rows
 at 10.8%.
 """
+
 import collections
 import json
 
@@ -47,8 +48,8 @@ TRAIN = "dev/train_dataset_trusted_v1.jsonl"
 ARTIFACT = "models/reasoning_router_v1.joblib"
 LOG = "llmvp/logs/interactions.jsonl"
 MARK = " …[snip]… "
-SIG = "MENU + ARGUMENT"   # the plan_interaction signature — the router's domain
-THR = 0.4                 # OURO_ROUTER_THR default (reasoning_router.py:92)
+SIG = "MENU + ARGUMENT"  # the plan_interaction signature — the router's domain
+THR = 0.4  # OURO_ROUTER_THR default (reasoning_router.py:92)
 
 
 def live_prompts(limit=4000):
@@ -73,7 +74,7 @@ def live_prompts(limit=4000):
 def cut(text, budget=1510, mark=""):
     keep = budget - len(mark)
     head = keep // 2
-    return text[:head] + mark + text[-(keep - head):]
+    return text[:head] + mark + text[-(keep - head) :]
 
 
 def main():
@@ -95,12 +96,18 @@ def main():
     collapsed = sum(len(v) - 1 for v in groups.values() if len(v) > 1)
     big = max(groups.values(), key=len)
     print("1. PREVIEW COLLAPSE")
-    print(f"   records={len(src)}  distinct previews={len(groups)}  collapsed={collapsed}")
-    print(f"   largest group: {len(big)} records spanning "
-          f"{len(set(r['task'] for r in big))} DISTINCT tasks")
+    print(
+        f"   records={len(src)}  distinct previews={len(groups)}  collapsed={collapsed}"
+    )
+    print(
+        f"   largest group: {len(big)} records spanning "
+        f"{len(set(r['task'] for r in big))} DISTINCT tasks"
+    )
     q = json.load(open("dev/label_quarantine_v1.json"))["header"]["tiers"]
-    print(f"   -> dedup quarantined {q['dedup_duplicate']} duplicate + "
-          f"{q['dedup_conflict']} conflict = {q['dedup_duplicate'] + q['dedup_conflict']}")
+    print(
+        f"   -> dedup quarantined {q['dedup_duplicate']} duplicate + "
+        f"{q['dedup_conflict']} conflict = {q['dedup_duplicate'] + q['dedup_conflict']}"
+    )
 
     # --- 2. what moves the decision: length, not the marker ---------------
     live = live_prompts()
@@ -110,27 +117,43 @@ def main():
         "full prompt (what runtime sends)": live,
         "cut to 1510, NO marker": [cut(x) for x in live],
         "cut to 1510, WITH marker": [cut(x, mark=MARK) for x in live],
-        "full length, marker injected": [x[:len(x) // 2] + MARK + x[len(x) // 2:] for x in live],
+        "full length, marker injected": [
+            x[: len(x) // 2] + MARK + x[len(x) // 2 :] for x in live
+        ],
     }
     for tag, texts in arms.items():
         r = rate(score(texts))
         print(f"   {tag:34s} medium={r:6.2f}%  ({r - base:+5.2f} pp)")
-    print("   -> the elision MARKER is worth +0.07pp; LENGTH carries ~88% of the effect")
-    print("      (tfidf is L2-normalized: a short doc concentrates weight, a long one dilutes)")
+    print(
+        "   -> the elision MARKER is worth +0.07pp; LENGTH carries ~88% of the effect"
+    )
+    print(
+        "      (tfidf is L2-normalized: a short doc concentrates weight, a long one dilutes)"
+    )
 
     # --- 3. the two clamps, separated -------------------------------------
     prev = np.array(["…[snip]…" in r["text"] for r in rows])
-    p_train = score([r["text"] for r in rows])   # in-sample; see note below
+    p_train = score([r["text"] for r in rows])  # in-sample; see note below
     p_live = score(live)
     print(f"\n3. SKEW DECOMPOSITION (THR={THR})")
     print(f"   preview rows,  in-domain : {rate(p_train[prev]):6.2f}%")
     print(f"   full-text rows, in-domain: {rate(p_train[~prev]):6.2f}%")
-    print(f"   LIVE runtime prompts     : {rate(p_live):6.2f}%   <- observed run: 199/201 low = 1.0%")
-    print(f"   format effect : {rate(p_train[prev]) / max(rate(p_train[~prev]), 1e-9):.1f}x")
-    print(f"   domain shift  : {rate(p_train[~prev]) / max(rate(p_live), 1e-9):.1f}x   <- DOMINANT")
-    print("\n   NOTE: rows above are in-sample and therefore optimistic. Out-of-fold with the")
+    print(
+        f"   LIVE runtime prompts     : {rate(p_live):6.2f}%   <- observed run: 199/201 low = 1.0%"
+    )
+    print(
+        f"   format effect : {rate(p_train[prev]) / max(rate(p_train[~prev]), 1e-9):.1f}x"
+    )
+    print(
+        f"   domain shift  : {rate(p_train[~prev]) / max(rate(p_live), 1e-9):.1f}x   <- DOMINANT"
+    )
+    print(
+        "\n   NOTE: rows above are in-sample and therefore optimistic. Out-of-fold with the"
+    )
     print("   shipped recipe the same split reads 79.59% / 28.55%, so the ratios hold.")
-    print("   The shipped macro-F1 is NOT an artifact: mixture 0.618 vs length-normalized 0.616.")
+    print(
+        "   The shipped macro-F1 is NOT an artifact: mixture 0.618 vs length-normalized 0.616."
+    )
 
 
 if __name__ == "__main__":

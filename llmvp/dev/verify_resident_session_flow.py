@@ -16,6 +16,7 @@ Checks:
 
 Usage (from llmvp/):  .venv/bin/python dev/verify_resident_session_flow.py <config>
 """
+
 import asyncio
 import sys
 import time
@@ -43,7 +44,9 @@ async def turn0(sm, flow_key, static_prefix, prompt):
     t0 = time.time()
     first = None
     text = ""
-    async for chunk in sm.session_turn(info.session_id, prompt, max_tokens=24, temperature=0.0):
+    async for chunk in sm.session_turn(
+        info.session_id, prompt, max_tokens=24, temperature=0.0
+    ):
         if first is None:
             first = time.time() - t0
         text += chunk
@@ -58,11 +61,12 @@ async def main():
     cfg = load_config(Path("configs") / f"{CONFIG}.yaml")
     cfg.model.resident_seq_cache = True
     cfg.model.resident_session_flow_fork = True
-    cfg.resources.jit_concurrency_limit = None      # eager, single instance
+    cfg.resources.jit_concurrency_limit = None  # eager, single instance
     cfg.resources.max_concurrent_requests = 1
     set_config(cfg)
 
     from preprocessing.static_tokens import manager
+
     manager.load_static_buffer()
 
     from inference.backends.factory import create_backend
@@ -70,18 +74,21 @@ async def main():
 
     backend = create_backend(cfg)
     await backend.initialize()
-    print(f"_resident_active={getattr(backend,'_resident_active',None)} "
-          f"_session_flow_fork={getattr(backend,'_session_flow_fork',None)} "
-          f"_flow_band={getattr(backend,'_flow_band',None)} "
-          f"global_static={getattr(backend,'_resident_static_len',None)}", flush=True)
+    print(
+        f"_resident_active={getattr(backend,'_resident_active',None)} "
+        f"_session_flow_fork={getattr(backend,'_session_flow_fork',None)} "
+        f"_flow_band={getattr(backend,'_flow_band',None)} "
+        f"global_static={getattr(backend,'_resident_static_len',None)}",
+        flush=True,
+    )
     if not getattr(backend, "_resident_active", False):
         print("resident not active (can_shift=False) — session flow-fork N/A")
         await backend.shutdown()
         return
 
     sm = SessionManager(backend)
-    out_a, ttft_a, base_a = await turn0(sm, "F", PREAMBLE, PROMPT)        # BUILD
-    out_b, ttft_b, base_b = await turn0(sm, "F", PREAMBLE, PROMPT)        # HIT
+    out_a, ttft_a, base_a = await turn0(sm, "F", PREAMBLE, PROMPT)  # BUILD
+    out_b, ttft_b, base_b = await turn0(sm, "F", PREAMBLE, PROMPT)  # HIT
     out_c, ttft_c, base_c = await turn0(sm, None, None, PREAMBLE + PROMPT)  # reference
     await backend.shutdown()
 
@@ -89,9 +96,12 @@ async def main():
     print(f"  B HIT  : ttft={ttft_b:.3f}s base={base_b} out={out_b[:48]!r}", flush=True)
     print(f"  C ref  : ttft={ttft_c:.3f}s base={base_c} out={out_c[:48]!r}", flush=True)
     identical = out_a == out_b == out_c
-    print(f"  => out A==B==C: {identical} | TTFT(B)<TTFT(A): {ttft_b < ttft_a} "
-          f"({ttft_b:.3f} vs {ttft_a:.3f}) | base A==B>{base_c}: "
-          f"{base_a == base_b and base_a > base_c}", flush=True)
+    print(
+        f"  => out A==B==C: {identical} | TTFT(B)<TTFT(A): {ttft_b < ttft_a} "
+        f"({ttft_b:.3f} vs {ttft_a:.3f}) | base A==B>{base_c}: "
+        f"{base_a == base_b and base_a > base_c}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

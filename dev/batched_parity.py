@@ -49,9 +49,11 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=96)
     ap.add_argument("--seed", type=int, default=12345)
     ap.add_argument(
-        "--session-turns", type=int, default=0,
+        "--session-turns",
+        type=int,
+        default=0,
         help="run N-turn pinned sessions instead of stateless completions "
-             "(--streams concurrent sessions, turns interleaved)",
+        "(--streams concurrent sessions, turns interleaved)",
     )
     args = ap.parse_args()
 
@@ -94,11 +96,14 @@ def main() -> None:
             outcome = await run_completion(
                 PROMPT, max_tokens=args.max_tokens, temperature=1e-6
             )
-            return {"i": i, "text": outcome.text,
-                    "tokens": outcome.tokens_generated,
-                    "fresh_prefill": outcome.fresh_prefill_tokens,
-                    "cached_prefix": outcome.cached_prefix_tokens,
-                    "wall_s": round(time.monotonic() - t, 2)}
+            return {
+                "i": i,
+                "text": outcome.text,
+                "tokens": outcome.tokens_generated,
+                "fresh_prefill": outcome.fresh_prefill_tokens,
+                "cached_prefix": outcome.cached_prefix_tokens,
+                "wall_s": round(time.monotonic() - t, 2),
+            }
 
         async def one_session(i: int):
             """A pinned N-turn session; a barrier per turn keeps the
@@ -110,15 +115,21 @@ def main() -> None:
             for turn in range(args.session_turns):
                 prompt = TURN_PROMPTS[turn % len(TURN_PROMPTS)]
                 text, n_tok, _meta = await mgr.session_turn_complete(
-                    info.session_id, prompt,
-                    max_tokens=args.max_tokens, temperature=1e-6,
+                    info.session_id,
+                    prompt,
+                    max_tokens=args.max_tokens,
+                    temperature=1e-6,
                 )
-                transcript.append({"turn": turn, "prompt": prompt,
-                                   "text": text, "tokens": n_tok})
+                transcript.append(
+                    {"turn": turn, "prompt": prompt, "text": text, "tokens": n_tok}
+                )
                 await _turn_barriers[turn].wait()
             await mgr.end_session(info.session_id)
-            return {"i": i, "transcript": transcript,
-                    "wall_s": round(time.monotonic() - t, 2)}
+            return {
+                "i": i,
+                "transcript": transcript,
+                "wall_s": round(time.monotonic() - t, 2),
+            }
 
         t1 = time.monotonic()
         if args.session_turns:
@@ -134,9 +145,7 @@ def main() -> None:
                 *(one_session(i) for i in range(args.streams))
             )
         else:
-            results = await asyncio.gather(
-                *(one(i) for i in range(args.streams))
-            )
+            results = await asyncio.gather(*(one(i) for i in range(args.streams)))
         gen_wall = time.monotonic() - t1
 
         health = backend.get_health_status()

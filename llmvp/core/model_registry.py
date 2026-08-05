@@ -109,7 +109,9 @@ def list_models() -> List[ModelEntry]:
     to its name."""
     current = active_name()
     entries: List[ModelEntry] = []
-    paths = [q for d in _listed_dirs() for q in sorted((CONFIGS_DIR / d).glob("*.yaml"))]
+    paths = [
+        q for d in _listed_dirs() for q in sorted((CONFIGS_DIR / d).glob("*.yaml"))
+    ]
     for path in paths:
         name = path.stem
         if name in _EXCLUDED_NAMES:

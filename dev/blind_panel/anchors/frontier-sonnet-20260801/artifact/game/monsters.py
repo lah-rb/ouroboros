@@ -82,7 +82,9 @@ class DireWolf(Monster):
         lines = []
         frenzied = self.health <= self.max_health // 2
         if frenzied and not self.frenzied_announced:
-            lines.append(f"{self.name}'s eyes go wild with pain -- it snarls into a frenzy!")
+            lines.append(
+                f"{self.name}'s eyes go wild with pain -- it snarls into a frenzy!"
+            )
             self.frenzied_announced = True
         power = self.attack_power + (4 if frenzied else 0)
         dmg = max(1, power - player.total_defense())
@@ -125,7 +127,9 @@ class SkeletalGuardian(Monster):
     def choose_action(self, player, turn_number):
         if turn_number % 3 == 0:
             self.shielded = True
-            return [f"{self.name} raises a wall of interlocked bone, bracing for your next blow!"]
+            return [
+                f"{self.name} raises a wall of interlocked bone, bracing for your next blow!"
+            ]
         dmg = max(1, self.attack_power - player.total_defense())
         player.take_damage(dmg)
         return [f"{self.name} swings a rusted blade for {dmg} damage!"]
@@ -150,9 +154,14 @@ class BanditScout(Monster):
     FLEE_CHANCE = 0.45
 
     def choose_action(self, player, turn_number):
-        if (self.health <= self.max_health * self.FLEE_HEALTH_FRACTION
-                and random.random() < self.FLEE_CHANCE):
-            return [f"{self.name} panics and bolts, vanishing into the rubble!", "__FLEE__"]
+        if (
+            self.health <= self.max_health * self.FLEE_HEALTH_FRACTION
+            and random.random() < self.FLEE_CHANCE
+        ):
+            return [
+                f"{self.name} panics and bolts, vanishing into the rubble!",
+                "__FLEE__",
+            ]
         dmg = max(1, self.attack_power - player.total_defense())
         player.take_damage(dmg)
         return [f"{self.name} slashes at you for {dmg} damage!"]
@@ -167,9 +176,21 @@ class Ashwyrm(Monster):
 
     WEAKNESS_ITEM = "sunstone_amulet"
 
-    def __init__(self, id, name, description, phase1_health, phase1_attack,
-                 phase1_defense, phase2_health, phase2_attack, phase2_defense):
-        super().__init__(id, name, description, phase1_health, phase1_attack, phase1_defense)
+    def __init__(
+        self,
+        id,
+        name,
+        description,
+        phase1_health,
+        phase1_attack,
+        phase1_defense,
+        phase2_health,
+        phase2_attack,
+        phase2_defense,
+    ):
+        super().__init__(
+            id, name, description, phase1_health, phase1_attack, phase1_defense
+        )
         self.phase = 1
         self.phase2_health = phase2_health
         self.phase2_attack = phase2_attack
@@ -181,8 +202,10 @@ class Ashwyrm(Monster):
 
     def attack_flavor(self, player):
         if self.has_weakness_exposed(player):
-            return ("The sunstone amulet flares with golden light -- the Ashwyrm recoils, "
-                    "smoke hissing from where the glow touches its scales!")
+            return (
+                "The sunstone amulet flares with golden light -- the Ashwyrm recoils, "
+                "smoke hissing from where the glow touches its scales!"
+            )
         return "Your attack skitters off its scales as if striking a mirror."
 
     def incoming_player_damage(self, player):
@@ -215,17 +238,23 @@ class Ashwyrm(Monster):
             power += 5  # unopposed by the light, its fury only grows
         dmg = max(1, power - player.total_defense())
         player.take_damage(dmg)
-        verb = "breathes searing flame at you" if self.phase == 2 else "claws and snaps at you"
+        verb = (
+            "breathes searing flame at you"
+            if self.phase == 2
+            else "claws and snaps at you"
+        )
         return [f"{self.name} {verb} for {dmg} damage!"]
 
     def to_dict(self):
         d = super().to_dict()
-        d.update({
-            "phase": self.phase,
-            "phase2_triggered": self.phase2_triggered,
-            "attack_power": self.attack_power,
-            "defense": self.defense,
-        })
+        d.update(
+            {
+                "phase": self.phase,
+                "phase2_triggered": self.phase2_triggered,
+                "attack_power": self.attack_power,
+                "defense": self.defense,
+            }
+        )
         return d
 
     def load_state(self, data):

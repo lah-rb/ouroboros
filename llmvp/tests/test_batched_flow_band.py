@@ -42,6 +42,7 @@ class TestSeqMapFlowBand:
 
 # ── engine-side capture/install with a recording ctx ────────────────────
 
+
 class _Ctx:
     def __init__(self):
         self.ops: list[tuple] = []
@@ -64,7 +65,9 @@ def _engine(flow_slots=2):
         _llama=SimpleNamespace(_ctx=_Ctx()),
         _seq_map=plan_seq_map(4, [], [], snapshots=0, flow_slots=flow_slots),
         _flow_pins=OrderedDict(),
-        h_flow_builds=0, h_flow_hits=0, h_flow_evicts=0,
+        h_flow_builds=0,
+        h_flow_hits=0,
+        h_flow_evicts=0,
     )
     e._capture_flow = mod.BatchedEngine._capture_flow.__get__(e)
     e.control = lambda fn: SimpleNamespace(result=lambda timeout=None: fn())
@@ -95,7 +98,13 @@ class TestBuildCapture:
         pin = e._flow_pins["ops:plan"]
         assert pin.seq in band and pin.n_tokens == 8
         ctx = e._llama._ctx
-        assert ("cp", 1, pin.seq, 0, 8) in ctx.ops, (
+        assert (
+            "cp",
+            1,
+            pin.seq,
+            0,
+            8,
+        ) in ctx.ops, (
             "must copy ONLY [0, prefix_len) — the tail and generation sit above"
         )
         assert e.h_flow_builds == 1
@@ -190,8 +199,7 @@ class TestBackendWiring:
 
         src = inspect.getsource(mod.BatchedEngine._retire)
         assert "reason is None and error is None" not in src, (
-            "unreachable-guard regression: no success path retires with "
-            "reason=None"
+            "unreachable-guard regression: no success path retires with " "reason=None"
         )
         assert "error is None" in src
         assert 'reason not in (_END_KV_PRESSURE, "abandoned")' in src

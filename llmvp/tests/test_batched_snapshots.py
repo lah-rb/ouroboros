@@ -20,8 +20,8 @@ import pytest
 from inference.batched_engine import plan_seq_map
 from inference.backends.llama_cpp_backend import LlamaCppBackend
 
-
 # ── the seq-map arithmetic (pure) ────────────────────────────────────────
+
 
 class TestSeqMapBand:
     def test_band_sits_above_reasoning(self):
@@ -47,6 +47,7 @@ class TestSeqMapBand:
 
 
 # ── capture / fork / purge with a recording engine ──────────────────────
+
 
 class _Ctx:
     def __init__(self):
@@ -86,14 +87,21 @@ class _Engine:
 def _backend(snapshots=2) -> LlamaCppBackend:
     config = SimpleNamespace(
         resources=SimpleNamespace(
-            cpu_threads=1, max_concurrent_requests=1, jit_concurrency_limit=None,
-            scale_wait_timeout=0.5, instance_idle_ttl=0.1,
+            cpu_threads=1,
+            max_concurrent_requests=1,
+            jit_concurrency_limit=None,
+            scale_wait_timeout=0.5,
+            instance_idle_ttl=0.1,
         ),
         app=SimpleNamespace(backend_timeout=0.2),
         model=SimpleNamespace(
-            resident_seq_cache=True, session_snapshot_max=snapshots,
-            session_full_replay=True, flow_kv_cache=False, flow_kv_cache_max=4,
-            resident_session_flow_fork=False, reasoning_head_swap=False,
+            resident_seq_cache=True,
+            session_snapshot_max=snapshots,
+            session_full_replay=True,
+            flow_kv_cache=False,
+            flow_kv_cache_max=4,
+            resident_session_flow_fork=False,
+            reasoning_head_swap=False,
         ),
         personas={},
     )
@@ -109,7 +117,10 @@ def _backend(snapshots=2) -> LlamaCppBackend:
 
 def _seat(seq=1, n_tokens=8, static_len=3, persona="default"):
     return SimpleNamespace(
-        seq=seq, persona=persona, n_tokens=n_tokens, static_len=static_len,
+        seq=seq,
+        persona=persona,
+        n_tokens=n_tokens,
+        static_len=static_len,
         input_ids=[7, 8, 9, 20, 21, 22, 23, 24],  # head(3) + 5 dynamic
         _engine_ref=_Engine(),
     )

@@ -30,7 +30,8 @@ def gql(q: str, variables=None, timeout=300):
     if variables:
         body["variables"] = variables
     req = urllib.request.Request(
-        URL, data=json.dumps(body).encode(),
+        URL,
+        data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -56,8 +57,10 @@ def turn(sid: str, prompt: str):
 
 def main() -> int:
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 30
-    a = gql('mutation{startSession(config:{ttlSeconds:36000}){sessionId}}')
-    u = gql('mutation{startSession(config:{ttlSeconds:36000, persona:"user_sim"}){sessionId}}')
+    a = gql("mutation{startSession(config:{ttlSeconds:36000}){sessionId}}")
+    u = gql(
+        'mutation{startSession(config:{ttlSeconds:36000, persona:"user_sim"}){sessionId}}'
+    )
     a_id = a["data"]["startSession"]["sessionId"]
     u_id = u["data"]["startSession"]["sessionId"]
     print(f"sessions: agent={a_id[:8]} user_sim={u_id[:8]} rounds={rounds}")
@@ -89,22 +92,28 @@ def main() -> int:
                 if fresh:
                     sids[label] = fresh["sessionId"]
                     heals += 1
-                    print(f"[{i:03d}] {label} new session {sids[label][:8]} (slot healed)")
+                    print(
+                        f"[{i:03d}] {label} new session {sids[label][:8]} (slot healed)"
+                    )
             else:
                 consecutive_dead[label] = 0
                 print(f"[{i:03d}] {label} ok ({len(text)}ch) wired={w}G")
             if consecutive_dead[label] >= 3:
-                print(f"FATAL: {label} slot dead 3 rounds straight — healing not working")
+                print(
+                    f"FATAL: {label} slot dead 3 rounds straight — healing not working"
+                )
                 return 1
         time.sleep(1)
 
-    h = gql('query{health{availableInstances}}')
-    raw = gql("query{health{availableInstances}}")  # counters via backend info not exposed; read log instead
+    h = gql("query{health{availableInstances}}")
+    raw = gql(
+        "query{health{availableInstances}}"
+    )  # counters via backend info not exposed; read log instead
     print(f"\nsoak done: {rounds} rounds, {len(errors)} decode errors")
     for e in errors[:10]:
         print("  ", e)
     for sid in set(sids.values()):
-        gql('mutation($s:String!){endSession(sessionId:$s)}', {"s": sid})
+        gql("mutation($s:String!){endSession(sessionId:$s)}", {"s": sid})
     return 0 if not errors else 2
 
 

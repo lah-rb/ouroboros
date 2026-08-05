@@ -71,7 +71,9 @@ def complete(prompt: str, max_tokens: int) -> dict:
       }
     }
     """
-    body = json.dumps({"query": q, "variables": {"p": prompt, "m": max_tokens}}).encode()
+    body = json.dumps(
+        {"query": q, "variables": {"p": prompt, "m": max_tokens}}
+    ).encode()
     req = urllib.request.Request(
         ENDPOINT, data=body, headers={"Content-Type": "application/json"}
     )
@@ -85,17 +87,23 @@ def main() -> int:
     ap.add_argument("--samples", type=int, default=2)
     args = ap.parse_args()
 
-    print(f"laguna CoT difficulty ladder — max_tokens={args.max_tokens}, "
-          f"{args.samples} samples/rung\n")
-    print(f"{'rung':<11} {'sample':>6} {'tokens':>8} {'chars':>8} {'files':>6} "
-          f"{'wall':>6}  verdict")
+    print(
+        f"laguna CoT difficulty ladder — max_tokens={args.max_tokens}, "
+        f"{args.samples} samples/rung\n"
+    )
+    print(
+        f"{'rung':<11} {'sample':>6} {'tokens':>8} {'chars':>8} {'files':>6} "
+        f"{'wall':>6}  verdict"
+    )
     rows = []
     for name, prompt in LADDER:
         for i in range(1, args.samples + 1):
             t0 = time.monotonic()
             try:
                 payload = complete(prompt, args.max_tokens)
-            except Exception as exc:  # noqa: BLE001 — a rung failing must not stop the ladder
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 — a rung failing must not stop the ladder
                 print(f"{name:<11} {i:>6}  ERROR {exc}")
                 continue
             wall = time.monotonic() - t0
@@ -110,8 +118,10 @@ def main() -> int:
                 verdict = "RAN TO CAP — never converged"
             else:
                 verdict = f"terminated ({toks} tok)"
-            print(f"{name:<11} {i:>6} {toks:>8} {len(text):>8,} {files:>6} "
-                  f"{wall:>5.0f}s  {verdict}")
+            print(
+                f"{name:<11} {i:>6} {toks:>8} {len(text):>8,} {files:>6} "
+                f"{wall:>5.0f}s  {verdict}"
+            )
             rows.append((name, toks, len(text), files, toks >= args.max_tokens))
 
     print("\n── summary ─────────────────────────────────────────────")
@@ -125,16 +135,20 @@ def main() -> int:
 
     trivial = [x for x in rows if x[0] == "trivial"]
     if trivial and all(x[4] for x in trivial):
-        print("\nVERDICT (a): even a trivial prompt runs to the cap — laguna "
-              "deliberates to whatever budget it is given.\n"
-              "             Thinking mode needs reasoning_budget to be usable "
-              "at all; a bigger context will not help.")
+        print(
+            "\nVERDICT (a): even a trivial prompt runs to the cap — laguna "
+            "deliberates to whatever budget it is given.\n"
+            "             Thinking mode needs reasoning_budget to be usable "
+            "at all; a bigger context will not help."
+        )
     elif trivial:
-        print("\nVERDICT (b): trivial prompts terminate — CoT scales with the "
-              "ASK, not the budget.\n"
-              "             The batch turn is beyond what it will commit to; "
-              "an uncapped max-context run is worth trying, and decomposing "
-              "the batch is the structural fix.")
+        print(
+            "\nVERDICT (b): trivial prompts terminate — CoT scales with the "
+            "ASK, not the budget.\n"
+            "             The batch turn is beyond what it will commit to; "
+            "an uncapped max-context run is worth trying, and decomposing "
+            "the batch is the structural fix."
+        )
     return 0
 
 

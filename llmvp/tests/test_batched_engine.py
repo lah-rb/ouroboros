@@ -729,9 +729,9 @@ def test_pinned_session_is_windowed_not_destroyed_under_pressure():
     eng._step()  # terminal pressure: only a pinned stream is resident
 
     assert "a" not in eng._streams, "the turn ends rather than livelocking"
-    assert s.end_reason == "kv_pressure_truncated", (
-        "the caller must be able to tell this from a natural stop"
-    )
+    assert (
+        s.end_reason == "kv_pressure_truncated"
+    ), "the caller must be able to tell this from a natural stop"
     assert slot.pinned, "the seat stays a session seat"
     assert slot.n_tokens == s.n_past, "session KV survives at the decoded position"
 

@@ -22,38 +22,58 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 class Room:
     """A single location in the world."""
 
-    def __init__(self, room_id, name, description, exits=None, items=None,
-                 npc=None, monster=None):
+    def __init__(
+        self, room_id, name, description, exits=None, items=None, npc=None, monster=None
+    ):
         self.id = room_id
         self.name = name
         self.description = description
-        self.exits = dict(exits or {})   # direction -> room_id
-        self.items = list(items or [])   # item ids currently lying here
-        self.npc = npc                   # npc id, or None
-        self.monster = monster           # monster id, or None
+        self.exits = dict(exits or {})  # direction -> room_id
+        self.items = list(items or [])  # item ids currently lying here
+        self.npc = npc  # npc id, or None
+        self.monster = monster  # monster id, or None
 
 
 class Item:
     """A takeable thing: a weapon, armor, a trinket, or a consumable."""
 
-    def __init__(self, item_id, name, description, type, slot=None,
-                 attack_bonus=0, defense_bonus=0, heal_amount=0, special=None):
+    def __init__(
+        self,
+        item_id,
+        name,
+        description,
+        type,
+        slot=None,
+        attack_bonus=0,
+        defense_bonus=0,
+        heal_amount=0,
+        special=None,
+    ):
         self.id = item_id
         self.name = name
         self.description = description
-        self.type = type                 # weapon | armor | trinket | consumable
-        self.slot = slot                 # weapon | armor | trinket | None
+        self.type = type  # weapon | armor | trinket | consumable
+        self.slot = slot  # weapon | armor | trinket | None
         self.attack_bonus = attack_bonus
         self.defense_bonus = defense_bonus
         self.heal_amount = heal_amount
-        self.special = special           # e.g. "ashwyrm_weakness"
+        self.special = special  # e.g. "ashwyrm_weakness"
 
 
 class NPC:
     """A conversational character with a greeting and topic-based dialogue."""
 
-    def __init__(self, npc_id, name, room, description, greeting,
-                 repeat_greeting, topics, default_response):
+    def __init__(
+        self,
+        npc_id,
+        name,
+        room,
+        description,
+        greeting,
+        repeat_greeting,
+        topics,
+        default_response,
+    ):
         self.id = npc_id
         self.name = name
         self.room = room
@@ -119,7 +139,7 @@ class World:
                 topics=ndata.get("topics", {}),
                 default_response=ndata.get(
                     "default_response",
-                    "They shake their head. \"I don't know anything about that.\"",
+                    'They shake their head. "I don\'t know anything about that."',
                 ),
             )
 

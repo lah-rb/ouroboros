@@ -29,7 +29,13 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import fitz  # noqa: E402
-from extract_batch import _NUM_RE, _norm, _prose_text, _SPAN_WORDS, _SPANS_PER_PAGE  # noqa: E402
+from extract_batch import (
+    _NUM_RE,
+    _norm,
+    _prose_text,
+    _SPAN_WORDS,
+    _SPANS_PER_PAGE,
+)  # noqa: E402
 
 # Mirrors agent/actions/extraction_actions.py (tool venv can't import
 # agent code); keep in sync.

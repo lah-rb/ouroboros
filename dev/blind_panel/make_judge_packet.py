@@ -37,13 +37,40 @@ HERE = Path(__file__).resolve().parent
 # (ouroboros, llmvp) — every arm ran under those, so they discriminate nothing
 # and blanking them would make the rubric unreadable.
 MODEL_TOKENS = [
-    "gpt-oss", "step-3.7", "step37", "stepfun", "gemma-4", "gemma",
-    "qwen3.6", "qwen3.5", "qwen", "devstral-2", "devstral",
-    "laguna-XS", "laguna-S", "laguna", "poolside",
-    "glm-4.7-flash", "glm4", "glm", "zhipu",
-    "hunyuan3", "hy3", "tencent", "olmo", "mistral", "tekken",
-    "deepseek", "llama", "kimi", "minimax", "reap", "unsloth",
-    "claude", "sonnet", "anthropic",
+    "gpt-oss",
+    "step-3.7",
+    "step37",
+    "stepfun",
+    "gemma-4",
+    "gemma",
+    "qwen3.6",
+    "qwen3.5",
+    "qwen",
+    "devstral-2",
+    "devstral",
+    "laguna-XS",
+    "laguna-S",
+    "laguna",
+    "poolside",
+    "glm-4.7-flash",
+    "glm4",
+    "glm",
+    "zhipu",
+    "hunyuan3",
+    "hy3",
+    "tencent",
+    "olmo",
+    "mistral",
+    "tekken",
+    "deepseek",
+    "llama",
+    "kimi",
+    "minimax",
+    "reap",
+    "unsloth",
+    "claude",
+    "sonnet",
+    "anthropic",
 ]
 # `apex` was here and was REMOVED (operator decision, 2026-07-31). It is an
 # ordinary English word, and on 2026-07-31 an arm named its game "Apex"
@@ -173,8 +200,21 @@ your total, the star band, and your comments.
 # artifact did not commit. "run" is an ordinary directory name and reads as one.
 _WORKDIR_PATH = re.compile(r"(/private/tmp/tier/)[^/\s\"'`)\]]+")
 _TEXTISH = {
-    ".py", ".sh", ".md", ".txt", ".yaml", ".yml", ".json", ".toml", ".cfg",
-    ".ini", ".bash", ".zsh", ".rst", ".env", "",
+    ".py",
+    ".sh",
+    ".md",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".toml",
+    ".cfg",
+    ".ini",
+    ".bash",
+    ".zsh",
+    ".rst",
+    ".env",
+    "",
 }
 
 
@@ -226,8 +266,10 @@ def main() -> int:
         print(f"  workdir paths : neutralised in {', '.join(sorted(scrubbed))}")
 
     assigned: dict[str, str] = {}
-    for name, src_doc in (("RUBRIC.md", "TIER_RUBRIC_v2.md"),
-                          ("CHECKLIST.md", "CHALLENGE_v2_CHECKLIST.md")):
+    for name, src_doc in (
+        ("RUBRIC.md", "TIER_RUBRIC_v2.md"),
+        ("CHECKLIST.md", "CHALLENGE_v2_CHECKLIST.md"),
+    ):
         (out / name).write_text(redact((HERE / src_doc).read_text(), assigned))
     # Name the rubric version FROM the rubric. It was hardcoded "v1.0" and went
     # on telling judges that after the instrument became v1.1 — the same stale-
@@ -252,12 +294,17 @@ def main() -> int:
     # docs with the artifact's list blocks the packet on a non-leak, which is
     # how a safety check gets switched off for being noisy.
     import sys
+
     sys.path.insert(0, str(HERE))
     from stage import scan  # noqa: E402
 
     print(f"packet -> {out}")
-    print(f"  artifact files : {sum(1 for p in (out/'artifact').rglob('*') if p.is_file())}")
-    print(f"  pseudonyms     : {', '.join(f'{k}->{v}' for k, v in assigned.items()) or '(none needed)'}")
+    print(
+        f"  artifact files : {sum(1 for p in (out/'artifact').rglob('*') if p.is_file())}"
+    )
+    print(
+        f"  pseudonyms     : {', '.join(f'{k}->{v}' for k, v in assigned.items()) or '(none needed)'}"
+    )
 
     # BLOCK on model names; ADVISE on framework names.
     #
@@ -275,7 +322,7 @@ def main() -> int:
     for doc in ("RUBRIC.md", "CHECKLIST.md", "INSTRUCTIONS.md"):
         text = (out / doc).read_text()
         for m in doc_pat.finditer(text):
-            leaks.append((doc, str(text[:m.start()].count("\n") + 1), m.group(0)))
+            leaks.append((doc, str(text[: m.start()].count("\n") + 1), m.group(0)))
 
     # THIRD SCAN: anchors. The two identifier scans above ask "does this name a
     # model"; neither asks "does this hand the judge a number". A surviving
@@ -286,15 +333,21 @@ def main() -> int:
     for doc in ("RUBRIC.md", "CHECKLIST.md", "INSTRUCTIONS.md"):
         text = (out / doc).read_text()
         for m in _SCORE_CITE.finditer(text):
-            anchor_hits.append(f"{doc}:{text[:m.start()].count(chr(10)) + 1}  {m.group(0)!r}")
+            anchor_hits.append(
+                f"{doc}:{text[:m.start()].count(chr(10)) + 1}  {m.group(0)!r}"
+            )
         for m in re.finditer(r"Arm [A-Z][-\w.]+", text):
-            tail_hits.append(f"{doc}:{text[:m.start()].count(chr(10)) + 1}  {m.group(0)!r}")
+            tail_hits.append(
+                f"{doc}:{text[:m.start()].count(chr(10)) + 1}  {m.group(0)!r}"
+            )
     if anchor_hits:
         print("\n!! PAST-SCORE ANCHORS SURVIVED — do NOT judge past this:")
         for h in anchor_hits:
             print(f"    {h}")
     if tail_hits:
-        print("\n!! PSEUDONYM KEPT A CONFIG TAIL — identifying; do NOT judge past this:")
+        print(
+            "\n!! PSEUDONYM KEPT A CONFIG TAIL — identifying; do NOT judge past this:"
+        )
         for h in tail_hits:
             print(f"    {h}")
     if not (anchor_hits or tail_hits):

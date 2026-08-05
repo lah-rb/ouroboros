@@ -31,10 +31,10 @@ def main() -> None:
     os.makedirs(os.path.dirname(logfile), exist_ok=True)
 
     if os.fork() > 0:
-        os._exit(0)          # parent returns to the shell immediately
-    os.setsid()              # new session; no controlling terminal
+        os._exit(0)  # parent returns to the shell immediately
+    os.setsid()  # new session; no controlling terminal
     if os.fork() > 0:
-        os._exit(0)          # not a session leader, so it cannot reacquire one
+        os._exit(0)  # not a session leader, so it cannot reacquire one
 
     fd_null = os.open(os.devnull, os.O_RDONLY)
     fd_log = os.open(logfile, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)

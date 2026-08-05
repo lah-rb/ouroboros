@@ -175,9 +175,7 @@ class FormatRenderer:
         if not _avail:
             reasoning_value = ""
         else:
-            reasoning_value = (
-                _effective or self.s.system_block.reasoning_default
-            )
+            reasoning_value = _effective or self.s.system_block.reasoning_default
         _level_map = self.s.reasoning.levels
         if _level_map and reasoning_value in _level_map:
             reasoning_value = _level_map[reasoning_value]
@@ -456,12 +454,7 @@ class FormatRenderer:
         """
         t = self.s.thinking
         n = int(getattr(t, "force_open_hold_tokens", 0) or 0)
-        if (
-            n <= 0
-            or t.style != "inline_tags"
-            or not t.open_tag
-            or not t.close_tag
-        ):
+        if n <= 0 or t.style != "inline_tags" or not t.open_tag or not t.close_tag:
             return None
         rendered = self.render_generation_prompt(reasoning=reasoning)
         tail = t.open_tag + ("\n" if t.open_tag_newline else "")

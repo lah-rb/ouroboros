@@ -70,7 +70,9 @@ BUDGETS = [("ample", 400), ("truncating", 60)]
 
 
 def main() -> None:
-    print(f"{'case':22} {'raw_tok':>7} {'raw_len':>7} {'strip_len':>9}  open  close  VERDICT")
+    print(
+        f"{'case':22} {'raw_tok':>7} {'raw_len':>7} {'strip_len':>9}  open  close  VERDICT"
+    )
     print("-" * 78)
     for pname, prompt in PROMPTS:
         for bname, budget in BUDGETS:

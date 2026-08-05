@@ -798,8 +798,7 @@ class Query:
             # KV-pressure force-window, which stops BELOW the budget — without
             # the second term a severed response reads as complete.
             truncated=(
-                outcome.tokens_generated >= effective_max
-                or outcome.truncated_by_engine
+                outcome.tokens_generated >= effective_max or outcome.truncated_by_engine
             ),
             prompt_tokens=outcome.prompt_tokens,
             cached_prefix_tokens=outcome.cached_prefix_tokens,

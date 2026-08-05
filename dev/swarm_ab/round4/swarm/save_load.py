@@ -5,7 +5,6 @@ import json
 from typing import Dict, Any
 
 
-
 def save_game(state: Dict[str, Any], filename: str) -> None:
     """Write the current game state to ``filename`` as JSON.
 

@@ -58,13 +58,13 @@ class SisterMaren(NPC):
                 '"The King wears his death like armor now -- ash and cinder, cold to any '
                 'ordinary blade. But flame remembers flame."',
                 '"Seek what burns without dying: a brand born of the sun itself. It sleeps '
-                'somewhere in this keep, hidden from looters. Find it. Carry it. Wield it '
+                "somewhere in this keep, hidden from looters. Find it. Carry it. Wield it "
                 'against him."',
             ]
         else:
             if player.weapon == "sunfire_brand" or player.has_item("sunfire_brand"):
                 return [
-                    'Sister Maren\'s hollow eyes brighten faintly. "You carry sunfire in '
+                    "Sister Maren's hollow eyes brighten faintly. \"You carry sunfire in "
                     'your hands, wanderer. He will feel it. Go -- end this."'
                 ]
             barks = [
@@ -101,8 +101,8 @@ class ArchivistRell(NPC):
             return [
                 'The old man startles, then relaxes. "Oh -- a visitor. Not a ghost, not '
                 'ash. How refreshing."',
-                '"I catalog what\'s left of this place. It was a proud keep once, before '
-                'its lord let grief curdle into something monstrous. Now he squats on that '
+                "\"I catalog what's left of this place. It was a proud keep once, before "
+                "its lord let grief curdle into something monstrous. Now he squats on that "
                 'throne, more cinder than man."',
             ]
         elif stage == 1:
@@ -110,7 +110,7 @@ class ArchivistRell(NPC):
             return [
                 '"You mean to face him? Then you\'ll want the Sunfire Brand."',
                 '"I catalogued every relic before the ash spread. The Brand was forged to '
-                'hold captured dawn-light -- too bright, too dangerous, so they entombed it '
+                "hold captured dawn-light -- too bright, too dangerous, so they entombed it "
                 'with the dead in the crypt below, so its light could not tempt looters."',
                 '"It is the one thing I know of that scars true fire back into that ashen '
                 'husk of a king. Ordinary steel just... slides off him."',
@@ -118,8 +118,8 @@ class ArchivistRell(NPC):
         else:
             if "cave_widow" in player.defeated_monsters:
                 line = (
-                    '"You crossed the Widow\'s crypt and lived -- good. Mind his second '
-                    'wind; he burns hotter once he\'s badly wounded."'
+                    "\"You crossed the Widow's crypt and lived -- good. Mind his second "
+                    "wind; he burns hotter once he's badly wounded.\""
                 )
             else:
                 line = '"Mind the stair down to the crypt. I hear something large nests there now."'

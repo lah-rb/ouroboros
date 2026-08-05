@@ -22,9 +22,9 @@ class Player:
         self.location = "courtyard"
         self.previous_location = "courtyard"
         self.poisoned_turns = 0
-        self.defeated_monsters = []       # list of monster keys
-        self.npc_stage = {}               # npc key -> int stage reached
-        self.turns_taken = 0              # combat rounds elapsed, total
+        self.defeated_monsters = []  # list of monster keys
+        self.npc_stage = {}  # npc key -> int stage reached
+        self.turns_taken = 0  # combat rounds elapsed, total
 
     # ---------- basic state ----------
 

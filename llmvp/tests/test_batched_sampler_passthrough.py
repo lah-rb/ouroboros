@@ -6,6 +6,7 @@ Llama.generate(). `build_sampling_params` only ever read 8 fields, so under
 `decode_mode: batched` (the default) those mitigations were silently INERT —
 configured, logged, and doing nothing. These tests pin the passthrough.
 """
+
 import pytest
 
 from inference.batched_engine import build_sampling_params
@@ -30,8 +31,12 @@ class TestOptInKnobsReachTheSampler:
         assert _params(penalty_last_n=800).penalty_last_n == 800
 
     def test_dry_sampler_forwarded(self):
-        p = _params(dry_multiplier=0.8, dry_base=1.75,
-                    dry_allowed_length=3, dry_penalty_last_n=-1)
+        p = _params(
+            dry_multiplier=0.8,
+            dry_base=1.75,
+            dry_allowed_length=3,
+            dry_penalty_last_n=-1,
+        )
         assert p.dry_multiplier == 0.8
         assert p.dry_base == 1.75
         assert p.dry_allowed_length == 3
@@ -41,8 +46,9 @@ class TestOptInKnobsReachTheSampler:
         assert _params(penalty_freq=0.4).penalty_freq == 0.4
 
     def test_reasoning_budget_forwarded_with_tags(self):
-        p = _params(reasoning_budget=2048,
-                    reasoning_start="<think>", reasoning_end="</think>")
+        p = _params(
+            reasoning_budget=2048, reasoning_start="<think>", reasoning_end="</think>"
+        )
         assert p.reasoning_budget == 2048
         assert p.reasoning_end == "</think>"
 
@@ -61,8 +67,8 @@ class TestOptInKnobsReachTheSampler:
 class TestUnconfiguredModelsAreUnchanged:
     def test_absent_knobs_keep_library_defaults(self):
         p = _params()
-        assert p.reasoning_budget == -1      # unrestricted
-        assert p.dry_multiplier == 0.0       # DRY off
+        assert p.reasoning_budget == -1  # unrestricted
+        assert p.dry_multiplier == 0.0  # DRY off
         assert p.penalty_freq == 0.0
         assert not p.logit_bias
 

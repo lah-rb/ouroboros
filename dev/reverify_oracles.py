@@ -94,7 +94,11 @@ def reverify(run_dirs: list[Path]) -> None:
         m = json.loads(mj.read_text(errors="replace"))
         if (m.get("config") or {}).get("flow_set") != "ops":
             continue
-        task = md.parts[md.parts.index("runs") + 2] if "runs" in md.parts else m.get("id", "?")
+        task = (
+            md.parts[md.parts.index("runs") + 2]
+            if "runs" in md.parts
+            else m.get("id", "?")
+        )
         td = m.get("task_definition") or {}
         criteria = td.get("completion_criteria") or []
         path = _extract_artifact_path(criteria)
@@ -129,7 +133,9 @@ def reverify(run_dirs: list[Path]) -> None:
         for task, path in unrecoverable:
             print(f"    {task}: {path}")
     false_pass = sum(1 for r in caught if r[3])
-    print(f"\n  HEADLINE: {false_pass} false-pass(es) the sanity rung would have caught.")
+    print(
+        f"\n  HEADLINE: {false_pass} false-pass(es) the sanity rung would have caught."
+    )
 
 
 if __name__ == "__main__":

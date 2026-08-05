@@ -46,11 +46,17 @@ TASK = (
 # Ties are resolved by "any correct answer of maximal length", so the checker
 # compares LENGTH and verifies the result really is a palindrome and a substring.
 CASES = [
-    ("babad", 3), ("cbbd", 2), ("", 0), ("a", 1), ("ac", 1),
-    ("forgeeksskeegfor", 10), ("abacabad", 7), ("aaaa", 4),
+    ("babad", 3),
+    ("cbbd", 2),
+    ("", 0),
+    ("a", 1),
+    ("ac", 1),
+    ("forgeeksskeegfor", 10),
+    ("abacabad", 7),
+    ("aaaa", 4),
 ]
 
-CHECKER = '''
+CHECKER = """
 import sys
 res = []
 for s, want in %r:
@@ -67,16 +73,20 @@ for s, want in %r:
     if got not in s:
         res.append(f"NOTSUB {s!r}: {got!r}"); continue
 print("PASS" if not res else "FAIL " + " | ".join(res[:3]))
-''' % (CASES,)
+""" % (CASES,)
 
 
 def complete(prompt: str, level: str, max_tokens: int = 4000) -> dict:
-    q = ("query($p:String!,$m:Int!,$r:String){completion(request:"
-         "{prompt:$p,maxTokens:$m,reasoning:$r}){text tokensGenerated}}")
-    body = json.dumps({"query": q,
-                       "variables": {"p": prompt, "m": max_tokens, "r": level}}).encode()
-    req = urllib.request.Request(ENDPOINT, data=body,
-                                 headers={"Content-Type": "application/json"})
+    q = (
+        "query($p:String!,$m:Int!,$r:String){completion(request:"
+        "{prompt:$p,maxTokens:$m,reasoning:$r}){text tokensGenerated}}"
+    )
+    body = json.dumps(
+        {"query": q, "variables": {"p": prompt, "m": max_tokens, "r": level}}
+    ).encode()
+    req = urllib.request.Request(
+        ENDPOINT, data=body, headers={"Content-Type": "application/json"}
+    )
     with urllib.request.urlopen(req, timeout=900) as r:
         return json.loads(r.read().decode())
 
@@ -91,8 +101,9 @@ def run_check(code: str) -> str:
     hang or a crash must not take the probe with it."""
     prog = code + "\n" + CHECKER
     try:
-        p = subprocess.run([sys.executable, "-c", prog],
-                           capture_output=True, text=True, timeout=20)
+        p = subprocess.run(
+            [sys.executable, "-c", prog], capture_output=True, text=True, timeout=20
+        )
     except subprocess.TimeoutExpired:
         return "FAIL timeout (likely not O(n), or an infinite loop)"
     out = (p.stdout or "").strip().splitlines()
@@ -119,31 +130,42 @@ def main() -> int:
         for i in range(REPS):
             try:
                 payload = complete(TASK, level)
-            except Exception as exc:  # noqa: BLE001 — one failure must not stop the sweep
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 — one failure must not stop the sweep
                 say(f"  {level:<10}{'—':>11}{'—':>12}{'ERROR':>10}  {exc}")
                 continue
             errs = payload.get("errors") or []
             if errs:
-                say(f"  {level:<10}{'—':>11}{'—':>12}{'ERROR':>10}  "
-                    f"{errs[0].get('message','')[:70]}")
+                say(
+                    f"  {level:<10}{'—':>11}{'—':>12}{'ERROR':>10}  "
+                    f"{errs[0].get('message','')[:70]}"
+                )
                 continue
-            text = ((payload.get("data") or {}).get("completion") or {}).get("text") or ""
+            text = ((payload.get("data") or {}).get("completion") or {}).get(
+                "text"
+            ) or ""
             code = extract_code(text)
             verdict = run_check(code) if code.strip() else "FAIL empty"
             # CoT is invisible in the returned text (it is stripped server-side),
             # so read it from the thinking endpoint rather than inferring.
             try:
                 tq = json.dumps({"query": "{ thinking { content complete } }"}).encode()
-                treq = urllib.request.Request(ENDPOINT, data=tq,
-                                              headers={"Content-Type": "application/json"})
+                treq = urllib.request.Request(
+                    ENDPOINT, data=tq, headers={"Content-Type": "application/json"}
+                )
                 with urllib.request.urlopen(treq, timeout=30) as r:
                     tk = json.loads(r.read().decode())
-                cot = len(((tk.get("data") or {}).get("thinking") or {}).get("content") or "")
+                cot = len(
+                    ((tk.get("data") or {}).get("thinking") or {}).get("content") or ""
+                )
             except Exception:  # noqa: BLE001
                 cot = -1
             head = verdict.split(" ", 1)
-            say(f"  {level:<10}{cot:>11}{len(code):>12}{head[0]:>10}  "
-                f"{(head[1][:64] if len(head) > 1 else '')}")
+            say(
+                f"  {level:<10}{cot:>11}{len(code):>12}{head[0]:>10}  "
+                f"{(head[1][:64] if len(head) > 1 else '')}"
+            )
 
     say("")
     say("READ IT AS: cot_chars rising across no_think < low < high means the dial")

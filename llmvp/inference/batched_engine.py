@@ -688,7 +688,9 @@ class BatchedEngine:
         """
         held = 0
         for s in self._streams.values():
-            if s.phase is StreamPhase.DONE or (exclude is not None and s.req is exclude):
+            if s.phase is StreamPhase.DONE or (
+                exclude is not None and s.req is exclude
+            ):
                 continue
             held += int(s.gen_start_pos) + int(s.effective_max)
         return held
@@ -1309,8 +1311,12 @@ class BatchedEngine:
         self.control(_do).result(timeout=30)
         self._flow_pins.move_to_end(pin.key)
         self.h_flow_hits += 1
-        logger.info("🔁 batched flow HIT %r (seat seq %d, %d tok)",
-                    pin.key, slot.seq, pin.n_tokens)
+        logger.info(
+            "🔁 batched flow HIT %r (seat seq %d, %d tok)",
+            pin.key,
+            slot.seq,
+            pin.n_tokens,
+        )
 
     def install_head_sync(self, slot: SeqSlot, head: PersonaHead) -> None:
         """Whole-seq replace of a seat's content with a pinned head (persona

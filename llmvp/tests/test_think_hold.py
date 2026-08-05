@@ -17,7 +17,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from inference.think_hold import ThinkHoldSampler, resolve_think_hold_kwargs  # noqa: E402
+from inference.think_hold import (
+    ThinkHoldSampler,
+    resolve_think_hold_kwargs,
+)  # noqa: E402
 
 
 class _Cand:

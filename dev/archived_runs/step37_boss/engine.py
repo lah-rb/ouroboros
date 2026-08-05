@@ -115,13 +115,24 @@ class GameEngine:
 
     def execute_command(self, cmd: Command) -> list[str]:
         output = []
-        
+
         def maybe_monster_attack():
-            if cmd.type not in (CommandType.FLEE, CommandType.QUIT, CommandType.SAVE, CommandType.LOAD):
-                if self.in_combat and self.current_monster and self.current_monster not in self.defeated_monsters:
+            if cmd.type not in (
+                CommandType.FLEE,
+                CommandType.QUIT,
+                CommandType.SAVE,
+                CommandType.LOAD,
+            ):
+                if (
+                    self.in_combat
+                    and self.current_monster
+                    and self.current_monster not in self.defeated_monsters
+                ):
                     if cmd.type != CommandType.ATTACK:
-                        output.extend(self.combat_engine.monster_attack(self.current_monster))
-        
+                        output.extend(
+                            self.combat_engine.monster_attack(self.current_monster)
+                        )
+
         if cmd.type == CommandType.QUIT:
             output.append("Goodbye!")
             maybe_monster_attack()

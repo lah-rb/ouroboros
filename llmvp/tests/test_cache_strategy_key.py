@@ -175,7 +175,9 @@ logging: {enabled: true, directory: ./logs}
         assert c.model.kv_unified is True
         assert c.resources.decode_mode == "pool"
 
-    def test_batched_satisfies_its_own_precondition_validator(self, tmp_path, monkeypatch):
+    def test_batched_satisfies_its_own_precondition_validator(
+        self, tmp_path, monkeypatch
+    ):
         """decode_mode: batched raises unless resident + swa_full + kv_unified
         are all set. The strategy supplies two of the three; swa_full is in the
         fixture because it is the model's business."""

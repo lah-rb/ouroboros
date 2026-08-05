@@ -209,7 +209,9 @@ def test_format_renderer_harmony():
     from types import SimpleNamespace as _NS
     from unittest.mock import patch as _patch
 
-    _cfg = _NS(model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None))
+    _cfg = _NS(
+        model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None)
+    )
     with _patch("core.config.get_config", return_value=_cfg):
         # System + developer split
         output = r.render_system(persona="Test persona", date="2026-01-01")
@@ -269,9 +271,7 @@ def test_format_renderer_chatml():
     from unittest.mock import patch as _patch0
 
     _cfg0 = _NS0(
-        model=_NS0(
-            thinking="per_request", thinking_available=True, thinking_mode=None
-        )
+        model=_NS0(thinking="per_request", thinking_available=True, thinking_mode=None)
     )
     with _patch0("core.config.get_config", return_value=_cfg0):
         gen = r.render_generation_prompt(reasoning="high")
@@ -284,7 +284,9 @@ def test_format_renderer_chatml():
     from types import SimpleNamespace as _NS
     from unittest.mock import patch as _patch
 
-    _cfg = _NS(model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None))
+    _cfg = _NS(
+        model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None)
+    )
     with _patch("core.config.get_config", return_value=_cfg):
         # REVISED 2026-08-03 (operator): canonical low maps to STEP-LOW —
         # shallow thinking WITH the opener; suppression is mode "off"'s job
@@ -348,7 +350,9 @@ def test_harmony_reasoning_driven_by_config():
     from types import SimpleNamespace as _NS
     from unittest.mock import patch as _patch
 
-    _cfg = _NS(model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None))
+    _cfg = _NS(
+        model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None)
+    )
     with _patch("core.config.get_config", return_value=_cfg):
         assert "Reasoning: high" in r.render_system(reasoning="high")
         assert "Reasoning: low" in r.render_system(reasoning=None)
@@ -365,7 +369,9 @@ def test_chatml_reasoning_prefix_gated():
     from types import SimpleNamespace as _NS
     from unittest.mock import patch as _patch
 
-    _cfg = _NS(model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None))
+    _cfg = _NS(
+        model=_NS(thinking="per_request", thinking_available=True, thinking_mode=None)
+    )
     # IDENTITY mapping as of 2026-07-25 (revised after the blind boss panel):
     # each canonical level renders Step's own dial; all three MUST stay
     # equal-length so the mid-session head splice remains legal.
@@ -579,9 +585,9 @@ def test_gemma4_rendering_matches_official_template():
     expected_on = render_official(True)
     for lvl in ("medium", "high"):
         ours_on = render_ours(reasoning=lvl)
-        assert ours_on == expected_on, (
-            f"{lvl}:\nexpected: {expected_on!r}\nours    : {ours_on!r}"
-        )
+        assert (
+            ours_on == expected_on
+        ), f"{lvl}:\nexpected: {expected_on!r}\nours    : {ours_on!r}"
 
     # ── Thinking OFF — the router's "low" level. ONE remaining known
     # deviation: the off-state system slot is PADDED ("  \n",
@@ -1018,7 +1024,9 @@ def test_qwen_rendering_matches_official_template():
     from unittest.mock import patch
 
     jinja2 = pytest.importorskip("jinja2")
-    tpl_path = Path(__file__).resolve().parents[2] / "dev" / "qwen36_chat_template.jinja"
+    tpl_path = (
+        Path(__file__).resolve().parents[2] / "dev" / "qwen36_chat_template.jinja"
+    )
     if not tpl_path.is_file():
         pytest.skip("official qwen3.6 template not banked")
 
@@ -1065,14 +1073,14 @@ def test_qwen_rendering_matches_official_template():
     # thinking: "on", which routes everything high -> enabled).
     for canonical, enabled in (("medium", True), ("high", True)):
         ours, official = render_ours(canonical), render_official(enabled)
-        assert ours == official, (
-            f"canonical={canonical}:\nours    : {ours!r}\nofficial: {official!r}"
-        )
+        assert (
+            ours == official
+        ), f"canonical={canonical}:\nours    : {ours!r}\nofficial: {official!r}"
     for canonical in ("low", None):
         ours, official = render_ours(canonical), render_official(False)
-        assert ours == official, (
-            f"{canonical}/suppressed:\nours    : {ours!r}\nofficial: {official!r}"
-        )
+        assert (
+            ours == official
+        ), f"{canonical}/suppressed:\nours    : {ours!r}\nofficial: {official!r}"
     assert "<think>\n\n</think>\n\n" in ours  # the exact suppressed bytes
 
 
@@ -1184,9 +1192,9 @@ def test_deepseek4_rendering_matches_official_template(monkeypatch):
         official = _deepseek4_official(**kw)
         # high/max prepend an effort paragraph to the system block; compare
         # the structural tail, which is what the dial actually changes.
-        assert ours[len(bos) :].endswith(official[-40:]), (
-            f"level {level}: ours {ours[-40:]!r} != official {official[-40:]!r}"
-        )
+        assert ours[len(bos) :].endswith(
+            official[-40:]
+        ), f"level {level}: ours {ours[-40:]!r} != official {official[-40:]!r}"
 
 
 def test_deepseek4_thinking_dial_is_close_only_when_off(monkeypatch):

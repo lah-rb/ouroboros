@@ -9,6 +9,7 @@ held-out estimate; retrain whenever trusted_labels grows).
 
 -> models/reasoning_router_v1.joblib  {vectorizer, clf, medium_idx, meta}
 """
+
 import json
 import time
 from collections import Counter
@@ -27,11 +28,23 @@ texts = [r["text"] for r in rows]
 labels = [r["label"] for r in rows]
 print(f"training on {len(rows)} trusted labels: {dict(Counter(labels))}")
 
-vectorizer = FeatureUnion([
-    ("w", TfidfVectorizer(max_features=50000, ngram_range=(1, 2), sublinear_tf=True)),
-    ("c", TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), max_features=100000,
-                          sublinear_tf=True)),
-])
+vectorizer = FeatureUnion(
+    [
+        (
+            "w",
+            TfidfVectorizer(max_features=50000, ngram_range=(1, 2), sublinear_tf=True),
+        ),
+        (
+            "c",
+            TfidfVectorizer(
+                analyzer="char_wb",
+                ngram_range=(3, 5),
+                max_features=100000,
+                sublinear_tf=True,
+            ),
+        ),
+    ]
+)
 X = vectorizer.fit_transform(texts)
 clf = LogisticRegression(class_weight="balanced", max_iter=2000)
 clf.fit(X, labels)
@@ -60,4 +73,6 @@ joblib.dump(
     OUT,
     compress=3,
 )
-print(f"saved {OUT} ({OUT.stat().st_size/1e6:.1f} MB) | single-text inference {lat_ms:.2f} ms")
+print(
+    f"saved {OUT} ({OUT.stat().st_size/1e6:.1f} MB) | single-text inference {lat_ms:.2f} ms"
+)

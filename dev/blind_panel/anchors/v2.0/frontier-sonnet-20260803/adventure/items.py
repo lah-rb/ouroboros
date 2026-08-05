@@ -19,8 +19,16 @@ class Item:
         or used.
     """
 
-    def __init__(self, key, name, description, item_type,
-                 value=0, heal_amount=0, boss_weakness=False):
+    def __init__(
+        self,
+        key,
+        name,
+        description,
+        item_type,
+        value=0,
+        heal_amount=0,
+        boss_weakness=False,
+    ):
         self.key = key
         self.name = name
         self.description = description

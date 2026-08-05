@@ -64,8 +64,11 @@ class WiredSampler(threading.Thread):
             if w > self.kill_gb:
                 self.tripped = True
                 subprocess.run(["pkill", "-KILL", "-f", "api/main.py"])
-                print(f"!! KILL CEILING: wired={w:.1f}GB > {self.kill_gb}GB "
-                      f"— server killed", flush=True)
+                print(
+                    f"!! KILL CEILING: wired={w:.1f}GB > {self.kill_gb}GB "
+                    f"— server killed",
+                    flush=True,
+                )
                 return
             time.sleep(2)
 
@@ -87,8 +90,10 @@ def main() -> None:
     pool = int(health.get("kvPoolTokens") or 0)
     stream_lim = int(health.get("modelMaxContext") or pool) or pool
     per_stream = min(pool, stream_lim)
-    print(f"server: {health['status']} pool={pool} streamLimit={stream_lim} "
-          f"mode={health['decodeMode']}")
+    print(
+        f"server: {health['status']} pool={pool} streamLimit={stream_lim} "
+        f"mode={health['decodeMode']}"
+    )
     base = wired_gb()
     print(f"baseline wired: {base:.1f}GB")
 
@@ -124,8 +129,7 @@ def main() -> None:
             r = gql(
                 "query($r: CompletionRequest!){ completion(request:$r){ "
                 "promptTokens generatedTokens } }",
-                {"r": {"prompt": prompt, "maxTokens": args.gen,
-                       "temperature": 0.3}},
+                {"r": {"prompt": prompt, "maxTokens": args.gen, "temperature": 0.3}},
             )
             if "errors" in r:
                 err = str(r["errors"])[:160]
@@ -153,13 +157,17 @@ def main() -> None:
     (t0_, w0), (t1, w1) = rows[0], rows[-1]
     if t1 > t0_:
         mb_per_tok = (w1 - w0) * 1e3 / (t1 - t0_)
-        print(f"\nmeasured marginal cost ≈ {mb_per_tok:.2f} MB/token "
-              f"(Δwired {w1 - w0:.1f}GB over Δ{t1 - t0_} tokens)")
+        print(
+            f"\nmeasured marginal cost ≈ {mb_per_tok:.2f} MB/token "
+            f"(Δwired {w1 - w0:.1f}GB over Δ{t1 - t0_} tokens)"
+        )
         for ceiling in (100.0, 110.0):
             if mb_per_tok > 0:
                 max_tok = int((ceiling - w0) * 1e3 / mb_per_tok) + t0_
-                print(f"  extrapolated max fill at {ceiling:.0f}GB wired ≈ "
-                      f"{max_tok:,} tokens")
+                print(
+                    f"  extrapolated max fill at {ceiling:.0f}GB wired ≈ "
+                    f"{max_tok:,} tokens"
+                )
     print("done")
 
 

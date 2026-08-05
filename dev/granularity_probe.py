@@ -211,7 +211,9 @@ def main() -> None:
     dirs = {name: build_arm(mods) for name, mods in ARMS.items()}
     prompts = {name: render(d) for name, d in dirs.items()}
     for name, text in prompts.items():
-        print(f"[{name}] {len(text)} chars | example modules = {example_count(ARMS[name])}")
+        print(
+            f"[{name}] {len(text)} chars | example modules = {example_count(ARMS[name])}"
+        )
     if args.render_only:
         for name, text in prompts.items():
             (Path(tempfile.gettempdir()) / f"gran_{name}.txt").write_text(text)
@@ -229,12 +231,16 @@ def main() -> None:
                 print(f"  {arm}[{i}] FAILED: {type(e).__name__}: {e}")
                 continue
             results[arm].append(out)
-            print(f"  {arm}[{i}] n={len(out.get('creation_order') or [])} {out.get('creation_order')}")
+            print(
+                f"  {arm}[{i}] n={len(out.get('creation_order') or [])} {out.get('creation_order')}"
+            )
 
     print("\n══ granularity by arm ══")
     summary = {}
     for arm, rows in results.items():
-        counts = [len(r.get("creation_order") or []) for r in rows if r.get("creation_order")]
+        counts = [
+            len(r.get("creation_order") or []) for r in rows if r.get("creation_order")
+        ]
         if not counts:
             print(f"{arm}: no parseable samples")
             continue
@@ -256,7 +262,11 @@ def main() -> None:
         print("\n══ pre-registered verdict ══")
         print(f"  fine - coarse = {spread:+.2f} modules")
         print(f"  arm spread    = {max(allv) - min(allv):.2f} modules")
-        if spread >= 1.5 and abs(summary["B_coarse"] - 2) <= 1.5 and abs(summary["C_fine"] - 9) <= 1.5:
+        if (
+            spread >= 1.5
+            and abs(summary["B_coarse"] - 2) <= 1.5
+            and abs(summary["C_fine"] - 9) <= 1.5
+        ):
             print("  -> ANCHORS: output tracks the example's granularity")
         elif max(allv) - min(allv) <= 1.0:
             print("  -> TASK-DRIVEN: example granularity does not transfer")

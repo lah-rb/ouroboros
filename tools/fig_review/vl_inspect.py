@@ -37,12 +37,22 @@ from fig_review import _free_port, _wait_health
 _DEFAULT_MODEL = "mlx-community/Qwen3-VL-8B-Instruct-8bit"
 _DEFAULT_MAX_TOKENS = 800
 
-_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-         ".gif": "image/gif", ".webp": "image/webp"}
+_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 
 
-def build_payload(model: str, image_b64: str, mime: str, question: str,
-                  max_tokens: int = _DEFAULT_MAX_TOKENS) -> dict:
+def build_payload(
+    model: str,
+    image_b64: str,
+    mime: str,
+    question: str,
+    max_tokens: int = _DEFAULT_MAX_TOKENS,
+) -> dict:
     """OpenAI-compatible chat payload with one image part (pure, testable)."""
     return {
         "model": model,
@@ -82,8 +92,12 @@ def main() -> int:
     ap.add_argument("--image", required=True)
     ap.add_argument("--question", required=True)
     ap.add_argument("--model", default=_DEFAULT_MODEL)
-    ap.add_argument("--port", type=int, default=0,
-                    help="0 = spawn a private mlx_vlm.server; N = reuse one")
+    ap.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        help="0 = spawn a private mlx_vlm.server; N = reuse one",
+    )
     ap.add_argument("--max-tokens", type=int, default=_DEFAULT_MAX_TOKENS)
     args = ap.parse_args()
 

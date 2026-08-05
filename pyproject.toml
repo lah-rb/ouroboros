@@ -40,3 +40,10 @@ swe = [
     "swebench>=3.0.0",
     "datasets>=2.0.0",
 ]
+
+[tool.black]
+# Defaults, stated explicitly so the standard is a decision rather than
+# whatever the installed black happens to do. A future black changing its
+# default line length would otherwise reformat the tree silently.
+line-length = 88
+target-version = ["py312"]

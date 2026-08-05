@@ -8,6 +8,7 @@ from src.parser import parse_command, Command
 from src.combat import initiate_combat, CombatResult
 from src.save_load import save_game, load_game
 
+
 class GameEngine:
     """Runs the interactive adventure.
 
@@ -34,7 +35,7 @@ class GameEngine:
                 id=d["id"],
                 name=d["name"],
                 description=d.get("description", ""),
-                type=d.get("type", "")
+                type=d.get("type", ""),
             )
 
         # Build rooms
@@ -43,13 +44,15 @@ class GameEngine:
             room_items = [make_item(i) for i in rdata.get("items", [])]
             room_npcs = []
             for nd in rdata.get("npcs", []):
-                room_npcs.append(NPC(
-                    id=nd["id"],
-                    name=nd["name"],
-                    location=rid,
-                    dialogue=nd.get("dialogue", []),
-                    dialogue_index=0
-                ))
+                room_npcs.append(
+                    NPC(
+                        id=nd["id"],
+                        name=nd["name"],
+                        location=rid,
+                        dialogue=nd.get("dialogue", []),
+                        dialogue_index=0,
+                    )
+                )
             monster_obj = None
             if "monster" in rdata and rdata["monster"] is not None:
                 m = rdata["monster"]
@@ -59,7 +62,7 @@ class GameEngine:
                     health=m["health"],
                     max_health=m["max_health"],
                     attack=m["attack"],
-                    description=m.get("description", "")
+                    description=m.get("description", ""),
                 )
             rooms[rid] = Room(
                 id=rid,
@@ -68,7 +71,7 @@ class GameEngine:
                 connections=rdata.get("connections", {}),
                 items=room_items,
                 npcs=room_npcs,
-                monster=monster_obj
+                monster=monster_obj,
             )
 
         # Build NPC dictionary (global reference)
@@ -92,16 +95,11 @@ class GameEngine:
             attack=pdata.get("attack", 5),
             defense=pdata.get("defense", 0),
             inventory=[make_item(i) for i in pdata.get("inventory", [])],
-            equipped={'weapon': None, 'armor': None}
+            equipped={"weapon": None, "armor": None},
         )
 
         # Assemble GameState
-        self.state = GameState(
-            player=player,
-            rooms=rooms,
-            npcs=npcs,
-            monsters=monsters
-        )
+        self.state = GameState(player=player, rooms=rooms, npcs=npcs, monsters=monsters)
         self._running = True
 
     def start(self) -> None:
@@ -228,16 +226,18 @@ class GameEngine:
                 if item.type.lower() == "healing":
                     # Simple healing logic; assume heal amount 20
                     heal_amount = 20
-                    new_health = min(self.state.player.health + heal_amount,
-                                     self.state.player.max_health)
+                    new_health = min(
+                        self.state.player.health + heal_amount,
+                        self.state.player.max_health,
+                    )
                     self.state.player.health = new_health
                     del inv[i]
                     print(f"You use the {item.name} and recover {heal_amount} health.")
                 elif item.type.lower() == "weapon":
-                    self.state.player.equipped['weapon'] = item
+                    self.state.player.equipped["weapon"] = item
                     print(f"You equip the {item.name} as a weapon.")
                 elif item.type.lower() == "armor":
-                    self.state.player.equipped['armor'] = item
+                    self.state.player.equipped["armor"] = item
                     print(f"You equip the {item.name} as armor.")
                 else:
                     print(f"You use the {item.name}, but nothing happens.")
@@ -275,7 +275,7 @@ class GameEngine:
                 if npc.dialogue:
                     line = npc.dialogue[npc.dialogue_index % len(npc.dialogue)]
                     npc.dialogue_index += 1
-                    print(f"{npc.name} says: \"{line}\"")
+                    print(f'{npc.name} says: "{line}"')
                 else:
                     print(f"{npc.name} has nothing to say.")
                 return
@@ -301,7 +301,9 @@ class GameEngine:
                 print(f"You have defeated {monster.name}!")
             else:
                 # Update health values if provided
-                self.state.player.health = getattr(result, "player_health", self.state.player.health)
+                self.state.player.health = getattr(
+                    result, "player_health", self.state.player.health
+                )
                 monster.health = getattr(result, "monster_health", monster.health)
                 print(f"The combat continues. Your health: {self.state.player.health}.")
         else:
@@ -335,16 +337,27 @@ class GameEngine:
             print(f"Inventory: {inv}")
         else:
             print("Inventory: empty")
-        weapon = p.equipped.get('weapon')
-        armor = p.equipped.get('armor')
+        weapon = p.equipped.get("weapon")
+        armor = p.equipped.get("armor")
         print(f"Equipped Weapon: {weapon.name if weapon else 'none'}")
         print(f"Equipped Armor: {armor.name if armor else 'none'}")
 
     def _handle_help(self) -> None:
         commands = [
-            "move <direction>", "take <item_id>", "drop <item_id>", "use <item_id>",
-            "examine <target_id>", "talk <npc_id>", "attack <monster_id>", "flee",
-            "look", "status", "help", "save <filepath>", "load <filepath>", "quit"
+            "move <direction>",
+            "take <item_id>",
+            "drop <item_id>",
+            "use <item_id>",
+            "examine <target_id>",
+            "talk <npc_id>",
+            "attack <monster_id>",
+            "flee",
+            "look",
+            "status",
+            "help",
+            "save <filepath>",
+            "load <filepath>",
+            "quit",
         ]
         print("Available commands:")
         for cmd in commands:

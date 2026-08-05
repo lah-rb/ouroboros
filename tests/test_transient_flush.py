@@ -129,14 +129,14 @@ async def test_an_ABSENT_declaration_is_reported_not_just_a_wrong_one():
     effects = MockEffects(
         files=_hy3_listing(),
         commands={"rm": _RM_OK},
-        mission=_mission(transient=[]),          # nothing declared AT ALL
+        mission=_mission(transient=[]),  # nothing declared AT ALL
     )
     out = await action_flush_transient_files(_si(effects))
     assert out.result["flushed"] == 0
-    assert "nothing to flush" in out.observations       # contract preserved
-    assert effects.call_count("push_note") == 1, (
-        "an undeclared save file must still reach the diagnostician"
-    )
+    assert "nothing to flush" in out.observations  # contract preserved
+    assert (
+        effects.call_count("push_note") == 1
+    ), "an undeclared save file must still reach the diagnostician"
     assert "game_state.json" in effects._state["notes"][-1]["content"]
 
 
@@ -213,7 +213,8 @@ class TestTripwire:
         from agent.actions.interactive_actions import _unaccounted_state_files
 
         stale = _unaccounted_state_files(
-            list(_hy3_listing()), {"engine.py", "world.yaml"},
+            list(_hy3_listing()),
+            {"engine.py", "world.yaml"},
             ["save.json", "*.autosave.json"],
         )
         assert stale == ["game_state.json"]
@@ -223,26 +224,34 @@ class TestTripwire:
         becomes the noise that trains an operator to ignore it."""
         from agent.actions.interactive_actions import _unaccounted_state_files
 
-        assert _unaccounted_state_files(
-            list(_hy3_listing()), {"engine.py", "world.yaml"}, ["game_state.json"]
-        ) == []
+        assert (
+            _unaccounted_state_files(
+                list(_hy3_listing()), {"engine.py", "world.yaml"}, ["game_state.json"]
+            )
+            == []
+        )
 
     def test_project_config_json_is_not_generated_state(self):
         from agent.actions.interactive_actions import _unaccounted_state_files
 
         stale = _unaccounted_state_files(
-            ["package.json", "package-lock.json", "tsconfig.json",
-             ".eslintrc.json", "index.ts", "save.dat"],
-            {"index.ts"}, ["nothing.json"],
+            [
+                "package.json",
+                "package-lock.json",
+                "tsconfig.json",
+                ".eslintrc.json",
+                "index.ts",
+                "save.dat",
+            ],
+            {"index.ts"},
+            ["nothing.json"],
         )
         assert stale == ["save.dat"]
 
     def test_canonical_modules_are_never_flagged(self):
         from agent.actions.interactive_actions import _unaccounted_state_files
 
-        assert _unaccounted_state_files(
-            ["data.json"], {"data.json"}, ["x.json"]
-        ) == []
+        assert _unaccounted_state_files(["data.json"], {"data.json"}, ["x.json"]) == []
 
 
 @pytest.mark.asyncio
@@ -295,8 +304,9 @@ async def test_the_note_is_pushed_once_not_once_per_session():
 
     # Second session: the note is already in mission state.
     mission.notes.append(
-        NoteRecord(content=effects._state["notes"][-1]["content"],
-                   category="failure_analysis")
+        NoteRecord(
+            content=effects._state["notes"][-1]["content"], category="failure_analysis"
+        )
     )
     effects2 = MockEffects(
         files=_hy3_listing(), commands={"rm": _RM_OK}, mission=mission
@@ -314,8 +324,8 @@ async def test_a_partial_mismatch_still_warns():
     effects = MockEffects(
         files={
             "engine.py": "code",
-            "state.json": "{}",        # declared -> flushed
-            "progress.db": "binary",   # NOT declared -> survives silently
+            "state.json": "{}",  # declared -> flushed
+            "progress.db": "binary",  # NOT declared -> survives silently
         },
         commands={"rm": _RM_OK},
         mission=_mission(transient=["state.json"]),

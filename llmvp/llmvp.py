@@ -323,16 +323,27 @@ def main():
                 r = subprocess.run(
                     ["sudo", "-n", "/usr/sbin/purge"], capture_output=True, timeout=180
                 )
-                print("🧹 purge:", "ok" if r.returncode == 0
-                      else f"skipped ({r.stderr.decode()[:60].strip()})")
+                print(
+                    "🧹 purge:",
+                    (
+                        "ok"
+                        if r.returncode == 0
+                        else f"skipped ({r.stderr.decode()[:60].strip()})"
+                    ),
+                )
             except Exception as e:  # noqa: BLE001
                 print(f"🧹 purge skipped: {e}")
         logf = open("/tmp/llmvp_restart.log", "a")
         subprocess.Popen(
             [sys.executable, me, "--backend"],
-            cwd=here, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True,
+            cwd=here,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
-        print("🔄 --restart: stopped + backend relaunching (detached -> /tmp/llmvp_restart.log)")
+        print(
+            "🔄 --restart: stopped + backend relaunching (detached -> /tmp/llmvp_restart.log)"
+        )
         return 0
 
     # Add project root to Python path for proper imports

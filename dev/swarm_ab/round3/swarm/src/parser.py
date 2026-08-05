@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Optional, List
 from src.constants import Direction, CommandType
 
+
 @dataclass
 class Command:
     """A parsed player instruction.
@@ -14,9 +15,11 @@ class Command:
         target: Primary argument (e.g., direction name, item id, npc id).
         extra: Additional free‑form arguments if needed.
     """
+
     type: CommandType
     target: Optional[str] = None
     extra: Optional[List[str]] = None
+
 
 def parse_command(raw: str) -> Command:
     """Convert a raw input line into a Command.

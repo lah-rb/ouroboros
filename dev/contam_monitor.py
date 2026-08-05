@@ -19,6 +19,7 @@ Usage:
   python dev/contam_monitor.py --working-dir /tmp/run_xyz --interval 30
   python dev/contam_monitor.py --replay --working-dir runs/capture_corpus/capture_card_game_3
 """
+
 from __future__ import annotations
 
 import argparse
@@ -46,8 +47,10 @@ def _isonow() -> str:
 
 
 def latest_trace(working_dir: str) -> str | None:
-    g = sorted(glob.glob(os.path.join(working_dir, ".agent/traces/*.jsonl")),
-               key=os.path.getmtime)
+    g = sorted(
+        glob.glob(os.path.join(working_dir, ".agent/traces/*.jsonl")),
+        key=os.path.getmtime,
+    )
     return g[-1] if g else None
 
 
@@ -71,7 +74,10 @@ def iter_rewrites(lines):
             e = json.loads(line)
         except Exception:
             continue
-        if e.get("event_type") == "inference_call" and e.get("step") == "generate_rewrite":
+        if (
+            e.get("event_type") == "inference_call"
+            and e.get("step") == "generate_rewrite"
+        ):
             yield classify(e), e
 
 
@@ -87,7 +93,8 @@ def _alert(reason: str, win_rate: float, cum_rate: float, last_stub_head: str) -
 
 def replay(working_dir: str) -> tuple[int, int]:
     """One-shot: process the whole latest trace and report the stub-rate
-    (verification mode — same generate_rewrite event selection as the trace forensics)."""
+    (verification mode — same generate_rewrite event selection as the trace forensics).
+    """
     T = latest_trace(working_dir)
     if not T:
         print(f"{os.path.basename(working_dir)}: NO TRACE")
@@ -103,7 +110,9 @@ def replay(working_dir: str) -> tuple[int, int]:
                     heads.append((e.get("response_content") or "")[:80])
     rate = stubs / max(n, 1)
     tripped = " <ALERT ≥ 25%>" if (rate >= 0.25 and n >= 8) else ""
-    print(f"{os.path.basename(working_dir)}: generate_rewrite {stubs}/{n} stub ({rate:.0%}){tripped}")
+    print(
+        f"{os.path.basename(working_dir)}: generate_rewrite {stubs}/{n} stub ({rate:.0%}){tripped}"
+    )
     for h in heads:
         print(f"    stub: {h!r}")
     return stubs, n
@@ -116,14 +125,16 @@ def live(working_dir: str, interval: float, out: str, window: int) -> None:
     win: deque[int] = deque(maxlen=window)
     cum_n = cum_stub = 0
     last_stub_head = ""
-    win_armed = True          # rising-edge state for the window alert (hysteresis)
+    win_armed = True  # rising-edge state for the window alert (hysteresis)
     cum_alerted = False
-    print(f"contam-monitor: tailing {working_dir} every {interval:.0f}s "
-          f"(window={window}); log -> {out or '(stdout only)'}")
+    print(
+        f"contam-monitor: tailing {working_dir} every {interval:.0f}s "
+        f"(window={window}); log -> {out or '(stdout only)'}"
+    )
     while True:
         T = latest_trace(working_dir)
         if T and T != seen_path:
-            seen_path, offset = T, 0   # new run/file -> tail from its start
+            seen_path, offset = T, 0  # new run/file -> tail from its start
         new_lines: list[str] = []
         if T:
             try:
@@ -144,39 +155,61 @@ def live(working_dir: str, interval: float, out: str, window: int) -> None:
         win_rate = sum(win) / len(win) if win else 0.0
         cum_rate = cum_stub / max(cum_n, 1)
         row = {
-            "ts": time.time(), "iso": _isonow(), "fresh": fresh,
-            "rewrites_total": cum_n, "stub_total": cum_stub,
-            "window_rate": round(win_rate, 3), "cumulative_rate": round(cum_rate, 3),
+            "ts": time.time(),
+            "iso": _isonow(),
+            "fresh": fresh,
+            "rewrites_total": cum_n,
+            "stub_total": cum_stub,
+            "window_rate": round(win_rate, 3),
+            "cumulative_rate": round(cum_rate, 3),
             "last_stub": last_stub_head,
         }
         if f:
             f.write(json.dumps(row) + "\n")
-        print(f"[{row['iso']}] rewrites={cum_n} stub={cum_stub} "
-              f"window={win_rate:.0%} cum={cum_rate:.0%} (+{fresh})")
+        print(
+            f"[{row['iso']}] rewrites={cum_n} stub={cum_stub} "
+            f"window={win_rate:.0%} cum={cum_rate:.0%} (+{fresh})"
+        )
 
         # Window alert: rising-edge at >=0.25 over >=8 events; re-arm below 0.20.
         if len(win) >= 8 and win_rate >= 0.25:
             if win_armed:
-                _alert(f"window stub-rate {win_rate:.0%} ≥ 25%", win_rate, cum_rate, last_stub_head)
+                _alert(
+                    f"window stub-rate {win_rate:.0%} ≥ 25%",
+                    win_rate,
+                    cum_rate,
+                    last_stub_head,
+                )
                 win_armed = False
         elif win_rate < 0.20:
             win_armed = True
         # Cumulative alert: fires once when the run is decisively contaminated.
         if not cum_alerted and cum_n >= 8 and cum_rate >= 0.50:
             cum_alerted = True
-            _alert("cumulative stub-rate crossed 50% (run contaminated, not a blip)",
-                   win_rate, cum_rate, last_stub_head)
+            _alert(
+                "cumulative stub-rate crossed 50% (run contaminated, not a blip)",
+                win_rate,
+                cum_rate,
+                last_stub_head,
+            )
         time.sleep(interval)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--working-dir", required=True, help="run dir containing .agent/traces/")
+    ap.add_argument(
+        "--working-dir", required=True, help="run dir containing .agent/traces/"
+    )
     ap.add_argument("--interval", type=float, default=30.0)
-    ap.add_argument("--window", type=int, default=20, help="rolling window of generate_rewrites")
+    ap.add_argument(
+        "--window", type=int, default=20, help="rolling window of generate_rewrites"
+    )
     ap.add_argument("--out", default="/tmp/contam_monitor.jsonl")
-    ap.add_argument("--replay", action="store_true",
-                    help="process the trace once and report (verification), no loop")
+    ap.add_argument(
+        "--replay",
+        action="store_true",
+        help="process the trace once and report (verification), no loop",
+    )
     args = ap.parse_args()
     if args.replay:
         replay(args.working_dir)

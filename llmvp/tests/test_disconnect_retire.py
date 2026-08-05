@@ -41,6 +41,7 @@ class _Info:
 def _backend(mode="batched"):
     class _B:
         _decode_mode = mode
+
     return _B()
 
 
@@ -50,6 +51,7 @@ def batched(monkeypatch):
 
     async def fake():
         return _backend("batched")
+
     monkeypatch.setattr(mod, "_get_backend_for_mode", fake)
 
 
@@ -59,6 +61,7 @@ def pool(monkeypatch):
 
     async def fake():
         return _backend("pool")
+
     monkeypatch.setattr(mod, "_get_backend_for_mode", fake)
 
 
@@ -97,6 +100,7 @@ async def test_pool_mode_stands_down(pool):
     release the generation guard while the thread still decodes — the
     instance-reuse hazard. Pool keeps run-to-completion until its generation
     is routed through the closeable streaming path."""
+
     async def work():
         # LONGER than one poll interval (2s), on purpose: a fast work item
         # finishes before the first poll either way, so it cannot distinguish
@@ -123,6 +127,7 @@ async def test_absent_info_stands_down(batched):
 async def test_poll_failure_never_kills_the_work(batched):
     """A broken is_disconnected (test double, proxy quirk) must be read as
     'still connected' — the poll is advisory, the WORK is the point."""
+
     class _BrokenReq:
         async def is_disconnected(self):
             raise OSError("transport gone weird")

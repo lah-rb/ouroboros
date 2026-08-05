@@ -17,6 +17,7 @@ the vendor-recommended setting, be reviewed, be correct — and be overridden by
 the loader. Only `None` means "not configured", which the schema
 (`Optional[float]`) already said.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -65,8 +66,14 @@ class TestAbsenceStillGetsTheDefault:
     same bug pointing the other way."""
 
     @pytest.mark.parametrize(
-        "key,default", [("top_p", 0.95), ("top_k", 40), ("min_p", 0.05),
-                        ("repeat_penalty", 1.0), ("present_penalty", 0.0)]
+        "key,default",
+        [
+            ("top_p", 0.95),
+            ("top_k", 40),
+            ("min_p", 0.05),
+            ("repeat_penalty", 1.0),
+            ("present_penalty", 0.0),
+        ],
     )
     def test_unset_falls_back(self, key, default):
         assert _Backend().kwargs()[key] == default
@@ -76,7 +83,10 @@ class TestNonZeroValuesAreUntouched:
     def test_configured_values_pass_through(self):
         k = _Backend(top_p=0.9, top_k=64, min_p=0.01, repeat_penalty=1.15).kwargs()
         assert (k["top_p"], k["top_k"], k["min_p"], k["repeat_penalty"]) == (
-            0.9, 64, 0.01, 1.15,
+            0.9,
+            64,
+            0.01,
+            1.15,
         )
 
     def test_temperature_is_the_caller_s_not_the_config_s(self):

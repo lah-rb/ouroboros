@@ -31,13 +31,15 @@ def main() -> int:
         env = make_env(domain, task_index=idx)
         opening = env.reset(task_index=idx).observation
         res = replay_gold(env, idx)
-        results.append({
-            "task": idx,
-            "reward": res.reward,
-            "gold_tool_calls": res.steps,
-            "user_opening": opening[:110],
-            "wall_s": round(time.time() - t0, 1),
-        })
+        results.append(
+            {
+                "task": idx,
+                "reward": res.reward,
+                "gold_tool_calls": res.steps,
+                "user_opening": opening[:110],
+                "wall_s": round(time.time() - t0, 1),
+            }
+        )
         print(json.dumps(results[-1]), flush=True)
 
     passed = sum(1 for r in results if r["reward"] == 1.0)

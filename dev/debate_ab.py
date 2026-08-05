@@ -97,9 +97,9 @@ GOAL = (
     "concede, begin your message with 'CONCEDE:'. Be concrete and tight."
 )
 
-DEBATER_TEMP = 1.0   # t*1.0 = the model's community-default base — "heated"
-SYNTH_TEMP = 0.7     # post-synthesis charter, matched to the BoN charter temp
-JUDGE_TEMP = 0.2     # stable referee
+DEBATER_TEMP = 1.0  # t*1.0 = the model's community-default base — "heated"
+SYNTH_TEMP = 0.7  # post-synthesis charter, matched to the BoN charter temp
+JUDGE_TEMP = 0.2  # stable referee
 COT_TEMP = 0.7
 # No-truncation budgets: high-reasoning CoT + a full 5-section charter must
 # both fit. The truncation guard below fails loudly if these are still tight.
@@ -109,14 +109,14 @@ CHARTER_MAX = 8000
 # (below), not by turn size — the debater sessions grow in KV incrementally,
 # which the engine handles; it was the observer's full-transcript re-prefill
 # that stalled v2, and that's now windowed.
-TURN_MAX = 4000     # competitive challenge+defend turns run longer than the
-                    # v4 collaborative ones (2500 clipped them); the observer
-                    # window bounds context growth regardless of turn size
-JUDGE_MAX = 1600   # short-claims format gives the observer more distinct
-                   # points to weigh per window; 800 clipped its vote in v7
-OBSERVER_WINDOW = 4     # observer sees only the last N messages (2 rounds) —
-                        # judging the CURRENT position, not re-prefilling the
-                        # whole growing transcript (v2 wedged on that).
+TURN_MAX = 4000  # competitive challenge+defend turns run longer than the
+# v4 collaborative ones (2500 clipped them); the observer
+# window bounds context growth regardless of turn size
+JUDGE_MAX = 1600  # short-claims format gives the observer more distinct
+# points to weigh per window; 800 clipped its vote in v7
+OBSERVER_WINDOW = 4  # observer sees only the last N messages (2 rounds) —
+# judging the CURRENT position, not re-prefilling the
+# whole growing transcript (v2 wedged on that).
 
 _truncations: list[str] = []  # any clipped generation lands here (guard)
 
@@ -126,7 +126,9 @@ class _TurnFailed(Exception):
 
 
 def _tok(r):
-    return int(getattr(r, "generated_tokens", 0) or getattr(r, "tokens_generated", 0) or 0)
+    return int(
+        getattr(r, "generated_tokens", 0) or getattr(r, "tokens_generated", 0) or 0
+    )
 
 
 async def _complete(fx, prompt, max_tokens, temp, tag):
@@ -157,8 +159,15 @@ async def arm_best_of_n(fx, level, n):
     for i in range(n):
         sid = await fx.start_session({"ttl_seconds": 1800})
         try:
-            text, tok = await _sturn(fx, sid, _COT, CHARTER_MAX, COT_TEMP,
-                                     f"BoN-{level}#{i}", reasoning=level)
+            text, tok = await _sturn(
+                fx,
+                sid,
+                _COT,
+                CHARTER_MAX,
+                COT_TEMP,
+                f"BoN-{level}#{i}",
+                reasoning=level,
+            )
         finally:
             try:
                 await fx.end_session(sid)
@@ -181,11 +190,17 @@ async def arm_best_of_n(fx, level, n):
         best = max(0, min(n - 1, int(j.get("best", 0))))
     except (TypeError, ValueError):
         best = 0
-    return {"arm": f"BoN_{level}", "reasoning": level, "charter": samples[best],
-            "tokens": tokens, "n": n, "picked": best,
-            "judge_reason": str(j.get("reason", ""))[:200],
-            "sample_lens": [len(s) for s in samples],
-            "wall_s": round(time.monotonic() - t0, 1)}
+    return {
+        "arm": f"BoN_{level}",
+        "reasoning": level,
+        "charter": samples[best],
+        "tokens": tokens,
+        "n": n,
+        "picked": best,
+        "judge_reason": str(j.get("reason", ""))[:200],
+        "sample_lens": [len(s) for s in samples],
+        "wall_s": round(time.monotonic() - t0, 1),
+    }
 
 
 # ── Conversation ────────────────────────────────────────────────────────
@@ -210,7 +225,9 @@ def _log_transcript(transcript, winner, solution, converged, conceded, stalled):
     for e in transcript:
         lines.append(f"## {e['side']} — round {e['round']}\n\n{e['text']}\n")
     if solution:
-        lines.append(f"## WINNING SOLUTION (crystallized by side {winner})\n\n{solution}\n")
+        lines.append(
+            f"## WINNING SOLUTION (crystallized by side {winner})\n\n{solution}\n"
+        )
     with open(path, "w") as f:
         f.write("\n".join(lines))
     print(f"  transcript → {path}", flush=True)
@@ -220,7 +237,9 @@ async def _observe(fx, transcript, final=False):
     # Bound the prompt to the recent window — the judge assesses the CURRENT
     # standing, and re-prefilling the whole growing transcript every round is
     # what stalled/wedged v2. Final pass gets a slightly wider window.
-    window = transcript[-(OBSERVER_WINDOW + 2):] if final else transcript[-OBSERVER_WINDOW:]
+    window = (
+        transcript[-(OBSERVER_WINDOW + 2) :] if final else transcript[-OBSERVER_WINDOW:]
+    )
     convo = _render(window)
     scope = "the recent exchange below" if final else "the exchange so far"
     p = (
@@ -238,9 +257,13 @@ async def _observe(fx, transcript, final=False):
     data = parse_llm_json(text)
     if not isinstance(data, dict) or data.get("winner") not in ("A", "B"):
         return None, tok
-    return {"winner": data["winner"], "score_a": data.get("score_a"),
-            "score_b": data.get("score_b"), "converged": bool(data.get("converged")),
-            "reason": str(data.get("reason", ""))[:200]}, tok
+    return {
+        "winner": data["winner"],
+        "score_a": data.get("score_a"),
+        "score_b": data.get("score_b"),
+        "converged": bool(data.get("converged")),
+        "reason": str(data.get("reason", ""))[:200],
+    }, tok
 
 
 def _decide(votes, final_vote):
@@ -269,11 +292,15 @@ def _judge_note(vote, side):
         standing = "rates your competitor's position ahead"
     else:
         standing = "has not called a clear leader"
-    score = (f" ({mine} vs {theirs})"
-             if isinstance(mine, (int, float)) and isinstance(theirs, (int, float))
-             else "")
-    return (f"A neutral judge scores each round. Last round it {standing}{score}. "
-            f"Its note: \"{vote.get('reason', '')}\".\n\n")
+    score = (
+        f" ({mine} vs {theirs})"
+        if isinstance(mine, (int, float)) and isinstance(theirs, (int, float))
+        else ""
+    )
+    return (
+        f"A neutral judge scores each round. Last round it {standing}{score}. "
+        f"Its note: \"{vote.get('reason', '')}\".\n\n"
+    )
 
 
 def _winning_position(transcript, winner):
@@ -284,13 +311,17 @@ def _winning_position(transcript, winner):
     fabricates scaffolding, so crystallize is the primary path."""
     if not winner:
         return ""
-    parts = [e["text"] for e in transcript
-             if e["side"] == winner
-             and not e["text"].strip().upper().startswith("CONCEDE")]
+    parts = [
+        e["text"]
+        for e in transcript
+        if e["side"] == winner and not e["text"].strip().upper().startswith("CONCEDE")
+    ]
     return "\n\n".join(p for p in parts if p.strip())
 
 
-async def arm_debate(fx, max_rounds, end_eval=False, socratic=False, prompt_centered=False):
+async def arm_debate(
+    fx, max_rounds, end_eval=False, socratic=False, prompt_centered=False
+):
     # end_eval=True (Option B): NO per-round observer, NO winner, NO crystallize.
     # The debate just runs its rounds, then ONE stateless eval reads the whole
     # conversation and writes the charter as it sees fit. Motivated by v9: the
@@ -322,59 +353,81 @@ async def arm_debate(fx, max_rounds, end_eval=False, socratic=False, prompt_cent
     sids = {"A": sid_a, "B": sid_b}
     transcript, votes, last_vote = [], [], None
     converged = conceded = stalled = False
-    charter, solution, winner, basis, final_vote, rounds_used = "", "", None, "", None, 0
+    charter, solution, winner, basis, final_vote, rounds_used = (
+        "",
+        "",
+        None,
+        "",
+        None,
+        0,
+    )
     try:
         # Openings.
         if socratic:
             # A OWNS the object under examination; B is a pure Socratic questioner.
             if prompt_centered:
-                pa = (f"{SCENARIO}\n\nYou OWN this problem STATEMENT. Your job is NOT "
-                      f"to design a solution — it is to develop the sharpest possible "
-                      f"UNDERSTANDING of the problem itself: what each requirement "
-                      f"truly demands, where the genuinely hard parts are, what is in "
-                      f"scope and what is out, and the assumptions any correct "
-                      f"solution must respect. State that understanding; you will "
-                      f"refine it under questioning. Do NOT propose a design.")
+                pa = (
+                    f"{SCENARIO}\n\nYou OWN this problem STATEMENT. Your job is NOT "
+                    f"to design a solution — it is to develop the sharpest possible "
+                    f"UNDERSTANDING of the problem itself: what each requirement "
+                    f"truly demands, where the genuinely hard parts are, what is in "
+                    f"scope and what is out, and the assumptions any correct "
+                    f"solution must respect. State that understanding; you will "
+                    f"refine it under questioning. Do NOT propose a design."
+                )
             else:
-                pa = (f"{SCENARIO}\n\nYou OWN this problem. Propose your design — the "
-                      f"key components and how it meets each requirement. Be concrete "
-                      f"but concise; you will examine and refine it through questioning.")
-            text, tok = await _sturn(fx, sids["A"], pa, TURN_MAX, DEBATER_TEMP, "own-open")
+                pa = (
+                    f"{SCENARIO}\n\nYou OWN this problem. Propose your design — the "
+                    f"key components and how it meets each requirement. Be concrete "
+                    f"but concise; you will examine and refine it through questioning."
+                )
+            text, tok = await _sturn(
+                fx, sids["A"], pa, TURN_MAX, DEBATER_TEMP, "own-open"
+            )
             tokens += tok
             transcript.append({"round": 0, "side": "A", "text": text})
             if prompt_centered:
-                pb = (f"{SCENARIO}\n\nAnother engineer framed their UNDERSTANDING of "
-                      f"this problem:\n\n{text}\n\nYou are a Socratic questioner. Your "
-                      f"role is NOT to propose a design and NOT to attack — it is to "
-                      f"ASK the probing questions that test their understanding of the "
-                      f"PROBLEM: 'what does that requirement actually require when…?', "
-                      f"'is that case in scope?', 'what happens to that guarantee "
-                      f"under…?', 'what are you assuming here?'. Ask a few sharp "
-                      f"questions that expose fuzzy requirements or unexamined "
-                      f"assumptions. Only ASK — do not answer, assert, or propose a "
-                      f"design.")
+                pb = (
+                    f"{SCENARIO}\n\nAnother engineer framed their UNDERSTANDING of "
+                    f"this problem:\n\n{text}\n\nYou are a Socratic questioner. Your "
+                    f"role is NOT to propose a design and NOT to attack — it is to "
+                    f"ASK the probing questions that test their understanding of the "
+                    f"PROBLEM: 'what does that requirement actually require when…?', "
+                    f"'is that case in scope?', 'what happens to that guarantee "
+                    f"under…?', 'what are you assuming here?'. Ask a few sharp "
+                    f"questions that expose fuzzy requirements or unexamined "
+                    f"assumptions. Only ASK — do not answer, assert, or propose a "
+                    f"design."
+                )
             else:
-                pb = (f"{SCENARIO}\n\nYou are a Socratic questioner. Another engineer "
-                      f"proposed this design:\n\n{text}\n\nYour role is NOT to attack "
-                      f"or to propose an alternative — it is to ASK the probing "
-                      f"questions that make the proposer examine their own reasoning: "
-                      f"'what happens when…?', 'how does that hold if…?', 'why is that "
-                      f"guaranteed?', 'what have you assumed here?'. Ask a few sharp, "
-                      f"specific questions aimed at the shaky assumptions and the cases "
-                      f"the design has not examined. Only ASK — do not answer them, "
-                      f"assert conclusions, or propose a design of your own.")
-            atk, tok = await _sturn(fx, sids["B"], pb, TURN_MAX, DEBATER_TEMP, "ask-open")
+                pb = (
+                    f"{SCENARIO}\n\nYou are a Socratic questioner. Another engineer "
+                    f"proposed this design:\n\n{text}\n\nYour role is NOT to attack "
+                    f"or to propose an alternative — it is to ASK the probing "
+                    f"questions that make the proposer examine their own reasoning: "
+                    f"'what happens when…?', 'how does that hold if…?', 'why is that "
+                    f"guaranteed?', 'what have you assumed here?'. Ask a few sharp, "
+                    f"specific questions aimed at the shaky assumptions and the cases "
+                    f"the design has not examined. Only ASK — do not answer them, "
+                    f"assert conclusions, or propose a design of your own."
+                )
+            atk, tok = await _sturn(
+                fx, sids["B"], pb, TURN_MAX, DEBATER_TEMP, "ask-open"
+            )
             tokens += tok
             transcript.append({"round": 0, "side": "B", "text": atk})
         else:
             # Symmetric debate: no seeded stance, no charter awareness — just the
             # problem and the win-by-optimal-solution goal. Each states a position.
             for side in ("A", "B"):
-                p = (f"{SCENARIO}\n\n{GOAL}\n\nOpen the working session: state your "
-                     f"core position briefly — lead with the key claim(s) you will "
-                     f"defend and why. Do NOT lay out a full design yet.")
-                text, tok = await _sturn(fx, sids[side], p, TURN_MAX, DEBATER_TEMP,
-                                         f"open-{side}")
+                p = (
+                    f"{SCENARIO}\n\n{GOAL}\n\nOpen the working session: state your "
+                    f"core position briefly — lead with the key claim(s) you will "
+                    f"defend and why. Do NOT lay out a full design yet."
+                )
+                text, tok = await _sturn(
+                    fx, sids[side], p, TURN_MAX, DEBATER_TEMP, f"open-{side}"
+                )
                 tokens += tok
                 transcript.append({"round": 0, "side": side, "text": text})
 
@@ -384,56 +437,67 @@ async def arm_debate(fx, max_rounds, end_eval=False, socratic=False, prompt_cent
                 opp = next(e["text"] for e in reversed(transcript) if e["side"] != side)
                 if socratic and side == "A" and prompt_centered:
                     # Owner: reshape the PROBLEM STATEMENT under questioning; no build.
-                    p = (f"The questioner asks:\n\n{opp}\n\nAnswer honestly and use "
-                         f"the answers to RESHAPE your understanding of the PROBLEM — "
-                         f"sharpen what each requirement means, correct any assumption "
-                         f"that does not hold, draw the scope line where it honestly "
-                         f"falls (say plainly what is OUT of scope and why), and name "
-                         f"the hard cases precisely. Do NOT design a solution or add "
-                         f"machinery — refine the PROBLEM STATEMENT itself. Then "
-                         f"restate your current understanding of the problem as it "
-                         f"now stands. Keep it tight.")
+                    p = (
+                        f"The questioner asks:\n\n{opp}\n\nAnswer honestly and use "
+                        f"the answers to RESHAPE your understanding of the PROBLEM — "
+                        f"sharpen what each requirement means, correct any assumption "
+                        f"that does not hold, draw the scope line where it honestly "
+                        f"falls (say plainly what is OUT of scope and why), and name "
+                        f"the hard cases precisely. Do NOT design a solution or add "
+                        f"machinery — refine the PROBLEM STATEMENT itself. Then "
+                        f"restate your current understanding of the problem as it "
+                        f"now stands. Keep it tight."
+                    )
                 elif socratic and side == "A":
                     # Owner: honestly ANSWER the questions, follow the reasoning
                     # even against yourself, revise the ONE design in place.
-                    p = (f"Your design is under examination. The questioner asks:"
-                         f"\n\n{opp}\n\nAnswer each question HONESTLY and rigorously "
-                         f"— follow the reasoning wherever it leads, even when it "
-                         f"exposes a flaw in your OWN design. You are seeking the "
-                         f"correct answer, NOT defending your design to win: if an "
-                         f"honest answer shows the design is wrong or incomplete, "
-                         f"say so plainly and revise it. Then restate your design "
-                         f"as it now stands. Keep it tight.")
+                    p = (
+                        f"Your design is under examination. The questioner asks:"
+                        f"\n\n{opp}\n\nAnswer each question HONESTLY and rigorously "
+                        f"— follow the reasoning wherever it leads, even when it "
+                        f"exposes a flaw in your OWN design. You are seeking the "
+                        f"correct answer, NOT defending your design to win: if an "
+                        f"honest answer shows the design is wrong or incomplete, "
+                        f"say so plainly and revise it. Then restate your design "
+                        f"as it now stands. Keep it tight."
+                    )
                 elif socratic and prompt_centered:
                     # Questioner (prompt-centered): probe the problem understanding.
-                    p = (f"The owner refined their understanding:\n\n{opp}\n\nAsk the "
-                         f"next probing questions — press where the understanding is "
-                         f"still fuzzy, an assumption is unexamined, a scope line is "
-                         f"unclear, or a requirement's hard case has not been pinned "
-                         f"down. Only ASK — do not attack, assert, or propose a "
-                         f"design. Sharp and specific.")
+                    p = (
+                        f"The owner refined their understanding:\n\n{opp}\n\nAsk the "
+                        f"next probing questions — press where the understanding is "
+                        f"still fuzzy, an assumption is unexamined, a scope line is "
+                        f"unclear, or a requirement's hard case has not been pinned "
+                        f"down. Only ASK — do not attack, assert, or propose a "
+                        f"design. Sharp and specific."
+                    )
                 elif socratic:
                     # Questioner: only ASK, never attack or propose.
-                    p = (f"The proposer answered and revised:\n\n{opp}\n\nAsk the "
-                         f"next probing questions — press where an answer was "
-                         f"evasive or hand-wavy, or where it revealed a new "
-                         f"assumption, and question any aspect of the problem still "
-                         f"unexamined. Only ASK — do not attack, assert "
-                         f"conclusions, or propose a design. Sharp and specific.")
+                    p = (
+                        f"The proposer answered and revised:\n\n{opp}\n\nAsk the "
+                        f"next probing questions — press where an answer was "
+                        f"evasive or hand-wavy, or where it revealed a new "
+                        f"assumption, and question any aspect of the problem still "
+                        f"unexamined. Only ASK — do not attack, assert "
+                        f"conclusions, or propose a design. Sharp and specific."
+                    )
                 else:
-                    p = (f"{_judge_note(last_vote, side)}Your competitor's latest "
-                         f"position:\n\n{opp}\n\nAdvance "
-                         f"the contest with SHORT, specific claims — engage or raise "
-                         f"one or a few points, not a full redesign. Do NOT just "
-                         f"react to the last message: if an aspect of the problem "
-                         f"that matters to a correct solution has not been examined "
-                         f"yet, raise it. Defend or sharpen your own position; "
-                         f"adopt-and-improve or shift ONLY if the result is "
-                         f"meaningfully better. Do not concede a point that is not "
-                         f"actually beaten; concede your whole position only if it "
-                         f"is obviously inferior.")
-                text, tok = await _sturn(fx, sids[side], p, TURN_MAX, DEBATER_TEMP,
-                                         f"r{rnd}-{side}")
+                    p = (
+                        f"{_judge_note(last_vote, side)}Your competitor's latest "
+                        f"position:\n\n{opp}\n\nAdvance "
+                        f"the contest with SHORT, specific claims — engage or raise "
+                        f"one or a few points, not a full redesign. Do NOT just "
+                        f"react to the last message: if an aspect of the problem "
+                        f"that matters to a correct solution has not been examined "
+                        f"yet, raise it. Defend or sharpen your own position; "
+                        f"adopt-and-improve or shift ONLY if the result is "
+                        f"meaningfully better. Do not concede a point that is not "
+                        f"actually beaten; concede your whole position only if it "
+                        f"is obviously inferior."
+                    )
+                text, tok = await _sturn(
+                    fx, sids[side], p, TURN_MAX, DEBATER_TEMP, f"r{rnd}-{side}"
+                )
                 tokens += tok
                 transcript.append({"round": rnd, "side": side, "text": text})
                 # In Socratic mode the interrogation always runs full rounds — the
@@ -462,19 +526,24 @@ async def arm_debate(fx, max_rounds, end_eval=False, socratic=False, prompt_cent
             # only as a quoted attack) and fabricated scaffolding to fill gaps.
             # Also ask for the rejected alternatives, to keep the deliberation
             # texture a bare restatement would otherwise erase.
-            cp = ("The session is complete and your position prevailed. State "
-                  "your COMPLETE, definitive design for the problem — the full "
-                  "solution you stake the win on, with the reasoning behind each "
-                  "choice. Then briefly note the main alternatives you REJECTED "
-                  "and why. Include only mechanisms YOU endorse.")
-            solution, tok = await _sturn(fx, sids[winner], cp, CHARTER_MAX,
-                                         SYNTH_TEMP, "crystallize")
+            cp = (
+                "The session is complete and your position prevailed. State "
+                "your COMPLETE, definitive design for the problem — the full "
+                "solution you stake the win on, with the reasoning behind each "
+                "choice. Then briefly note the main alternatives you REJECTED "
+                "and why. Include only mechanisms YOU endorse."
+            )
+            solution, tok = await _sturn(
+                fx, sids[winner], cp, CHARTER_MAX, SYNTH_TEMP, "crystallize"
+            )
             tokens += tok
         else:
             if socratic and prompt_centered:
                 basis = "prompt-centered socratic (owner reshapes the PROBLEM) + lean end-eval"
             elif socratic:
-                basis = "socratic questioning (owner answers a pure questioner) + end-eval"
+                basis = (
+                    "socratic questioning (owner answers a pure questioner) + end-eval"
+                )
             else:
                 basis = "single end-eval over full conversation (no per-round judge)"
     except InferenceError as exc:
@@ -483,7 +552,9 @@ async def arm_debate(fx, max_rounds, end_eval=False, socratic=False, prompt_cent
         # calls. Fall back to the winner's assembled turns only if crystallize
         # never produced a solution (lower fidelity, but the run always finishes).
         stalled = True
-        print(f"  ⚠️ conversation turn stalled ({exc}) — degrading gracefully", flush=True)
+        print(
+            f"  ⚠️ conversation turn stalled ({exc}) — degrading gracefully", flush=True
+        )
         if not end_eval:
             if winner is None:
                 winner, basis = _decide(votes, final_vote)
@@ -505,59 +576,83 @@ async def arm_debate(fx, max_rounds, end_eval=False, socratic=False, prompt_cent
         if socratic and prompt_centered:
             # v12 lean synthesizer, RESTORED VERBATIM (v16 = v12 rerun to test
             # reproducibility of v12's 2nd place given the loop-variance confound).
-            sp = (f"{SCENARIO}\n\n{DELIVERABLE}\n\nBelow, engineers examined this "
-                  f"PROBLEM through Socratic questioning — sharpening what each "
-                  f"requirement means, where the hard cases lie, and what is "
-                  f"honestly in and out of scope. Use this refined understanding as "
-                  f"your fuel. Write a LEAN, honest build charter: solve exactly "
-                  f"what the requirements demand and NO more. Scope limitations "
-                  f"honestly (state what is out of scope and why). Do NOT "
-                  f"over-engineer, add unrequested machinery, or gold-plate.\n\n"
-                  f"=== EXAMINATION ===\n{convo}\n=== END EXAMINATION ===\n\n"
-                  f"Write the charter.")
+            sp = (
+                f"{SCENARIO}\n\n{DELIVERABLE}\n\nBelow, engineers examined this "
+                f"PROBLEM through Socratic questioning — sharpening what each "
+                f"requirement means, where the hard cases lie, and what is "
+                f"honestly in and out of scope. Use this refined understanding as "
+                f"your fuel. Write a LEAN, honest build charter: solve exactly "
+                f"what the requirements demand and NO more. Scope limitations "
+                f"honestly (state what is out of scope and why). Do NOT "
+                f"over-engineer, add unrequested machinery, or gold-plate.\n\n"
+                f"=== EXAMINATION ===\n{convo}\n=== END EXAMINATION ===\n\n"
+                f"Write the charter."
+            )
         elif socratic:
-            sp = (f"{SCENARIO}\n\n{DELIVERABLE}\n\nBelow, a design owner proposed a "
-                  f"solution and examined it through Socratic questioning — "
-                  f"answering probing questions and revising their OWN design as "
-                  f"honest answers exposed flaws. Using the full examination as "
-                  f"context — what held under questioning, what the proposer "
-                  f"corrected in themselves, and what remains a genuine limitation "
-                  f"— write the build charter for the examined design. Be honest "
-                  f"about weaknesses the questioning surfaced.\n\n=== SESSION ==="
-                  f"\n{convo}\n=== END SESSION ===\n\nWrite the charter.")
+            sp = (
+                f"{SCENARIO}\n\n{DELIVERABLE}\n\nBelow, a design owner proposed a "
+                f"solution and examined it through Socratic questioning — "
+                f"answering probing questions and revising their OWN design as "
+                f"honest answers exposed flaws. Using the full examination as "
+                f"context — what held under questioning, what the proposer "
+                f"corrected in themselves, and what remains a genuine limitation "
+                f"— write the build charter for the examined design. Be honest "
+                f"about weaknesses the questioning surfaced.\n\n=== SESSION ==="
+                f"\n{convo}\n=== END SESSION ===\n\nWrite the charter."
+            )
         else:
             # Option B: two symmetric positions — synthesize freely, no winner.
-            sp = (f"{SCENARIO}\n\n{DELIVERABLE}\n\nTwo engineers argued toward the "
-                  f"best design in the working session below. Use it as context — "
-                  f"weigh both positions and the objections each raised — and write "
-                  f"the build charter as YOU judge best. You are NOT bound to either "
-                  f"engineer's framing or to picking a side: take what is correct, "
-                  f"discard what is not, and resolve the open questions yourself.\n\n"
-                  f"=== SESSION ===\n{convo}\n=== END SESSION ===\n\nWrite the charter.")
-        charter, tok = await _complete(fx, sp, CHARTER_MAX, SYNTH_TEMP, "end-eval-charter")
+            sp = (
+                f"{SCENARIO}\n\n{DELIVERABLE}\n\nTwo engineers argued toward the "
+                f"best design in the working session below. Use it as context — "
+                f"weigh both positions and the objections each raised — and write "
+                f"the build charter as YOU judge best. You are NOT bound to either "
+                f"engineer's framing or to picking a side: take what is correct, "
+                f"discard what is not, and resolve the open questions yourself.\n\n"
+                f"=== SESSION ===\n{convo}\n=== END SESSION ===\n\nWrite the charter."
+            )
+        charter, tok = await _complete(
+            fx, sp, CHARTER_MAX, SYNTH_TEMP, "end-eval-charter"
+        )
         tokens += tok
     elif solution.strip():
-        sp = (f"{SCENARIO}\n\n{DELIVERABLE}\n\nAn expert working session settled "
-              f"on the following as the strongest solution:\n\n{solution}\n\n"
-              f"Write the build charter for THIS solution — capture its design "
-              f"decisions and the rejected alternatives it notes.")
+        sp = (
+            f"{SCENARIO}\n\n{DELIVERABLE}\n\nAn expert working session settled "
+            f"on the following as the strongest solution:\n\n{solution}\n\n"
+            f"Write the build charter for THIS solution — capture its design "
+            f"decisions and the rejected alternatives it notes."
+        )
         charter, tok = await _complete(fx, sp, CHARTER_MAX, SYNTH_TEMP, "synth-charter")
         tokens += tok
 
     _log_transcript(transcript, winner, solution, converged, conceded, stalled)
-    return {"arm": "B_debate", "charter": charter, "solution": solution,
-            "tokens": tokens, "rounds": rounds_used, "winner": winner,
-            "decision_basis": basis, "converged": converged, "conceded": conceded,
-            "stalled": stalled, "votes": votes, "final_vote": final_vote,
-            "transcript": transcript, "wall_s": round(time.monotonic() - t0, 1)}
+    return {
+        "arm": "B_debate",
+        "charter": charter,
+        "solution": solution,
+        "tokens": tokens,
+        "rounds": rounds_used,
+        "winner": winner,
+        "decision_basis": basis,
+        "converged": converged,
+        "conceded": conceded,
+        "stalled": stalled,
+        "votes": votes,
+        "final_vote": final_vote,
+        "transcript": transcript,
+        "wall_s": round(time.monotonic() - t0, 1),
+    }
 
 
 def _save(arms, n):
     """Write results after EACH arm — a later arm's failure must never lose
     the completed ones (the v2 bug: all-at-end write lost 3 clean arms)."""
     with open(OUT, "w") as f:
-        json.dump({"scenario": SCENARIO, "deliverable": DELIVERABLE,
-                   "n": n, "arms": arms}, f, indent=1)
+        json.dump(
+            {"scenario": SCENARIO, "deliverable": DELIVERABLE, "n": n, "arms": arms},
+            f,
+            indent=1,
+        )
 
 
 async def main():
@@ -584,26 +679,67 @@ async def main():
                 a = await arm_best_of_n(fx, level, n)
                 arms.append(a)
                 _save(arms, n)  # bank it immediately
-                print(json.dumps({k: a[k] for k in ("arm", "tokens", "picked", "wall_s")}), flush=True)
+                print(
+                    json.dumps(
+                        {k: a[k] for k in ("arm", "tokens", "picked", "wall_s")}
+                    ),
+                    flush=True,
+                )
 
         print("── B debate ──", flush=True)
-        b = await arm_debate(fx, max_rounds, end_eval=end_eval, socratic=socratic,
-                             prompt_centered=prompt_centered)
+        b = await arm_debate(
+            fx,
+            max_rounds,
+            end_eval=end_eval,
+            socratic=socratic,
+            prompt_centered=prompt_centered,
+        )
         arms.append(b)
         _save(arms, n)
-        print(json.dumps({k: b[k] for k in ("arm", "tokens", "rounds", "winner",
-              "converged", "conceded", "stalled", "decision_basis", "wall_s")}), flush=True)
+        print(
+            json.dumps(
+                {
+                    k: b[k]
+                    for k in (
+                        "arm",
+                        "tokens",
+                        "rounds",
+                        "winner",
+                        "converged",
+                        "conceded",
+                        "stalled",
+                        "decision_basis",
+                        "wall_s",
+                    )
+                }
+            ),
+            flush=True,
+        )
 
         print(f"\nwrote {OUT}", flush=True)
-        print(json.dumps({
-            "cost": {a["arm"]: {"tokens": a["tokens"], "wall_s": a["wall_s"]} for a in arms},
-            "B_winner": b["winner"], "B_rounds": b["rounds"],
-            "B_converged": b["converged"], "B_conceded": b["conceded"],
-            "TRUNCATIONS": _truncations or "none (clean)",
-        }, indent=1), flush=True)
+        print(
+            json.dumps(
+                {
+                    "cost": {
+                        a["arm"]: {"tokens": a["tokens"], "wall_s": a["wall_s"]}
+                        for a in arms
+                    },
+                    "B_winner": b["winner"],
+                    "B_rounds": b["rounds"],
+                    "B_converged": b["converged"],
+                    "B_conceded": b["conceded"],
+                    "TRUNCATIONS": _truncations or "none (clean)",
+                },
+                indent=1,
+            ),
+            flush=True,
+        )
         if _truncations:
-            print("\n⚠️  TRUNCATION DETECTED — budgets still too small; result confounded.",
-                  file=sys.stderr, flush=True)
+            print(
+                "\n⚠️  TRUNCATION DETECTED — budgets still too small; result confounded.",
+                file=sys.stderr,
+                flush=True,
+            )
     finally:
         await fx.close()
 

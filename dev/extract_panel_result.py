@@ -8,6 +8,7 @@ The .output file is a wrapper {summary, agentCount, logs, result, ...} where
 We pull result.labels, filter to the batch's manifest ids (drop any hallucinated
 id), dedup, and write <batch_dir>/result.json = {"labels":[...]}. Prints coverage.
 """
+
 import json
 import os
 import sys
@@ -37,5 +38,7 @@ clean = list(best.values())
 missing = sorted(batch_ids - set(best), key=lambda x: int(x.split("_")[1]))
 
 json.dump({"labels": clean}, open(os.path.join(batch_dir, "result.json"), "w"))
-print(f"clean={len(clean)}/{len(batch_ids)} | spurious={spurious} | "
-      f"missing={missing[:10]}{'...' if len(missing) > 10 else ''}")
+print(
+    f"clean={len(clean)}/{len(batch_ids)} | spurious={spurious} | "
+    f"missing={missing[:10]}{'...' if len(missing) > 10 else ''}"
+)

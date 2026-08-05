@@ -21,7 +21,9 @@ Usage:
   python dev/refresh_efficacy.py            # before/after (auto-skips if not soured)
   python dev/refresh_efficacy.py capture    # (re)capture the fixed probe prompt
 """
+
 import json, re, sys, os, glob, urllib.request
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent.trace_health import classify
 
@@ -33,25 +35,38 @@ def _llmvp_raw(prompt, temp, mt=2500):
     dev/vanilla_compare.py forensics script)."""
     import urllib.request
 
-    body = json.dumps({
-        "query": "query($r: CompletionRequest!){ rawCompletion(request:$r){ rawText tokensGenerated } }",
-        "variables": {"r": {"prompt": prompt, "maxTokens": mt, "temperature": temp}},
-    }).encode()
+    body = json.dumps(
+        {
+            "query": "query($r: CompletionRequest!){ rawCompletion(request:$r){ rawText tokensGenerated } }",
+            "variables": {
+                "r": {"prompt": prompt, "maxTokens": mt, "temperature": temp}
+            },
+        }
+    ).encode()
     try:
-        r = json.load(urllib.request.urlopen(urllib.request.Request(
-            LLMVP_URL, body, {"Content-Type": "application/json"}), timeout=300))
+        r = json.load(
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    LLMVP_URL, body, {"Content-Type": "application/json"}
+                ),
+                timeout=300,
+            )
+        )
     except Exception as ex:
         return None, str(ex)[:80]
     if r.get("errors"):
         return None, str(r["errors"][:1])[:80]
     raw = r["data"]["rawCompletion"]["rawText"]
-    fm = re.search(r"final<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|$)", raw, re.DOTALL)
+    fm = re.search(
+        r"final<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|$)", raw, re.DOTALL
+    )
     return (fm.group(1).strip() if fm else raw.strip()), None
+
 
 PROBE_F = "dev/efficacy_probe.txt"
 GQL = "http://localhost:8008/graphql"
 N = 10
-SOURED_BEFORE = 0.25   # below this the server isn't soured -> test inconclusive
+SOURED_BEFORE = 0.25  # below this the server isn't soured -> test inconclusive
 TEMP = 0.35
 
 
@@ -59,8 +74,9 @@ def capture_probe():
     """Capture the HARDEST file-producing generate_rewrite prompt from a preserved
     CLEAN run — a prompt a healthy server answered with code, so a high stub-rate on
     it later is unambiguously server souring (not spec difficulty)."""
-    cands = (glob.glob("runs/marathon_capture/*/traces/*.jsonl")
-             + glob.glob("runs/marathon_capture/*/.agent/traces/*.jsonl"))
+    cands = glob.glob("runs/marathon_capture/*/traces/*.jsonl") + glob.glob(
+        "runs/marathon_capture/*/.agent/traces/*.jsonl"
+    )
     best = None
     for f in cands:
         for l in open(f, errors="ignore"):
@@ -68,26 +84,37 @@ def capture_probe():
                 e = json.loads(l)
             except Exception:
                 continue
-            if (e.get("step") == "generate_rewrite" and e.get("prompt_content")
-                    and (e.get("response_content") or "")
-                    and classify(e["response_content"]) == "file"
-                    and (e.get("tokens_in") or 0) > 1500):
+            if (
+                e.get("step") == "generate_rewrite"
+                and e.get("prompt_content")
+                and (e.get("response_content") or "")
+                and classify(e["response_content"]) == "file"
+                and (e.get("tokens_in") or 0) > 1500
+            ):
                 if best is None or (e.get("tokens_in") or 0) > best[1]:
                     best = (e["prompt_content"], e.get("tokens_in") or 0, f)
     if best is None:
         print("no clean file-producing rewrite (>1500 tok-in) found to use as probe")
         return False
     open(PROBE_F, "w").write(best[0])
-    print(f"captured probe: {len(best[0])}c, {best[1]} tok-in, from {best[2].split('/')[-1]} -> {PROBE_F}")
+    print(
+        f"captured probe: {len(best[0])}c, {best[1]} tok-in, from {best[2].split('/')[-1]} -> {PROBE_F}"
+    )
     return True
 
 
 def fire_refresh():
-    body = json.dumps({
-        "query": 'mutation{ refreshContext(reason:"efficacy"){ status elapsedS totalRefreshes } }'
-    }).encode()
-    r = json.load(urllib.request.urlopen(urllib.request.Request(
-        GQL, body, {"Content-Type": "application/json"}), timeout=180))
+    body = json.dumps(
+        {
+            "query": 'mutation{ refreshContext(reason:"efficacy"){ status elapsedS totalRefreshes } }'
+        }
+    ).encode()
+    r = json.load(
+        urllib.request.urlopen(
+            urllib.request.Request(GQL, body, {"Content-Type": "application/json"}),
+            timeout=180,
+        )
+    )
     return r["data"]["refreshContext"]
 
 
@@ -108,9 +135,11 @@ def main():
     before, _ = replay(prompt, N)
     print(f"(1) BEFORE refresh: stub {int(round(before*N))}/{N} = {before:.0%}")
     if before < SOURED_BEFORE:
-        print(f"  server NOT soured (before {before:.0%} < {SOURED_BEFORE:.0%}) — the "
-              f"in-process rot isn't present yet; re-run when the server is volume-aged. "
-              f"INCONCLUSIVE (this is the expected result on a fresh server).")
+        print(
+            f"  server NOT soured (before {before:.0%} < {SOURED_BEFORE:.0%}) — the "
+            f"in-process rot isn't present yet; re-run when the server is volume-aged. "
+            f"INCONCLUSIVE (this is the expected result on a fresh server)."
+        )
         return
 
     ref = fire_refresh()
@@ -120,12 +149,16 @@ def main():
 
     print("\n=== REFRESH-EFFICACY VERDICT ===")
     if after <= 0.15 or after <= before * 0.4:
-        print(f"  ✅ CURED: stub-rate {before:.0%} -> {after:.0%} after a "
-              f"{ref.get('elapsedS')}s in-process refresh. The context rebuild clears the "
-              f"LLMVP-process rot WITHOUT a restart — the 24/7 no-restart fix is confirmed.")
+        print(
+            f"  ✅ CURED: stub-rate {before:.0%} -> {after:.0%} after a "
+            f"{ref.get('elapsedS')}s in-process refresh. The context rebuild clears the "
+            f"LLMVP-process rot WITHOUT a restart — the 24/7 no-restart fix is confirmed."
+        )
     else:
-        print(f"  ❌ NOT cured: {before:.0%} -> {after:.0%}. The in-process refresh did not "
-              f"clear it — the rot persists in something the context rebuild doesn't reset.")
+        print(
+            f"  ❌ NOT cured: {before:.0%} -> {after:.0%}. The in-process refresh did not "
+            f"clear it — the rot persists in something the context rebuild doesn't reset."
+        )
 
 
 if __name__ == "__main__":

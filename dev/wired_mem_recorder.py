@@ -37,9 +37,7 @@ from pathlib import Path
 try:
     import psutil
 except ImportError:  # pragma: no cover — the venv that has it is llmvp's
-    sys.exit(
-        "psutil not available. Run with llmvp/.venv/bin/python, which has it."
-    )
+    sys.exit("psutil not available. Run with llmvp/.venv/bin/python, which has it.")
 
 RUNS = Path.home() / "ouroboros-runs"
 
@@ -51,12 +49,23 @@ def gb(n: float) -> float:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--label", default="run", help="tag for the output filename")
-    ap.add_argument("--hz", type=float, default=20.0,
-                    help="samples per second (fsync-bound; 20 is comfortable)")
-    ap.add_argument("--peak-every", type=float, default=30.0,
-                    help="seconds between PEAK summary rows")
-    ap.add_argument("--watch", default="api/main.py",
-                    help="substring of the process cmdline to track RSS for")
+    ap.add_argument(
+        "--hz",
+        type=float,
+        default=20.0,
+        help="samples per second (fsync-bound; 20 is comfortable)",
+    )
+    ap.add_argument(
+        "--peak-every",
+        type=float,
+        default=30.0,
+        help="seconds between PEAK summary rows",
+    )
+    ap.add_argument(
+        "--watch",
+        default="api/main.py",
+        help="substring of the process cmdline to track RSS for",
+    )
     args = ap.parse_args()
 
     RUNS.mkdir(parents=True, exist_ok=True)
@@ -68,18 +77,24 @@ def main() -> int:
         import subprocess
 
         limit_mb = int(
-            subprocess.run(["sysctl", "-n", "iogpu.wired_limit_mb"],
-                           capture_output=True, text=True).stdout.strip() or 0
+            subprocess.run(
+                ["sysctl", "-n", "iogpu.wired_limit_mb"], capture_output=True, text=True
+            ).stdout.strip()
+            or 0
         )
     except Exception:  # noqa: BLE001 — a missing sysctl must not stop recording
         pass
 
     total_gb = gb(psutil.virtual_memory().total)
     f = out.open("w", buffering=1)
-    f.write(f"# physical={total_gb}GB iogpu.wired_limit_mb={limit_mb} "
-            f"label={args.label} hz={args.hz}\n")
-    f.write("kind,ts,elapsed_s,wired_gb,active_gb,free_gb,available_gb,"
-            "swap_used_gb,watched_rss_gb,pct_of_wired_limit\n")
+    f.write(
+        f"# physical={total_gb}GB iogpu.wired_limit_mb={limit_mb} "
+        f"label={args.label} hz={args.hz}\n"
+    )
+    f.write(
+        "kind,ts,elapsed_s,wired_gb,active_gb,free_gb,available_gb,"
+        "swap_used_gb,watched_rss_gb,pct_of_wired_limit\n"
+    )
     f.flush()
     os.fsync(f.fileno())
 
@@ -110,7 +125,9 @@ def main() -> int:
     def _find():
         for p in psutil.process_iter(["pid", "cmdline"]):
             try:
-                if p.info["cmdline"] and any(args.watch in c for c in p.info["cmdline"]):
+                if p.info["cmdline"] and any(
+                    args.watch in c for c in p.info["cmdline"]
+                ):
                     return p
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
@@ -134,9 +151,11 @@ def main() -> int:
             now = time.time()
             wired = gb(m.wired)
             pct = round(100.0 * m.wired / (limit_mb * 1e6), 1) if limit_mb else 0.0
-            row = (f"{datetime.now().strftime('%H:%M:%S.%f')[:-3]},"
-                   f"{now - t0:.2f},{wired},{gb(m.active)},{gb(m.free)},"
-                   f"{gb(m.available)},{gb(sw)},{gb(rss)},{pct}")
+            row = (
+                f"{datetime.now().strftime('%H:%M:%S.%f')[:-3]},"
+                f"{now - t0:.2f},{wired},{gb(m.active)},{gb(m.free)},"
+                f"{gb(m.available)},{gb(sw)},{gb(rss)},{pct}"
+            )
             f.write("S," + row + "\n")
             f.flush()
             os.fsync(f.fileno())  # THE point of this script
@@ -153,8 +172,10 @@ def main() -> int:
     finally:
         if peak_row:
             f.write("PEAK," + peak_row + "\n")
-        f.write(f"# clean exit; peak wired {peak_wired} GB of "
-                f"{limit_mb / 1000 if limit_mb else '?'} GB limit\n")
+        f.write(
+            f"# clean exit; peak wired {peak_wired} GB of "
+            f"{limit_mb / 1000 if limit_mb else '?'} GB limit\n"
+        )
         f.flush()
         os.fsync(f.fileno())
         f.close()

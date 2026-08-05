@@ -104,7 +104,7 @@ class Player:
     @property
     def attack(self) -> int:
         base = self.base_attack
-        if 'weapon' in self.equipped:
+        if "weapon" in self.equipped:
             # This will be resolved via the items dict in game state
             return base  # actual calculation happens in engine with item lookup
         return base
@@ -112,7 +112,7 @@ class Player:
     @property
     def defense(self) -> int:
         base = self.base_defense
-        if 'armor' in self.equipped:
+        if "armor" in self.equipped:
             # This will be resolved via the items dict in game state
             return base  # actual calculation happens in engine with item lookup
         return base

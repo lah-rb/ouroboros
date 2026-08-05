@@ -35,7 +35,11 @@ def _load(path: str):
 
 
 def _latest_summary(agent_logs: str):
-    paths = sorted(glob.glob(os.path.join(agent_logs, "ouroboros-mission", "traces", "*.summary.json")))
+    paths = sorted(
+        glob.glob(
+            os.path.join(agent_logs, "ouroboros-mission", "traces", "*.summary.json")
+        )
+    )
     return _load(paths[-1]) if paths else None
 
 
@@ -107,7 +111,9 @@ def analyze_task(task_dir: str) -> dict:
 
 def analyze_run(run_dir: str) -> list[dict]:
     rows = []
-    for results_path in sorted(glob.glob(os.path.join(run_dir, "*", "*", "results.json"))):
+    for results_path in sorted(
+        glob.glob(os.path.join(run_dir, "*", "*", "results.json"))
+    ):
         rows.append(analyze_task(os.path.dirname(results_path)))
     return rows
 

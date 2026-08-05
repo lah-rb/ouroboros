@@ -22,6 +22,7 @@ Usage:
   python3 dev/canary_probe.py --working-dir /tmp/run_xyz --interval 60 --out /tmp/canary.jsonl
   (Ctrl-C to stop; or --duration SECONDS.)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -90,17 +91,32 @@ Task: add a function `decrement(n: int) -> int` that returns n - 1. Preserve
 with the marker line `# === FILE: counter.py ===`."""
 
 HEALTH_FIELDS = [
-    "status", "availableInstances", "memProcessRssMb", "memSystemUsedPercent",
-    "memSystemAvailableMb", "memSystemWiredMb", "flowCacheEntries", "residentActive",
-    "flowBuilds", "flowHits", "flowEvicts", "flowFallbacks", "runawayCaptures",
-    "trendSamples", "decodeTpsRecent", "decodeTpsBaseline", "throughputDrift",
+    "status",
+    "availableInstances",
+    "memProcessRssMb",
+    "memSystemUsedPercent",
+    "memSystemAvailableMb",
+    "memSystemWiredMb",
+    "flowCacheEntries",
+    "residentActive",
+    "flowBuilds",
+    "flowHits",
+    "flowEvicts",
+    "flowFallbacks",
+    "runawayCaptures",
+    "trendSamples",
+    "decodeTpsRecent",
+    "decodeTpsBaseline",
+    "throughputDrift",
     "ttftRecentS",
 ]
 
 
 def _sh(cmd: str) -> str:
     try:
-        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=6).stdout
+        return subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=6
+        ).stdout
     except Exception:
         return ""
 
@@ -154,12 +170,18 @@ def _alert(reason: str, row: dict) -> None:
     h = row.get("health", {})
     print("\n" + "!" * 70)
     print(f"!! CANARY ALERT @ {row['iso']} (+{row['elapsed_s']:.0f}s): {reason}")
-    print(f"!!   mem avail={h.get('memSystemAvailableMb')}MB used%={h.get('memSystemUsedPercent')} "
-          f"wired={h.get('memSystemWiredMb')}MB rss={h.get('memProcessRssMb')}MB")
-    print(f"!!   flow fallbacks={h.get('flowFallbacks')} evicts={h.get('flowEvicts')} "
-          f"runaways={h.get('runawayCaptures')}")
-    print(f"!!   throughput_drift={h.get('throughputDrift')} decode_tps={h.get('decodeTpsRecent')}/"
-          f"{h.get('decodeTpsBaseline')} ttft={h.get('ttftRecentS')}s")
+    print(
+        f"!!   mem avail={h.get('memSystemAvailableMb')}MB used%={h.get('memSystemUsedPercent')} "
+        f"wired={h.get('memSystemWiredMb')}MB rss={h.get('memProcessRssMb')}MB"
+    )
+    print(
+        f"!!   flow fallbacks={h.get('flowFallbacks')} evicts={h.get('flowEvicts')} "
+        f"runaways={h.get('runawayCaptures')}"
+    )
+    print(
+        f"!!   throughput_drift={h.get('throughputDrift')} decode_tps={h.get('decodeTpsRecent')}/"
+        f"{h.get('decodeTpsBaseline')} ttft={h.get('ttftRecentS')}s"
+    )
     print("!" * 70 + "\n")
 
 
@@ -240,8 +262,10 @@ class ContaminationProbe(Probe):
         if len(self._win) >= 8 and wr >= 0.25:
             if self._win_armed:
                 self._win_armed = False
-                return (f"ContaminationProbe: window stub-rate {wr:.0%} ≥ 25% "
-                        f"(last stub: {self._last_stub[:80]!r})")
+                return (
+                    f"ContaminationProbe: window stub-rate {wr:.0%} ≥ 25% "
+                    f"(last stub: {self._last_stub[:80]!r})"
+                )
         elif wr < 0.20:
             self._win_armed = True
         if not self._cum_alerted and self._cum_n >= 8 and cr >= 0.50:
@@ -283,7 +307,9 @@ class TaskBindingProbe(Probe):
         try:
             d = json.loads(raw)
             checks = d.get("checks", d if isinstance(d, list) else [])
-            covered = "merged_users.parquet" in json.dumps(checks) and "conflicts.json" in json.dumps(checks)
+            covered = "merged_users.parquet" in json.dumps(
+                checks
+            ) and "conflicts.json" in json.dumps(checks)
         except Exception:
             pass
         return {
@@ -337,7 +363,8 @@ class AuthoringProbe(Probe):
                 flow_key="canary:author:v1",
             )
             res = await eff.session_turn(
-                sid, AUTHOR_CANARY_PROMPT,
+                sid,
+                AUTHOR_CANARY_PROMPT,
                 config_overrides={"max_tokens": 1200, "temperature": ctx["temp"]},
             )
         except Exception as e:
@@ -359,26 +386,39 @@ class AuthoringProbe(Probe):
         cls = row.get("author")
         if cls in ("stub", "malformed") and not self._flagged:
             self._flagged = True
-            return (f"AuthoringProbe: response was a {cls}, not code — the resident-KV "
-                    f"authoring path is degrading")
+            return (
+                f"AuthoringProbe: response was a {cls}, not code — the resident-KV "
+                f"authoring path is degrading"
+            )
         return None
 
 
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--endpoint", default="http://localhost:8008/graphql")
-    ap.add_argument("--working-dir", default="",
-                    help="active run dir (.agent/traces/) for the ContaminationProbe")
+    ap.add_argument(
+        "--working-dir",
+        default="",
+        help="active run dir (.agent/traces/) for the ContaminationProbe",
+    )
     ap.add_argument("--interval", type=float, default=60.0)
     ap.add_argument("--duration", type=float, default=0.0, help="0 = until Ctrl-C")
-    ap.add_argument("--temp", type=float, default=0.0,
-                    help="probe temp (0.0 matches the run that broke)")
+    ap.add_argument(
+        "--temp",
+        type=float,
+        default=0.0,
+        help="probe temp (0.0 matches the run that broke)",
+    )
     # NOT /tmp: macOS wipes it on reboot/cleanup — a marathon canary's
     # time series is exactly the artifact that must survive (the July
     # corpus loss was this same trap).
     ap.add_argument("--out", default="llmvp/logs/canary_probe.jsonl")
-    ap.add_argument("--drift-floor", type=float, default=0.7,
-                    help="alert when throughput_drift falls below this")
+    ap.add_argument(
+        "--drift-floor",
+        type=float,
+        default=0.7,
+        help="alert when throughput_drift falls below this",
+    )
     args = ap.parse_args()
 
     probes: list[Probe] = [ContaminationProbe(), TaskBindingProbe(), AuthoringProbe()]
@@ -387,22 +427,37 @@ async def main() -> None:
 
     t0 = time.monotonic()
     f = open(args.out, "a", buffering=1)
-    print(f"canary harness: {args.endpoint} every {args.interval}s; probes="
-          f"{[p.name for p in probes]}; working_dir={args.working_dir or '(none)'}; log -> {args.out}")
+    print(
+        f"canary harness: {args.endpoint} every {args.interval}s; probes="
+        f"{[p.name for p in probes]}; working_dir={args.working_dir or '(none)'}; log -> {args.out}"
+    )
     prev_fallbacks = None
     prev_swapouts = None
-    prev_flow_builds = None  # server-restart detector (cumulative counter; resets on restart)
+    prev_flow_builds = (
+        None  # server-restart detector (cumulative counter; resets on restart)
+    )
     tick = 0
     async with httpx.AsyncClient() as client:
         while True:
             elapsed = time.monotonic() - t0
             health = await fetch_health(client, args.endpoint)
             os_sig = os_snapshot()
-            instance_free = bool(health.get("availableInstances", 0)) and "status" in health
-            ctx = {"endpoint": args.endpoint, "temp": args.temp,
-                   "working_dir": args.working_dir, "health": health}
-            row = {"ts": time.time(), "iso": datetime.now(timezone.utc).isoformat(),
-                   "elapsed_s": round(elapsed, 1), "health": health, "os": os_sig}
+            instance_free = (
+                bool(health.get("availableInstances", 0)) and "status" in health
+            )
+            ctx = {
+                "endpoint": args.endpoint,
+                "temp": args.temp,
+                "working_dir": args.working_dir,
+                "health": health,
+            }
+            row = {
+                "ts": time.time(),
+                "iso": datetime.now(timezone.utc).isoformat(),
+                "elapsed_s": round(elapsed, 1),
+                "health": health,
+                "os": os_sig,
+            }
 
             # instance-free probes: every tick (these survive pool starvation)
             for p in free_probes:
@@ -425,11 +480,13 @@ async def main() -> None:
                     row[p.name] = "busy"
 
             f.write(json.dumps(row) + "\n")
-            print(f"{elapsed:>7.0f}s  contam={str(row.get('contam_window_rate','-')):>5}/"
-                  f"{str(row.get('contam_cum_rate','-')):<5} tb={str(row.get('taskbind','-')):<8} "
-                  f"author={str(row.get('author','-')):<9} | availMB={str(health.get('memSystemAvailableMb')):>7} "
-                  f"wired={str(health.get('memSystemWiredMb')):>7} drift={str(health.get('throughputDrift')):>5} "
-                  f"| cmp={os_sig.get('compressed_gb')}G swpout={os_sig.get('swapouts')}")
+            print(
+                f"{elapsed:>7.0f}s  contam={str(row.get('contam_window_rate','-')):>5}/"
+                f"{str(row.get('contam_cum_rate','-')):<5} tb={str(row.get('taskbind','-')):<8} "
+                f"author={str(row.get('author','-')):<9} | availMB={str(health.get('memSystemAvailableMb')):>7} "
+                f"wired={str(health.get('memSystemWiredMb')):>7} drift={str(health.get('throughputDrift')):>5} "
+                f"| cmp={os_sig.get('compressed_gb')}G swpout={os_sig.get('swapouts')}"
+            )
 
             # probe alerts (rising-edge)
             for p in probes:
@@ -445,19 +502,35 @@ async def main() -> None:
             # log aren't mistaken for current state — e.g. a stale throughput_drift
             # from a now-replaced soured server) and reset the cross-tick delta-trackers
             # so the next deltas compare against the FRESH process, not the old one.
-            if prev_flow_builds is not None and fbuilds is not None and fbuilds < prev_flow_builds:
-                _alert(f"🔄 SERVER RESTART (flowBuilds {prev_flow_builds}->{fbuilds}) — "
-                       f"alerts above this line are STALE; cross-tick trackers reset", row)
+            if (
+                prev_flow_builds is not None
+                and fbuilds is not None
+                and fbuilds < prev_flow_builds
+            ):
+                _alert(
+                    f"🔄 SERVER RESTART (flowBuilds {prev_flow_builds}->{fbuilds}) — "
+                    f"alerts above this line are STALE; cross-tick trackers reset",
+                    row,
+                )
                 prev_fallbacks = None
                 prev_swapouts = None
             prev_flow_builds = fbuilds if fbuilds is not None else prev_flow_builds
             if prev_fallbacks is not None and fbk is not None and fbk > prev_fallbacks:
-                _alert(f"flow_fallbacks rose {prev_fallbacks}->{fbk} (KV-cache instability)", row)
+                _alert(
+                    f"flow_fallbacks rose {prev_fallbacks}->{fbk} (KV-cache instability)",
+                    row,
+                )
             if drift is not None and drift < args.drift_floor:
-                _alert(f"throughput_drift {drift} < {args.drift_floor} (generation slowdown)", row)
+                _alert(
+                    f"throughput_drift {drift} < {args.drift_floor} (generation slowdown)",
+                    row,
+                )
             if prev_swapouts is not None and os_sig.get("swapouts", 0) > prev_swapouts:
-                _alert(f"SWAPOUTS rose {prev_swapouts}->{os_sig.get('swapouts')} "
-                       f"(compressed={os_sig.get('compressed_gb')}G — unified-memory pressure)", row)
+                _alert(
+                    f"SWAPOUTS rose {prev_swapouts}->{os_sig.get('swapouts')} "
+                    f"(compressed={os_sig.get('compressed_gb')}G — unified-memory pressure)",
+                    row,
+                )
             prev_fallbacks = fbk if fbk is not None else prev_fallbacks
             prev_swapouts = os_sig.get("swapouts", prev_swapouts)
 

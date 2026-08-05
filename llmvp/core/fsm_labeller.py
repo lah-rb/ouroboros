@@ -95,10 +95,10 @@ _ALWAYS_STRUCTURAL_CATS = {
 
 
 class _ThinkShape(str, Enum):
-    CHANNEL = "channel"      # harmony: <|channel|>name<|message|>
-    ANGLE = "angle"          # chatml/olmo/laguna: <think></think>
-    BRACKET = "bracket"      # tekken/mistral: [THINK][/THINK]
-    NONE = "none"            # pure content from the first token
+    CHANNEL = "channel"  # harmony: <|channel|>name<|message|>
+    ANGLE = "angle"  # chatml/olmo/laguna: <think></think>
+    BRACKET = "bracket"  # tekken/mistral: [THINK][/THINK]
+    NONE = "none"  # pure content from the first token
 
 
 # family -> (shape, reason). ONLY for real spec/FSM disagreements.
@@ -590,7 +590,7 @@ def label_atoms(
             # (not category) is what keeps this from swallowing real output:
             # it can only consume atoms the family said would be there.
             result.append((atom.text, "D"))
-            pending_tail = pending_tail[len(atom.text):]
+            pending_tail = pending_tail[len(atom.text) :]
         elif cat in pending_close_cats:
             # This atom closes the compound marker we just recognized.
             result.append((atom.text, "D"))

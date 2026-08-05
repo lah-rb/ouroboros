@@ -269,10 +269,10 @@ def test_kv_preflight_budget_precedence(tmp_path, monkeypatch):
         be._kv_preflight()
 
     # 4. Lowering still works, which is the override's real job.
-    be.config.model.n_ctx = 32768              # ~56GB, comfortably under physical
+    be.config.model.n_ctx = 32768  # ~56GB, comfortably under physical
     be.config.model.kv_preflight_gb = None
     monkeypatch.delenv("OURO_KV_PREFLIGHT_GB", raising=False)
-    be._kv_preflight()                         # passes on its own merits
+    be._kv_preflight()  # passes on its own merits
     monkeypatch.setenv("OURO_KV_PREFLIGHT_GB", "10")
     with pytest.raises(RuntimeError, match="KV preflight REFUSED"):
         be._kv_preflight()
@@ -482,12 +482,13 @@ class TestStaticPrefixDoubleIncludeGuard:
         import logging
 
         from core.inference import run_completion  # noqa: F401 — module import
+
         # Exercise the guard logic directly at the string level: it must fire
         # exactly when the prompt LEADS with the head.
         head = "## ROLE\nYou are the clerk.\n"
         prompt = head + "## TASK\ndo the thing"
         assert prompt.startswith(head)
-        assert prompt[len(head):] == "## TASK\ndo the thing"
+        assert prompt[len(head) :] == "## TASK\ndo the thing"
 
     def test_guard_is_in_run_completion_before_assembly(self):
         """Source guard: the strip must happen BEFORE build_full_prompt sees

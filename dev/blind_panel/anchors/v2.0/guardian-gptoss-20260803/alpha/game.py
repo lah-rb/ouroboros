@@ -20,7 +20,6 @@ from entities import (
 from world import load_world
 from parser import parse_command
 
-
 SAVE_PATH = "savegame.json"
 
 

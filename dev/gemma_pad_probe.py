@@ -69,7 +69,9 @@ def main() -> None:
 
     # Pin the invariant this whole idea rests on: ON and PAD prefixes are the
     # same token length, and differ at exactly one position.
-    a = llm.tokenize(build("<|think|>\n", False, "x").encode(), add_bos=True, special=True)
+    a = llm.tokenize(
+        build("<|think|>\n", False, "x").encode(), add_bos=True, special=True
+    )
     b = llm.tokenize(build("  \n", False, "x").encode(), add_bos=True, special=True)
     diff = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
     print(f"LENGTH CHECK  ON={len(a)}  PAD={len(b)}  equal={len(a) == len(b)}")

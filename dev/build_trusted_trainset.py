@@ -6,6 +6,7 @@ train_dataset.jsonl: {text, label, task, source, uid}.
 
 -> dev/train_dataset_trusted_v1.jsonl
 """
+
 import json
 
 CONTEXT_SOURCES = {
@@ -28,8 +29,15 @@ for r in records:
     if not text:
         misses.append(r["uid"])
         continue
-    rows.append({"text": text, "label": r["label"], "task": r["task"],
-                 "source": r["source"], "uid": r["uid"]})
+    rows.append(
+        {
+            "text": text,
+            "label": r["label"],
+            "task": r["task"],
+            "source": r["source"],
+            "uid": r["uid"],
+        }
+    )
 
 assert not misses, f"unjoinable uids: {misses[:5]} (+{len(misses)-5} more)"
 with open("dev/train_dataset_trusted_v1.jsonl", "w") as f:
@@ -37,8 +45,11 @@ with open("dev/train_dataset_trusted_v1.jsonl", "w") as f:
         f.write(json.dumps(r) + "\n")
 
 from collections import Counter
-print(f"wrote dev/train_dataset_trusted_v1.jsonl: {len(rows)} rows "
-      f"{dict(Counter(r['label'] for r in rows))} across "
-      f"{len(set(r['task'] for r in rows))} tasks")
+
+print(
+    f"wrote dev/train_dataset_trusted_v1.jsonl: {len(rows)} rows "
+    f"{dict(Counter(r['label'] for r in rows))} across "
+    f"{len(set(r['task'] for r in rows))} tasks"
+)
 lens = sorted(len(r["text"]) for r in rows)
 print(f"text chars: min {lens[0]} median {lens[len(lens)//2]} max {lens[-1]}")

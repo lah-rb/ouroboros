@@ -3,15 +3,19 @@
 from __future__ import annotations
 from enum import Enum, auto
 
+
 class Direction(Enum):
     """Cardinal directions used for room navigation."""
+
     NORTH = auto()
     SOUTH = auto()
     EAST = auto()
     WEST = auto()
 
+
 class CommandType(Enum):
     """Supported player command categories."""
+
     MOVE = auto()
     TAKE = auto()
     DROP = auto()

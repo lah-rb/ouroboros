@@ -404,7 +404,7 @@ async def run_completion(
             "HIT cost more than a cold call while reporting cacheHit=true.",
             len(static_prefix),
         )
-        prompt = prompt[len(static_prefix):]
+        prompt = prompt[len(static_prefix) :]
 
     # Build complete prompt BEFORE acquiring instance to minimize pool hold time
     tokenizer = get_cached_tokenizer()

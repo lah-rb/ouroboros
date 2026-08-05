@@ -9,6 +9,7 @@ Also runs the legacy (resident off) path for the static-fork == load_state bit-i
 
 Usage (from llmvp/):  .venv/bin/python dev/verify_resident_jit.py <config> ["prompt"]
 """
+
 import asyncio
 import sys
 from pathlib import Path
@@ -22,11 +23,12 @@ async def run(resident: bool):
 
     cfg = load_config(Path("configs") / f"{CONFIG}.yaml")
     cfg.model.resident_seq_cache = resident
-    cfg.resources.jit_concurrency_limit = 2      # JIT mode, up to 2 instances
+    cfg.resources.jit_concurrency_limit = 2  # JIT mode, up to 2 instances
     cfg.resources.max_concurrent_requests = 2
     set_config(cfg)
 
     from preprocessing.static_tokens import manager
+
     manager.load_static_buffer()
 
     from inference.backends.factory import create_backend
@@ -35,7 +37,10 @@ async def run(resident: bool):
     backend = create_backend(cfg)
     await backend.initialize()
     active = getattr(backend, "_resident_active", None)
-    print(f"\n=== resident={resident} _resident_active={active} (JIT limit=2) ===", flush=True)
+    print(
+        f"\n=== resident={resident} _resident_active={active} (JIT limit=2) ===",
+        flush=True,
+    )
 
     sm = SessionManager(backend)
 

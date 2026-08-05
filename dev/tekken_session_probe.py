@@ -49,7 +49,7 @@ PROMPTS = [
     "Think carefully: if a player carries 3 items and drops 1, then picks up 2, how many? Answer with the number only.",
     "Write a one-line Python function that reverses a string.",
     "Summarize what you have produced so far in one sentence.",
-    "Return JSON: {\"status\": \"ok\"} and nothing else.",
+    'Return JSON: {"status": "ok"} and nothing else.',
     "What was the first room you named?",
     "Give one more room name.",
 ]
@@ -104,8 +104,7 @@ def main() -> None:
                 recovered_after_empty = True
             flag = "  <-- EMPTY" if empty else ""
             print(
-                f"{i:>4} {tok:>5} {len(text):>11}  {temp:>5}  "
-                f"{text[:44]!r}{flag}"
+                f"{i:>4} {tok:>5} {len(text):>11}  {temp:>5}  " f"{text[:44]!r}{flag}"
             )
     finally:
         gql(END, {"s": sid})

@@ -55,7 +55,9 @@ def backend(monkeypatch):
     # Intercept the self-SIGTERM so the test process survives its own guard.
     import os
 
-    monkeypatch.setattr(os, "kill", lambda *_a, **_k: setattr(b, "signalled", b.signalled + 1))
+    monkeypatch.setattr(
+        os, "kill", lambda *_a, **_k: setattr(b, "signalled", b.signalled + 1)
+    )
     return b
 
 

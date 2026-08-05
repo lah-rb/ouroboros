@@ -184,6 +184,7 @@ class ModelConfig(BaseModel):
         if not self.thinking_available and self.thinking != "off":
             self.thinking = "off"
         return self
+
     # Session continuity policy. When true (the DEFAULT), sessions keep a
     # token history and FULLY RE-PREFILL each turn from the pristine static
     # snapshot — whole-state restore, the one rollback every architecture
@@ -887,11 +888,7 @@ def resolve_config_path(name: str, root: Optional[Path] = None) -> Optional[Path
     """
     base_dir = root or CONFIGS_DIR
     stem = name.removesuffix(".yaml").removesuffix(".yml")
-    hits = [
-        p
-        for d in SEARCH_DIRS
-        if (p := (base_dir / d / f"{stem}.yaml")).is_file()
-    ]
+    hits = [p for d in SEARCH_DIRS if (p := (base_dir / d / f"{stem}.yaml")).is_file()]
     if not hits:
         return None
     if len(hits) > 1 and hits[0].parent != base_dir:
@@ -1006,7 +1003,11 @@ def _merge_over(
     for key, child_val in child.items():
         here = f"{_path}{key}"
         base_val = base.get(key)
-        if key in sections and isinstance(child_val, dict) and isinstance(base_val, dict):
+        if (
+            key in sections
+            and isinstance(child_val, dict)
+            and isinstance(base_val, dict)
+        ):
             merged[key], sub = _merge_over(
                 base_val, child_val, sections[key], f"{here}."
             )
@@ -1189,9 +1190,7 @@ def load_config(path: Optional[Path] = None) -> Config:
         _strategy = raw_cfg.get("cache_strategy")
         _applied = expand_cache_strategy(raw_cfg)
         if _applied:
-            log.info(
-                "🧩 cache_strategy: %s → %s", _strategy, ", ".join(_applied)
-            )
+            log.info("🧩 cache_strategy: %s → %s", _strategy, ", ".join(_applied))
         elif _strategy:
             log.info(
                 "🧩 cache_strategy: %s (every implied flag already stated)",

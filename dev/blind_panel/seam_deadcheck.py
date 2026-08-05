@@ -17,6 +17,7 @@ This sweeps the staged artifacts and asks the question that decides the fix:
 Read-only. Usage:
     uv run python -P dev/blind_panel/seam_deadcheck.py [staged_root]
 """
+
 import re
 import sys
 from pathlib import Path
@@ -30,8 +31,20 @@ DEFAULT_ROOT = Path.home() / "ouroboros-runs/tier_20260731-050209/staged"
 # A dead symbol matching one of these is a candidate decisive defect; a dead
 # symbol that does not is much more likely to be an unused helper.
 CORE = (
-    "combat", "attack", "flee", "victory", "defeat", "restart", "win",
-    "boss", "phase", "monster", "fight", "damage", "death", "die",
+    "combat",
+    "attack",
+    "flee",
+    "victory",
+    "defeat",
+    "restart",
+    "win",
+    "boss",
+    "phase",
+    "monster",
+    "fight",
+    "damage",
+    "death",
+    "die",
 )
 
 
@@ -93,10 +106,29 @@ def main():
             continue
         r = scan_tree(tree)
         if not r or "error" in r:
-            rows.append((arm.name, r.get("files", 0), [], [], r.get("error", "empty"), [], False))
+            rows.append(
+                (
+                    arm.name,
+                    r.get("files", 0),
+                    [],
+                    [],
+                    r.get("error", "empty"),
+                    [],
+                    False,
+                )
+            )
             continue
-        rows.append((arm.name, r["files"], r["dead"], r["core"], "",
-                     r.get("dynamic") or [], r.get("dup_tree", False)))
+        rows.append(
+            (
+                arm.name,
+                r["files"],
+                r["dead"],
+                r["core"],
+                "",
+                r.get("dynamic") or [],
+                r.get("dup_tree", False),
+            )
+        )
         tot_dead += len(r["dead"])
         tot_core += len(r["core"])
         arms_with_core += 1 if r["core"] else 0

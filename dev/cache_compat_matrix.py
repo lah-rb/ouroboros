@@ -69,7 +69,10 @@ def build_turn_payload(turn_i: int, target_tokens: int) -> tuple[str, str, str]:
     # a linear sequence is a pattern, not a needle. md5 makes each value
     # independent; results are comparable only within a vintage.
     import hashlib
-    fact_value = str(4096 + int(hashlib.md5(f"fact:{turn_i}".encode()).hexdigest()[:4], 16))
+
+    fact_value = str(
+        4096 + int(hashlib.md5(f"fact:{turn_i}".encode()).hexdigest()[:4], 16)
+    )
     fact_key = f"gamma-{turn_i}"
     filler = (
         f"Progress note {turn_i}, segment {{j}}. The apparatus was recalibrated "
@@ -134,14 +137,19 @@ async def main() -> int:
     ap.add_argument("--endpoint", default="http://localhost:8008/graphql")
     ap.add_argument("--label", default="")
     ap.add_argument("--run-id", default="")
-    ap.add_argument("--depth", type=int, default=12,
-                    help="session turns incl. doc + needle turns")
-    ap.add_argument("--turn-tokens", type=int, default=0,
-                    help="~tokens of per-turn payload; 0 = the classic 5-token "
-                         "'Reply exactly: READY' filler. Realistic agent turns "
-                         "are ~900 (the hy3 arm's measured session growth); the "
-                         "5-token filler understates full_replay growth ~56x "
-                         "and exists for continuity with the two prior matrices")
+    ap.add_argument(
+        "--depth", type=int, default=12, help="session turns incl. doc + needle turns"
+    )
+    ap.add_argument(
+        "--turn-tokens",
+        type=int,
+        default=0,
+        help="~tokens of per-turn payload; 0 = the classic 5-token "
+        "'Reply exactly: READY' filler. Realistic agent turns "
+        "are ~900 (the hy3 arm's measured session growth); the "
+        "5-token filler understates full_replay growth ~56x "
+        "and exists for continuity with the two prior matrices",
+    )
     args = ap.parse_args()
     c = C(args.endpoint)
     row: dict = {"label": args.label, "errors": []}
@@ -208,9 +216,7 @@ async def main() -> int:
             # session it may legitimately have fallen out — record which, so
             # "forgot because windowed" is distinguishable from "recall broke".
             fk, fv = mid_facts[0]
-            tf = await c.turn(
-                sid, f"What was the {fk} reading? Value only."
-            )
+            tf = await c.turn(sid, f"What was the {fk} reading? Value only.")
             row["early_fact_ok"] = fv in (tf["text"] or "")
             curve.append(int(tf["freshPrefillTokens"] or 0))
             prefill_s.append(round(float(tf.get("prefillMs") or 0) / 1000, 1))
@@ -249,7 +255,11 @@ async def main() -> int:
         # Disagreement between the declared strategy and the observed one is
         # the finding, so record it rather than leaving a reader to diff two
         # fields.
-        _declared = "full-replay" if row["session_strategy"] == "full_replay" else "resident-live"
+        _declared = (
+            "full-replay"
+            if row["session_strategy"] == "full_replay"
+            else "resident-live"
+        )
         row["strategy_matches_behaviour"] = row["session_mode"] == _declared
         # ── snapshot tier from the live session ──────────────────────
         try:

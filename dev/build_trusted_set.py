@@ -8,6 +8,7 @@ manifest with the remediation tier it needs.
 
 Outputs: dev/trusted_labels_v1.json, dev/label_quarantine_v1.json
 """
+
 import hashlib
 import json
 import re
@@ -44,33 +45,59 @@ def load_set(name):
                 yield r["id"], r["label"], r["tally"], None, None, None, None
                 continue
             acts = {lv: c["candidates"][lv]["action"] for lv in c["candidates"]}
-            yield r["id"], r["label"], r["tally"], c["task"], c.get("bucket"), c["context"], acts
+            yield r["id"], r["label"], r["tally"], c["task"], c.get("bucket"), c[
+                "context"
+            ], acts
     elif name in ("phaseC", "tb1_cf"):
-        lf = {"phaseC": "dev/phaseC_labels_clean.json", "tb1_cf": "dev/tb1_cf_labels.json"}[name]
-        cf = {"phaseC": "dev/phaseC_labeling.json", "tb1_cf": "dev/tb1_cf_labeling.json"}[name]
+        lf = {
+            "phaseC": "dev/phaseC_labels_clean.json",
+            "tb1_cf": "dev/tb1_cf_labels.json",
+        }[name]
+        cf = {
+            "phaseC": "dev/phaseC_labeling.json",
+            "tb1_cf": "dev/tb1_cf_labeling.json",
+        }[name]
         content = {r["id"]: r for r in json.load(open(cf))}
         for r in json.load(open(lf)):
             c = content.get(r["id"])
             if c is None:
-                yield r["id"], r.get("label"), r.get("tally", {}), None, None, None, None
+                yield r["id"], r.get("label"), r.get(
+                    "tally", {}
+                ), None, None, None, None
                 continue
             acts = {lv: c["candidates"][lv].get("action", "") for lv in c["candidates"]}
-            yield (r["id"], r.get("label"), r.get("tally", {}), c.get("task"),
-                   c.get("stratum"), c.get("context"), acts)
+            yield (
+                r["id"],
+                r.get("label"),
+                r.get("tally", {}),
+                c.get("task"),
+                c.get("stratum"),
+                c.get("context"),
+                acts,
+            )
     elif name == "grow":
         content = {r["id"]: r for r in json.load(open("dev/grow_panel_input.json"))}
         for r in json.load(open("dev/grow_labels.json")):
             c = content.get(r["id"])
             if c is None:
-                yield r["id"], r.get("label"), r.get("tally", {}), None, None, None, None
+                yield r["id"], r.get("label"), r.get(
+                    "tally", {}
+                ), None, None, None, None
                 continue
             # candidates live at top level as low/medium/high keys
             acts = {}
             for lv in ("low", "medium", "high"):
                 v = c.get(lv)
                 acts[lv] = v.get("action", "") if isinstance(v, dict) else (v or "")
-            yield (r["id"], r.get("label"), r.get("tally", {}), c.get("task"),
-                   c.get("bucket"), c.get("context"), acts)
+            yield (
+                r["id"],
+                r.get("label"),
+                r.get("tally", {}),
+                c.get("task"),
+                c.get("bucket"),
+                c.get("context"),
+                acts,
+            )
     elif name == "v3":
         turns = {t["id"]: t for t in json.load(open("dev/clean_turns_v3.json"))}
         acts = {}
@@ -88,10 +115,19 @@ def load_set(name):
         for r in json.load(open("dev/clean_labels_v3.json")):
             t = turns.get(r["id"])
             if t is None:
-                yield r["id"], r.get("level"), r.get("tally", {}), None, None, None, None
+                yield r["id"], r.get("level"), r.get(
+                    "tally", {}
+                ), None, None, None, None
                 continue
-            yield (r["id"], r.get("level"), r.get("tally", {}), t.get("task"), None,
-                   t.get("prompt"), acts.get(r["id"], {}))
+            yield (
+                r["id"],
+                r.get("level"),
+                r.get("tally", {}),
+                t.get("task"),
+                None,
+                t.get("prompt"),
+                acts.get(r["id"], {}),
+            )
 
 
 SOURCES = ["phaseB", "phaseC", "tb1_cf", "grow", "v3"]
@@ -100,8 +136,15 @@ trusted, quarantine, seen_prompt = [], [], {}
 for src in SOURCES:
     for oid, label, tally, task, stratum, prompt, acts in load_set(src):
         uid = f"{src}:{oid}"
-        rec = {"uid": uid, "source": src, "orig_id": oid, "label": label,
-               "tally": tally, "task": task, "stratum": stratum}
+        rec = {
+            "uid": uid,
+            "source": src,
+            "orig_id": oid,
+            "label": label,
+            "tally": tally,
+            "task": task,
+            "stratum": stratum,
+        }
 
         def park(tier, detail=None):
             quarantine.append({**rec, "tier": tier, "detail": detail})
@@ -135,60 +178,112 @@ for src in SOURCES:
             elif prior["label"] == label:
                 park("dedup_duplicate", f"dup_of={prior['uid']}")
             else:
-                park("dedup_conflict", f"conflicts_with={prior['uid']} ({prior['label']} vs {label})")
+                park(
+                    "dedup_conflict",
+                    f"conflicts_with={prior['uid']} ({prior['label']} vs {label})",
+                )
                 trusted[:] = [t for t in trusted if t["uid"] != prior["uid"]]
-                quarantine.append({k: v for k, v in prior.items() if k != "_conflicted"}
-                                  | {"tier": "dedup_conflict", "detail": f"conflicts_with={uid}"})
+                quarantine.append(
+                    {k: v for k, v in prior.items() if k != "_conflicted"}
+                    | {"tier": "dedup_conflict", "detail": f"conflicts_with={uid}"}
+                )
                 prior["_conflicted"] = True
             continue
-        rec.update({"prompt_sha256": ph,
-                    "candidate_sha256": {lv: sha(a) for lv, a in acts.items()},
-                    "accepted_by": "retro-gate-3-0", "standard": STANDARD,
-                    "caveats": ["candidates_pre_featurizer_fix"]})
+        rec.update(
+            {
+                "prompt_sha256": ph,
+                "candidate_sha256": {lv: sha(a) for lv, a in acts.items()},
+                "accepted_by": "retro-gate-3-0",
+                "standard": STANDARD,
+                "caveats": ["candidates_pre_featurizer_fix"],
+            }
+        )
         seen_prompt[ph] = rec
         trusted.append(rec)
 
 SET_LEVEL = [
-    {"tier": "no_raw_votes", "source": "phaseB2", "count": 367,
-     "detail": "tallies never stored; ungateable; anomalous 49% medium mix",
-     "action": "exclude; relabel under v1.0 only if its turns fill class gaps"},
-    {"tier": "superseded_corpus", "source": "clean_v1", "count": 850,
-     "detail": "corpus rebuilt as v3 with reassigned ids; turn cleaning status unknown",
-     "action": "exclude; do not resurrect"},
-    {"tier": "rule_labels_not_judged", "source": "grow_short", "count": 229,
-     "detail": "blanket short->low; phaseB short bucket was 32 low / 8 MED, so ~20% mislabeled",
-     "action": "exclude from gold; short->NOT-HIGH stays valid for routing"},
-    {"tier": "dropped_by_prior_cleaning", "source": "phaseB(-22)+phaseC(-380)", "count": 402,
-     "detail": "records the _clean variants already removed",
-     "action": "stay dropped"},
+    {
+        "tier": "no_raw_votes",
+        "source": "phaseB2",
+        "count": 367,
+        "detail": "tallies never stored; ungateable; anomalous 49% medium mix",
+        "action": "exclude; relabel under v1.0 only if its turns fill class gaps",
+    },
+    {
+        "tier": "superseded_corpus",
+        "source": "clean_v1",
+        "count": 850,
+        "detail": "corpus rebuilt as v3 with reassigned ids; turn cleaning status unknown",
+        "action": "exclude; do not resurrect",
+    },
+    {
+        "tier": "rule_labels_not_judged",
+        "source": "grow_short",
+        "count": 229,
+        "detail": "blanket short->low; phaseB short bucket was 32 low / 8 MED, so ~20% mislabeled",
+        "action": "exclude from gold; short->NOT-HIGH stays valid for routing",
+    },
+    {
+        "tier": "dropped_by_prior_cleaning",
+        "source": "phaseB(-22)+phaseC(-380)",
+        "count": 402,
+        "detail": "records the _clean variants already removed",
+        "action": "stay dropped",
+    },
 ]
 
 from collections import Counter
+
 tiers = Counter(q["tier"] for q in quarantine)
 by_src = Counter(t["source"] for t in trusted)
 by_lab = Counter(t["label"] for t in trusted)
 by_task = Counter(t["task"] for t in trusted)
 
-header = {"standard": STANDARD, "built": "2026-07-15",
-          "gates": ["votes>=3", "unanimous", "label in {low,medium}",
-                    "corruption screen (trailing_lt/lt_eol/empty on prompt+3 candidates)",
-                    "cross-set prompt dedup"],
-          "caveat": "ALL candidates pre-date the featurizer fix (llmvp becacca 2026-07-03); "
-                    "pending the 250-turn post-fix regeneration calibration, this set is "
-                    "TRUSTED-RETRO tier, not final gold.",
-          "counts": {"trusted": len(trusted), "by_source": dict(by_src),
-                     "by_label": dict(by_lab), "quarantined": len(quarantine),
-                     "quarantine_tiers": dict(tiers)}}
-json.dump({"header": header, "records": trusted},
-          open("dev/trusted_labels_v1.json", "w"), indent=1)
-json.dump({"header": {"standard": STANDARD, "built": "2026-07-15",
-                      "tiers": dict(tiers), "set_level_exclusions": SET_LEVEL},
-           "records": quarantine},
-          open("dev/label_quarantine_v1.json", "w"), indent=1)
+header = {
+    "standard": STANDARD,
+    "built": "2026-07-15",
+    "gates": [
+        "votes>=3",
+        "unanimous",
+        "label in {low,medium}",
+        "corruption screen (trailing_lt/lt_eol/empty on prompt+3 candidates)",
+        "cross-set prompt dedup",
+    ],
+    "caveat": "ALL candidates pre-date the featurizer fix (llmvp becacca 2026-07-03); "
+    "pending the 250-turn post-fix regeneration calibration, this set is "
+    "TRUSTED-RETRO tier, not final gold.",
+    "counts": {
+        "trusted": len(trusted),
+        "by_source": dict(by_src),
+        "by_label": dict(by_lab),
+        "quarantined": len(quarantine),
+        "quarantine_tiers": dict(tiers),
+    },
+}
+json.dump(
+    {"header": header, "records": trusted},
+    open("dev/trusted_labels_v1.json", "w"),
+    indent=1,
+)
+json.dump(
+    {
+        "header": {
+            "standard": STANDARD,
+            "built": "2026-07-15",
+            "tiers": dict(tiers),
+            "set_level_exclusions": SET_LEVEL,
+        },
+        "records": quarantine,
+    },
+    open("dev/label_quarantine_v1.json", "w"),
+    indent=1,
+)
 
 print(f"TRUSTED: {len(trusted)}  by_label={dict(by_lab)}  by_source={dict(by_src)}")
 print(f"  tasks: {len(by_task)} distinct; top: {by_task.most_common(5)}")
 print(f"QUARANTINED (record-level): {len(quarantine)}")
 for t, c in tiers.most_common():
     print(f"  {t}: {c}")
-print(f"SET-LEVEL EXCLUSIONS: {sum(s['count'] for s in SET_LEVEL)} across {len(SET_LEVEL)} sets")
+print(
+    f"SET-LEVEL EXCLUSIONS: {sum(s['count'] for s in SET_LEVEL)} across {len(SET_LEVEL)} sets"
+)

@@ -86,9 +86,9 @@ class TestCompletion:
     def test_an_unasked_lint_failure_holds_the_goal_open(self):
         g = _goal(["lint: engine.py"])
         _maybe_complete_goal(g)
-        assert g.status == "incomplete", (
-            "this is the regression that shipped F821 into the functional phase"
-        )
+        assert (
+            g.status == "incomplete"
+        ), "this is the regression that shipped F821 into the functional phase"
 
     def test_an_asked_one_completes(self):
         g = _goal(["lint: engine.py"])
@@ -191,9 +191,7 @@ class TestTheSweepActuallyAsks:
         return MissionState(
             objective="t",
             status="active",
-            config=MissionConfig(
-                working_directory=str(tmp_path), structural_mode=mode
-            ),
+            config=MissionConfig(working_directory=str(tmp_path), structural_mode=mode),
             architecture=ArchitectureState(
                 run_command="python engine.py",
                 creation_order=["engine.py"],
@@ -243,9 +241,9 @@ class TestTheSweepActuallyAsks:
 
         mission = self._mission(tmp_path, ["lint: engine.py"])
         asyncio.run(self._sweep(mission))
-        assert mission.goals[0].lint_reviewed is False, (
-            "the goal must still be a candidate when the burst recomputes"
-        )
+        assert (
+            mission.goals[0].lint_reviewed is False
+        ), "the goal must still be a candidate when the burst recomputes"
 
     def test_the_goal_survives_as_a_candidate_for_the_burst(self, tmp_path):
         """The property the above protects: after dispatch, the burst can still
@@ -257,9 +255,9 @@ class TestTheSweepActuallyAsks:
         mission = self._mission(tmp_path, ["lint: engine.py"])
         asyncio.run(self._sweep(mission))
         got = _diagnose_batch_candidates(mission, str(tmp_path))
-        assert [p for _, p, _ in got] == ["engine.py"], (
-            "dispatch must not consume the very candidate it dispatched for"
-        )
+        assert [p for _, p, _ in got] == [
+            "engine.py"
+        ], "dispatch must not consume the very candidate it dispatched for"
 
     def test_a_burst_that_books_nothing_is_still_bounded(self, tmp_path):
         """THE ANTI-DEADLOCK PROPERTY, end to end.

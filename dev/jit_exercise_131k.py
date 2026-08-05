@@ -35,8 +35,11 @@ def gql(q, variables=None, timeout=600):
     body = {"query": q}
     if variables:
         body["variables"] = variables
-    req = urllib.request.Request(URL, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        URL,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+    )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
@@ -50,8 +53,9 @@ def wired_gb() -> float:
 
 
 def health() -> dict:
-    return gql("query{health{availableInstances activeInstances inFlight}}")[
-        "data"]["health"]
+    return gql("query{health{availableInstances activeInstances inFlight}}")["data"][
+        "health"
+    ]
 
 
 def one(i: int) -> dict:
@@ -62,8 +66,12 @@ def one(i: int) -> dict:
         if r.get("errors"):
             return {"i": i, "err": r["errors"][0]["message"][:140]}
         c = r["data"]["completion"]
-        return {"i": i, "tok": c["generatedTokens"],
-                "decode_ms": c["decodeMs"], "wall_s": round(time.time() - t0, 1)}
+        return {
+            "i": i,
+            "tok": c["generatedTokens"],
+            "decode_ms": c["decodeMs"],
+            "wall_s": round(time.time() - t0, 1),
+        }
     except Exception as e:  # noqa: BLE001 — observational harness
         return {"i": i, "err": str(e)[:140]}
 
@@ -72,7 +80,9 @@ def main() -> None:
     report: dict = {}
 
     report["A_baseline"] = {
-        "result": one(0), "wired_gb": wired_gb(), "health": health(),
+        "result": one(0),
+        "wired_gb": wired_gb(),
+        "health": health(),
     }
 
     t0 = time.time()
@@ -95,12 +105,14 @@ def main() -> None:
     for _ in range(24):  # up to 4 min: ttl 60s + cooldown 30s + tick cadence
         time.sleep(10)
         h = health()
-        reap_samples.append({
-            "t_s": len(reap_samples) * 10 + 10,
-            "active": h["activeInstances"],
-            "available": h["availableInstances"],
-            "wired_gb": wired_gb(),
-        })
+        reap_samples.append(
+            {
+                "t_s": len(reap_samples) * 10 + 10,
+                "active": h["activeInstances"],
+                "available": h["availableInstances"],
+                "wired_gb": wired_gb(),
+            }
+        )
         if h["activeInstances"] <= 1:
             break
     report["D_reap"] = reap_samples

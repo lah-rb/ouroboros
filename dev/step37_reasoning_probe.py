@@ -100,9 +100,11 @@ def main() -> None:
         separated = means["high"] > 2 * max(means["low"], 1)
         print(
             f"\nVERDICT: monotonic={monotonic} separated={separated} — "
-            + ("the Reasoning knob WORKS on step37"
-               if monotonic and separated
-               else "the Reasoning line is NOT meaningfully steering CoT")
+            + (
+                "the Reasoning knob WORKS on step37"
+                if monotonic and separated
+                else "the Reasoning line is NOT meaningfully steering CoT"
+            )
         )
 
 

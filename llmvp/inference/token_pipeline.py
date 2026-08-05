@@ -56,9 +56,7 @@ def build_capture_meta(
     try:
         meta["prompt_tail"] = llama.detokenize(
             list(prompt_tokens[-768:]), special=True
-        ).decode(
-            "utf-8", errors="replace"
-        )
+        ).decode("utf-8", errors="replace")
     except Exception:  # noqa: BLE001 — forensics must not break the request
         meta["prompt_tail"] = "(detokenization failed)"
     return meta

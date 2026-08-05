@@ -8,6 +8,7 @@ narrow band (46-60). Is that because the models are genuinely close, or because
 most of the 100 points are pinned at the same value for everyone -- i.e. the
 instrument is measuring the BRIEF rather than the model?
 """
+
 import sys
 import statistics as st
 from pathlib import Path
@@ -56,9 +57,11 @@ def collect():
             continue
         for _path, block, dims in find_dimension_blocks(tier):
             run = str(block.get("run", ""))
-            vec = {n: (float(d["score"]), float(d.get("max", 0)))
-                   for n, d in dims.items()
-                   if isinstance(d, dict) and "score" in d}
+            vec = {
+                n: (float(d["score"]), float(d.get("max", 0)))
+                for n, d in dims.items()
+                if isinstance(d, dict) and "score" in d
+            }
             if not vec:
                 continue
             # single-judge blocks record `total:`; three-judge blocks record
@@ -85,8 +88,10 @@ def report(pop, title):
             if n not in [d for d, _ in dims]:
                 dims.append((n, mx))
     print()
-    print(f"{'dimension':22s} {'max':>4s} {'min':>4s} {'max':>4s} {'rng':>4s} "
-          f"{'sd':>5s} {'rng/max':>8s}  values")
+    print(
+        f"{'dimension':22s} {'max':>4s} {'min':>4s} {'max':>4s} {'rng':>4s} "
+        f"{'sd':>5s} {'rng/max':>8s}  values"
+    )
     print("-" * 92)
     summary = []
     for dname, dmax in dims:
@@ -97,23 +102,28 @@ def report(pop, title):
         sd = st.pstdev(vals)
         frac = rng / dmax if dmax else 0.0
         summary.append((frac, rng, sd, dname, dmax))
-        print(f"{dname:22s} {dmax:4g} {min(vals):4g} {max(vals):4g} {rng:4g} "
-              f"{sd:5.2f} {frac:8.2f}  {sorted(vals)}")
+        print(
+            f"{dname:22s} {dmax:4g} {min(vals):4g} {max(vals):4g} {rng:4g} "
+            f"{sd:5.2f} {frac:8.2f}  {sorted(vals)}"
+        )
     summary.sort(reverse=True)
     print("\nRANKED BY SEPARATING POWER (range as a fraction of the max):")
     for frac, rng, sd, dname, dmax in summary:
-        verdict = ("SEPARATES" if frac >= 0.4 else
-                   "weak" if frac >= 0.2 else "PINNED")
+        verdict = "SEPARATES" if frac >= 0.4 else "weak" if frac >= 0.2 else "PINNED"
         print(f"  {frac:5.2f}  {dname:22s} ({rng:g}/{dmax:g}, sd {sd:.2f})  {verdict}")
     live = sum(m for fr, _, _, _, m in summary if fr >= 0.4)
     weak = sum(m for fr, _, _, _, m in summary if 0.2 <= fr < 0.4)
     pin = sum(m for fr, _, _, _, m in summary if fr < 0.2)
-    print(f"\nPOINT BUDGET:  separating={live:g}  weak={weak:g}  pinned={pin:g}"
-          f"  (of {live + weak + pin:g})")
+    print(
+        f"\nPOINT BUDGET:  separating={live:g}  weak={weak:g}  pinned={pin:g}"
+        f"  (of {live + weak + pin:g})"
+    )
     totals = [t for _l, _s, t, _v in pop if t is not None]
     if len(totals) > 1:
-        print(f"TOTALS: min={min(totals)} max={max(totals)} "
-              f"range={max(totals) - min(totals)} sd={st.pstdev(totals):.2f}")
+        print(
+            f"TOTALS: min={min(totals)} max={max(totals)} "
+            f"range={max(totals) - min(totals)} sd={st.pstdev(totals):.2f}"
+        )
 
 
 def pedestal_and_rerank(pop, pinned):
@@ -123,8 +133,10 @@ def pedestal_and_rerank(pop, pinned):
     every artifact clears) and the ranking still means something. If the order
     scrambles, the ranking was riding on dimensions that do not discriminate.
     """
-    print(f"\n{'=' * 78}\nPEDESTAL TEST -- drop the pinned dimensions {sorted(pinned)}"
-          f"\n{'=' * 78}")
+    print(
+        f"\n{'=' * 78}\nPEDESTAL TEST -- drop the pinned dimensions {sorted(pinned)}"
+        f"\n{'=' * 78}"
+    )
     rows = []
     for label, _sw, total, vec in pop:
         ped = sum(sc for n, (sc, _m) in vec.items() if n in pinned)
@@ -141,21 +153,27 @@ def pedestal_and_rerank(pop, pinned):
 
     print(f"{'arm':36s} {'total':>6s} {'pedestal':>9s} {'live':>6s} {'live/max':>9s}")
     for label, total, ped, live, live_max in sorted(rows, key=lambda r: -(r[1] or 0)):
-        print(f"{label:36s} {str(total):>6s} {ped:9g} {live:6g} "
-              f"{live / live_max * 100:8.1f}%")
+        print(
+            f"{label:36s} {str(total):>6s} {ped:9g} {live:6g} "
+            f"{live / live_max * 100:8.1f}%"
+        )
 
     peds = [r[2] for r in rows]
-    print(f"\nPEDESTAL: every artifact banks {min(peds):g}-{max(peds):g} points "
-          f"from the pinned dimensions (mean {st.mean(peds):.1f}) "
-          f"regardless of quality.")
-    print(f"LIVE RANGE: {min(r[3] for r in rows):g}-{max(r[3] for r in rows):g} "
-          f"of {rows[0][4]:g} possible.")
+    print(
+        f"\nPEDESTAL: every artifact banks {min(peds):g}-{max(peds):g} points "
+        f"from the pinned dimensions (mean {st.mean(peds):.1f}) "
+        f"regardless of quality."
+    )
+    print(
+        f"LIVE RANGE: {min(r[3] for r in rows):g}-{max(r[3] for r in rows):g} "
+        f"of {rows[0][4]:g} possible."
+    )
     print(f"\nrank by TOTAL: {' > '.join(by_total)}")
     print(f"rank by LIVE : {' > '.join(by_live)}")
 
     inversions, agree, ties_split = [], 0, []
     for i, a in enumerate(rows):
-        for b in rows[i + 1:]:
+        for b in rows[i + 1 :]:
             ta, tb = (a[1] or 0), (b[1] or 0)
             if ta == tb:
                 if a[3] != b[3]:
@@ -164,12 +182,15 @@ def pedestal_and_rerank(pop, pinned):
                 continue
             hi_t, lo_t = (a, b) if ta > tb else (b, a)
             if hi_t[3] < lo_t[3]:
-                inversions.append(f"total says {hi_t[0]}>{lo_t[0]}, "
-                                  f"live says {lo_t[0]}>{hi_t[0]}")
+                inversions.append(
+                    f"total says {hi_t[0]}>{lo_t[0]}, " f"live says {lo_t[0]}>{hi_t[0]}"
+                )
             else:
                 agree += 1
-    print(f"\nORDERED PAIRS (distinct totals only): {agree} agree, "
-          f"{len(inversions)} invert")
+    print(
+        f"\nORDERED PAIRS (distinct totals only): {agree} agree, "
+        f"{len(inversions)} invert"
+    )
     for s in inversions:
         print(f"  INVERSION: {s}")
     if ties_split:

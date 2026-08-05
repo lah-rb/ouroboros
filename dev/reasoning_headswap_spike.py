@@ -10,6 +10,7 @@ installs). Expectation if the swap works:
 
 Usage: python dev/reasoning_headswap_spike.py   (server must be up)
 """
+
 import json
 import urllib.request
 
@@ -63,7 +64,9 @@ for level in ["high", "low", "default", "low"]:
     try:
         r = turn(sid, None if level == "default" else level)
         tail = (r["text"] or "").replace("\n", " ")[-70:]
-        print(f"{level:10} {r['tokensGenerated']:>8}  {len(r['text'] or ''):>9}  {tail!r}")
+        print(
+            f"{level:10} {r['tokensGenerated']:>8}  {len(r['text'] or ''):>9}  {tail!r}"
+        )
         results.setdefault(level, []).append(r["tokensGenerated"])
     except Exception as e:
         print(f"{level:10}  ERROR: {e}")
@@ -74,5 +77,11 @@ print("\n--- verdict ---")
 if results.get("low") and results.get("high"):
     lo = min(results["low"])
     hi = max(results["high"])
-    print(f"low={results['low']} high={results['high']} default={results.get('default')}")
-    print("HEAD-SWAP WORKS ✅" if lo < hi * 0.8 else "NO CLEAR SWING ⚠ (heads may not differ)")
+    print(
+        f"low={results['low']} high={results['high']} default={results.get('default')}"
+    )
+    print(
+        "HEAD-SWAP WORKS ✅"
+        if lo < hi * 0.8
+        else "NO CLEAR SWING ⚠ (heads may not differ)"
+    )

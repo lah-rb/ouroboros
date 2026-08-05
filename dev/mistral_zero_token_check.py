@@ -69,7 +69,9 @@ def main() -> None:
     print(f"generated-but-empty-after-strip: {len(stripped)}")
     if stripped:
         print(f"  steps: {Counter(c.get('step') for c in stripped).most_common(5)}")
-        print(f"  temps: {sorted(set(round(c.get('temperature') or 0, 3) for c in stripped))}")
+        print(
+            f"  temps: {sorted(set(round(c.get('temperature') or 0, 3) for c in stripped))}"
+        )
         s = stripped[0]
         print(f"  sample thinking: {(s.get('thinking_content') or '')[:200]!r}")
 
@@ -96,9 +98,13 @@ def main() -> None:
     zt = [c.get("temperature") or 0.0 for c in zero]
     nt = [c.get("temperature") or 0.0 for c in nonzero]
     print("\ntemperature: zero vs healthy")
-    print(f"  zero    n={len(zt):4} min={min(zt):.3f} median={statistics.median(zt):.3f} max={max(zt):.3f}")
+    print(
+        f"  zero    n={len(zt):4} min={min(zt):.3f} median={statistics.median(zt):.3f} max={max(zt):.3f}"
+    )
     if nt:
-        print(f"  healthy n={len(nt):4} min={min(nt):.3f} median={statistics.median(nt):.3f} max={max(nt):.3f}")
+        print(
+            f"  healthy n={len(nt):4} min={min(nt):.3f} median={statistics.median(nt):.3f} max={max(nt):.3f}"
+        )
         verdict = (
             "CONSISTENT with the low-temp collapse (zero turns are colder)"
             if statistics.median(zt) < statistics.median(nt)

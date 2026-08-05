@@ -112,9 +112,10 @@ class TestEffectiveStrategy:
     def test_requested_but_denied_still_reports_the_path_it_landed_on(self):
         """The §4 wrinkle: the request was granted by config and refused by the
         arch. Strategy must name where it ACTUALLY landed, not what was asked."""
-        b = _with_ctx(_backend(resident_requested=True, full_replay=True),
-                      can_shift=False)
-        b._resident_active = False          # what the gate would have set
+        b = _with_ctx(
+            _backend(resident_requested=True, full_replay=True), can_shift=False
+        )
+        b._resident_active = False  # what the gate would have set
         b._session_can_shift = False
         assert b._session_strategy() == "full_replay"
 
@@ -212,9 +213,9 @@ class TestTheAskIsUnconditional:
         # Eight spaces = method-body indent. Deeper would mean it sits inside the
         # resident branch and would not fire for a full_replay config.
         line_start = src.rindex("\n", 0, call) + 1
-        assert src[line_start:call] == " " * 8, (
-            "session-strategy logging must not be nested inside a conditional"
-        )
+        assert (
+            src[line_start:call] == " " * 8
+        ), "session-strategy logging must not be nested inside a conditional"
 
 
 class TestInfoDict:

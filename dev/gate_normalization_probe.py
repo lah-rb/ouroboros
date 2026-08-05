@@ -108,9 +108,7 @@ def mean_pairwise_jaccard(sets: list[set[str]]) -> float:
     pairs = list(itertools.combinations([s for s in sets if s], 2))
     if not pairs:
         return float("nan")
-    return statistics.mean(
-        len(a & b) / len(a | b) for a, b in pairs if (a | b)
-    )
+    return statistics.mean(len(a & b) / len(a | b) for a, b in pairs if (a | b))
 
 
 def main() -> None:
@@ -209,7 +207,9 @@ def main() -> None:
 
     print("\n══ convergence ══")
     print(f"  n = {len(done)}")
-    print(f"  mean pairwise Jaccard   before={jb:.3f}   after={ja:.3f}   delta={ja - jb:+.3f}")
+    print(
+        f"  mean pairwise Jaccard   before={jb:.3f}   after={ja:.3f}   delta={ja - jb:+.3f}"
+    )
     print(f"  distinct file-sets      before={ub}       after={ua}")
     print(
         f"  module count spread     before={max(len(s) for s in before_sets) - min(len(s) for s in before_sets)}"

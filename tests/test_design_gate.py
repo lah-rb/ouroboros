@@ -318,9 +318,9 @@ class TestTheGateVerdictReachesTheReconcile:
         keys = _compiled()["design_and_plan"]["steps"]["design_reconcile"][
             "prompt_template"
         ]["context_keys"]
-        assert "design_gate_feedback" in keys, (
-            "a declared-but-unrendered key is exactly the bug this guards"
-        )
+        assert (
+            "design_gate_feedback" in keys
+        ), "a declared-but-unrendered key is exactly the bug this guards"
 
     def test_the_publisher_and_the_consumer_agree(self):
         """Pins both ends, so renaming one side fails loudly here."""
@@ -337,9 +337,7 @@ class TestTheGateVerdictReachesTheReconcile:
         not emit an empty feedback heading on a first attempt."""
         import yaml
 
-        tpl = yaml.safe_load(
-            open("prompts/design_and_plan/design_architecture.yaml")
-        )
+        tpl = yaml.safe_load(open("prompts/design_and_plan/design_architecture.yaml"))
         secs = [s for s in tpl["sections"] if "design_gate_feedback" in str(s)]
         assert secs, "no section renders design_gate_feedback"
         assert any(

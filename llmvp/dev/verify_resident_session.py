@@ -11,6 +11,7 @@ two modes and reporting, per turn:
 
 Usage (run from llmvp/):  .venv/bin/python dev/verify_resident_session.py <config> [n_turns]
 """
+
 import asyncio
 import sys
 import time
@@ -37,6 +38,7 @@ async def run_session(resident: bool, n_turns: int):
     set_config(cfg)
 
     from preprocessing.static_tokens import manager
+
     manager.load_static_buffer()
 
     from inference.backends.factory import create_backend
@@ -46,7 +48,10 @@ async def run_session(resident: bool, n_turns: int):
     await backend.initialize()
     active = getattr(backend, "_resident_active", None)
     mode = f"resident={resident} _resident_active={active}"
-    print(f"\n=== {mode} | full_replay={getattr(cfg.model,'session_full_replay',True)} ===", flush=True)
+    print(
+        f"\n=== {mode} | full_replay={getattr(cfg.model,'session_full_replay',True)} ===",
+        flush=True,
+    )
 
     sm = SessionManager(backend)
     info = await sm.start_session(ttl_seconds=600)
@@ -57,7 +62,9 @@ async def run_session(resident: bool, n_turns: int):
         if t == 0:
             prompt = f"Remember this code for later: {SECRET}. Acknowledge in one word."
         elif t == n_turns - 1:
-            prompt = "What was the code I gave you at the start? Reply with just the code."
+            prompt = (
+                "What was the code I gave you at the start? Reply with just the code."
+            )
         else:
             prompt = f"Turn {t}: reply in one short sentence about the number {t}."
         t0 = time.time()
@@ -66,26 +73,35 @@ async def run_session(resident: bool, n_turns: int):
         # Thinking models need room to finish CoT + answer (24 truncated mid-CoT).
         turn_max = 200 if t == n_turns - 1 else 80
         try:
-            async for chunk in sm.session_turn(sid, prompt, max_tokens=turn_max, temperature=0.0):
+            async for chunk in sm.session_turn(
+                sid, prompt, max_tokens=turn_max, temperature=0.0
+            ):
                 if first is None:
                     first = time.time() - t0
                 text += chunk
         except Exception as e:  # noqa: BLE001
-            print(f"  turn {t:>2}: CRASHED: {type(e).__name__}: {str(e)[:120]}", flush=True)
+            print(
+                f"  turn {t:>2}: CRASHED: {type(e).__name__}: {str(e)[:120]}",
+                flush=True,
+            )
             ttfts.append(None)
             break
         ttfts.append(first)
         if t == n_turns - 1:
             mem_ok = SECRET.replace("-", "") in text.replace("-", "").upper()
-        print(f"  turn {t:>2}: TTFT={first:6.2f}s  out={text.strip()[:46]!r}", flush=True)
+        print(
+            f"  turn {t:>2}: TTFT={first:6.2f}s  out={text.strip()[:46]!r}", flush=True
+        )
 
     await sm.end_session(sid)
     await backend.shutdown()
     valid = [x for x in ttfts if x is not None]
     growth = (valid[-1] / valid[0]) if len(valid) >= 2 and valid[0] else float("nan")
-    print(f"  -> TTFT first={valid[0]:.2f}s last={valid[-1]:.2f}s growth={growth:.2f}x "
-          f"| memory_recall={'PASS' if mem_ok else 'FAIL'} | survived={len(valid)}/{n_turns} turns",
-          flush=True)
+    print(
+        f"  -> TTFT first={valid[0]:.2f}s last={valid[-1]:.2f}s growth={growth:.2f}x "
+        f"| memory_recall={'PASS' if mem_ok else 'FAIL'} | survived={len(valid)}/{n_turns} turns",
+        flush=True,
+    )
     return ttfts, mem_ok
 
 
@@ -96,7 +112,9 @@ async def main():
     if not resident_only:
         await run_session(resident=False, n_turns=N_TURNS)
     await run_session(resident=True, n_turns=N_TURNS)
-    print("\n(resident TTFT should be FLAT (~1x growth); legacy full_replay should CLIMB.)")
+    print(
+        "\n(resident TTFT should be FLAT (~1x growth); legacy full_replay should CLIMB.)"
+    )
 
 
 if __name__ == "__main__":

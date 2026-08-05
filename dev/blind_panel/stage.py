@@ -45,8 +45,16 @@ STRIP_DIRS = {".agent", ".venv", "__pycache__", ".ruff_cache", ".pytest_cache", 
 # beside the artifact by dev/overnight_tier_run.sh. It survived the 2026-07-27
 # tier staging and would have handed judges the goal ledger the .agent strip
 # exists to remove. Any new harness that writes a sidecar needs a line here.
-STRIP_GLOBS = ["run.log", "create.log", "*.png", "output.txt", "*.jsonl",
-               "nohup.out", "OUTCOME", "*.OUTCOME"]
+STRIP_GLOBS = [
+    "run.log",
+    "create.log",
+    "*.png",
+    "output.txt",
+    "*.jsonl",
+    "nohup.out",
+    "OUTCOME",
+    "*.OUTCOME",
+]
 
 # Strings that would identify which system/model produced an artifact. Extend
 # freely — a false positive costs one look, a false negative costs the panel.
@@ -191,17 +199,17 @@ def main() -> None:
     )
 
     print(f"staged {len(runs)} arms -> {out}")
-    model_pat = re.compile(
-        "|".join(re.escape(t) for t in MODEL_IDENTIFIERS), re.I
-    )
+    model_pat = re.compile("|".join(re.escape(t) for t in MODEL_IDENTIFIERS), re.I)
     leaks, advisory = [], []
     for label in labels:
         for f, line, s in scan(out / label):
             entry = f"  {label}/{f}:{line}  contains {s!r}"
             (leaks if model_pat.search(s) else advisory).append(entry)
     if advisory:
-        print("\n   advisory (framework/judge names — present in every arm, "
-              "so they identify nothing; not a leak):")
+        print(
+            "\n   advisory (framework/judge names — present in every arm, "
+            "so they identify nothing; not a leak):"
+        )
         print("\n".join(advisory))
     if leaks:
         print("\n!! MODEL-NAME LEAKS — do NOT judge past this:")

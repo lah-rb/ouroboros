@@ -136,7 +136,9 @@ def test_unresolvable_token_text_degrades_instead_of_raising():
         # produced a false "GGUF lacks thinking tags" warning on a
         # thinking-capable 26B-A4B (2026-08-03).
         pytest.param("{{- '<|think|>\\n' -}}", True, id="gemma_pipe_think"),
-        pytest.param("{%- if enable_thinking -%}x{%- endif -%}", True, id="enable_thinking_var"),
+        pytest.param(
+            "{%- if enable_thinking -%}x{%- endif -%}", True, id="enable_thinking_var"
+        ),
         pytest.param("{{ messages }}", False, id="no_think_marker"),
         pytest.param("", None, id="empty_template_is_unknown"),
         pytest.param(None, None, id="absent_template_is_unknown"),

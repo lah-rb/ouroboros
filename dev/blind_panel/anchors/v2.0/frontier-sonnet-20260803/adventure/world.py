@@ -20,10 +20,10 @@ class Room:
         self.key = key
         self.name = name
         self.description = description
-        self.exits = exits or {}          # direction -> room key
-        self.items = items or []          # list of item keys currently here
-        self.monster = None               # Monster instance or None
-        self.npc = None                   # NPC instance or None
+        self.exits = exits or {}  # direction -> room key
+        self.items = items or []  # list of item keys currently here
+        self.monster = None  # Monster instance or None
+        self.npc = None  # NPC instance or None
         self.visited = False
 
     def has_living_monster(self):
@@ -50,14 +50,16 @@ def build_world():
         rooms[key] = Room(key, name, description, exits, items)
 
     add(
-        "courtyard", "Ruined Courtyard",
+        "courtyard",
+        "Ruined Courtyard",
         "Weeds split the flagstones of what was once a proud courtyard. "
         "The keep's broken gate hangs from a single hinge behind you; "
         "ahead, wide stairs climb north into a dark hall.",
         {"north": "hall"},
     )
     add(
-        "hall", "Great Hall",
+        "hall",
+        "Great Hall",
         "A vast hall, its banners burned to lace. Cold hearths line the "
         "walls, ash still heaped in their mouths. Passages lead east "
         "and west, and a grand stair climbs north; the courtyard lies "
@@ -66,14 +68,16 @@ def build_world():
         items=["old_journal"],
     )
     add(
-        "armory", "Armory",
+        "armory",
+        "Armory",
         "Racks of rusted weapons line the walls, most too corroded to "
         "lift. Something is standing very still in the far corner.",
         {"west": "hall"},
         items=["iron_longsword"],
     )
     add(
-        "shrine", "Shattered Shrine",
+        "shrine",
+        "Shattered Shrine",
         "A small shrine, its altar cracked clean in two. Candle-wax has "
         "pooled and hardened on the floor in long-cold rivulets. A "
         "figure kneels before the altar.",
@@ -81,14 +85,16 @@ def build_world():
         items=["healing_draught"],
     )
     add(
-        "landing", "Stairwell Landing",
+        "landing",
+        "Stairwell Landing",
         "A wide landing at the heart of the keep's spiral stair. "
         "Passages open east and west, and the stair continues north "
         "into darkness; the hall lies south.",
         {"south": "hall", "east": "library", "west": "storeroom", "north": "crypt"},
     )
     add(
-        "library", "High Library",
+        "library",
+        "High Library",
         "Shelves of scorched books rise toward a cracked skylight. "
         "Someone has clearly been living here among the ruin -- a "
         "bedroll, a cold lamp, careful stacks instead of chaos.",
@@ -96,14 +102,16 @@ def build_world():
         items=["scaled_breastplate"],
     )
     add(
-        "storeroom", "Storeroom",
+        "storeroom",
+        "Storeroom",
         "Barrels and crates, most long since looted, line this cramped "
         "room. Something skitters in the shadows between them.",
         {"east": "landing"},
         items=["boiled_leather_vest", "healing_draught"],
     )
     add(
-        "crypt", "Silent Crypt",
+        "crypt",
+        "Silent Crypt",
         "Rows of stone sarcophagi stretch into the dark, their lids "
         "carved with the likenesses of the keep's dead. The air is "
         "cold and smells of old ash. A door of black iron stands to "
@@ -112,7 +120,8 @@ def build_world():
         items=["sunfire_brand"],
     )
     add(
-        "throne", "Throne of Ash",
+        "throne",
+        "Throne of Ash",
         "The throne room is scorched black, embers still glowing "
         "faintly in the cracks of the floor. A figure sits slumped on "
         "a throne of fused bone and cinder -- until it stirs.",

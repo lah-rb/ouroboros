@@ -127,13 +127,13 @@ class GameEngine:
         equipped_weapon = None
         equipped_armor = None
 
-        if 'weapon' in self.state_manager.state.equipped:
-            weapon_id = self.state_manager.state.equipped['weapon']
+        if "weapon" in self.state_manager.state.equipped:
+            weapon_id = self.state_manager.state.equipped["weapon"]
             if weapon_id in self.items and isinstance(self.items[weapon_id], Weapon):
                 equipped_weapon = self.items[weapon_id]
 
-        if 'armor' in self.state_manager.state.equipped:
-            armor_id = self.state_manager.state.equipped['armor']
+        if "armor" in self.state_manager.state.equipped:
+            armor_id = self.state_manager.state.equipped["armor"]
             if armor_id in self.items and isinstance(self.items[armor_id], Armor):
                 equipped_armor = self.items[armor_id]
 

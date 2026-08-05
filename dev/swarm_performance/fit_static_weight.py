@@ -6,6 +6,7 @@ D_static is constant within a single config (see FINDINGS §8).
 
     uv run python dev/swarm_performance/fit_static_weight.py
 """
+
 import collections, json
 import numpy as np
 
@@ -18,8 +19,14 @@ def main():
     for f, static in CONFIGS:
         d = json.load(open(R + f))
         for r in d["rows"]:
-            rows.append((r["n"], r["context_depth"] - static + d["gen"] / 2,
-                         static, r["decode_tok_s_aggregate"]))
+            rows.append(
+                (
+                    r["n"],
+                    r["context_depth"] - static + d["gen"] / 2,
+                    static,
+                    r["decode_tok_s_aggregate"],
+                )
+            )
     N = np.array([r[0] for r in rows], float)
     P = np.array([r[1] for r in rows], float)
     S = np.array([r[2] for r in rows], float)
@@ -27,7 +34,9 @@ def main():
 
     def mape(w):
         D = P + w * S
-        X = np.column_stack([np.ones_like(N), np.log(N), np.log(N) * np.log(D), np.log(D)])
+        X = np.column_stack(
+            [np.ones_like(N), np.log(N), np.log(N) * np.log(D), np.log(D)]
+        )
         b, *_ = np.linalg.lstsq(X, np.log(A), rcond=None)
         return 100 * np.abs((np.exp(X @ b) - A) / A).mean()
 
@@ -46,8 +55,10 @@ def main():
     print("\n   delta from removing 1737 static tokens (gain shrinks as N grows ->")
     print("   a per-STEP cost, not per-stream):")
     for size in (256, 2048):
-        deltas = [f"N={n}: {100*(t[(size,n)]['decode_tok_s_aggregate']/b[(size,n)]['decode_tok_s_aggregate']-1):+5.1f}%"
-                  for n in (4, 24, 96)]
+        deltas = [
+            f"N={n}: {100*(t[(size,n)]['decode_tok_s_aggregate']/b[(size,n)]['decode_tok_s_aggregate']-1):+5.1f}%"
+            for n in (4, 24, 96)
+        ]
         print(f"     size {size:<5} " + "   ".join(deltas))
 
 

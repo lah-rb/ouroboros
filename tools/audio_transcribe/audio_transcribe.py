@@ -79,33 +79,50 @@ def main() -> int:
     ap.add_argument("--audio", required=True)
     ap.add_argument("--out", default="", help="write here (default: stdout)")
     ap.add_argument("--engine", choices=("parakeet", "whisper"), default="parakeet")
-    ap.add_argument("--timestamps", action="store_true",
-                    help="prefix segments with [m:ss] (recommended for long audio)")
-    ap.add_argument("--chunk-s", type=float, default=120.0,
-                    help="parakeet chunk duration for long audio")
+    ap.add_argument(
+        "--timestamps",
+        action="store_true",
+        help="prefix segments with [m:ss] (recommended for long audio)",
+    )
+    ap.add_argument(
+        "--chunk-s",
+        type=float,
+        default=120.0,
+        help="parakeet chunk duration for long audio",
+    )
     args = ap.parse_args()
 
     if not os.path.isfile(args.audio):
         print(f"audio_transcribe: no such file: {args.audio}", file=sys.stderr)
         return 2
     if shutil.which("ffmpeg") is None:
-        print("audio_transcribe: ffmpeg not on PATH (brew install ffmpeg)", file=sys.stderr)
+        print(
+            "audio_transcribe: ffmpeg not on PATH (brew install ffmpeg)",
+            file=sys.stderr,
+        )
         return 3
 
     t0 = time.time()
     engine = args.engine
     try:
-        segments = run_parakeet(args.audio, args.chunk_s) if engine == "parakeet" \
+        segments = (
+            run_parakeet(args.audio, args.chunk_s)
+            if engine == "parakeet"
             else run_whisper(args.audio)
+        )
     except Exception as e:  # noqa: BLE001 — engine fallback, then CLI boundary
         if engine == "parakeet":
-            print(f"audio_transcribe: parakeet failed ({e}) — falling back to whisper",
-                  file=sys.stderr)
+            print(
+                f"audio_transcribe: parakeet failed ({e}) — falling back to whisper",
+                file=sys.stderr,
+            )
             engine = "whisper"
             try:
                 segments = run_whisper(args.audio)
             except Exception as e2:  # noqa: BLE001
-                print(f"audio_transcribe: whisper fallback failed: {e2}", file=sys.stderr)
+                print(
+                    f"audio_transcribe: whisper fallback failed: {e2}", file=sys.stderr
+                )
                 return 1
         else:
             print(f"audio_transcribe: {e}", file=sys.stderr)
@@ -115,10 +132,17 @@ def main() -> int:
     if args.out:
         with open(args.out, "w") as f:
             f.write(text)
-        print(json.dumps({
-            "out": args.out, "engine": engine, "chars": len(text),
-            "segments": len(segments), "seconds": round(time.time() - t0, 1),
-        }))
+        print(
+            json.dumps(
+                {
+                    "out": args.out,
+                    "engine": engine,
+                    "chars": len(text),
+                    "segments": len(segments),
+                    "seconds": round(time.time() - t0, 1),
+                }
+            )
+        )
     else:
         print(text)
     return 0

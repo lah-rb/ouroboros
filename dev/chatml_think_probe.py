@@ -61,7 +61,9 @@ def think_split(text: str) -> tuple[int, int]:
 
 
 def main() -> None:
-    print(f"{'mode':10s} {'task':8s} {'think_ch':>9s} {'answer_ch':>10s} {'hit_cap':>8s}")
+    print(
+        f"{'mode':10s} {'task':8s} {'think_ch':>9s} {'answer_ch':>10s} {'hit_cap':>8s}"
+    )
     stats: dict[str, list[int]] = {}
     for mode, toggle in (("default", ""), ("/no_think", " /no_think")):
         for name, task in TASKS.items():
@@ -78,18 +80,26 @@ def main() -> None:
             cap = "YES" if len(text) > 6144 * 3 else ""  # rough char proxy
             stats.setdefault(mode, []).append(think)
             print(f"{mode:10s} {name:8s} {think:9d} {answer:10d} {cap:>8s}", flush=True)
-    print("\nmean think chars: ", {m: round(sum(v) / max(len(v), 1)) for m, v in stats.items()})
+    print(
+        "\nmean think chars: ",
+        {m: round(sum(v) / max(len(v), 1)) for m, v in stats.items()},
+    )
     d, n = stats.get("default", [0]), stats.get("/no_think", [0])
     md, mn = sum(d) / max(len(d), 1), sum(n) / max(len(n), 1)
     print(
         "VERDICT: default mean %.0f chars — %s; /no_think %s"
         % (
             md,
-            "RUNAWAY-CLASS (Qwopus territory)" if md > 20000
-            else "heavy" if md > 8000 else "sane",
-            f"WORKS ({mn:.0f} chars, {mn / max(md, 1):.0%} of default)"
-            if mn < md * 0.25
-            else f"NOT effective ({mn:.0f} chars)",
+            (
+                "RUNAWAY-CLASS (Qwopus territory)"
+                if md > 20000
+                else "heavy" if md > 8000 else "sane"
+            ),
+            (
+                f"WORKS ({mn:.0f} chars, {mn / max(md, 1):.0%} of default)"
+                if mn < md * 0.25
+                else f"NOT effective ({mn:.0f} chars)"
+            ),
         )
     )
 

@@ -30,23 +30,32 @@ def gql(q, variables=None, timeout=600):
     body = {"query": q}
     if variables:
         body["variables"] = variables
-    req = urllib.request.Request(URL, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        URL,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+    )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
 def one(i: int):
-    prompt = (f"Worker {i}: write a detailed, meandering description of a small "
-              f"coastal town's morning market. Prose only.")
+    prompt = (
+        f"Worker {i}: write a detailed, meandering description of a small "
+        f"coastal town's morning market. Prose only."
+    )
     t0 = time.time()
     r = gql(Q, {"p": prompt, "m": 256})
     wall = time.time() - t0
     if r.get("errors"):
         return {"err": r["errors"][0]["message"][:120]}
     c = r["data"]["completion"]
-    return {"tok": c["generatedTokens"], "decode_ms": c["decodeMs"],
-            "prefill_ms": c["prefillMs"], "wall": wall}
+    return {
+        "tok": c["generatedTokens"],
+        "decode_ms": c["decodeMs"],
+        "prefill_ms": c["prefillMs"],
+        "wall": wall,
+    }
 
 
 def main():
@@ -62,12 +71,17 @@ def main():
         ok = [r for r in results if "tok" in r]
         tot_tok = sum(r["tok"] for r in ok)
         per = [r["tok"] / (r["decode_ms"] / 1000) for r in ok if r["decode_ms"]]
-        rows.append({
-            "n": n, "rep": rep, "errors": len(errs),
-            "per_instance_tps": round(sum(per) / len(per), 2) if per else 0,
-            "aggregate_tps": round(tot_tok / wall, 2),
-            "total_tokens": tot_tok, "concurrent_wall_s": round(wall, 1),
-        })
+        rows.append(
+            {
+                "n": n,
+                "rep": rep,
+                "errors": len(errs),
+                "per_instance_tps": round(sum(per) / len(per), 2) if per else 0,
+                "aggregate_tps": round(tot_tok / wall, 2),
+                "total_tokens": tot_tok,
+                "concurrent_wall_s": round(wall, 1),
+            }
+        )
         for e in errs:
             print("ERR:", e["err"], file=sys.stderr)
     for row in rows:

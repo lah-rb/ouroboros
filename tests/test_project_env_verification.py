@@ -27,7 +27,8 @@ COMPILED = Path(__file__).resolve().parents[1] / "flows" / "compiled.json"
 
 def _si(effects):
     return StepInput(
-        context={}, params={},
+        context={},
+        params={},
         meta=FlowMeta(flow_name="project_ops", step_id="verify_env", attempt=1),
         effects=effects,
     )
@@ -41,7 +42,7 @@ class TestDeclaredDistributions:
     def test_strips_specifiers_extras_and_markers(self):
         toml = (
             '[project]\nname = "x"\n'
-            'dependencies = ["requests[socks]>=2 ; python_version>\'3.8\'"]\n'
+            "dependencies = [\"requests[socks]>=2 ; python_version>'3.8'\"]\n"
         )
         assert _declared_distributions(toml, "") == ["requests"]
 
@@ -76,7 +77,11 @@ class TestVerifyAction:
     async def test_all_present_verifies(self):
         eff = MockEffects(
             files={"pyproject.toml": '[project]\nname="x"\ndependencies=["PyYAML"]\n'},
-            commands={"python": CommandResult(return_code=0, stdout="", stderr="", command="python")},
+            commands={
+                "python": CommandResult(
+                    return_code=0, stdout="", stderr="", command="python"
+                )
+            },
         )
         out = await action_verify_project_env(_si(eff))
         assert out.result["env_verified"] is True
@@ -85,7 +90,11 @@ class TestVerifyAction:
     async def test_declared_but_absent_fails_verification(self):
         eff = MockEffects(
             files={"pyproject.toml": '[project]\nname="x"\ndependencies=["PyYAML"]\n'},
-            commands={"python": CommandResult(return_code=0, stdout="PyYAML", stderr="", command="python")},
+            commands={
+                "python": CommandResult(
+                    return_code=0, stdout="PyYAML", stderr="", command="python"
+                )
+            },
         )
         out = await action_verify_project_env(_si(eff))
         assert out.result["env_verified"] is False
@@ -97,7 +106,11 @@ class TestVerifyAction:
         probe must never be read as success."""
         eff = MockEffects(
             files={"pyproject.toml": '[project]\nname="x"\ndependencies=["PyYAML"]\n'},
-            commands={"python": CommandResult(return_code=1, stdout="", stderr="boom", command="python")},
+            commands={
+                "python": CommandResult(
+                    return_code=1, stdout="", stderr="boom", command="python"
+                )
+            },
         )
         out = await action_verify_project_env(_si(eff))
         assert out.result["env_verified"] is False
@@ -125,6 +138,9 @@ class TestWiring:
     def test_the_escalate_verify_loop_terminates(self, po):
         """A persistently-missing dependency must not cycle
         escalate -> verify -> escalate forever."""
-        after = [r["transition"] for r in po["verify_env_after_escalation"]["resolver"]["rules"]]
+        after = [
+            r["transition"]
+            for r in po["verify_env_after_escalation"]["resolver"]["rules"]
+        ]
         assert "escalate_env" not in after
         assert after[-1] == "build_report_failure"

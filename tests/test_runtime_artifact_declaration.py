@@ -94,11 +94,11 @@ class TestEvidenceReachesThePrompt:
         [
             ('SAVE = "game_state.json"', True),
             ('DB = "data/app.sqlite"', True),
-            ('VERSION = "1.0.2"', False),        # version, not an extension
+            ('VERSION = "1.0.2"', False),  # version, not an extension
             ('MSG = "Hello there friend"', False),
-            ('TPL = "{run_id}.log"', False),     # unresolved template
+            ('TPL = "{run_id}.log"', False),  # unresolved template
             ('REL = "./data.json"', False),
-            ('MOD = "agent.actions"', False),    # dotted module path
+            ('MOD = "agent.actions"', False),  # dotted module path
         ],
     )
     def test_only_path_shaped_constants_survive(self, line, kept):
@@ -149,7 +149,7 @@ class TestPersistence:
 
     @pytest.mark.asyncio
     async def test_an_empty_declaration_is_recorded_as_a_real_answer(self):
-        """"This program writes nothing" is a finding, not a failure — and it
+        """ "This program writes nothing" is a finding, not a failure — and it
         must overwrite a stale prior value."""
         m = _mission(transient=["stale.json"])
         effects = MockEffects(mission=m)
@@ -214,8 +214,10 @@ class TestPersistence:
     @pytest.mark.asyncio
     async def test_no_architecture_is_survivable(self):
         m = MissionState(
-            objective="t", status="active",
-            config=MissionConfig(working_directory="/tmp/x"), architecture=None,
+            objective="t",
+            status="active",
+            config=MissionConfig(working_directory="/tmp/x"),
+            architecture=None,
         )
         effects = MockEffects(mission=m)
         out = await action_persist_transient_files(
@@ -237,8 +239,11 @@ class TestReconcileCarryForward:
         doc = {
             "execution": {"run_command": "python main.py", "import_scheme": "flat"},
             "modules": [{"file": "main.py", "defines": [], "imports_from": {}}],
-            "interfaces": [], "data_shapes": [], "state_shapes": [],
-            "creation_order": ["main.py"], "notes": "",
+            "interfaces": [],
+            "data_shapes": [],
+            "state_shapes": [],
+            "creation_order": ["main.py"],
+            "notes": "",
         }
         doc.update(extra)
         return json.dumps(doc)
@@ -259,9 +264,9 @@ class TestReconcileCarryForward:
         await action_parse_and_store_architecture(
             self._si_parse(effects, self._design(), m)
         )
-        assert m.architecture.transient_files == ["game_state.json"], (
-            "reconcile must not erase what project_ops measured from the source"
-        )
+        assert m.architecture.transient_files == [
+            "game_state.json"
+        ], "reconcile must not erase what project_ops measured from the source"
 
     @pytest.mark.asyncio
     async def test_a_supplied_value_still_wins(self):
@@ -270,9 +275,7 @@ class TestReconcileCarryForward:
         m = _mission(transient=["old.json"])
         effects = MockEffects(mission=m)
         await action_parse_and_store_architecture(
-            self._si_parse(
-                effects, self._design(transient_files=["new.json"]), m
-            )
+            self._si_parse(effects, self._design(transient_files=["new.json"]), m)
         )
         assert m.architecture.transient_files == ["new.json"]
 

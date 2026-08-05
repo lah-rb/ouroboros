@@ -78,8 +78,8 @@ def extract_paddle(pdf_path: str, model: str, dpi: int, port: int) -> str:
                 elif md:
                     parts.append(str(md))
             page_mds.append(
-                f"=== page {i + 1} ===\n" + ("\n".join(p for p in parts if p).strip()
-                                             or _NO_TEXT_MARKER)
+                f"=== page {i + 1} ===\n"
+                + ("\n".join(p for p in parts if p).strip() or _NO_TEXT_MARKER)
             )
     doc.close()
     return "\n\n".join(page_mds)
@@ -90,10 +90,16 @@ def main() -> int:
     ap.add_argument("--pdf", required=True)
     ap.add_argument("--out", default="", help="write here (default: stdout)")
     ap.add_argument("--engine", choices=("paddle", "pymupdf"), default="paddle")
-    ap.add_argument("--model", default=_DEFAULT_MODEL, help="MLX VLM model dir (paddle)")
+    ap.add_argument(
+        "--model", default=_DEFAULT_MODEL, help="MLX VLM model dir (paddle)"
+    )
     ap.add_argument("--dpi", type=int, default=160)
-    ap.add_argument("--port", type=int, default=0,
-                    help="0 = spawn a private mlx_vlm.server; N = reuse one (paddle)")
+    ap.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        help="0 = spawn a private mlx_vlm.server; N = reuse one (paddle)",
+    )
     args = ap.parse_args()
 
     if not os.path.isfile(args.pdf):
@@ -131,10 +137,16 @@ def main() -> int:
     if args.out:
         with open(args.out, "w") as f:
             f.write(text)
-        print(json.dumps({
-            "out": args.out, "engine": args.engine, "chars": len(text),
-            "seconds": round(time.time() - t0, 1),
-        }))
+        print(
+            json.dumps(
+                {
+                    "out": args.out,
+                    "engine": args.engine,
+                    "chars": len(text),
+                    "seconds": round(time.time() - t0, 1),
+                }
+            )
+        )
     else:
         print(text)
     return 0

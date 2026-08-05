@@ -158,8 +158,10 @@ def main() -> int:
         print(f"{n:<30}{f:<11}{str(s):<22}{str(eot):<17}{str(eom):<17}{flag}")
 
     bad = [r for r in rows if r[5]]
-    print(f"\n{len(bad)} of {len(rows)} models declare a turn-terminator "
-          f"the family does not stop on.")
+    print(
+        f"\n{len(bad)} of {len(rows)} models declare a turn-terminator "
+        f"the family does not stop on."
+    )
     for r in bad:
         print(f"  {r[0]} ({r[1]}): stops on {r[2]!r}, model also ends on {r[5]}")
     return 1 if bad else 0

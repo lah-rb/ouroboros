@@ -10,6 +10,7 @@ the panel Workflow fans out smaller judge sub-slices x 3 votes within each).
 
 Run AFTER the counterfactual completes (clean_actions_v3.jsonl has 2124x3 records).
 """
+
 import glob
 import json
 import os
@@ -51,13 +52,16 @@ for f in glob.glob(f"{OUT}/batch_*.json"):
 n = 0
 for i in range(0, len(rows), BATCH):
     json.dump(
-        {"batch": n, "turns": rows[i:i + BATCH]},
+        {"batch": n, "turns": rows[i : i + BATCH]},
         open(f"{OUT}/batch_{n:02d}.json", "w"),
         indent=1,
     )
     n += 1
 
-chars = [len(r["prompt"]) + sum(len(r["actions"][k]["action"]) for k in r["actions"]) for r in rows]
+chars = [
+    len(r["prompt"]) + sum(len(r["actions"][k]["action"]) for k in r["actions"])
+    for r in rows
+]
 avg = statistics.mean(chars) if chars else 0
 print(f"complete turns: {len(rows)} (skipped {skipped} missing a level)")
 print(f"super-batches: {n} ({BATCH}/batch) -> {OUT}/")

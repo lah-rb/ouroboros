@@ -15,6 +15,7 @@ the BUILDs don't corrupt the SWA cache.
 Usage: python3 dev/warm_flows.py [endpoint]   (default http://localhost:8008/graphql)
 Prints one line per warmed flow + a summary. Exit 0 always (best-effort warmup).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -106,8 +107,10 @@ def main() -> int:
                 ).json()
                 if "errors" in d:
                     failed += 1
-                    print(f"  FAIL {flow_key} ({len(static_prefix)} ch): "
-                          f"{d['errors'][0]['message'][:80]}")
+                    print(
+                        f"  FAIL {flow_key} ({len(static_prefix)} ch): "
+                        f"{d['errors'][0]['message'][:80]}"
+                    )
                 else:
                     warmed += 1
                     print(f"  warmed {flow_key} ({len(static_prefix)} ch static)")

@@ -37,13 +37,10 @@ END = """mutation($s:String!){ endSession(sessionId:$s) }"""
 
 # ~1.6KB of stable filler per turn so context grows quickly without the model
 # needing to reason about it. Content is deliberately mundane.
-FILLER = (
-    "Reference notes for the world builder. "
-    + " ".join(
-        f"Room {i} is connected to room {i + 1} via a corridor and contains a "
-        f"lantern, a crate, and a note describing the history of area {i}."
-        for i in range(24)
-    )
+FILLER = "Reference notes for the world builder. " + " ".join(
+    f"Room {i} is connected to room {i + 1} via a corridor and contains a "
+    f"lantern, a crate, and a note describing the history of area {i}."
+    for i in range(24)
 )
 
 ASKS = [
