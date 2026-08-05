@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from agent.tier import runner as tier_runner
 from agent.tier.runner import RUNS, TierRun
 
 CONTROL_HELP = {
@@ -100,12 +101,14 @@ def cmd_tier(args) -> None:
         _resume(args)
     elif args.tier_command == "list":
         _list()
+    elif args.tier_command == "extend":
+        _extend(args)
     elif args.tier_command in CONTROL_HELP:
         _control(args.tier_command)
     else:
         print(
             "usage: ouroboros.py tier "
-            "{run,status,list,pause,resume,skip,stop,force-stop}"
+            "{run,status,list,extend,pause,resume,skip,stop,force-stop}"
         )
 
 
@@ -138,7 +141,18 @@ def _list() -> None:
             )
         else:
             done = sum(1 for r in data.get("results", []) if r.get("staged"))
-            print(f"{base.name:<28}{'finished':<12}{done} staged")
+            short = sum(
+                1
+                for c in tier_runner.extend_candidates(base)
+                if c["verdict"] == "eligible"
+            )
+            hint = (
+                f", {short} extendable  -> ouroboros.py tier extend "
+                f"--run {base.name}"
+                if short
+                else ""
+            )
+            print(f"{base.name:<28}{'finished':<12}{done} staged{hint}")
 
 
 def _resume(args) -> None:
@@ -182,6 +196,8 @@ def _resume(args) -> None:
                 str(getattr(args, "budget_h", None) or 11.0),
                 "--resume-consumed-s",
                 str(arm["consumed_s"]),
+                "--resume-prior-elapsed-s",
+                str(arm.get("prior_elapsed_s", 0.0) or 0.0),
             ],
             cwd=Path(__file__).resolve().parents[2],
             stdout=fh,
@@ -224,6 +240,34 @@ def _run(args) -> None:
                 "config": arms[0],
                 "work": str(Path("/tmp/tier") / arms[0]),
                 "consumed_s": consumed,
+                "prior_elapsed_s": float(
+                    getattr(args, "resume_prior_elapsed_s", 0.0) or 0.0
+                ),
+            }
+        elif getattr(args, "extend", False):
+            # Extending a short arm: same re-entry mechanics as a resume, but
+            # consumed_s is 0 ON PURPOSE. For a contemplator to park short the
+            # WALL is what bound it, so carrying elapsed (~4h) would leave
+            # _remaining_wall_s at its 60-second floor — a 20-minute model boot
+            # for one minute of work. The cycle cap is the real budget; the
+            # fresh wall is only jam protection. Prior elapsed rides separately
+            # so ArmResult.minutes (and therefore cyc/h) stays honest.
+            label = arms[0]
+            base_dir = Path(args.base)
+            prior = next(
+                (
+                    c
+                    for c in tier_runner.extend_candidates(base_dir)
+                    if c["arm"] == label
+                ),
+                {},
+            )
+            resume = {
+                "config": label,
+                "work": str(Path("/tmp/tier") / label),
+                "consumed_s": 0.0,
+                "prior_elapsed_s": float(prior.get("minutes", 0) or 0) * 60.0,
+                "mission_id": tier_runner.snapshot_mission_id(base_dir, label),
             }
         run = TierRun(
             arms=arms,
@@ -330,3 +374,201 @@ def _control(word: str) -> None:
             "  note: the server may need to finish an abandoned generation "
             "before it releases; the runner escalates to SIGKILL if it stalls."
         )
+
+
+def _resolve_extend_run(args) -> Optional[Path]:
+    """The run to extend: --run, else the newest finished one with a candidate."""
+    if getattr(args, "run", None):
+        base = Path(args.run)
+        if not base.is_dir():
+            base = RUNS / args.run
+        if not base.is_dir():
+            print(f"no such run: {args.run}")
+            return None
+        return base
+    for base in _run_dirs():
+        try:
+            data = json.loads((base / "STATE.json").read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        if not data.get("finished"):
+            continue
+        if any(c["verdict"] == "eligible" for c in tier_runner.extend_candidates(base)):
+            print(f"(newest finished run with an extendable arm: {base.name})")
+            return base
+    print("no finished run has an extendable arm — `tier extend --list` for why")
+    return None
+
+
+def _print_candidates(base: Path) -> list[dict]:
+    rows = tier_runner.extend_candidates(base)
+    print(f"\n{base.name}")
+    if not rows:
+        print("  (no arms recorded — STATE.json unreadable or pre-dates the field)")
+        return rows
+    for c in rows:
+        mark = "ELIGIBLE" if c["verdict"] == "eligible" else c["verdict"]
+        detail = tier_runner.VERDICT_HELP.get(c["verdict"], "")
+        if c["verdict"] == "eligible":
+            detail = (
+                f"{c['cycles']}/{tier_runner.CONTEMPLATOR_CYCLES} cycles, "
+                f"slot arm{c['slot']:02d}"
+                if c["slot"]
+                else f"{c['cycles']} cycles"
+            )
+        print(f"  {c['arm']:<30} {mark:<18} {detail}")
+    return rows
+
+
+def _extend(args) -> None:
+    """Give a short contemplator arm the cycle budget it never spent.
+
+    The counterpart to `tier resume`, which only finds a batch parked by the
+    explicit `pause` verb. An arm whose mission parked on its wall inside a
+    FINISHED batch is in exactly the same resumable state — `status: paused`
+    with `cycles_consumed` on disk — but had no way back.
+    """
+    if getattr(args, "list", False):
+        dirs = _run_dirs()[:15]
+        if not dirs:
+            print("no tier runs found")
+            return
+        for base in dirs:
+            _print_candidates(base)
+        return
+
+    if (existing := _active_run()) is not None:
+        # Global on purpose: the inference server is single-tenant, so a live
+        # batch anywhere blocks, not just one in this directory.
+        print(f"a tier batch is already running: {existing}")
+        raise SystemExit(1)
+
+    base = _resolve_extend_run(args)
+    if base is None:
+        raise SystemExit(1)
+
+    try:
+        state = json.loads((base / "STATE.json").read_text())
+    except Exception:  # noqa: BLE001
+        print(f"{base.name}: STATE.json unreadable")
+        raise SystemExit(1)
+    if not state.get("finished"):
+        verb = "resume" if state.get("paused") else "wait for it"
+        print(f"{base.name} is not finished — {verb}")
+        raise SystemExit(1)
+
+    rows = tier_runner.extend_candidates(base)
+    by_arm = {c["arm"]: c for c in rows}
+    eligible = [c for c in rows if c["verdict"] == "eligible"]
+
+    if getattr(args, "arm", None):
+        cand = by_arm.get(args.arm)
+        if cand is None:
+            print(f"{base.name} has no arm {args.arm!r}. Arms:")
+            _print_candidates(base)
+            raise SystemExit(1)
+        if cand["verdict"] != "eligible":
+            _refuse(base, cand)
+            raise SystemExit(1)
+    elif len(eligible) == 1:
+        cand = eligible[0]
+    elif not eligible:
+        print(f"{base.name}: no extendable arm.")
+        _print_candidates(base)
+        raise SystemExit(1)
+    else:
+        # Never guess which model gets four hours of the machine.
+        print(f"{base.name} has {len(eligible)} extendable arms — name one with --arm:")
+        _print_candidates(base)
+        raise SystemExit(2)
+
+    slot = cand["slot"]
+    if slot is not None and not getattr(args, "replace_judged", False):
+        cite = f"{base.name}/staged/arm{slot:02d}"
+        ladder = tier_runner.ROOT / "dev/blind_panel/LADDER.md"
+        try:
+            if cite in ladder.read_text():
+                print(
+                    f"REFUSED: staged/arm{slot:02d} is cited in LADDER.md as {cite}.\n"
+                    f"  Extending REPLACES that artifact, and it has already been "
+                    f"judged and ranked.\n"
+                    f"  Pass --replace-judged if that is what you want."
+                )
+                raise SystemExit(1)
+        except OSError:
+            pass
+
+    target = (
+        f"REPLACES staged/arm{slot:02d}" if slot is not None else "stages a new slot"
+    )
+    print(f"extending {base.name}")
+    print(f"  arm    : {cand['arm']}   ({cand['league']})")
+    print(
+        f"  cycles : {cand['cycles']}/{tier_runner.CONTEMPLATOR_CYCLES} "
+        f"-> {tier_runner.CONTEMPLATOR_CYCLES - cand['cycles']} more, "
+        f"{tier_runner.CONTEMPLATOR_SAFETY_WALL} safety wall"
+    )
+    print(f"  prior  : {cand['minutes']}min (carried into the record; wall is fresh)")
+    print(f"  stages : {target}")
+
+    cmd = [
+        sys.executable,
+        "ouroboros.py",
+        "tier",
+        "run",
+        "--_worker",
+        "--_extend",
+        "--models",
+        cand["arm"],
+        "--base",
+        str(base),
+        "--mission",
+        state.get("mission", "game_challenge_tier"),
+        "--wall",
+        state.get("wall", "2h"),
+    ]
+    root = Path(__file__).resolve().parents[2]
+    if getattr(args, "foreground", False):
+        raise SystemExit(subprocess.run(cmd, cwd=root).returncode)
+    with open(base / "driver.log", "a") as fh:
+        proc = subprocess.Popen(
+            cmd, cwd=root, stdout=fh, stderr=subprocess.STDOUT, start_new_session=True
+        )
+    print(f"\nextending (pid {proc.pid}, detached) — ouroboros.py tier status")
+
+
+def _refuse(base: Path, cand: dict) -> None:
+    """Say why, and name the remedy that actually applies."""
+    v = cand["verdict"]
+    if v == "grinder":
+        cfg = cand["config"]
+        print(
+            f"REFUSED: {cand['arm']} ran GRINDER (llmvp/configs/{cfg}.yaml "
+            f"tier.league).\n"
+            f"  A grinder reaching its wall is the league contract working, not a\n"
+            f"  shortfall — there is no cycle budget left unspent to extend into.\n\n"
+            f"  If the wall was the wrong instrument for this model, re-league it:\n"
+            f"      llmvp/configs/{cfg}.yaml:  tier.league: contemplator\n"
+            f"  then `tier extend` becomes available on this run (it re-reads the\n"
+            f"  config), or re-run clean for a single-session artifact."
+        )
+    elif v == "workspace_reused":
+        print(
+            f"REFUSED: {cand['arm']}'s workspace now holds a DIFFERENT mission.\n"
+            f"    this run staged : {cand.get('snapshot_id')}\n"
+            f"    /tmp/tier holds : {cand.get('live_id')}\n"
+            f"  /tmp/tier/<label> is keyed by model name alone, so a later batch\n"
+            f"  running the same model overwrote it. Extending would resume that\n"
+            f"  stranger's mission and stage it over this run's artifact.\n"
+            f"  Nothing to do — re-run the model fresh if you want more cycles."
+        )
+    elif v.startswith("mission_"):
+        status = v.removeprefix("mission_")
+        extra = {
+            "completed": "it finished inside its budget; there is nothing to extend",
+            "active": "it never parked, so its cycle count is stale and "
+            "30-N would be arithmetic on a number that is not true",
+        }.get(status, "only a paused mission can be extended")
+        print(f"REFUSED: {cand['arm']} mission is {status!r} — {extra}.")
+    else:
+        print(f"REFUSED: {cand['arm']} — " f"{tier_runner.VERDICT_HELP.get(v, v)}.")

@@ -978,6 +978,12 @@ def main() -> None:
     tier_run.add_argument(
         "--resume-consumed-s", type=float, default=0.0, help=argparse.SUPPRESS
     )
+    tier_run.add_argument(
+        "--_extend", dest="extend", action="store_true", help=argparse.SUPPRESS
+    )
+    tier_run.add_argument(
+        "--resume-prior-elapsed-s", type=float, default=0.0, help=argparse.SUPPRESS
+    )
 
     tier_sub.add_parser("status", help="Current arm, progress, and what has staged")
     tier_sub.add_parser(
@@ -989,6 +995,24 @@ def main() -> None:
     tier_sub.add_parser(
         "pause", help="Park the current arm cleanly and free the machine (resumable)"
     )
+    tier_extend = tier_sub.add_parser(
+        "extend",
+        help="Give a short contemplator arm the cycle budget it never spent",
+    )
+    tier_extend.add_argument("--run", help="Run dir or tier_<stamp> name")
+    tier_extend.add_argument("--arm", help="Arm label (required if >1 eligible)")
+    tier_extend.add_argument(
+        "--list",
+        action="store_true",
+        help="Show every arm's extend verdict and exit (changes nothing)",
+    )
+    tier_extend.add_argument("--foreground", action="store_true")
+    tier_extend.add_argument(
+        "--replace-judged",
+        action="store_true",
+        help="Allow replacing an artifact already cited in LADDER.md",
+    )
+
     tier_resume = tier_sub.add_parser(
         "resume", help="Pick a paused batch back up where it stopped"
     )

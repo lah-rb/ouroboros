@@ -63,6 +63,7 @@ server over in about a second.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -88,6 +89,11 @@ ROOT = Path(__file__).resolve().parents[2]
 # behaviour for every existing config.
 CONTEMPLATOR_CYCLES = 30
 CONTEMPLATOR_SAFETY_WALL = "4h"
+
+# Every arm's workspace. Keyed by LABEL alone, with nothing tying it to a
+# run — which is precisely why `tier extend` must verify mission identity
+# before resuming one (see snapshot_mission_id).
+TIER_WORK_ROOT = Path("/tmp/tier")
 
 
 def config_league(config: str) -> str:
@@ -124,13 +130,176 @@ def arm_league(arm: str) -> tuple[str, str]:
     return arm, ("grinder" if league == "both" else league)
 
 
+def _mission_doc(work: Path) -> dict:
+    try:
+        return json.loads((work / ".agent" / "mission.json").read_text())
+    except Exception:  # noqa: BLE001 — fresh arm / unreadable
+        return {}
+
+
 def cycles_consumed(work: Path) -> int:
     """Lifetime work cycles a parked arm already used (mission.json)."""
+    return max(0, int(_mission_doc(work).get("cycles_consumed", 0) or 0))
+
+
+def mission_state(work: Path) -> tuple[str, int]:
+    """(status, cycles_consumed) for a workspace; ("", 0) if unreadable."""
+    doc = _mission_doc(work)
+    return str(doc.get("status", "") or ""), max(
+        0, int(doc.get("cycles_consumed", 0) or 0)
+    )
+
+
+def mission_id(work: Path) -> str:
+    """The mission this workspace currently holds; "" if unreadable."""
+    doc = _mission_doc(work)
+    return str(doc.get("mission_id") or doc.get("id") or "")
+
+
+def snapshot_mission_id(base: Path, label: str) -> str:
+    """The mission an arm held AT ARM END, from the run-local `.agent` copy.
+
+    The identity half of the workspace-reuse guard. `/tmp/tier/<label>` is
+    keyed by label alone with nothing tying it to a run, so a later batch
+    running the same model overwrites it — verified 2026-08-05, where both
+    arms of tier_20260803-151411 had been replaced by the 08-04 re-runs.
+    Comparing this against mission_id(work) is what stops an extend from
+    resuming a stranger's mission into a cited artifact slot.
+
+    NOTE the path shape: `cp -a <work>/.agent <base>/<label>_agent` copies
+    the CONTENTS of .agent, so mission.json sits directly under
+    `<label>_agent/` — not under a nested `.agent/`. Reading it through
+    mission_id() (which appends `.agent`) silently returns "", and an
+    empty id is falsy, so the reuse check would skip and every stale
+    workspace would read as eligible. The guard would have been decorative.
+    """
     try:
-        data = json.loads((work / ".agent" / "mission.json").read_text())
-        return max(0, int(data.get("cycles_consumed", 0) or 0))
-    except Exception:  # noqa: BLE001 — fresh arm / unreadable = 0
-        return 0
+        doc = json.loads((base / f"{label}_agent" / "mission.json").read_text())
+    except Exception:  # noqa: BLE001 — snapshot predates this change
+        return ""
+    return str(doc.get("mission_id") or doc.get("id") or "")
+
+
+def manifest_rows(base: Path) -> list[tuple[str, str, str]]:
+    """(dest, config, status) per MANIFEST.txt row, in file order."""
+    out: list[tuple[str, str, str]] = []
+    try:
+        text = (base / "MANIFEST.txt").read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        parts = re.split(r"\s{2,}", line.strip())
+        if len(parts) == 3:
+            out.append((parts[0], parts[1], parts[2]))
+    return out
+
+
+def arm_slot(base: Path, label: str) -> Optional[int]:
+    """The staged slot this arm last wrote, or None if it never staged."""
+    found = None
+    for dest, config, _status in manifest_rows(base):
+        if config != label:
+            continue
+        m = re.search(r"arm(\d+)$", dest)
+        if m:
+            found = int(m.group(1))
+    return found
+
+
+def next_free_slot(base: Path) -> int:
+    """Lowest slot number no arm has claimed."""
+    used = set()
+    for dest, _config, _status in manifest_rows(base):
+        m = re.search(r"arm(\d+)$", dest)
+        if m:
+            used.add(int(m.group(1)))
+    staged = base / "staged"
+    if staged.is_dir():
+        for child in staged.iterdir():
+            m = re.fullmatch(r"arm(\d+)", child.name)
+            if m:
+                used.add(int(m.group(1)))
+    return max(used) + 1 if used else 1
+
+
+def extend_candidates(base: Path) -> list[dict]:
+    """Every arm of a finished batch, with a verdict on whether it can extend.
+
+    Returns a verdict for ALL arms, not just eligible ones — when nothing is
+    extendable the reason per arm IS the product, and "no candidates" alone
+    sends you reading logs.
+
+    Ladder order is load-bearing:
+
+      no_config        BEFORE grinder — config_league() defaults a missing
+                       config to grinder, so a renamed/deleted config would
+                       otherwise report as a league refusal and mislead.
+      workspace_reused BEFORE the status/cycle checks — a reused workspace's
+                       numbers belong to a DIFFERENT mission, and reporting
+                       them as this arm's is how the wrong mission gets
+                       extended into a cited artifact slot.
+    """
+    out: list[dict] = []
+    try:
+        state = json.loads((base / "STATE.json").read_text())
+    except Exception:  # noqa: BLE001 — unreadable run
+        return out
+
+    for label in state.get("arms") or []:
+        if not isinstance(label, str):
+            continue
+        cfg, league = arm_league(label)
+        work = TIER_WORK_ROOT / label
+        row: dict = {
+            "arm": label,
+            "config": cfg,
+            "league": league,
+            "slot": arm_slot(base, label),
+            "cycles": 0,
+            "status": "",
+            "verdict": "",
+        }
+        prior = next(
+            (r for r in (state.get("results") or []) if r.get("config") == label),
+            {},
+        )
+        row["minutes"] = int(prior.get("minutes", 0) or 0)
+
+        if not any(
+            (ROOT / "llmvp" / "configs" / sub / f"{cfg}.yaml").is_file()
+            for sub in ("", "boss", "experiments")
+        ):
+            row["verdict"] = "no_config"
+        elif league != "contemplator":
+            row["verdict"] = "grinder"
+        elif not (work / ".agent").is_dir():
+            row["verdict"] = "workspace_gone"
+        else:
+            snap, live = snapshot_mission_id(base, label), mission_id(work)
+            status, cycles = mission_state(work)
+            row["status"], row["cycles"] = status, cycles
+            if snap and live and snap != live:
+                row["verdict"] = "workspace_reused"
+                row["snapshot_id"], row["live_id"] = snap, live
+            elif status != "paused":
+                row["verdict"] = f"mission_{status or 'unknown'}"
+            elif cycles >= CONTEMPLATOR_CYCLES:
+                row["verdict"] = "budget_spent"
+            else:
+                row["verdict"] = "eligible"
+        out.append(row)
+    return out
+
+
+VERDICT_HELP = {
+    "no_config": "no llmvp config by that name — renamed or removed",
+    "grinder": "ran GRINDER; a wall-bound finish is the contract, not a shortfall",
+    "workspace_gone": "/tmp workspace was reaped — nothing left to resume",
+    "workspace_reused": "workspace now holds a DIFFERENT mission (a later batch "
+    "reused it) — extending would resume a stranger",
+    "budget_spent": "already spent its full cycle budget",
+    "eligible": "",
+}
 
 
 RUNS = Path.home() / "ouroboros-runs"
@@ -190,6 +359,14 @@ class ArmResult:
     degenerations: int = 0
     staged: Optional[str] = None
     detail: str = ""
+    # The league this arm RAN under and the lifetime cycles it reached.
+    # Stored as inputs rather than a derived `short` flag: cyc/h is what
+    # drives league placement and it is currently re-derived by hand into
+    # YAML comments, so the record should carry the raw numbers. Recorded
+    # for grinders too — step37 was a grinder whose cycle count is exactly
+    # what revealed the mis-league.
+    league: str = ""
+    cycles: int = 0
 
 
 @dataclass
@@ -207,6 +384,19 @@ class TierRun:
     # created, and its working directory must survive.
     resume_from: Optional[dict] = None
 
+    # Arms this base has EVER run, adopted from a prior STATE.json on
+    # re-entry. `arms` narrows to the remaining queue on a resume, and
+    # writing that as the batch's arm list erased the rest of the record.
+    _prior_arms: list[str] = field(default_factory=list)
+    _adopted: bool = False
+
+    @property
+    def full_arms(self) -> list[str]:
+        """Every arm this base has run, prior ones first — never narrows."""
+        out = list(self._prior_arms)
+        out.extend(a for a in self.arms if a not in out)
+        return out
+
     # ── plumbing ──────────────────────────────────────────────────
     def log(self, msg: str) -> None:
         line = f"[{time.strftime('%m-%d %H:%M:%S')}] {msg}"
@@ -214,13 +404,103 @@ class TierRun:
         with open(self.base / "batch.log", "a") as fh:
             fh.write(line + "\n")
 
+    # An arm whose re-entry FAILED must not overwrite the good record of its
+    # earlier run — STATE.json would then deny an artifact that is still on
+    # disk and cited in LADDER.md.
+    NON_CLOBBERING = ("resume_lost", "unsupported", "create_failed")
+
+    def _record(self, res: "ArmResult") -> None:
+        """One entry per arm label, replacing on re-entry."""
+        for i, prior in enumerate(self.results):
+            if prior.config != res.config:
+                continue
+            if res.status in self.NON_CLOBBERING:
+                prior.detail = (f"re-entry {res.status}: {res.detail}").strip()[:300]
+            else:
+                self.results[i] = res
+            return
+        self.results.append(res)
+
+    def _claim_base(self) -> bool:
+        """One worker per base.
+
+        `_active_run()` guards the CLI verbs but NOT the `--_worker` path, and
+        a re-entry writes into a directory that may already have a live owner.
+        Two workers would interleave STATE.json writes and the loser's arms
+        would vanish from the record. Uses the pid the state already carries —
+        no new lock file.
+        """
+        try:
+            prior = json.loads((self.base / "STATE.json").read_text())
+        except Exception:  # noqa: BLE001 — fresh base
+            return True
+        pid = prior.get("pid")
+        if not isinstance(pid, int) or pid == os.getpid():
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True  # dead owner — the base is ours
+        except PermissionError:
+            pass  # alive, just not ours to signal — still an owner
+        self.log(
+            f"!! base {self.base.name} is owned by live worker pid {pid} — refusing"
+        )
+        return False
+
+    def _adopt_prior_state(self) -> None:
+        """Inherit a prior STATE.json so a re-entry adds to the record.
+
+        Without this a re-entering worker starts with `results = []` and its
+        first write replaces the batch's entire per-arm record with a
+        one-element list. That is live today for `tier resume`.
+        """
+        try:
+            prior = json.loads((self.base / "STATE.json").read_text())
+        except Exception:  # noqa: BLE001 — fresh base, nothing to adopt
+            return
+        known = {f.name for f in dataclasses.fields(ArmResult)}
+        adopted: list[ArmResult] = []
+        for row in prior.get("results") or []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                adopted.append(
+                    ArmResult(**{k: v for k, v in row.items() if k in known})
+                )
+            except Exception:  # noqa: BLE001 — a malformed row is not fatal
+                continue
+        self.results = adopted
+        self._prior_arms = [a for a in (prior.get("arms") or []) if isinstance(a, str)]
+        self._adopted = True
+        if adopted or self._prior_arms:
+            self.log(
+                f"    adopted prior record: {len(adopted)} arm result(s), "
+                f"{len(self._prior_arms)} arm(s) known to this base"
+            )
+
     def _write_state(self, **kw) -> None:
+        """STATE.json is ALWAYS a complete picture, never a partial one.
+
+        It was a full overwrite fed by PARTIAL callers, which cost real
+        history two ways. `_heartbeat` omits `results`, so every 30s
+        rewrite dropped the per-arm record for the rest of the run — a
+        batch that died mid-flight lost every finished arm. And `arms`
+        came from `self.arms`, which on a re-entry (`tier resume`, and
+        now `tier extend`) is only the REMAINING queue, so the record
+        forgot which arms the batch ever contained.
+
+        Fixing the contract here rather than at each call site is
+        deliberate: the next caller cannot reintroduce it. Cost is
+        serialising <=16 small dicts every 30s.
+        """
         state = {
             "pid": os.getpid(),
             "base": str(self.base),
-            "arms": self.arms,
+            "arms": self.full_arms,
             "mission": self.mission,
             "wall": self.wall,
+            "results": [r.__dict__ for r in self.results],
             **kw,
         }
         tmp = self.base / "STATE.json.tmp"
@@ -322,15 +602,19 @@ class TierRun:
             and p.name != "OUTCOME"
         ]
 
-    def _stage(self, work: Path, idx: int, config: str) -> Optional[str]:
+    def _stage(self, work: Path, slot: int, config: str) -> Optional[str]:
         """Strip, blind-scan, and copy somewhere /tmp cannot eat — immediately,
         so judging can begin while the next arm boots. The directory is an index,
-        never the model name, and the map lives outside the staged tree."""
+        never the model name, and the map lives outside the staged tree.
+
+        `slot` comes from _slot_for, NOT the loop index — see its docstring.
+        """
         if not self._authored(work):
             self.log("  no authored files — nothing to stage (tier 3 candidate)")
             self._manifest("-", config, "NO_ARTIFACT")
             return None
-        dest = self.base / "staged" / f"arm{idx:02d}"
+        dest = self.base / "staged" / f"arm{slot:02d}"
+        replacing = dest.is_dir()
         slog = self.base / f"stage_{config}.log"
         with open(slog, "w") as fh:
             rc = subprocess.run(
@@ -378,8 +662,20 @@ class TierRun:
             )
         )
         self.log(f"  staged -> {dest}{note}")
+        if replacing:
+            # stage.py rmtree's the destination, so the prior artifact is
+            # already gone by here. Say so in the record: MANIFEST is
+            # append-only, and a second `staged` row would read as a second
+            # artifact rather than a replacement of a cited one.
+            self.log(f"  REPLACED the artifact previously staged at {dest}")
         self._manifest(
-            str(dest), config, "BLOCKED_model_name_leak" if leaked else "staged"
+            str(dest),
+            config,
+            (
+                "BLOCKED_model_name_leak"
+                if leaked
+                else ("staged_extended" if replacing else "staged")
+            ),
         )
         return str(dest)
 
@@ -445,7 +741,7 @@ class TierRun:
         # mission consume. Workspace/logs/results key by the LABEL so a both-
         # model's two arms stay distinct.
         cfg, league = arm_league(config)
-        work = Path("/tmp/tier") / config
+        work = TIER_WORK_ROOT / config
         if resume is None:
             subprocess.run(["rm", "-rf", str(work)])
             work.mkdir(parents=True, exist_ok=True)
@@ -462,6 +758,29 @@ class TierRun:
                 ),
                 None,
             )
+        if resume is not None and resume.get("mission_id"):
+            # Second enforcement of the workspace-identity guard. The CLI
+            # already checked, but discovery and boot are seconds apart and
+            # /tmp/tier/<label> is keyed by model name alone — a concurrent
+            # batch could claim it in between. Resuming a stranger's mission
+            # would stage it over this run's artifact, which is a cited key.
+            live = mission_id(work)
+            if live and live != resume["mission_id"]:
+                self.log(
+                    f"  CANNOT RESUME — {work} now holds mission {live}, "
+                    f"not {resume['mission_id']} (a later batch reused it)"
+                )
+                return (
+                    ArmResult(
+                        config,
+                        "resume_lost",
+                        detail=(
+                            f"workspace reused by mission {live}; "
+                            f"re-run this arm fresh"
+                        ),
+                    ),
+                    None,
+                )
         slog, rlog = self.base / f"{config}_server.log", self.base / f"{config}_run.log"
         self.log(f"\n─── ARM {idx}/{len(self.arms)}: {config} ───")
 
@@ -485,6 +804,12 @@ class TierRun:
         self.log("  server up")
 
         consumed = float(resume["consumed_s"]) if resume else 0.0
+        # Elapsed the RECORD should show, kept separate from the elapsed the
+        # BUDGET counts. An extend deliberately gets consumed_s=0 (a fresh
+        # safety wall) but must still report total arm time — cyc/h drives
+        # league placement, and a number covering only the last leg would
+        # inflate the rate of exactly the arms whose rate is in question.
+        prior_elapsed = float((resume or {}).get("prior_elapsed_s", 0.0) or 0.0)
         if resume is None:
             create = subprocess.run(
                 [
@@ -602,14 +927,20 @@ class TierRun:
             time.sleep(POLL_S)
         proc.wait()
 
-        elapsed_s = time.time() - started
+        elapsed_s = (time.time() - started) + prior_elapsed
         if control == "pause":
             # A paused arm is NOT staged: it is unfinished on purpose and will
             # be judged only once it has spent its full backstop.
+            # consumed_s is the BUDGET clock and must stay the leg only —
+            # `tier resume` subtracts it from the backstop. Folding prior
+            # elapsed in would hand the next resume a budget already spent
+            # and strand it on _remaining_wall_s's 60-second floor.
+            # prior_elapsed rides separately so the RECORD stays total.
             self._paused_state = {
                 "config": config,
                 "work": str(work),
-                "consumed_s": elapsed_s,
+                "consumed_s": elapsed_s - prior_elapsed,
+                "prior_elapsed_s": prior_elapsed,
                 "index": idx,
             }
             return (
@@ -621,18 +952,68 @@ class TierRun:
 
         res = self._tally(config, work, rlog, int(elapsed_s / 60))
         res.status = "skipped" if control in ("skip", "force-stop") else "completed"
+        res.league = league
+        res.cycles = cycles_consumed(work)
+        rate = (res.cycles / (res.minutes / 60)) if res.minutes else 0.0
         self.log(
             f"  done {res.minutes}min files={res.files} "
             f"py_ok={res.py_ok} py_fail={res.py_fail} degen={res.degenerations} "
-            f"| {res.goals}"
+            f"| {res.cycles} cyc ({rate:.1f} cyc/h) | {res.goals}"
         )
-        res.staged = self._stage(work, idx, config)
-        agent_dir = work / ".agent"
-        if agent_dir.is_dir():  # telemetry for the OBSERVED half of the record
-            subprocess.run(
-                ["cp", "-a", str(agent_dir), str(self.base / f"{config}_agent")]
+        if league == "contemplator" and res.cycles < CONTEMPLATOR_CYCLES:
+            # The 4h safety wall bound this arm, not its cycle budget — so
+            # there is unspent budget an extend can finish. Say it here, at
+            # the moment it happens, with the command already written.
+            self.log(
+                f"  !! SHORT FINISH — {res.cycles}/{CONTEMPLATOR_CYCLES} cycles; "
+                f"the safety wall bound this arm, not its cycle budget"
             )
+            self.log(
+                f"     ouroboros.py tier extend --run {self.base.name} "
+                f"--arm {config}"
+            )
+        res.staged = self._stage(work, self._slot_for(idx, config), config)
+        self._snapshot_agent(work, config)
         return res, control
+
+    def _slot_for(self, idx: int, config: str) -> int:
+        """The staged slot this arm owns.
+
+        `staged/armNN` is a PUBLISHED CITATION KEY — dev/blind_panel/LADDER.md
+        cites artifacts as `tier_<stamp>/staged/armNN` — so a re-entry must
+        write back into the arm's own slot rather than wherever it happens to
+        land in the current queue.
+
+        It used to be the loop index over `self.arms`, which on ANY re-entry
+        is the remaining queue restarting at 1. `tier resume` on arm 3 of 6
+        therefore re-staged into `arm01`, and stage.py:184 rmtree's the
+        destination first — silently destroying arm 1's artifact. That is
+        live today, not a hazard introduced by extend.
+
+        A fresh arm keeps `idx` deliberately: arms that produce no artifact
+        consume no slot, so deriving from the manifest would renumber a
+        fresh run and invalidate the citations.
+        """
+        prior = arm_slot(self.base, config)
+        if prior is not None:
+            return prior
+        return next_free_slot(self.base) if self._adopted else idx
+
+    def _snapshot_agent(self, work: Path, config: str) -> None:
+        """Telemetry for the OBSERVED half of the record — and the run-local
+        mission identity `tier extend` verifies a workspace against.
+
+        `cp -a SRC DST` with DST an existing directory copies INTO it, so a
+        re-entry produced `<label>_agent/.agent/` and the snapshot at the
+        expected path silently stopped updating. Clear first; `.agent`
+        accumulates, so the newer copy is a superset of the old.
+        """
+        agent_dir = work / ".agent"
+        if not agent_dir.is_dir():
+            return
+        dest = self.base / f"{config}_agent"
+        subprocess.run(["rm", "-rf", str(dest)])
+        subprocess.run(["cp", "-a", str(agent_dir), str(dest)])
 
     def _tally(self, config: str, work: Path, rlog: Path, minutes: int) -> ArmResult:
         files = self._authored(work)
@@ -707,6 +1088,9 @@ class TierRun:
         self.base.mkdir(parents=True, exist_ok=True)
         (self.base / "staged").mkdir(exist_ok=True)
         (self.base / "MANIFEST.txt").touch()
+        if not self._claim_base():
+            return 1
+        self._adopt_prior_state()
         self.log(
             f"=== tier batch · {len(self.arms)} arms · {self.wall} each "
             f"· budget {self.budget_h}h ==="
@@ -734,7 +1118,7 @@ class TierRun:
             # everything after it starts fresh.
             resume, self.resume_from = self.resume_from, None
             res, control = self._run_arm(idx, config, resume=resume)
-            self.results.append(res)
+            self._record(res)
             if control in CHAIN_ENDING:
                 self.log(f"=== {control} — ending the chain ===")
                 # A pause keeps the CURRENT arm at the head of the queue so it
@@ -765,15 +1149,36 @@ class TierRun:
 
         self.log("\n=== SUMMARY ===")
         for r in self.results:
+            rate = f"{r.cycles / (r.minutes / 60):.1f}" if r.minutes else "-"
             self.log(
                 f"  {r.config:<30} {r.status:<12} {r.minutes:>3}min "
                 f"files={r.files:<3} py_fail={r.py_fail} degen={r.degenerations} "
+                f"cyc={r.cycles:<3} {rate:>5} cyc/h "
                 f"{'-> ' + r.staged if r.staged else ''}"
             )
         self.log(
             f"\nmanifest: {self.base / 'MANIFEST.txt'}  "
             f"(the map lives HERE, never inside staged/)"
         )
+
+        # Contemplators the safety wall bound before their cycle budget ran
+        # out. Listed at the moment of the finish so it lands in batch.log,
+        # rather than being discovered weeks later from a YAML comment.
+        short = [
+            r
+            for r in self.results
+            if r.league == "contemplator" and 0 < r.cycles < CONTEMPLATOR_CYCLES
+        ]
+        if short:
+            self.log(
+                f"\n=== SHORT FINISHES ({len(short)}) — cycle budget left unspent ==="
+            )
+            for r in short:
+                self.log(f"  {r.config:<30} {r.cycles}/{CONTEMPLATOR_CYCLES} cycles")
+                self.log(
+                    f"     ouroboros.py tier extend --run {self.base.name} "
+                    f"--arm {r.config}"
+                )
 
         remaining = getattr(self, "_remaining", [])
         if paused:
@@ -793,7 +1198,6 @@ class TierRun:
                 paused=True,
                 paused_arm=paused,
                 remaining_arms=remaining,
-                results=[r.__dict__ for r in self.results],
             )
         else:
             if remaining:
@@ -803,5 +1207,4 @@ class TierRun:
                 finished=True,
                 paused=False,
                 remaining_arms=remaining,
-                results=[r.__dict__ for r in self.results],
             )
