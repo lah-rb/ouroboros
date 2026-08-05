@@ -96,11 +96,22 @@ class TestLegitimateConsumersSilenceIt:
 
 class TestPythonOnlyIsItsOwnVerdict:
     """The 'duties have blurred' signal: it works, but the wiring is
-    invisible to anyone reading the .cue. Distinct from dead, and quieter."""
+    invisible to anyone reading the .cue. Distinct from dead, and quieter.
+
+    The reader must be BOUND TO A STEP IN THIS FLOW. `check_boot_liveness`
+    reads `terminal_output`, so a flow containing that step really can
+    consume the key.
+    """
 
     def test_python_read_downgrades_to_info(self):
         res = check_dead_publishes(
-            _flow({"a": {"publishes": ["validation_commands"]}}), AGENT_DIR
+            _flow(
+                {
+                    "a": {"publishes": ["terminal_output"]},
+                    "b": {"action": "check_boot_liveness"},
+                }
+            ),
+            AGENT_DIR,
         )
         assert [(r.level, r.check) for r in res] == [
             ("INFO", "context_key_python_only")
@@ -108,9 +119,26 @@ class TestPythonOnlyIsItsOwnVerdict:
 
     def test_it_names_the_file_so_the_wiring_can_be_found(self):
         res = check_dead_publishes(
-            _flow({"a": {"publishes": ["validation_commands"]}}), AGENT_DIR
+            _flow(
+                {
+                    "a": {"publishes": ["terminal_output"]},
+                    "b": {"action": "check_boot_liveness"},
+                }
+            ),
+            AGENT_DIR,
         )
         assert ".py" in res[0].message
+
+    def test_a_reader_in_ANOTHER_flow_does_not_count(self):
+        """The scoping fix, pinned. Sub-flows get a fresh accumulator
+        (runtime.py:279, :757-775), so a reader elsewhere can never see
+        this key — counting it masked real dead publishes, which is how
+        file_ops.symbol_menu_options hid behind an action bound to no step.
+        """
+        res = check_dead_publishes(
+            _flow({"a": {"publishes": ["terminal_output"]}}), AGENT_DIR
+        )
+        assert [(r.level, r.check) for r in res] == [("WARNING", "dead_publish")]
 
 
 class TestPromptTextInPython:
@@ -167,3 +195,70 @@ class TestDeclaredConsumersHelper:
             }
         )
         assert {"ret", "req", "opt", "tpl", "rule"} <= found
+
+
+class TestConsumptionSpellingsTheScanMissed:
+    """Two regex defects that made the check call wired keys dead. Both
+    were found by triaging its own output against the tree, and both are
+    the kind that quietly erode trust in a warning.
+    """
+
+    def test_context_get_in_a_resolver_condition_counts(self):
+        """`context.get('k')` is as live a read as `context.k`, but a bare
+        `context\\.(\\w+)` scan captures the word `get`. project_ops.all_passed
+        linted as dead while its own resolver consumed it
+        (project_ops.cue:322)."""
+        res = check_dead_publishes(
+            _flow(
+                {
+                    "a": {"publishes": ["all_passed"]},
+                    "b": {
+                        "resolver": {
+                            "rules": [
+                                {"condition": "context.get('all_passed') == true"}
+                            ]
+                        }
+                    },
+                }
+            ),
+            AGENT_DIR,
+        )
+        assert res == [], f"should be silent, got {[r.message for r in res]}"
+
+    def test_a_returns_entry_reaching_into_the_value_counts(self):
+        """research_gate exports `context.gate_results.verdict`. Splitting
+        on the FIRST dot yielded `gate_results.verdict`, so the root key
+        never matched its publisher (research_gate.cue:24-26)."""
+        res = check_dead_publishes(
+            _flow(
+                {"a": {"publishes": ["gate_results"]}},
+                returns={"verdict": {"from": "context.gate_results.verdict"}},
+            ),
+            AGENT_DIR,
+        )
+        assert res == []
+
+    def test_the_plain_context_dot_form_still_counts(self):
+        """Guard against fixing one spelling by breaking the other."""
+        res = check_dead_publishes(
+            _flow(
+                {
+                    "a": {"publishes": ["k"]},
+                    "b": {"resolver": {"rules": [{"condition": "context.k == true"}]}},
+                }
+            ),
+            AGENT_DIR,
+        )
+        assert res == []
+
+
+class TestPersonaIsAPromptName:
+    def test_persona_bindings_are_flagged(self, tmp_path):
+        """OPERATOR_PERSONA (1,511 chars, md5-keyed as a static prefix like
+        every other one) escaped the first sweep purely because `persona`
+        was absent from the name hints."""
+        (tmp_path / "p_actions.py").write_text(
+            'OPERATOR_PERSONA = """' + ("You are the operator. " * 20) + '"""\n'
+        )
+        res = check_prompt_text_in_python(tmp_path)
+        assert [r.check for r in res] == ["prompt_text_in_python"]

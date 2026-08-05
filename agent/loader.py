@@ -465,6 +465,96 @@ class PromptRenderer:
         return current
 
 
+# ── Verbatim prompt text (for plain action code) ─────────────────────
+#
+# Some steps are plain `action:` steps that drive an inference effect
+# themselves rather than going through `action: inference` + a
+# prompt_template. Their prompt text still belongs in prompts/ — that is
+# the auditable surface a reviewer diffs and the lint checks parse — but
+# they need it as a STRING, not rendered against namespaces:
+#
+#   * several pin it as a `static_prefix` KV-cache head keyed on
+#     md5(text)[:10], so the bytes must survive the trip untouched;
+#   * most interpolate with str.format(), whose placeholders (`{brief}`)
+#     are deliberately NOT the store's `{context.x}` syntax and must pass
+#     through unresolved.
+#
+# Hence: read the file, return `content` exactly, interpolate nothing.
+# Running these through PromptRenderer.render would return "" anyway —
+# it renders `sections:`, and these files are the flat turn format.
+#
+# This replaces two ad-hoc loaders. The one it most improves on is
+# contract_swarm_actions._load_prompt, which swallowed every error and
+# returned "" — a typo'd id silently produced an EMPTY prompt rather
+# than a failure.
+
+_prompt_text_cache: dict[str, str] = {}
+_prompt_text_dir: Path | None = None
+
+
+def set_prompt_text_dir(prompts_dir: str | Path | None) -> None:
+    """Point load_prompt_text at a directory (tests). None restores the
+    default and clears the cache."""
+    global _prompt_text_dir
+    _prompt_text_dir = Path(prompts_dir) if prompts_dir is not None else None
+    _prompt_text_cache.clear()
+
+
+def _prompts_dir_for_text() -> Path:
+    """Locate prompts/, anchored on the REPO ROOT rather than the cwd.
+
+    Deliberately not the cwd probe _get_prompt_renderer uses: callers load
+    these at module import time, long before init_prompt_renderer runs and
+    from whatever directory the process happened to start in. The repo
+    anchor is the only one that holds there.
+    """
+    if _prompt_text_dir is not None:
+        return _prompt_text_dir
+    anchored = Path(__file__).resolve().parent.parent / "prompts"
+    if anchored.exists():
+        return anchored
+    for candidate in (Path("prompts"), Path("ouroboros/prompts")):
+        if candidate.exists():
+            return candidate
+    return anchored
+
+
+def load_prompt_text(template_id: str) -> str:
+    """Return a flat prompt file's ``content`` verbatim.
+
+    Args:
+        template_id: e.g. "personas/diagnosis" -> prompts/personas/diagnosis.yaml
+
+    Raises:
+        FlowRuntimeError: file missing, unparseable, or ``content`` absent
+            or empty. Failing loud is the point — see the module note above.
+    """
+    if template_id in _prompt_text_cache:
+        return _prompt_text_cache[template_id]
+
+    path = _prompts_dir_for_text() / f"{template_id}.yaml"
+    if not path.exists():
+        raise FlowRuntimeError(
+            f"Prompt text not found: {template_id!r} (looked at {path})"
+        )
+    try:
+        data = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as exc:
+        raise FlowRuntimeError(
+            f"Prompt text {template_id!r} is not valid YAML ({path}): {exc}"
+        ) from exc
+
+    content = (data or {}).get("content") if isinstance(data, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise FlowRuntimeError(
+            f"Prompt text {template_id!r} has no non-empty 'content' key "
+            f"({path}). This file must use the flat turn format."
+        )
+
+    _prompt_text_cache[template_id] = content
+    return content
+
+
 # ── Returns Assembly ───────────────────────────────────────────────
 #
 # Assembles structured return data from the flow's `returns` declaration,

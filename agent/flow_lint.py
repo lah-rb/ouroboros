@@ -391,6 +391,71 @@ def _python_context_reads(agent_dir: Path) -> dict[str, set[str]]:
     return reads
 
 
+def _python_reads_by_function(agent_dir: Path) -> dict[str, set[str]]:
+    """action function name -> context keys it reads.
+
+    Attribution is by enclosing `async def action_*`, reusing
+    _find_enclosing_action. A module-level helper defined after an action
+    attributes to that action — an over-attribution, which is the SAFE
+    direction here: it can only suppress a warning, never invent one.
+    """
+    reads: dict[str, set[str]] = {}
+    actions = agent_dir / "actions"
+    if not actions.exists():
+        return reads
+    for f in sorted(actions.glob("*.py")):
+        if f.name in ("__init__.py", "registry.py"):
+            continue
+        try:
+            source = f.read_text()
+        except OSError:
+            continue
+        for m in _PY_CONTEXT_READ_RE.finditer(source):
+            func = _find_enclosing_action(source, m.start())
+            if func:
+                key = m.group(1) or m.group(2)
+                reads.setdefault(func, set()).add(key)
+    return reads
+
+
+def _flow_reader_keys(
+    flow_def: dict,
+    name_map: dict[str, str],
+    reads_by_func: dict[str, set[str]],
+) -> set[str]:
+    """Keys read by Python actions BOUND TO A STEP IN THIS FLOW.
+
+    Scoping matters because sub-flows do not inherit the parent
+    accumulator — execute_flow seeds every flow with `dict(inputs)`
+    (runtime.py:279), and inputs come only from the calling step's
+    input_map (runtime.py:757-775). So a reader in another flow can NEVER
+    see this flow's key, and counting it as a consumer masks a real dead
+    publish. That is how `file_ops.symbol_menu_options` hid: its reader
+    action_select_symbol_turn is registered but bound to zero steps.
+    """
+    keys: set[str] = set()
+    for step_def in (flow_def.get("steps") or {}).values():
+        if not isinstance(step_def, dict):
+            continue
+        func = name_map.get(step_def.get("action", ""))
+        if func:
+            keys.update(reads_by_func.get(func, set()))
+    return keys
+
+
+def _condition_context_keys(condition: str) -> set[str]:
+    """Context keys a resolver condition reads, in BOTH spellings.
+
+    `context.foo` and `context.get('foo')` are both live in the tree, and a
+    bare `context\\.(\\w+)` scan captures the literal word `get` from the
+    second — so `project_ops.all_passed` linted as dead while its own
+    resolver consumed it (project_ops.cue:322).
+    """
+    keys = set(re.findall(r"context\.get\(\s*[\"'](\w+)[\"']", condition))
+    keys.update(k for k in re.findall(r"context\.(\w+)", condition) if k != "get")
+    return keys
+
+
 def _declared_consumers(flow_def: dict) -> set[str]:
     """Every context key this flow consumes through a DECLARED path.
 
@@ -405,7 +470,13 @@ def _declared_consumers(flow_def: dict) -> set[str]:
     for spec in (flow_def.get("returns") or {}).values():
         src = spec.get("from", "") if isinstance(spec, dict) else ""
         if src.startswith("context."):
-            consumed.add(src.split(".", 1)[1])
+            # ROOT segment only. A returns entry may reach into the value —
+            # research_gate exports `context.gate_results.verdict` — and
+            # taking everything after the first dot yielded the dotted
+            # sub-path, so the root key never matched a publisher and
+            # `gate_results` linted as dead while being fully wired
+            # (research_gate.cue:24-26, lifted at research_control.cue:196).
+            consumed.add(src.split(".")[1])
 
     for step_def in (flow_def.get("steps") or {}).values():
         if not isinstance(step_def, dict):
@@ -420,9 +491,7 @@ def _declared_consumers(flow_def: dict) -> set[str]:
         consumed.update(tpl.get("input_keys") or [])
 
         for rule in (step_def.get("resolver") or {}).get("rules") or []:
-            consumed.update(
-                re.findall(r"context\.(\w+)", str(rule.get("condition", "")))
-            )
+            consumed.update(_condition_context_keys(str(rule.get("condition", ""))))
 
     return consumed
 
@@ -525,10 +594,13 @@ def check_dead_publishes(flows: dict, agent_dir: Path) -> list[LintResult]:
     """
     results: list[LintResult] = []
     py_reads = _python_context_reads(agent_dir)
+    name_map = _build_action_name_map(agent_dir / "actions" / "registry.py")
+    reads_by_func = _python_reads_by_function(agent_dir)
 
     for flow_name, flow_def in _iter_flows(flows):
         consumed = _declared_consumers(flow_def)
         flow_inputs = _flow_input_keys(flow_def)
+        in_flow_reads = _flow_reader_keys(flow_def, name_map, reads_by_func)
 
         published: dict[str, list[str]] = {}
         for step_name, step_def in (flow_def.get("steps") or {}).items():
@@ -554,9 +626,11 @@ def check_dead_publishes(flows: dict, agent_dir: Path) -> list[LintResult]:
         for key, publishers in sorted(published.items()):
             if key in consumed or key in flow_inputs or key in _RUNTIME_KEYS:
                 continue
-            readers = py_reads.get(key)
-            if readers:
-                where = ", ".join(sorted(readers)[:2])
+            # Only a reader BOUND TO THIS FLOW counts. A reader elsewhere
+            # cannot see the key at all (sub-flows get a fresh accumulator),
+            # so treating it as a consumer would mask a dead publish.
+            if key in in_flow_reads:
+                where = ", ".join(sorted(py_reads.get(key, ()))[:2])
                 results.append(
                     LintResult(
                         level="INFO",
@@ -1426,6 +1500,10 @@ _PROMPT_NAME_HINTS = (
     "directive",
     "rubric",
     "brief",
+    # Missing until 2026-08-05, which is exactly why
+    # interactive_actions.OPERATOR_PERSONA — 1,511 chars, md5-keyed as a
+    # static prefix like the rest — escaped the first sweep of this check.
+    "persona",
 )
 _PROMPT_MIN_CHARS = 200
 _INTERPOLATION_MIN_CHARS = 60
