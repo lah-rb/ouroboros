@@ -196,21 +196,5 @@ logging:
 # THINKING ON via think-hold. The thinking:off record for the same file
 # lives in laguna-s-2.1-apex.yaml.
 tier:
-  league: contemplator
-  status: not_yet_run
-  thinking: true            # THE PROPERTY THIS CONFIG SCORES
-  expectation:
-    registered: 2026-08-02
-    basis: think-hold mechanism probe (one deflected close -> clean CoT)
-    outcome: pending
-    why: >
-      PRE-REGISTERED. With the reasoning channel genuinely open (think-hold
-      defeats the persona's no-think veto), the untagged content-channel
-      deliberation that defined every prior laguna-S run should move INTO
-      think blocks where budget/strip machinery can see it. Expected shifts
-      vs the apex thinking:off record (48/100): fewer content-channel
-      mega-turns, deliberation visible as reasoning_tokens, and — if the
-      XS single-probe result generalizes — better decision quality. The
-      2026-07-26 unsloth thinking-on failure (CoT circling to the cap,
-      never closing) is the regression to watch; it predates top_k=20,
-      think-hold, and ran a different quant.
+  league: contemplator  # LOAD-BEARING — agent/tier/runner.py:config_league
+  status: not_yet_run  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md

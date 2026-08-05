@@ -137,6 +137,5 @@ logging:
 # on the APEX I-Balanced weights and moved WITH them to
 # configs/archive/laguna-xs-2.1-apex.yaml. This config scores the BF16.
 tier:
-  league: contemplator  # measured cyc/h — see dev/blind_panel/LADDER.md
-  status: not_yet_run
-  quant: BF16 (poolside)   # THE PROPERTY THIS CONFIG SCORES
+  league: contemplator  # LOAD-BEARING — agent/tier/runner.py:config_league
+  status: not_yet_run  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md

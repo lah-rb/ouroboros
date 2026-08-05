@@ -115,15 +115,27 @@ which is the direction people forget to check for.
 
 7. **Unblind once, at the end**, after all judges report.
 
-8. **RECORD THE RESULT INTO THE MODEL'S CONFIG — the run is not finished until
-   this is done.** A verdict that lives only in a chat log or a RESULTS file is
-   lost the moment the session ends: on 2026-07-31 the 2026-07-29 non-thinking
-   laguna-xs run turned out never to have been recorded at all, leaving
-   `judged: null` and nothing but the operator's recollection of the headline.
-   The individual scores are simply gone, and the thinking A/B they existed to
-   support cannot be computed.
+8. **RECORD THE RESULT — the run is not finished until this is done.** A verdict
+   that lives only in a chat log or a RESULTS file is lost the moment the session
+   ends: on 2026-07-31 the 2026-07-29 non-thinking laguna-xs run turned out never
+   to have been recorded at all, leaving `judged: null` and nothing but the
+   operator's recollection of the headline. The individual scores are simply
+   gone, and the thinking A/B they existed to support cannot be computed.
 
-   Into `llmvp/configs/<model>.yaml` under the doc-only `tier:` key:
+   **Judgements go in `llmvp/configs/archive/TIER_JUDGEMENTS.md`, not in the
+   config.** They lived under each config's doc-only `tier:` key until
+   2026-08-05, when the history had reached 2,607 lines across 19 configs —
+   47.5% of all config bytes — and was burying the configuration a reader opens
+   the file for. Placements are also cross-model by nature: a result means
+   nothing except relative to an anchor and to the field, which 19 separate
+   files cannot show. Add a dated section per epoch; never rewrite a prior one.
+
+   Each config keeps only a two-key stub. **`tier.league` is load-bearing** —
+   `agent/tier/runner.py:config_league` reads it and silently falls back to
+   `"grinder"` if absent, so it must never be deleted as documentation.
+   `tier.status` is the at-a-glance judged flag. Nothing else goes back in.
+
+   Record, per model:
    - `status`, `rubric` (exact version string), `stars`, `tier`
    - `judged:` — run + staged path, judge model as an exact string, every
      judge's total, the recorded median, and a pointer to the RESULTS file
