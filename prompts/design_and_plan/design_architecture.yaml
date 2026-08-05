@@ -241,6 +241,27 @@ sections:
     diverged, data shapes that don't agree. Produce an UPDATED architecture
     that reconciles the blueprint with reality.
 
+# Only ever non-empty on a RECONCILE attempt: the coherence gate publishes
+# its verdict here, and `ground_design_gate_verdict` clears it to "" on a
+# pass, so design_initial never renders this section.
+# IT WAS PUBLISHED AND READ BY NOTHING until 2026-08-05 — the gate would
+# name a specific, actionable defect ("run_command `python main.py` is at
+# the root, but `main.py` imports `engine`, which is at `src/engine.py`")
+# and then hand the model a reconcile prompt that never mentioned it. Every
+# reconcile attempt was blind, so a model could burn its whole attempt
+# budget re-emitting the same defect and DNF at the design gate. Found on
+# gemma-4-26b-a4b (tier_20260805-001206, 3/3 attempts, same complaint).
+- id: gate_feedback
+  when: context.design_gate_feedback
+  content: |
+    ## Coherence Defect Found In Your Previous Blueprint
+    {context.design_gate_feedback}
+
+    This is the SPECIFIC reason the previous blueprint was rejected. Fix
+    THIS defect. Do not restate the same structure and expect a different
+    verdict — if the run command and the import paths disagree, change one
+    of them so they agree.
+
 - id: repo_map
   when: context.repo_map_formatted
   content: |

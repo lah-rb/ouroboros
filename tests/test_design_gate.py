@@ -290,3 +290,58 @@ class TestBarrenGenerationRetries:
         unreachable critic would start blocking missions."""
         rules = _rules(_compiled()["design_and_plan"]["steps"], "design_gate_critique")
         assert rules["true"] == "derive_goals"
+
+
+class TestTheGateVerdictReachesTheReconcile:
+    """The gate names a SPECIFIC defect; the reconcile step must be told it.
+
+    Regression for a dead channel found 2026-08-05: `design_gate_ground`
+    published `design_gate_feedback` and NOTHING consumed it — not a step
+    context, not a prompt template, not an action. So every reconcile
+    attempt was blind to the defect it existed to fix, and a model could
+    burn its whole attempt budget re-emitting the same incoherence and DNF
+    at the design gate. Observed on gemma-4-26b-a4b: three attempts, the
+    same run_command-vs-import-path complaint each time, zero cycles.
+    """
+
+    def test_reconcile_declares_the_feedback_key(self):
+        step = _compiled()["design_and_plan"]["steps"]["design_reconcile"]
+        ctx = step["context"]
+        declared = (ctx.get("required") or []) + (ctx.get("optional") or [])
+        assert "design_gate_feedback" in declared, (
+            "design_reconcile must declare the gate's verdict or it cannot "
+            "see why the previous blueprint was rejected"
+        )
+
+    def test_reconcile_renders_the_feedback_in_its_prompt(self):
+        """Declaring it is not enough — it has to reach the model."""
+        keys = _compiled()["design_and_plan"]["steps"]["design_reconcile"][
+            "prompt_template"
+        ]["context_keys"]
+        assert "design_gate_feedback" in keys, (
+            "a declared-but-unrendered key is exactly the bug this guards"
+        )
+
+    def test_the_publisher_and_the_consumer_agree(self):
+        """Pins both ends, so renaming one side fails loudly here."""
+        steps = _compiled()["design_and_plan"]["steps"]
+        assert "design_gate_feedback" in steps["design_gate_ground"]["publishes"]
+        assert (
+            "design_gate_feedback"
+            in steps["design_reconcile"]["prompt_template"]["context_keys"]
+        )
+
+    def test_the_prompt_template_has_a_section_for_it(self):
+        """The context key is inert unless the template renders it, and the
+        section must be conditional so design_initial (which gets "") does
+        not emit an empty feedback heading on a first attempt."""
+        import yaml
+
+        tpl = yaml.safe_load(
+            open("prompts/design_and_plan/design_architecture.yaml")
+        )
+        secs = [s for s in tpl["sections"] if "design_gate_feedback" in str(s)]
+        assert secs, "no section renders design_gate_feedback"
+        assert any(
+            s.get("when") == "context.design_gate_feedback" for s in secs
+        ), "the feedback section must be conditional on the key being non-empty"

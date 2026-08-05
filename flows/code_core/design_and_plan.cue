@@ -126,13 +126,22 @@ design_and_plan: #FlowDefinition & {
 			action: "inference"
 			context: {
 				required: ["mission"]
-				optional: ["project_manifest", "repo_map_formatted"]
+				// design_gate_feedback is OPTIONAL because only the reconcile
+				// path has one: the gate clears it to "" on a pass, so
+				// design_initial renders no feedback section at all.
+				optional: ["project_manifest", "repo_map_formatted",
+					"design_gate_feedback"]
 			}
 			prompt_template: {
 				template: "design_and_plan/design_architecture"
 				context_keys: [
 					"mission_objective", "repo_map_formatted",
 					"project_file_list", "existing_architecture",
+					// WAS MISSING — the gate published its verdict and no step
+					// ever consumed it, so every reconcile attempt was blind to
+					// the defect it was meant to fix. See the gate_feedback
+					// section in design_architecture.yaml.
+					"design_gate_feedback",
 				]
 				input_keys: []
 			}

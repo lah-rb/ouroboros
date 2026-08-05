@@ -2552,7 +2552,8 @@
           ],
           "optional": [
             "project_manifest",
-            "repo_map_formatted"
+            "repo_map_formatted",
+            "design_gate_feedback"
           ]
         },
         "params": {},
@@ -2562,7 +2563,8 @@
             "mission_objective",
             "repo_map_formatted",
             "project_file_list",
-            "existing_architecture"
+            "existing_architecture",
+            "design_gate_feedback"
           ],
           "input_keys": []
         },
@@ -2623,7 +2625,8 @@
           ],
           "optional": [
             "project_manifest",
-            "repo_map_formatted"
+            "repo_map_formatted",
+            "design_gate_feedback"
           ]
         },
         "params": {},
@@ -2633,7 +2636,8 @@
             "mission_objective",
             "repo_map_formatted",
             "project_file_list",
-            "existing_architecture"
+            "existing_architecture",
+            "design_gate_feedback"
           ],
           "input_keys": []
         },
