@@ -972,7 +972,7 @@ class MissionState(BaseModel):
     # needs a persisted number the tier runner can subtract from on resume.
     cycles_consumed: int = 0
     # The phase ceiling this mission COMPLETED at (config.top_phase at
-    # finalize time; "" for deadlocked/aborted/legacy). The continuance key
+    # finalize time; "" for aborted/legacy). The continuance key
     # for phase stacking: `mission resume` reopens a completed mission when
     # its config.top_phase now ranks ABOVE this — run to structural today,
     # raise the ceiling and resume tomorrow.

@@ -1296,6 +1296,17 @@ def check_prompt_conventions(flows: dict, prompts_dir: Path) -> list[LintResult]
 
             prompt_text = prompt_file.read_text()
 
+            # PROMPTING_CONVENTIONS.md \u00a72/\u00a75: \u2705/\u274c examples are REQUIRED for
+            # machine-parsed output and explicitly OPTIONAL for free-text
+            # (analysis, charters, consults), where the doc warns that
+            # "constraining the shape of analysis constrains the analysis
+            # itself". A prompt that declares `output_contract: free_text`
+            # has made that call deliberately, so asking it for examples is
+            # asking it to get worse. Anything undeclared defaults to
+            # parsed, which is the stricter reading.
+            if re.search(r"^output_contract:\s*free_text\s*$", prompt_text, re.M):
+                continue
+
             has_correct = "\u2705" in prompt_text or "CORRECT" in prompt_text
             has_wrong = "\u274c" in prompt_text or "WRONG" in prompt_text
 

@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 from agent.actions.frame_actions import _frame_evidence
 from agent.loader import load_prompt_text

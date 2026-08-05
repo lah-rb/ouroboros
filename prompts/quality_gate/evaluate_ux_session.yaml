@@ -10,6 +10,10 @@
 # step, alongside deterministic check results and cross-file analysis.
 
 id: quality_gate/evaluate_ux_session
+# output_contract: free_text — a UX ASSESSMENT published verbatim as
+# ux_session_assessment. Judgement prose; §5's warning about constraining
+# analysis applies directly.
+output_contract: free_text
 description: "Assess UX session for quality gate — in-session evaluation"
 
 sections:

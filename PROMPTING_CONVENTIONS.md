@@ -116,6 +116,21 @@ The output format section is the highest-leverage part of the prompt. For prompt
 
 For free-text prompts (analysis, reflections, directives) where output is not machine-parsed, ✅/❌ examples are optional. Over-constraining format for reasoning and analysis prompts can reduce output quality — the model focuses on matching the example rather than thinking through the problem. Use format guidance (length, structure, focus) without rigid examples unless you're seeing a specific failure mode you need to correct.
 
+### Declaring a free-text contract
+
+`check_prompt_conventions` enforces the ✅/❌ rule above, and it cannot tell by reading a prompt whether its output gets parsed. Left to guess, it asked every free-text prompt for examples the paragraph above says not to add — so those findings sat unresolved and unresolvable, which is how a real signal becomes noise.
+
+A prompt whose output is genuinely free-text declares it, as a top-level key beside `id:`:
+
+```yaml
+id: quality_gate/evaluate_ux_session
+# output_contract: free_text — a UX ASSESSMENT published verbatim as
+# ux_session_assessment. Judgement prose; §5's warning applies directly.
+output_contract: free_text
+```
+
+The key is read by the linter only — no loader or renderer touches it, so it is inert at runtime. **Undeclared defaults to parsed**, the stricter reading: a new prompt must earn its exemption rather than get one by omission. Declare it only when nothing regex- or JSON-parses the output; if a parser reads the result, the prompt needs the examples, not the exemption.
+
 ---
 
 ## 3. Structured Output (JSON) Prompts

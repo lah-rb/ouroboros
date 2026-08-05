@@ -841,7 +841,15 @@ _FLOW_NAME_REMAP: dict[str, str] = {
 
 
 async def action_finalize_mission(step_input: StepInput) -> StepOutput:
-    """Mark mission complete, deadlocked, or aborted and save."""
+    """Mark mission complete or aborted and save.
+
+    There was a third status, "deadlocked", from the early frustration
+    system. The escalation system fully superseded that, and by 2026-08-05
+    it was unreachable: this action could still produce it, but all
+    sixteen finalize_mission steps pass either {} or {"abort": True} — no
+    flow had requested a deadlock in a long time, and nothing branched on
+    the status. Surfaced by the action_reads_undeclared_param triage.
+    """
     effects = step_input.effects
     mission = step_input.context.get("mission")
 
@@ -851,9 +859,7 @@ async def action_finalize_mission(step_input: StepInput) -> StepOutput:
             observations="No mission to finalize",
         )
 
-    if step_input.params.get("deadlock", False):
-        mission.status = "deadlocked"
-    elif step_input.params.get("abort", False):
+    if step_input.params.get("abort", False):
         mission.status = "aborted"
     else:
         mission.status = "completed"

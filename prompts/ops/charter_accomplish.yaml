@@ -7,6 +7,10 @@
 # Pre-computed: task_spec, feedback_block (empty on the first attempt)
 
 id: ops/charter_accomplish
+# output_contract: free_text — a CHARTER written for a human-style
+# terminal operator to work through. Consumed as prose by run_terminal;
+# nothing parses it. §5 applies.
+output_contract: free_text
 description: "Write an operator brief to accomplish a terminal task"
 
 sections:

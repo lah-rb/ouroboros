@@ -11,6 +11,9 @@
 # architecture_run_command (launch), project_listing (structure).
 
 id: quality_gate/charter_explore
+# output_contract: free_text — an EXPLORE charter published as
+# execution_persona for the verification operator. Prose, unparsed. §5.
+output_contract: free_text
 description: "Author an exploratory UX charter for the quality gate"
 
 sections:

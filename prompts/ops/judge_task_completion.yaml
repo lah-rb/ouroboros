@@ -53,6 +53,12 @@ sections:
       {"task_complete": false, "feedback": "The service starts but the /health endpoint returns 500 — the database connection string is still unset."}
       ```
 
+      ❌ WRONG — do not wrap the JSON in explanation:
+      Looking at the transcript, the service came up but the health check fails.
+      ```json
+      {"task_complete": false, "feedback": "health endpoint returns 500"}
+      ```
+
       Return ONLY the fenced JSON object.
 
   - id: task

@@ -8,7 +8,7 @@
 //
 // Callers:
 //   design_and_plan — "How do Python text adventure games structure dialogue trees?"
-//   mission_control (deadlock rescue) — "Python ImportError circular dependency solutions"
+//   mission_control (stuck-goal rescue) — "Python ImportError circular dependency solutions"
 //   interact — "CLI text adventure testing strategies"
 
 package ouroboros

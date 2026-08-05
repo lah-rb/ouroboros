@@ -82,6 +82,13 @@ sections:
       {"genuinely_done": false, "reason": "answer.txt holds the literal 0 — the re-run shows the domain filter matched no rows, so nothing was counted"}
       ```
 
+      ❌ WRONG — do not add a preamble or a sign-off:
+      Here is my verification:
+      ```json
+      {"genuinely_done": true, "reason": "checks re-ran clean"}
+      ```
+      Let me know if you want me to re-run anything.
+
       Return ONLY the fenced JSON object.
     cache: true
 

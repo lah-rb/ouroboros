@@ -6,6 +6,11 @@
 # framing plus the agent's own situation summary and question.
 
 id: escalate/boss_consult
+# output_contract: free_text — a CONSULT. The reply is folded into the
+# escalation session as advice (escalate.do_consult -> fold_consult), not
+# parsed. PROMPTING_CONVENTIONS.md §5: rigid examples here would shape the
+# advice rather than improve its extraction.
+output_contract: free_text
 description: "Supervisor consult for a stuck escalation"
 
 sections:

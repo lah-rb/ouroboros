@@ -55,6 +55,7 @@ sections:
       UNRELATED task — it shows the SHAPE only; write actions for the real task
       (or an empty array if nothing is needed).
 
+      ✅ CORRECT:
       ```json
       {
         "setup_actions": [
@@ -64,7 +65,15 @@ sections:
       ```
 
       Each action: `type` is "command", `command` is an argv array, `name` is a
-      short label. Return ONLY the fenced JSON object.
+      short label.
+
+      ❌ WRONG — do not explain the plan around the JSON:
+      The task needs the requests library, so:
+      ```json
+      {"setup_actions": [{"type": "command", "command": ["pip", "install", "requests"], "name": "install requests"}]}
+      ```
+
+      Return ONLY the fenced JSON object.
 
   # ── cache boundary ── everything below is dynamic (not cached) ──
 

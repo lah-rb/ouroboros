@@ -64,6 +64,12 @@ sections:
       {"plausible": false, "reason": "answer is 3, but the task counts tokens across millions of rows — the filter almost certainly matched nothing"}
       ```
 
+      ❌ WRONG — do not reason out loud around the JSON:
+      The expected magnitude is millions, so 3 is clearly off.
+      ```json
+      {"plausible": false, "reason": "answer is 3"}
+      ```
+
       Return ONLY the fenced JSON object.
     cache: true
 

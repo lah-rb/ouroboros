@@ -69,6 +69,26 @@ sections:
       (a nonzero exit is correct — the candidate is unusable). Do not print
       anything except the PROBE_PASS / PROBE_FAIL line and any failure detail.
 
+      ✅ CORRECT — one fenced python block, nothing around it:
+      ```python
+      import sys
+      from solver import normalize
+
+      for raw, want in (("  A b ", "a b"), ("", "")):
+          got = normalize(raw)
+          if got != want:
+              print(f"PROBE_FAIL: idempotent normalize on input {raw!r} — expected {want!r}, got {got!r}")
+              sys.exit(1)
+      print("PROBE_PASS")
+      ```
+
+      ❌ WRONG — no commentary before or after the block:
+      I'll check idempotence and the empty-string edge case.
+      ```python
+      print("PROBE_PASS")
+      ```
+      This covers the main properties.
+
   # Dynamic tail — the task spec (names the file/function + the worked examples).
   - id: task
     content: |
