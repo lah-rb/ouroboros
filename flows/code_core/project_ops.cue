@@ -133,7 +133,7 @@ project_ops: #FlowDefinition & {
 				// published it, loaded via effects otherwise.
 				optional: ["mission"]
 			}
-			publishes: ["transient_files"]
+			publishes: []
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "plan_setup"}]
@@ -234,7 +234,7 @@ project_ops: #FlowDefinition & {
 				type: "rule"
 				rules: [{condition: "true", transition: "detect_env"}]
 			}
-			publishes: ["undeclared_dependencies"]
+			publishes: []
 		}
 
 		// ── (removed) Phase 4: run setup commands ───────────────────

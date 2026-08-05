@@ -527,8 +527,7 @@
         },
         "publishes": [
           "batch_check_results",
-          "validation_results",
-          "validation_output"
+          "validation_results"
         ],
         "effects": [],
         "terminal": false
@@ -556,8 +555,7 @@
           ]
         },
         "publishes": [
-          "batch_check_results",
-          "validation_output"
+          "batch_check_results"
         ],
         "effects": [],
         "terminal": false
@@ -3573,7 +3571,6 @@
           "diagnosis_confidence",
           "root_cause",
           "module_statement",
-          "expected_error",
           "related_symbols"
         ],
         "effects": [],
@@ -6427,8 +6424,6 @@
           ]
         },
         "publishes": [
-          "goal_met",
-          "summary",
           "headline"
         ],
         "effects": [],
@@ -6806,7 +6801,6 @@
           ]
         },
         "publishes": [
-          "acceptance_ok",
           "acceptance_summary"
         ],
         "effects": [],
@@ -6916,9 +6910,7 @@
           ]
         },
         "publishes": [
-          "goal_met",
-          "headline",
-          "summary"
+          "headline"
         ],
         "effects": [],
         "terminal": false
@@ -6950,9 +6942,7 @@
           ]
         },
         "publishes": [
-          "mission",
-          "now_ok",
-          "acceptance_ok"
+          "mission"
         ],
         "effects": [],
         "terminal": false
@@ -9669,9 +9659,7 @@
         },
         "params": {},
         "config": {},
-        "publishes": [
-          "transient_files"
-        ],
+        "publishes": [],
         "resolver": {
           "type": "rule",
           "rules": [
@@ -9831,9 +9819,7 @@
             }
           ]
         },
-        "publishes": [
-          "undeclared_dependencies"
-        ],
+        "publishes": [],
         "effects": [],
         "terminal": false
       },
@@ -13135,8 +13121,7 @@
                 "description": "Every item in the brief is done (or another run cannot help) \u2014 end the session and move to assessment.",
                 "terminal": false
               }
-            },
-            "publish_selection": "relaunch_choice"
+            }
           },
           "transitions": {
             "default": "close_session",
@@ -13868,7 +13853,6 @@
           ]
         },
         "publishes": [
-          "contract_review",
           "contract_feedback",
           "contract_revision",
           "swarm_token_base"
@@ -13907,7 +13891,6 @@
         },
         "publishes": [
           "worker_results",
-          "swarm_stats",
           "inference_tokens_generated",
           "batch_manifest",
           "files_changed",
@@ -14056,8 +14039,7 @@
         },
         "publishes": [
           "batch_check_results",
-          "validation_results",
-          "validation_output"
+          "validation_results"
         ],
         "effects": [],
         "terminal": false
@@ -14086,8 +14068,7 @@
           ]
         },
         "publishes": [
-          "batch_check_results",
-          "validation_output"
+          "batch_check_results"
         ],
         "effects": [],
         "terminal": false
@@ -14115,8 +14096,7 @@
           ]
         },
         "publishes": [
-          "batch_check_results",
-          "validation_output"
+          "batch_check_results"
         ],
         "effects": [],
         "terminal": false
@@ -14743,8 +14723,7 @@
         },
         "publishes": [
           "batch_check_results",
-          "validation_results",
-          "validation_output"
+          "validation_results"
         ],
         "effects": [],
         "terminal": false
@@ -14772,8 +14751,7 @@
           ]
         },
         "publishes": [
-          "batch_check_results",
-          "validation_output"
+          "batch_check_results"
         ],
         "effects": [],
         "terminal": false
@@ -15266,7 +15244,6 @@
           ]
         },
         "publishes": [
-          "contract_review",
           "contract_feedback",
           "contract_revision",
           "swarm_token_base"
@@ -15305,7 +15282,6 @@
         },
         "publishes": [
           "worker_results",
-          "swarm_stats",
           "inference_tokens_generated",
           "batch_manifest",
           "files_changed",
@@ -15598,8 +15574,7 @@
         },
         "publishes": [
           "batch_check_results",
-          "validation_results",
-          "validation_output"
+          "validation_results"
         ],
         "effects": [],
         "terminal": false
@@ -15628,8 +15603,7 @@
           ]
         },
         "publishes": [
-          "batch_check_results",
-          "validation_output"
+          "batch_check_results"
         ],
         "effects": [],
         "terminal": false
@@ -15657,8 +15631,7 @@
           ]
         },
         "publishes": [
-          "batch_check_results",
-          "validation_output"
+          "batch_check_results"
         ],
         "effects": [],
         "terminal": false
@@ -19920,9 +19893,7 @@
             }
           ]
         },
-        "publishes": [
-          "pending_curation"
-        ],
+        "publishes": [],
         "effects": [],
         "terminal": false
       },
@@ -20708,9 +20679,7 @@
             }
           ]
         },
-        "publishes": [
-          "pending_extractions"
-        ],
+        "publishes": [],
         "effects": [],
         "terminal": false
       },
@@ -22911,7 +22880,6 @@
           ]
         },
         "publishes": [
-          "discovery_stats",
           "directive_report"
         ],
         "effects": [],

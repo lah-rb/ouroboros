@@ -539,6 +539,16 @@ def check_dead_publishes(flows: dict, agent_dir: Path) -> list[LintResult]:
             turn = step_def.get("turn") or {}
             selection = (turn.get("response") or {}).get("publish_selection")
             if selection:
+                # `publish_selection: k` makes the runtime emit BOTH `k` (the
+                # chosen option) and `k_arg` (that option's argument) —
+                # runtime.py:1459/1475. When the arg is consumed, the
+                # declaration is load-bearing and the bare `k` is an
+                # unavoidable by-product, not a dead channel. Flagging it
+                # would be pure noise: five of the six menu steps in the tree
+                # are this shape (router/search/investigation/escalation/
+                # context_request), each with a consumed `_arg`.
+                if f"{selection}_arg" in consumed:
+                    continue
                 published.setdefault(selection, []).append(step_name)
 
         for key, publishers in sorted(published.items()):

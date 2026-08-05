@@ -95,7 +95,7 @@ discover: #FlowDefinition & {
 					{condition: "true", transition: "return_success"},
 				]
 			}
-			publishes: ["discovery_stats", "directive_report"]
+			publishes: ["directive_report"]
 		}
 
 		// Local return step — the shared return templates hardcode

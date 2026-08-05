@@ -42,7 +42,7 @@ curate_gate: #FlowDefinition & {
 					{condition: "true", transition: "gate_fail"},
 				]
 			}
-			publishes: ["pending_curation"]
+			publishes: []
 		}
 
 		build_corpus: #StepDefinition & {

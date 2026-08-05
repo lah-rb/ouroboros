@@ -284,7 +284,7 @@ build_structure_contracted: #FlowDefinition & {
 					{condition: "true", transition: "run_type_check"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_results", "validation_output"]
+			publishes: ["batch_check_results", "validation_results"]
 		}
 
 		// Cross-module interface check — same net as build_structure's tail
@@ -302,7 +302,7 @@ build_structure_contracted: #FlowDefinition & {
 					{condition: "true", transition: "apply_results"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_output"]
+			publishes: ["batch_check_results"]
 		}
 
 		apply_results: #StepDefinition & {

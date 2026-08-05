@@ -231,7 +231,7 @@ build_structure_integrated: #FlowDefinition & {
 					{condition: "true", transition: "fan_out_workers"},
 				]
 			}
-			publishes: ["contract_review", "contract_feedback", "contract_revision", "swarm_token_base"]
+			publishes: ["contract_feedback", "contract_revision", "swarm_token_base"]
 		}
 
 		// One stateless completion per top-level symbol, fanned out
@@ -256,7 +256,7 @@ build_structure_integrated: #FlowDefinition & {
 					{condition: "true", transition: "apply_results"},
 				]
 			}
-			publishes: ["worker_results", "swarm_stats", "inference_tokens_generated", "batch_manifest", "files_changed", "primary_code_file"]
+			publishes: ["worker_results", "inference_tokens_generated", "batch_manifest", "files_changed", "primary_code_file"]
 		}
 
 		// Per-file assembly: splice_frame(skeleton, worker bodies).
@@ -400,7 +400,7 @@ build_structure_integrated: #FlowDefinition & {
 					{condition: "true", transition: "run_doctests"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_results", "validation_output"]
+			publishes: ["batch_check_results", "validation_results"]
 		}
 
 		// The contract's doctests against the RECONCILED modules.
@@ -417,7 +417,7 @@ build_structure_integrated: #FlowDefinition & {
 					{condition: "true", transition: "run_type_check"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_output"]
+			publishes: ["batch_check_results"]
 		}
 
 		// Static cross-module interface check over the RECONCILED package.
@@ -434,7 +434,7 @@ build_structure_integrated: #FlowDefinition & {
 					{condition: "true", transition: "apply_results"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_output"]
+			publishes: ["batch_check_results"]
 		}
 
 		apply_results: #StepDefinition & {

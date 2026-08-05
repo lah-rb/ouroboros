@@ -237,7 +237,12 @@ run_session: #FlowDefinition & {
 							description: "Every item in the brief is done (or another run cannot help) — end the session and move to assessment."
 						}
 					}
-					publish_selection: "relaunch_choice"
+					// No publish_selection. This menu routes purely through
+					// `transitions.options` below, and its options take no
+					// arg, so the usual reason to declare one — the runtime
+					// also emitting `<key>_arg` for the action to read
+					// (runtime.py:1475) — does not apply here. The five other
+					// menus in the tree DO consume their `_arg` and keep it.
 				}
 				transitions: {
 					options: {

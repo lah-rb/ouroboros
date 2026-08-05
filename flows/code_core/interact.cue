@@ -123,7 +123,7 @@ interact: #FlowDefinition & {
 					{condition: "true", transition: "flush_transient_failure"},
 				]
 			}
-			publishes: ["goal_met", "summary", "headline"]
+			publishes: ["headline"]
 		}
 
 		// ══════════════════════════════════════════════════════════
@@ -310,7 +310,7 @@ interact: #FlowDefinition & {
 				type: "rule"
 				rules: [{condition: "true", transition: "evaluate_outcome"}]
 			}
-			publishes: ["acceptance_ok", "acceptance_summary"]
+			publishes: ["acceptance_summary"]
 		}
 
 		// ══════════════════════════════════════════════════════════
@@ -389,7 +389,7 @@ interact: #FlowDefinition & {
 					{condition: "true", transition: "end_eval_session_failure"},
 				]
 			}
-			publishes: ["goal_met", "headline", "summary"]
+			publishes: ["headline"]
 		}
 
 		// Behavior refutes an acceptance check (goal_met=true but a required
@@ -413,7 +413,7 @@ interact: #FlowDefinition & {
 					{condition: "true", transition: "end_eval_session_failure"},
 				]
 			}
-			publishes: ["mission", "now_ok", "acceptance_ok"]
+			publishes: ["mission"]
 		}
 
 		// Release the memoryful inference session now that evaluation is done.

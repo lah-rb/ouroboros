@@ -250,7 +250,7 @@ build_contracts: #FlowDefinition & {
 					{condition: "true", transition: "fan_out_workers"},
 				]
 			}
-			publishes: ["contract_review", "contract_feedback", "contract_revision", "swarm_token_base"]
+			publishes: ["contract_feedback", "contract_revision", "swarm_token_base"]
 		}
 
 		// The net-new concurrency primitive: one stateless completion per
@@ -281,7 +281,7 @@ build_contracts: #FlowDefinition & {
 					{condition: "true", transition: "apply_results"},
 				]
 			}
-			publishes: ["worker_results", "swarm_stats", "inference_tokens_generated", "batch_manifest", "files_changed", "primary_code_file"]
+			publishes: ["worker_results", "inference_tokens_generated", "batch_manifest", "files_changed", "primary_code_file"]
 		}
 
 		// Per-file assembly: splice_frame(skeleton, worker bodies) —
@@ -359,7 +359,7 @@ build_contracts: #FlowDefinition & {
 					{condition: "true", transition: "run_doctests"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_results", "validation_output"]
+			publishes: ["batch_check_results", "validation_results"]
 		}
 
 		// The contract's doctests are the acceptance surface the author
@@ -379,7 +379,7 @@ build_contracts: #FlowDefinition & {
 					{condition: "true", transition: "run_type_check"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_output"]
+			publishes: ["batch_check_results"]
 		}
 
 		// Deterministic cross-module interface check (round-2 lever): the
@@ -403,7 +403,7 @@ build_contracts: #FlowDefinition & {
 					{condition: "true", transition: "apply_results"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_output"]
+			publishes: ["batch_check_results"]
 		}
 
 		apply_results: #StepDefinition & {

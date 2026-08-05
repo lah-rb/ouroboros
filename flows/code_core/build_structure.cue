@@ -180,7 +180,7 @@ build_structure: #FlowDefinition & {
 					{condition: "true", transition: "run_type_check"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_results", "validation_output"]
+			publishes: ["batch_check_results", "validation_results"]
 		}
 
 		// Deterministic cross-module interface check (generalized from the
@@ -202,7 +202,7 @@ build_structure: #FlowDefinition & {
 					{condition: "true", transition: "apply_results"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_output"]
+			publishes: ["batch_check_results"]
 		}
 
 		apply_results: #StepDefinition & {

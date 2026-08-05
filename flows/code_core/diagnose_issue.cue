@@ -412,9 +412,13 @@ diagnose_issue: #FlowDefinition & {
 				// Structured module-fix declaration: the literal module-level
 				// line accompanying kind == "module_fix".
 				"module_statement",
-				// Should-raise contract: the exception the retest should accept
-				// as PASS (persisted onto the goal by conclude_diagnosis).
-				"expected_error",
+				// NOT declared: `expected_error`, the should-raise contract
+				// naming the exception a retest may accept as PASS. It is
+				// written straight onto the goal by conclude_diagnosis and
+				// read back from there, so no step consumes it from context —
+				// declaring it claimed a downstream contract that never
+				// existed. The action still emits it; only the false claim
+				// is gone.
 				// Multi-symbol patching (505 round)
 				"related_symbols",
 			]

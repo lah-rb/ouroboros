@@ -41,7 +41,7 @@ extract_gate: #FlowDefinition & {
 					{condition: "true", transition: "gate_fail"},
 				]
 			}
-			publishes: ["pending_extractions"]
+			publishes: []
 		}
 
 		gate_pass: #StepDefinition & {
