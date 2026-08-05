@@ -14,12 +14,25 @@ Checks (ported from blueprint/lint.py):
   6. Prompt conventions: inference prompts missing ✅/❌ examples
   7. Resolver conventions: rule conditions using string-match anti-patterns
 
+Checks (auditability of the flow layer — added 2026-08-05):
+  8. Dead publishes: a context key published and consumed by NOTHING, once
+     flow returns / prompt keys / resolver conditions / Python reads have
+     been resolved away. This is the `design_gate_feedback` class, where
+     the coherence gate named a defect that design_reconcile was never
+     shown, so models DNF'd on what looked like their own incapacity.
+  8b. context_key_python_only (INFO): the flow declares nothing about a key
+     but Python reads it — it works, yet the wiring is invisible to anyone
+     auditing the .cue, which is where the data contract should be legible.
+  9. Prompt text in Python: prompt literals outside prompts/, which no
+     reviewer can diff and no prompt/parser contract check can parse.
+
 Usage:
     python -m agent.flow_lint [--verbose] [--compiled PATH]
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -347,6 +360,73 @@ def _find_cycles(adj: dict[str, list[str]]) -> list[list[str]]:
 # ── Check 3: Publish/consume chain validation ────────────────────────
 
 
+# Published by runtime machinery after every inference/turn step and read
+# back by that same machinery, never by a flow declaration.
+_RUNTIME_KEYS = frozenset({"inference_response", "inference_error", "events"})
+
+# `context.get("x")` / `context["x"]` anywhere under agent/. Deliberately
+# broader than _extract_action_context_reads (which requires the
+# `step_input.` prefix and lives per-action): for the dead-publish question
+# we only need to know SOMETHING reads the key, not which action does.
+_PY_CONTEXT_READ_RE = re.compile(
+    r"""context\.get\(\s*["'](\w+)["']|context\[\s*["'](\w+)["']"""
+)
+
+
+def _python_context_reads(agent_dir: Path) -> dict[str, set[str]]:
+    """key -> set of agent/** files that read it out of a context dict."""
+    reads: dict[str, set[str]] = {}
+    if not agent_dir.exists():
+        return reads
+    for f in sorted(agent_dir.rglob("*.py")):
+        if "__pycache__" in str(f):
+            continue
+        try:
+            source = f.read_text()
+        except OSError:
+            continue
+        for m in _PY_CONTEXT_READ_RE.finditer(source):
+            key = m.group(1) or m.group(2)
+            reads.setdefault(key, set()).add(f.as_posix())
+    return reads
+
+
+def _declared_consumers(flow_def: dict) -> set[str]:
+    """Every context key this flow consumes through a DECLARED path.
+
+    Declared means auditable from the flow definition alone: step context
+    blocks, $refs, prompt template keys, resolver rule conditions, and the
+    flow's own `returns` (which its caller consumes). This is the set a
+    reader of the .cue can see; anything outside it is invisible to the
+    flow layer, which is the whole point of the check.
+    """
+    consumed: set[str] = set()
+
+    for spec in (flow_def.get("returns") or {}).values():
+        src = spec.get("from", "") if isinstance(spec, dict) else ""
+        if src.startswith("context."):
+            consumed.add(src.split(".", 1)[1])
+
+    for step_def in (flow_def.get("steps") or {}).values():
+        if not isinstance(step_def, dict):
+            continue
+        ctx = step_def.get("context") or {}
+        consumed.update(ctx.get("required") or [])
+        consumed.update(ctx.get("optional") or [])
+        consumed.update(_extract_context_refs(step_def))
+
+        tpl = step_def.get("prompt_template") or {}
+        consumed.update(tpl.get("context_keys") or [])
+        consumed.update(tpl.get("input_keys") or [])
+
+        for rule in (step_def.get("resolver") or {}).get("rules") or []:
+            consumed.update(
+                re.findall(r"context\.(\w+)", str(rule.get("condition", "")))
+            )
+
+    return consumed
+
+
 def check_publish_consume_chains(flows: dict) -> list[LintResult]:
     """Verify required context keys have an upstream publisher.
 
@@ -408,18 +488,90 @@ def check_publish_consume_chains(flows: dict) -> list[LintResult]:
                         )
                     )
 
-        # Published but never consumed (INFO)
-        for key, publishers in all_published.items():
-            if key not in all_consumed and key not in flow_inputs:
+    return results
+
+
+# ── Check 3c: Dead publishes, with every legitimate path resolved ────
+#
+# This supersedes the INFO-level half of check_publish_consume_chains,
+# which hedged every finding with "may be consumed by parent flow" and so
+# emitted 108 unactionable notes that the CLI dropped below its
+# ERROR/WARNING threshold. The signal was real and 100% invisible: it
+# included `design_gate_feedback`, where the coherence gate named a
+# specific defect and design_reconcile was never shown it, so every
+# reconcile attempt ran blind and models DNF'd at the design gate on what
+# looked like their own incapacity (fixed 2026-08-05).
+#
+# The fix is to resolve the paths that made it hedge — flow `returns`,
+# prompt template keys, resolver conditions, runtime machinery, and reads
+# from Python — so that what remains is genuinely unconsumed and can be
+# stated plainly.
+
+
+def check_dead_publishes(flows: dict, agent_dir: Path) -> list[LintResult]:
+    """Published context keys that nothing consumes.
+
+    Two verdicts, because they call for different responses:
+
+      dead_publish (WARNING)
+          No consumer anywhere — not the flow layer, not Python. Either
+          the key is vestigial and should go, or a consumer was meant to
+          exist and does not. The second case is a silent data loss.
+
+      context_key_python_only (INFO)
+          The flow layer declares nothing, but Python reads it. It works,
+          yet the wiring is invisible to anyone auditing the .cue, which
+          is where the flow's data contract is supposed to be legible.
+    """
+    results: list[LintResult] = []
+    py_reads = _python_context_reads(agent_dir)
+
+    for flow_name, flow_def in _iter_flows(flows):
+        consumed = _declared_consumers(flow_def)
+        flow_inputs = _flow_input_keys(flow_def)
+
+        published: dict[str, list[str]] = {}
+        for step_name, step_def in (flow_def.get("steps") or {}).items():
+            if not isinstance(step_def, dict):
+                continue
+            for key in step_def.get("publishes") or []:
+                published.setdefault(key, []).append(step_name)
+            turn = step_def.get("turn") or {}
+            selection = (turn.get("response") or {}).get("publish_selection")
+            if selection:
+                published.setdefault(selection, []).append(step_name)
+
+        for key, publishers in sorted(published.items()):
+            if key in consumed or key in flow_inputs or key in _RUNTIME_KEYS:
+                continue
+            readers = py_reads.get(key)
+            if readers:
+                where = ", ".join(sorted(readers)[:2])
                 results.append(
                     LintResult(
                         level="INFO",
                         flow=flow_name,
                         step=publishers[0],
-                        check="published_never_consumed",
+                        check="context_key_python_only",
                         message=(
-                            f"publishes '{key}' but no step in this flow "
-                            f"consumes it (may be consumed by parent flow)"
+                            f"publishes '{key}'; no declaration in this flow "
+                            f"consumes it, only Python does ({where}) — the "
+                            f"wiring is invisible to a reader of the .cue"
+                        ),
+                    )
+                )
+            else:
+                results.append(
+                    LintResult(
+                        level="WARNING",
+                        flow=flow_name,
+                        step=publishers[0],
+                        check="dead_publish",
+                        message=(
+                            f"publishes '{key}' and NOTHING consumes it — no "
+                            f"step context, $ref, prompt key, resolver "
+                            f"condition, flow return, or Python read. Either "
+                            f"drop it or wire the consumer that was intended"
                         ),
                     )
                 )
@@ -1244,6 +1396,126 @@ def check_pydantic_model_drift(flows: dict) -> list[LintResult]:
 # ── Main ─────────────────────────────────────────────────────────────
 
 
+# ── Check 9: Prompt text living in Python instead of the store ──────
+#
+# prompts/ is the auditable surface: a reviewer can diff it, a lint check
+# can parse it, and check_prompt_parser_contracts can verify the JSON keys
+# a prompt asks for against the keys its parser reads. A prompt built from
+# a string literal inside an action gets none of that, and the drift is
+# gradual — each individual literal looks like a reasonable local choice.
+#
+# Two signals, both narrow enough to keep false positives near zero:
+#   A. a literal bound to a prompt-ish NAME (*_prompt, *_instruction, ...)
+#   B. a literal using the prompt-store interpolation syntax ({context.x})
+# Docstrings are excluded structurally via AST rather than by heuristic.
+
+_PROMPT_NAME_HINTS = (
+    "prompt",
+    "instruction",
+    "template",
+    "directive",
+    "rubric",
+    "brief",
+)
+_PROMPT_MIN_CHARS = 200
+_INTERPOLATION_MIN_CHARS = 60
+
+
+def _docstring_node_ids(tree: ast.AST) -> set[int]:
+    """ids of Constant nodes that are docstrings, so they can be skipped."""
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            continue
+        body = getattr(node, "body", None)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            out.add(id(body[0].value))
+    return out
+
+
+def check_prompt_text_in_python(agent_dir: Path) -> list[LintResult]:
+    """Flag prompt text embedded in Python rather than the prompts/ store."""
+    results: list[LintResult] = []
+    if not agent_dir.exists():
+        return results
+
+    for path in sorted(agent_dir.rglob("*.py")):
+        # This module is tooling, not agent behaviour, and it necessarily
+        # quotes the interpolation syntax it detects — it would flag itself.
+        if "__pycache__" in str(path) or path.name == "flow_lint.py":
+            continue
+        try:
+            source = path.read_text()
+            tree = ast.parse(source)
+        except (OSError, SyntaxError):
+            continue
+
+        docstrings = _docstring_node_ids(tree)
+        flagged: set[int] = set()
+        rel = path.as_posix()
+
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
+                continue
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if not any(h in n.lower() for n in names for h in _PROMPT_NAME_HINTS):
+                continue
+            text = node.value.value
+            if len(text) < _PROMPT_MIN_CHARS:
+                continue
+            flagged.add(id(node.value))
+            results.append(
+                LintResult(
+                    level="WARNING",
+                    flow=rel,
+                    step=f"line {node.lineno}",
+                    check="prompt_text_in_python",
+                    message=(
+                        f"`{names[0]}` is {len(text)} chars of prompt text in "
+                        f"Python — prompts/ is the auditable store, and text "
+                        f"here is invisible to prompt/parser contract checks"
+                    ),
+                )
+            )
+
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            if id(node) in docstrings or id(node) in flagged:
+                continue
+            text = node.value
+            if len(text) < _INTERPOLATION_MIN_CHARS:
+                continue
+            if "{context." not in text and "{input." not in text:
+                continue
+            results.append(
+                LintResult(
+                    level="WARNING",
+                    flow=rel,
+                    step=f"line {getattr(node, 'lineno', 0)}",
+                    check="prompt_text_in_python",
+                    message=(
+                        "string literal uses prompt-store interpolation "
+                        "syntax ({context.*}/{input.*}) outside prompts/ — "
+                        "this is a prompt fragment in Python"
+                    ),
+                )
+            )
+
+    return results
+
+
 def lint(
     compiled_path: str = "flows/compiled.json",
     action_dir: str = "agent/actions",
@@ -1282,6 +1554,10 @@ def lint(
     results.extend(check_publish_consume_chains(flows))
     results.extend(check_precompute_context_declared(flows))
 
+    # Strategy 3c: Dead publishes (the design_gate_feedback class), and
+    # keys the flow layer declares nothing about but Python reads.
+    results.extend(check_dead_publishes(flows, actions.parent))
+
     # Strategy 3b: Path reachability of required context (stronger —
     # catches gaps where the publisher exists but isn't on the taken path)
     results.extend(check_path_reachability(flows))
@@ -1300,6 +1576,9 @@ def lint(
 
     # Strategy 8: Pydantic model drift (CUE fields vs Pydantic fields)
     results.extend(check_pydantic_model_drift(flows))
+
+    # Strategy 9: Prompt text that has drifted out of the prompts/ store
+    results.extend(check_prompt_text_in_python(actions.parent))
 
     if not verbose:
         results = [r for r in results if r.level != "INFO"]
