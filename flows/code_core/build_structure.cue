@@ -8,12 +8,23 @@
 // same syntax/import/lint + data parse-validity checks serial mode
 // uses, and complete the structural goals that pass.
 //
-// Failure containment, not retry: files the model omitted (or a
-// token-ceiling truncation cut off) stay missing — mission_control's
-// structural sweep creates them serially. Files that fail their gate
-// keep an incomplete goal carrying a failed report — the sweep routes
-// them to repair (diagnose-first in parallel mode). The batch itself
-// never re-runs wholesale; its summary note is the attempted-flag.
+// Failure is a LADDER, not a cliff (operator, 2026-08-05). This flow
+// used to contain failure without ever retrying — "the batch itself
+// never re-runs wholesale" — and the 13-arm GUARDIAN batch showed what
+// that cost: the only two arms whose batch turn collapsed produced the
+// two worst artifacts in the field, because serial creation authors
+// every file alone, blind to its siblings. hy3 is the clean case — the
+// same config generated 6/6 files as a contemplator (judged 47/47) and
+// 1/6 as a grinder, neither truncated. One bad roll, unrecoverable.
+//
+//   rung 1  substantially complete -> keep it, serial the remainder
+//   rung 2  cheap and short        -> RESAMPLE the batch (<= 2 retries)
+//   rung 3  neither                -> serial, and now it MEANS something
+//
+// Rung 2 discards its attempt BEFORE writing, so a resample can never
+// splice two independent generations into one tree. Files that fail
+// their gate keep an incomplete goal carrying a failed report — the
+// sweep routes them to repair (diagnose-first in parallel mode).
 //
 // Dispatched from mission_control (dispatch_batch_create) with
 // last_goal_id deliberately empty: this flow books per-goal reports
@@ -105,11 +116,24 @@ build_structure: #FlowDefinition & {
 				// runaway capture keyed by request id, and completed FILE
 				// blocks slice out of it (bartowski 2026-08-02: 8/9 files
 				// discarded whole, rebuilt serially for nothing).
-				optional: ["inference_truncated", "inference_degenerate", "inference_request_id"]
+				//
+				// tokens_generated is LOAD-BEARING, not telemetry: rung 2 asks
+				// whether this attempt cost less than the serial fallback it
+				// would trigger, and _build_step_input filters context to what
+				// a step declares — undeclared, it reads 0 and every attempt
+				// looks free, so the batch would resample unconditionally.
+				optional: ["inference_truncated", "inference_degenerate", "inference_request_id",
+					"inference_tokens_generated"]
 			}
 			resolver: {
 				type: "rule"
 				rules: [
+					// RUNG 2. The action already applies the budget test and
+					// its own attempt cap; meta.attempt repeats the cap here
+					// as a HARD loop stop, so the cycle terminates even if
+					// that check ever regresses. Safe to re-enter: a
+					// resampled attempt wrote nothing.
+					{condition: "result.retry_batch == true and meta.attempt < 3", transition: "generate_all_files"},
 					{condition: "result.files_written > 0", transition: "lookup_env"},
 					// Nothing written (empty/unsliceable response) — record
 					// the attempt so the sweep falls back to serial.

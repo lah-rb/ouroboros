@@ -381,7 +381,8 @@
           "optional": [
             "inference_truncated",
             "inference_degenerate",
-            "inference_request_id"
+            "inference_request_id",
+            "inference_tokens_generated"
           ]
         },
         "params": {},
@@ -389,6 +390,10 @@
         "resolver": {
           "type": "rule",
           "rules": [
+            {
+              "condition": "result.retry_batch == true and meta.attempt < 3",
+              "transition": "generate_all_files"
+            },
             {
               "condition": "result.files_written > 0",
               "transition": "lookup_env"

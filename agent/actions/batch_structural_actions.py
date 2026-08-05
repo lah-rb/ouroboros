@@ -11,11 +11,14 @@ module takes over deterministically:
   apply_batch_results     — per-goal DirectiveReports, complete goals
                             that pass the same gate serial mode uses
 
-Files the model omitted (or that a token-ceiling truncation cut off)
-simply stay missing: the structural sweep's existing needs_create path
-creates them serially. Files that fail their gate keep their goal
-incomplete with a failed report; the sweep routes them to repair.
-Goals are never created or destroyed here — only reported on.
+Files the model omitted no longer simply stay missing. A short generation
+climbs the fallback LADDER (see BATCH_MAX_ATTEMPTS below): keep a
+substantially complete batch, resample a cheap short one, and only then
+fall through to serial creation — so reaching serial is itself a signal
+about the model rather than the routine cost of one bad sampling roll.
+Files that fail their gate keep their goal incomplete with a failed
+report; the sweep routes them to repair. Goals are never created or
+destroyed here — only reported on.
 """
 
 from __future__ import annotations
@@ -41,6 +44,110 @@ logger = logging.getLogger(__name__)
 # Extensions with no checkable content (mirrors pipeline _SKIP semantics
 # for things like README.md a blueprint may legitimately include).
 _UNCHECKED_NOTE = "no checker for this extension — accepted as written"
+
+# ── INCREMENTAL BATCH FALLBACK (operator, 2026-08-05) ─────────────────
+# A short generation used to fall STRAIGHT through to serial creation, and
+# serial is where cross-file seam bugs are born — the files are authored
+# alone, each blind to its siblings.
+#
+# Measured on the 13-arm GUARDIAN batch: the only two arms whose batch turn
+# collapsed (hy3[g] 1/6 files at 700 tokens, glm-4.7-flash 3/8 at 3,521)
+# produced the two WORST artifacts in the field — 38/47 and 30/47, both
+# losses, both with no win path anywhere in the tree. Every arm with an
+# intact batch turn scored 37-47 and took 7 of the 10 wins. hy3 is the
+# clean natural experiment: the SAME config, temperature and prompt
+# generated 7,843 tokens and 6/6 files as a contemplator (judged 47/47,
+# played to victory) and 700 tokens and 1/6 as a grinder, `truncated:
+# False` both times. One bad sampling roll, unrecoverable.
+#
+# So the fallback is now a ladder rather than a cliff:
+#   1. significantly complete -> accept the partial, serial the remainder
+#   2. cheap failed attempt   -> RESAMPLE the whole batch (<= 2 retries)
+#   3. neither                -> serial, which now MEANS something: a
+#      variable or struggling model, not one stray roll of the dice.
+BATCH_MAX_ATTEMPTS = 3  # one generation + two retries
+
+# "Significantly complete." qwen3-next salvaged 6/7 (86%) and placed
+# mid-field; the two collapses sat at 17% and 38%. Two thirds separates
+# them with room on either side.
+BATCH_COVERAGE_FLOOR = 2 / 3
+
+# "Cheap." A retry is worth taking when the failed attempt cost LESS than
+# the serial fallback it would otherwise trigger — so the comparison is
+# against real work avoided, not an absolute ceiling that would need
+# re-tuning per model. Serial cost is measured, not assumed: 33 `create`
+# generations across the 08-03/08-05 tier runs have a median of 2,332
+# tokens each (p25 1,150 / p75 3,702). 2,000 is that rounded DOWN, so the
+# estimate under-counts serial cost and the rule retries less eagerly than
+# the evidence would license.
+SERIAL_CREATE_TOKENS = 2000
+
+
+def _opt_int(v: Any) -> int | None:
+    """None stays None — see the unknown-cost rung in _batch_retry_verdict."""
+    return None if v is None else int(v)
+
+
+def _batch_retry_verdict(
+    *,
+    resolved: int,
+    declared: int,
+    missing: int,
+    tokens: int | None,
+    attempt: int,
+    truncated: bool,
+    salvaged: bool,
+) -> tuple[bool, str]:
+    """Which rung of the fallback ladder this batch attempt lands on.
+
+    Returns ``(should_retry, why)``. The reason is returned either way and
+    goes into the observations, the log line and the manifest, so a trace
+    can always say WHICH rung fired and why — the old code logged only
+    that serial had been chosen, never that it was the last resort.
+    """
+    coverage = (resolved / declared) if declared else 0.0
+    pct = f"{resolved}/{declared} ({coverage:.0%})"
+
+    if coverage >= BATCH_COVERAGE_FLOOR:
+        return False, f"batch is substantially complete at {pct} — keeping it"
+    # A ceiling-bound generation will hit the same ceiling on a resample;
+    # only a model that stopped SHORT of its budget is worth re-rolling.
+    if truncated:
+        return (
+            False,
+            f"{pct} but the generation was TRUNCATED — a resample truncates too",
+        )
+    # A degenerate abort already consumed its second chance on the salvage
+    # path; re-rolling a model mid-orbit throws good tokens after bad.
+    if salvaged:
+        return False, f"{pct} from a salvaged abort — already the recovery rung"
+    if attempt >= BATCH_MAX_ATTEMPTS:
+        return False, f"{pct} after {attempt} attempts — retries exhausted"
+
+    # UNKNOWN COST IS NOT CHEAP. `tokens is None` means the step never
+    # received a measurement — the context key was not declared, not
+    # published, or the caller is a harness that does not model it. A
+    # missing measurement must not read as a free attempt, or the budget
+    # test degrades into "always retry" exactly where it stops protecting
+    # anything. A measured 0 (an empty generation) is a real, and very
+    # cheap, number and does license a resample.
+    if tokens is None:
+        return (
+            False,
+            f"{pct} but the attempt's token cost is unknown — not resampling blind",
+        )
+
+    serial_cost = missing * SERIAL_CREATE_TOKENS
+    if tokens > serial_cost:
+        return False, (
+            f"{pct} but the attempt cost {tokens} tokens against ~{serial_cost} "
+            f"for serial ({missing} files) — a resample is the more expensive path"
+        )
+    return True, (
+        f"{pct} at only {tokens} tokens, under the ~{serial_cost} a serial "
+        f"fallback for {missing} files would cost — resampling the batch "
+        f"(attempt {attempt + 1} of {BATCH_MAX_ATTEMPTS})"
+    )
 
 
 def _normalize_path(path: str) -> str:
@@ -632,8 +739,34 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
                 capture.get("elided_bytes", 0),
             )
     if not effects or not raw or not declared:
+        # An empty response against a real blueprint is the CHEAPEST possible
+        # failed attempt (zero coverage, near-zero tokens), so it is the
+        # strongest resample candidate there is — route it through the same
+        # ladder rather than dropping straight to serial. `not effects` and
+        # `not declared` are unrecoverable here and fall through unchanged.
+        if effects and declared:
+            retry_empty, rung_empty = _batch_retry_verdict(
+                resolved=0,
+                declared=len(declared),
+                missing=len(declared),
+                tokens=_opt_int(ctx.get("inference_tokens_generated")),
+                attempt=step_input.meta.attempt if step_input.meta else 1,
+                truncated=truncated,
+                salvaged=salvaged,
+            )
+            if retry_empty:
+                logger.warning("🎲 batch resample: empty response — %s", rung_empty)
+                return StepOutput(
+                    result={
+                        "files_written": 0,
+                        "wrote_any": False,
+                        "retry_batch": True,
+                    },
+                    observations=f"Batch attempt produced no usable text — {rung_empty}",
+                    context_updates={},
+                )
         return StepOutput(
-            result={"files_written": 0, "wrote_any": False},
+            result={"files_written": 0, "wrote_any": False, "retry_batch": False},
             observations="No effects, response, or architecture manifest — nothing to write",
             context_updates={
                 "batch_manifest": {
@@ -693,26 +826,68 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
                 severed_path,
             )
 
-    written: list[str] = []
+    # RESOLUTION PASS — work out what this generation covers WITHOUT writing
+    # anything. The resample rung has to be able to abandon an attempt
+    # cleanly, and it can only do that if coverage is known before bytes
+    # land on disk. Writing first and deleting on retry could destroy a
+    # brownfield file the batch legitimately overwrote; writing first and
+    # leaving them would splice two independent generations into one tree,
+    # which is precisely the incoherence the batch path exists to prevent.
+    resolved: list[tuple[str, str]] = []
+    claimed: set[str] = set()
     extra: list[str] = []
     for path, content in blocks:
         norm = _normalize_path(path)
         target = norm if norm in declared_set else ""
         if not target:
-            # Basename rescue: unique match against a still-missing file.
+            # Basename rescue: unique match against a still-unclaimed file.
             base = norm.rsplit("/", 1)[-1]
             candidates = [
-                d for d in declared if d.rsplit("/", 1)[-1] == base and d not in written
+                d for d in declared if d.rsplit("/", 1)[-1] == base and d not in claimed
             ]
             if len(candidates) == 1:
                 target = candidates[0]
                 logger.info(
                     "Batch slice: accepting %r under declared path %r", path, target
                 )
-        if not target or target in written:
+        if not target or target in claimed:
             if norm not in declared_set:
                 extra.append(norm)
             continue
+        claimed.add(target)
+        resolved.append((target, content))
+
+    # The verdict is taken on what the generation COVERS, before any write.
+    # A file the write guard later rejects (stub over an existing file, a
+    # data file that does not parse) therefore lands in `missing` without
+    # re-opening the resample question — deliberately. Re-deciding after
+    # writes would mean deciding with files already on disk, which is the
+    # merge this whole rung exists to avoid; guard rejections are content
+    # faults and the serial repair path is the right owner for them.
+    attempt = step_input.meta.attempt if step_input.meta else 1
+    should_retry, rung = _batch_retry_verdict(
+        resolved=len(resolved),
+        declared=len(declared),
+        missing=len(declared) - len(resolved),
+        tokens=_opt_int(ctx.get("inference_tokens_generated")),
+        attempt=attempt,
+        truncated=truncated,
+        salvaged=salvaged,
+    )
+    if should_retry:
+        logger.warning("🎲 batch resample: %s", rung)
+        return StepOutput(
+            result={"files_written": 0, "wrote_any": False, "retry_batch": True},
+            observations=f"Batch attempt discarded before writing — {rung}",
+            # Deliberately publishes nothing: this attempt never existed as
+            # far as the tree is concerned, and the resample's own slice
+            # sets the manifest for real.
+            context_updates={},
+        )
+
+    # WRITE PASS — this attempt is the one we are keeping.
+    written: list[str] = []
+    for target, content in resolved:
         written_ok, err = await guarded_write_file(effects, target, content)
         if written_ok:
             written.append(target)
@@ -742,6 +917,12 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
         "truncated": truncated,
         "salvaged": salvaged,
         "deliberation_chars": deliberation_chars,
+        # Which rung of the fallback ladder this batch landed on, and after
+        # how many generations. Serial fallback is only interpretable as a
+        # model signal if the record says the cheap retries were TRIED and
+        # declined — without this, rung 3 and "never had a rung" look alike.
+        "attempts": attempt,
+        "fallback_rung": rung,
     }
     obs = (
         f"Batch slice: wrote {len(written)}/{len(declared)} declared files"
@@ -759,9 +940,17 @@ async def action_slice_batch_files(step_input: StepInput) -> StepOutput:
         )
     )
     logger.info(obs)
+    if missing:
+        # Say WHY serial was chosen, at the moment it is chosen. The whole
+        # point of the ladder is that reaching serial is now informative.
+        logger.warning("🪜 batch fallback rung: %s", rung)
     return StepOutput(
-        result={"files_written": len(written), "wrote_any": bool(written)},
-        observations=obs,
+        result={
+            "files_written": len(written),
+            "wrote_any": bool(written),
+            "retry_batch": False,
+        },
+        observations=obs + (f" — {rung}" if missing else ""),
         context_updates={
             "batch_manifest": manifest,
             "files_changed": written,
@@ -1026,17 +1215,29 @@ async def action_apply_batch_results(step_input: StepInput) -> StepOutput:
         elif not passed:
             failed_files.append(file_path)
 
+    attempts = int(manifest.get("attempts") or 1)
     summary = (
         f"Batch structural creation: {len(written)} files written, "
         f"{completed} goals completed, {len(failed_files)} failed gates"
         + (f", {len(missing)} missing (serial fallback)" if missing else "")
         + (f", {len(extra)} undeclared blocks skipped" if extra else "")
+        # After a resample, "1 files written" alone would read as one bad
+        # roll when it is actually the model's THIRD identical answer — the
+        # difference between a fluke and a verdict about the model.
+        + (f", after {attempts} batch attempts" if attempts > 1 else "")
         + (
             ", SALVAGED from aborted generation"
             if manifest.get("salvaged")
             else (", generation truncated" if truncated else "")
         )
         + (f". Generation cost: {tokens} tokens." if tokens else ".")
+        # .get, not []: a manifest can arrive from a mission persisted before
+        # the ladder existed, or from a caller that builds one by hand.
+        + (
+            f" Fallback rung: {manifest['fallback_rung']}."
+            if missing and manifest.get("fallback_rung")
+            else ""
+        )
     )
     # LOG IT, not just note it. This summary is the only place that says whether
     # a batch DELIVERED, and until 2026-07-29 it existed solely in mission.json
