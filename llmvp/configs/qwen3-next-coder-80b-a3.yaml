@@ -301,6 +301,66 @@ tier:
 
       FAMILY: the qwen hybrid architecture makes advanced features — cache strategies, instance swarming — markedly harder to adapt than a plain transformer. Applies to every qwen arm.
 
+  # ── SAME-MODEL VARIABILITY FLIGHT, 2026-08-05 ──────────────────────
+  # Not a placement. The v2 entry above stands; this is a three-artifact
+  # comparison of THIS model against itself, to pick the best artifact and
+  # measure how much its runs vary.
+  variability_2026_08_05:
+    instrument: dev/blind_panel/SINGLE_MODEL_FLIGHT_PROMPT.md
+    rubric: TIER_RUBRIC v2.1
+    blind_root: qwen3next_variability_20260805-123200
+    judge: "claude-opus-5 (blind subagent)"
+    # SINGLE JUDGE — order is provisional, no cross-judge convergence.
+    # METHODS §3 requires three; one is legitimate for a same-model
+    # variability read but MUST NOT be promoted into a ladder placement.
+    panel: single_judge
+    artifacts:
+      - {label: gamma, run: tier_20260805-092309, staged: staged/arm01,
+         rank: 1, cycles: 57, minutes: 120, goals: "18/35",
+         conformance: "42/47 NEAR-FULL"}
+      - {label: alpha, run: tier_20260802-043526, staged: staged/arm02,
+         rank: 2, cycles: 111, minutes: 124, goals: "13/29",
+         conformance: "36/47 SIGNIFICANTLY-DEVIATED"}
+      - {label: beta, run: tier_20260804-141701, staged: staged/arm02,
+         rank: 3, cycles: 29, minutes: 121, goals: "8/29",
+         conformance: "37/47 SIGNIFICANTLY-DEVIATED"}
+    panel_a_order: "gamma > alpha > beta (firsts 3/1/0)"
+    panel_b_order: "gamma > beta > alpha (firsts 5/1/0)"
+    overall: "gamma > alpha > beta — no panel split; SELF-FLAG CLOSE alpha/beta"
+    best_artifact: tier_20260805-092309/staged/arm01
+    all_three_unwinnable: true
+    finding: >
+      EVERY arm was stopped by a cross-module seam bug — an identifier or
+      contract mismatch between two files each internally reasonable. What
+      separates them is DEPTH IN THE DEPENDENCY CHAIN, not ambition:
+      gamma's sits at the leaf (main.py calls engine.handle_combat_input,
+      which does not exist; the real method is _handle_combat_command), so
+      a genuine two-phase boss with weakness double-damage and armour
+      mitigation sits FINISHED behind it. alpha's are mid-chain (a dead
+      244-line commands.py imported by nothing, a loader that never
+      populates the `monsters` key the engine reads) plus a world graph
+      authored in two disconnected components. beta's is at the ROOT — its
+      loader returns raw dicts where every consumer does attribute access —
+      so it dies before the first prompt and answers zero commands ever.
+    cycles_do_not_predict_quality: >
+      alpha ran 111 cycles, nearly TWICE gamma's 57, and produced the worse
+      artifact. All three authored exactly 11 files in ~120 minutes. So
+      neither cycle count nor file count tracks the panel here; goal
+      fraction happened to (0.51 / 0.45 / 0.28, the ranking order) but
+      METHODS §"Why blind play" documents counters INVERTING against play,
+      so one agreeing flight is a datapoint, not a vindication.
+    evidence_of_run_shape: >
+      Each artifact shipped a tell the judge read independently, and they
+      line up with the depth finding. beta ships loader_backup.py — the
+      OLDER, contract-correct version of the file that breaks it — reading
+      as a refactor that regressed the return type and was never
+      re-verified end to end. gamma ships a save.json, a runtime artifact
+      that can only exist because the program was actually RUN (the packet
+      builder flagged it as contemporaneous with the sources, i.e. the
+      model's own, not smoke residue). alpha ships a fully written,
+      never-imported commands.py — an abandoned design direction neither
+      wired up nor removed.
+
 # ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260730-qwen3next) ─
 # The compatibility test the config's resident claim had never had. Depth 16,
 # ~900 tok/turn — the same workload as the Block A-F cells, so these numbers
