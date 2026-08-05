@@ -147,8 +147,42 @@ def stage_one(src: Path, dest: Path) -> None:
                 p.unlink(missing_ok=True)
 
 
-def scan(root: Path) -> list[tuple[str, str, str]]:
-    """Grep surviving text files for arm-identifying strings."""
+_MODEL_PAT = re.compile("|".join(re.escape(t) for t in MODEL_IDENTIFIERS), re.I)
+
+
+def _is_blocking(text: str, m: re.Match) -> bool:
+    """Does this hit compromise the blinding, or is it a stem inside a word?
+
+    Model identifiers are short FAMILY STEMS, deliberately matched as
+    substrings so `qwen` catches `qwen3.6-27b` and `gpt-oss` catches
+    `gpt-oss-120b-a5`. Word boundaries would break exactly that — `\\bqwen\\b`
+    does not match `qwen3`, which is most of the roster.
+
+    What separates a model name from English prose is the NEXT character. A
+    real leak continues with a separator or a digit (`reap-200b`, `qwen3`,
+    `glm-4.7`) or ends; an accident continues with more letters, because the
+    stem is buried in an ordinary word. The v2.0 Frontier anchor blocked all
+    five 2026-08-05 face-offs on `reap` inside "reapplied", in a docstring,
+    in an anchor that is CONSTANT across every flight and so discriminates
+    nothing.
+
+    Demoted, never dropped: this only decides blocking vs advisory, so the
+    hit is still printed and still gets a human look.
+    """
+    if not _MODEL_PAT.fullmatch(m.group(0)):
+        return False  # framework/judge name — in every arm, identifies nothing
+    tail = text[m.end() : m.end() + 1]
+    return not tail.isalpha()
+
+
+def scan(root: Path) -> list[tuple[str, str, str, bool]]:
+    """Grep surviving text files for arm-identifying strings.
+
+    Returns (path, line, matched, blocking). At most one BLOCKING and one
+    advisory hit per file — enough to warrant a look, while never letting an
+    advisory hit mask a real leak further down the same file (the old
+    unconditional `break` did exactly that).
+    """
     found = []
     pat = re.compile("|".join(re.escape(s) for s in IDENTIFIERS), re.I)
     for p in root.rglob("*"):
@@ -158,10 +192,17 @@ def scan(root: Path) -> list[tuple[str, str, str]]:
             text = p.read_text(errors="ignore")
         except Exception:  # noqa: BLE001 — binary/unreadable is not a leak vector
             continue
+        seen_blocking = seen_advisory = False
         for m in pat.finditer(text):
+            blocking = _is_blocking(text, m)
+            if blocking and seen_blocking or not blocking and seen_advisory:
+                continue
             line = text[: m.start()].count("\n") + 1
-            found.append((str(p.relative_to(root)), str(line), m.group(0)))
-            break  # one hit per file is enough to warrant a look
+            found.append((str(p.relative_to(root)), str(line), m.group(0), blocking))
+            seen_blocking |= blocking
+            seen_advisory |= not blocking
+            if seen_blocking and seen_advisory:
+                break
     return found
 
 
@@ -199,16 +240,16 @@ def main() -> None:
     )
 
     print(f"staged {len(runs)} arms -> {out}")
-    model_pat = re.compile("|".join(re.escape(t) for t in MODEL_IDENTIFIERS), re.I)
     leaks, advisory = [], []
     for label in labels:
-        for f, line, s in scan(out / label):
+        for f, line, s, blocking in scan(out / label):
             entry = f"  {label}/{f}:{line}  contains {s!r}"
-            (leaks if model_pat.search(s) else advisory).append(entry)
+            (leaks if blocking else advisory).append(entry)
     if advisory:
         print(
-            "\n   advisory (framework/judge names — present in every arm, "
-            "so they identify nothing; not a leak):"
+            "\n   advisory (framework/judge names, and family stems buried in "
+            "ordinary words — present in every arm or not a name at all, so "
+            "they identify nothing; not a leak):"
         )
         print("\n".join(advisory))
     if leaks:
