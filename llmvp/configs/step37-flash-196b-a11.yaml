@@ -160,7 +160,25 @@ tier:
   # move this config to contemplator. That way the arm is not wasted: it
   # becomes a complete contemplator artifact rather than a truncated
   # grinder one.
-  league: grinder  # see dev/blind_panel/LADDER.md
+  # IT FELL SHORT, AS PREDICTED — 15 cycles / 152 min = 5.9 cyc/h, the
+  # fleet's lowest, half a contemplator budget. Moved to contemplator
+  # 2026-08-04 per the protocol above.
+  # THE RESUME LEG OF THAT PROTOCOL WAS NOT AVAILABLE: `tier resume` picks
+  # up a PAUSED batch, and the chain had already finished cleanly, so
+  # cycles_consumed=15 could not be carried into a continuation. Re-run
+  # fresh at 30 cycles instead. No loss — the grinder artifact was clean
+  # (it ran entirely after the bf78236 slicer fix), just short.
+  # THAT WALL-BOUND PREDICTION WAS WRONG — corrected 2026-08-05. The
+  # contemplator re-run (tier_20260804-141701) completed all 30 cycles in
+  # 173 min = 10.4 cyc/h, comfortably inside the 4h wall. No per-league
+  # rate-scaled wall is needed on this model's account.
+  # THE REAL FINDING IS THE VARIANCE: 5.9 cyc/h then 10.4 cyc/h on an
+  # unchanged config — a 1.8x run-to-run swing. A single arm's cyc/h is
+  # therefore NOT a sound basis for a league assignment; both observations
+  # land contemplator, which is why the placement holds regardless, but
+  # any future borderline call on this fleet needs two arms before it is
+  # trusted.
+  league: contemplator
   status: recorded
   rubric: TIER_RUBRIC v1.2
   stars: 4                  # 61-80 band; 62/100

@@ -191,7 +191,21 @@ tier:
   # this is a boundary case, not a clear grinder. Assigned GRINDER on
   # throughput; confirm from the first run's measured cyc/h and move it if
   # this model's deep per-cycle reasoning drags the rate under ~20 cyc/h.
-  league: grinder
+  # CONFIRMED CONTEMPLATOR 2026-08-04, exactly as the "move it if" clause
+  # above anticipated: the first run measured 22 cycles / 132 min =
+  # 10.0 cyc/h, half the ~20 cyc/h threshold. Decode speed did not predict
+  # the cycle rate — 21.2 tok/s is grinder-class throughput, but this
+  # model spends it on deep per-cycle reasoning rather than more cycles.
+  # 30 cycles at this rate needs ~3h, inside the 4h contemplator wall.
+  league: contemplator
+  # CONTEMPLATOR RE-RUN LANDED 2026-08-05 (tier_20260804-141701): 29 cycles
+  # / 160 min = 10.9 cyc/h — the league call confirmed a second time, and
+  # inside the 4h wall. 15 files (8 py-ok), ZERO degenerations, and the
+  # wave's best goal ratio at 16/19.
+  # THE HARD-MODE HANDICAP IS GONE, and not because the fallback caught it:
+  # the run needed ZERO unfenced recoveries and ZERO serial demotions. It
+  # emitted properly fenced batches natively. So this artifact is the
+  # model's real level, not a floor — supersedes the discarded arm below.
   status: not_yet_run
   # ⚠️ THE FIRST RUN IS A HARD-MODE TEST, NOT THIS MODEL'S CEILING
   # (operator, 2026-08-03; run tier_20260803-151411).

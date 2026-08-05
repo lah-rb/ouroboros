@@ -140,6 +140,32 @@ generation:
   top_p: 0.95
   top_k: 64
   min_p: 0.0
+  # WAS ABSENT (inheriting formats/schema.py's 1.0), so this model has run
+  # vendor-neutral for its whole history — same as the sibling 31b's
+  # explicit 1.0. The absence was never a bug; this line makes it a choice.
+  #
+  # IT DNF'd 2026-08-04 (tier_20260804-141701 arm 1): three consecutive
+  # `design_initial` attempts died on long-cycle orbit — 16,384 then 6,144
+  # tokens, ratios 0.054/0.095/0.038 — and the arm terminated after ZERO
+  # cycles with zero files. Not a dial fault and not a format fault: the
+  # captures show it opening its proper `<|channel>thought` head and
+  # planning correctly, then looping its module list (entities/world/
+  # parser/combat/state/engine/main, over and over) until the guard fired.
+  # A clean model-level orbit, of the class where temperature floors are
+  # known not to help.
+  #
+  # 1.05 IS THE OPERATOR'S OWN PRE-AUTHORIZED LEVER, extended here from
+  # gemma-4-31b.yaml where it reads: "IF IT RECURS, bump this a tad — 1.05
+  # first, 1.10 if that does not hold (operator, 2026-07-31)." That note
+  # was written about 31b; applying it to the 26b sibling is an EXTENSION,
+  # made because vendor guidance itself calls a penalty remedial once
+  # repetition is actually observed, and it now has been, hard.
+  # ⚠️ THIS CHANGES MEASUREMENT CONDITIONS. Any artifact from the re-run is
+  # scored under a remedial penalty the rest of the fleet does not carry,
+  # and must be read that way. If 1.05 does not hold, go to 1.10; if that
+  # fails too, the honest record is DNF-under-vendor-sampling rather than a
+  # third bump.
+  repeat_penalty: 1.05
   repetition_guard_enabled: null
   long_cycle_guard_enabled: null
 
