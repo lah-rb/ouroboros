@@ -262,3 +262,53 @@ class TestPersonaIsAPromptName:
         )
         res = check_prompt_text_in_python(tmp_path)
         assert [r.check for r in res] == ["prompt_text_in_python"]
+
+
+class TestRuntimeOwnedTurnsCarryNoResolver:
+    """A resolver on a runtime-owned turn step is dead code that reads as
+    load-bearing.
+
+    runtime.py:552-556: a turn step with action == "inference" routes from
+    `turn.transitions` and NEVER consults `step.resolver`. When the action
+    is a wrapper instead, the dispatch inverts and the resolver is the live
+    path. add_symbol.generate_new_symbol carried a resolver whose rules
+    exactly mirrored its transitions, so it looked correct and never ran —
+    the last lint warning in the tree.
+    """
+
+    def _compiled(self):
+        import json
+
+        return json.loads(
+            (Path(__file__).resolve().parent.parent / "flows" / "compiled.json").read_text()
+        )
+
+    def test_no_inference_turn_step_declares_a_resolver(self):
+        offenders = []
+        for flow_name, flow in self._compiled().items():
+            if not isinstance(flow, dict):
+                continue
+            for step_name, step in (flow.get("steps") or {}).items():
+                if not isinstance(step, dict) or not step.get("turn"):
+                    continue
+                if step.get("action") != "inference":
+                    continue  # wrapper-driven: the resolver IS the live path
+                if (step.get("resolver") or {}).get("rules"):
+                    offenders.append(f"{flow_name}.{step_name}")
+        assert not offenders, (
+            f"dead resolvers on runtime-owned turn steps: {offenders} — "
+            f"turn.transitions decides; these rules never execute"
+        )
+
+    def test_wrapper_driven_turn_steps_keep_theirs(self):
+        """The other half of the rule — deleting these would break routing."""
+        compiled = self._compiled()
+        for flow_name, step_name in (
+            ("patch", "rewrite_symbol"),
+            ("patch", "capture_bail_reason"),
+        ):
+            step = compiled[flow_name]["steps"][step_name]
+            assert step["action"] != "inference"
+            assert (step.get("resolver") or {}).get(
+                "rules"
+            ), f"{flow_name}.{step_name} lost the resolver its routing depends on"

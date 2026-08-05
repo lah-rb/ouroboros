@@ -145,19 +145,6 @@
           }
         ],
         "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "result.text != ''",
-              "transition": "insert_and_write"
-            },
-            {
-              "condition": "true",
-              "transition": "failed"
-            }
-          ]
-        },
         "publishes": [
           "inference_response"
         ],

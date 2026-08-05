@@ -118,13 +118,16 @@ add_symbol: #FlowDefinition & {
 						highlight_symbol: {$ref: "input.target_symbol"}
 					}},
 			]
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.text != ''", transition: "insert_and_write"},
-					{condition: "true", transition:              "failed"},
-				]
-			}
+			// NO resolver. This is a turn step with action "inference", so
+			// the runtime owns the turn and routes from turn.transitions
+			// above (runtime.py:552-556) — step.resolver is never consulted.
+			// It carried one until 2026-08-05 whose rules exactly MIRRORED
+			// those transitions (result.text != '' -> insert_and_write ==
+			// default; true -> failed == no_answer), which is why a dead
+			// block read as load-bearing for so long. The two turn steps
+			// that legitimately keep a resolver (patch.rewrite_symbol,
+			// patch.capture_bail_reason) have WRAPPER actions, where the
+			// dispatch rule inverts and the resolver is the live path.
 			publishes: ["inference_response"]
 		}
 
