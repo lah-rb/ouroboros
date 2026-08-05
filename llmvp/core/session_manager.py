@@ -302,6 +302,28 @@ class SessionManager:
         static_toks = getattr(self._backend, "_resident_static_tokens", None) or []
         glob = int(getattr(self._backend, "_resident_static_len", 0) or 0)
         prefix = session.flow_static_prefix or ""
+
+        # PROBE ONLY — reports, never repairs (operator, 2026-08-05).
+        #
+        # The stateless path strips a duplicated head (inference.py:399) but
+        # this one has no such guard, and four agent-side callers pass
+        # static_prefix=PERSONA *and* queue that same persona at the head of
+        # their seed injection (diagnosis_session_actions, router_actions,
+        # escalation_actions, interactive_actions). On a flow-fork server the
+        # persona then lands in the token stream TWICE; on a plain server it
+        # lands once, because start_session ignores static_prefix. Stripping
+        # here would silently change model input for four flows mid-campaign,
+        # so this only makes the condition visible enough to measure.
+        if prefix and prompt.startswith(prefix):
+            log.warning(
+                "🧩 flow static_prefix DUPLICATED at the head of turn 0 "
+                "(%d chars, flow_key=%s) — NOT stripping, unlike the "
+                "stateless path. The caller is passing static_prefix AND "
+                "seeding the same text; the model reads the persona twice.",
+                len(prefix),
+                session.flow_key,
+            )
+
         dynamic_full = build_full_prompt(prefix + prompt, tokenizer)
         n = len(flow_head_tokens(prefix, tokenizer, confirm_with=dynamic_full))
         if n <= 0:
