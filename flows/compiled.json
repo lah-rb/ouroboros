@@ -9193,7 +9193,9 @@
           "optional": [
             "frame_text",
             "module_directive",
-            "flow_directive"
+            "flow_directive",
+            "change_spec",
+            "root_cause"
           ]
         },
         "params": {},

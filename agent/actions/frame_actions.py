@@ -329,6 +329,27 @@ def _frame_lang(file_path: str) -> tuple[str, str]:
 _FRAME_INSTRUCTION = load_prompt_text("patch_module/frame_instruction")
 
 
+def _frame_evidence(root_cause: str, change_spec: str) -> str:
+    """The diagnosis behind a module fix, as a prompt block.
+
+    file_ops.run_module_frame_edit has always passed `change_spec` and
+    `root_cause` into patch_module, and patch_module read NEITHER — the
+    frame editor worked from `module_directive` alone, which names the
+    literal line to write but not why. Caps mirror the ones LOCALIZE_PROMPT
+    applies to the same fields (:517-520); an empty return leaves the
+    prompt byte-identical to the pre-wiring version for any fix that
+    carried no diagnosis.
+    """
+    lines = []
+    if root_cause.strip():
+        lines.append(f"  Root cause: {root_cause.strip()[:600]}")
+    if change_spec.strip():
+        lines.append(f"  Required change: {change_spec.strip()[:600]}")
+    if not lines:
+        return ""
+    return "\nThe diagnosis that led here:\n" + "\n".join(lines) + "\n"
+
+
 async def action_rewrite_frame_turn(step_input: StepInput) -> StepOutput:
     """Single inference turn: the model edits the frame per the directive."""
     effects = step_input.effects
@@ -337,9 +358,16 @@ async def action_rewrite_frame_turn(step_input: StepInput) -> StepOutput:
     directive = _ctx(step_input, "module_directive") or _ctx(
         step_input, "flow_directive"
     )
+    evidence = _frame_evidence(
+        _ctx(step_input, "root_cause"), _ctx(step_input, "change_spec")
+    )
     label, fence = _frame_lang(file_path)
     prompt = _FRAME_INSTRUCTION.format(
-        label=label, fence=fence, directive=directive, frame=frame_text
+        label=label,
+        fence=fence,
+        directive=directive,
+        frame=frame_text,
+        evidence=evidence,
     )
 
     model_frame = ""

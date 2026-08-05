@@ -1,7 +1,7 @@
 id: patch_module/frame_instruction
 content: |-
   You are editing the FRAME of a {label} — the top-level code OUTSIDE any function/class body. {directive}
-
+  {evidence}
   Rules:
   - Edit ONLY top-level code: the file header/shebang, imports or includes, top-level statements, and any entry-point block. Do NOT touch function or class bodies.
   - Lines containing the `⟦OUROBOROS-SYMBOL ...⟧` placeholder stand in for function/class bodies that are preserved elsewhere. Keep each such line EXACTLY as-is — do not edit, remove, reorder, or add them.

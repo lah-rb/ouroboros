@@ -67,7 +67,14 @@ patch_module: #FlowDefinition & {
 		rewrite_frame: #StepDefinition & {
 			action:      "rewrite_frame_turn"
 			description: "Model edits the module frame (single inference turn)"
-			context: optional: ["frame_text", "module_directive", "flow_directive"]
+			// change_spec + root_cause: file_ops.run_module_frame_edit has
+			// always passed these in and patch_module read NEITHER, so the
+			// frame editor worked from module_directive alone — the literal
+			// line to write, without the diagnosis that motivated it.
+			context: optional: [
+				"frame_text", "module_directive", "flow_directive",
+				"change_spec", "root_cause",
+			]
 			resolver: {
 				type: "rule"
 				rules: [

@@ -139,12 +139,18 @@ MIGRATED = [
         553,
         "6a95ba6633",
     ),
+    # Re-frozen 2026-08-05: gained an {evidence} slot so the frame editor
+    # finally sees the change_spec + root_cause file_ops had always passed
+    # into patch_module. A DELIBERATE edit — the guard fired on it, which
+    # is the guard working. Was 563 chars / 0775a613d8. This prompt is not
+    # a static_prefix site (run_inference, no flow_key), so the hash is
+    # drift protection only and no KV pin moved.
     (
         "patch_module/frame_instruction",
         "frame_actions",
         "_FRAME_INSTRUCTION",
-        563,
-        "0775a613d8",
+        573,
+        "c12f0099b7",
     ),
     ("file_ops/localize", "frame_actions", "LOCALIZE_PROMPT", 822, "6cb436ae67"),
     ("data_patch/translate", "data_ops_actions", "DATA_OPS_PROMPT", 1201, "bf2e057d88"),
