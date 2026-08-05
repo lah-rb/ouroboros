@@ -247,7 +247,7 @@ build_structure_contracted: #FlowDefinition & {
 					{condition: "true", transition: "run_set_env"},
 				]
 			}
-			publishes: ["validation_commands"]
+			publishes: []
 		}
 
 		run_set_env: #StepDefinition & {
@@ -284,7 +284,7 @@ build_structure_contracted: #FlowDefinition & {
 					{condition: "true", transition: "run_type_check"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_results"]
+			publishes: ["batch_check_results"]
 		}
 
 		// Cross-module interface check — same net as build_structure's tail

@@ -142,7 +142,12 @@ add_symbol: #FlowDefinition & {
 					{condition: "true", transition:                     "report_failure"},
 				]
 			}
-			publishes: ["files_changed", "edit_summary", "file_content_updated"]
+			// NOT declared: `file_content_updated`. The action still emits it,
+			// but nothing here or downstream can read it — file_ops.cue:200-214
+			// documents that the sub-flow's updated content DELIBERATELY does
+			// not propagate (reread_after_module_fix exists because of it), and
+			// sub-flows get a fresh accumulator anyway (runtime.py:279).
+			publishes: ["files_changed", "edit_summary"]
 		}
 
 		// ── Terminal reporting ───────────────────────────────────

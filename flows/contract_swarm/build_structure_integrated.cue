@@ -363,7 +363,7 @@ build_structure_integrated: #FlowDefinition & {
 					{condition: "true", transition: "run_set_env"},
 				]
 			}
-			publishes: ["validation_commands"]
+			publishes: []
 		}
 
 		run_set_env: #StepDefinition & {
@@ -400,7 +400,7 @@ build_structure_integrated: #FlowDefinition & {
 					{condition: "true", transition: "run_doctests"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_results"]
+			publishes: ["batch_check_results"]
 		}
 
 		// The contract's doctests against the RECONCILED modules.

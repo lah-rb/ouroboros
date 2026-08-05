@@ -90,7 +90,10 @@ patch_module: #FlowDefinition & {
 					{condition: "true", transition:                          "report_failure"},
 				]
 			}
-			publishes: ["files_changed", "edit_summary", "file_content_updated"]
+			// NOT declared: `file_content_updated` — see add_symbol.cue and the
+			// non-propagation note at file_ops.cue:200-214. The reader lives in
+			// `patch`, which publishes and declares it itself (patch.cue:231/154).
+			publishes: ["files_changed", "edit_summary"]
 		}
 
 		// ── Terminal reporting ───────────────────────────────────

@@ -141,7 +141,12 @@ build_structure: #FlowDefinition & {
 					{condition: "true", transition: "run_set_env"},
 				]
 			}
-			publishes: ["validation_commands"]
+			// NOT declared: `validation_commands`. The batch checks action reads
+			// the env config itself (batch_structural_actions.py:816) and builds a
+			// synthetic StepInput for it (:880) — the value never travels through
+			// flow context here. file_ops.run_checks is where it IS a real
+			// contract (file_ops.cue:464 -> :505).
+			publishes: []
 		}
 
 		run_set_env: #StepDefinition & {
@@ -180,7 +185,7 @@ build_structure: #FlowDefinition & {
 					{condition: "true", transition: "run_type_check"},
 				]
 			}
-			publishes: ["batch_check_results", "validation_results"]
+			publishes: ["batch_check_results"]
 		}
 
 		// Deterministic cross-module interface check (generalized from the

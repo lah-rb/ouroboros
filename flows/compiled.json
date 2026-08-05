@@ -196,8 +196,7 @@
         },
         "publishes": [
           "files_changed",
-          "edit_summary",
-          "file_content_updated"
+          "edit_summary"
         ],
         "effects": [],
         "terminal": false
@@ -457,9 +456,7 @@
             }
           ]
         },
-        "publishes": [
-          "validation_commands"
-        ],
+        "publishes": [],
         "effects": [],
         "terminal": false
       },
@@ -526,8 +523,7 @@
           ]
         },
         "publishes": [
-          "batch_check_results",
-          "validation_results"
+          "batch_check_results"
         ],
         "effects": [],
         "terminal": false
@@ -6122,8 +6118,7 @@
           ]
         },
         "publishes": [
-          "mission",
-          "architecture"
+          "mission"
         ],
         "effects": [],
         "terminal": false
@@ -9266,8 +9261,7 @@
         },
         "publishes": [
           "files_changed",
-          "edit_summary",
-          "file_content_updated"
+          "edit_summary"
         ],
         "effects": [],
         "terminal": false
@@ -13969,9 +13963,7 @@
             }
           ]
         },
-        "publishes": [
-          "validation_commands"
-        ],
+        "publishes": [],
         "effects": [],
         "terminal": false
       },
@@ -14038,8 +14030,7 @@
           ]
         },
         "publishes": [
-          "batch_check_results",
-          "validation_results"
+          "batch_check_results"
         ],
         "effects": [],
         "terminal": false
@@ -14653,9 +14644,7 @@
             }
           ]
         },
-        "publishes": [
-          "validation_commands"
-        ],
+        "publishes": [],
         "effects": [],
         "terminal": false
       },
@@ -14722,8 +14711,7 @@
           ]
         },
         "publishes": [
-          "batch_check_results",
-          "validation_results"
+          "batch_check_results"
         ],
         "effects": [],
         "terminal": false
@@ -15504,9 +15492,7 @@
             }
           ]
         },
-        "publishes": [
-          "validation_commands"
-        ],
+        "publishes": [],
         "effects": [],
         "terminal": false
       },
@@ -15573,8 +15559,7 @@
           ]
         },
         "publishes": [
-          "batch_check_results",
-          "validation_results"
+          "batch_check_results"
         ],
         "effects": [],
         "terminal": false

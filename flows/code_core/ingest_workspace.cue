@@ -152,7 +152,7 @@ ingest_workspace: #FlowDefinition & {
 					{condition: "true", transition: "handoff"},
 				]
 			}
-			publishes: ["mission", "architecture"]
+			publishes: ["mission"]
 		}
 
 		// ── Optional proactive domain research (config-gated) ────────
