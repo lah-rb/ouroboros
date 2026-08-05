@@ -314,3 +314,87 @@ class TestRuntimeOwnedTurnsCarryNoResolver:
             assert (step.get("resolver") or {}).get(
                 "rules"
             ), f"{flow_name}.{step_name} lost the resolver its routing depends on"
+
+
+class TestEveryWayAFlowInputIsActuallyRead:
+    """unused_optional_input was 70 findings and unreadable; 54 were the
+    check's own blind spots. It judged a flow input by `input.` $refs in
+    top-level params/input_map only, so four live consumption paths read
+    as "nobody uses this" — the same shape as the dead-publish hedge that
+    hid design_gate_feedback.
+
+    Each path below is one of those four. If any regresses the noise
+    returns and the check stops being read.
+    """
+
+    def _res(self, flow, prompts_dir=None):
+        from agent.flow_lint import check_unused_optional_inputs
+
+        kwargs = {"prompts_dir": prompts_dir} if prompts_dir else {}
+        return check_unused_optional_inputs(flow, **kwargs)
+
+    def _flow(self, steps, optional):
+        return {
+            "f": {
+                "flow": "f",
+                "steps": steps,
+                "input": {"optional": optional},
+                "returns": {},
+            }
+        }
+
+    def test_a_ref_nested_in_a_list_counts(self):
+        """interact.cue:97 is `commands: [{$ref: "input.run_command"}]` —
+        a top-level-only scan called a plainly-used input unused."""
+        res = self._res(
+            self._flow(
+                {"a": {"params": {"commands": [{"$ref": "input.run_command"}]}}},
+                ["run_command"],
+            )
+        )
+        assert res == [], [r.message for r in res]
+
+    def test_a_context_declaration_counts(self):
+        """execute_flow seeds `accumulator=dict(inputs)` (runtime.py:279),
+        so an input IS a context key of the same name. patch.cue:154
+        declares `mode` that way."""
+        res = self._res(
+            self._flow({"a": {"context": {"optional": ["mode"]}}}, ["mode"])
+        )
+        assert res == []
+
+    def test_a_resolver_condition_counts_in_both_spellings(self):
+        """interact.cue:153 routes on `input.get('charter_mode', '')`."""
+        for cond in (
+            "input.get('charter_mode', '') == 'explore'",
+            "input.charter_mode == 'explore'",
+        ):
+            res = self._res(
+                self._flow(
+                    {"a": {"resolver": {"rules": [{"condition": cond}]}}},
+                    ["charter_mode"],
+                )
+            )
+            assert res == [], f"{cond!r} not recognised"
+
+    def test_a_prompt_template_interpolation_counts(self, tmp_path):
+        """prompts/patch/change_spec.yaml is literally `{input.change_spec}`
+        — patch reads that input on every rewrite turn while the .cue
+        mentions it nowhere."""
+        (tmp_path / "p").mkdir()
+        (tmp_path / "p" / "spec.yaml").write_text(
+            "id: p/spec\ncontent: |\n  {input.change_spec}\n"
+        )
+        res = self._res(
+            self._flow(
+                {"a": {"turn": {"sections": [{"template": "p/spec"}]}}},
+                ["change_spec"],
+            ),
+            prompts_dir=tmp_path,
+        )
+        assert res == []
+
+    def test_a_genuinely_unread_input_still_reports(self):
+        """The check must not become vacuous while being made accurate."""
+        res = self._res(self._flow({"a": {"action": "noop"}}, ["ghost_input_xyz"]))
+        assert [r.check for r in res] == ["unused_optional_input"]

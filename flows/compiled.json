@@ -6782,6 +6782,7 @@
           ]
         },
         "publishes": [
+          "acceptance_ok",
           "acceptance_summary"
         ],
         "effects": [],
@@ -6923,7 +6924,8 @@
           ]
         },
         "publishes": [
-          "mission"
+          "mission",
+          "acceptance_ok"
         ],
         "effects": [],
         "terminal": false

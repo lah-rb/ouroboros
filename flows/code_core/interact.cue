@@ -310,7 +310,14 @@ interact: #FlowDefinition & {
 				type: "rule"
 				rules: [{condition: "true", transition: "evaluate_outcome"}]
 			}
-			publishes: ["acceptance_summary"]
+			// acceptance_ok IS consumed — evaluate_outcome's resolver reads
+			// `context.get('acceptance_ok', true)` (:382/:388). 8da36b1
+			// dropped this declaration because the dead-publish check could
+			// not yet read that spelling; cca7e92 taught it to, and the
+			// declaration is restored. Resolver conditions read the raw
+			// accumulator, so nothing broke meanwhile — the CONTRACT was
+			// wrong, not the behaviour.
+			publishes: ["acceptance_ok", "acceptance_summary"]
 		}
 
 		// ══════════════════════════════════════════════════════════
@@ -413,7 +420,7 @@ interact: #FlowDefinition & {
 					{condition: "true", transition: "end_eval_session_failure"},
 				]
 			}
-			publishes: ["mission"]
+			publishes: ["mission", "acceptance_ok"]
 		}
 
 		// Release the memoryful inference session now that evaluation is done.

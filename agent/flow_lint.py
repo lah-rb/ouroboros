@@ -38,6 +38,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # ── Result dataclass ─────────────────────────────────────────────────
 
@@ -1136,7 +1137,46 @@ def _extract_parser_reads(source: str, func_name: str) -> set[str]:
 # ── Check 5: Unused optional inputs (ported from blueprint/lint.py) ──
 
 
-def check_unused_optional_inputs(flows: dict) -> list[LintResult]:
+_TEMPLATE_REF_RE = re.compile(r"\{input\.(\w+)")
+
+
+def _step_template_ids(step_def: dict) -> set[str]:
+    """Prompt ids this step renders: the legacy template plus every turn
+    section template."""
+    ids: set[str] = set()
+    tpl = (step_def.get("prompt_template") or {}).get("template")
+    if isinstance(tpl, str) and tpl:
+        ids.add(tpl)
+    for section in (step_def.get("turn") or {}).get("sections") or []:
+        if isinstance(section, dict):
+            t = section.get("template")
+            if isinstance(t, str) and t:
+                ids.add(t)
+    return ids
+
+
+def _template_input_refs(step_def: dict, prompts_dir: Path) -> set[str]:
+    """input.* keys a step's PROMPT FILES interpolate.
+
+    The third consumption path, and the one that made this check
+    unreadable: prompts/patch/change_spec.yaml is literally
+    `{input.change_spec}`, so `patch` reads that input on every rewrite
+    turn while the flow definition mentions it nowhere. Judging a flow
+    input by the .cue alone declares live data dead.
+    """
+    refs: set[str] = set()
+    for tid in _step_template_ids(step_def):
+        path = prompts_dir / f"{tid}.yaml"
+        try:
+            refs.update(_TEMPLATE_REF_RE.findall(path.read_text()))
+        except OSError:
+            continue
+    return refs
+
+
+def check_unused_optional_inputs(
+    flows: dict, prompts_dir: Path = Path("prompts")
+) -> list[LintResult]:
     """Warn about flow optional inputs that no step references.
 
     An optional input that nothing reads is dead weight in the flow
@@ -1153,6 +1193,16 @@ def check_unused_optional_inputs(flows: dict) -> list[LintResult]:
         referenced: set[str] = set()
         for step_name, step_def in flow_def["steps"].items():
             referenced.update(_extract_input_refs(step_def))
+            referenced.update(_template_input_refs(step_def, prompts_dir))
+            # A flow's inputs SEED the accumulator — execute_flow starts with
+            # `accumulator=dict(inputs)` (runtime.py:279) — so an input is
+            # also readable as a context key of the same name, and a step
+            # declaring it in context.required/optional consumes it just as
+            # surely as an `input.` $ref. Missing this called `patch.mode`
+            # unused while patch.cue:154 declares it.
+            ctx = step_def.get("context") or {}
+            referenced.update(ctx.get("required") or [])
+            referenced.update(ctx.get("optional") or [])
 
         unused = optional_inputs - referenced
         for inp in sorted(unused):
@@ -1337,53 +1387,69 @@ def _flow_input_keys(flow_def: dict) -> set[str]:
 
 
 def _extract_context_refs(step_def: dict) -> set[str]:
-    """Extract context.* references from input_map and pre_compute $refs."""
-    refs: set[str] = set()
-    for v in step_def.get("input_map", {}).values():
-        if isinstance(v, dict) and "$ref" in v:
-            ref = v["$ref"]
-            if ref.startswith("context."):
-                refs.add(ref.split(".")[1])
-    for pc in step_def.get("pre_compute", []):
-        for v in pc.get("params", {}).values():
-            if isinstance(v, dict) and "$ref" in v:
-                ref = v["$ref"]
-                if ref.startswith("context."):
-                    refs.add(ref.split(".")[1])
-    return refs
+    """Every context.* this step reads, at any depth.
+
+    Was top-level-only over input_map and pre_compute.params, which made
+    a $ref nested in a list or a turn block read as "nothing consumes
+    this" — the exact shape check_dead_publishes exists to catch, in the
+    check itself.
+    """
+    return _walk_refs(step_def, "context")
+
+
+def _walk_refs(node: Any, namespace: str) -> set[str]:
+    """Every `{"$ref": "<namespace>.KEY"}` anywhere under ``node``.
+
+    Recursive on purpose. The hand-rolled extractors this replaces only
+    looked at TOP-LEVEL dict values in params / input_map /
+    pre_compute.params, so any $ref nested one level deeper was invisible:
+      - inside a list — `commands: [{$ref: "input.run_command"}]`
+        (interact.cue:97), which made a plainly-used input lint as unused
+      - inside a `turn` block, where refs live under sections/response
+      - inside a `fallback` chain on another $ref
+    Reads the whole subtree instead of enumerating the shapes we
+    remembered.
+    """
+    found: set[str] = set()
+    prefix = f"{namespace}."
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith(prefix):
+            # Root segment only: `context.mission.architecture` is a read
+            # OF `mission`.
+            found.add(ref[len(prefix) :].split(".")[0])
+        for value in node.values():
+            found |= _walk_refs(value, namespace)
+    elif isinstance(node, list):
+        for item in node:
+            found |= _walk_refs(item, namespace)
+    return found
+
+
+def _condition_input_keys(condition: str) -> set[str]:
+    """input.* keys a resolver condition reads, in BOTH spellings.
+
+    The input twin of _condition_context_keys. Resolver conditions route
+    on flow inputs directly — interact.cue:153 is
+    `input.get('charter_mode', '') == 'explore'` — and scanning only
+    params/input_map/templates missed every one of them.
+    """
+    keys = set(re.findall(r"input\.get\(\s*[\"']([\w]+)[\"']", condition))
+    keys.update(k for k in re.findall(r"input\.(\w+)", condition) if k != "get")
+    return keys
 
 
 def _extract_input_refs(step_def: dict) -> set[str]:
-    """Extract input.* references from params, input_map, pre_compute, prompt_template."""
-    refs: set[str] = set()
-
-    # $ref in params
-    for v in step_def.get("params", {}).values():
-        if isinstance(v, dict) and "$ref" in v:
-            ref = v["$ref"]
-            if ref.startswith("input."):
-                refs.add(ref.split(".")[1])
-
-    # $ref in input_map
-    for v in step_def.get("input_map", {}).values():
-        if isinstance(v, dict) and "$ref" in v:
-            ref = v["$ref"]
-            if ref.startswith("input."):
-                refs.add(ref.split(".")[1])
-
-    # $ref in pre_compute params
-    for pc in step_def.get("pre_compute", []):
-        for v in pc.get("params", {}).values():
-            if isinstance(v, dict) and "$ref" in v:
-                ref = v["$ref"]
-                if ref.startswith("input."):
-                    refs.add(ref.split(".")[1])
-
-    # prompt_template input_keys
+    """Every input.* this step reads, plus declared prompt input_keys."""
+    refs = _walk_refs(step_def, "input")
     pt = step_def.get("prompt_template", {})
     for key in pt.get("input_keys", []):
         refs.add(key)
-
+    for rule in (step_def.get("resolver") or {}).get("rules") or []:
+        refs |= _condition_input_keys(str(rule.get("condition", "")))
+    for section in (step_def.get("turn") or {}).get("sections") or []:
+        if isinstance(section, dict):
+            refs |= _condition_input_keys(str(section.get("when", "")))
     return refs
 
 
@@ -1654,7 +1720,7 @@ def lint(
     results.extend(check_prompt_parser_contracts(prompts, actions))
 
     # Ported 5: Unused optional inputs
-    results.extend(check_unused_optional_inputs(flows))
+    results.extend(check_unused_optional_inputs(flows, prompts))
 
     # Ported 6: Prompt conventions
     results.extend(check_prompt_conventions(flows, prompts))
