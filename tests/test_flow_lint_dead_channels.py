@@ -398,3 +398,22 @@ class TestEveryWayAFlowInputIsActuallyRead:
         """The check must not become vacuous while being made accurate."""
         res = self._res(self._flow({"a": {"action": "noop"}}, ["ghost_input_xyz"]))
         assert [r.check for r in res] == ["unused_optional_input"]
+
+    def test_an_action_reading_step_input_inputs_counts(self):
+        """The sixth path. escalation_actions does
+        `inputs.get("target_file_path")` to build its "## Focus" seed
+        section — a real read with nothing in the .cue to show for it.
+        Scoped to the flow: `open_escalation_session` is bound to a step
+        here, so its reads count."""
+        res = self._res(
+            self._flow(
+                {"a": {"action": "open_escalation_session"}}, ["target_file_path"]
+            )
+        )
+        assert res == [], [r.message for r in res]
+
+    def test_that_read_does_NOT_count_from_another_flow(self):
+        """Same scoping rule as the dead-publish check — an action bound
+        elsewhere proves nothing about this flow."""
+        res = self._res(self._flow({"a": {"action": "noop"}}, ["target_file_path"]))
+        assert [r.check for r in res] == ["unused_optional_input"]

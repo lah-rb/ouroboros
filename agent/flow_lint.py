@@ -1174,8 +1174,38 @@ def _template_input_refs(step_def: dict, prompts_dir: Path) -> set[str]:
     return refs
 
 
+def _action_input_reads(action_dir: Path) -> dict[str, set[str]]:
+    """action function name -> input keys it reads off step_input.inputs.
+
+    The sixth consumption path. An action can read a flow input directly —
+    escalation_actions does `inputs.get("target_file_path")` to write its
+    "## Focus" seed section — with nothing in the .cue to show for it.
+    Attributed per function so it can be scoped to the flow, exactly like
+    _python_reads_by_function: an action bound to some OTHER flow reading
+    the same name proves nothing here.
+    """
+    reads: dict[str, set[str]] = {}
+    if not action_dir.exists():
+        return reads
+    pattern = re.compile(r"""(?:step_input\.)?inputs\.get\(\s*["'](\w+)["']""")
+    for f in sorted(action_dir.glob("*.py")):
+        if f.name in ("__init__.py", "registry.py"):
+            continue
+        try:
+            source = f.read_text()
+        except OSError:
+            continue
+        for m in pattern.finditer(source):
+            func = _find_enclosing_action(source, m.start())
+            if func:
+                reads.setdefault(func, set()).add(m.group(1))
+    return reads
+
+
 def check_unused_optional_inputs(
-    flows: dict, prompts_dir: Path = Path("prompts")
+    flows: dict,
+    prompts_dir: Path = Path("prompts"),
+    action_dir: Path = Path("agent/actions"),
 ) -> list[LintResult]:
     """Warn about flow optional inputs that no step references.
 
@@ -1184,6 +1214,8 @@ def check_unused_optional_inputs(
     without updating the input declaration.
     """
     results = []
+    name_map = _build_action_name_map(action_dir / "registry.py")
+    input_reads = _action_input_reads(action_dir)
 
     for flow_name, flow_def in _iter_flows(flows):
         optional_inputs = set(flow_def.get("input", {}).get("optional", []))
@@ -1203,6 +1235,9 @@ def check_unused_optional_inputs(
             ctx = step_def.get("context") or {}
             referenced.update(ctx.get("required") or [])
             referenced.update(ctx.get("optional") or [])
+            func = name_map.get(step_def.get("action", ""))
+            if func:
+                referenced.update(input_reads.get(func, set()))
 
         unused = optional_inputs - referenced
         for inp in sorted(unused):
@@ -1720,7 +1755,7 @@ def lint(
     results.extend(check_prompt_parser_contracts(prompts, actions))
 
     # Ported 5: Unused optional inputs
-    results.extend(check_unused_optional_inputs(flows, prompts))
+    results.extend(check_unused_optional_inputs(flows, prompts, actions))
 
     # Ported 6: Prompt conventions
     results.extend(check_prompt_conventions(flows, prompts))
