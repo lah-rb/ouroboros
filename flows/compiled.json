@@ -11631,7 +11631,8 @@
           ],
           "optional": [
             "repo_map_formatted",
-            "repo_file_index"
+            "repo_file_index",
+            "project_manifest"
           ]
         },
         "params": {},
@@ -11683,6 +11684,15 @@
               },
               "field": "router_findings"
             }
+          },
+          {
+            "formatter": "format_modality_sidecars",
+            "output_key": "modality_sidecars",
+            "params": {
+              "source": {
+                "$ref": "context.project_manifest"
+              }
+            }
           }
         ],
         "prompt_template": {
@@ -11694,7 +11704,8 @@
             "existing_goals",
             "repo_map_formatted",
             "repo_file_index",
-            "router_findings"
+            "router_findings",
+            "modality_sidecars"
           ],
           "input_keys": []
         },
@@ -11730,7 +11741,8 @@
           ],
           "optional": [
             "repo_map_formatted",
-            "repo_file_index"
+            "repo_file_index",
+            "project_manifest"
           ]
         },
         "params": {},
@@ -11782,6 +11794,15 @@
               },
               "field": "router_findings"
             }
+          },
+          {
+            "formatter": "format_modality_sidecars",
+            "output_key": "modality_sidecars",
+            "params": {
+              "source": {
+                "$ref": "context.project_manifest"
+              }
+            }
           }
         ],
         "prompt_template": {
@@ -11793,7 +11814,8 @@
             "existing_goals",
             "repo_map_formatted",
             "repo_file_index",
-            "router_findings"
+            "router_findings",
+            "modality_sidecars"
           ],
           "input_keys": []
         },

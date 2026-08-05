@@ -300,6 +300,42 @@ def format_project_file_list(params: dict, namespaces: dict) -> str:
 _LISTING_MAX_CHARS = 40000
 
 
+# Sidecar suffixes mirror refinement_actions._VL_SIDECAR_SUFFIX /
+# _AUDIO_SIDECAR_SUFFIX — kept in sync deliberately rather than imported,
+# so formatters stay free of action-module imports.
+_SIDECAR_SUFFIXES = (".vltext", ".transcript.txt")
+
+
+def format_modality_sidecars(params: dict, namespaces: dict) -> str:
+    """Only the VL/ASR digests from a project manifest — not the file list.
+
+    action_scan_project runs _digest_modality_sidecars, which mutates the
+    manifest so the model sees the readings (refinement_actions.py:440):
+    a successful digest lands as manifest[<path>.vltext] = <text>, and a
+    failure or a skipped-over-cap note lands under a "[...]" key.
+
+    Rendering the whole manifest instead would repeat the file list that
+    repo_file_index already carries authoritatively, at up to 40k chars.
+    This carries the part nothing else does.
+    """
+    manifest = params.get("source") or {}
+    if not isinstance(manifest, dict):
+        return ""
+    lines: list[str] = []
+    for path, value in manifest.items():
+        key = str(path)
+        is_sidecar = key.endswith(_SIDECAR_SUFFIXES) or (
+            key.startswith("[") and key.endswith("]")
+        )
+        if not is_sidecar:
+            continue
+        text = str(value or "").strip()
+        if not text:
+            continue
+        lines.append(f"### {key}\n{text}")
+    return "\n\n".join(lines)
+
+
 def format_project_listing(params: dict, namespaces: dict) -> str:
     manifest = params.get("source") or {}
     if not manifest:
@@ -714,6 +750,7 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_mission_meta": format_mission_meta,
     "format_project_file_list": format_project_file_list,
     "format_project_listing": format_project_listing,
+    "format_modality_sidecars": format_modality_sidecars,
     "format_search_findings": format_search_findings,
     "format_validation_results": format_validation_results,
     "format_verified_behaviors": format_verified_behaviors,

@@ -95,7 +95,15 @@ replan: #FlowDefinition & {
 			description: "Decompose the pending directive into goals against the existing codebase"
 			context: {
 				required: ["mission"]
-				optional: ["repo_map_formatted", "repo_file_index"]
+				// project_manifest carries the MODALITY SIDECAR digests, not
+				// just a file list: action_scan_project runs
+				// _digest_modality_sidecars and mutates the manifest with the
+				// VL/ASR readings "so the model sees them"
+				// (refinement_actions.py:440). Before this was declared,
+				// scan_workspace paid for that digestion every replan and the
+				// decomposition never saw a word of it.
+				optional: ["repo_map_formatted", "repo_file_index",
+					"project_manifest"]
 			}
 			pre_compute: [
 				{formatter: "format_mission_meta", output_key: "mission_objective"
@@ -108,6 +116,8 @@ replan: #FlowDefinition & {
 					params: {source: {$ref: "context.mission.goals"}}},
 				{formatter: "format_mission_meta", output_key: "router_findings"
 					params: {mission: {$ref: "context.mission"}, field: "router_findings"}},
+				{formatter: "format_modality_sidecars", output_key: "modality_sidecars"
+					params: {source: {$ref: "context.project_manifest"}}},
 			]
 			prompt_template: {
 				template: "replan/decompose_directive"
@@ -115,6 +125,7 @@ replan: #FlowDefinition & {
 					"mission_objective", "pending_directive",
 					"existing_architecture", "existing_goals",
 					"repo_map_formatted", "repo_file_index", "router_findings",
+					"modality_sidecars",
 				]
 				input_keys: []
 			}
@@ -139,7 +150,15 @@ replan: #FlowDefinition & {
 			description: "Decompose a bug-fix directive into the minimal fix goal(s)"
 			context: {
 				required: ["mission"]
-				optional: ["repo_map_formatted", "repo_file_index"]
+				// project_manifest carries the MODALITY SIDECAR digests, not
+				// just a file list: action_scan_project runs
+				// _digest_modality_sidecars and mutates the manifest with the
+				// VL/ASR readings "so the model sees them"
+				// (refinement_actions.py:440). Before this was declared,
+				// scan_workspace paid for that digestion every replan and the
+				// decomposition never saw a word of it.
+				optional: ["repo_map_formatted", "repo_file_index",
+					"project_manifest"]
 			}
 			pre_compute: [
 				{formatter: "format_mission_meta", output_key: "mission_objective"
@@ -152,6 +171,8 @@ replan: #FlowDefinition & {
 					params: {source: {$ref: "context.mission.goals"}}},
 				{formatter: "format_mission_meta", output_key: "router_findings"
 					params: {mission: {$ref: "context.mission"}, field: "router_findings"}},
+				{formatter: "format_modality_sidecars", output_key: "modality_sidecars"
+					params: {source: {$ref: "context.project_manifest"}}},
 			]
 			prompt_template: {
 				template: "replan/decompose_directive_repair"
@@ -159,6 +180,7 @@ replan: #FlowDefinition & {
 					"mission_objective", "pending_directive",
 					"existing_architecture", "existing_goals",
 					"repo_map_formatted", "repo_file_index", "router_findings",
+					"modality_sidecars",
 				]
 				input_keys: []
 			}

@@ -155,6 +155,16 @@ sections:
     the list as a strong prior.)
     {context.repo_file_index}
 
+- id: modality_sidecars
+  when: context.modality_sidecars
+  content: |
+    ## Digested Images / Audio (VL and ASR readings)
+    These are machine readings of non-text files already in the workspace,
+    produced at the workspace scan. Treat them as evidence about what the
+    project contains — a goal that depends on an image or recording should
+    reference the reading below rather than assume the file is opaque.
+    {context.modality_sidecars}
+
 - id: output_reminder
   content: |
     ---

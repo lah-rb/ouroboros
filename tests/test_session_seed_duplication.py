@@ -78,10 +78,7 @@ def test_the_session_path_still_lacks_the_stateless_dedup():
     """The asymmetry itself. If llmvp grows a strip here, this fails and the
     duplication is gone — at which point this whole file should go too."""
     sm = (
-        Path(__file__).resolve().parent.parent
-        / "llmvp"
-        / "core"
-        / "session_manager.py"
+        Path(__file__).resolve().parent.parent / "llmvp" / "core" / "session_manager.py"
     ).read_text()
     tree = ast.parse(sm)
     for node in ast.walk(tree):
