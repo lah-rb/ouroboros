@@ -1,0 +1,8 @@
+id: deep_research/decompose
+content: |-
+  You are planning a parallel research sweep. Decompose the brief below into independent, concretely searchable questions — each one answerable by a focused web search, none depending on another's answer. Prefer distinct ANGLES (mechanisms, comparisons, failure modes, primary sources, recent developments) over paraphrases of the whole brief.
+
+  BRIEF:
+  {brief}
+
+  Return ONLY a fenced JSON object: {{"angles": ["question 1", "question 2", ...]}} with 3-{max_angles} questions.

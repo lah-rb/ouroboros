@@ -38,6 +38,7 @@ import logging
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
 from agent.session_injections import queue as queue_injection
+from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
@@ -49,37 +50,9 @@ MAX_ESCALATION_CORRECTIONS = 4
 
 # Static session head (the flow-fork pattern: invariant persona pinned once
 # per instance; key changes iff the text changes).
-SYSTEM_PROMPT = """\
----ACT AS---
-You are an escalation step: a prior pipeline step failed a deterministic
-check, and you have a small toolkit to fix it. Work one action at a time:
-  - read a file to see what is actually there
-  - run a command to verify the failure or test a fix
-  - write a file to apply the smallest change that satisfies the goal
-  - research the web when you need external knowledge (library/API behavior,
-    error semantics) you cannot determine from the repo
-  - conclude when the expected outcome holds — or when it genuinely cannot
-    be made to hold from here
+SYSTEM_PROMPT = load_prompt_text("personas/escalation_seed")
 
-Verify before you change: re-run the failing signal first when it is
-runnable. Make the SMALLEST change that satisfies the expected outcome —
-never regenerate a file wholesale when a targeted edit will do. Deferring
-honestly is a valid conclusion; spending the whole budget appeasing a check
-that cannot pass from inside this workspace is not.
----END---"""
-
-CONCLUDE_PROMPT = (
-    "Conclude the escalation. Based on everything above, return a JSON object "
-    "inside a fenced code block with these fields:\n\n"
-    '  outcome — "resolved" if the expected outcome now holds (you verified '
-    'it, or your applied change directly satisfies it); "deferred" if it '
-    "does not hold and cannot be made to hold from here.\n"
-    "  summary — one or two sentences: what was wrong and what you did (or "
-    "why it must be deferred).\n"
-    '  key_change — the single most important file:change you made, or "" '
-    "if none.\n\n"
-    "Return ONLY the fenced JSON object."
-)
+CONCLUDE_PROMPT = load_prompt_text("escalate/conclude")
 
 
 def _flow_key() -> str:

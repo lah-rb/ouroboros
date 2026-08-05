@@ -32,6 +32,7 @@ from agent.actions.refinement_actions import _extract_exa_hits
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
 from agent.session_injections import queue as queue_injection
+from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
@@ -43,35 +44,13 @@ MAX_SEARCH_CORRECTIONS = 3
 NUM_RESULTS = 5  # Exa hits per query
 _CONDENSE_HITS = 3  # top-K hits fed to the condense inference
 
-SEARCH_SYSTEM_PROMPT = """\
----ACT AS---
-You are a focused web-research step. A caller is stuck and needs external
-knowledge (library/API behavior, error semantics, a spec detail) to proceed.
-Work one action at a time:
-  - search the web for the SPECIFIC fact you are missing (a focused query,
-    never the whole problem restated)
-  - when the accumulated findings answer the brief, finish
-
-Name the exact unknown before each search, and refine your query when results
-miss. Prefer primary sources (official docs, specs, the project's own repo/issues)
-over blogspam. Stop as soon as you can answer — do not over-search.
----END---"""
+SEARCH_SYSTEM_PROMPT = load_prompt_text("personas/deep_search_seed")
 
 # Condense: distill raw hits to the answer-bearing fact(s) for one query. Runs in
 # an EPHEMERAL low-reasoning session (opened/closed per call) so (a) raw pages
 # never enter the main search session, and (b) the reasoning HEAD-SWAP steers it
 # to LOW effort — a distillation task never needs high reasoning (see _CONDENSE_CFG).
-CONDENSE_PROMPT = (
-    "You are distilling raw web-search results into the single answer-bearing "
-    "fact(s) for a specific question. Be terse and literal — extract, do not "
-    "reason.\n\n"
-    "QUESTION (the gap being filled):\n{query}\n\n"
-    "RAW RESULTS:\n{hits}\n\n"
-    "Return 1-4 sentences capturing ONLY the concrete fact(s) that answer the "
-    "question, each with its source URL in parentheses. If the results do NOT "
-    "answer it, reply exactly: INSUFFICIENT. If sources conflict, say so and "
-    "give each side with its URL. No preamble, no restating the question."
-)
+CONDENSE_PROMPT = load_prompt_text("deep_search/condense")
 
 # Condense is a low-reasoning task: the reasoning HEAD-SWAP steers the ephemeral
 # condense session to LOW effort (server forks the low head at turn 0), plus a low
@@ -79,16 +58,7 @@ CONDENSE_PROMPT = (
 # "reasoning" (Optional field) and fall back to their default level — still bounded.
 _CONDENSE_CFG = {"reasoning": "low", "temperature": "t*0.2", "max_tokens": 512}
 
-CONCLUDE_SEARCH_PROMPT = (
-    "Conclude the research. Based on the distilled findings above, return a JSON "
-    "object inside a fenced code block with these fields:\n\n"
-    "  research_summary — the answer to the brief in 2-6 sentences, grounded in "
-    "the findings (cite source URLs inline). If the brief could not be answered, "
-    "say what IS known and what remains open.\n"
-    "  sufficient — true if the findings actually answer the brief; false if "
-    "they are partial or the question remains open.\n\n"
-    "Return ONLY the fenced JSON object."
-)
+CONCLUDE_SEARCH_PROMPT = load_prompt_text("deep_search/conclude")
 
 
 def _bounded(s: str, n: int) -> str:

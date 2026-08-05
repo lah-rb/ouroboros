@@ -26,8 +26,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from agent import languages
 from agent.actions.ast_actions import (
     _build_symbol_table,
@@ -47,6 +45,7 @@ from agent.actions.refinement_actions import extract_code_from_response
 from agent.llm_json import parse_llm_json
 from agent.markdown_fence import parse_file_blocks
 from agent.models import StepInput, StepOutput
+from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
@@ -60,14 +59,12 @@ _GEN_MARGIN = 2048
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 
 
-def _load_prompt(rel: str) -> str:
-    """Load a flat-content prompt yaml (turn-template format) by id path."""
-    try:
-        data = yaml.safe_load((_PROMPTS_DIR / f"{rel}.yaml").read_text())
-        return str(data.get("content", "")).strip()
-    except Exception:  # noqa: BLE001 — a missing fragment degrades, never crashes
-        logger.warning("contract swarm: prompt fragment %s unreadable", rel)
-        return ""
+# _load_prompt lived here until 2026-08-05. It swallowed every error and
+# returned "", so a typo'd id produced an EMPTY prompt fragment that no
+# test could catch and no log made obvious. Retired onto
+# agent.loader.load_prompt_text, which fails loud and names the id. The
+# `.strip()` it applied moves to the call sites — it is load-bearing (each
+# fragment carries a trailing newline).
 
 
 def _empty_manifest(declared: list[str]) -> dict[str, Any]:
@@ -1003,8 +1000,8 @@ async def action_swarm_generate_symbols(step_input: StepInput) -> StepOutput:
     pool_budget = int(step_input.params.get("pool_budget", 131072) or 131072)
     token_base = int(ctx.get("swarm_token_base", 0) or 0)
 
-    persona = _load_prompt("personas/symbol_worker")
-    instruction = _load_prompt("build_contracts/worker_instruction")
+    persona = load_prompt_text("personas/symbol_worker").strip()
+    instruction = load_prompt_text("build_contracts/worker_instruction").strip()
 
     tasks: list[tuple[str, str]] = [
         (path, name) for path, entry in files.items() for name in entry["order"]
@@ -2129,24 +2126,7 @@ async def action_generate_content_batch(step_input: StepInput) -> StepOutput:
 # patch. CONFIDENCE-GATED: a worker that cannot diagnose locally books
 # nothing and its goal falls to the full interactive diagnosis unchanged.
 
-_DIAGNOSE_WORKER_PROMPT = (
-    "You are diagnosing ONE failed validation gate on a freshly generated "
-    "file. Work only from the evidence below — if the root cause needs "
-    "cross-file investigation you cannot see here, say so via "
-    '"confident": false.\n\n'
-    "GOAL:\n{directive}\n\n"
-    "FILE: {path}\n"
-    "GATE FAILURES: {checks}\n"
-    "GATE OUTPUT:\n{output}\n\n"
-    "FILE CONTENT:\n{content}\n\n"
-    "Return ONLY a fenced JSON object:\n"
-    '{{"confident": true|false, "root_cause": "one-paragraph diagnosis", '
-    '"target_symbol": "symbol to change or empty", '
-    '"change_spec": "the specific change to make", '
-    '"diagnosis_kind": "fix"|"module_fix", '
-    '"module_statement": "exact module-level line when module_fix, else empty", '
-    '"related_symbols": []}}'
-)
+_DIAGNOSE_WORKER_PROMPT = load_prompt_text("diagnose_batch/worker")
 
 
 def _diagnose_batch_candidates(mission: Any, working_directory: str) -> list[tuple]:

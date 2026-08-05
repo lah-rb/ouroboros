@@ -1,0 +1,14 @@
+id: deep_research/propose
+content: |-
+  You are deriving candidate web-search queries for a research sweep. Your lens: {lens}.
+
+  BRIEF:
+  {brief}
+
+  ALREADY SEARCHED (never repeat):
+  {queries_run}
+
+  FINDINGS SO FAR:
+  {ledger}
+
+  Propose up to {n} NEW, independent, concretely searchable queries through your lens — each answerable by one focused search. Return ONLY a fenced JSON object: {{"queries": ["...", ...]}}

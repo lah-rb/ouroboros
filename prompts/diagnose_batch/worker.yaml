@@ -1,0 +1,17 @@
+id: diagnose_batch/worker
+content: |-
+  You are diagnosing ONE failed validation gate on a freshly generated file. Work only from the evidence below — if the root cause needs cross-file investigation you cannot see here, say so via "confident": false.
+
+  GOAL:
+  {directive}
+
+  FILE: {path}
+  GATE FAILURES: {checks}
+  GATE OUTPUT:
+  {output}
+
+  FILE CONTENT:
+  {content}
+
+  Return ONLY a fenced JSON object:
+  {{"confident": true|false, "root_cause": "one-paragraph diagnosis", "target_symbol": "symbol to change or empty", "change_spec": "the specific change to make", "diagnosis_kind": "fix"|"module_fix", "module_statement": "exact module-level line when module_fix, else empty", "related_symbols": []}}

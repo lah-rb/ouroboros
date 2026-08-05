@@ -27,6 +27,7 @@ from agent import languages
 from agent.actions.refinement_actions import extract_code_from_response
 from agent.models import StepInput, StepOutput
 from agent.repomap import extract_file_symbols
+from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
@@ -325,19 +326,7 @@ def _frame_lang(file_path: str) -> tuple[str, str]:
     return languages.frame_label_and_fence(file_path)
 
 
-_FRAME_INSTRUCTION = (
-    "You are editing the FRAME of a {label} — the top-level code OUTSIDE any "
-    "function/class body. {directive}\n\n"
-    "Rules:\n"
-    "- Edit ONLY top-level code: the file header/shebang, imports or includes, "
-    "top-level statements, and any entry-point block. Do NOT touch function or "
-    "class bodies.\n"
-    "- Lines containing the `⟦OUROBOROS-SYMBOL ...⟧` placeholder stand in for "
-    "function/class bodies that are preserved elsewhere. Keep each such line "
-    "EXACTLY as-is — do not edit, remove, reorder, or add them.\n"
-    "- Return the COMPLETE edited frame as one code block.\n\n"
-    "Frame:\n```{fence}\n{frame}\n```"
-)
+_FRAME_INSTRUCTION = load_prompt_text("patch_module/frame_instruction")
 
 
 async def action_rewrite_frame_turn(step_input: StepInput) -> StepOutput:
@@ -449,30 +438,7 @@ async def action_splice_frame(step_input: StepInput) -> StepOutput:
 # persistent misses. Fail-safe: no evidence, no parse, or a symbol the
 # AST doesn't contain → whole-file rewrite exactly as before.
 
-LOCALIZE_PROMPT = """A fix was dispatched for `{file}` without a named \
-target symbol. Using the error evidence, name the most likely place in \
-THIS file to make the fix.
-
-## Fix directive
-{directive}
-
-## Error evidence
-{evidence}
-
-## Symbols in {file}
-{symbols}
-
-Return a JSON object in a fenced code block:
-  target_symbol — the ONE symbol from the list above most likely to need \
-the change (qualified name exactly as listed). Empty string if the fix is \
-not inside any listed symbol.
-  scope — "symbol" (fix lives inside target_symbol), "module" (fix is a \
-top-level line: import, constant, module statement), or "file" (genuinely \
-needs whole-file restructuring).
-  module_statement — when scope is "module": the exact top-level line to \
-add or correct. Otherwise empty.
-  change_spec — one or two sentences: what must be true after the change.
-"""
+LOCALIZE_PROMPT = load_prompt_text("file_ops/localize")
 
 
 async def action_localize_fix_target(step_input: StepInput) -> StepOutput:

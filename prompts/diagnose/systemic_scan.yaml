@@ -1,0 +1,23 @@
+id: diagnose/systemic_scan
+content: |
+  Before we finish: think like a developer who just found one instance of a bug.
+
+  Your diagnosis fixes ONE symbol. Often the same mistake is repeated in SIBLING symbols — the same defect CLASS, coded the same way (e.g. several handlers calling a method under the wrong name, multiple parsers missing the same guard, several models with the same off-by-one). These siblings are NOT necessarily caught by the program yet, because it failed fast on the first one.
+
+  Using ONLY the evidence you already gathered this session (the symbol bodies and call sites you traced, plus the project structure), decide whether this is a systemic pattern. Do not speculate about symbols you have not seen.
+
+  Return a JSON object inside a fenced code block:
+
+    systemic — true only if you can point to specific sibling symbols that share the SAME defect class as your target. false (the common case) when the fix is local.
+
+    siblings — array of file-qualified symbols that share the defect, each ``path/to/file.py:Class.method`` (or ``path/to/file.py:function``). Only include symbols you actually inspected and are confident share the bug. Empty array when systemic is false.
+
+    pattern_change_spec — one line describing the fix at the CLASS level so it can be applied uniformly to the target and every sibling (e.g. "every Command.execute must call the engine's real method name"). Empty string when systemic is false.
+
+  ```json
+  {
+    "systemic": true,
+    "siblings": ["commands.py:TalkCommand.execute", "commands.py:HelpCommand.execute"],
+    "pattern_change_spec": "Each Command.execute must call the engine method that actually exists."
+  }
+  ```

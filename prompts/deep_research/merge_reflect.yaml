@@ -1,0 +1,14 @@
+id: deep_research/merge_reflect
+content: |-
+  You are auditing a research ledger mid-sweep. The brief and the findings so far are below. Judge coverage and name what is still missing.
+
+  BRIEF:
+  {brief}
+
+  FINDINGS ({n} so far):
+  {ledger}
+
+  Return ONLY a fenced JSON object:
+  {{"sufficient": true|false, "gaps": ["searchable question", ...]}}
+
+  sufficient = true when the findings already answer the brief (gaps then empty). Otherwise list up to {max_angles} NEW independent searchable questions targeting the actual gaps — never repeat a question already answered, and drop angles that returned INSUFFICIENT twice. Findings marked [CONTRADICTED] or [UNVERIFIED] failed fact-checking — treat their questions as still open.

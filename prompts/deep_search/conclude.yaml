@@ -1,0 +1,8 @@
+id: deep_search/conclude
+content: |-
+  Conclude the research. Based on the distilled findings above, return a JSON object inside a fenced code block with these fields:
+
+    research_summary — the answer to the brief in 2-6 sentences, grounded in the findings (cite source URLs inline). If the brief could not be answered, say what IS known and what remains open.
+    sufficient — true if the findings actually answer the brief; false if they are partial or the question remains open.
+
+  Return ONLY the fenced JSON object.

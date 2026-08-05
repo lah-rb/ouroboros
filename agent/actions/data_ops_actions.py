@@ -18,43 +18,13 @@ from agent.data_ops import DataOp, Fmt, detect_fmt, patch_text
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
 from agent.schema_extract import extract_data_skeleton
+from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
 _MAX_INLINE = 8000  # include the whole current file when under this; else skeleton-only
 
-DATA_OPS_PROMPT = """\
-You are editing a {fmt} data file with a SURGICAL patch — emit a minimal set of
-path-scoped operations, NOT a rewritten file.
-
-## The fix to apply
-{change_spec}
-
-## Shape of the data file
-{skeleton}
-
-## Current content of {path}
-{current}
-
-## How to address a path (RFC-6901 JSON Pointer)
-- /rooms/0/exits/north        keys and list indices, separated by "/"
-- /rooms/-                    "-" appends to a list
-- /rooms/[id=bedroom]/exits   select a list item by a child field (prefer this over indices)
-- escape "/" inside a key as "~1" and "~" as "~0"
-
-## Operations (each targets exactly one path)
-- {{"op": "set",    "path": "<ptr>", "value": <json>}}   replace or create a value
-- {{"op": "add",    "path": "<ptr>", "value": <json>}}   insert into a list / upsert a key
-- {{"op": "remove", "path": "<ptr>"}}                     delete a key or list item
-- {{"op": "move",   "from": "<ptr>", "path": "<ptr>"}}    relocate a subtree
-
-Values are real JSON (true/false/null, numbers, objects, lists — not strings).
-
-Return ONLY this JSON object:
-{{"ops": [ ... ], "reason": "<one line>"}}
-If the change cannot be expressed as a few targeted ops, return
-{{"ops": [], "reason": "needs full rewrite"}}.
-"""
+DATA_OPS_PROMPT = load_prompt_text("data_patch/translate")
 
 
 def _param(step_input: StepInput, key: str, default: str = "") -> Any:

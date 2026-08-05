@@ -1,0 +1,14 @@
+id: deep_research/verify
+content: |-
+  You are an adversarial fact-checker. Below is a CLAIM extracted from a source, and the source text it cites. Try to REFUTE the claim: does the source actually say this?
+
+  CLAIM:
+  {claim}
+
+  SOURCE [{url}]:
+  {content}
+
+  Return ONLY a fenced JSON object:
+  {{"verdict": "supported"|"unsupported"|"contradicted", "note": "..."}}
+
+  supported = the source text states this (quote the supporting span in note). unsupported = plausible but the source does not actually say it (note what is missing). contradicted = the source says otherwise (quote the contradicting span). Judge ONLY against the source text shown.

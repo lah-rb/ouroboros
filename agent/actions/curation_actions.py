@@ -675,11 +675,22 @@ def _snapshot_key(paper_key: str) -> str:
     return f"paper:{paper_key}"
 
 
-async def _render_prompt(template_id: str, context: dict) -> str:
-    from agent.loader import PromptRenderer
+# These templates use real `when:` sections and {context.x} interpolation,
+# so they keep the full PromptRenderer rather than moving to
+# load_prompt_text. The renderer is now built ONCE — it was reconstructed
+# per call, which defeated its own template cache on every invocation.
+_curator_renderer = None  # lazily built PromptRenderer
 
-    renderer = PromptRenderer(_prompts_dir())
-    return renderer.render(template_id, {"input": {}, "context": context, "meta": {}})
+
+async def _render_prompt(template_id: str, context: dict) -> str:
+    global _curator_renderer
+    if _curator_renderer is None:
+        from agent.loader import PromptRenderer
+
+        _curator_renderer = PromptRenderer(_prompts_dir())
+    return _curator_renderer.render(
+        template_id, {"input": {}, "context": context, "meta": {}}
+    )
 
 
 async def _build_doc_for(effects, paper_key: str) -> str:

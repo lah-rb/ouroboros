@@ -37,6 +37,7 @@ import re
 from typing import Any
 
 from agent.models import StepInput, StepOutput
+from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
@@ -129,131 +130,10 @@ def _extract_traceback(terminal_output: str) -> str:
 
 # ── Persona and system prompt ────────────────────────────────────────
 
-SYSTEM_PROMPT = """\
----ACT AS---
-You are a diagnosis step. Work one action at a time:
-  - trace a symbol to see its body and call sites
-  - conclude when you know what's broken and what to change
-
-Precision matters — the next step writes the fix directly from
-your conclusion, so identify the specific file and symbol.
-
-When the evidence describes a value arriving somewhere it doesn't
-fit — "expected A but got B", "called with X instead of Y",
-"object is not subscriptable", "got an unexpected keyword
-argument" — treat this as a data-flow contract mismatch, not a
-defect in the receiver. The receiver is reporting what it saw;
-the mismatch itself was produced by an upstream symbol that
-deviated from the expected contract. Before targeting the
-reporter, trace the call site at least one hop upward and ask
-where the non-conforming value originates. The fix usually
-belongs at that origin, or at the boundary between producer
-and consumer — not at the receiver where the error surfaced.
----END---"""
+SYSTEM_PROMPT = load_prompt_text("personas/diagnosis")
 
 
-CONCLUDE_PROMPT = (
-    "Based on the evidence gathered, produce the diagnosis.\n\n"
-    "Return a JSON object inside a fenced code block with these "
-    "fields:\n\n"
-    "  target_file — the file the change targets. Set this even if "
-    "the file doesn't exist yet; file_ops will route to the create "
-    "flow automatically when the path isn't on disk. Must be a real "
-    "file in this project or a real new-file path — never a "
-    "placeholder or unknown, and never blank. If the fix spans several "
-    "files, name the file holding the primary symbol here and put the "
-    "rest in related_symbols.\n\n"
-    "  target_symbol — function / method / class to modify or add. "
-    "Use the qualified name for methods (e.g. `ClassName.method`). "
-    "Omit only for whole-file operations (new data files, new config "
-    "files).\n\n"
-    "  related_symbols — array of other symbols that must change "
-    "alongside ``target_symbol`` to keep the contract consistent. "
-    "Each entry is a qualified name. Use one of two forms:\n"
-    "    - File-qualified (preferred): `path/to/file.py:ClassName.method`. "
-    "Always use this when the symbol lives in a different file from "
-    "``target_file`` — and prefer it generally so file_ops can locate "
-    "it unambiguously.\n"
-    "    - Bare: `ClassName.method` or `function_name` — interpreted "
-    "as a symbol in ``target_file``. Use this only when the symbol "
-    "definitely lives in ``target_file``.\n"
-    "  Common cases: consumers of a method whose signature you're "
-    "changing, callers of a renamed function, other methods that "
-    "read the same attribute you're about to remove or rename, the "
-    "upstream producer of a value the receiver is reporting as "
-    "wrong-shaped. Leave as an empty array `[]` when the change is "
-    "genuinely local to ``target_symbol``. List at most 6 symbols — "
-    "if more would need to change, the refactor is too large to "
-    "land in one patch and should be broken down.\n\n"
-    "  root_cause — why the test failed. Name the specific bug, "
-    "missing feature, or contract mismatch in one or two sentences.\n\n"
-    "  change_spec — what needs to be true after the change. "
-    "Concrete enough that the next step can write the fix directly. "
-    "When ``related_symbols`` is non-empty, also describe the "
-    "cross-symbol contract: what attribute name, signature, or "
-    "return shape all the listed symbols will share after the "
-    "change.\n\n"
-    "  expected_error — leave EMPTY in almost every case. Set it ONLY when the "
-    "fix's success is that some input the code CURRENTLY accepts must instead "
-    "be REJECTED by raising an exception (input validation, a guard clause). "
-    "Then name that exception type exactly — e.g. `ValueError`, `TypeError`. "
-    "The retest treats that exception appearing in the output as the PASS "
-    "signal instead of a crash. If the fix makes code STOP raising, or is any "
-    "other kind of change, leave this empty.\n\n"
-    "  kind — one of: `fix` (existing behavior is incorrect — "
-    "wrong output, crash, exception, broken contract between "
-    "symbols), `enhancement` (a feature the user expected is "
-    "missing — a command verb the parser doesn't recognize, no "
-    "orientation text where users expect one, no handler for "
-    "input that should respond, missing field on a model class), "
-    "`new_file` (a whole file needs to exist that currently "
-    "doesn't), `module_fix` (a module-level "
-    "line is missing or wrong in ``target_file`` — a missing import, "
-    "a script's shebang, a `source`/`set` line; a name it uses is "
-    "never imported, or the script lacks its interpreter line). "
-    "Prefer `module_fix` over `fix` whenever the change is adding or "
-    "correcting a module-level line such as an import. A module_fix "
-    "may ALSO need a function or method body to change (e.g. an "
-    "assignment inside `__init__` that pairs with the new module "
-    "line): keep kind `module_fix`, name that symbol in "
-    "``target_symbol``, and describe the body change in "
-    "``change_spec`` — both edits are applied, module line first.\n\n"
-    "  module_statement — REQUIRED when kind is `module_fix`; omit "
-    "otherwise. The exact literal line(s) to insert, exactly as they "
-    "should appear in the file. Executable code only — never "
-    "comments, instructions, or guidance (they would be inserted "
-    "into the file verbatim). Any accompanying body change or "
-    "explanation belongs in ``change_spec``, not here.\n"
-    '    ✅ "module_statement": "from commands import InventoryCommand"\n'
-    '    ✅ "module_statement": "#!/usr/bin/env bash"\n'
-    '    ❌ "module_statement": "add an import for InventoryCommand at the top"\n'
-    '    ❌ "module_statement": "ITEMS = {}\\n# then assign ITEMS inside __init__"'
-    " (guidance smuggled as comments — put it in change_spec)\n\n"
-    "  confidence — one of: `HIGH`, `MEDIUM`, `LOW`.\n\n"
-    "  recommended_flow — `file_ops` for code or data file "
-    "changes (covers create, patch, add, rewrite internally); "
-    "`project_ops` for environment or dependency fixes only "
-    "(missing package, Python path, build tooling). Do NOT pick "
-    "project_ops as a fallback when you're unsure — if you can't "
-    "identify a target, pick file_ops with your best-evidence "
-    "guess at target_file.\n\n"
-    "Shape reference — example values illustrate format and field "
-    "shape only. They are NOT symbols in this project; produce real "
-    "values for your diagnosis.\n\n"
-    "```json\n"
-    "{\n"
-    '  "target_file": "src/handler.py",\n'
-    '  "target_symbol": "RequestHandler.dispatch",\n'
-    '  "related_symbols": ["src/router.py:Router.resolve", "make_envelope"],\n'
-    '  "root_cause": "Dispatch reads handler.route_table by attribute but Router.resolve writes routes as a dict keyed by name.",\n'
-    '  "change_spec": "Make RequestHandler.dispatch accept the dict shape Router.resolve produces, or change Router.resolve to expose a flat attribute. Pick whichever side has fewer callers.",\n'
-    '  "expected_error": "",\n'
-    '  "kind": "fix",\n'
-    '  "confidence": "HIGH",\n'
-    '  "recommended_flow": "file_ops"\n'
-    "}\n"
-    "```\n"
-)
+CONCLUDE_PROMPT = load_prompt_text("diagnose/conclude")
 
 
 # Systemic-scan prompt (v12). Runs once AFTER conclude, in the same session, so
@@ -262,39 +142,7 @@ CONCLUDE_PROMPT = (
 # way elsewhere?" — horizontal/pattern widening, distinct from the vertical
 # (causal) widening conclude already does via related_symbols. Confirmed
 # siblings ride the existing multi-symbol patch so the whole class lands at once.
-SCAN_PROMPT = (
-    "Before we finish: think like a developer who just found one instance of a "
-    "bug.\n\n"
-    "Your diagnosis fixes ONE symbol. Often the same mistake is repeated in "
-    "SIBLING symbols — the same defect CLASS, coded the same way (e.g. several "
-    "handlers calling a method under the wrong name, multiple parsers missing "
-    "the same guard, several models with the same off-by-one). These siblings "
-    "are NOT necessarily caught by the program yet, because it failed fast on "
-    "the first one.\n\n"
-    "Using ONLY the evidence you already gathered this session (the symbol "
-    "bodies and call sites you traced, plus the project structure), decide "
-    "whether this is a systemic pattern. Do not speculate about symbols you "
-    "have not seen.\n\n"
-    "Return a JSON object inside a fenced code block:\n\n"
-    "  systemic — true only if you can point to specific sibling symbols that "
-    "share the SAME defect class as your target. false (the common case) when "
-    "the fix is local.\n\n"
-    "  siblings — array of file-qualified symbols that share the defect, each "
-    "``path/to/file.py:Class.method`` (or ``path/to/file.py:function``). Only "
-    "include symbols you actually inspected and are confident share the bug. "
-    "Empty array when systemic is false.\n\n"
-    "  pattern_change_spec — one line describing the fix at the CLASS level so "
-    'it can be applied uniformly to the target and every sibling (e.g. "every '
-    "Command.execute must call the engine's real method name\"). Empty string "
-    "when systemic is false.\n\n"
-    "```json\n"
-    "{\n"
-    '  "systemic": true,\n'
-    '  "siblings": ["commands.py:TalkCommand.execute", "commands.py:HelpCommand.execute"],\n'
-    '  "pattern_change_spec": "Each Command.execute must call the engine method that actually exists."\n'
-    "}\n"
-    "```\n"
-)
+SCAN_PROMPT = load_prompt_text("diagnose/systemic_scan")
 
 
 _FAILED_NODE_RE = re.compile(r"(?m)^(?:FAILED|ERROR) (\S+?\.py)::(\S+)")

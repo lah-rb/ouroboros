@@ -1,0 +1,18 @@
+id: file_ops/localize
+content: |
+  A fix was dispatched for `{file}` without a named target symbol. Using the error evidence, name the most likely place in THIS file to make the fix.
+
+  ## Fix directive
+  {directive}
+
+  ## Error evidence
+  {evidence}
+
+  ## Symbols in {file}
+  {symbols}
+
+  Return a JSON object in a fenced code block:
+    target_symbol — the ONE symbol from the list above most likely to need the change (qualified name exactly as listed). Empty string if the fix is not inside any listed symbol.
+    scope — "symbol" (fix lives inside target_symbol), "module" (fix is a top-level line: import, constant, module statement), or "file" (genuinely needs whole-file restructuring).
+    module_statement — when scope is "module": the exact top-level line to add or correct. Otherwise empty.
+    change_spec — one or two sentences: what must be true after the change.

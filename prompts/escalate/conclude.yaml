@@ -1,0 +1,9 @@
+id: escalate/conclude
+content: |-
+  Conclude the escalation. Based on everything above, return a JSON object inside a fenced code block with these fields:
+
+    outcome — "resolved" if the expected outcome now holds (you verified it, or your applied change directly satisfies it); "deferred" if it does not hold and cannot be made to hold from here.
+    summary — one or two sentences: what was wrong and what you did (or why it must be deferred).
+    key_change — the single most important file:change you made, or "" if none.
+
+  Return ONLY the fenced JSON object.

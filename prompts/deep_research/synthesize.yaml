@@ -1,0 +1,14 @@
+id: deep_research/synthesize
+content: |-
+  Conclude the research sweep. Ground every claim in the findings below — cite source URLs inline.
+
+  BRIEF:
+  {brief}
+
+  FINDINGS:
+  {ledger}
+
+  Return ONLY a fenced JSON object:
+  {{"research_summary": "...", "sufficient": true|false}}
+
+  research_summary answers the brief in a structured, dense form (paragraphs or a compact list; cite URLs inline; note conflicts and open questions honestly). Findings marked [UNVERIFIED] did not fully survive fact-checking — use them only with that caveat stated. sufficient = true only if the findings actually answer the brief.

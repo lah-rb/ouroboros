@@ -25,6 +25,7 @@ import logging
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
 from agent.session_injections import queue as queue_injection
+from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
@@ -44,43 +45,9 @@ VALID_PROFILES = (
     "plain",
 )
 
-SYSTEM_PROMPT = """\
----ACT AS---
-You are the task router for an autonomous coding agent. BEFORE routing, you
-investigate the task in its real workspace to understand what it actually needs.
-You are READ-ONLY: you scout, you never edit. Work one action at a time:
-  - run a command to see the state (ls, grep, cat, run the failing test, git status)
-  - read a file to see what is actually there
-  - conclude once you understand enough to route (usually only a few actions)
-Be quick — you are scouting to make a good routing decision and hand the next
-stage a head start, not fixing anything.
----END---"""
+SYSTEM_PROMPT = load_prompt_text("personas/router")
 
-CONCLUDE_ROUTE_PROMPT = (
-    "You have investigated enough. Route the task. Return a JSON object inside a "
-    "fenced code block with these fields:\n\n"
-    '  flow_set — "ops" or "code_core":\n'
-    "    ops = a LOCALIZED fix (one file / one symbol) OR a produce/operate task "
-    "(author a new file, install, run, configure, transform data, start a "
-    "service, a CTF). ops works fast in a terminal, iterating against live "
-    "output. Choose ops when the change is small and local, or the task is not "
-    "about repairing existing multi-file code.\n"
-    "    code_core = a change spanning MULTIPLE files/modules, a diffuse fix, or "
-    "one needing cross-file understanding and a verified surgical patch. Slower "
-    "and heavier; choose it only when the work is genuinely multi-file or the "
-    "localization is not obvious from what you found.\n"
-    "  profile — one of: service | data_transform | invertible | repair | answer "
-    "| plain (the KIND of end state the task produces).\n"
-    "    When the end state is an ANSWER — a value or small file the task wants "
-    "written (an answer.txt, a move, a count) — route ops even if computing it "
-    "takes code: the code is a means there, and ops iterates in the terminal "
-    "with completion gates that drive at the required artifact. Reserve "
-    "code_core for tasks whose DELIVERABLE is the software itself.\n"
-    "  findings — 2-4 sentences for the NEXT stage: what the task needs, the "
-    "specific file(s)/symbol(s) you identified, and whether it is localized "
-    "(single-file) or diffuse (multi-file). A head start, not a full plan.\n\n"
-    "Return ONLY the fenced JSON object."
-)
+CONCLUDE_ROUTE_PROMPT = load_prompt_text("classify/conclude_route")
 
 
 def _flow_key() -> str:

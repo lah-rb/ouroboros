@@ -18,6 +18,7 @@ import json
 import logging
 
 from agent.models import StepInput, StepOutput
+from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
@@ -41,35 +42,7 @@ _INTERACT_RPC_TIMEOUT_S = 450.0
 # The BUILD-vs-OBSERVE distinction here is canonical — the formerly-duplicate
 # `## Rules` block in plan_interaction_rules.yaml was dropped; its one unique
 # nuance ("deprecation warnings are not failures") is folded in below.
-OPERATOR_PERSONA = """\
----ACT AS---
-You are driving an interactive terminal session to carry out YOUR BRIEF
-(stated in this session's opening message). Read your brief and act
-according to which KIND of brief it is:
-
-- BUILD / ACCOMPLISH brief (create a file, write a script, install a tool,
-  produce a deliverable): DO it. Use shell commands to write the files your
-  brief describes — `cat > path/file <<'EOF' … EOF` to create a script,
-  install any packages it needs, then run and verify what you created.
-  Producing the end state your brief describes IS the job; do not merely
-  observe, and do not assume "another flow" will write the file — you write
-  it here.
-- TEST / OBSERVE brief (exercise existing software, play a program, report
-  behaviour): RUN and OBSERVE only. Respond to prompts as a user would; do
-  NOT modify, patch, or install the software under test. If you see an error
-  trace, read it and report it — don't fix it. Deprecation warnings are not
-  failures.
-
-When a command fails in a way you don't expect, don't just retry the same
-thing — the environment may be set up differently than you assume (a tool
-aliased or installed somewhere unexpected, a missing or differently-named
-credential, a service listening on a non-default endpoint). Inspect what is
-actually there (run `--version`, `which`, list what's running) and adapt,
-rather than repeating a failing command.
-
-When the end state your brief calls for is reached (or you've seen enough for
-an observe brief), close the session cleanly.
----END---"""
+OPERATOR_PERSONA = load_prompt_text("personas/operator")
 
 
 # ── start_interactive_session ─────────────────────────────────────────
@@ -1231,14 +1204,38 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
 # files that merely share an extension. A false positive here costs one log
 # line; a false negative costs what 2026-07-29 cost.
 _STATE_SUFFIXES = (
-    ".json", ".log", ".db", ".sqlite", ".sqlite3", ".pickle", ".pkl",
-    ".cache", ".tmp", ".bak", ".out", ".dat", ".state", ".sav",
+    ".json",
+    ".log",
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".pickle",
+    ".pkl",
+    ".cache",
+    ".tmp",
+    ".bak",
+    ".out",
+    ".dat",
+    ".state",
+    ".sav",
 )
-_CONFIG_NAMES = frozenset({
-    "package.json", "package-lock.json", "tsconfig.json", "composer.json",
-    "compile_commands.json", "pyrightconfig.json", "biome.json", "deno.json",
-    ".eslintrc.json", "env.json", "cargo.json", "angular.json", "nest-cli.json",
-})
+_CONFIG_NAMES = frozenset(
+    {
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "composer.json",
+        "compile_commands.json",
+        "pyrightconfig.json",
+        "biome.json",
+        "deno.json",
+        ".eslintrc.json",
+        "env.json",
+        "cargo.json",
+        "angular.json",
+        "nest-cli.json",
+    }
+)
 
 
 def _unaccounted_state_files(
@@ -1258,7 +1255,7 @@ def _unaccounted_state_files(
         if not path or path in protected:
             continue
         if any(fnmatch.fnmatch(path, pat) for pat in patterns):
-            continue                                    # already accounted for
+            continue  # already accounted for
         base = posixpath.basename(path)
         if base in _CONFIG_NAMES or base.startswith("."):
             continue

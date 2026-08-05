@@ -1,0 +1,11 @@
+id: deep_search/condense
+content: |-
+  You are distilling raw web-search results into the single answer-bearing fact(s) for a specific question. Be terse and literal — extract, do not reason.
+
+  QUESTION (the gap being filled):
+  {query}
+
+  RAW RESULTS:
+  {hits}
+
+  Return 1-4 sentences capturing ONLY the concrete fact(s) that answer the question, each with its source URL in parentheses. If the results do NOT answer it, reply exactly: INSUFFICIENT. If sources conflict, say so and give each side with its URL. No preamble, no restating the question.

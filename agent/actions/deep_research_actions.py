@@ -58,6 +58,7 @@ from agent.actions.fanout import FanoutPerf, estimate_draw, pool_fit_width
 from agent.actions.refinement_actions import _extract_exa_hits
 from agent.llm_json import parse_llm_json
 from agent.models import StepInput, StepOutput
+from agent.loader import load_prompt_text
 
 logger = logging.getLogger(__name__)
 
@@ -75,28 +76,9 @@ _EXTRACT_DRAW_EST = estimate_draw("x" * 2600, gen_margin=384)
 _EXTRACT_CFG = {"reasoning": "low", "temperature": "t*0.2", "max_tokens": 384}
 _VERIFY_CFG = {"reasoning": "low", "temperature": "t*0.2", "max_tokens": 384}
 
-DECOMPOSE_PROMPT = (
-    "You are planning a parallel research sweep. Decompose the brief below "
-    "into independent, concretely searchable questions — each one answerable "
-    "by a focused web search, none depending on another's answer. Prefer "
-    "distinct ANGLES (mechanisms, comparisons, failure modes, primary "
-    "sources, recent developments) over paraphrases of the whole brief.\n\n"
-    "BRIEF:\n{brief}\n\n"
-    "Return ONLY a fenced JSON object: "
-    '{{"angles": ["question 1", "question 2", ...]}} '
-    "with 3-{max_angles} questions."
-)
+DECOMPOSE_PROMPT = load_prompt_text("deep_research/decompose")
 
-PROPOSE_PROMPT = (
-    "You are deriving candidate web-search queries for a research sweep. "
-    "Your lens: {lens}.\n\n"
-    "BRIEF:\n{brief}\n\n"
-    "ALREADY SEARCHED (never repeat):\n{queries_run}\n\n"
-    "FINDINGS SO FAR:\n{ledger}\n\n"
-    "Propose up to {n} NEW, independent, concretely searchable queries "
-    "through your lens — each answerable by one focused search. Return ONLY "
-    'a fenced JSON object: {{"queries": ["...", ...]}}'
-)
+PROPOSE_PROMPT = load_prompt_text("deep_research/propose")
 
 _PROPOSER_LENSES = (
     "mechanisms, definitions, and primary sources (specs, official docs, "
@@ -109,72 +91,15 @@ _PROPOSER_LENSES = (
     "stories, practitioner opinions (forums, reviews, real-world reports)",
 )
 
-VOTE_PROMPT = (
-    "You are one voter on a search-budget panel. The sweep can afford {budget} "
-    "web searches this round — pick the candidates most likely to close the "
-    "brief's remaining gaps (independent, specific, non-overlapping; prefer "
-    "primary-source-shaped queries over paraphrases of the brief).\n\n"
-    "BRIEF:\n{brief}\n\n"
-    "FINDINGS SO FAR:\n{ledger}\n\n"
-    "CANDIDATES:\n{candidates}\n\n"
-    "Return ONLY a fenced JSON object with the numbers of your picks "
-    '(at most {budget}): {{"picks": [1, 4, ...]}}'
-)
+VOTE_PROMPT = load_prompt_text("deep_research/vote")
 
-EXTRACT_PROMPT = (
-    "You are extracting the answer-bearing fact(s) from ONE web-search hit "
-    "for a specific question. Be terse and literal — extract, do not "
-    "reason.\n\n"
-    "QUESTION (the gap being filled):\n{query}\n\n"
-    "SOURCE [{url}] {title}:\n{content}\n\n"
-    "Return 1-3 sentences capturing ONLY the concrete fact(s) from THIS "
-    "source that answer the question, with the source URL in parentheses. "
-    "If this source does NOT answer it, reply exactly: INSUFFICIENT. No "
-    "preamble, no restating the question."
-)
+EXTRACT_PROMPT = load_prompt_text("deep_research/extract")
 
-VERIFY_PROMPT = (
-    "You are an adversarial fact-checker. Below is a CLAIM extracted from a "
-    "source, and the source text it cites. Try to REFUTE the claim: does the "
-    "source actually say this?\n\n"
-    "CLAIM:\n{claim}\n\n"
-    "SOURCE [{url}]:\n{content}\n\n"
-    "Return ONLY a fenced JSON object:\n"
-    '{{"verdict": "supported"|"unsupported"|"contradicted", "note": "..."}}\n\n'
-    "supported = the source text states this (quote the supporting span in "
-    "note). unsupported = plausible but the source does not actually say it "
-    "(note what is missing). contradicted = the source says otherwise (quote "
-    "the contradicting span). Judge ONLY against the source text shown."
-)
+VERIFY_PROMPT = load_prompt_text("deep_research/verify")
 
-MERGE_REFLECT_PROMPT = (
-    "You are auditing a research ledger mid-sweep. The brief and the findings "
-    "so far are below. Judge coverage and name what is still missing.\n\n"
-    "BRIEF:\n{brief}\n\n"
-    "FINDINGS ({n} so far):\n{ledger}\n\n"
-    "Return ONLY a fenced JSON object:\n"
-    '{{"sufficient": true|false, "gaps": ["searchable question", ...]}}\n\n'
-    "sufficient = true when the findings already answer the brief (gaps then "
-    "empty). Otherwise list up to {max_angles} NEW independent searchable "
-    "questions targeting the actual gaps — never repeat a question already "
-    "answered, and drop angles that returned INSUFFICIENT twice. Findings "
-    "marked [CONTRADICTED] or [UNVERIFIED] failed fact-checking — treat "
-    "their questions as still open."
-)
+MERGE_REFLECT_PROMPT = load_prompt_text("deep_research/merge_reflect")
 
-SYNTHESIZE_PROMPT = (
-    "Conclude the research sweep. Ground every claim in the findings below — "
-    "cite source URLs inline.\n\n"
-    "BRIEF:\n{brief}\n\n"
-    "FINDINGS:\n{ledger}\n\n"
-    "Return ONLY a fenced JSON object:\n"
-    '{{"research_summary": "...", "sufficient": true|false}}\n\n'
-    "research_summary answers the brief in a structured, dense form "
-    "(paragraphs or a compact list; cite URLs inline; note conflicts and "
-    "open questions honestly). Findings marked [UNVERIFIED] did not fully "
-    "survive fact-checking — use them only with that caveat stated. "
-    "sufficient = true only if the findings actually answer the brief."
-)
+SYNTHESIZE_PROMPT = load_prompt_text("deep_research/synthesize")
 
 
 def _bounded(s: str, n: int) -> str:

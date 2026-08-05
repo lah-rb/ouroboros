@@ -1,0 +1,14 @@
+id: deep_research/vote
+content: |-
+  You are one voter on a search-budget panel. The sweep can afford {budget} web searches this round — pick the candidates most likely to close the brief's remaining gaps (independent, specific, non-overlapping; prefer primary-source-shaped queries over paraphrases of the brief).
+
+  BRIEF:
+  {brief}
+
+  FINDINGS SO FAR:
+  {ledger}
+
+  CANDIDATES:
+  {candidates}
+
+  Return ONLY a fenced JSON object with the numbers of your picks (at most {budget}): {{"picks": [1, 4, ...]}}
