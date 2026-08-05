@@ -173,7 +173,6 @@ file_ops: #FlowDefinition & {
 				flow_directive:    {$ref: "input.flow_directive"}
 				module_directive:  {$ref: "context.module_directive", default: ""}
 				change_spec:       {$ref: "input.change_spec", default: ""}
-				working_directory: {$ref: "input.working_directory"}
 			}
 			resolver: {
 				type: "rule"
@@ -392,15 +391,11 @@ file_ops: #FlowDefinition & {
 			description: "YAML data file — surgical path-scoped patch (data_ops)"
 			flow:        "data_patch"
 			input_map: {
-				mission_id:        {$ref: "input.mission_id"}
-				goal_id:           {$ref: "input.goal_id"}
 				target_file_path:  {$ref: "input.target_file_path"}
 				file_content:      {$ref: "context.target_file.content"}
 				change_spec:       {$ref: "input.change_spec", default: ""}
-				target_symbol:     {$ref: "input.target_symbol", default: ""}
 				flow_directive:    {$ref: "input.flow_directive"}
 				file_context:      {$ref: "input.file_context"}
-				working_directory: {$ref: "input.working_directory"}
 			}
 			resolver: {
 				type: "rule"
@@ -590,8 +585,6 @@ file_ops: #FlowDefinition & {
 			flow:        "escalate"
 			context: required: ["validation_output"]
 			input_map: {
-				mission_id:        {$ref: "input.mission_id"}
-				working_directory: {$ref: "input.working_directory"}
 				target_file_path:  {$ref: "input.target_file_path"}
 				failure_evidence:  {$ref: "context.validation_output"}
 				expected_outcome:  "The deterministic validation checks pass for the changed file(s)."

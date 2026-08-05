@@ -39,7 +39,13 @@ escalate: #FlowDefinition & {
 
 	input: {
 		required: ["failure_evidence", "expected_outcome"]
-		optional: ["mission_id", "working_directory", "target_file_path", "invoking_flow"]
+		// mission_id + working_directory retired 2026-08-05: escalate never
+		// read either. Their only use was forwarding them to deep_search,
+		// which ignored them too — plumbing three levels deep with no
+		// consumer at any level. The two that ARE read (invoking_flow,
+		// target_file_path) stay; escalation_actions builds its seed from
+		// them via step_input.inputs.
+		optional: ["target_file_path", "invoking_flow"]
 	}
 
 	defaults: config: temperature: "t*0.3"
@@ -225,8 +231,6 @@ escalate: #FlowDefinition & {
 			context: optional: ["escalation_choice_arg"]
 			input_map: {
 				brief:             {$ref: "context.escalation_choice_arg"}
-				working_directory: {$ref: "input.working_directory"}
-				mission_id:        {$ref: "input.mission_id"}
 			}
 			resolver: {
 				type: "rule"

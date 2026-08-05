@@ -184,7 +184,6 @@ research_control: #FlowDefinition & {
 			input_map: {
 				mission_id:        {$ref: "input.mission_id"}
 				working_directory: {$ref: "context.mission.config.working_directory"}
-				mission_objective: {$ref: "context.mission.objective"}
 			}
 			resolver: {
 				type: "rule"

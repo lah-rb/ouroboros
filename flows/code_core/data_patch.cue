@@ -30,7 +30,7 @@ data_patch: #FlowDefinition & {
 
 	input: {
 		required: ["target_file_path", "file_content", "flow_directive"]
-		optional: ["change_spec", "target_symbol", "file_context", "working_directory", "mission_id", "goal_id"]
+		optional: ["change_spec", "file_context"]
 	}
 
 	defaults: config: temperature: "t*0.3"

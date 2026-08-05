@@ -51,7 +51,7 @@ deep_research: #FlowDefinition & {
 
 	input: {
 		required: ["brief"]
-		optional: ["mission_id", "working_directory"]
+		optional: ["working_directory"]
 	}
 
 	defaults: config: temperature: "t*0.4"

@@ -41,7 +41,6 @@ patch_module: #FlowDefinition & {
 			"module_directive",
 			"change_spec",
 			"root_cause",
-			"working_directory",
 		]
 	}
 

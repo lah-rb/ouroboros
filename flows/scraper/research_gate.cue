@@ -28,7 +28,7 @@ research_gate: #FlowDefinition & {
 
 	input: {
 		required: ["mission_id", "working_directory"]
-		optional: ["mission_objective"]
+		optional: []
 	}
 
 	defaults: config: temperature: "t*0.2"

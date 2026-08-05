@@ -42,7 +42,7 @@ deep_search: #FlowDefinition & {
 
 	input: {
 		required: ["brief"]
-		optional: ["mission_id", "working_directory"]
+		optional: []
 	}
 
 	defaults: config: temperature: "t*0.4"

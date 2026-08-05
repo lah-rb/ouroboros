@@ -389,7 +389,6 @@ design_and_plan: #FlowDefinition & {
 			context: required: ["mission"]
 			input_map: {
 				brief:             {$ref: "context.mission.objective"}
-				mission_id:        {$ref: "input.mission_id"}
 				working_directory: {$ref: "context.mission.config.working_directory"}
 			}
 			resolver: {

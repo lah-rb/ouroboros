@@ -383,8 +383,6 @@ project_ops: #FlowDefinition & {
 			flow:        "escalate"
 			context: optional: ["terminal_output", "install_commands"]
 			input_map: {
-				mission_id:        {$ref: "input.mission_id"}
-				working_directory: {$ref: "input.working_directory"}
 				failure_evidence:  {$ref: "context.terminal_output", default: "The dependency install commands failed."}
 				expected_outcome:  "The project's declared dependencies are installed and importable by the interpreter that runs the program."
 				invoking_flow:     "project_ops"

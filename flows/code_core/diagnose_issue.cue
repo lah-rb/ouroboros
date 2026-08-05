@@ -125,8 +125,6 @@ diagnose_issue: #FlowDefinition & {
 			context: optional: ["search_brief"]
 			input_map: {
 				brief:             {$ref: "context.search_brief"}
-				working_directory: {$ref: "input.working_directory"}
-				mission_id:        {$ref: "input.mission_id"}
 			}
 			resolver: {
 				type: "rule"

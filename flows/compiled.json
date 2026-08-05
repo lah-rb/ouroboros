@@ -1540,11 +1540,7 @@
       ],
       "optional": [
         "change_spec",
-        "target_symbol",
-        "file_context",
-        "working_directory",
-        "mission_id",
-        "goal_id"
+        "file_context"
       ]
     },
     "defaults": {
@@ -1701,7 +1697,6 @@
         "brief"
       ],
       "optional": [
-        "mission_id",
         "working_directory"
       ]
     },
@@ -2025,10 +2020,7 @@
       "required": [
         "brief"
       ],
-      "optional": [
-        "mission_id",
-        "working_directory"
-      ]
+      "optional": []
     },
     "defaults": {
       "config": {
@@ -3006,9 +2998,6 @@
           "brief": {
             "$ref": "context.mission.objective"
           },
-          "mission_id": {
-            "$ref": "input.mission_id"
-          },
           "working_directory": {
             "$ref": "context.mission.config.working_directory"
           }
@@ -3284,12 +3273,6 @@
         "input_map": {
           "brief": {
             "$ref": "context.search_brief"
-          },
-          "working_directory": {
-            "$ref": "input.working_directory"
-          },
-          "mission_id": {
-            "$ref": "input.mission_id"
           }
         },
         "params": {},
@@ -3858,8 +3841,6 @@
         "expected_outcome"
       ],
       "optional": [
-        "mission_id",
-        "working_directory",
         "target_file_path",
         "invoking_flow"
       ]
@@ -4139,12 +4120,6 @@
         "input_map": {
           "brief": {
             "$ref": "context.escalation_choice_arg"
-          },
-          "working_directory": {
-            "$ref": "input.working_directory"
-          },
-          "mission_id": {
-            "$ref": "input.mission_id"
           }
         },
         "params": {},
@@ -4738,9 +4713,6 @@
           "change_spec": {
             "$ref": "input.change_spec",
             "default": ""
-          },
-          "working_directory": {
-            "$ref": "input.working_directory"
           }
         },
         "publishes": [
@@ -5094,12 +5066,6 @@
         "effects": [],
         "flow": "data_patch",
         "input_map": {
-          "mission_id": {
-            "$ref": "input.mission_id"
-          },
-          "goal_id": {
-            "$ref": "input.goal_id"
-          },
           "target_file_path": {
             "$ref": "input.target_file_path"
           },
@@ -5110,18 +5076,11 @@
             "$ref": "input.change_spec",
             "default": ""
           },
-          "target_symbol": {
-            "$ref": "input.target_symbol",
-            "default": ""
-          },
           "flow_directive": {
             "$ref": "input.flow_directive"
           },
           "file_context": {
             "$ref": "input.file_context"
-          },
-          "working_directory": {
-            "$ref": "input.working_directory"
           }
         },
         "publishes": [
@@ -5424,12 +5383,6 @@
         "effects": [],
         "flow": "escalate",
         "input_map": {
-          "mission_id": {
-            "$ref": "input.mission_id"
-          },
-          "working_directory": {
-            "$ref": "input.working_directory"
-          },
           "target_file_path": {
             "$ref": "input.target_file_path"
           },
@@ -9143,8 +9096,7 @@
       "optional": [
         "module_directive",
         "change_spec",
-        "root_cause",
-        "working_directory"
+        "root_cause"
       ]
     },
     "defaults": {
@@ -9949,12 +9901,6 @@
         "effects": [],
         "flow": "escalate",
         "input_map": {
-          "mission_id": {
-            "$ref": "input.mission_id"
-          },
-          "working_directory": {
-            "$ref": "input.working_directory"
-          },
           "failure_evidence": {
             "$ref": "context.terminal_output",
             "default": "The dependency install commands failed."
@@ -23500,9 +23446,6 @@
           },
           "working_directory": {
             "$ref": "context.mission.config.working_directory"
-          },
-          "mission_objective": {
-            "$ref": "context.mission.objective"
           }
         },
         "params": {},
@@ -23646,9 +23589,7 @@
         "mission_id",
         "working_directory"
       ],
-      "optional": [
-        "mission_objective"
-      ]
+      "optional": []
     },
     "defaults": {
       "config": {
