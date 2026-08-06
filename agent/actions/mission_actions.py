@@ -4464,6 +4464,94 @@ async def action_run_test_suite_gate(step_input: StepInput) -> StepOutput:
     )
 
 
+# How many genuine repair attempts an evidenced warning gets before it stands
+# down. Matches _ACCEPTANCE_DISARM_K / _SHAPE_REFUTE_K — the house threshold
+# for "tried twice, believe the evidence".
+WARNING_MAX_ATTEMPTS = 2
+
+
+async def action_warning_sweep_next(step_input: StepInput) -> StepOutput:
+    """Take the next evidenced warning and build a diagnose_issue dispatch.
+
+    THE SECOND EVIDENCE CHANNEL. Everything else in the repair loop is driven
+    by a PTY session: a failure gets fixed because a session observed it. A
+    deterministic check (an unaccounted runtime file, an unreachable room
+    graph, a cross-module type mismatch) has no session behind it and, before
+    2026-08-06, no route into repair at all — it was logged and dropped.
+
+    THE WARNING TRAVELS AS FLOW INPUTS, NOT AS A NOTE. diagnose_issue strips
+    notes from its session seed (diagnosis_session_actions.py, "cross-goal
+    leak in 7e7"), so a note-borne warning arrives as nothing. That is exactly
+    how the flush tripwire stayed invisible for an entire 8-hour run: it wrote
+    a correct, actionable note tagged to `save.json`, and _filter_notes_for_file
+    only surfaces a note to whoever is working on that file — which no goal
+    ever is, because it is a runtime artifact.
+
+    The evidence is quoted verbatim into flow_directive. A thin payload
+    recreates the blind-diagnose trap, where a fixer with no evidence opens a
+    session and starts guessing (699 investigate steps on thompson-nfa without
+    ever running the code).
+
+    Context required: mission
+    Publishes: dispatch_config
+    """
+    mission = step_input.context.get("mission")
+    warning = mission.next_pending_warning() if mission else None
+    if warning is None:
+        return StepOutput(
+            result={"sweep_complete": True},
+            observations="No pending warnings",
+        )
+
+    mission.dispatch_warning(warning.id)
+    if step_input.effects:
+        await step_input.effects.save_mission(mission)
+
+    subject = warning.subject or warning.kind
+    fix_line = (
+        f"\n\nPrescribed fix: {warning.prescribed_fix}"
+        if warning.prescribed_fix
+        else ""
+    )
+    directive = (
+        f"A deterministic check raised this, WITHOUT a behavioural test session "
+        f"behind it — so it will not appear in any transcript. Diagnose the root "
+        f"cause and identify what to change.\n\n"
+        f"Observed by: {warning.source_flow} ({warning.kind})\n"
+        f"Subject: {subject}\n\n"
+        f"Evidence:\n{warning.evidence}{fix_line}"
+    )
+    headline = f"{warning.kind}: {subject}"[:80]
+
+    logger.info(
+        "Warning sweep: dispatching %s (attempt %d/%d)",
+        headline,
+        warning.attempts,
+        WARNING_MAX_ATTEMPTS,
+    )
+    return StepOutput(
+        result={"sweep_complete": False, "needs_diagnosis": True},
+        observations=f"Evidenced warning → diagnose: {headline}",
+        context_updates={
+            "mission": mission,
+            "dispatch_config": {
+                # No goal binds a warning — it is not goal-shaped. The
+                # warning's own lifecycle (dispatched -> abandoned) is what
+                # guarantees forward progress, not a goal completion.
+                "goal_id": "",
+                "goal_description": headline,
+                "goal_type": "warning",
+                "goal_files": [],
+                "flow": "diagnose_issue",
+                "target_file_path": "",
+                "flow_directive": directive,
+                "what_happened": warning.evidence,
+                "error_headline": headline,
+            },
+        },
+    )
+
+
 async def action_quality_sweep_next(step_input: StepInput) -> StepOutput:
     """Work the next incomplete ``quality`` goal: diagnose -> file_ops -> complete
     on a successful patch (quality goals have no clean interact re-test). Mirror

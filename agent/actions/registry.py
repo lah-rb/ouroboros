@@ -181,6 +181,7 @@ def build_action_registry() -> ActionRegistry:
         action_functional_sweep_next,
         action_harvest_quality_findings,
         action_quality_sweep_next,
+        action_warning_sweep_next,
         action_regression_sweep,
         action_run_test_suite_gate,
         # In-graph task router (classify flow)
@@ -422,6 +423,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("functional_sweep_next", action_functional_sweep_next)
     registry.register("harvest_quality_findings", action_harvest_quality_findings)
     registry.register("quality_sweep_next", action_quality_sweep_next)
+    registry.register("warning_sweep_next", action_warning_sweep_next)
     registry.register("run_test_suite_gate", action_run_test_suite_gate)
     registry.register("regression_sweep", action_regression_sweep)
     # Fix target resolution — menu assembly moved to fix_target_menu projection

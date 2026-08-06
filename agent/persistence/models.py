@@ -435,6 +435,54 @@ class NoteRecord(BaseModel):
         return v if v in known else "general"
 
 
+class WarningRecord(BaseModel):
+    """A deterministic finding that needs repair but has no PTY evidence.
+
+    THE GAP THIS FILLS. The repair cycle has exactly one evidence channel —
+    the behavioural session. A failure gets fixed because a session observed
+    it. Anything a deterministic check knows (an unaccounted runtime file, an
+    unreachable room graph, a cross-module type mismatch) is logged and
+    dropped, because nothing routes it to a fixer.
+
+    Found the hard way on 2026-08-05: an 8-hour hy3 run wrote `save.json`
+    every session with no `transient_files` declaration, so every behavioural
+    test inherited the previous test's state. The flush tripwire named the
+    file correctly on every cycle and prescribed the right fix, and no reader
+    could ever see it — the note was tagged to `save.json`, and
+    `_filter_notes_for_file` only surfaces a note to whoever is working on
+    that file. No goal targets a runtime artifact.
+
+    NOT A NOTE. Notes are a log; this is a queue with a lifecycle, and
+    critically `diagnose_issue` strips notes from its session seed
+    (diagnosis_session_actions.py, "cross-goal leak in 7e7"). A warning
+    travels as flow INPUTS or it does not arrive at all.
+
+    `evidence` is what was OBSERVED, quoted. A thin payload recreates the
+    blind-diagnose trap, where a fixer with no evidence opens a session and
+    starts guessing.
+    """
+
+    id: str = Field(default_factory=lambda: _new_id()[:8])
+    # (kind, subject) is the identity a producer re-raises against — e.g.
+    # ("unaccounted_runtime_file", "save.json").
+    kind: str = "general"
+    subject: str = ""
+    evidence: str = ""
+    prescribed_fix: str = ""
+    source_flow: str = "unknown"
+    # Same coercion rationale as NoteRecord.category: a strict Literal makes a
+    # whole archived mission.json unreadable, because load_mission raises on
+    # the first bad record.
+    status: Literal["pending", "dispatched", "abandoned"] = "pending"
+    attempts: int = 0
+    timestamp: str = Field(default_factory=_now_iso)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _coerce_status(cls, v: Any) -> str:
+        return v if v in {"pending", "dispatched", "abandoned"} else "pending"
+
+
 # ── Architecture State ─────────────────────────────────────────────────
 
 
@@ -960,6 +1008,12 @@ class MissionState(BaseModel):
     # project_ops report path and renders it into setup planning + diagnose
     # seeds. Additive default keeps old mission.json files loading.
     workspace_ledger: list[WorkspaceLedgerEntry] = Field(default_factory=list)
+    # Evidenced warnings — the SECOND evidence channel. Deterministic findings
+    # that need repair but have no PTY session behind them; the director
+    # diverts to diagnose_issue on a pending entry before taking the next
+    # functional goal. See WarningRecord for why this is a queue and not a
+    # note. Additive default keeps old mission.json files loading.
+    pending_warnings: list[WarningRecord] = Field(default_factory=list)
     environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
     # ── League run protocol (epoch v2.0, 2026-08-02) — both additive ──
     # The budget park now lands at the work→entry boundary, BEFORE the entry
@@ -1072,6 +1126,97 @@ class MissionState(BaseModel):
         if len(self.workspace_ledger) > 60:
             del self.workspace_ledger[:-60]
         return True
+
+    # ── Evidenced warnings ────────────────────────────────────────────
+    #
+    # Lifecycle: pending -> dispatched -> (re-armed to pending | abandoned).
+    # Modelled on the acceptance_conflicts disarm (pipeline_actions.py):
+    # increment, compare to a named K, terminal state, audit trail.
+
+    def find_warning(self, kind: str, subject: str) -> "WarningRecord | None":
+        """The live entry for a (kind, subject), whatever its status."""
+        for w in self.pending_warnings:
+            if w.kind == kind and w.subject == subject:
+                return w
+        return None
+
+    def raise_warning(
+        self,
+        *,
+        kind: str,
+        subject: str,
+        evidence: str,
+        prescribed_fix: str = "",
+        source_flow: str = "unknown",
+        max_attempts: int = 2,
+    ) -> bool:
+        """Raise or RE-ARM a warning. True when it now needs attention.
+
+        Four cases, and the third is the whole design:
+
+        * No entry -> create it `pending`.
+        * Entry is `pending` -> no-op. A producer that runs every session must
+          not enqueue every session; the tripwire this replaces was "PUSHED
+          ONCE" for exactly that reason.
+        * Entry is `dispatched` and has attempts left -> RE-ARM to `pending`.
+          The producer firing again after a fix attempt IS the evidence the
+          fix did not work; nothing else has to re-check anything.
+        * Entry is `dispatched` and attempts are spent -> `abandoned`.
+
+        ABANDONMENT IS DECIDED HERE, not at dispatch, because this is where
+        the evidence is: the finding came back after N fixes. Deciding at
+        dispatch would spend one attempt on bookkeeping and leave only N-1
+        real repair attempts.
+
+        `abandoned` is terminal and never re-arms — without a terminal state a
+        warning that cannot be cleared diverts every goal boundary forever,
+        which is the acceptance-check permanent-veto bug in a new hat.
+        """
+        existing = self.find_warning(kind, subject)
+        if existing is None:
+            self.pending_warnings.append(
+                WarningRecord(
+                    kind=kind,
+                    subject=subject,
+                    evidence=evidence,
+                    prescribed_fix=prescribed_fix,
+                    source_flow=source_flow,
+                )
+            )
+            return True
+        if existing.status in ("abandoned", "pending"):
+            return False
+        # dispatched: it came back.
+        if existing.attempts >= max_attempts:
+            existing.status = "abandoned"
+            return False
+        existing.status = "pending"
+        # The latest sighting is the current evidence.
+        existing.evidence = evidence or existing.evidence
+        existing.timestamp = _now_iso()
+        return True
+
+    def next_pending_warning(self) -> "WarningRecord | None":
+        """Oldest pending warning — FIFO, so one producer cannot starve another."""
+        for w in self.pending_warnings:
+            if w.status == "pending":
+                return w
+        return None
+
+    def dispatch_warning(self, warning_id: str) -> str:
+        """Mark a warning dispatched and count the attempt.
+
+        Always succeeds — the abandon decision lives in raise_warning, where
+        the re-sighting evidence is. Returns the new status, or "" if the id
+        is unknown.
+        """
+        for w in self.pending_warnings:
+            if w.id != warning_id:
+                continue
+            w.attempts += 1
+            w.status = "dispatched"
+            return w.status
+        return ""
 
 
 # ── Events ────────────────────────────────────────────────────────────

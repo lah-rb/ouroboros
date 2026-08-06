@@ -50,6 +50,12 @@ class PhaseRule:
                             OR a sweep-reopened grounded incomplete goal exists
                             (re-clear it) -> ``phase`` (runs the bidirectional
                             cross-goal acceptance-check regression suite)
+      warnings_pending    — any ``mission.pending_warnings`` entry with
+                            ``status == "pending"`` -> ``phase`` (the second
+                            evidence channel: deterministic findings with no
+                            PTY session behind them). Self-limiting — a
+                            dispatch marks the entry ``dispatched`` and,
+                            once attempts are spent, ``abandoned``
       terminal            — always matches (the spec's final rule)
     """
 
@@ -59,6 +65,7 @@ class PhaseRule:
         "flag_unset",
         "attr_truthy",
         "regression_pending",
+        "warnings_pending",
         "terminal",
     ]
     phase: str
@@ -86,6 +93,13 @@ class PhaseRule:
 PHASE_RANKS: dict[str, int] = {
     "structural": 10,
     "environment": 20,
+    # Evidenced warnings sit between the environment existing and the next
+    # functional goal — a deterministic finding is cheap to fix and its cost
+    # compounds if the functional phase builds on top of it. Deliberately
+    # RANKED (not rank 0 like replan/regression, which are uncappable): a
+    # top_phase that stops short of functional runs no behavioural sessions,
+    # so there is nothing observed worth diverting for.
+    "warning": 25,
     "functional": 30,
     "test_suite": 40,
     "quality": 50,
@@ -143,6 +157,20 @@ CODE_CORE_PHASES: tuple[PhaseRule, ...] = (
         flag="environment_verified",
         observation="All structural goals complete — environment needs verification",
         rank=PHASE_RANKS["environment"],
+    ),
+    # Evidenced warnings — the second evidence channel. A deterministic check
+    # (unaccounted runtime file, unreachable room graph, cross-module type
+    # mismatch) has no PTY session behind it and therefore no route into the
+    # repair loop; before 2026-08-06 such findings were logged and dropped.
+    # Sits BEFORE functional so a finding is cleared before more work is built
+    # on it, and AFTER environment so the workspace exists first. Self-limiting
+    # via WarningRecord.attempts -> abandoned; see evaluate_phases
+    # (warnings_pending).
+    PhaseRule(
+        kind="warnings_pending",
+        phase="warning",
+        observation="Evidenced warning pending — diverting to diagnose before the next goal",
+        rank=PHASE_RANKS["warning"],
     ),
     PhaseRule(
         kind="goal_type_incomplete",
@@ -467,6 +495,20 @@ def evaluate_phases(mission: Any, phases: tuple[PhaseRule, ...]) -> tuple[str, s
                     and getattr(g, "acceptance_checks", None)
                 )
                 for g in getattr(mission, "goals", []) or []
+            ):
+                return rule.phase, rule.observation
+            continue
+
+        if rule.kind == "warnings_pending":
+            # Any evidenced warning still awaiting a fix attempt. `dispatched`
+            # and `abandoned` both read as false here, so the divert fires at
+            # most once per raise and a warning that cannot be cleared stops
+            # diverting after WARNING_MAX_ATTEMPTS instead of starving the
+            # functional queue forever. Safe on a None mission and on an old
+            # mission.json that predates the field.
+            if any(
+                getattr(w, "status", "") == "pending"
+                for w in getattr(mission, "pending_warnings", None) or []
             ):
                 return rule.phase, rule.observation
             continue

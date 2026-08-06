@@ -113,6 +113,7 @@ mission_control: #FlowDefinition & {
 						{condition: "result.phase == 'plan'", transition: "dispatch_planning"},
 					{condition: "result.phase == 'structural'", transition: "structural_sweep_next"},
 					{condition: "result.phase == 'environment'", transition: "dispatch_environment_setup"},
+					{condition: "result.phase == 'warning'", transition: "warning_sweep_next"},
 					{condition: "result.phase == 'functional'", transition: "functional_sweep_next"},
 					// Quality goals (harvested from gate findings) have their own
 					// sweep — diagnose -> file_ops -> complete-on-patch. Functional/
@@ -432,6 +433,56 @@ mission_control: #FlowDefinition & {
 				]
 			}
 			publishes: ["dispatch_config"]
+		}
+
+		// ── Evidenced warnings ────────────────────────────────────
+		//
+		// The second evidence channel. Everything else in the repair loop is
+		// driven by a PTY session; a deterministic check has none, so before
+		// 2026-08-06 its findings were logged and dropped. Sits between the
+		// environment phase and the functional queue: clear a cheap known
+		// defect before building more work on top of it.
+		//
+		// Terminating by construction — the sweep marks the entry dispatched
+		// and raise_warning abandons it once attempts are spent, so a warning
+		// that cannot be cleared stops diverting instead of starving the
+		// functional queue (the acceptance-check permanent-veto failure).
+		warning_sweep_next: #StepDefinition & {
+			action:      "warning_sweep_next"
+			description: "Take the next evidenced warning and build its diagnosis dispatch"
+			context: {
+				required: ["mission"]
+			}
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.needs_diagnosis == true", transition: "dispatch_warning_diagnosis"},
+					{condition: "true", transition: "check_phase"},
+				]
+			}
+			publishes: ["dispatch_config"]
+		}
+
+		dispatch_warning_diagnosis: #StepDefinition & {
+			action:      "noop"
+			description: "Diagnose an evidenced warning (no session behind it)"
+			context: required: ["dispatch_config", "mission"]
+			tail_call: {
+				flow: "diagnose_issue"
+				input_map: {
+					mission_id: {$ref: "input.mission_id"}
+					// Deliberately empty: a warning is not goal-shaped. Forward
+					// progress is guaranteed by the warning's own lifecycle,
+					// not by a goal completing.
+					goal_id:           ""
+					flow_directive:    {$ref: "context.dispatch_config.flow_directive"}
+					goal_description:  {$ref: "context.dispatch_config.goal_description", default: ""}
+					target_file_path:  {$ref: "context.dispatch_config.target_file_path", default: ""}
+					what_happened:     {$ref: "context.dispatch_config.what_happened", default: ""}
+					error_headline:    {$ref: "context.dispatch_config.error_headline", default: ""}
+					working_directory: {$ref: "context.mission.config.working_directory"}
+				}
+			}
 		}
 
 		dispatch_functional_test: #StepDefinition & {
