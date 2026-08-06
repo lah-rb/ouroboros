@@ -371,3 +371,63 @@ async def test_bidirectional_same_batch():
     assert complete_g.status == "incomplete"
     assert out.result == {"reopened": 1, "autocompleted": 1}
     assert len(fx.calls_to("save_mission")) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_disarmed_check_is_replaced_not_just_removed():
+    """The deferred "component 3", built 2026-08-06 after the examine goal
+    completed with ZERO checks: grounding is one-shot (needs_derive = not
+    grounded), so the disarm's completion round skipped re-derivation and the
+    goal dropped out of the regression sweep entirely — future edits could
+    break it silently, forever. A disarm now resets grounding AND tells THIS
+    round's arm_acceptance to derive a fresh check from the pass that just
+    happened, so the stale assumption is replaced by one grounded in the
+    current world. Derive-after-pass stays inviolate — now_ok IS a pass."""
+    cmd = "test -f stale-layout"
+    g = _goal("g", [_check(cmd)])
+    g.acceptance_grounded = True
+    m = _mission([g])
+    fx = MockEffects()
+    fail_row = check_result("m", ["/bin/sh", "-c", cmd], False, required=True)
+
+    for _ in range(_ACCEPTANCE_DISARM_K - 1):
+        out = await action_reconcile_acceptance(_rc_si(m, [fail_row], "g", fx))
+        assert g.acceptance_grounded is True, "no reset before the disarm"
+        assert "acceptance_needs_derive" not in (out.context_updates or {})
+
+    out = await action_reconcile_acceptance(_rc_si(m, [fail_row], "g", fx))
+    assert out.result["now_ok"] is True
+    assert g.acceptance_grounded is False, "grounding must reset on disarm"
+    assert out.context_updates.get("acceptance_needs_derive") is True, (
+        "the completion round must derive the replacement — grounding alone "
+        "cannot re-arm a goal that completes this same round"
+    )
+
+
+def test_the_flow_routes_the_replacement_derive():
+    """reconcile now_ok -> end_eval_session_success -> arm_acceptance, whose
+    resolver reads acceptance_needs_derive — the key reconcile now publishes.
+    Pinned off the compiled graph so the route survives refactors."""
+    import json as _json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    interact = _json.loads((root / "flows" / "compiled.json").read_text())["interact"]
+    steps = interact["steps"]
+
+    assert "acceptance_needs_derive" in steps["reconcile_acceptance"]["publishes"]
+    ok = [
+        r
+        for r in steps["reconcile_acceptance"]["resolver"]["rules"]
+        if "now_ok" in r["condition"]
+    ]
+    assert ok[0]["transition"] == "end_eval_session_success"
+    assert steps["end_eval_session_success"]["resolver"]["rules"][0]["transition"] == (
+        "arm_acceptance"
+    )
+    derive = [
+        r
+        for r in steps["arm_acceptance"]["resolver"]["rules"]
+        if "acceptance_needs_derive" in r["condition"]
+    ]
+    assert derive and derive[0]["transition"] == "derive_acceptance"

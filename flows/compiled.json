@@ -6898,7 +6898,8 @@
         },
         "publishes": [
           "mission",
-          "acceptance_ok"
+          "acceptance_ok",
+          "acceptance_needs_derive"
         ],
         "effects": [],
         "terminal": false

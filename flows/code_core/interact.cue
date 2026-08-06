@@ -445,7 +445,12 @@ interact: #FlowDefinition & {
 					{condition: "true", transition: "end_eval_session_failure"},
 				]
 			}
-			publishes: ["mission", "acceptance_ok"]
+			// acceptance_needs_derive: published on a disarm so THIS round's
+			// arm_acceptance derives a replacement check from the pass that
+			// just happened — a disarmed check is replaced, not just removed
+			// (grounding is one-shot; without this the goal completes with a
+			// guard hole and drops out of the regression sweep).
+			publishes: ["mission", "acceptance_ok", "acceptance_needs_derive"]
 		}
 
 		// Release the memoryful inference session now that evaluation is done.

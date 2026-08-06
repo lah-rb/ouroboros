@@ -2080,14 +2080,36 @@ async def action_reconcile_acceptance(step_input: StepInput) -> StepOutput:
             )
             logger.info("reconcile: disarmed check on '%s'", goal.description[:50])
 
+        # A DISARMED CHECK MUST BE REPLACED, NOT JUST REMOVED (operator,
+        # 2026-08-06 — the deferred "component 3"). Grounding is one-shot
+        # (`needs_derive = not grounded`), so without this reset the
+        # completion round skips re-derivation and the goal finishes with
+        # fewer checks than it earned — in the observed case ZERO, which
+        # takes it out of the regression sweep entirely: future edits could
+        # silently break it with no auto-reopen, ever. Resetting grounded
+        # (and saying so in context for THIS round's arm_acceptance) makes
+        # the now_ok completion round — which is a genuine behavioural pass
+        # with the transcript in hand — derive a FRESH check grounded in
+        # the CURRENT world. Derive-after-pass stays inviolate; the stale
+        # assumption is replaced instead of leaving a guard hole.
+        goal.acceptance_grounded = False
+
     now_ok = not [r for r in failed if _key(r) not in disarmed]
     if effects:
         await effects.save_mission(mission)
+    updates: dict = {"mission": mission, "now_ok": now_ok, "acceptance_ok": now_ok}
+    if disarmed:
+        updates["acceptance_needs_derive"] = True
     return StepOutput(
         result={"now_ok": now_ok, "disarmed": len(disarmed)},
         observations=(
             f"reconcile: {len(disarmed)} disarmed, {len(failed)} failing, "
             f"now_ok={now_ok}"
+            + (
+                " — grounding reset, fresh check derives on this pass"
+                if disarmed
+                else ""
+            )
         ),
-        context_updates={"mission": mission, "now_ok": now_ok, "acceptance_ok": now_ok},
+        context_updates=updates,
     )
