@@ -343,10 +343,31 @@ special weight.**
   combat tense or arithmetic? Are the NPCs worth talking to? **This is not
   the help text.**
 
+  **JUDGE THE PLAYER'S EXPERIENCE, NOT YOURS (operator ruling, 2026-08-06).**
+  You can read the source; a player cannot. Whenever you got past an obstacle
+  by consulting the tree — learning that the room prints `Iron Sword` but the
+  parser only accepts `sword`, that an NPC needs its bare id, that a verb the
+  help omits actually exists — **that obstacle stands at full weight here, and
+  counts AGAINST the artifact.** Say so explicitly in the record: name the
+  wall and say you routed around it with knowledge the player has no way to
+  obtain.
+
+  This is not hypothetical leniency. A campaign judge wrote: *"A seam bug is
+  not what stopped me — I got past it by reading `data/world.yaml` to learn
+  the keys, which a player cannot do."* Two artifacts in that campaign printed
+  names they then refused, and the defect reads as a nuisance to a judge with
+  the data file open and as an unplayable game to everyone else. The advantage
+  is systematic, so the correction has to be too.
+
 - **B8 · craft (UI) — surface** — help accuracy, status legibility, naming,
   error messages, input tolerance, prompt hygiene. Separated from B7 because
   in v2.0 it silently outvoted felt experience: a checkbox layer is easy to
   audit and therefore dominates a merged axis.
+
+  **An artifact that will not accept the names it prints fails INPUT TOLERANCE
+  here** — that is the mechanism, and it is charged on this axis. B7 charges
+  the consequence (you cannot play it). Both are legitimate: the surface fault
+  and the felt cost are different findings, not one finding counted twice.
 
 - **B9 · workability** — could a person work in this? Logic organisation
   (module boundaries, whether the seams are where you would put them),

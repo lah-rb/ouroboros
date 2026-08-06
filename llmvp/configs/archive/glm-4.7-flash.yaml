@@ -168,9 +168,50 @@ logging:
 # shown to a judge, never revised afterwards. Its job is not to be right —
 # it is to make a SURPRISE legible, so an unexpected score prompts a look at
 # the run before the number enters the ledger.
+# ── FINAL TIER NOTE — ARCHIVED 2026-08-06 ────────────────────────────
+# Epoch v2.0, TIER_RUBRIC v2.1. Judged TWICE, on two different artifacts,
+# and placed BELOW THE FLOOR ANCHOR both times:
+#
+#   08-03 run   GUARDIAN lost 0-4 / 1-5 · 30/47, BOTH triggers
+#   08-05 rerun GUARDIAN lost 0-4 / 2-4 · 40/47, core-loop trigger
+#               FLOOR    lost 0-4 / 2-4 · 40/47 vs devstral's 40/47 NEAR-FULL
+#
+# THE RE-RUN IS THE INFORMATIVE ONE. The 08-03 artifact was built through the
+# old serial cliff (3/10 batch, 5 files authored alone). The 08-05 run went
+# through the new fallback ladder, which resampled three times — 1/10 at
+# 1,733 tok, 1/10 at 5,872, 1/10 at 2,059 — before landing 9/10 at 11,939.
+# Serial fallback fell from 5 files to 1. The framework did its job.
+#
+# The model still failed, and that is the finding worth keeping: NINE FILES
+# WRITTEN TOGETHER IN ONE SHARED-CONTEXT GENERATION DISAGREE WITH EACH OTHER
+# IN FIVE PLACES. Shared context is necessary for cross-file coherence and is
+# not sufficient. The artifact does not start:
+#
+#   $ python main.py
+#   An error occurred: Room.__init__() got an unexpected keyword argument 'id'
+#
+# Seven stacked seams, patched one at a time by the floor judge: Room(id=) vs
+# room_id · Command.create() called nine times, defined nowhere · CommandType
+# branched on in two files, imported by neither · get_dialogue() vs
+# get_dialogue_nodes() · three missing combat methods. Behind wall seven there
+# is nothing to reach — CombatSystem.resolve_turn is called by nothing and
+# constructed with player=None. Neither terminal state can fire by
+# construction: nothing writes defeated_monsters, nothing decrements health.
+# Room graph: 7 authored, 3 reachable, boss wing one-way inbound.
+# Worst robustness result of the campaign: `except EOFError: continue` — an
+# unbounded spin that emitted 4,695,918 lines in five seconds.
+#
+# It WON B5 ambition and B6 imagination in the floor flight, on merit — the
+# same two axes gemma-4-26b won when it lost the floor. Both below-floor
+# artifacts are the more imaginative of their pair. Conformance 40/47 EQUALS
+# the floor anchor's; the verdicts differ because devstral's core loop is
+# present end to end and glm's entry point is dead. That is the
+# conformance/delivery split working exactly as designed.
+#
+# Full record: llmvp/configs/archive/TIER_JUDGEMENTS.md · dev/blind_panel/LADDER.md
 tier:
   league: contemplator  # LOAD-BEARING — agent/tier/runner.py:config_league
-  status: recorded  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md
+  status: archived  # placed BELOW THE FLOOR anchor; see the note above
 
 # ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
 probe_verified_cache:
