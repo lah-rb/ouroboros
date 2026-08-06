@@ -148,16 +148,45 @@ class TestPersistence:
         assert m.architecture.import_scheme == "flat"
 
     @pytest.mark.asyncio
-    async def test_an_empty_declaration_is_recorded_as_a_real_answer(self):
-        """ "This program writes nothing" is a finding, not a failure — and it
-        must overwrite a stale prior value."""
-        m = _mission(transient=["stale.json"])
+    async def test_an_empty_FIRST_declaration_is_recorded_as_a_real_answer(self):
+        """ "This program writes nothing" is a finding, not a failure — on the
+        FIRST declaration. (This test previously also asserted that an empty
+        answer overwrites a stale prior; that contract was REVERSED by the W3
+        carry-forward on 2026-08-06 — see the re-declaration tests below.)"""
+        m = _mission(transient=[])
         effects = MockEffects(mission=m)
         out = await action_persist_transient_files(
             _si(effects, json.dumps({"transient_files": []}), m)
         )
         assert out.result["transient_files"] == []
         assert m.architecture.transient_files == []
+
+    @pytest.mark.asyncio
+    async def test_a_re_declaration_of_empty_keeps_the_prior(self):
+        """W3 makes project_ops re-enterable (build_structure chains into it;
+        a diagnosis can route back). A well-formed [] on run 2 wiping run 1's
+        correct declaration re-arms the exact game_state.json failure this
+        step exists to prevent — declared, flushed 22/22 no-ops, 91% of
+        sessions resumed mid-run."""
+        m = _mission(transient=["save.json"])
+        effects = MockEffects(mission=m)
+        out = await action_persist_transient_files(
+            _si(effects, json.dumps({"transient_files": []}), m)
+        )
+        assert out.result["transient_files"] == ["save.json"]
+        assert m.architecture.transient_files == ["save.json"]
+
+    @pytest.mark.asyncio
+    async def test_a_re_declaration_unions_rather_than_replacing(self):
+        """A second look can only WIDEN coverage, never silently narrow it —
+        the widening direction is harmless (a pattern matching nothing flushes
+        nothing) while narrowing re-exposes every later session."""
+        m = _mission(transient=["save.json"])
+        effects = MockEffects(mission=m)
+        out = await action_persist_transient_files(
+            _si(effects, _decl(("cache.db", "engine.py: CACHE")), m)
+        )
+        assert out.result["transient_files"] == ["save.json", "cache.db"]
 
     @pytest.mark.asyncio
     async def test_unparseable_response_leaves_the_prior_declaration_alone(self):
@@ -336,3 +365,38 @@ class TestDesignTimeDeclarationRemoved:
 
         text = Path("prompts/design_and_plan/extract_architecture.yaml").read_text()
         assert "transient_files" in text
+
+
+class TestBuildStructureChainsIntoProjectOps:
+    """W3: the declaration runs while the batch's files are freshly written —
+    the original design intent — instead of from a lossy signature listing at
+    whatever later cycle the one-shot environment phase fires. Pinned off the
+    compiled flow graph so a CUE edit cannot silently undo the chain."""
+
+    @staticmethod
+    def _flow():
+        import json as _json
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        return _json.loads((root / "flows" / "compiled.json").read_text())[
+            "build_structure"
+        ]
+
+    def test_success_tail_calls_project_ops(self):
+        tc = self._flow()["steps"]["report_success"]["tail_call"]
+        assert tc["flow"] == "project_ops"
+
+    def test_the_directive_is_a_literal_not_a_passthrough(self):
+        """build_structure's own flow_directive is the structural-batch text;
+        passing it through would feed the wrong task to project_ops' prompts."""
+        im = self._flow()["steps"]["report_success"]["tail_call"]["input_map"]
+        assert isinstance(im["flow_directive"], str)
+        assert "dependencies" in im["flow_directive"]
+        assert im["goal_id"] == "", "project_ops books its own reports"
+
+    def test_failure_still_returns_to_the_director(self):
+        """A batch that produced nothing usable has nothing to declare —
+        the serial sweep handles it, and the environment phase fires later."""
+        tc = self._flow()["steps"]["report_failed"]["tail_call"]
+        assert tc["flow"] == "mission_control"

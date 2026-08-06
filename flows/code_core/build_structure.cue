@@ -38,8 +38,9 @@ build_structure: #FlowDefinition & {
 	description: """
 		One-shot batch creation of all architecture files. Generates the
 		whole project in shared context, slices per-file, gates each file
-		deterministically, completes passing structural goals, and returns
-		a batch summary to mission_control.
+		deterministically, completes passing structural goals, and chains
+		into project_ops on success (declare artifacts + verify env while
+		the files are freshly written); failure returns to mission_control.
 		"""
 
 	context_tier: "flow_directive"
@@ -251,8 +252,40 @@ build_structure: #FlowDefinition & {
 			publishes: ["directive_report", "mission"]
 		}
 
-		report_success: #StepDefinition & _templates.return_success & {
-			description: "Return to mission_control — batch written and booked"
+		// SUCCESS CHAINS INTO project_ops (W3, operator design 2026-08-06)
+		// instead of returning to mission_control. The declare_artifacts step
+		// runs while the batch's files are freshly written — the original
+		// design intent — rather than from a lossy signature listing at
+		// whatever later cycle the environment phase fires. project_ops
+		// reports through attach_directive_report, which sets
+		// environment_verified on ANY project_ops report, so the director's
+		// one-shot environment phase is satisfied and never double-runs it
+		// in greenfield. Brownfield still reaches project_ops through the
+		// unchanged environment phase (this flow never runs there).
+		//
+		// A TAIL CALL, NEVER a sub-flow: _materialize_projections runs once
+		// per cycle for the DISPATCHED flow only, and project_ops declares
+		// the project_setup_context projection — invoking it via
+		// `action: "flow"` would silently null that and render plan_setup's
+		// brief empty.
+		//
+		// flow_directive is a LITERAL (copied from mission_control's
+		// dispatch_environment_setup): build_structure's own directive is the
+		// structural-batch text, and passing it through would feed the wrong
+		// task to project_ops' prompts. goal_id "" matches the same
+		// convention — project_ops books its own reports.
+		report_success: #StepDefinition & {
+			action:      "noop"
+			description: "Batch written and booked — chain into environment setup"
+			tail_call: {
+				flow: "project_ops"
+				input_map: {
+					mission_id:        {$ref: "input.mission_id"}
+					goal_id:           ""
+					working_directory: {$ref: "input.working_directory"}
+					flow_directive:    "Install all required dependencies and verify the project environment is ready."
+				}
+			}
 		}
 
 		report_failed: #StepDefinition & _templates.return_failed & {

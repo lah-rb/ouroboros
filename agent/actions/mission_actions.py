@@ -651,6 +651,30 @@ async def action_persist_transient_files(step_input: StepInput) -> StepOutput:
             context_updates={"mission": mission},
         )
 
+    # CARRY-FORWARD ON A SECOND RUN (W3 guard, 2026-08-06). project_ops is now
+    # re-enterable — build_structure chains into it, and a diagnosis can route
+    # back via recommended_flow — so a well-formed `{"transient_files": []}`
+    # on run 2 must not WIPE a correct run-1 declaration. An empty answer
+    # stays meaningful on the FIRST declaration ("this program writes
+    # nothing"); on a re-run it merges instead: the union of prior and new,
+    # so a re-declaration can only widen coverage, never silently narrow it.
+    # Mirrors action_parse_and_store_architecture's carry-forward-on-omission.
+    prior = [str(p) for p in (arch.transient_files or [])]
+    if prior:
+        merged = list(prior)
+        for p in patterns:
+            if p not in merged:
+                merged.append(p)
+        if merged != patterns:
+            logger.info(
+                "🧹 runtime artifacts: carrying forward %d prior pattern(s) "
+                "through a re-declaration (prior: %s; new: %s)",
+                len(prior),
+                ", ".join(prior),
+                ", ".join(patterns) or "(none)",
+            )
+        patterns = merged
+
     arch.transient_files = patterns
     # NO push_note BEFORE save_mission: push_note reloads the mission from disk
     # and re-saves it, which would drop this architecture edit (see the note in

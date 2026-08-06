@@ -240,7 +240,7 @@
   "build_structure": {
     "flow": "build_structure",
     "version": 1,
-    "description": "One-shot batch creation of all architecture files. Generates the\nwhole project in shared context, slices per-file, gates each file\ndeterministically, completes passing structural goals, and returns\na batch summary to mission_control.",
+    "description": "One-shot batch creation of all architecture files. Generates the\nwhole project in shared context, slices per-file, gates each file\ndeterministically, completes passing structural goals, and chains\ninto project_ops on success (declare artifacts + verify env while\nthe files are freshly written); failure returns to mission_control.",
     "context_tier": "flow_directive",
     "returns": {
       "files_changed": {
@@ -585,7 +585,7 @@
       },
       "report_success": {
         "action": "noop",
-        "description": "Return to mission_control \u2014 batch written and booked",
+        "description": "Batch written and booked \u2014 chain into environment setup",
         "context": {
           "required": [],
           "optional": []
@@ -596,15 +596,16 @@
         "effects": [],
         "terminal": false,
         "tail_call": {
-          "flow": "mission_control",
+          "flow": "project_ops",
           "input_map": {
             "mission_id": {
               "$ref": "input.mission_id"
             },
-            "last_goal_id": {
-              "$ref": "input.goal_id"
+            "goal_id": "",
+            "working_directory": {
+              "$ref": "input.working_directory"
             },
-            "last_status": "success"
+            "flow_directive": "Install all required dependencies and verify the project environment is ready."
           }
         }
       },
