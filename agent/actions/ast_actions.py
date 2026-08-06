@@ -688,6 +688,44 @@ async def action_load_next_file(step_input: StepInput) -> StepOutput:
             unresolved.extend(f"{fpath}:{s}" for s in names)
             continue
 
+        # DATA FILES TAKE THE DATA PATH (2026-08-06). A data file has no
+        # symbol table — extract_file_symbols returns nothing for JSON/YAML —
+        # so every requested name used to land in `unresolved` and the entry
+        # was skipped with only an INFO line, while the flow reported
+        # success. Observed live: a diagnosis named `world.json:monsters` in
+        # related_symbols (lower the Stone Guard's health), the walk reached
+        # world.json, resolved nothing, and the prescription evaporated.
+        # The machinery for this already exists — the data_patch flow edits
+        # a data file whole or walks it path-by-path — the walk just never
+        # routed to it. Publish the file and the requested sections; the
+        # flow's resolver branches to patch_data_file.
+        from agent import languages as _languages
+
+        ext = fpath.rsplit(".", 1)[-1].lower() if "." in fpath else ""
+        if _languages.is_data(ext):
+            logger.info(
+                "load_next_file: %s is a data file — routing %s to data_patch",
+                fpath,
+                names,
+            )
+            return StepOutput(
+                result={"has_next": True, "is_data_file": True},
+                observations=(
+                    f"Cross-file batch: {fpath} is a data file — "
+                    f"dispatching data_patch for sections {names}"
+                ),
+                context_updates={
+                    "cross_file_queue": cross_file_queue,
+                    "unresolved_symbols": unresolved,
+                    "file_path": fpath,
+                    "file_content": fc.content,
+                    "data_sections": names,
+                    # No symbol machinery for a data hop.
+                    "current_symbol": None,
+                    "rewrite_queue": [],
+                },
+            )
+
         symbol_table = _build_symbol_table(fpath, fc.content)
         resolved: list[dict] = []
         seen: set[str] = set()
@@ -1784,10 +1822,20 @@ async def action_finalize_edit_session(step_input: StepInput) -> StepOutput:
     summary_parts = list(step_input.context.get("edit_summary_parts", []) or [])
     unresolved = list(step_input.context.get("unresolved_symbols", []) or [])
 
+    # Data hops ride ALIASED returns (data_files_changed / data_edit_summary)
+    # because the data_patch sub-flow's own `files_changed` return would
+    # REPLACE the walk's accumulated list on publish — merged here instead.
+    for f in step_input.context.get("data_files_changed") or []:
+        if f and f not in files_changed:
+            files_changed.append(f)
+    data_summary = str(step_input.context.get("data_edit_summary") or "").strip()
+
     if summary_parts:
         edit_summary = "AST-edited " + "; ".join(summary_parts)
     else:
         edit_summary = "No changes applied"
+    if data_summary:
+        edit_summary += f"; data: {data_summary}"
     if unresolved:
         edit_summary += f"; unresolved: {', '.join(unresolved)}"
 

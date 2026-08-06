@@ -1535,6 +1535,16 @@
         "type": "string",
         "from": "context.edit_summary",
         "optional": true
+      },
+      "data_files_changed": {
+        "type": "list",
+        "from": "context.files_changed",
+        "optional": true
+      },
+      "data_edit_summary": {
+        "type": "string",
+        "from": "context.edit_summary",
+        "optional": true
       }
     },
     "projections": {},
@@ -9022,6 +9032,10 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "result.is_data_file == true",
+              "transition": "patch_data_file"
+            },
+            {
               "condition": "result.has_next == true",
               "transition": "build_call_graph"
             },
@@ -9039,9 +9053,61 @@
           "file_content",
           "file_content_updated",
           "symbol_table",
-          "unresolved_symbols"
+          "unresolved_symbols",
+          "data_sections"
         ],
         "effects": [],
+        "terminal": false
+      },
+      "patch_data_file": {
+        "action": "flow",
+        "description": "Apply the diagnosed change to a data file via data_patch",
+        "config": {},
+        "context": {
+          "required": [
+            "file_path",
+            "file_content"
+          ],
+          "optional": [
+            "data_sections",
+            "file_context"
+          ]
+        },
+        "effects": [],
+        "flow": "data_patch",
+        "input_map": {
+          "target_file_path": {
+            "$ref": "context.file_path"
+          },
+          "file_content": {
+            "$ref": "context.file_content"
+          },
+          "change_spec": {
+            "$ref": "input.change_spec",
+            "default": ""
+          },
+          "flow_directive": {
+            "$ref": "input.flow_directive"
+          },
+          "file_context": {
+            "$ref": "context.file_context",
+            "default": ""
+          }
+        },
+        "params": {},
+        "publishes": [
+          "data_files_changed",
+          "data_edit_summary"
+        ],
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "advance_file"
+            }
+          ]
+        },
         "terminal": false
       },
       "finalize": {
@@ -9054,7 +9120,9 @@
           "optional": [
             "files_changed",
             "edit_summary_parts",
-            "unresolved_symbols"
+            "unresolved_symbols",
+            "data_files_changed",
+            "data_edit_summary"
           ]
         },
         "params": {},

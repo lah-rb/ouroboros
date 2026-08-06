@@ -261,6 +261,12 @@ patch: #FlowDefinition & {
 			resolver: {
 				type: "rule"
 				rules: [
+					// A data file has no symbol table — every requested name
+					// used to fall into `unresolved` here and the prescription
+					// evaporated (observed live: `world.json:monsters` from a
+					// diagnosis, dropped while the flow reported success). The
+					// data machinery already exists; route to it.
+					{condition: "result.is_data_file == true", transition: "patch_data_file"},
 					{condition: "result.has_next == true", transition: "build_call_graph"},
 					{condition: "true", transition:                    "finalize"},
 				]
@@ -268,8 +274,37 @@ patch: #FlowDefinition & {
 			publishes: [
 				"current_symbol", "rewrite_queue", "cross_file_queue",
 				"file_path", "file_content", "file_content_updated",
-				"symbol_table", "unresolved_symbols",
+				"symbol_table", "unresolved_symbols", "data_sections",
 			]
+		}
+
+		// Data hop in the cross-file walk: hand the whole file to data_patch
+		// (surgical path-scoped ops, or full translate) and rejoin the walk.
+		// Publishes the ALIASED returns so this sub-flow's files_changed
+		// cannot replace the walk's accumulated list — finalize merges.
+		patch_data_file: #StepDefinition & {
+			action:      "flow"
+			description: "Apply the diagnosed change to a data file via data_patch"
+			flow:        "data_patch"
+			context: {
+				required: ["file_path", "file_content"]
+				optional: ["data_sections", "file_context"]
+			}
+			input_map: {
+				target_file_path: {$ref: "context.file_path"}
+				file_content:     {$ref: "context.file_content"}
+				change_spec:      {$ref: "input.change_spec", default: ""}
+				flow_directive:   {$ref: "input.flow_directive"}
+				file_context:     {$ref: "context.file_context", default: ""}
+			}
+			resolver: {
+				type: "rule"
+				// Rejoin the walk whatever happened — data_patch books its
+				// outcome into data_edit_summary either way, and the walk may
+				// still hold code files that must not be abandoned.
+				rules: [{condition: "true", transition: "advance_file"}]
+			}
+			publishes: ["data_files_changed", "data_edit_summary"]
 		}
 
 		finalize: #StepDefinition & {
@@ -277,7 +312,15 @@ patch: #FlowDefinition & {
 			description: "Close session; assemble batch edit_summary (writes happened per file)"
 			context: {
 				required: ["edit_session_id"]
-				optional: ["files_changed", "edit_summary_parts", "unresolved_symbols"]
+				// data_files_changed / data_edit_summary are LOAD-BEARING
+				// declarations, not documentation: _build_step_input filters
+				// context to what a step declares, so without them a data
+				// hop's results silently vanish before the merge — the exact
+				// silent-wire class as meta.attempt and workspace_snapshot.
+				optional: [
+					"files_changed", "edit_summary_parts", "unresolved_symbols",
+					"data_files_changed", "data_edit_summary",
+				]
 			}
 			terminal: true
 			status:   "success"

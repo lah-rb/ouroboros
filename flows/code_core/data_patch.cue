@@ -26,6 +26,13 @@ data_patch: #FlowDefinition & {
 	returns: {
 		files_changed: {type: "list",   from: "context.files_changed", optional: true}
 		edit_summary:  {type: "string", from: "context.edit_summary",  optional: true}
+		// ALIASES of the two returns above, for callers that must not let
+		// this sub-flow's publish REPLACE their own accumulated keys —
+		// patch's cross-file walk already carries files_changed for the
+		// code files it edited, so its data hop publishes these aliases
+		// and finalize_edit_session merges them in.
+		data_files_changed: {type: "list",   from: "context.files_changed", optional: true}
+		data_edit_summary:  {type: "string", from: "context.edit_summary",  optional: true}
 	}
 
 	input: {
