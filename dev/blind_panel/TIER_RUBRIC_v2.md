@@ -197,6 +197,12 @@ evidence:
   the central mechanic chain), **or** >20% of the checklist. The presence rule
   is retained inside the binary: authored-but-unreachable counts as present
   here and is charged on the axes.
+  **MISSING means ABSENT FROM THE TREE, not unreachable in play** — a win
+  screen behind a broken door is present and does not trigger; a win that
+  nothing in the code can ever set does. See the checklist's rule 1 for the
+  full statement, including the operator's ruling that a conformant D&D
+  character sheet would score 100% and still lose every axis. Conformance is
+  never a quality score.
 - **State integrity note** — does persistence/reset round-trip without
   rewriting the world?
 - **Robustness battery** — the ten probes, reported as a fact table with the

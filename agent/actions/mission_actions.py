@@ -934,8 +934,12 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
     from agent.persistence.models import GoalRecord
 
     # Access mission as dict or object
+    # `_arch_src` is bound in BOTH branches so the transient filter below has
+    # one name to read — the object branch calls it `architecture`, the dict
+    # branch `arch`, and only the latter was ever in scope after the if/elif.
     if hasattr(mission, "objective"):
         objective = mission.objective
+        _arch_src = architecture
         modules = (
             architecture.modules
             if architecture and hasattr(architecture, "modules")
@@ -949,6 +953,7 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
     elif isinstance(mission, dict):
         objective = mission.get("objective", "")
         arch = mission.get("architecture") or architecture or {}
+        _arch_src = arch
         if isinstance(arch, dict):
             modules = arch.get("modules", [])
             data_shapes = arch.get("data_shapes", [])
@@ -960,6 +965,32 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
             result={"goals_derived": False},
             observations="Cannot read mission state",
         )
+
+    # Runtime state is never a structural goal. Filtered HERE, at the source,
+    # rather than only in _get_sweep_files: goals are built straight off
+    # `modules`/`data_shapes`, so filtering the sweep alone would still create
+    # a goal to author the save file — and the serial create path would still
+    # fulfil it. Operator ruling 2026-08-06.
+    _transient = transient_exact_names(_arch_src)
+    if _transient:
+
+        def _keep(entry: Any) -> bool:
+            f = (
+                entry.get("file", "")
+                if isinstance(entry, dict)
+                else getattr(entry, "file", "")
+            )
+            return _norm_decl_path(f) not in _transient
+
+        _before = len(modules) + len(data_shapes)
+        modules = [m for m in modules if _keep(m)]
+        data_shapes = [d for d in data_shapes if _keep(d)]
+        if _before != len(modules) + len(data_shapes):
+            logger.info(
+                "goal derivation: excluded declared-transient file(s) from "
+                "structural goals: %s",
+                ", ".join(sorted(_transient)),
+            )
 
     goals = []
 
@@ -1396,12 +1427,79 @@ def _get_working_dir(mission: Any) -> str:
     return ""
 
 
+def _norm_decl_path(p: Any) -> str:
+    """Normalise a declared path for comparison — `./x.py` and `x.py` are one.
+
+    A PREFIX strip, deliberately. `lstrip("./")` would also eat the leading
+    dot of `.gitignore` and every leading slash of an absolute path.
+    """
+    s = str(p).strip()
+    while s.startswith("./"):
+        s = s[2:]
+    return s
+
+
+def transient_exact_names(arch: Any) -> set[str]:
+    """Files the architecture names EXACTLY (not by glob) as transient.
+
+    A transient file is RUNTIME STATE, so it is not a structural goal, not
+    part of the declared sweep, and not protected from the flush. Operator
+    ruling 2026-08-06: remove them from consideration for structural goals
+    entirely.
+
+    WHY THIS EXISTS. A design can list the same path in `data_shapes` AND in
+    `transient_files` — "author this file" and "this is runtime state, delete
+    it at session close", at once. Two of the campaign's three
+    missing-by-one-file batch turns were exactly that, and they were the only
+    two runs in which any file was declared both ways:
+
+        tier_20260801-185254  gpt-oss       savegame.json  in both
+        tier_20260805-092309  qwen3-next    save.json      in both
+
+    The chain: the file is declared, the model sensibly declines to author a
+    save file, the batch is scored as MISSING it, the serial create path
+    authors a pristine empty-state save, the flush protects it (declared
+    data_shapes were exempt), and it ships. Both artifacts carry one. A judge
+    then read one as proof the program had been run.
+
+    EXACT NAMES ONLY. A glob keeps the flush's protection, so a broad
+    `*.json` cannot silently swallow a declared data_shape — the guard that
+    exemption was written for. Both real cases were exact names.
+    """
+    # dict OR object: mission state arrives both ways here, and a bare
+    # getattr on a dict returns None — a silent miss for exactly the shape
+    # the goal-derivation path uses.
+    raw = (
+        arch.get("transient_files")
+        if isinstance(arch, dict)
+        else getattr(arch, "transient_files", None)
+    )
+    out: set[str] = set()
+    for p in raw or []:
+        s = str(p).strip()
+        # VALIDATE THE RAW STRING, THEN NORMALISE. `lstrip("./")` is a
+        # CHARACTER-SET strip, not a prefix strip: it turns "/etc/passwd" into
+        # "etc/passwd" and "../secrets.json" into "secrets.json". Sanitising
+        # first would launder exactly the paths these guards exist to reject —
+        # and this set is subtracted from the flush's `protected` list, so a
+        # laundered entry un-protects a real file from deletion.
+        if not s or s.startswith(("/", "~")) or ".." in s:
+            continue
+        if any(c in s for c in "*?["):
+            continue  # a glob keeps the data_shapes exemption
+        out.add(_norm_decl_path(s))
+    return out
+
+
 def _get_sweep_files(arch: Any) -> list[str]:
     """Build the ordered list of files: creation_order ∪ modules ∪ data_shapes.
 
     Uses creation_order for sequencing, but unions with all module files
     to catch any that were listed in modules but omitted from the order
     (e.g., __init__.py).  Data shape files are appended last.
+
+    Exact-named `transient_files` are subtracted at the end — runtime state
+    is not a file anyone is asked to author (see transient_exact_names).
     """
     ordered = (
         list(arch.creation_order)
@@ -1425,6 +1523,18 @@ def _get_sweep_files(arch: Any) -> list[str]:
             if f and f not in seen:
                 ordered.append(f)
                 seen.add(f)
+
+    transient = transient_exact_names(arch)
+    if transient:
+        dropped = [f for f in ordered if _norm_decl_path(f) in transient]
+        if dropped:
+            logger.info(
+                "sweep: dropping %d declared-transient file(s) — runtime state "
+                "is not a structural goal: %s",
+                len(dropped),
+                ", ".join(dropped),
+            )
+        ordered = [f for f in ordered if _norm_decl_path(f) not in transient]
 
     return ordered
 

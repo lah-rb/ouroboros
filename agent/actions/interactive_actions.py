@@ -1122,6 +1122,17 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
         protected.update(
             ds.file for ds in getattr(arch, "data_shapes", []) or [] if ds.file
         )
+        # An EXACT transient declaration outranks the data_shapes exemption.
+        # A design that lists the same path both ways is saying "author this"
+        # and "this is runtime state" at once; the operator ruling (2026-08-06)
+        # is that transient wins. Without this, a save file the running program
+        # writes itself is protected from the flush and ships in the artifact —
+        # which is how two arms shipped a save file judges then read as
+        # evidence. GLOBS still lose to the exemption, so a broad `*.json`
+        # cannot silently swallow declared input data.
+        from agent.actions.mission_actions import transient_exact_names
+
+        protected -= transient_exact_names(arch)
 
     safe_patterns = [
         p for p in patterns if not p.startswith(("/", "~")) and ".." not in p

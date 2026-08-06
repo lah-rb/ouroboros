@@ -30,6 +30,28 @@ Unreachability is charged on the rubric's axes (delivery), never here.
 Conformance asks *did it do what was asked*; the rest of the rubric asks *did
 it deliver*. One number hides that; two dimensions show it.
 
+**How far this goes (operator ruling, 2026-08-06).** All the way. A model that
+delivered a **D&D character sheet instead of a working game** would score
+**100% conformant** if every aspect the brief asked for appeared on that sheet.
+It would then be judged harshly on the axes, for being broken — which is the
+correct outcome, arrived at through the correct instrument. Conformance is not
+a quality score and must never be read as one; a perfect tally protects nothing.
+
+**Present ≠ working. Absent ≠ unreachable.** Two judges asked for a re-ruling
+here, so state it plainly:
+
+* Authored and **unreachable** → MET. A victory screen behind a broken door is
+  present. Charge the door on A1/A4.
+* Authored and **inert** → MET. `behaviour: aggressive` that no code reads is
+  present. Charge the deadness on the axes.
+* **Not in the tree at all** → UNMET, and if it is a core-loop element, the
+  binary trigger fires. "Nothing anywhere writes `defeated_monsters`, so the
+  win link does not exist" is absence, not unreachability. So is a boss whose
+  two phases appear in neither code nor data.
+
+The line is whether the thing was PRODUCED, not whether it functions and not
+what form it took. Read the tree; if it is there, it counts.
+
 Item 38's "connected" is still a presence check: it is a property OF the
 authored data (the room graph, read from wherever the model chose to define
 it), not of play. Rooms count as connected if the authored exits link all of
