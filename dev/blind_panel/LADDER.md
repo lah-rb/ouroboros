@@ -180,6 +180,7 @@ anywhere) reproduced on BOTH arms — now 5+ independent sightings on gpt-oss.
 | pos | model | tier | flights | artifact | notes |
 |---|---|---|---|---|---|
 | 1 | qwen3-next-coder-80b-a3 | **2, LOW (below the FLOOR anchor)** | GUARDIAN: lost 0–5 · FLOOR: **lost 4–1** (took state integrity only) | `tier_20260802-043526/staged/arm02` | Run shape was the epoch's cleanest (6/6 batch at cycle 1, 54.2 cyc/h, 0 degen — the §20-doc-bug hypothesis holds) but the artifact never reaches a fight: 8 rooms in two components, zero monsters placed, dead 244-line commands.py, examine a silent no-op, save/load incompatible with its own file. Judge 5's Guardian tally 42/47 (±1 vs the four prior 41/47s) |
+| 2 | gemma-4-26b-a4b | **2, LOW (below the FLOOR anchor)** — **FINAL · config ARCHIVED 2026-08-05** | GUARDIAN: lost 0–4 / 2–4 (37/47, count trigger) · FLOOR: **lost 0–4 / 2–4** (36/47, BOTH triggers) | `tier_20260805-071313/staged/arm01` | **First artifact of the campaign to lose a FLOOR flight**, and it loses the binary verdict too — 36/47 with both triggers against devstral's 39/47 with one. Placed and retired in one epoch; config moved to `llmvp/configs/archive/`. NOT a fallback artifact: its batch turn wrote 9/9 with nothing missing, so this measures the model. **It took B6 imagination and B9 workability** — a titled quest with a real geography (surface→cave→void) and genuine module seams against the floor's 433-line monolith. It has the better world and the better layout and cannot be played: `parser.py` takes `target = parts[1]` (ONE token) against handlers comparing full underscore-normalised names, so every multi-word entity is untypeable by the name the game prints (`take Rusty Sword` → "That isn't here."); five bare verbs kill the process; `help` advertises `inventory`/`save`/`load`, none dispatched; armour and boss-weakness are both literal `pass`. UNWINNABLE TWICE OVER — room graph orphans `boss_chamber` + the Holy Water alcove, AND the boss is arithmetically unbeatable once connected (combat resolves atomically in one command, so no healing or fleeing). **Flight finding worth keeping: BOTH artifacts were stopped by the same seam** (a boss component with no inbound edge) and in both a second independent seam killed the NPC dialogue carrying the weakness hint — *neither model ever met its own NPC* |
 
 ## Frontier scorecards
 
@@ -187,6 +188,32 @@ anywhere) reproduced on BOTH arms — now 5+ independent sightings on gpt-oss.
 |---|---|---|---|
 | qwen3.6-35b-a3 (flight 4, 2026-08-03) | FRONTIER 5–0 | FRONTIER, no self-flag | "The Ashen Keep" WON again (47/47, second judge, full round-trip incl. room depletion + NPC stage); qwen UNWINNABLE by arithmetic (boss best 80/150), NEAR-FULL **carried wholly by the presence rule** — win path, phase 2, monster specials (`hasattr` on a dict, p≈0.03 empirical), and dialogue branching all authored, none reachable. Position-bias check passed (A-slot won after three B-slot verdicts). Family-bias caveat stamped per §5 |
 | hy3-reap-200b-a21[c] (2026-08-03, v2.1 two-panel) | FRONTIER — Delivery 4–0, Character 6–0 | FRONTIER, no self-flag | **First field candidate to enter this flight with a WON game — the judge won BOTH artifacts.** The ceiling gap is now DEPTH, not completability: Frontier adds poison, movement-gating monsters, resistance-flips-to-vulnerability, state-conditional dialogue (item 45 met on LIVE evidence), full save round-trip incl. per-room monster_hp + mid-fight save refusal, and a README that survived every probe. New hy3 findings this flight: winnable in 7 commands at 100/100 HP (monsters never block movement), `flee` with no enemy = free teleport, save payload has no rooms key. Judge divergence vs the Guardian flight: 46/47 here (item 45 charged — flat topic dicts, no player choice) vs 47/47 there (staged progression counted) — **RESOLVED by operator ruling 2026-08-03: item 45 is presence-lenient, staged progression meets it, hy3's 47/47 STANDS** (the gradation lives on axes B6/B7, where this flight already charged it comparatively); B9 was the judge's one self-argued axis (hy3's pure-data world genuinely better for content edits). Family-bias caveat stamped per §5 (judge Opus, Frontier artifact Claude) |
+
+### Frontier batch 2026-08-05 — five flights, out-of-band
+
+Full records in `llmvp/configs/archive/TIER_JUDGEMENTS.md`. Scorecards only;
+none of these moves a placement. §5 family-bias caveat stamped on all five.
+
+| candidate | Delivery | Character | axis taken off Sonnet 5 |
+|---|---|---|---|
+| qwen3.6-27b | 1–3 | 0–6 | **A3 robustness** — zero tracebacks anywhere vs the Frontier's own title-screen `EOFError` |
+| qwen3.5-122b-a10 | 0–4 | 1–5 | **B5 ambition** |
+| deepseek-v4-flash | 0–4 | 1–5 | **B9 workability** — judge: "the one I would rather add content to" |
+| step37-flash-196b-a11 | 0–4 | 0–6 | — |
+| gpt-oss-120b-a5-swarm-524k | 0–4 | 0–6 | — |
+
+**Three axes of fifty, on a 30-cycle budget.** The sweep is expected; the axes
+are the finding. Every artifact that scored 45–47/47 against the GUARDIAN gave
+up a major structural defect here — qwen3.5's global `boss_phase` makes its
+headline mechanic and its win condition mutually exclusive; qwen3.6-27b's phase
+2 is a de-escalation and its saves destroy untouched items; gpt-oss-swarm
+crashes on the win check itself. A stronger opponent forces a deeper read,
+which is what this scorecard is for.
+
+**Instrument note (open):** step37's judge got past the display-name/key seam
+"by reading `data/world.yaml` to learn the keys, **which a player cannot do**."
+Judges have source access; the rubric is systematically lenient on that defect
+class and should say so.
 
 ## Pre-epoch reference: the v1.2 field (NOT ladder members)
 

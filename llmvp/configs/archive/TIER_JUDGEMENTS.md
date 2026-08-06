@@ -381,6 +381,132 @@ and every error path an uncaught traceback. Floor-assessment candidate.
 5. **Floor assessment**: `glm-4.7-flash` (30/47, both triggers),
    `gemma-4-26b-a4b` (37/47).
 
+*Items 4 and 5 were executed the same day — see the next section. Items 1–3
+remain open.*
+
+---
+
+# EPOCH v2.0 · FRONTIER AND FLOOR FLIGHTS — 2026-08-05
+
+Same day, same rubric, same batch root pattern
+(`~/ouroboros-runs/frontier_v21_20260805/`, `~/ouroboros-runs/floor_v21_20260805/`),
+one blind `claude-opus-5` judge per flight, contender seating stratified A×3 / B×2,
+zero identifier leaks.
+
+## FRONTIER — out-of-band scorecard, never moves the ladder
+
+Per METHODS §5 the family-bias caveat is stamped: our judges are Opus and the
+Frontier artifact ("The Ashen Keep") is Claude-authored.
+
+| contender | Delivery | Character | axes taken off Sonnet 5 |
+|---|---|---|---|
+| qwen3.6-27b | 1–3 | 0–6 | **A3 robustness** |
+| qwen3.5-122b-a10 | 0–4 | 1–5 | **B5 ambition** |
+| deepseek-v4-flash | 0–4 | 1–5 | **B9 workability** |
+| step37-flash-196b-a11 | 0–4 | 0–6 | — |
+| gpt-oss-120b-a5-swarm-524k | 0–4 | 0–6 | — |
+
+**Five flown, five losses, three axes taken of fifty.** The headline is not the
+sweep — it is that three separate local models, on a **30-cycle budget**, each
+took a genuine axis off a frontier model. qwen3.6-27b's A3 is the strongest:
+**zero tracebacks anywhere**, including clean EOF at every level, against the
+Frontier's own `EOFError` at its title screen. Sonnet is not clean either —
+doubled articles (`A The Ashen King`), raw ids in the status block, and a
+phase-2 line claiming *"His wounds knit shut with ember and smoke"* while HP
+does not rise.
+
+**What the Frontier surfaced that the Guardian could not.** Every artifact that
+scored 45–47/47 against the Guardian gave up a major structural defect against
+an opponent that works:
+
+* **qwen3.5-122b** — `boss_phase` is a **single global int shared by every
+  fight**. The first monster you damage consumes it. Beeline to the boss and
+  phase two fires (heals 120 → 180/180, provably unwinnable); fight anything
+  first and phase two never happens (winnable). Its headline mechanic and its
+  win condition cannot both exist in one playthrough. Also: armour is inert
+  (`get_armor_bonus()` returns `0` under a comment saying the engine resolves
+  it — the engine resolves only the weapon), and `flags["game_lost"]` is set
+  and never read, so every `attack` after death reprints DEFEAT forever.
+  **Design-intent check (operator question, resolved):** NOT an authored
+  difficulty gate. `phase_two_threshold` is a per-enemy field the gate never
+  reads; `boss_phase` lives on `GameState` rather than `CombatState`; only the
+  boss has `phase_two_stats`; the README says "Two-phase final boss", singular.
+  A one-line scope change gives either the documented design or the emergent one.
+* **qwen3.6-27b** — phase 2 is a **de-escalation** (attack 5 against phase 1's
+  8; *"shifts into a more vicious form!"* is followed by *"Weakened Strike! You
+  take 1 damage!"*). Every new game opens at **50/100 HP** (`models.py:48`
+  against a max hardcoded as 100 in three places). Death auto-saves
+  `"health": -5` in the boss chamber over your good save. Load destroys
+  untouched items (no room state; the loader subtracts inventory *by id*).
+  No `random` anywhere — combat is fixed arithmetic. Its `pyproject.toml`
+  names a build backend that does not exist.
+* **deepseek-v4-flash** — `crypt` declares an exit to `courtyard`; `courtyard`
+  declares nothing back. `sage` is authored with a full dialogue tree and
+  placed in no room. Orphaned: the 8th room, 3rd monster, 5th item, 2nd NPC.
+* **gpt-oss-swarm** — `_boss_defeated()` calls `.get("is_boss")` on the
+  `Monster` **dataclass**, so **defeating any monster crashes the process**
+  before `display_victory()` can run. The real final boss's room has no
+  inbound edge. The Sun Relic is defined and placed in no room, and no monster
+  carries a `weakness` field at all. Plus a duplicate unused 71-line combat
+  implementation, a `__globals__` reach-in across modules, and the whole world
+  re-parsed on every `status` — the swarm's parallel-authoring signature.
+* **step37** — displays `Iron Sword`, accepts only `sword`. **4 of 5 items and
+  1 of 2 NPCs cannot be addressed by the names the game prints.** Replicated
+  independently by both its Guardian and Frontier judges. Winnable bare-fisted,
+  and monster HP resets on room re-entry, so the boss is farmable.
+
+**Instrument note worth acting on.** step37's judge wrote: *"A seam bug is not
+what stopped me — I got past it by reading `data/world.yaml` to learn the keys,
+**which a player cannot do**."* Every judge has source access, which makes the
+instrument systematically lenient on the display-name/key mismatch class.
+
+## FLOOR — `gemma-4-26b-a4b` vs `floor-devstral-20260803`
+
+**LOST — Delivery 0–4, Character 2–4. It places BELOW the floor anchor**, and
+below it on the binary verdict too: **36/47 with BOTH triggers** (23.4% count
+*and* core loop) against devstral's 39/47 with one. A clean measurement, not a
+fallback artifact — its batch turn wrote 9/9 with nothing missing.
+
+It took **B6 imagination** ("THE CRYSTAL OF DESTINY", a geography with a shape,
+item prose carrying its own hint) and **B9 workability** (real module seams
+against the floor's 433-line monolith). It has the better world and the better
+layout, and it cannot be played:
+
+* `parser.py` sets `target = parts[1]` — **one token** — while every handler
+  compares full underscore-normalised names. The room prints `You see: Rusty
+  Sword`; `take Rusty Sword` → *"That isn't here."*; `take rusty_sword` works.
+* Five bare verbs (`take`, `equip`, `talk`, `drop`, `use`) kill the process.
+* `help` advertises `inventory`, `save`, `load`; none is dispatched.
+* Armour and boss-weakness are both literal `pass` statements, each file
+  believing the other implements it.
+* **Unwinnable twice over** — the room graph orphans `boss_chamber` and the
+  Holy Water alcove, and even with both edges restored the boss is
+  arithmetically unbeatable, because combat resolves the entire fight inside
+  one `attack` command with no player input.
+
+**The finding that carries beyond this flight:** both artifacts were stopped by
+the *same* seam — a boss component with no inbound edge — and in both, a second
+independent seam killed the NPC dialogue carrying the boss-weakness hint
+(gemma: the one-token parser; devstral: a `continue` escaping the wrong loop on
+a `condition: none` sentinel). *Neither model ever met its own NPC.*
+
+## ROOM-GRAPH ORPHANING — the epoch's dominant decisive defect
+
+Six artifacts, five different models, **plus our own floor anchor**:
+
+| artifact | orphaned |
+|---|---|
+| gemma-4-31b | `secret_alcove` holding the weakness item; one outward-only exit |
+| qwen3.6-35b-a3 | `tower`, `dungeon`, `throne_room` — boss, 2 monsters, 2 weapons |
+| deepseek-v4-flash | one-way `crypt`, plus an NPC placed in no room |
+| gemma-4-26b-a4b | `boss_chamber` + `secret_alcove` (Holy Water) |
+| gpt-oss-swarm | `throne` (real final boss); weakness item in no room |
+| **floor-devstral (anchor)** | 9 rooms authored, **4 reachable**, five components |
+
+Every instance is invisible to lint, import and syntax gates. A reachability
+traversal from the start room, plus an item/NPC placement check, would have
+caught all six.
+
 ---
 
 # ARCHIVED PER-MODEL RECORDS
