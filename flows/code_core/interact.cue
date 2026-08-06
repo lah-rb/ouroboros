@@ -318,14 +318,19 @@ interact: #FlowDefinition & {
 				type: "rule"
 				rules: [{condition: "true", transition: "evaluate_outcome"}]
 			}
-			// acceptance_ok IS consumed — evaluate_outcome's resolver reads
-			// `context.get('acceptance_ok', true)` (:382/:388). 8da36b1
-			// dropped this declaration because the dead-publish check could
-			// not yet read that spelling; cca7e92 taught it to, and the
-			// declaration is restored. Resolver conditions read the raw
-			// accumulator, so nothing broke meanwhile — the CONTRACT was
-			// wrong, not the behaviour.
-			publishes: ["acceptance_ok", "acceptance_summary"]
+			// acceptance_ok IS consumed — parse_evaluation's resolver reads
+			// `context.get('acceptance_ok', true)`. 8da36b1 dropped this
+			// declaration because the dead-publish check could not yet read
+			// that spelling; cca7e92 taught it to, and the declaration is
+			// restored.
+			//
+			// acceptance_summary is NO LONGER published (2026-08-06): its one
+			// consumer was evaluate_outcome's prompt, and feeding the
+			// deterministic verdict to the behavioural evaluator collapsed two
+			// independent signals into one — see the note on evaluate_outcome.
+			// The action still computes it (its own tests pin that); it just
+			// travels nowhere.
+			publishes: ["acceptance_ok"]
 		}
 
 		// ══════════════════════════════════════════════════════════
@@ -345,7 +350,7 @@ interact: #FlowDefinition & {
 			action:      "inference"
 			description: "Evaluate whether the product interaction achieved its goal"
 			context: {
-				optional: ["terminal_output", "inference_session_id", "acceptance_summary"]
+				optional: ["terminal_output", "inference_session_id"]
 			}
 			turn: #Turn & {
 				response_shape: "json_document"
@@ -355,10 +360,22 @@ interact: #FlowDefinition & {
 					// context (inference_session_id) still carries the history
 					// and terminal_output isn't separately needed.
 					{type: "evidence", ref:         {$ref: "context.terminal_output"}},
-					// Deterministic acceptance-check results (empty when no
-					// checks ran — omits cleanly). A required failure here is
-					// hard evidence the goal's end-state is not met.
-					{type: "evidence", ref:         {$ref: "context.acceptance_summary"}, title: "Acceptance checks"},
+					// The acceptance-check results are DELIBERATELY NOT shown
+					// here (removed 2026-08-06). They used to appear as an
+					// "Acceptance checks" evidence block, and the evaluator
+					// dutifully folded a failed check into goal_met=false even
+					// while its own headline said the behaviour worked
+					// ("Examine works but sword description format fails
+					// acceptance check"). That DOUBLE-VETO made
+					// reconcile_acceptance unreachable — its route requires
+					// goal_met==true AND acceptance_ok==false — so the
+					// staleness counter could never count and a stale check
+					// (a world-layout assumption invalidated by a later edit)
+					// held its goal hostage forever. The ops rule is "checks
+					// pass AND judge confirms": two INDEPENDENT signals, ANDed
+					// in parse_evaluation's resolver. goal_met judges the
+					// SESSION BEHAVIOUR alone; acceptance_ok stays a
+					// deterministic veto with reconcile as its wear-out path.
 					{type: "problem", template:     "interact/test_objective_bounded"},
 					{type: "instruction", template: "interact/evaluate_rules"},
 					{type: "envelope"},

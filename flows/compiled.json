@@ -6765,8 +6765,7 @@
           ]
         },
         "publishes": [
-          "acceptance_ok",
-          "acceptance_summary"
+          "acceptance_ok"
         ],
         "effects": [],
         "terminal": false
@@ -6778,8 +6777,7 @@
           "required": [],
           "optional": [
             "terminal_output",
-            "inference_session_id",
-            "acceptance_summary"
+            "inference_session_id"
           ]
         },
         "params": {},
@@ -6796,14 +6794,6 @@
               "ref": {
                 "$ref": "context.terminal_output"
               },
-              "required": false
-            },
-            {
-              "type": "evidence",
-              "ref": {
-                "$ref": "context.acceptance_summary"
-              },
-              "title": "Acceptance checks",
               "required": false
             },
             {
