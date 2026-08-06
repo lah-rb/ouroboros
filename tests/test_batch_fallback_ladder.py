@@ -17,6 +17,13 @@ The load-bearing property is that rung 2 discards its attempt BEFORE
 writing. Two independent generations spliced into one tree is the very
 incoherence the batch path exists to prevent, so a resample that left its
 files behind would be reintroducing the bug it is meant to fix.
+
+SCOPE: everything here calls the verdict and the action DIRECTLY, passing
+`attempt` in by hand. That is a unit test of the decision, and it is not
+enough on its own — it says nothing about whether the runtime ever supplies
+a real attempt number. It did not, for the ladder's whole first day in
+production. The wiring is covered by
+`tests/test_step_attempt_reaches_actions.py`, which drives `execute_flow`.
 """
 
 from __future__ import annotations

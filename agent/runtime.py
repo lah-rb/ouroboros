@@ -323,6 +323,7 @@ async def execute_flow(
                 accumulator=execution.accumulator,
                 inputs=inputs,
                 effects=effects,
+                attempt=step_visits[step_name],
             )
 
             # ── Trace: StepStart ─────────────────────────────────────
@@ -1688,6 +1689,7 @@ def _build_step_input(
     accumulator: dict[str, Any],
     inputs: dict[str, Any],
     effects: Any = None,
+    attempt: int = 1,
 ) -> StepInput:
     """Build a StepInput for a step, with filtered context and rendered params.
 
@@ -1755,6 +1757,16 @@ def _build_step_input(
         meta=FlowMeta(
             flow_name=flow_def.flow,
             step_id=step_name,
+            # The step's VISIT COUNT, matching what resolvers already get as
+            # `meta.attempt`. Until 2026-08-06 this was never set here, so an
+            # action reading `step_input.meta.attempt` always saw the default
+            # 1 — any retry cap written inside an action was dead code, and
+            # only the resolver half of the guard actually fired. Found in
+            # production: batch_structural's resample ladder logged "attempt
+            # 2 of 3" three times in a row, spent four generations on a cap
+            # of three, and exhausted its retries into a step that had
+            # published no manifest.
+            attempt=attempt,
         ),
         effects=effects,
         turn=step_def.turn,
