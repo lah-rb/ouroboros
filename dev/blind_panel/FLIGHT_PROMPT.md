@@ -6,6 +6,16 @@ compose a flight prompt from memory: the v2.0 campaign's eight flights were
 prompted from chat, and every one of them silently omitted the documentation
 change `TIER_RUBRIC_v2.md` had already scheduled.
 
+**It happened again, the other way round (2026-08-05).** Across the 19-flight
+GUARDIAN/FRONTIER/FLOOR campaign the dispatcher pasted TWO instructions into
+every prompt that were never in this file — the cross-module seam-bug bullet,
+and (from flight 19) the room-graph walk. Both earned their place: the seam
+bullet named the decisive defect in most flights, and the graph walk caught an
+unplaced boss on its first outing. Neither was recorded, so the next flight run
+straight from this file would have silently dropped both. They are folded in
+below. **The rule is symmetric — an improvement composed in chat is as lost as
+an omission made in chat. Edit this file, then dispatch from it.**
+
 Build the two packets first, one per artifact:
 
     python3 dev/blind_panel/make_judge_packet.py <staged>/alpha --out {PACKET_ROOT}/A
@@ -40,6 +50,8 @@ PROTOCOL — play first, in this order:
    - a state-integrity note, the robustness table, the modification-probe result, the furthest point reached
    - a quoted transcript excerpt for every decisive finding
    - attribution labels: model-innate / interaction / framework-coupled. CHARGE WHAT SHIPS: everything in the artifact tree is IN comparison regardless of label — record the label, never exclude on it. Interaction-attributed observations (how the artifact's author behaved with its build harness: workaround shims, stub tools, shipped save files) are comparison-relevant, as advantage or handicap. The ONE exclusion is PROJECT LAYOUT, which the scaffold dictates identically for both artifacts — documentation IS in comparison (axis B10).
+   - **Expect cross-module seam bugs.** In every panel run so far the decisive defect has been a mismatched identifier or key BETWEEN files that are each internally reasonable (`shadow_lord` vs `shadow_lich`; a parser emitting one token against handlers that compare full display names; a `Boss` gated on an equipment slot its own item type can never occupy). Look for them specifically, and say whether a seam bug is what stopped you.
+   - **Walk the room graph explicitly, and check placement.** State how many authored rooms are reachable from the start room, and name any room, boss, weakness item, monster or NPC that is authored but placed in NO room at all. This is the campaign's single most common decisive defect — seven artifacts so far, including one of our own anchors — and it takes two distinct forms: a disconnected COMPONENT (a boss wing nothing links into) and an UNPLACED ENTITY (a boss whose data block has no room field; an item in the registry and in no room's item list). A pure room-to-room traversal finds the first and misses the second. Check both.
 
 FLIGHT VERDICT — ten forced choices, A or B, one line of justification each. Per-axis ties are FORBIDDEN.
 
