@@ -1064,6 +1064,43 @@ async def action_relaunch_program(step_input: StepInput) -> StepOutput:
 # ══════════════════════════════════════════════════════════════════════
 
 
+async def action_snapshot_workspace(step_input: StepInput) -> StepOutput:
+    """Record the workspace file listing BEFORE any session runs.
+
+    The other half of OPEN_TASKS §11's universal fix: with a pre-session
+    snapshot, the post-session flush can compute `appeared = now − snapshot`
+    and OBSERVE which files the program wrote, instead of trusting a
+    declaration predicted off a lossy signature listing. Observation is
+    deterministic, language-agnostic, and cannot go stale — the declaration
+    missed `save.json` for an entire 8-hour run because the filename lived in
+    a default argument no extractor surfaced.
+
+    Publishes: workspace_snapshot (sorted list of file paths). An EMPTY list
+    is a real snapshot (empty workspace: everything later is "appeared");
+    only an absent key means "no snapshot taken" and drops the flush back to
+    declaration-only behaviour.
+    """
+    effects = step_input.effects
+    if effects is None:
+        return StepOutput(result={"snapshot_files": 0}, observations="no effects")
+    try:
+        listing = await effects.list_directory(".", recursive=True)
+        entries = sorted(
+            {
+                getattr(e, "path", "")
+                for e in getattr(listing, "entries", []) or []
+                if getattr(e, "path", "") and not getattr(e, "is_dir", False)
+            }
+        )
+    except Exception:  # noqa: BLE001 - snapshot is best-effort, never fatal
+        entries = []
+    return StepOutput(
+        result={"snapshot_files": len(entries)},
+        observations=f"Workspace snapshot: {len(entries)} file(s) before session",
+        context_updates={"workspace_snapshot": entries},
+    )
+
+
 async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
     """Delete architecture-declared transient files after a test session.
 
@@ -1158,8 +1195,38 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
         }
     )
 
+    # ── OBSERVATION (OPEN_TASKS §11's universal fix, built 2026-08-06) ──
+    # With a pre-session snapshot on the accumulator, the transient set is
+    # OBSERVED rather than predicted: `appeared = now − snapshot`, filtered
+    # through the same program-generated heuristic the tripwire uses. Files
+    # the session itself created, that look like runtime state, and that no
+    # declaration accounts for, get flushed regardless — the declaration
+    # missed `save.json` for an entire 8-hour run because the filename lived
+    # in a default argument no signature extractor surfaced, and every
+    # behavioural test inherited the previous test's state.
+    #
+    # SAFETY comes from the conjunction: appeared-this-session AND
+    # state-suffixed AND not protected AND not dot/config. A file that
+    # PRE-DATES the session is never observation-flushed, however
+    # state-like it looks — we did not watch it appear, so deleting it is
+    # not ours to decide (it still gets the tripwire below).
+    #
+    # An EMPTY snapshot list is a real snapshot (empty workspace); only an
+    # ABSENT key means no snapshot step ran (quality_gate today, brownfield
+    # resumes, older flows) and drops back to declaration-only behaviour.
+    snapshot = step_input.context.get("workspace_snapshot")
+    observed: list[str] = []
+    if isinstance(snapshot, list):
+        snap_set = {str(p) for p in snapshot}
+        appeared = [p for p in entries if p not in snap_set]
+        observed = [
+            p
+            for p in _unaccounted_state_files(appeared, protected, safe_patterns)
+            if p not in set(victims)
+        ]
+
     flushed: list[str] = []
-    for path in victims:
+    for path in victims + observed:
         try:
             result = await effects.run_command(["rm", "-f", path], timeout=10)
             if getattr(result, "return_code", 1) == 0:
@@ -1167,8 +1234,62 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
         except Exception as e:  # noqa: BLE001 - keep flushing the rest
             logger.warning("flush_transient_files: rm failed for %s: %s", path, e)
 
+    # An observed flush is evidence of a missing/incomplete DECLARATION —
+    # the operational contamination is handled (file deleted), but the deep
+    # fix is architecture.transient_files, and that repair needs a route.
+    # Raise an evidenced warning per file: the queue de-duplicates while
+    # pending, re-arms if the file keeps appearing after a fix attempt, and
+    # abandons after WARNING_MAX_ATTEMPTS so it can never starve the
+    # functional loop. (raise_warning's default max_attempts matches
+    # WARNING_MAX_ATTEMPTS in mission_actions.)
+    observed_flushed = [p for p in observed if p in set(flushed)]
+    if observed_flushed and mission is not None:
+        raised = 0
+        for path in observed_flushed:
+            raised += bool(
+                mission.raise_warning(
+                    kind="unaccounted_runtime_file",
+                    subject=path,
+                    evidence=(
+                        f"The behavioural session created `{path}` (absent from "
+                        f"the pre-session snapshot, present at session close), "
+                        f"it matches the program-generated state heuristic, and "
+                        f"no architecture.transient_files entry accounts for it "
+                        f"(declared: {safe_patterns or 'nothing'}). It was "
+                        f"flushed by OBSERVATION this time, so this session did "
+                        f"not contaminate the next — but the declaration is "
+                        f"still wrong, and any session path without a snapshot "
+                        f"stays exposed."
+                    ),
+                    prescribed_fix=(
+                        f"Declare `{path}` in architecture.transient_files, "
+                        f"citing the write site in the source (the project_ops "
+                        f"declare_artifacts step persists this)."
+                    ),
+                    source_flow="flush_transient_files",
+                )
+            )
+        if raised:
+            try:
+                await effects.save_mission(mission)
+            except Exception:  # noqa: BLE001 - flush is best-effort, never fatal
+                logger.debug("flush: could not persist warnings", exc_info=True)
+        logger.warning(
+            "flush_transient_files: OBSERVED %d undeclared runtime file(s) "
+            "created by this session and flushed them: %s (%d warning(s) queued "
+            "for the declaration fix)",
+            len(observed_flushed),
+            ", ".join(observed_flushed),
+            raised,
+        )
+
     if flushed:
         observation = f"Flushed {len(flushed)} transient file(s): {', '.join(flushed)}"
+        if observed_flushed:
+            observation += (
+                f" ({len(observed_flushed)} by observation, undeclared: "
+                f"{', '.join(observed_flushed)})"
+            )
     elif not declared:
         observation = "no transient_files declared — nothing to flush"
     else:
@@ -1195,7 +1316,16 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
     # later session. Gating on total failure would have caught 2026-07-29 and
     # missed its narrower sibling. (Found by mutation testing — the version
     # gated on `not flushed` passed every test.)
-    stale = _unaccounted_state_files(entries, protected, safe_patterns)
+    # Files observation just flushed (and queued warnings for) are handled —
+    # re-reporting them here would double-signal. What remains is the set the
+    # observation deliberately does NOT touch: state-like files that PRE-DATE
+    # the session (a save shipped by the batch, a leftover from a snapshotless
+    # path), which still deserve the human-facing note.
+    stale = [
+        p
+        for p in _unaccounted_state_files(entries, protected, safe_patterns)
+        if p not in set(flushed)
+    ]
     if stale:
         logger.warning(
             "flush_transient_files: %s and flushed %d, but these look "
@@ -1287,7 +1417,16 @@ async def _note_flush_mismatch(
 
     PUSHED ONCE. That list is capped at 8 and sorted newest-first, so a note
     after each of 22 sessions would evict the real diagnoses it is meant to sit
-    beside — the warning would crowd out the findings."""
+    beside — the warning would crowd out the findings.
+
+    TAGGED TO THE WRITERS, NOT THE ARTIFACT (fixed 2026-08-06). This note used
+    to be tagged with the stale filenames themselves — and
+    `_filter_notes_for_file` surfaces a note only to whoever is working on a
+    tagged file. Nobody ever works on `save.json`; it is a runtime artifact,
+    not a goal target. The note spent an entire 8-hour run addressed to a
+    reader who cannot exist. The files someone WILL work on are the modules
+    that write the artifact, so grep the canonical sources for the filename
+    and tag those."""
     marker = "TEST-HARNESS CONTAMINATION"
     try:
         existing = getattr(mission, "notes", None) or []
@@ -1295,6 +1434,29 @@ async def _note_flush_mismatch(
             return
     except Exception:  # noqa: BLE001 - a note is never worth failing a step
         pass
+
+    # Best-effort writer lookup: which canonical module mentions the filename?
+    writers: list[str] = []
+    try:
+        arch = getattr(mission, "architecture", None)
+        candidates = list(getattr(arch, "canonical_files", lambda: [])())
+        import posixpath
+
+        basenames = {posixpath.basename(s) for s in stale}
+        for f in candidates:
+            if len(writers) >= 4:
+                break
+            try:
+                fc = await effects.read_file(f)
+                content = getattr(fc, "content", "") or ""
+            except Exception:  # noqa: BLE001
+                continue
+            if any(b in content for b in basenames):
+                writers.append(f)
+    except Exception:  # noqa: BLE001 - tagging is best-effort
+        writers = []
+
+    writer_line = f" Written by: {', '.join(writers)}." if writers else ""
     try:
         await effects.push_note(
             content=(
@@ -1307,10 +1469,13 @@ async def _note_flush_mismatch(
                 f"under test resumed instead of starting fresh — a 'wrong' "
                 f"response can be correct for the state it was actually in. The "
                 f"fix is the DECLARATION, not the program: name the file the code "
-                f"actually writes."
+                f"actually writes.{writer_line}"
             ),
             category="failure_analysis",
-            tags=stale[:4],
+            # Writer files first — those are paths a goal actually targets, so
+            # the note surfaces when someone touches the code that writes the
+            # artifact. Stale names stay for the content-substring match.
+            tags=(writers + stale)[:4],
             source_flow="flush_transient_files",
         )
         logger.info("flush_transient_files: pushed contamination note for diagnosis")

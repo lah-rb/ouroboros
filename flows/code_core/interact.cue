@@ -70,6 +70,14 @@ interact: #FlowDefinition & {
 		// Route: check interaction mode
 		// ══════════════════════════════════════════════════════════
 
+		// Pre-session snapshot FIRST, before either path can run the program.
+		// The flush at the tail diffs against this to observe what the session
+		// created — the transient set as fact, not prediction.
+		snapshot_workspace: #StepDefinition & _templates.snapshot_workspace & {
+			_next:       "check_mode"
+			description: "Record the workspace file listing before any session runs"
+		}
+
 		check_mode: #StepDefinition & {
 			action:      "noop"
 			description: "Route based on interaction_mode — deterministic or exploratory"
@@ -560,5 +568,5 @@ interact: #FlowDefinition & {
 		}
 	}
 
-	entry: "check_mode"
+	entry: "snapshot_workspace"
 }

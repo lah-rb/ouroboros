@@ -215,6 +215,7 @@ def build_action_registry() -> ActionRegistry:
         action_send_interaction,
         action_close_interactive_session,
         action_flush_transient_files,
+        action_snapshot_workspace,
         action_relaunch_program,
         action_execute_commands_batch_mcp,
         action_end_inference_session,
@@ -504,6 +505,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("send_interaction", action_send_interaction)
     registry.register("close_interactive_session", action_close_interactive_session)
     registry.register("flush_transient_files", action_flush_transient_files)
+    registry.register("snapshot_workspace", action_snapshot_workspace)
     registry.register("relaunch_program", action_relaunch_program)
     registry.register("execute_commands_batch", action_execute_commands_batch_mcp)
     registry.register("end_inference_session", action_end_inference_session)

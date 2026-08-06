@@ -215,9 +215,32 @@ _templates: {
 		...
 	}
 
+	// Pre-session workspace listing, so flush_transient can OBSERVE which
+	// files the session created (appeared = now − snapshot) instead of only
+	// trusting the architecture's declaration. OPEN_TASKS §11's universal
+	// fix: the declaration missed `save.json` for an entire 8h run because
+	// the filename lived in a default argument no extractor surfaced.
+	snapshot_workspace: {
+		_next:  string
+		action: "snapshot_workspace"
+		resolver: {
+			type: "rule"
+			rules: [{condition: "true", transition: _next}]
+		}
+		publishes: ["workspace_snapshot"]
+		...
+	}
+
 	flush_transient: {
 		_next:  string
 		action: "flush_transient_files"
+		// LOAD-BEARING declaration, not documentation: _build_step_input
+		// filters the accumulator to declared context, so without this the
+		// flush reads no snapshot and silently degrades to declaration-only
+		// behaviour — the same silent-wire class as the batch ladder's
+		// inference_tokens_generated. Optional: quality_gate and brownfield
+		// paths run no snapshot step, and the flush must keep working there.
+		context: optional: ["workspace_snapshot"]
 		resolver: {
 			type: "rule"
 			rules: [{condition: "true", transition: _next}]

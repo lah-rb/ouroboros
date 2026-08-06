@@ -6273,6 +6273,30 @@
     },
     "flow_persona": "[Role: product testing \u2014 run the software and observe behavior;\n Approach: crafts a tester persona, launches the project in a terminal session, explores features;\n Scope: reports what happened factually \u2014 pass/fail judgment is separate]\nReceives a flow_directive describing what to test. Plans an execution persona,\nruns a multi-turn terminal session, then evaluates whether the goal was met.",
     "steps": {
+      "snapshot_workspace": {
+        "action": "snapshot_workspace",
+        "description": "Record the workspace file listing before any session runs",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "check_mode"
+            }
+          ]
+        },
+        "publishes": [
+          "workspace_snapshot"
+        ],
+        "effects": [],
+        "terminal": false
+      },
       "check_mode": {
         "action": "noop",
         "description": "Route based on interaction_mode \u2014 deterministic or exploratory",
@@ -7048,7 +7072,9 @@
         "description": "Delete architecture-declared transient files (test isolation)",
         "context": {
           "required": [],
-          "optional": []
+          "optional": [
+            "workspace_snapshot"
+          ]
         },
         "params": {},
         "config": {},
@@ -7070,7 +7096,9 @@
         "description": "Delete architecture-declared transient files (test isolation)",
         "context": {
           "required": [],
-          "optional": []
+          "optional": [
+            "workspace_snapshot"
+          ]
         },
         "params": {},
         "config": {},
@@ -7238,7 +7266,7 @@
         }
       }
     },
-    "entry": "check_mode",
+    "entry": "snapshot_workspace",
     "overflow": {
       "strategy": "split",
       "fallback": "reorganize"
@@ -10948,7 +10976,9 @@
         "description": "Delete architecture-declared transient files (test isolation)",
         "context": {
           "required": [],
-          "optional": []
+          "optional": [
+            "workspace_snapshot"
+          ]
         },
         "params": {},
         "config": {},
@@ -11361,7 +11391,9 @@
         "description": "Delete architecture-declared transient files between probes",
         "context": {
           "required": [],
-          "optional": []
+          "optional": [
+            "workspace_snapshot"
+          ]
         },
         "params": {},
         "config": {},
@@ -11383,7 +11415,9 @@
         "description": "Flush transients after the last probe",
         "context": {
           "required": [],
-          "optional": []
+          "optional": [
+            "workspace_snapshot"
+          ]
         },
         "params": {},
         "config": {},
