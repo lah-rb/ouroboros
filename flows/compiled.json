@@ -6815,8 +6815,7 @@
         "context": {
           "required": [],
           "optional": [
-            "terminal_output",
-            "inference_session_id"
+            "terminal_output"
           ]
         },
         "params": {},
@@ -6831,7 +6830,7 @@
             {
               "type": "evidence",
               "ref": {
-                "$ref": "context.terminal_output"
+                "$ref": "context.eval_session_tail"
               },
               "required": false
             },
@@ -6872,6 +6871,16 @@
               "source": {
                 "$ref": "input.flow_directive"
               }
+            }
+          },
+          {
+            "formatter": "format_session_tail",
+            "output_key": "eval_session_tail",
+            "params": {
+              "source": {
+                "$ref": "context.terminal_output"
+              },
+              "max_chars": 16000
             }
           }
         ],

@@ -349,17 +349,24 @@ interact: #FlowDefinition & {
 		evaluate_outcome: #StepDefinition & {
 			action:      "inference"
 			description: "Evaluate whether the product interaction achieved its goal"
+			// STATELESS EVALUATION (2026-08-07). This turn used to join the
+			// tester's memoryful session — the whole transcript in KV plus
+			// the eval prompt. A 77-turn session (the completeness rule
+			// working as designed) hit 63k tokens against the 32k window,
+			// the evaluation errored, and the session's verdict was LOST —
+			// scored failed by overflow, not on the merits. Any session deep
+			// enough to pass the e2e finale would overflow its own verdict.
+			// inference_session_id is deliberately NOT declared (the context
+			// filter makes the turn stateless); the evidence is a BOUNDED
+			// session tail — the decisive late-game stretch always fits.
 			context: {
-				optional: ["terminal_output", "inference_session_id"]
+				optional: ["terminal_output"]
 			}
 			turn: #Turn & {
 				response_shape: "json_document"
 				sections: [
 					{type: "role", template:        "personas/interact_evaluator"},
-					// Evidence is a fallback — omits cleanly if the session
-					// context (inference_session_id) still carries the history
-					// and terminal_output isn't separately needed.
-					{type: "evidence", ref:         {$ref: "context.terminal_output"}},
+					{type: "evidence", ref:         {$ref: "context.eval_session_tail"}},
 					// The acceptance-check results are DELIBERATELY NOT shown
 					// here (removed 2026-08-06). They used to appear as an
 					// "Acceptance checks" evidence block, and the evaluator
@@ -402,6 +409,12 @@ interact: #FlowDefinition & {
 			pre_compute: [
 				{formatter: "strip_test_guidance", output_key: "eval_objective"
 					params: source:                              {$ref: "input.flow_directive"}},
+				// Bounded transcript for the stateless evaluation: 16k chars
+				// (~4-5k tokens) covers the decisive late-game stretch of
+				// even a 77-turn session with the whole prompt well under
+				// the 32k window.
+				{formatter: "format_session_tail", output_key: "eval_session_tail"
+					params: {source: {$ref: "context.terminal_output"}, max_chars: 16000}},
 			]
 			publishes: ["inference_response"]
 		}

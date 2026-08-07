@@ -799,3 +799,33 @@ class TestAcceptanceVetoRetestsInsteadOfDiagnosing:
         text = Path("prompts/interact/derive_goal_acceptance.yaml").read_text()
         assert "PIN THE GOAL'S INVARIANT, NEVER THIS SESSION'S FINGERPRINT" in text
         assert "would this check pass for a different" in text
+
+
+class TestEvaluationIsStatelessAndBounded:
+    """The 63k overflow (2026-08-07): evaluate_outcome joined the tester's
+    memoryful session, so a 77-turn transcript's KV plus the eval prompt
+    overflowed the 32k window and the session's verdict was LOST — any
+    session deep enough to pass the e2e finale would overflow its own
+    evaluation. The turn is now stateless over a bounded session tail."""
+
+    def test_evaluate_outcome_declares_no_session(self):
+        step = _compiled()["interact"]["steps"]["evaluate_outcome"]
+        assert "inference_session_id" not in (
+            step["context"].get("optional", []) + step["context"].get("required", [])
+        )
+
+    def test_evidence_is_the_bounded_tail(self):
+        step = _compiled()["interact"]["steps"]["evaluate_outcome"]
+        evidence = next(s for s in step["turn"]["sections"] if s["type"] == "evidence")
+        assert evidence["ref"] == {"$ref": "context.eval_session_tail"}
+        tail_pc = next(
+            p for p in step["pre_compute"] if p["formatter"] == "format_session_tail"
+        )
+        assert tail_pc["output_key"] == "eval_session_tail"
+        assert tail_pc["params"]["max_chars"] == 16000
+
+    def test_the_tail_formatter_actually_bounds(self):
+        from agent.formatters import format_session_tail
+
+        out = format_session_tail({"source": "x" * 100000, "max_chars": 16000}, {})
+        assert len(out) == 16000
