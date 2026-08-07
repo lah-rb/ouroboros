@@ -2098,6 +2098,15 @@ async def action_reconcile_acceptance(step_input: StepInput) -> StepOutput:
     if effects:
         await effects.save_mission(mission)
     updates: dict = {"mission": mission, "now_ok": now_ok, "acceptance_ok": now_ok}
+    # Veto marker (operator, 2026-08-07): this step is only reachable when
+    # BEHAVIOUR PASSED and a deterministic replay check failed. When the
+    # round still ends failed (check not yet worn out), the report carries
+    # acceptance_vetoed so the sweep dispatches a plain RETEST instead of a
+    # full diagnosis — the checks were meant as a replay guard ("does the
+    # same session still work"), not a testing standard, and a veto is
+    # never evidence of a code defect.
+    if not now_ok:
+        updates["acceptance_vetoed"] = True
     if disarmed:
         updates["acceptance_needs_derive"] = True
     return StepOutput(

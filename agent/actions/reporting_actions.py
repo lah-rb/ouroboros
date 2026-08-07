@@ -293,6 +293,10 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
     # it alongside goal_met/summary from the evaluation JSON. Other flows
     # won't have it; default to empty string and propagate whatever's there.
     headline = ctx.get("headline", "") or ""
+    # Acceptance veto (operator, 2026-08-07): behaviour passed, replay check
+    # failed. Published by reconcile_acceptance; the sweep reads it off the
+    # report to retest instead of diagnosing.
+    acceptance_vetoed = bool(ctx.get("acceptance_vetoed", False))
 
     from agent.persistence.models import DirectiveReport
 
@@ -313,6 +317,7 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
         diagnosis_kind=diagnosis_kind,
         module_statement=module_statement,
         test_guidance=test_guidance,
+        acceptance_vetoed=acceptance_vetoed,
     )
 
     return _wrap_report(report, flow_name, status)

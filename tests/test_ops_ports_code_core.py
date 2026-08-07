@@ -728,3 +728,74 @@ class TestEvaluatorStandardIsGuidanceFree:
         text = Path("prompts/interact/evaluate_rules.yaml").read_text()
         assert "Judge ONLY the capability the objective names" in text
         assert "Never require" in text
+
+
+class TestAcceptanceVetoRetestsInsteadOfDiagnosing:
+    """Operator (2026-08-07): the checks are a replay guard, not a testing
+    standard. A vetoed round (behaviour PASSED, deterministic replay check
+    failed) is never evidence of a code defect — the quit goal paid 8 full
+    diagnoses for stale-fingerprint vetoes. The sweep now retests directly;
+    the reconcile lane wears the stale check out in parallel."""
+
+    @pytest.mark.asyncio
+    async def test_a_vetoed_failure_dispatches_a_retest_not_a_diagnosis(self):
+        from agent.actions.mission_actions import action_functional_sweep_next
+        from agent.persistence.models import DirectiveReport
+
+        g = GoalRecord(
+            description="Player can quit and exit cleanly",
+            type="functional",
+            status="incomplete",
+            interaction_mode="exploratory",
+            reports=[
+                DirectiveReport(
+                    flow="interact",
+                    status="failed",
+                    summary="behaviour passed; replay check vetoed",
+                    acceptance_vetoed=True,
+                )
+            ],
+        )
+        m = _mission([g])
+        out = await action_functional_sweep_next(_si(MockEffects(mission=m), mission=m))
+        assert out.result.get("needs_test") is True
+        dc = out.context_updates["dispatch_config"]
+        assert dc["flow"] == "interact"
+        assert "veto" in dc["flow_directive"]
+        assert g.retest_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_genuine_failure_still_diagnoses(self):
+        from agent.actions.mission_actions import action_functional_sweep_next
+        from agent.persistence.models import DirectiveReport
+
+        g = GoalRecord(
+            description="Player can quit and exit cleanly",
+            type="functional",
+            status="incomplete",
+            interaction_mode="exploratory",
+            reports=[
+                DirectiveReport(
+                    flow="interact",
+                    status="failed",
+                    summary="quit crashed with a traceback",
+                )
+            ],
+        )
+        m = _mission([g])
+        out = await action_functional_sweep_next(_si(MockEffects(mission=m), mission=m))
+        assert out.result.get("needs_fix") is True
+        assert out.context_updates["dispatch_config"]["flow"] == "diagnose_issue"
+
+    def test_the_report_step_declares_the_veto_key(self):
+        step = _compiled()["interact"]["steps"]["compile_report_failure"]
+        assert "acceptance_vetoed" in step["context"]["optional"]
+        rec = _compiled()["interact"]["steps"]["reconcile_acceptance"]
+        assert "acceptance_vetoed" in rec["publishes"]
+
+    def test_derive_prompt_carries_rule_8(self):
+        from pathlib import Path
+
+        text = Path("prompts/interact/derive_goal_acceptance.yaml").read_text()
+        assert "PIN THE GOAL'S INVARIANT, NEVER THIS SESSION'S FINGERPRINT" in text
+        assert "would this check pass for a different" in text

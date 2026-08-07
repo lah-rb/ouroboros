@@ -462,7 +462,7 @@ interact: #FlowDefinition & {
 			// just happened — a disarmed check is replaced, not just removed
 			// (grounding is one-shot; without this the goal completes with a
 			// guard hole and drops out of the regression sweep).
-			publishes: ["mission", "acceptance_ok", "acceptance_needs_derive"]
+			publishes: ["mission", "acceptance_ok", "acceptance_needs_derive", "acceptance_vetoed"]
 		}
 
 		// Release the memoryful inference session now that evaluation is done.
@@ -570,7 +570,10 @@ interact: #FlowDefinition & {
 		compile_report_failure: #StepDefinition & {
 			action:      "compile_directive_report"
 			description: "Summarize failed interaction for goal report"
-			context: optional: ["terminal_output", "session_summary", "inference_response", "headline"]
+			// acceptance_vetoed (2026-08-07): behaviour passed, replay check
+			// failed — LOAD-BEARING declaration; the sweep reads it off the
+			// report to dispatch a retest instead of a diagnosis.
+			context: optional: ["terminal_output", "session_summary", "inference_response", "headline", "acceptance_vetoed"]
 			params: {
 				flow_name: "interact"
 				status:    "failed"

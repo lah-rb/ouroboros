@@ -3636,9 +3636,56 @@ async def _sweep_interact_failure(
     mission: Any,
     effects: Any,
     last_report: Any,
+    goal_mode: str = "",
+    run_command: str = "",
+    interactive_prompt: str = "",
 ) -> StepOutput:
     """Fallback: interact failed — dispatch diagnose_issue with the
-    accumulated attempt history."""
+    accumulated attempt history. EXCEPT the acceptance veto: behaviour
+    passed and only the deterministic replay check failed — retest."""
+    # Acceptance veto (operator, 2026-08-07): the checks were conceived as a
+    # replay guard ("does the same session still work as when it passed"),
+    # not a testing standard. A veto with passing behaviour is never
+    # evidence of a code defect, so bouncing to diagnose_issue buys a full
+    # investigation of nothing (quit paid that tax 8 times). Retest
+    # directly; the reconcile lane wears the stale check out in parallel
+    # (conflict counted this round, disarm at K).
+    if getattr(last_report, "acceptance_vetoed", False):
+        goal.retest_count = int(getattr(goal, "retest_count", 0) or 0) + 1
+        dispatch_config = {
+            "goal_id": goal.id,
+            "goal_description": goal.description,
+            "goal_type": "functional",
+            "goal_files": goal.associated_files or [],
+            "flow": "interact",
+            "target_file_path": "",
+            "flow_directive": _functional_retest_directive(
+                goal,
+                after=(
+                    "deterministic-check veto (the session's behaviour "
+                    "PASSED; only the replay check failed)"
+                ),
+            ),
+            "interaction_mode": goal_mode,
+            "run_command": run_command if goal_mode == "deterministic" else "",
+            "interactive_prompt": interactive_prompt,
+        }
+        logger.info(
+            "Functional sweep: acceptance-vetoed round for '%s' — retesting "
+            "directly (no diagnosis; behaviour passed)",
+            goal.description[:50],
+        )
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": False, "needs_test": True},
+            observations=(
+                f"Functional sweep: replay-check veto on "
+                f"'{goal.description[:50]}' — direct retest, no diagnosis"
+            ),
+            context_updates={"dispatch_config": dispatch_config},
+        )
+
     # interact failed — dispatch diagnose_issue to identify root cause
     # and the correct file to fix. Diagnosis uses LLM analysis of the
     # error context rather than fragile regex on tracebacks.
@@ -3844,7 +3891,15 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
                 interactive_prompt=interactive_prompt,
             )
 
-        return await _sweep_interact_failure(goal, mission, effects, last_report)
+        return await _sweep_interact_failure(
+            goal,
+            mission,
+            effects,
+            last_report,
+            goal_mode=goal_mode,
+            run_command=run_command,
+            interactive_prompt=interactive_prompt,
+        )
 
     # All functional goals visited — did we make progress?
     if effects:

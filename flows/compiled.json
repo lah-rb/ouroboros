@@ -6951,7 +6951,8 @@
         "publishes": [
           "mission",
           "acceptance_ok",
-          "acceptance_needs_derive"
+          "acceptance_needs_derive",
+          "acceptance_vetoed"
         ],
         "effects": [],
         "terminal": false
@@ -7200,7 +7201,8 @@
             "terminal_output",
             "session_summary",
             "inference_response",
-            "headline"
+            "headline",
+            "acceptance_vetoed"
           ]
         },
         "params": {

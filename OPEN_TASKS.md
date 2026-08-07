@@ -1046,3 +1046,48 @@ retired/unknown categories to "general" so archived mission.json files still
 load. CORRECTION to the original audit: `requirement_discovered` is NOT
 writer-less — `mission create --task` writes it (ouroboros.py:188); the
 channel stays.
+
+## 22. Testing paradigms for functional goals (operator, 2026-08-07)
+
+The acceptance-check machinery was conceived as a REPLAY GUARD — after a
+goal's first genuine pass, pin that session's durable end-state so a later
+edit that breaks it reopens the goal. On the hy3 run it quietly deviated
+into a quasi testing standard: derived checks became the de-facto
+definition of the goal (session-fingerprint checks like
+`current_room_id=='room4' and inventory==['sword']` vetoed every
+legitimate future pass), and each veto bounced through a full
+diagnose_issue that investigated nothing.
+
+Patched tactically (2026-08-07): derive rule 8 (invariants, never
+fingerprints), and vetoed rounds now dispatch a direct retest instead of a
+diagnosis (`DirectiveReport.acceptance_vetoed`). Both keep the replay
+guard a replay guard.
+
+THE OPEN QUESTION is the strategic one: what testing paradigm should
+functional goals actually carry? Constraints that make this tricky:
+
+- Models typically write TESTS worse than they write code — a
+  model-authored test suite becomes its own defect surface (the rigged
+  checks catalog in derive rules 3-5 exists because every one of those
+  patterns was observed).
+- Must stay LANGUAGE-AGNOSTIC: the framework cannot assume pytest or any
+  per-language harness; today's floor is `/bin/sh -c` + exit codes.
+- The behavioural evaluator (PTY session + LLM judge) is the primary
+  verifier; anything added must complement it, not compete (the double-veto
+  incident: two signals judging the same question drove a churn loop).
+- Deterministic replay of an INTERACTIVE program is inherently fragile —
+  world state moves, routes change, output wording shifts. The stable
+  substrate is invariants over durable artifacts, which is thin coverage.
+
+Directions worth evaluating (none committed):
+- Goal-scoped invariant contracts derived at DESIGN time (when the canon
+  is authored) instead of post-pass — checks born from intent, not from a
+  session's incidentals.
+- Scripted-replay checks that drive the program's stdin with the passing
+  session's command sequence and assert on coarse outcomes (exit code,
+  final-state keys) — replay as data, not as re-derived assertions.
+- Property-style checks over data files (schema/shape validation via the
+  data_shapes exemplar machinery, which already exists and is checkable).
+- Accepting the thin floor: evaluator-primary with structural-only checks,
+  and investing instead in evaluator reliability (the picky-personality
+  fix class).

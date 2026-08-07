@@ -193,6 +193,12 @@ class DirectiveReport(BaseModel):
     # InventoryCommand" or "#!/usr/bin/env bash"). file_ops routes on this — no
     # heuristic extraction from prose. Empty for all other kinds.
     module_statement: str = ""
+    # Acceptance veto (operator, 2026-08-07). True when this failed interact
+    # report's behaviour PASSED (goal_met) and only the deterministic replay
+    # check vetoed. The checks were conceived as a replay guard, not a
+    # testing standard — a veto is never evidence of a code defect, so the
+    # sweep dispatches a plain retest instead of a diagnosis.
+    acceptance_vetoed: bool = False
     # Retest verdict (2026-08-06, the Stone Guard case). When diagnosis
     # concludes the CODE is correct and the SESSION never exercised the
     # behavior (recommended_flow == "retest"), this carries the concrete

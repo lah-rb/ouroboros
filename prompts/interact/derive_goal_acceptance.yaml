@@ -127,7 +127,23 @@ sections:
          the program never emitted fails forever and vetoes a correct result.
          If the exact text is not visible in the session block, do not assert
          on it — use a structural predicate (a file, an exit code) or drop the
-         check.
+         check. (Rule 7 governs the SPELLING of what you assert; rule 8 below
+         governs WHICH facts deserve asserting — both apply.)
+      8. PIN THE GOAL'S INVARIANT, NEVER THIS SESSION'S FINGERPRINT. This
+         check re-runs against FUTURE sessions whose walks will differ. A
+         check that encodes incidental state from this particular session —
+         the exact room the tester stood in, the specific items it happened
+         to carry, a mid-fight HP value — fails every legitimate future pass
+         and burns reconcile rounds until it wears out. Assert the STRUCTURE
+         the goal requires of ANY passing session, never the VALUES this
+         session happened to produce — unless the goal itself names the
+         value. Before emitting, ask: would this check pass for a different
+         tester who satisfied the goal by another route? If not, generalize
+         it or drop it.
+         ✅ structure the goal requires of any pass:
+            {"command": "python -c \"import json,sys; d=json.load(open('save.json')); sys.exit(0 if 'current_room_id' in d and isinstance(d.get('inventory'), list) else 1)\"", "description": "the save records location and inventory"}
+         ❌ this session's walk, not the goal's requirement:
+            {"command": "python -c \"import json,sys; d=json.load(open('save.json')); sys.exit(0 if d.get('current_room_id')=='room4' and d.get('inventory')==['sword'] else 1)\"", "description": "save matches the session"}
 
       Most purely-behavioral goals (interactive flows, conversational
       output) have NO robust shell-checkable end-state — for those return
