@@ -260,8 +260,17 @@ async def action_condense_results(step_input: StepInput) -> StepOutput:
     # Distill in an EPHEMERAL low-reasoning session: the raw hits go into a
     # throwaway session (never the main search session), and the reasoning
     # HEAD-SWAP (reasoning=low in _CONDENSE_CFG) steers it to low effort at turn 0.
+    #
+    # BUSY-SKIP (2026-08-07): the ephemeral session is a SECOND concurrent
+    # inference session, which a limit=1 pool can never grant while the main
+    # search session holds the slot — on hy3 all 29 condense attempts failed
+    # identically, each burning retries and a warning. After the first busy
+    # failure in a run, `condense_unavailable` short-circuits every later
+    # round straight to the raw-snippet fallback.
     fact = ""
-    if effects is not None:
+    condense_unavailable = bool(step_input.context.get("condense_unavailable"))
+    extra: dict = {}
+    if effects is not None and not condense_unavailable:
         sess = None
         try:
             sess = await effects.start_inference_session({"ttl_seconds": 120})
@@ -270,7 +279,15 @@ async def action_condense_results(step_input: StepInput) -> StepOutput:
         except (
             Exception
         ) as e:  # noqa: BLE001 - fold a degraded note, keep the loop alive
-            logger.warning("condense failed for %r: %s", query, e)
+            if "busy" in str(e).lower():
+                extra["condense_unavailable"] = True
+                logger.info(
+                    "condense: pool cannot host a second session (%s) — "
+                    "skipping condense for the rest of this run",
+                    e,
+                )
+            else:
+                logger.warning("condense failed for %r: %s", query, e)
             fact = ""
         finally:
             if sess:
@@ -285,6 +302,7 @@ async def action_condense_results(step_input: StepInput) -> StepOutput:
     return _round_observe(
         step_input,
         f"Finding for {query!r}:\n{_bounded(fact, 2000)}",
+        extra=extra or None,
     )
 
 

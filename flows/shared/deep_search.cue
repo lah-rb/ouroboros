@@ -150,13 +150,19 @@ deep_search: #FlowDefinition & {
 				optional: [
 					"raw_search_results", "last_query", "search_choice_arg",
 					"search_round",
+					// Busy-skip (2026-08-07): set after the first
+					// instances-busy failure so later rounds don't retry a
+					// second session a limit=1 pool can never grant.
+					// LOAD-BEARING both ways — undeclared here the action
+					// never sees it; unpublished below it never persists.
+					"condense_unavailable",
 				]
 			}
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "check_budget"}]
 			}
-			publishes: ["search_round"]
+			publishes: ["search_round", "condense_unavailable"]
 		}
 
 		// Round budget: MAX_SEARCH_ROUNDS = 4 (keep this rule, the Python

@@ -2202,7 +2202,8 @@
             "raw_search_results",
             "last_query",
             "search_choice_arg",
-            "search_round"
+            "search_round",
+            "condense_unavailable"
           ]
         },
         "params": {},
@@ -2217,7 +2218,8 @@
           ]
         },
         "publishes": [
-          "search_round"
+          "search_round",
+          "condense_unavailable"
         ],
         "effects": [],
         "terminal": false

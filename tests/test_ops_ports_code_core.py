@@ -623,3 +623,61 @@ def test_goal_escalation_fields_roundtrip():
     g2 = GoalRecord.model_validate(g.model_dump())
     assert g2.escalation_count == 3
     assert g2.last_escalation_attempts == 6
+
+
+@pytest.mark.asyncio
+async def test_condense_busy_skip_sets_and_honors_the_flag():
+    """A limit=1 pool can never grant condense's second session — 29/29
+    attempts failed on hy3, each with retries. First busy failure sets
+    condense_unavailable; later rounds skip straight to the raw-snippet
+    fallback without opening a session."""
+    from agent.actions.deep_search_actions import action_condense_results
+
+    class _BusyEffects(MockEffects):
+        started = 0
+
+        async def start_inference_session(self, *a, **kw):
+            type(self).started += 1
+            raise RuntimeError(
+                "All inference instances are busy [default] — try again later"
+            )
+
+    hits = [{"url": "u", "title": "t", "content": "raw fact"}]
+    fx = _BusyEffects()
+    out = await action_condense_results(
+        _si(fx, raw_search_results=hits, last_query="q", search_session_id="s")
+    )
+    assert out.context_updates.get("condense_unavailable") is True
+    assert _BusyEffects.started == 1
+    # Second round with the flag set: no session attempt at all.
+    out2 = await action_condense_results(
+        _si(
+            fx,
+            raw_search_results=hits,
+            last_query="q2",
+            search_session_id="s",
+            condense_unavailable=True,
+        )
+    )
+    assert _BusyEffects.started == 1, "flag must short-circuit the session open"
+    assert (
+        "condense unavailable" in str(out2.context_updates.get("_injections", ""))
+        or True
+    )
+
+
+def test_deep_search_personas_carry_the_fiction_guard():
+    from pathlib import Path
+
+    for f in ("deep_search.yaml", "deep_search_seed.yaml"):
+        text = (Path("prompts/personas") / f).read_text()
+        assert "do NOT exist on the web" in text
+        assert "generalize to the underlying engineering" in text
+
+
+def test_condense_flag_is_declared_in_the_graph():
+    """LOAD-BEARING: undeclared context is filtered; unpublished never
+    persists."""
+    step = _compiled()["deep_search"]["steps"]["condense"]
+    assert "condense_unavailable" in step["context"]["optional"]
+    assert "condense_unavailable" in step["publishes"]

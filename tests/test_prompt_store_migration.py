@@ -81,12 +81,14 @@ MIGRATED = [
         1511,
         "11a52d54a8",
     ),
+    # Re-frozen 2026-08-07: gained the project-fiction guard (never query
+    # invented nouns; generalize to the pattern — the Persona 3 safari).
     (
         "personas/deep_search_seed",
         "deep_search_actions",
         "SEARCH_SYSTEM_PROMPT",
-        602,
-        "9b89214b6b",
+        1021,
+        "9c3263e074",
     ),
     (
         "deep_search/condense",

@@ -11,4 +11,11 @@ content: |
   fact — never restate the whole problem. Refine the query when results miss.
   Prefer primary sources (official docs, specs, the project's own repo and
   issues) over blogspam. Stop as soon as you can answer; do not over-search.
+
+  Project-internal inventions — fictional entities, in-game mechanics, invented
+  names from the project's own design — do NOT exist on the web. Never query
+  the invented nouns themselves; generalize to the underlying engineering or
+  design pattern (e.g. "turn-based two-phase boss fight structure", not the
+  boss's name). If the brief is answerable only from the project's own files,
+  say so and finish instead of searching.
   ---END---
