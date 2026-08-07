@@ -96,3 +96,75 @@ def test_goal_messages_coexist_with_pause_handling():
     assert out.result["pause_requested"] is True
     assert m.status == "paused"
     assert len(m.goals) == 1
+
+
+class TestDirectiveGoalsSweepFirst:
+    """List position is dispatch priority in the functional sweep — and an
+    operator-injected goal starved at the back of the list on hy3 while the
+    grind it would have ended ran 100+ reports. Directive-origin goals now
+    sort first (stable: everything else keeps its order)."""
+
+    @staticmethod
+    def _sweep(mission):
+        from agent.actions.mission_actions import action_functional_sweep_next
+
+        return asyncio.run(
+            action_functional_sweep_next(
+                StepInput(
+                    context={"mission": mission},
+                    params={},
+                    meta=FlowMeta(flow_name="mission_control", step_id="x"),
+                    effects=MockEffects(mission=mission),
+                )
+            )
+        )
+
+    def test_a_directive_goal_preempts_earlier_organic_goals(self):
+        from agent.persistence.models import GoalRecord
+
+        m = _mission()
+        m.goals = [
+            GoalRecord(
+                description="organic goal that would otherwise dispatch first",
+                type="functional",
+                status="incomplete",
+                origin="design",
+                interaction_mode="exploratory",
+            ),
+            GoalRecord(
+                description=DIRECTIVE,
+                type="functional",
+                status="incomplete",
+                origin="directive",
+                interaction_mode="exploratory",
+            ),
+        ]
+        out = self._sweep(m)
+        dc = out.context_updates["dispatch_config"]
+        assert dc["goal_id"] == m.goals[1].id, (
+            "the directive-origin goal must dispatch ahead of the earlier "
+            "organic goal"
+        )
+
+    def test_organic_order_is_otherwise_preserved(self):
+        from agent.persistence.models import GoalRecord
+
+        m = _mission()
+        m.goals = [
+            GoalRecord(
+                description="first organic",
+                type="functional",
+                status="incomplete",
+                origin="design",
+                interaction_mode="exploratory",
+            ),
+            GoalRecord(
+                description="second organic",
+                type="functional",
+                status="incomplete",
+                origin="design",
+                interaction_mode="exploratory",
+            ),
+        ]
+        out = self._sweep(m)
+        assert out.context_updates["dispatch_config"]["goal_id"] == m.goals[0].id

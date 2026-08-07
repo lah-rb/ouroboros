@@ -3700,6 +3700,16 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
 
     functional = [g for g in mission.goals if g.type == "functional"]
     incomplete = [g for g in functional if g.status == "incomplete"]
+    # Directive-origin goals first (2026-08-07, the starved-scaffolding
+    # case). A directive goal carries externally injected intent — an
+    # operator `mission message --as-goal` or reopen/replan scope — and the
+    # sweep dispatches the FIRST goal needing action, so list position is
+    # priority. hy3 live: the operator's prologue-removal goal (the fix for
+    # the very blocker phase two was grinding on) sat last in the list and
+    # starved behind 100+ reports of the grind it would have ended — the
+    # cure queued behind the disease. Stable sort: directive goals keep
+    # their relative order, everything else keeps its original order.
+    incomplete.sort(key=lambda g: 0 if getattr(g, "origin", "") == "directive" else 1)
 
     if not incomplete:
         return StepOutput(
