@@ -6732,7 +6732,7 @@
             },
             {
               "condition": "true",
-              "transition": "evaluate_outcome"
+              "transition": "choose_eval_mode"
             }
           ]
         },
@@ -6784,6 +6784,105 @@
         "effects": [],
         "terminal": false
       },
+      "choose_eval_mode": {
+        "action": "probe_eval_context",
+        "description": "Pick in-session vs stateless evaluation from the model's real context window",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.big_context == true",
+              "transition": "evaluate_in_session"
+            },
+            {
+              "condition": "true",
+              "transition": "evaluate_outcome"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "evaluate_in_session": {
+        "action": "inference",
+        "description": "Evaluate in the tester's session (big-context models)",
+        "context": {
+          "required": [],
+          "optional": [
+            "terminal_output",
+            "inference_session_id"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "json_document",
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/interact_evaluator",
+              "required": false
+            },
+            {
+              "type": "evidence",
+              "ref": {
+                "$ref": "context.terminal_output"
+              },
+              "required": false
+            },
+            {
+              "type": "problem",
+              "ref": {
+                "$ref": "context.eval_objective"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "interact/evaluate_rules",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "response": {
+            "schema_id": "evaluation"
+          },
+          "transitions": {
+            "default": "parse_evaluation",
+            "no_answer": "flush_transient_failure"
+          },
+          "config": {
+            "temperature": "t*0.4"
+          },
+          "retries": 3
+        },
+        "pre_compute": [
+          {
+            "formatter": "strip_test_guidance",
+            "output_key": "eval_objective",
+            "params": {
+              "source": {
+                "$ref": "input.flow_directive"
+              }
+            }
+          }
+        ],
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
       "acceptance_verdict": {
         "action": "apply_acceptance_verdict",
         "description": "Fold the check run into a deterministic verdict for the evaluator",
@@ -6800,7 +6899,7 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "evaluate_outcome"
+              "transition": "choose_eval_mode"
             }
           ]
         },

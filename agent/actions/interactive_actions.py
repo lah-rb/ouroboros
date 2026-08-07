@@ -1089,6 +1089,38 @@ async def action_relaunch_program(step_input: StepInput) -> StepOutput:
 # ══════════════════════════════════════════════════════════════════════
 
 
+# Context window at or above which the evaluation joins the tester's
+# memoryful session (the original design: full transcript in KV, no
+# re-prefill). Below it, the stateless bounded-tail fallback runs — a 77-turn
+# session at 32k lost its verdict to a 63k-token in-session eval prompt.
+# Operator (2026-08-07): "the original behavior should be the default with
+# bigger context models."
+_BIG_CONTEXT_MIN = 65536
+
+
+async def action_probe_eval_context(step_input: StepInput) -> StepOutput:
+    """Choose the evaluation mode from the serving model's real context
+    window (health.nCtxSeq — read from health, never config: resident is a
+    request the arch can refuse). Unknown/unreported defaults to the
+    stateless fallback — the mode that cannot lose a verdict."""
+    effects = step_input.effects
+    n_ctx = 0
+    if effects is not None and hasattr(effects, "cache_health"):
+        try:
+            h = await effects.cache_health()
+            n_ctx = int(h.get("nCtxSeq") or 0)
+        except Exception:  # noqa: BLE001 - telemetry never breaks a run
+            n_ctx = 0
+    big = n_ctx >= _BIG_CONTEXT_MIN
+    return StepOutput(
+        result={"big_context": big, "n_ctx": n_ctx},
+        observations=(
+            f"evaluation mode: {'in-session' if big else 'stateless tail'} "
+            f"(n_ctx={n_ctx or 'unknown'})"
+        ),
+    )
+
+
 def _transient_flush_plan(mission) -> tuple[list[str], set[str], list[str]]:
     """The shared account of what counts as transient: declared fnmatch
     patterns, the protected set (canonical modules + declared data files,

@@ -282,7 +282,7 @@ interact: #FlowDefinition & {
 				type: "rule"
 				rules: [
 					{condition: "result.has_checks == true", transition: "run_acceptance_checks"},
-					{condition: "true", transition: "evaluate_outcome"},
+					{condition: "true", transition: "choose_eval_mode"},
 				]
 			}
 			publishes: ["mission", "goal_acceptance_checks"]
@@ -310,13 +310,68 @@ interact: #FlowDefinition & {
 			publishes: ["validation_results"]
 		}
 
+		// Evaluation-mode router (operator, 2026-08-07): "the original
+		// behavior should be the default with bigger context models." The
+		// in-session evaluation (full transcript in KV, no re-prefill) runs
+		// when the serving model's real window (health.nCtxSeq) is >= 64k;
+		// the stateless bounded-tail fallback — which cannot lose a verdict
+		// to depth — runs below that, and whenever the window is unknown.
+		choose_eval_mode: #StepDefinition & {
+			action:      "probe_eval_context"
+			description: "Pick in-session vs stateless evaluation from the model's real context window"
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.big_context == true", transition: "evaluate_in_session"},
+					{condition: "true", transition: "evaluate_outcome"},
+				]
+			}
+		}
+
+		// The ORIGINAL evaluation: joins the tester's memoryful session so
+		// the judge sees the full transcript from KV. Safe only on big
+		// windows — a 77-turn session at n_ctx 32k built a 63k-token prompt
+		// and lost its verdict. Same guidance-free objective and rules as
+		// the stateless path; only the evidence transport differs.
+		evaluate_in_session: #StepDefinition & {
+			action:      "inference"
+			description: "Evaluate in the tester's session (big-context models)"
+			context: {
+				optional: ["terminal_output", "inference_session_id"]
+			}
+			turn: #Turn & {
+				response_shape: "json_document"
+				sections: [
+					{type: "role", template:        "personas/interact_evaluator"},
+					// Fallback evidence — omits cleanly when the session
+					// context already carries the history.
+					{type: "evidence", ref:         {$ref: "context.terminal_output"}},
+					{type: "problem", ref:          {$ref: "context.eval_objective"}},
+					{type: "instruction", template: "interact/evaluate_rules"},
+					{type: "envelope"},
+				]
+				response: schema_id: "evaluation"
+				transitions: {
+					default:   "parse_evaluation"
+					no_answer: "flush_transient_failure"
+				}
+				config: temperature: "t*0.4"
+				retries: 3
+			}
+			pre_compute: [
+				{formatter: "strip_test_guidance", output_key: "eval_objective"
+					params: source:                              {$ref: "input.flow_directive"}},
+			]
+			publishes: ["inference_response"]
+		}
+
 		acceptance_verdict: #StepDefinition & {
 			action:      "apply_acceptance_verdict"
 			description: "Fold the check run into a deterministic verdict for the evaluator"
 			context: optional: ["validation_results"]
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "evaluate_outcome"}]
+				rules: [{condition: "true", transition: "choose_eval_mode"}]
 			}
 			// acceptance_ok IS consumed — parse_evaluation's resolver reads
 			// `context.get('acceptance_ok', true)`. 8da36b1 dropped this

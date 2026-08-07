@@ -398,11 +398,12 @@ def test_interact_wiring_acceptance_rung():
         for r in steps["load_stored_checks"]["resolver"]["rules"]
     }
     assert ls["result.has_checks == true"] == "run_acceptance_checks"
-    assert ls["true"] == "evaluate_outcome"  # no stored checks → skip to eval
+    # no stored checks → skip to eval, THROUGH the mode router (2026-08-07)
+    assert ls["true"] == "choose_eval_mode"
     assert steps["run_acceptance_checks"]["action"] == "run_validation_checks"
     assert (
         steps["acceptance_verdict"]["resolver"]["rules"][0]["transition"]
-        == "evaluate_outcome"
+        == "choose_eval_mode"  # through the eval-mode router (2026-08-07)
     )
     # The deterministic veto: goal_met AND acceptance_ok.
     pe = steps["parse_evaluation"]["resolver"]["rules"]
@@ -885,3 +886,64 @@ class TestRewriteSizeGate:
         h = out.context_updates["headline"]
         assert "engine.py" in h and "39KB" in h
         assert "target_symbol" in h
+
+
+class TestEvaluationModeRouter:
+    """Operator (2026-08-07): 'the original behavior should be the default
+    with bigger context models.' In-session evaluation (full transcript in
+    KV) runs when health.nCtxSeq >= 64k; the stateless bounded tail — which
+    cannot lose a verdict to depth — runs below that or when unknown."""
+
+    @pytest.mark.asyncio
+    async def test_probe_defaults_to_stateless_when_unknown(self):
+        from agent.actions.interactive_actions import action_probe_eval_context
+
+        out = await action_probe_eval_context(
+            StepInput(
+                context={},
+                params={},
+                meta=FlowMeta(flow_name="interact", step_id="choose_eval_mode"),
+                effects=MockEffects(),  # no cache_health
+            )
+        )
+        assert out.result["big_context"] is False
+
+    @pytest.mark.asyncio
+    async def test_probe_picks_in_session_on_big_windows(self):
+        from agent.actions.interactive_actions import action_probe_eval_context
+
+        class _Fx(MockEffects):
+            async def cache_health(self):
+                return {"nCtxSeq": 131072}
+
+        out = await action_probe_eval_context(
+            StepInput(
+                context={},
+                params={},
+                meta=FlowMeta(flow_name="interact", step_id="choose_eval_mode"),
+                effects=_Fx(),
+            )
+        )
+        assert out.result["big_context"] is True
+
+    def test_router_wiring(self):
+        steps = _compiled()["interact"]["steps"]
+        cm = {
+            r["condition"]: r["transition"]
+            for r in steps["choose_eval_mode"]["resolver"]["rules"]
+        }
+        assert cm["result.big_context == true"] == "evaluate_in_session"
+        assert cm["true"] == "evaluate_outcome"
+        # both acceptance paths enter through the router
+        for entry in ("load_stored_checks", "acceptance_verdict"):
+            assert any(
+                r["transition"] == "choose_eval_mode"
+                for r in steps[entry]["resolver"]["rules"]
+            )
+
+    def test_in_session_variant_keeps_the_objective_fixes(self):
+        step = _compiled()["interact"]["steps"]["evaluate_in_session"]
+        assert "inference_session_id" in step["context"]["optional"]
+        problem = next(s for s in step["turn"]["sections"] if s["type"] == "problem")
+        assert problem["ref"] == {"$ref": "context.eval_objective"}
+        assert step["pre_compute"][0]["formatter"] == "strip_test_guidance"
