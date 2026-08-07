@@ -162,16 +162,22 @@ async def action_handle_events(step_input: StepInput) -> StepOutput:
         elif event.type == "user_message":
             msg = event.payload.get("message", "")
             if msg:
-                user_messages.append(msg)
+                user_messages.append((msg, bool(event.payload.get("as_goal"))))
 
-    # Append user messages as notes.
-    # NOTE: This action mutates multiple mission fields (status, notes) and
-    # persists once at the end. We can't use effects.push_note here because
-    # that reloads mission from disk, losing our status edits.
+    # Append user messages as notes; goal-bearing messages (mission message
+    # --as-goal) ALSO append a directive-origin functional goal. This is the
+    # only live-mission goal-injection path: the CLI's direct mission.json
+    # save loses to the running process's in-memory state, so the goal must
+    # be created HERE, inside the process, at the cycle boundary.
+    # NOTE: This action mutates multiple mission fields (status, notes,
+    # goals) and persists once at the end. We can't use effects.push_note
+    # here because that reloads mission from disk, losing our status edits.
+    goals_added = 0
     if user_messages:
-        from agent.persistence.models import NoteRecord
+        from agent.persistence.models import GoalRecord, NoteRecord
 
-        for msg in user_messages:
+        existing_descs = {g.description.strip().lower() for g in mission.goals}
+        for msg, as_goal in user_messages:
             mission.notes.append(
                 NoteRecord(
                     content=msg,
@@ -179,6 +185,27 @@ async def action_handle_events(step_input: StepInput) -> StepOutput:
                     source_flow="user_message",
                 )
             )
+            if not as_goal:
+                continue
+            if msg.strip().lower() in existing_descs:
+                logger.info(
+                    "Operator goal message duplicates an existing goal; "
+                    "note recorded, no new goal: %s",
+                    msg[:60],
+                )
+                continue
+            mission.goals.append(
+                GoalRecord(
+                    description=msg,
+                    type="functional",
+                    status="incomplete",
+                    origin="directive",
+                    interaction_mode="exploratory",
+                )
+            )
+            existing_descs.add(msg.strip().lower())
+            goals_added += 1
+            logger.info("Operator goal added via message: %s", msg[:80])
 
     # Clear processed events
     await effects.clear_events()
@@ -191,7 +218,7 @@ async def action_handle_events(step_input: StepInput) -> StepOutput:
         },
         observations=f"Processed {len(events)} events: "
         f"abort={abort_requested}, pause={pause_requested}, "
-        f"messages={len(user_messages)}",
+        f"messages={len(user_messages)}, goals_added={goals_added}",
         context_updates={"mission": mission},
     )
 
@@ -3278,15 +3305,6 @@ async def _sweep_after_project_ops(
         )
 
 
-# Retest verdicts honored per goal before the sweep stops accepting them
-# and falls through to the normal fix path. Matches _ACCEPTANCE_DISARM_K's
-# philosophy: two genuine tries, then the loop-shape is the problem. A
-# diagnosis that keeps concluding "the test just didn't reach it" after two
-# guided sessions is either wrong about the code or the goal is intractable
-# — unbounded retest→diagnose→retest is the acceptance-veto loop again.
-_RETEST_MAX = 2
-
-
 async def _sweep_after_diagnose(
     goal: Any,
     mission: Any,
@@ -3310,10 +3328,18 @@ async def _sweep_after_diagnose(
     # times because the only vocabulary was file_ops/project_ops). No code
     # or data is touched, so nothing needs restoring afterwards — the
     # failure mode the nerf-the-guardian edits had.
+    # UNCAPPED (operator, 2026-08-07): the original _RETEST_MAX=2 cap was an
+    # artificial loop-break, and its live behavior was worse than the loop it
+    # guarded against — on hy3's Boss Nyx goal every post-cap diagnosis
+    # correctly certified the code and the forced fall-through edited that
+    # certified-correct code round after round. With the conclude prompt
+    # carrying the fork explicitly, an honest retest verdict is honored every
+    # time; retest_count remains as telemetry. The guidance-missing demote
+    # (below and at conclude) is still the guard against empty promises.
     if recommended_flow == "retest":
         guidance = (getattr(goal, "test_guidance", "") or "").strip()
         retests_used = int(getattr(goal, "retest_count", 0) or 0)
-        if guidance and retests_used < _RETEST_MAX:
+        if guidance:
             goal.retest_count = retests_used + 1
             dispatch_config = {
                 "goal_id": goal.id,
@@ -3334,11 +3360,10 @@ async def _sweep_after_diagnose(
                 "interactive_prompt": interactive_prompt,
             }
             logger.info(
-                "Functional sweep: retest verdict for '%s' (retest %d/%d) — "
+                "Functional sweep: retest verdict for '%s' (retest #%d) — "
                 "re-testing with diagnosis guidance, no fix dispatched",
                 goal.description[:50],
                 goal.retest_count,
-                _RETEST_MAX,
             )
             if effects:
                 await effects.save_mission(mission)
@@ -3347,22 +3372,19 @@ async def _sweep_after_diagnose(
                 observations=(
                     f"Functional sweep: diagnosis says the code is right and "
                     f"the test never reached it — guided retest "
-                    f"{goal.retest_count}/{_RETEST_MAX} for "
-                    f"'{goal.description[:50]}'"
+                    f"#{goal.retest_count} for '{goal.description[:50]}'"
                 ),
                 context_updates={"dispatch_config": dispatch_config},
             )
-        # Cap reached (or guidance missing): stop accepting the verdict.
-        # Fall through to the normal fix path — with no target_file this
-        # lands in fix_target_resolution, which is the right place for a
+        # Guidance missing: an unguided retest would re-run the exact failed
+        # session. Fall through to the normal fix path — with no target_file
+        # this lands in fix_target_resolution, which is the right place for a
         # diagnosis that can't produce an actionable next step.
         logger.warning(
             "Functional sweep: retest verdict for '%s' NOT honored "
-            "(guidance=%s, retests_used=%d/%d); falling through to fix path",
+            "(guidance MISSING, retests_used=%d); falling through to fix path",
             goal.description[:50],
-            "present" if guidance else "MISSING",
             retests_used,
-            _RETEST_MAX,
         )
         recommended_flow = "file_ops"
 

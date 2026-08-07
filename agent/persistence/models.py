@@ -376,14 +376,13 @@ class GoalRecord(BaseModel):
     # Retest verdict (2026-08-06). Diagnosis-authored charter steps for
     # reaching the behavior the last session failed to exercise — persisted
     # here because the diagnose flow context is gone by charter time; the
-    # interaction_context projection reads it back into the charter brief.
+    # retest directive builder reads it back into every future re-test.
     # Refreshed on each retest verdict, cleared when a later diagnosis
     # returns a code/data fix (the guidance described a session, not the
-    # goal). retest_count caps the loop: after _RETEST_MAX honored retests
-    # the sweep stops accepting the verdict and falls through to the
-    # normal fix path — a diagnosis that keeps blaming the test is either
-    # wrong or the goal is intractable, and unbounded retest→diagnose→
-    # retest is the acceptance-veto loop shape all over again.
+    # goal). retest_count is pure telemetry: the original _RETEST_MAX=2 cap
+    # was removed (operator, 2026-08-07) after its fall-through spent rounds
+    # editing code the diagnosis had just certified correct — an honest
+    # retest verdict is now honored every time it arrives with guidance.
     test_guidance: str = ""
     retest_count: int = 0
 

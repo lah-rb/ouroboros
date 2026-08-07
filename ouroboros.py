@@ -452,15 +452,23 @@ def cmd_mission_message(args: argparse.Namespace) -> None:
     pm, mission = _load_mission_or_exit(args)
 
     message = args.message
-    event = Event(type="user_message", payload={"message": message})
+    as_goal = bool(getattr(args, "as_goal", False))
+    event = Event(type="user_message", payload={"message": message, "as_goal": as_goal})
     pm.push_event(event)
 
-    # Also add as a note to mission state
+    # Also add as a note to mission state. NOTE: against a LIVE agent this
+    # direct save is advisory only — the running process holds mission state
+    # in memory and its next save wins. The event is the reliable carrier;
+    # handle_events re-appends the note (and the goal, for --as-goal) inside
+    # the process at the next cycle boundary.
     note = NoteRecord(content=message, source_flow="user_message")
     mission.notes.append(note)
     pm.save_mission(mission)
 
-    print(f"💬 Message sent: {message}")
+    if as_goal:
+        print(f"🎯 Goal message sent (lands at next cycle boundary): {message}")
+    else:
+        print(f"💬 Message sent: {message}")
 
 
 def cmd_mission_history(args: argparse.Namespace) -> None:
@@ -1115,6 +1123,15 @@ def main() -> None:
     # mission message
     msg_p = mission_sub.add_parser("message", help="Send a message to the agent")
     msg_p.add_argument("message", help="Message text")
+    msg_p.add_argument(
+        "--as-goal",
+        action="store_true",
+        help=(
+            "Deliver the message as a new functional goal (origin=directive) "
+            "instead of an advisory note. The running agent appends it at the "
+            "next cycle boundary via the event pipeline."
+        ),
+    )
     msg_p.add_argument("--working-dir", help="Working directory (default: cwd)")
 
     # mission history

@@ -30,7 +30,6 @@ import pytest
 from agent.actions.diagnosis_session_actions import action_conclude_diagnosis
 from agent.actions.diagnostic_actions import action_compile_diagnosis
 from agent.actions.mission_actions import (
-    _RETEST_MAX,
     _functional_retest_directive,
     action_functional_sweep_next,
 )
@@ -270,17 +269,17 @@ async def test_retest_verdict_dispatches_a_guided_retest_not_a_fix():
 
 
 @pytest.mark.asyncio
-async def test_retest_cap_falls_through_to_the_fix_path():
-    """After _RETEST_MAX guided sessions the verdict stops being trusted —
-    the anchored target becomes the best-evidence fix locus instead of an
-    unbounded retest→diagnose→retest loop (the acceptance-veto shape)."""
-    g = _sweep_goal(retest_count=_RETEST_MAX)
+async def test_retest_is_uncapped():
+    """The original _RETEST_MAX=2 cap was removed (operator, 2026-08-07):
+    on hy3's Boss Nyx goal every post-cap diagnosis correctly certified the
+    code and the forced fall-through edited that certified-correct code
+    round after round. An honest verdict with guidance is honored every
+    time; retest_count keeps counting as telemetry."""
+    g = _sweep_goal(retest_count=7)
     out = await action_functional_sweep_next(_sweep_input(_mission([g])))
-    assert out.result.get("needs_test") is not True
-    dc = out.context_updates["dispatch_config"]
-    assert dc["flow"] == "file_ops"
-    assert dc["target_file_path"] == "engine.py"
-    assert g.retest_count == _RETEST_MAX  # not incremented past the cap
+    assert out.result.get("needs_test") is True
+    assert out.context_updates["dispatch_config"]["flow"] == "interact"
+    assert g.retest_count == 8
 
 
 @pytest.mark.asyncio
