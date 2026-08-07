@@ -1048,6 +1048,15 @@ class MissionState(BaseModel):
     # functional goal. See WarningRecord for why this is a queue and not a
     # note. Additive default keeps old mission.json files loading.
     pending_warnings: list[WarningRecord] = Field(default_factory=list)
+    # Runtime files OBSERVED appearing during behavioural sessions (the
+    # snapshot-diff producer). Deletion is deferred (operator, 2026-08-07):
+    # session end RECORDS here so the artifact stays inspectable; the
+    # pre-session flush at the next interact entry (and pause/completion)
+    # deletes everything listed. Observation is the declaration — the
+    # dispatched declaration-fix path failed twice on hy3 because
+    # architecture.transient_files is mission metadata no fix flow can
+    # write, so this list is the durable, self-healing account.
+    observed_transient_files: list[str] = Field(default_factory=list)
     environment_verified: bool = False  # Pipeline v9: set after project_ops succeeds
     # ── League run protocol (epoch v2.0, 2026-08-02) — both additive ──
     # The budget park now lands at the work→entry boundary, BEFORE the entry

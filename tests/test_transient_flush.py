@@ -70,9 +70,11 @@ async def test_flush_deletes_matching_files_only():
         mission=_mission(transient=["state.json", "*.save.json"]),
     )
     out = await action_flush_transient_files(_si(effects))
-    assert out.result["flushed"] == 2
-    rm_targets = [c.args["command"][2] for c in effects.calls_to("run_command")]
-    assert sorted(rm_targets) == ["save1.save.json", "state.json"]
+    # Deferred deletion (operator, 2026-08-07): session end RECORDS; the
+    # rm happens at the next interact entry / pause / completion.
+    assert out.result["recorded"] == 2
+    assert out.result["flushed"] == 0
+    assert effects.calls_to("run_command") == []
 
 
 @pytest.mark.asyncio
@@ -83,9 +85,11 @@ async def test_flush_protects_declared_files_even_when_glob_matches():
         mission=_mission(transient=["*.yaml"]),  # over-broad glob
     )
     out = await action_flush_transient_files(_si(effects))
-    rm_targets = [c.args["command"][2] for c in effects.calls_to("run_command")]
-    assert rm_targets == ["cache.yaml"]  # world.yaml is data_shapes input
-    assert out.result["flushed"] == 1
+    # Deferred deletion: recording honors the same protection contract —
+    # world.yaml (data_shapes input) is never scheduled, cache.yaml is.
+    assert out.result["recorded"] == 1
+    assert "cache.yaml" in out.observations
+    assert "world.yaml" not in out.observations
 
 
 @pytest.mark.asyncio
@@ -284,7 +288,7 @@ async def test_a_clean_flush_says_nothing():
         mission=_mission(transient=["state.json"]),
     )
     out = await action_flush_transient_files(_si(effects))
-    assert out.result["flushed"] == 1
+    assert out.result["recorded"] == 1
     assert effects.call_count("push_note") == 0
 
 
@@ -331,6 +335,6 @@ async def test_a_partial_mismatch_still_warns():
         mission=_mission(transient=["state.json"]),
     )
     out = await action_flush_transient_files(_si(effects))
-    assert out.result["flushed"] == 1, "the declared file is still cleared"
+    assert out.result["recorded"] == 1, "the declared file is still scheduled"
     assert effects.call_count("push_note") == 1, "and the survivor is still reported"
     assert "progress.db" in effects._state["notes"][-1]["content"]

@@ -212,6 +212,12 @@ async def _save_full_output(effects, output: str, turn) -> str | None:
         return None
 
 
+# Identical (input, output) exchanges required before the next identical send
+# is called stuck. Operator-set (2026-08-07): 5 — genuine circling, not the
+# 2-3 repeats navigation legitimately needs.
+_STUCK_IDENTICAL_RUNS = 4  # 4 identical priors → the 5th send trips
+
+
 async def action_send_interaction(step_input: StepInput) -> StepOutput:
     """Parse the model's structured interaction and dispatch to MCP.
 
@@ -489,19 +495,19 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
     # ("go north" three times in a row walks Cave Mouth → Crossroads), and
     # the detector closed the session on the SECOND consecutive move —
     # "ended after step 2 of 10", thirty-plus times, immune to every
-    # prompt fix because the persona never chose to stop. Stuck now means
-    # repetition with IDENTICAL output: the same input has already run
-    # twice producing byte-identical responses (no state change), and the
-    # tester is sending it a third time. Repeated input whose output
-    # changes is progress, not a loop; the turn budget bounds the rest.
-    if len(session_history) >= 2:
-        last = session_history[-1]
-        prev = session_history[-2]
+    # prompt fix because the persona never chose to stop. Stuck means
+    # repetition with IDENTICAL output — no state change — and the operator
+    # set the bar at FIVE (2026-08-07): the same input has already run
+    # _STUCK_IDENTICAL_RUNS times producing byte-identical responses, and
+    # the tester is sending it yet again. "At that point it really looks
+    # like circling, not productive terminal time." Repeated input whose
+    # output changes is progress; the turn budget bounds the rest.
+    if len(session_history) >= _STUCK_IDENTICAL_RUNS:
+        tail = session_history[-_STUCK_IDENTICAL_RUNS:]
+        outputs = {(e.get("output", "") or "").strip() for e in tail}
         same_run = (
-            (last.get("input", "") or "").strip() == text.strip()
-            and (prev.get("input", "") or "").strip() == text.strip()
-            and (last.get("output", "") or "").strip()
-            == (prev.get("output", "") or "").strip()
+            all((e.get("input", "") or "").strip() == text.strip() for e in tail)
+            and len(outputs) == 1
         )
         if text.strip() and same_run:
             return StepOutput(
@@ -512,7 +518,7 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
                 },
                 observations=(
                     f"Stuck: '{text.strip()[:60]}' repeated with identical "
-                    f"output twice — no state change"
+                    f"output {_STUCK_IDENTICAL_RUNS} times — no state change"
                 ),
                 context_updates={
                     "mcp_session_id": session_id,
@@ -1083,6 +1089,97 @@ async def action_relaunch_program(step_input: StepInput) -> StepOutput:
 # ══════════════════════════════════════════════════════════════════════
 
 
+def _transient_flush_plan(mission) -> tuple[list[str], set[str], list[str]]:
+    """The shared account of what counts as transient: declared fnmatch
+    patterns, the protected set (canonical modules + declared data files,
+    minus exact transient declarations), and the mission's OBSERVED list.
+    """
+    import fnmatch as _fn  # noqa: F401 - imported for callers' use
+
+    arch = getattr(mission, "architecture", None) if mission else None
+    patterns = [
+        str(p).strip()
+        for p in (getattr(arch, "transient_files", None) or [])
+        if str(p).strip()
+    ]
+    protected: set[str] = set()
+    if arch is not None:
+        try:
+            protected.update(arch.canonical_files())
+        except Exception:  # noqa: BLE001 - canonical list is best-effort
+            protected.update(m.file for m in getattr(arch, "modules", []) or [])
+        protected.update(
+            ds.file for ds in getattr(arch, "data_shapes", []) or [] if ds.file
+        )
+        from agent.actions.mission_actions import transient_exact_names
+
+        protected -= transient_exact_names(arch)
+    safe_patterns = [
+        p for p in patterns if not p.startswith(("/", "~")) and ".." not in p
+    ]
+    observed = [
+        str(p)
+        for p in (getattr(mission, "observed_transient_files", None) or [])
+        if str(p).strip() and not str(p).startswith(("/", "~")) and ".." not in str(p)
+    ]
+    return safe_patterns, protected, observed
+
+
+async def flush_known_transients(effects, mission) -> list[str]:
+    """Delete every known transient file: declared patterns + the mission's
+    observed list. The DELETION half of the deferred-flush design (operator,
+    2026-08-07): runs at interact ENTRY (before the pre-session snapshot),
+    on mission pause, and at mission completion — never at session end, so
+    a session's runtime files stay inspectable until the next test needs a
+    clean floor.
+    """
+    import fnmatch
+
+    if effects is None or mission is None:
+        return []
+    safe_patterns, protected, observed = _transient_flush_plan(mission)
+    if not safe_patterns and not observed:
+        return []
+    try:
+        listing = await effects.list_directory(".", recursive=True)
+        entries = [
+            getattr(e, "path", "")
+            for e in getattr(listing, "entries", []) or []
+            if not getattr(e, "is_dir", False)
+        ]
+    except Exception:  # noqa: BLE001 - flush is best-effort, never fatal
+        entries = []
+    observed_set = set(observed)
+    victims = sorted(
+        {
+            path
+            for path in entries
+            if path
+            and path not in protected
+            and (
+                path in observed_set
+                or any(fnmatch.fnmatch(path, pat) for pat in safe_patterns)
+            )
+        }
+    )
+    flushed: list[str] = []
+    for path in victims:
+        try:
+            result = await effects.run_command(["rm", "-f", path], timeout=10)
+            if getattr(result, "return_code", 1) == 0:
+                flushed.append(path)
+        except Exception as e:  # noqa: BLE001 - keep flushing the rest
+            logger.warning("flush_known_transients: rm failed for %s: %s", path, e)
+    if flushed:
+        logger.info(
+            "flush_known_transients: cleared %d stale transient(s) before "
+            "session/park: %s",
+            len(flushed),
+            ", ".join(flushed),
+        )
+    return flushed
+
+
 async def action_snapshot_workspace(step_input: StepInput) -> StepOutput:
     """Record the workspace file listing BEFORE any session runs.
 
@@ -1102,6 +1199,18 @@ async def action_snapshot_workspace(step_input: StepInput) -> StepOutput:
     effects = step_input.effects
     if effects is None:
         return StepOutput(result={"snapshot_files": 0}, observations="no effects")
+    # PRE-SESSION FLUSH (deferred-deletion design, operator 2026-08-07):
+    # session end only RECORDS observed runtime files; the deletion happens
+    # here, immediately before the snapshot, so this session starts on a
+    # clean floor while the previous session's files stayed inspectable in
+    # the gap between them.
+    pre_flushed: list[str] = []
+    try:
+        mission = await effects.load_mission()
+    except Exception:  # noqa: BLE001 - flush is best-effort, never fatal
+        mission = None
+    if mission is not None:
+        pre_flushed = await flush_known_transients(effects, mission)
     try:
         listing = await effects.list_directory(".", recursive=True)
         entries = sorted(
@@ -1113,15 +1222,28 @@ async def action_snapshot_workspace(step_input: StepInput) -> StepOutput:
         )
     except Exception:  # noqa: BLE001 - snapshot is best-effort, never fatal
         entries = []
+    obs = f"Workspace snapshot: {len(entries)} file(s) before session"
+    if pre_flushed:
+        obs += f" (pre-flushed {len(pre_flushed)} stale transient(s))"
     return StepOutput(
-        result={"snapshot_files": len(entries)},
-        observations=f"Workspace snapshot: {len(entries)} file(s) before session",
+        result={"snapshot_files": len(entries), "pre_flushed": len(pre_flushed)},
+        observations=obs,
         context_updates={"workspace_snapshot": entries},
     )
 
 
 async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
-    """Delete architecture-declared transient files after a test session.
+    """RECORD transient files at session end; deletion is deferred.
+
+    Deferred-deletion design (operator, 2026-08-07): this end-of-session
+    step observes which runtime files the session created (snapshot diff),
+    records them on ``mission.observed_transient_files``, and raises the
+    declaration warning — but deletes NOTHING. The deletion happens at the
+    next interact entry's pre-session flush (action_snapshot_workspace), on
+    mission pause, and at mission completion, so the artifact's runtime
+    files stay inspectable between sessions (an acceptance check may look
+    for save.json after the session that wrote it) while no session ever
+    STARTS with stale state.
 
     Programs under test write side-effect files (saves, caches, logs)
     into the shared working directory, and those files persist into the
@@ -1244,24 +1366,33 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
             if p not in set(victims)
         ]
 
-    flushed: list[str] = []
-    for path in victims + observed:
-        try:
-            result = await effects.run_command(["rm", "-f", path], timeout=10)
-            if getattr(result, "return_code", 1) == 0:
-                flushed.append(path)
-        except Exception as e:  # noqa: BLE001 - keep flushing the rest
-            logger.warning("flush_transient_files: rm failed for %s: %s", path, e)
+    # DEFERRED DELETION (operator, 2026-08-07). Session end no longer
+    # deletes anything — it RECORDS. Deleting here made the artifact
+    # uninspectable (a save-goal acceptance check looking for save.json
+    # after the session would false-fail against our own flush) and hid
+    # runtime files from the operator. The deletion now happens at the
+    # NEXT interact entry (pre-snapshot, in action_snapshot_workspace),
+    # on mission pause, and at mission completion — the contamination
+    # guarantee is preserved (no session ever STARTS with stale state)
+    # while the gap between sessions keeps the files on disk.
+    flushed: list[str] = []  # nothing is deleted at session end anymore
+    recorded: list[str] = []
+    if mission is not None and (victims or observed):
+        known = set(getattr(mission, "observed_transient_files", None) or [])
+        for path in observed:
+            if path not in known:
+                mission.observed_transient_files.append(path)
+                known.add(path)
+                recorded.append(path)
 
-    # An observed flush is evidence of a missing/incomplete DECLARATION —
-    # the operational contamination is handled (file deleted), but the deep
-    # fix is architecture.transient_files, and that repair needs a route.
-    # Raise an evidenced warning per file: the queue de-duplicates while
-    # pending, re-arms if the file keeps appearing after a fix attempt, and
-    # abandons after WARNING_MAX_ATTEMPTS so it can never starve the
-    # functional loop. (raise_warning's default max_attempts matches
-    # WARNING_MAX_ATTEMPTS in mission_actions.)
-    observed_flushed = [p for p in observed if p in set(flushed)]
+    # An observed runtime file is evidence of a missing/incomplete
+    # DECLARATION. The observed list above is the operational, self-healing
+    # account (the pre-session flush reads it); the warning below keeps the
+    # audit trail and gives the declaration repair a route. The queue
+    # de-duplicates while pending, re-arms if the file keeps appearing
+    # after a fix attempt, and abandons after WARNING_MAX_ATTEMPTS so it
+    # can never starve the functional loop.
+    observed_flushed = list(observed)
     if observed_flushed and mission is not None:
         raised = 0
         for path in observed_flushed:
@@ -1275,10 +1406,10 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
                         f"it matches the program-generated state heuristic, and "
                         f"no architecture.transient_files entry accounts for it "
                         f"(declared: {safe_patterns or 'nothing'}). It was "
-                        f"flushed by OBSERVATION this time, so this session did "
-                        f"not contaminate the next — but the declaration is "
-                        f"still wrong, and any session path without a snapshot "
-                        f"stays exposed."
+                        f"RECORDED by observation and will be deleted at the "
+                        f"next session's pre-flush, so no later session starts "
+                        f"with its state — but the declaration is still wrong, "
+                        f"and any session path without a snapshot stays exposed."
                     ),
                     prescribed_fix=(
                         f"Declare `{path}` in architecture.transient_files, "
@@ -1288,22 +1419,31 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
                     source_flow="flush_transient_files",
                 )
             )
-        if raised:
+        if raised or recorded:
             try:
                 await effects.save_mission(mission)
             except Exception:  # noqa: BLE001 - flush is best-effort, never fatal
                 logger.debug("flush: could not persist warnings", exc_info=True)
         logger.warning(
             "flush_transient_files: OBSERVED %d undeclared runtime file(s) "
-            "created by this session and flushed them: %s (%d warning(s) queued "
-            "for the declaration fix)",
+            "created by this session and recorded them for pre-session flush: "
+            "%s (%d warning(s) queued for the declaration fix)",
             len(observed_flushed),
             ", ".join(observed_flushed),
             raised,
         )
+    elif recorded and mission is not None:
+        try:
+            await effects.save_mission(mission)
+        except Exception:  # noqa: BLE001 - flush is best-effort, never fatal
+            logger.debug("flush: could not persist observed list", exc_info=True)
 
-    if flushed:
-        observation = f"Flushed {len(flushed)} transient file(s): {', '.join(flushed)}"
+    accounted = victims + observed
+    if accounted:
+        observation = (
+            f"Recorded {len(accounted)} transient file(s) for pre-session "
+            f"flush: {', '.join(accounted)}"
+        )
         if observed_flushed:
             observation += (
                 f" ({len(observed_flushed)} by observation, undeclared: "
@@ -1343,21 +1483,26 @@ async def action_flush_transient_files(step_input: StepInput) -> StepOutput:
     stale = [
         p
         for p in _unaccounted_state_files(entries, protected, safe_patterns)
-        if p not in set(flushed)
+        if p not in set(accounted)
     ]
     if stale:
         logger.warning(
-            "flush_transient_files: %s and flushed %d, but these look "
+            "flush_transient_files: %s and recorded %d, but these look "
             "program-generated and nothing accounts for them: %s — if the program "
-            "writes any of these, they were NOT cleared and every later session "
-            "inherits their state",
+            "writes any of these, they are NOT scheduled for the pre-session "
+            "flush and every later session inherits their state",
             f"declared {safe_patterns}" if declared else "NOTHING was declared",
-            len(flushed),
+            len(accounted),
             ", ".join(stale),
         )
         await _note_flush_mismatch(effects, mission, safe_patterns, stale)
 
-    return StepOutput(result={"flushed": len(flushed)}, observations=observation)
+    # `flushed` stays in the result for flow/telemetry compatibility; it is
+    # always 0 now that deletion is deferred to the pre-session flush.
+    return StepOutput(
+        result={"flushed": len(flushed), "recorded": len(accounted)},
+        observations=observation,
+    )
 
 
 # Extensions that mean "the program wrote this while running", minus the config

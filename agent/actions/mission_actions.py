@@ -159,6 +159,18 @@ async def action_handle_events(step_input: StepInput) -> StepOutput:
         elif event.type == "pause":
             pause_requested = True
             mission.status = "paused"
+            # Deferred-flush design (operator, 2026-08-07): deletion of
+            # known transients happens at interact entry, pause, and
+            # completion. Parking is a boundary the operator inspects at,
+            # but a resumed mission must not inherit stale session state.
+            try:
+                from agent.actions.interactive_actions import (
+                    flush_known_transients,
+                )
+
+                await flush_known_transients(effects, mission)
+            except Exception:  # noqa: BLE001 - park must never fail on cleanup
+                logger.debug("pause: transient flush failed", exc_info=True)
         elif event.type == "user_message":
             msg = event.payload.get("message", "")
             if msg:
@@ -919,6 +931,17 @@ async def action_finalize_mission(step_input: StepInput) -> StepOutput:
         mission.completed_at_phase = str(
             getattr(getattr(mission, "config", None), "top_phase", "") or "quality"
         )
+
+    # Deferred-flush design (operator, 2026-08-07): completion is the final
+    # deletion point for known transients — the shipped artifact must not
+    # carry runtime state (two arms once shipped a save file that judges
+    # read as evidence).
+    try:
+        from agent.actions.interactive_actions import flush_known_transients
+
+        await flush_known_transients(effects, mission)
+    except Exception:  # noqa: BLE001 - finalize must never fail on cleanup
+        logger.debug("finalize: transient flush failed", exc_info=True)
 
     # Terminal archive sweep: the per-cycle sweep (attach_directive_report)
     # never runs AFTER the final goal completes — this catches the last

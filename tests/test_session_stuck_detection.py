@@ -8,9 +8,11 @@ the SECOND consecutive move. Thirty-plus guided retests failed identically,
 immune to every prompt-side fix, because the persona never chose to stop —
 the detector did.
 
-Stuck now requires the same input to have already run TWICE with
-byte-identical outputs (no state change) before a third send trips it.
-Repeated input whose output changes is navigation, not a loop.
+Stuck requires the same input to have already run _STUCK_IDENTICAL_RUNS
+(operator-set: 4) times with byte-identical outputs — the FIFTH identical
+send trips it ("at that point it really looks like circling, not
+productive terminal time"). Repeated input whose output changes is
+navigation, not a loop.
 """
 
 from __future__ import annotations
@@ -66,14 +68,21 @@ def test_three_moves_in_a_row_fine_while_rooms_change():
     assert out.result.get("stuck_detected") is not True
 
 
-def test_true_loop_trips_on_the_third_identical_exchange():
-    """Same input already ran twice with byte-identical output — the third
-    send is a genuine loop and closes."""
+def test_four_identical_exchanges_still_send():
+    """One shy of the bar: 4 identical no-progress runs — the 5th send is
+    still allowed through (it becomes the trip only on the NEXT try)."""
     out = _run(
-        _hx(
-            ("go south", "No way to go."),
-            ("go south", "No way to go."),
-        ),
+        _hx(*[("go south", "No way to go.")] * 3),
+        "go south",
+    )
+    assert out.result.get("stuck_detected") is not True
+
+
+def test_true_circling_trips_on_the_fifth_identical_send():
+    """Same input already ran 4 times with byte-identical output — the
+    fifth send is genuine circling and closes."""
+    out = _run(
+        _hx(*[("go south", "No way to go.")] * 4),
         "go south",
     )
     assert out.result.get("stuck_detected") is True

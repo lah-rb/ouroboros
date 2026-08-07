@@ -134,9 +134,14 @@ class TestSnapshot:
 
 class TestObservedFlush:
     @pytest.mark.asyncio
-    async def test_the_hy3_case_an_undeclared_save_that_appeared_is_flushed(self):
-        out, fx, _ = await _session_wrote(_mission(transient=[]), {"save.json": "{}"})
-        assert "save.json" in _rm_targets(fx)
+    async def test_the_hy3_case_an_undeclared_save_that_appeared_is_recorded(self):
+        """Deferred deletion (operator, 2026-08-07): session end RECORDS the
+        observed file on mission.observed_transient_files; the deletion
+        happens at the next interact entry's pre-session flush. Nothing is
+        rm'd here — the artifact stays inspectable between sessions."""
+        out, fx, m = await _session_wrote(_mission(transient=[]), {"save.json": "{}"})
+        assert _rm_targets(fx) == set(), "session end must not delete"
+        assert "save.json" in (m.observed_transient_files or [])
         assert "save.json" in out.observations
         assert "observation" in out.observations
 
@@ -164,10 +169,11 @@ class TestObservedFlush:
         assert "engine.py" not in _rm_targets(fx)
 
     @pytest.mark.asyncio
-    async def test_a_declared_file_is_flushed_by_declaration_not_double_counted(self):
+    async def test_a_declared_file_is_recorded_by_declaration_not_double_counted(self):
         m = _mission(transient=["save.json"])
         out, fx, mission = await _session_wrote(m, {"save.json": "{}"})
-        assert "save.json" in _rm_targets(fx)
+        assert _rm_targets(fx) == set(), "session end must not delete"
+        assert "save.json" in out.observations  # recorded for pre-session flush
         # Covered by the declaration -> no warning: the declaration is right.
         assert mission.pending_warnings == []
         assert "observation" not in out.observations
@@ -257,3 +263,95 @@ class TestTripwireAddressing:
         assert not fx.calls_to(
             "push_note"
         ), "observation handled it — no tripwire note on top"
+
+
+class TestDeferredDeletion:
+    """Operator ruling (2026-08-07): deletion happens at the NEXT interact
+    entry (pre-snapshot), on mission pause, and at mission completion —
+    never at session end, so runtime files stay inspectable between
+    sessions and acceptance checks can read the save a session just wrote."""
+
+    @pytest.mark.asyncio
+    async def test_entry_preflush_deletes_recorded_and_declared(self):
+        m = _mission(transient=["*.autosave"])
+        m.observed_transient_files = ["save.json"]
+        files = dict(_PRE_SESSION)
+        files["save.json"] = "{}"
+        files["run.autosave"] = "x"
+        fx = _fx(files, m)
+        out = await action_snapshot_workspace(
+            StepInput(
+                context={},
+                params={},
+                meta=FlowMeta(flow_name="interact", step_id="snapshot_workspace"),
+                effects=fx,
+            )
+        )
+        assert _rm_targets(fx) == {"save.json", "run.autosave"}
+        # The snapshot itself is taken AFTER the pre-flush... (MockEffects
+        # file store is static, so we assert intent via the rm calls and the
+        # pre_flushed count rather than listing contents.)
+        assert out.result["pre_flushed"] == 2
+
+    @pytest.mark.asyncio
+    async def test_entry_preflush_never_touches_protected_files(self):
+        m = _mission(transient=["*.json"])
+        m.observed_transient_files = ["engine.py"]  # hostile/wrong record
+        fx = _fx(dict(_PRE_SESSION), m)
+        await action_snapshot_workspace(
+            StepInput(
+                context={},
+                params={},
+                meta=FlowMeta(flow_name="interact", step_id="snapshot_workspace"),
+                effects=fx,
+            )
+        )
+        assert "engine.py" not in _rm_targets(fx)
+        assert "world.yaml" not in _rm_targets(fx)
+
+    @pytest.mark.asyncio
+    async def test_pause_flushes_known_transients(self):
+        from agent.actions.mission_actions import action_handle_events
+        from agent.persistence.models import Event
+
+        m = _mission(transient=[])
+        m.observed_transient_files = ["save.json"]
+        files = dict(_PRE_SESSION)
+        files["save.json"] = "{}"
+        fx = _fx(files, m)
+        await action_handle_events(
+            StepInput(
+                context={"mission": m, "events": [Event(type="pause", payload={})]},
+                params={},
+                meta=FlowMeta(flow_name="mission_control", step_id="handle_events"),
+                effects=fx,
+            )
+        )
+        assert m.status == "paused"
+        assert "save.json" in _rm_targets(fx)
+
+    @pytest.mark.asyncio
+    async def test_completion_flushes_known_transients(self):
+        from agent.actions.mission_actions import action_finalize_mission
+
+        m = _mission(transient=[])
+        m.observed_transient_files = ["save.json"]
+        files = dict(_PRE_SESSION)
+        files["save.json"] = "{}"
+        fx = _fx(files, m)
+        await action_finalize_mission(
+            StepInput(
+                context={"mission": m},
+                params={},
+                meta=FlowMeta(flow_name="mission_control", step_id="finalize"),
+                effects=fx,
+            )
+        )
+        assert m.status == "completed"
+        assert "save.json" in _rm_targets(fx)
+
+    def test_observed_list_survives_a_model_roundtrip(self):
+        m = _mission()
+        m.observed_transient_files = ["save.json"]
+        m2 = MissionState.model_validate(m.model_dump())
+        assert m2.observed_transient_files == ["save.json"]
