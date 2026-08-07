@@ -31,6 +31,13 @@ content: |
     operator sees only this brief and
     cannot discover the map on its own.
   - Each step is one concrete action the tester types.
+  - If the test objective contains a TEST GUIDANCE block, it was written
+    by a diagnosis that read the code, the data, AND the previous failed
+    session — its steps are computed from ground truth you cannot see
+    (e.g. exact hit counts from code-side damage values). Carry those
+    steps into TEST STEPS essentially verbatim, keeping their counts and
+    order. Guidance OVERRIDES the step-count cap and the simplest-instance
+    rule above; expand to as many steps as the guidance needs.
 
   ## PASS CRITERIA
   One or two sentences: the capability is satisfied the moment the

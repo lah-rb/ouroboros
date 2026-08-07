@@ -38,12 +38,15 @@ MIGRATED = [
         979,
         "3e34525acf",
     ),
+    # Re-frozen 2026-08-06: gained the `retest` verdict + test_guidance field
+    # (the Stone Guard case — diagnosis vocabulary for "the code is right,
+    # the session never reached it").
     (
         "diagnose/conclude",
         "diagnosis_session_actions",
         "CONCLUDE_PROMPT",
-        5489,
-        "a4c17e5e2b",
+        7580,
+        "09c17bc07b",
     ),
     (
         "diagnose/systemic_scan",

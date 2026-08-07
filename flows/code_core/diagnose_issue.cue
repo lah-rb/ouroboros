@@ -419,6 +419,10 @@ diagnose_issue: #FlowDefinition & {
 				// is gone.
 				// Multi-symbol patching (505 round)
 				"related_symbols",
+				// Retest verdict (2026-08-06): charter steps riding
+				// recommended_flow == "retest". LOAD-BEARING — undeclared,
+				// _build_step_input filters it out before compile_diagnosis.
+				"test_guidance",
 			]
 		}
 
@@ -484,6 +488,8 @@ diagnose_issue: #FlowDefinition & {
 					"module_statement",
 					// Multi-symbol patching (505 round)
 					"related_symbols",
+					// Retest verdict (2026-08-06)
+					"test_guidance",
 				]
 			}
 			params: include_rejected_hypotheses: true

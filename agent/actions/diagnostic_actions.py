@@ -42,9 +42,20 @@ async def action_compile_diagnosis(step_input: StepInput) -> StepOutput:
     # Read recommended fix flow from context (set by classify_fix_type LLM menu).
     # Falls back to "file_ops" if the menu step was skipped or produced no result.
     recommended_flow = step_input.context.get("recommended_flow", "file_ops")
-    if recommended_flow not in ("file_ops", "project_ops"):
+    if recommended_flow not in ("file_ops", "project_ops", "retest"):
         recommended_flow = "file_ops"
     logger.info("Diagnosis recommended flow: %s", recommended_flow)
+
+    # Retest verdict (2026-08-06): charter steps accompanying
+    # recommended_flow == "retest". conclude_diagnosis already enforces the
+    # pairing (retest without guidance demotes; guidance without retest is
+    # zeroed) — mirror it here defensively since this step also runs on
+    # older flow paths that never published the key.
+    test_guidance = str(step_input.context.get("test_guidance", "") or "")
+    if recommended_flow != "retest":
+        test_guidance = ""
+    elif not test_guidance:
+        recommended_flow = "file_ops"
 
     # Phase A (patch redesign): read the structured fields that
     # conclude_diagnosis publishes from the flattened diagnosis schema.
@@ -109,6 +120,7 @@ async def action_compile_diagnosis(step_input: StepInput) -> StepOutput:
         "change_spec": change_spec,
         "kind": diagnosis_kind,
         "module_statement": str(module_statement),
+        "test_guidance": test_guidance,
     }
 
     status_msg = (

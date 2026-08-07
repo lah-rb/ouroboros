@@ -246,6 +246,10 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
     # through so the dispatcher can thread them into subsequent
     # fix dispatches. Non-diagnose flows leave this empty.
     related_symbols: list[str] = []
+    # Retest verdict — charter steps riding recommended_flow == "retest".
+    # Kept on the report (append-only) as the forensic copy; the live copy
+    # the sweep dispatches from is goal.test_guidance.
+    test_guidance = ""
     if isinstance(diagnosis, dict):
         recommended_flow = diagnosis.get("recommended_flow", "") or ""
         target_file = str(diagnosis.get("target_file", "") or "")
@@ -253,6 +257,7 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
         change_spec = str(diagnosis.get("change_spec", "") or "")
         diagnosis_kind = str(diagnosis.get("kind", "") or "")
         module_statement = str(diagnosis.get("module_statement", "") or "")
+        test_guidance = str(diagnosis.get("test_guidance", "") or "")
         raw_rel = diagnosis.get("related_symbols", []) or []
         if isinstance(raw_rel, list):
             related_symbols = [str(s).strip() for s in raw_rel if str(s).strip()]
@@ -307,6 +312,7 @@ async def action_compile_directive_report(step_input: StepInput) -> StepOutput:
         change_spec=change_spec,
         diagnosis_kind=diagnosis_kind,
         module_statement=module_statement,
+        test_guidance=test_guidance,
     )
 
     return _wrap_report(report, flow_name, status)

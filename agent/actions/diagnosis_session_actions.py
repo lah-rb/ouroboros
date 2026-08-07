@@ -947,17 +947,24 @@ async def action_conclude_diagnosis(
         expected_error = str(
             (out.context_updates or {}).get("expected_error", "") or ""
         )
+        # Retest verdict: goal.test_guidance rides the same refresh-on-every-
+        # conclude contract. A retest verdict sets it; any later fix verdict
+        # clears it (the action zeroes test_guidance for non-retest verdicts),
+        # so stale charter overrides can't outlive the diagnosis that made
+        # them. The sweep, not this persist, owns the honor/cap decision.
+        test_guidance = str((out.context_updates or {}).get("test_guidance", "") or "")
         try:
             mission = await effects.load_mission()
             goal = next(
                 (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id),
                 None,
             )
-            if (
-                goal is not None
-                and getattr(goal, "expected_error", "") != expected_error
+            if goal is not None and (
+                getattr(goal, "expected_error", "") != expected_error
+                or getattr(goal, "test_guidance", "") != test_guidance
             ):
                 goal.expected_error = expected_error
+                goal.test_guidance = test_guidance
                 await effects.save_mission(mission)
         except Exception:
             pass  # non-critical — evaluator falls back to blanket error scan
@@ -1036,14 +1043,29 @@ async def _conclude_diagnosis(
     # target_symbol. Empty when the change is local to
     # target_symbol. CONCLUDE_PROMPT asks for at most 6.
     related_symbols: list[str] = []
+    # Retest verdict (2026-08-06): concrete charter steps accompanying
+    # recommended_flow == "retest" — the code is right, the session never
+    # reached the behavior. Empty for every other verdict.
+    test_guidance: str = ""
     try:
         from agent.llm_json import parse_llm_json
 
         parsed = parse_llm_json(diagnosis_text)
         if isinstance(parsed, dict):
             candidate = parsed.get("recommended_flow")
-            if candidate in ("file_ops", "project_ops"):
+            if candidate in ("file_ops", "project_ops", "retest"):
                 recommended_flow = candidate
+            test_guidance = str(parsed.get("test_guidance", "") or "").strip()
+            # A retest verdict without steps is unactionable — the sweep
+            # would dispatch a session no better charted than the one that
+            # just failed. Demote it to the default fix path rather than
+            # publish an empty promise.
+            if recommended_flow == "retest" and not test_guidance:
+                recommended_flow = None
+            # Symmetric guard: guidance riding a fix verdict would leak a
+            # stale charter override onto the goal via the report walk.
+            if recommended_flow != "retest":
+                test_guidance = ""
             target_file = str(parsed.get("target_file", "") or "")
             target_symbol = str(parsed.get("target_symbol", "") or "")
             change_spec = str(parsed.get("change_spec", "") or "")
@@ -1089,6 +1111,7 @@ async def _conclude_diagnosis(
         "diagnosis_confidence": confidence,
         "root_cause": root_cause,
         "expected_error": expected_error,
+        "test_guidance": test_guidance,
     }
     if recommended_flow is not None:
         context_updates["recommended_flow"] = recommended_flow

@@ -3278,11 +3278,23 @@ async def _sweep_after_project_ops(
         )
 
 
+# Retest verdicts honored per goal before the sweep stops accepting them
+# and falls through to the normal fix path. Matches _ACCEPTANCE_DISARM_K's
+# philosophy: two genuine tries, then the loop-shape is the problem. A
+# diagnosis that keeps concluding "the test just didn't reach it" after two
+# guided sessions is either wrong about the code or the goal is intractable
+# — unbounded retest→diagnose→retest is the acceptance-veto loop again.
+_RETEST_MAX = 2
+
+
 async def _sweep_after_diagnose(
     goal: Any,
     mission: Any,
     effects: Any,
     last_report: Any,
+    goal_mode: str = "",
+    run_command: str = "",
+    interactive_prompt: str = "",
 ) -> StepOutput:
     """After a diagnose_issue report: extract the structured fix target
     (Phase A operation spec) and dispatch file_ops/project_ops, with the
@@ -3290,6 +3302,69 @@ async def _sweep_after_diagnose(
     diag_summary = getattr(last_report, "summary", "")
     diag_files = getattr(last_report, "files_affected", [])
     recommended_flow = getattr(last_report, "recommended_flow", "") or "file_ops"
+
+    # Retest verdict (2026-08-06, the Stone Guard case): diagnosis concluded
+    # the code is correct and the SESSION never exercised the behavior —
+    # dispatch a re-test with the diagnostician's charter steps instead of
+    # rewriting correct code (r13/r16/r19 rewrote a working kill path three
+    # times because the only vocabulary was file_ops/project_ops). No code
+    # or data is touched, so nothing needs restoring afterwards — the
+    # failure mode the nerf-the-guardian edits had.
+    if recommended_flow == "retest":
+        guidance = (getattr(goal, "test_guidance", "") or "").strip()
+        retests_used = int(getattr(goal, "retest_count", 0) or 0)
+        if guidance and retests_used < _RETEST_MAX:
+            goal.retest_count = retests_used + 1
+            dispatch_config = {
+                "goal_id": goal.id,
+                "goal_description": goal.description,
+                "goal_type": "functional",
+                "goal_files": goal.associated_files or [],
+                "flow": "interact",
+                "target_file_path": "",
+                # _functional_retest_directive appends the TEST GUIDANCE
+                # block from goal.test_guidance (persisted by conclude) —
+                # the charter prompt renders the directive verbatim as its
+                # problem section, so the steps arrive in-band.
+                "flow_directive": _functional_retest_directive(
+                    goal, after="diagnosis (no code was changed)"
+                ),
+                "interaction_mode": goal_mode,
+                "run_command": run_command if goal_mode == "deterministic" else "",
+                "interactive_prompt": interactive_prompt,
+            }
+            logger.info(
+                "Functional sweep: retest verdict for '%s' (retest %d/%d) — "
+                "re-testing with diagnosis guidance, no fix dispatched",
+                goal.description[:50],
+                goal.retest_count,
+                _RETEST_MAX,
+            )
+            if effects:
+                await effects.save_mission(mission)
+            return StepOutput(
+                result={"sweep_complete": False, "needs_test": True},
+                observations=(
+                    f"Functional sweep: diagnosis says the code is right and "
+                    f"the test never reached it — guided retest "
+                    f"{goal.retest_count}/{_RETEST_MAX} for "
+                    f"'{goal.description[:50]}'"
+                ),
+                context_updates={"dispatch_config": dispatch_config},
+            )
+        # Cap reached (or guidance missing): stop accepting the verdict.
+        # Fall through to the normal fix path — with no target_file this
+        # lands in fix_target_resolution, which is the right place for a
+        # diagnosis that can't produce an actionable next step.
+        logger.warning(
+            "Functional sweep: retest verdict for '%s' NOT honored "
+            "(guidance=%s, retests_used=%d/%d); falling through to fix path",
+            goal.description[:50],
+            "present" if guidance else "MISSING",
+            retests_used,
+            _RETEST_MAX,
+        )
+        recommended_flow = "file_ops"
 
     # Phase A (patch redesign) — read structured operation spec
     # from the report. Diagnose's flat schema gives us the
@@ -3690,7 +3765,15 @@ async def action_functional_sweep_next(step_input: StepInput) -> StepOutput:
 
         # Last report was diagnose_issue — extract fix target and dispatch
         if report_flow == "diagnose_issue":
-            return await _sweep_after_diagnose(goal, mission, effects, last_report)
+            return await _sweep_after_diagnose(
+                goal,
+                mission,
+                effects,
+                last_report,
+                goal_mode=goal_mode,
+                run_command=run_command,
+                interactive_prompt=interactive_prompt,
+            )
 
         return await _sweep_interact_failure(goal, mission, effects, last_report)
 
@@ -3835,6 +3918,20 @@ def _functional_retest_directive(goal: Any, *, after: str) -> str:
     ("main.py crashes on startup") — verifying that "works correctly" is
     nonsense and false-passes, so frame it as defect-resolution instead."""
     desc = getattr(goal, "description", "")
+    # Retest verdict (2026-08-06): diagnosis-authored steps for reaching the
+    # behavior. Appended to EVERY retest directive for the goal — once the
+    # route to the untested state is known (e.g. "east, east, north, then
+    # strike guard 3 times — 25 HP at 10 damage"), every future session
+    # should use it, not rediscover it. The charter prompt renders the
+    # directive verbatim, and charter_function's guidance rule tells the
+    # author to carry these steps into TEST STEPS over the brevity caps.
+    guidance = (getattr(goal, "test_guidance", "") or "").strip()
+    guidance_block = (
+        f"\n\nTEST GUIDANCE (from diagnosis of the previous session — "
+        f"incorporate these steps into the test):\n{guidance}"
+        if guidance
+        else ""
+    )
     if getattr(goal, "origin", "design") == "quality_gate":
         directive = (
             f"A quality-gate review reported this defect: {desc}\n"
@@ -3848,10 +3945,11 @@ def _functional_retest_directive(goal: Any, *, after: str) -> str:
                 f"{repro_block}\n"
                 "Re-run this exact sequence and confirm the defect no longer occurs."
             )
-        return directive
+        return directive + guidance_block
     return (
         f"Re-test this capability after a {after}: {desc}\n"
         f"Run the program and verify the described behavior works correctly."
+        + guidance_block
     )
 
 

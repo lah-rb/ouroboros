@@ -3553,7 +3553,8 @@
           "diagnosis_confidence",
           "root_cause",
           "module_statement",
-          "related_symbols"
+          "related_symbols",
+          "test_guidance"
         ],
         "effects": [],
         "terminal": false
@@ -3659,7 +3660,8 @@
             "diagnosis_confidence",
             "root_cause",
             "module_statement",
-            "related_symbols"
+            "related_symbols",
+            "test_guidance"
           ]
         },
         "params": {

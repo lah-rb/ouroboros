@@ -193,6 +193,15 @@ class DirectiveReport(BaseModel):
     # InventoryCommand" or "#!/usr/bin/env bash"). file_ops routes on this — no
     # heuristic extraction from prose. Empty for all other kinds.
     module_statement: str = ""
+    # Retest verdict (2026-08-06, the Stone Guard case). When diagnosis
+    # concludes the CODE is correct and the SESSION never exercised the
+    # behavior (recommended_flow == "retest"), this carries the concrete
+    # steps a charter needs to reach the untested state — authored by the
+    # diagnostician, the only party holding code + data + transcript at
+    # once (the charter author never sees code, so cross-file arithmetic
+    # like "guard 25 HP ÷ attack_power 10 = 3 strikes" is uncomputable
+    # at charter time). Empty for every other verdict.
+    test_guidance: str = ""
     timestamp: str = Field(default_factory=_now_iso)
 
 
@@ -364,6 +373,19 @@ class GoalRecord(BaseModel):
     # (cleared when the conclusion is no longer a should-raise). Empty (the
     # default) = no raise expected; an exception in the output fails as before.
     expected_error: str = ""
+    # Retest verdict (2026-08-06). Diagnosis-authored charter steps for
+    # reaching the behavior the last session failed to exercise — persisted
+    # here because the diagnose flow context is gone by charter time; the
+    # interaction_context projection reads it back into the charter brief.
+    # Refreshed on each retest verdict, cleared when a later diagnosis
+    # returns a code/data fix (the guidance described a session, not the
+    # goal). retest_count caps the loop: after _RETEST_MAX honored retests
+    # the sweep stops accepting the verdict and falls through to the
+    # normal fix path — a diagnosis that keeps blaming the test is either
+    # wrong or the goal is intractable, and unbounded retest→diagnose→
+    # retest is the acceptance-veto loop shape all over again.
+    test_guidance: str = ""
+    retest_count: int = 0
 
 
 class FailedAttempt(BaseModel):
