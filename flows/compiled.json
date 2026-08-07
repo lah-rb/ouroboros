@@ -9122,7 +9122,8 @@
             "edit_summary_parts",
             "unresolved_symbols",
             "data_files_changed",
-            "data_edit_summary"
+            "data_edit_summary",
+            "change_spec"
           ]
         },
         "params": {},

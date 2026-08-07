@@ -196,3 +196,81 @@ class TestTheFlowGraphRoutesTheHop:
         rets = compiled["data_patch"]["returns"]
         assert rets["data_files_changed"]["from"] == "context.files_changed"
         assert rets["data_edit_summary"]["from"] == "context.edit_summary"
+
+
+class TestUnresolvedTargetsRaiseWarnings:
+    """Warning-queue producer #2 (operator-approved 2026-08-06). A batch that
+    succeeded while part of the prescription went unresolved used to record
+    the drop in an INFO line and return success — the `world.json:monsters`
+    evaporation. Now each leftover ref is raised on the evidenced-warning
+    queue, where the director's rank-25 divert routes it to diagnosis with
+    the evidence quoted."""
+
+    @staticmethod
+    def _mission():
+        from agent.persistence.models import MissionConfig, MissionState
+
+        return MissionState(
+            objective="t", config=MissionConfig(working_directory="/tmp/x")
+        )
+
+    def _finalize(self, ctx, mission):
+        return asyncio.run(
+            action_finalize_edit_session(
+                StepInput(
+                    context={"edit_session_id": "s1", **ctx},
+                    params={},
+                    meta=FlowMeta(flow_name="patch", step_id="finalize"),
+                    effects=MockEffects(mission=mission),
+                )
+            )
+        )
+
+    def test_a_successful_batch_with_leftovers_raises(self):
+        m = self._mission()
+        self._finalize(
+            {
+                "files_changed": ["engine.py"],
+                "unresolved_symbols": ["world.json:monsters"],
+                "change_spec": "In world.json, set guardian health <= 10",
+            },
+            m,
+        )
+        assert len(m.pending_warnings) == 1
+        w = m.pending_warnings[0]
+        assert w.kind == "unresolved_edit_target"
+        assert w.subject == "world.json:monsters"
+        assert "NEVER APPLIED" in w.evidence
+        assert "guardian health" in w.evidence, "the change_spec must ride along"
+
+    def test_a_failed_batch_does_not_double_drive(self):
+        """No files changed -> the goal's own diagnose loop already owns the
+        failure; a warning on top would dispatch the same defect twice."""
+        m = self._mission()
+        self._finalize(
+            {"files_changed": [], "unresolved_symbols": ["world.json:monsters"]}, m
+        )
+        assert m.pending_warnings == []
+
+    def test_a_clean_batch_raises_nothing(self):
+        m = self._mission()
+        self._finalize({"files_changed": ["engine.py"]}, m)
+        assert m.pending_warnings == []
+
+    def test_repeat_finalizes_do_not_duplicate(self):
+        m = self._mission()
+        ctx = {
+            "files_changed": ["engine.py"],
+            "unresolved_symbols": ["world.json:monsters"],
+        }
+        self._finalize(ctx, m)
+        self._finalize(ctx, m)
+        assert len(m.pending_warnings) == 1
+        assert m.pending_warnings[0].status == "pending"
+
+    def test_the_flow_declares_change_spec_for_the_evidence(self):
+        compiled = json.loads((ROOT / "flows" / "compiled.json").read_text())
+        opt = compiled["patch"]["steps"]["finalize"]["context"]["optional"]
+        assert (
+            "change_spec" in opt
+        ), "LOAD-BEARING: undeclared, the spec never reaches the warning"

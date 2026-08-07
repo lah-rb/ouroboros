@@ -320,6 +320,10 @@ patch: #FlowDefinition & {
 				optional: [
 					"files_changed", "edit_summary_parts", "unresolved_symbols",
 					"data_files_changed", "data_edit_summary",
+					// change_spec: quoted into the unresolved-edit-target
+					// warning's evidence so the diverted diagnosis sees WHAT
+					// was prescribed, not just which ref was dropped.
+					"change_spec",
 				]
 			}
 			terminal: true

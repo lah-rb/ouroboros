@@ -1846,6 +1846,62 @@ async def action_finalize_edit_session(step_input: StepInput) -> StepOutput:
         unresolved,
     )
 
+    # PARTIAL SUCCESS IS AN EVIDENCED FINDING, NOT A FOOTNOTE (operator,
+    # 2026-08-06 — warning-queue producer #2). A batch that edited some
+    # files while part of the prescription went unresolved used to record
+    # that fact in an INFO line and a summary clause, then return SUCCESS —
+    # observed live when `world.json:monsters` (lower the Stone Guard's
+    # health) evaporated while three .py files were rewritten. Raise each
+    # leftover ref on the evidenced-warning queue: the director diverts to
+    # diagnose_issue with the evidence quoted, the queue de-duplicates while
+    # pending, re-arms on recurrence, and abandons at the cap.
+    #
+    # ONLY on an otherwise-successful batch: a failed patch already
+    # re-enters the goal's own diagnose loop, and a warning on top would
+    # double-drive the same defect.
+    if unresolved and files_changed and effects:
+        spec = str(step_input.context.get("change_spec") or "").strip()
+        try:
+            mission = await effects.load_mission()
+        except Exception:  # noqa: BLE001 - the warning is best-effort
+            mission = None
+        if mission is not None:
+            raised = 0
+            for ref in unresolved:
+                raised += bool(
+                    mission.raise_warning(
+                        kind="unresolved_edit_target",
+                        subject=str(ref),
+                        evidence=(
+                            f"A patch batch changed {', '.join(files_changed)} "
+                            f"but could not resolve `{ref}` — that part of the "
+                            f"diagnosed fix was NEVER APPLIED, while the step "
+                            f"reported success."
+                            + (
+                                f" The diagnosis's change_spec: {spec[:400]}"
+                                if spec
+                                else ""
+                            )
+                        ),
+                        prescribed_fix=(
+                            f"Apply the remaining change to `{ref}` (the rest "
+                            f"of the batch already landed)."
+                        ),
+                        source_flow="patch",
+                    )
+                )
+            if raised:
+                try:
+                    await effects.save_mission(mission)
+                except Exception:  # noqa: BLE001
+                    logger.debug("finalize: could not persist warnings", exc_info=True)
+                logger.warning(
+                    "finalize_edit_session: %d unresolved edit target(s) queued "
+                    "as evidenced warnings: %s",
+                    raised,
+                    ", ".join(str(u) for u in unresolved),
+                )
+
     # End the inference session
     if effects and session_id:
         try:
