@@ -729,6 +729,19 @@ def render_batch_blueprint(params: dict, namespaces: dict) -> str:
             structure = _get(ds, "structure")
             if structure:
                 lines.append(f"Structure: {structure}")
+            # The design phase's creative canon. Without this line the
+            # batch model sees only a generic objective + nameless schema
+            # and invents its own names — which the design-derived goals
+            # then spend the whole run testing against (hy3: "Boss Nyx"
+            # goals vs a "Shadow Lord" artifact).
+            content_brief = (_get(ds, "content_brief") or "").strip()
+            if content_brief:
+                lines.append(
+                    "Content (the design's canon — use these names, places, "
+                    "and entities verbatim; invent freely only where the "
+                    "brief is silent):"
+                )
+                lines.append(content_brief)
             example = (_get(ds, "example") or "").strip()
             if example:
                 try:

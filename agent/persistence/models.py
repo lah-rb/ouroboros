@@ -550,8 +550,21 @@ class DataShapeContract(BaseModel):
     # internal references — so the exemplar is the checkable contract:
     # validate_data_shapes diffs the real file against it path by path.
     example: str = ""
+    # The design phase's CREATIVE CANON for this file — the hot-temp content
+    # brief (entity names, places, relationships) generated in
+    # derive_project_goals Pass 1b. Before this field existed the brief was
+    # stored only inside a goal-description string, which batch creation
+    # never reads — so hy3's construct phase, shown a generic objective and
+    # this nameless schema, invented a SECOND canon (Boss Nyx became the
+    # Shadow Lord, the moonstone shard an Amulet of Light) and every noun in
+    # the design goals diverged from the artifact from hour one. Same gap
+    # class as `example` above: a design decision that lived outside the
+    # architecture reached no one. The batch blueprint renders this verbatim.
+    content_brief: str = ""
 
-    @field_validator("file", "consumed_by", "structure", "example", mode="before")
+    @field_validator(
+        "file", "consumed_by", "structure", "example", "content_brief", mode="before"
+    )
     @classmethod
     def _coerce_to_str(cls, v: Any) -> str:
         """Coerce non-string values to strings.

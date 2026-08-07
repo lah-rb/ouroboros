@@ -1158,6 +1158,11 @@ def _data_shape_to_dict(ds: Any) -> dict:
         # 'initial_dialogue_node' that no contract declared) while data
         # files followed the exemplar, and the two authorities diverged.
         "example": getattr(ds, "example", "") or "",
+        # The design's creative canon (hot-temp content brief). Same gap
+        # class as `example`: dropped here, the batch creator invented a
+        # second canon and the goals diverged from the artifact (hy3's
+        # Nyx/Shadow-Lord split).
+        "content_brief": getattr(ds, "content_brief", "") or "",
     }
 
 

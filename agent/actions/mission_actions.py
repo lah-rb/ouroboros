@@ -1133,9 +1133,23 @@ async def action_derive_project_goals(step_input: StepInput) -> StepOutput:
 
                 briefs = parse_llm_json(brief_result.text)
                 if isinstance(briefs, dict):
+                    # Write each brief onto the STORED architecture's
+                    # DataShapeContract, not just the goal description. The
+                    # architecture is what downstream consumers actually
+                    # read — batch creation renders its blueprint from it
+                    # and never sees goal text, so a brief that lives only
+                    # in the goal string leaves the construct model to
+                    # invent its own canon (the hy3 Nyx/Shadow-Lord split).
+                    arch_obj = getattr(mission, "architecture", None)
+                    arch_shapes = (
+                        getattr(arch_obj, "data_shapes", None) or [] if arch_obj else []
+                    )
                     for d in data_file_goals:
                         if d["file_path"] in briefs:
-                            d["content_brief"] = briefs[d["file_path"]]
+                            d["content_brief"] = str(briefs[d["file_path"]] or "")
+                            for ds_rec in arch_shapes:
+                                if getattr(ds_rec, "file", "") == d["file_path"]:
+                                    ds_rec.content_brief = d["content_brief"]
                             logger.info(
                                 "Content brief for %s: %s",
                                 d["file_path"],
