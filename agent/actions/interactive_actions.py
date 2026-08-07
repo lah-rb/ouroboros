@@ -483,18 +483,37 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
             },
         )
 
-    # ── Duplicate detection ────────────────────────────────────
-    if session_history:
+    # ── Stuck detection: repeated input WITHOUT progress ───────────────
+    # A bare duplicate-input check killed every post-prologue session on
+    # hy3 (2026-08-07): navigation games legitimately repeat commands
+    # ("go north" three times in a row walks Cave Mouth → Crossroads), and
+    # the detector closed the session on the SECOND consecutive move —
+    # "ended after step 2 of 10", thirty-plus times, immune to every
+    # prompt fix because the persona never chose to stop. Stuck now means
+    # repetition with IDENTICAL output: the same input has already run
+    # twice producing byte-identical responses (no state change), and the
+    # tester is sending it a third time. Repeated input whose output
+    # changes is progress, not a loop; the turn budget bounds the rest.
+    if len(session_history) >= 2:
         last = session_history[-1]
-        last_input = last.get("input", "")
-        if last_input and last_input.strip() == text.strip():
+        prev = session_history[-2]
+        same_run = (
+            (last.get("input", "") or "").strip() == text.strip()
+            and (prev.get("input", "") or "").strip() == text.strip()
+            and (last.get("output", "") or "").strip()
+            == (prev.get("output", "") or "").strip()
+        )
+        if text.strip() and same_run:
             return StepOutput(
                 result={
                     "command_sent": False,
                     "stuck_detected": True,
                     "duplicate_input": text.strip(),
                 },
-                observations=f"Stuck: duplicate input '{text.strip()[:60]}'",
+                observations=(
+                    f"Stuck: '{text.strip()[:60]}' repeated with identical "
+                    f"output twice — no state change"
+                ),
                 context_updates={
                     "mcp_session_id": session_id,
                     "session_history": session_history,
