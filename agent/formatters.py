@@ -209,6 +209,28 @@ def format_session_tail(params: dict, namespaces: dict) -> str:
     return out[-n:] if len(out) > n else out
 
 
+def strip_test_guidance(params: dict, namespaces: dict) -> str:
+    """The evaluator's objective, with the TEST GUIDANCE block removed.
+
+    Guidance rides flow_directive so the charter author receives it in-band
+    — but the evaluator's problem section rendered the SAME directive, so
+    every diagnosis-authored step became part of the standard the session
+    was judged against. On hy3's quit goal the goalposts grew each round by
+    exactly the steps the previous verdict provoked ("take sword, equip,
+    move, then quit" judged as unmet objective components on a
+    quit-capability goal). The evaluator judges the objective; the guidance
+    is HOW to reach it, never WHAT must be true.
+    """
+    directive = str(params.get("source") or "")
+    marker = "TEST GUIDANCE ("
+    idx = directive.find(marker)
+    objective = directive[:idx].rstrip() if idx >= 0 else directive
+    # Same banner framing interact/test_objective_bounded gave the raw
+    # directive — the evaluator's prompt shape is unchanged, only the
+    # guidance block is gone.
+    return f"---TEST OBJECTIVE---\n{objective}\n---END TEST OBJECTIVE---"
+
+
 def format_completion_criteria(params: dict, namespaces: dict) -> str:
     """Render an ops TaskState's completion_criteria as the {"checks": [...]}
     JSON that action_run_validation_checks consumes (the ops definition-of-done
@@ -746,6 +768,7 @@ PRE_COMPUTE_FORMATTERS: dict[str, Any] = {
     "format_feedback_block": format_feedback_block,
     "format_workspace_ledger": format_workspace_ledger,
     "format_session_tail": format_session_tail,
+    "strip_test_guidance": strip_test_guidance,
     "format_existing_goals": format_existing_goals,
     "format_mission_meta": format_mission_meta,
     "format_project_file_list": format_project_file_list,

@@ -681,3 +681,50 @@ def test_condense_flag_is_declared_in_the_graph():
     step = _compiled()["deep_search"]["steps"]["condense"]
     assert "condense_unavailable" in step["context"]["optional"]
     assert "condense_unavailable" in step["publishes"]
+
+
+class TestEvaluatorStandardIsGuidanceFree:
+    """The quit-goal ratchet (2026-08-07): TEST GUIDANCE rides
+    flow_directive for the charter author, but the evaluator's problem
+    section rendered the same directive — so every diagnosis-authored step
+    became part of the standard the session was judged against, growing
+    each round by the steps the previous verdict provoked."""
+
+    def test_formatter_strips_guidance_and_keeps_the_banner(self):
+        from agent.formatters import strip_test_guidance
+
+        directive = (
+            "Re-test this capability after a fix: Player can quit.\n"
+            "Run the program and verify the described behavior works correctly."
+            "\n\nTEST GUIDANCE (from diagnosis of the previous session — "
+            "incorporate these steps into the test):\n1. take sword\n2. quit"
+        )
+        out = strip_test_guidance({"source": directive}, {})
+        assert "take sword" not in out
+        assert "Player can quit" in out
+        assert out.startswith("---TEST OBJECTIVE---")
+        assert out.endswith("---END TEST OBJECTIVE---")
+
+    def test_formatter_passes_plain_directives_through(self):
+        from agent.formatters import strip_test_guidance
+
+        out = strip_test_guidance({"source": "Test this capability: X"}, {})
+        assert "Test this capability: X" in out
+
+    def test_evaluate_outcome_uses_the_stripped_objective(self):
+        step = _compiled()["interact"]["steps"]["evaluate_outcome"]
+        pc = step["pre_compute"][0]
+        assert pc["formatter"] == "strip_test_guidance"
+        assert pc["output_key"] == "eval_objective"
+        assert pc["params"]["source"] == {"$ref": "input.flow_directive"}
+        sections = step["turn"]["sections"]
+        problem = next(s for s in sections if s["type"] == "problem")
+        assert problem.get("ref") == {"$ref": "context.eval_objective"}
+        assert "template" not in problem
+
+    def test_evaluate_rules_anchor_against_invented_progress_standards(self):
+        from pathlib import Path
+
+        text = Path("prompts/interact/evaluate_rules.yaml").read_text()
+        assert "Judge ONLY the capability the objective names" in text
+        assert "Never require" in text

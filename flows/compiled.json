@@ -6837,7 +6837,9 @@
             },
             {
               "type": "problem",
-              "template": "interact/test_objective_bounded",
+              "ref": {
+                "$ref": "context.eval_objective"
+              },
               "required": false
             },
             {
@@ -6862,6 +6864,17 @@
           },
           "retries": 3
         },
+        "pre_compute": [
+          {
+            "formatter": "strip_test_guidance",
+            "output_key": "eval_objective",
+            "params": {
+              "source": {
+                "$ref": "input.flow_directive"
+              }
+            }
+          }
+        ],
         "config": {},
         "publishes": [
           "inference_response"

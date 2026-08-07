@@ -376,7 +376,15 @@ interact: #FlowDefinition & {
 					// in parse_evaluation's resolver. goal_met judges the
 					// SESSION BEHAVIOUR alone; acceptance_ok stays a
 					// deterministic veto with reconcile as its wear-out path.
-					{type: "problem", template:     "interact/test_objective_bounded"},
+					// GUIDANCE-FREE objective (2026-08-07): the raw directive
+					// carries the TEST GUIDANCE block for the charter author,
+					// and rendering it here let diagnosis-authored steps
+					// ratchet into the evaluation standard — the quit goal's
+					// goalposts grew each round by exactly the steps the
+					// previous verdict provoked. The evaluator judges the
+					// OBJECTIVE; guidance is HOW to reach it, never WHAT
+					// must be true.
+					{type: "problem", ref:          {$ref: "context.eval_objective"}},
 					{type: "instruction", template: "interact/evaluate_rules"},
 					{type: "envelope"},
 				]
@@ -391,6 +399,10 @@ interact: #FlowDefinition & {
 				config: temperature: "t*0.4"
 				retries: 3
 			}
+			pre_compute: [
+				{formatter: "strip_test_guidance", output_key: "eval_objective"
+					params: source:                              {$ref: "input.flow_directive"}},
+			]
 			publishes: ["inference_response"]
 		}
 

@@ -6,6 +6,12 @@ content: |
 
   - Ground every judgment in the terminal evidence. If no output
     supports a claim, don't make the claim.
+  - Judge ONLY the capability the objective names. Never require
+    unrelated progress: a session that launches the program and
+    directly exercises the named capability is complete evidence,
+    however short it is. (A quit test that launches and quits cleanly
+    is a PASS — "no gameplay happened first" is not a failure of
+    quitting.)
   - `goal_met: true` when the observed behavior is sufficient
     evidence that the objective was achieved — even if the session
     didn't run every planned step.
