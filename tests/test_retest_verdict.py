@@ -104,6 +104,33 @@ async def test_conclude_publishes_retest_with_guidance():
 
 
 @pytest.mark.asyncio
+async def test_list_valued_guidance_joins_to_clean_steps():
+    """hy3's phase-two verdict emitted test_guidance as a JSON array; str()
+    turned it into a Python-repr blob. Arrays join line-per-step."""
+    fenced = (
+        "```json\n"
+        + json.dumps(
+            {
+                "target_file": "engine.py",
+                "target_symbol": "GameEngine._do_attack",
+                "kind": "fix",
+                "recommended_flow": "retest",
+                "test_guidance": ["1. go east", "2. take amulet", "3. attack"],
+            }
+        )
+        + "\n```"
+    )
+    effects = MockEffects(inference_responses=[fenced])
+    out = await action_conclude_diagnosis(
+        _conclude_input(effects, diagnosis_session_id="s", investigation_turn=1)
+    )
+    assert out.context_updates["test_guidance"] == (
+        "1. go east\n2. take amulet\n3. attack"
+    )
+    assert out.context_updates["recommended_flow"] == "retest"
+
+
+@pytest.mark.asyncio
 async def test_retest_without_guidance_is_demoted():
     """A retest verdict with no steps is an unactionable promise — the sweep
     would dispatch a session no better charted than the one that failed."""

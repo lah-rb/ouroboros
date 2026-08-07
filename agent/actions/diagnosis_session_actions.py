@@ -1055,7 +1055,17 @@ async def _conclude_diagnosis(
             candidate = parsed.get("recommended_flow")
             if candidate in ("file_ops", "project_ops", "retest"):
                 recommended_flow = candidate
-            test_guidance = str(parsed.get("test_guidance", "") or "").strip()
+            # Models emit test_guidance as either a string or a JSON array of
+            # steps (hy3's phase-two verdict did the latter, and str() turned
+            # it into a Python-repr blob). Join arrays line-per-step so the
+            # charter author gets clean numbered steps either way.
+            raw_guidance = parsed.get("test_guidance", "")
+            if isinstance(raw_guidance, list):
+                test_guidance = "\n".join(
+                    str(s).strip() for s in raw_guidance if str(s).strip()
+                )
+            else:
+                test_guidance = str(raw_guidance or "").strip()
             # A retest verdict without steps is unactionable — the sweep
             # would dispatch a session no better charted than the one that
             # just failed. Demote it to the default fix path rather than
