@@ -1447,13 +1447,20 @@ async def action_systemic_scan(step_input: StepInput) -> StepOutput:
 
 
 async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
-    """Gate the stuck-goal web research. Fires once per goal when the goal has
-    >= 2 failed attempts and no stored findings; builds a research brief from
-    the goal description + current headline for the deep_search sub-flow
-    (which derives its own focused queries — no pre-stripping needed).
+    """Gate the stuck-goal ESCALATION (operator, 2026-08-07: the deep_search
+    web hop is replaced by the full escalate flow — its original intent).
 
-    Inputs: goal_id.  Result: should_search.
-    Publishes: mission, search_brief (when firing).
+    Fires when a goal has >= 2 failed attempts and RE-FIRES every 2 further
+    attempts; each fire runs the bounded read/run/write/consult REACT loop
+    with the failure evidence as its seed. On the goal's THIRD escalation
+    the boss consult is FORCED as the first action — two self-recoveries
+    without resolution mean the agent needs direction, not more tooling.
+    (The old web-search hop queried the goal's fictional nouns verbatim —
+    the Persona 3 safari; escalation reads the actual repo.)
+
+    Inputs: goal_id.  Result: should_search (kept for flow compat).
+    Publishes: mission, search_brief (failure evidence), expected_outcome,
+    force_consult (when firing).
     """
     effects = step_input.effects
     goal_id = str(step_input.inputs.get("goal_id", "") or "")
@@ -1467,40 +1474,75 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
     if goal is None:
         return StepOutput(
             result={"should_search": False},
-            observations="goal-search: no goal — skip",
-        )
-    # Hermetic runs (SWE-bench sets web_research=False) must NOT reach the web:
-    # a stuck-goal search retrieves the instance's own upstream issue/fix thread
-    # (observed: psf__requests-1724 pulled psf/requests#1723) — contamination.
-    if not bool(getattr(getattr(mission, "config", None), "web_research", True)):
-        return StepOutput(
-            result={"should_search": False},
-            observations="goal-search: skip (web_research disabled — hermetic run)",
+            observations="goal-escalation: no goal — skip",
         )
     attempts = len(getattr(goal, "failed_attempts", None) or [])
-    already = bool((getattr(goal, "search_findings", "") or "").strip())
-    if attempts < 2 or already:
+    last_at = int(getattr(goal, "last_escalation_attempts", 0) or 0)
+    if attempts < 2 or attempts - last_at < 2:
         return StepOutput(
             result={"should_search": False},
-            observations=f"goal-search: skip (attempts={attempts}, searched={already})",
+            observations=(
+                f"goal-escalation: skip (attempts={attempts}, "
+                f"last_escalation_at={last_at})"
+            ),
         )
+
+    goal.escalation_count = int(getattr(goal, "escalation_count", 0) or 0) + 1
+    goal.last_escalation_attempts = attempts
+    # "Make sure the boss is consulted on the 3rd escalation" — forced from
+    # the third onward; by then self-recovery has had two full loops.
+    force_consult = goal.escalation_count >= 3
+    if effects:
+        try:
+            await effects.save_mission(mission)
+        except Exception:  # noqa: BLE001 - gate must not die on a save
+            logger.debug("goal-escalation: save failed", exc_info=True)
+
     headline = str(step_input.context.get("error_headline", "") or "").strip()
-    brief = goal.description.strip()
+    attempt_lines = [
+        f"- {getattr(a, 'flow', '?')} on "
+        f"{getattr(a, 'target_file', '?')}:{getattr(a, 'target_symbol', '') or ''}"
+        f" — {getattr(a, 'reason', '') or getattr(a, 'diagnosis_summary', '')}"[:160]
+        for a in (getattr(goal, "failed_attempts", None) or [])[-6:]
+    ]
+    evidence = (
+        f"Goal (functional): {goal.description.strip()}\n"
+        f"This goal has failed {attempts} fix attempts. "
+        f"Escalation #{goal.escalation_count} for this goal.\n"
+    )
     if headline:
-        brief = f"{brief}\nObserved failure: {headline}"
+        evidence += f"Latest observed failure: {headline}\n"
+    if attempt_lines:
+        evidence += "Prior fix attempts (most recent):\n" + "\n".join(attempt_lines)
+    expected = (
+        f"A behavioural test session can observe this working: "
+        f"{goal.description.strip()}"
+    )
     return StepOutput(
         result={"should_search": True},
-        observations=f"goal-search: researching (attempts={attempts})",
-        context_updates={"mission": mission, "search_brief": brief[:2000]},
+        observations=(
+            f"goal-escalation: escalating (attempts={attempts}, "
+            f"escalation #{goal.escalation_count}"
+            f"{', BOSS CONSULT FORCED' if force_consult else ''})"
+        ),
+        context_updates={
+            "mission": mission,
+            "search_brief": evidence[:4000],
+            "expected_outcome": expected[:1000],
+            "force_consult": force_consult,
+        },
     )
 
 
 async def action_store_goal_search_findings(step_input: StepInput) -> StepOutput:
-    """Store the deep_search research summary on the GOAL so every later
-    diagnose seed surfaces it. One-shot guard: sets goal.search_findings even
-    on an empty summary (web off / no hits) so the gate never re-searches.
+    """Store the escalation summary on the GOAL so every later diagnose seed
+    surfaces it. (Named for the web-search era it replaced; the field —
+    goal.search_findings — is the same seed slot.) The gate re-fires every 2
+    failed attempts, so each escalation's summary REPLACES the previous one:
+    the freshest supervisor/self-recovery account wins.
 
-    Context: mission, research_summary.  Inputs: goal_id.  Publishes: mission.
+    Context: mission, escalation_summary (or legacy research_summary).
+    Inputs: goal_id.  Publishes: mission.
     """
     effects = step_input.effects
     mission = step_input.context.get("mission")
@@ -1510,8 +1552,12 @@ async def action_store_goal_search_findings(step_input: StepInput) -> StepOutput
     )
     if goal is None:
         return StepOutput(result={"stored": False}, observations="goal-search: no goal")
-    summary = str(step_input.context.get("research_summary", "") or "").strip()
-    goal.search_findings = summary[:4000] or "(no relevant web results found)"
+    summary = str(
+        step_input.context.get("escalation_summary", "")
+        or step_input.context.get("research_summary", "")
+        or ""
+    ).strip()
+    goal.search_findings = summary[:4000] or "(escalation produced no summary)"
     if effects:
         await effects.save_mission(mission)
     stored = bool(summary)

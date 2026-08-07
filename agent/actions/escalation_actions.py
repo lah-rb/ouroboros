@@ -144,11 +144,31 @@ async def action_open_escalation_session(step_input: StepInput) -> StepOutput:
         "escalation_corrections": 0,
         "escalation_files": [],
     }
+    # Forced boss consult (operator, 2026-08-07): a stuck goal's third
+    # escalation routes to the consult BEFORE the first tool action — two
+    # self-recovery loops already failed, so the supervisor speaks first.
+    # The consult prompt reads escalation_choice_arg (normally the model's
+    # own question from the work menu); under force we synthesize the
+    # question from the evidence the invoker passed.
+    force_consult = bool(step_input.params.get("force_consult", False))
+    if force_consult:
+        updates["escalation_choice_arg"] = (
+            "This is a repeated escalation for the same failure — prior "
+            "self-recovery attempts did not resolve it. Given the evidence "
+            "above: is the premise of these repair attempts wrong, and what "
+            "should the next concrete action be?"
+        )
     queue_injection(updates, step_input.context, "\n".join(parts))
-    logger.info("Escalation session started for %s: %s", invoking, session_id)
+    logger.info(
+        "Escalation session started for %s: %s%s",
+        invoking,
+        session_id,
+        " (boss consult forced)" if force_consult else "",
+    )
     return StepOutput(
-        result={"session_started": True},
-        observations=f"Escalation opened for {invoking}",
+        result={"session_started": True, "force_consult": force_consult},
+        observations=f"Escalation opened for {invoking}"
+        + (" — boss consult forced" if force_consult else ""),
         context_updates=updates,
     )
 

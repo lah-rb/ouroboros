@@ -385,6 +385,15 @@ class GoalRecord(BaseModel):
     # retest verdict is now honored every time it arrives with guidance.
     test_guidance: str = ""
     retest_count: int = 0
+    # Stuck-goal escalation (operator, 2026-08-07: "replace the current
+    # [deep_search] path with the full escalation path — that was the
+    # original intent when it was built"). The gate fires when a goal has
+    # accumulated 2 failed attempts and re-fires every 2 further attempts;
+    # each fire runs the full escalate flow (read/run/write/consult REACT
+    # loop). On the THIRD escalation the boss consult is forced — two
+    # self-recoveries without resolution mean direction, not more tooling.
+    escalation_count: int = 0
+    last_escalation_attempts: int = 0
 
 
 class FailedAttempt(BaseModel):

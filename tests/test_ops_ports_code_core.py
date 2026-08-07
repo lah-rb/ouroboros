@@ -437,7 +437,8 @@ def test_interact_wiring_acceptance_rung():
     )
 
 
-# ── C5: stuck-goal web search ─────────────────────────────────────────
+# ── C5: stuck-goal escalation (2026-08-07: full escalate flow replaced
+# the deep_search web hop; boss consult forced on the 3rd escalation) ──
 
 
 def _stuck_goal(n_attempts=2) -> GoalRecord:
@@ -455,16 +456,36 @@ def _stuck_goal(n_attempts=2) -> GoalRecord:
 
 
 @pytest.mark.asyncio
-async def test_goal_search_gate_fires_when_stuck_once():
+async def test_goal_escalation_gate_fires_and_repeats_every_two_attempts():
     goal = _stuck_goal(2)
     fx = MockEffects(mission=_mission([goal]))
     out = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
     assert out.result["should_search"] is True
     assert goal.description[:40] in out.context_updates["search_brief"]
-    # One-shot: stored findings (even the no-results sentinel) stop re-search.
-    goal.search_findings = "(no relevant web results found)"
+    assert out.context_updates["force_consult"] is False
+    assert goal.escalation_count == 1
+    # Not one-shot anymore: re-fires only after 2 MORE failed attempts.
     out2 = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
     assert out2.result["should_search"] is False
+    goal.failed_attempts.extend(_stuck_goal(2).failed_attempts)
+    out3 = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
+    assert out3.result["should_search"] is True
+    assert goal.escalation_count == 2
+
+
+@pytest.mark.asyncio
+async def test_third_escalation_forces_the_boss_consult():
+    """Operator (2026-08-07): 'make sure the boss is consulted on the 3rd
+    escalation' — two self-recovery loops without resolution mean the agent
+    needs direction, not more tooling."""
+    goal = _stuck_goal(2)
+    fx = MockEffects(mission=_mission([goal]))
+    for expected_force in (False, False, True):
+        out = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
+        assert out.result["should_search"] is True
+        assert out.context_updates["force_consult"] is expected_force
+        goal.failed_attempts.extend(_stuck_goal(2).failed_attempts)
+    assert goal.escalation_count == 3
 
 
 @pytest.mark.asyncio
@@ -476,16 +497,17 @@ async def test_goal_search_gate_skips_fresh_goal():
 
 
 @pytest.mark.asyncio
-async def test_goal_search_gate_respects_hermetic_web_research_off():
-    # SWE-bench sets web_research=False (hermetic): a stuck-goal search would
-    # retrieve the instance's own upstream issue thread — must never fire.
+async def test_hermetic_runs_still_escalate_without_web():
+    """Escalation is repo-local, so hermetic runs (web_research=False) DO
+    escalate — the escalate seed announces web_search is unavailable and
+    deep_search self-gates (the contamination guard lives there). The old
+    gate skipped entirely because its only tool WAS the web."""
     goal = _stuck_goal(2)
     m = _mission([goal])
     m.config.web_research = False
     fx = MockEffects(mission=m)
     out = await action_goal_search_gate(_si(fx, inputs={"goal_id": goal.id}))
-    assert out.result["should_search"] is False
-    assert "web_research disabled" in out.observations
+    assert out.result["should_search"] is True
 
 
 @pytest.mark.asyncio
@@ -502,17 +524,27 @@ async def test_store_goal_search_findings_and_sentinel():
     )
     assert out.result["stored"] is True
     assert "pty not pipes" in goal.search_findings
-    # Empty summary (web off / no hits) → sentinel so the gate one-shots.
+    # escalation_summary is the primary source now (research_summary legacy).
     g2 = _stuck_goal(2)
     await action_store_goal_search_findings(
         _si(
             MockEffects(),
             inputs={"goal_id": g2.id},
             mission=_mission([g2]),
+            escalation_summary="boss: the demo script is the blocker",
+        )
+    )
+    assert "demo script" in g2.search_findings
+    g3 = _stuck_goal(2)
+    await action_store_goal_search_findings(
+        _si(
+            MockEffects(),
+            inputs={"goal_id": g3.id},
+            mission=_mission([g3]),
             research_summary="",
         )
     )
-    assert g2.search_findings.startswith("(no relevant")
+    assert g3.search_findings.startswith("(escalation produced no summary)")
 
 
 def test_diagnose_wiring_search_arm():
@@ -523,12 +555,13 @@ def test_diagnose_wiring_search_arm():
         r["condition"]: r["transition"]
         for r in steps["search_gate"]["resolver"]["rules"]
     }
-    assert sg["result.should_search == true"] == "do_deep_search"
+    assert sg["result.should_search == true"] == "do_escalate"
     assert sg["true"] == "start_session"
-    # The stuck-goal arm now runs the deep_search sub-flow, not a one-shot exa.
-    ds = steps["do_deep_search"]
-    assert ds["flow"] == "deep_search"
-    assert ds["input_map"]["brief"] == {"$ref": "context.search_brief"}
+    # The stuck-goal arm runs the FULL escalate flow (operator, 2026-08-07).
+    ds = steps["do_escalate"]
+    assert ds["flow"] == "escalate"
+    assert ds["input_map"]["failure_evidence"] == {"$ref": "context.search_brief"}
+    assert ds["input_map"]["force_consult"]["$ref"] == "context.force_consult"
     assert ds["resolver"]["rules"][0]["transition"] == "store_search_findings"
     assert (
         steps["store_search_findings"]["resolver"]["rules"][0]["transition"]
@@ -561,3 +594,32 @@ async def test_diagnose_seed_surfaces_ledger_and_findings():
     )
     assert "ALREADY DONE THIS MISSION" in injected
     assert "pty not pipes" in injected
+
+
+def test_escalate_forced_consult_entry_wiring():
+    """Compiled-graph pin: force_consult routes start_session straight to
+    the boss consult before any tool action (3rd-escalation contract)."""
+    steps = _compiled()["escalate"]["steps"]
+    rules = {
+        r["condition"]: r["transition"]
+        for r in steps["start_session"]["resolver"]["rules"]
+    }
+    assert (
+        rules["result.session_started == true and result.force_consult == true"]
+        == "do_consult"
+    )
+    assert rules["result.session_started == true"] == "work"
+    assert "escalation_choice_arg" in steps["start_session"]["publishes"]
+    assert (
+        steps["start_session"]["params"]["force_consult"]["$ref"]
+        == "input.force_consult"
+    )
+
+
+def test_goal_escalation_fields_roundtrip():
+    g = _functional_goal()
+    g.escalation_count = 3
+    g.last_escalation_attempts = 6
+    g2 = GoalRecord.model_validate(g.model_dump())
+    assert g2.escalation_count == 3
+    assert g2.last_escalation_attempts == 6

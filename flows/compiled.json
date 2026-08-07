@@ -3245,7 +3245,7 @@
     "steps": {
       "search_gate": {
         "action": "goal_search_gate",
-        "description": "Gate the stuck-goal web research (>= 2 failed attempts, once)",
+        "description": "Gate the stuck-goal escalation (every 2 failed attempts; boss on the 3rd)",
         "context": {
           "required": [],
           "optional": [
@@ -3259,7 +3259,7 @@
           "rules": [
             {
               "condition": "result.should_search == true",
-              "transition": "do_deep_search"
+              "transition": "do_escalate"
             },
             {
               "condition": "true",
@@ -3269,31 +3269,44 @@
         },
         "publishes": [
           "mission",
-          "search_brief"
+          "search_brief",
+          "expected_outcome",
+          "force_consult"
         ],
         "effects": [],
         "terminal": false
       },
-      "do_deep_search": {
+      "do_escalate": {
         "action": "flow",
-        "description": "Research the stuck problem via the deep_search sub-flow",
+        "description": "Run the full escalation loop on the stuck goal (read/run/write/consult)",
         "config": {},
         "context": {
           "required": [],
           "optional": [
-            "search_brief"
+            "search_brief",
+            "expected_outcome",
+            "force_consult"
           ]
         },
         "effects": [],
-        "flow": "deep_search",
+        "flow": "escalate",
         "input_map": {
-          "brief": {
+          "failure_evidence": {
             "$ref": "context.search_brief"
+          },
+          "expected_outcome": {
+            "$ref": "context.expected_outcome",
+            "default": "The goal's behaviour is observable in a test session."
+          },
+          "invoking_flow": "diagnose_issue (stuck goal)",
+          "force_consult": {
+            "$ref": "context.force_consult",
+            "default": false
           }
         },
         "params": {},
         "publishes": [
-          "research_summary"
+          "escalation_summary"
         ],
         "resolver": {
           "type": "rule",
@@ -3308,12 +3321,13 @@
       },
       "store_search_findings": {
         "action": "store_goal_search_findings",
-        "description": "Store the research summary on the goal (one-shot sentinel)",
+        "description": "Store the escalation summary on the goal (freshest wins)",
         "context": {
           "required": [
             "mission"
           ],
           "optional": [
+            "escalation_summary",
             "research_summary"
           ]
         },
@@ -3860,7 +3874,8 @@
       ],
       "optional": [
         "target_file_path",
-        "invoking_flow"
+        "invoking_flow",
+        "force_consult"
       ]
     },
     "defaults": {
@@ -3879,11 +3894,20 @@
             "escalation_turn"
           ]
         },
-        "params": {},
+        "params": {
+          "force_consult": {
+            "$ref": "input.force_consult",
+            "default": false
+          }
+        },
         "config": {},
         "resolver": {
           "type": "rule",
           "rules": [
+            {
+              "condition": "result.session_started == true and result.force_consult == true",
+              "transition": "do_consult"
+            },
             {
               "condition": "result.session_started == true",
               "transition": "work"
@@ -3899,7 +3923,8 @@
           "escalation_session_id",
           "escalation_turn",
           "escalation_corrections",
-          "escalation_files"
+          "escalation_files",
+          "escalation_choice_arg"
         ],
         "effects": [],
         "terminal": false

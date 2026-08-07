@@ -45,7 +45,11 @@ escalate: #FlowDefinition & {
 		// consumer at any level. The two that ARE read (invoking_flow,
 		// target_file_path) stay; escalation_actions builds its seed from
 		// them via step_input.inputs.
-		optional: ["target_file_path", "invoking_flow"]
+		// force_consult (2026-08-07): the invoker demands the boss consult
+		// as the FIRST action — a stuck goal's third escalation means two
+		// self-recovery loops already failed and the agent needs direction,
+		// not more tooling. The loop proceeds normally after the fold.
+		optional: ["target_file_path", "invoking_flow", "force_consult"]
 	}
 
 	defaults: config: temperature: "t*0.3"
@@ -59,9 +63,16 @@ escalate: #FlowDefinition & {
 				required: []
 				optional: ["escalation_corrections", "escalation_turn"]
 			}
+			params: {
+				force_consult: {$ref: "input.force_consult", default: false}
+			}
 			resolver: {
 				type: "rule"
 				rules: [
+					// Forced consult (3rd escalation): the boss speaks before
+					// the loop's first tool action. The action publishes a
+					// synthetic escalation_choice_arg for the consult prompt.
+					{condition: "result.session_started == true and result.force_consult == true", transition: "do_consult"},
 					{condition: "result.session_started == true", transition: "work"},
 					{condition: "true", transition: "deferred_no_session"},
 				]
@@ -69,6 +80,8 @@ escalate: #FlowDefinition & {
 			publishes: [
 				"inference_session_id", "escalation_session_id",
 				"escalation_turn", "escalation_corrections", "escalation_files",
+				// The forced-consult question (only set when force_consult).
+				"escalation_choice_arg",
 			]
 		}
 

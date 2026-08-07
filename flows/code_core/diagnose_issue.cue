@@ -104,41 +104,55 @@ diagnose_issue: #FlowDefinition & {
 		// later diagnose. deep_search self-gates on web_research/exa-key
 		// (empty summary → sentinel), so hermetic runs stay hermetic.
 
+		// Stuck-goal ESCALATION (operator, 2026-08-07). The deep_search web
+		// hop this replaces queried the goal's fictional nouns verbatim (the
+		// Persona 3 safari); the full escalate flow was the original intent:
+		// a bounded read/run/write REACT loop over the actual repo, with the
+		// boss consult FORCED on the goal's third escalation. Fires at 2
+		// failed attempts and re-fires every 2 more (gate action owns the
+		// cadence + the goal's escalation_count).
 		search_gate: #StepDefinition & {
 			action:      "goal_search_gate"
-			description: "Gate the stuck-goal web research (>= 2 failed attempts, once)"
+			description: "Gate the stuck-goal escalation (every 2 failed attempts; boss on the 3rd)"
 			context: optional: ["error_headline"]
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.should_search == true", transition: "do_deep_search"},
+					{condition: "result.should_search == true", transition: "do_escalate"},
 					{condition: "true", transition: "start_session"},
 				]
 			}
-			publishes: ["mission", "search_brief"]
+			publishes: ["mission", "search_brief", "expected_outcome", "force_consult"]
 		}
 
-		do_deep_search: #StepDefinition & {
+		do_escalate: #StepDefinition & {
 			action:      "flow"
-			description: "Research the stuck problem via the deep_search sub-flow"
-			flow:        "deep_search"
-			context: optional: ["search_brief"]
+			description: "Run the full escalation loop on the stuck goal (read/run/write/consult)"
+			flow:        "escalate"
+			context: optional: ["search_brief", "expected_outcome", "force_consult"]
 			input_map: {
-				brief:             {$ref: "context.search_brief"}
+				failure_evidence: {$ref: "context.search_brief"}
+				expected_outcome: {$ref: "context.expected_outcome", default: "The goal's behaviour is observable in a test session."}
+				invoking_flow:    "diagnose_issue (stuck goal)"
+				force_consult:    {$ref: "context.force_consult", default: false}
 			}
 			resolver: {
 				type: "rule"
 				rules: [{condition: "true", transition: "store_search_findings"}]
 			}
-			publishes: ["research_summary"]
+			// escalate also returns files_changed; deliberately NOT declared —
+			// nothing in diagnose consumes it (the escalation's edits show up
+			// in the traced code itself), and an unconsumed publish is lint
+			// noise. The summary is the contract.
+			publishes: ["escalation_summary"]
 		}
 
 		store_search_findings: #StepDefinition & {
 			action:      "store_goal_search_findings"
-			description: "Store the research summary on the goal (one-shot sentinel)"
+			description: "Store the escalation summary on the goal (freshest wins)"
 			context: {
 				required: ["mission"]
-				optional: ["research_summary"]
+				optional: ["escalation_summary", "research_summary"]
 			}
 			resolver: {
 				type: "rule"
