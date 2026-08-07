@@ -54,8 +54,17 @@ def _build_adapter(name: str):
 
 def get_adapter(name: str):
     """(RemoteModelConfig, adapter) for a remote entry, else None."""
+    from core.config import resolve_config_path
+
+    # resolve_config_path searches root + boss/ — the same lookup
+    # remote_config uses. The old hardcoded root path never found the
+    # boss/ entries, so the first live forced consult misrouted
+    # 'boss-sonnet' to the inactive-local error instead of the provider.
+    path = resolve_config_path(name, model_registry.CONFIGS_DIR)
+    if path is None:
+        return None
     try:
-        mtime = (model_registry.CONFIGS_DIR / f"{name}.yaml").stat().st_mtime
+        mtime = path.stat().st_mtime
     except OSError:
         return None
     cached = _adapters.get(name)
