@@ -37,6 +37,9 @@ rewrite: #FlowDefinition & {
 	context_tier: "session_task"
 	returns: {
 		files_changed: {type: "list",   from: "context.files_changed", optional: true}
+		// Size-gate headline (2026-08-07): rides the failed report into the
+		// next diagnose seed so it names a symbol-scoped target.
+		headline:      {type: "string", from: "context.headline",      optional: true}
 	}
 
 
@@ -60,8 +63,28 @@ rewrite: #FlowDefinition & {
 		read_target: #StepDefinition & _templates.read_target_file & {
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "gather_context"}]
+				rules: [
+					// SIZE GATE (2026-08-07): a whole-file rewrite of a
+					// 40KB engine.py built a 39k-token prompt against the
+					// 32k window — the round burned before authoring began.
+					// 24KB is the safe ceiling (file + context bundle +
+					// full regeneration all inside the window); larger
+					// targets need a symbol-scoped patch, which works at
+					// any file size. The too_large headline rides the
+					// failed report into the next diagnose seed.
+					{condition: "result.get('content_bytes', 0) > 24000", transition: "too_large"},
+					{condition: "true", transition: "gather_context"},
+				]
 			}
+		}
+
+		too_large: #StepDefinition & {
+			action:      "flag_rewrite_too_large"
+			description: "Target exceeds the whole-file rewrite budget — demand a symbol-scoped fix"
+			context: optional: ["target_file"]
+			terminal:    true
+			status:      "failed"
+			publishes: ["headline"]
 		}
 
 		gather_context: #StepDefinition & _templates.gather_project_context & {

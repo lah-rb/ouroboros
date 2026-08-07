@@ -432,7 +432,7 @@ file_ops: #FlowDefinition & {
 					{condition: "true", transition: "compile_report_failure"},
 				]
 			}
-			publishes: ["files_changed"]
+			publishes: ["files_changed", "headline"]
 		}
 
 		// ══════════════════════════════════════════════════════════

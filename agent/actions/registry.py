@@ -6,9 +6,12 @@ The registry maps action names (referenced in flow YAML) to their implementation
 
 from __future__ import annotations
 
+import logging
 from typing import Awaitable, Callable
 
 from agent.models import StepInput, StepOutput
+
+logger = logging.getLogger(__name__)
 
 # Type alias for action callables
 ActionCallable = Callable[[StepInput], Awaitable[StepOutput]]
@@ -101,8 +104,16 @@ async def action_read_files(step_input: StepInput) -> StepOutput:
     if step_input.effects is not None:
         fc = await step_input.effects.read_file(target)
         if fc.exists:
+            content = fc.content or ""
             return StepOutput(
-                result={"file_found": True},
+                result={
+                    "file_found": True,
+                    # Size gate input (2026-08-07): rewrite's read_target
+                    # routes oversized files away from the doomed whole-file
+                    # regeneration (engine.py at 40KB built a 39k-token
+                    # prompt against the 32k window).
+                    "content_bytes": len(content),
+                },
                 observations=f"Read {fc.size} characters from {target}",
                 context_updates={
                     "target_file": {"path": fc.path, "content": fc.content},
@@ -140,6 +151,29 @@ async def action_log_completion(step_input: StepInput) -> StepOutput:
         context_updates={
             "summary": summary,
         },
+    )
+
+
+async def action_flag_rewrite_too_large(step_input: StepInput) -> StepOutput:
+    """Terminal for rewrite's size gate: the target is too large for a
+    whole-file regeneration (the prompt would overflow the context window —
+    engine.py at 40KB built a 39k-token prompt against a 32k window, burning
+    the round). Publishes a headline that rides the failed report into the
+    next diagnose seed, steering it to name a SYMBOL-scoped target (patch
+    works at any file size)."""
+    tf = step_input.context.get("target_file") or {}
+    path = tf.get("path", "the target") if isinstance(tf, dict) else "the target"
+    size = len(tf.get("content", "") or "") if isinstance(tf, dict) else 0
+    headline = (
+        f"{path} is too large ({size // 1024}KB) for a whole-file rewrite — "
+        f"a symbol-scoped fix is required: name the specific function/method "
+        f"in target_symbol"
+    )
+    logger.warning("rewrite size gate: %s", headline)
+    return StepOutput(
+        result={"too_large": True},
+        observations=headline,
+        context_updates={"headline": headline},
     )
 
 
@@ -349,6 +383,7 @@ def build_action_registry() -> ActionRegistry:
     registry.register("read_files", action_read_files)
     registry.register("log_completion", action_log_completion)
     registry.register("noop", action_noop)
+    registry.register("flag_rewrite_too_large", action_flag_rewrite_too_large)
 
     # ── Mission control ────────────────────────────────────────────
     registry.register("load_mission_state", action_load_mission_state)

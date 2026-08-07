@@ -5192,7 +5192,8 @@
           }
         },
         "publishes": [
-          "files_changed"
+          "files_changed",
+          "headline"
         ],
         "resolver": {
           "type": "rule",
@@ -12366,6 +12367,11 @@
         "type": "list",
         "from": "context.files_changed",
         "optional": true
+      },
+      "headline": {
+        "type": "string",
+        "from": "context.headline",
+        "optional": true
       }
     },
     "projections": {},
@@ -12422,6 +12428,10 @@
           "type": "rule",
           "rules": [
             {
+              "condition": "result.get('content_bytes', 0) > 24000",
+              "transition": "too_large"
+            },
+            {
               "condition": "true",
               "transition": "gather_context"
             }
@@ -12429,6 +12439,24 @@
         },
         "effects": [],
         "terminal": false
+      },
+      "too_large": {
+        "action": "flag_rewrite_too_large",
+        "description": "Target exceeds the whole-file rewrite budget \u2014 demand a symbol-scoped fix",
+        "context": {
+          "required": [],
+          "optional": [
+            "target_file"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "effects": [],
+        "publishes": [
+          "headline"
+        ],
+        "status": "failed",
+        "terminal": true
       },
       "gather_context": {
         "action": "flow",

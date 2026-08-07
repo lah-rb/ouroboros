@@ -829,3 +829,59 @@ class TestEvaluationIsStatelessAndBounded:
 
         out = format_session_tail({"source": "x" * 100000, "max_chars": 16000}, {})
         assert len(out) == 16000
+
+
+class TestRewriteSizeGate:
+    """The 39k overflow (2026-08-07): a whole-file rewrite of a 40KB
+    engine.py (two days of fix sediment) built a prompt over the 32k window
+    and burned the round before authoring began. Oversized targets now fail
+    fast with a headline that steers the next diagnosis to a symbol-scoped
+    target — patch works at any file size."""
+
+    def test_read_target_gates_on_size(self):
+        rw = _compiled()["rewrite"]["steps"]
+        rules = rw["read_target"]["resolver"]["rules"]
+        assert rules[0]["condition"] == "result.get('content_bytes', 0) > 24000"
+        assert rules[0]["transition"] == "too_large"
+        tl = rw["too_large"]
+        assert tl["terminal"] is True and tl["status"] == "failed"
+        assert "headline" in tl["publishes"]
+
+    def test_headline_rides_the_return_chain(self):
+        assert (
+            _compiled()["rewrite"]["returns"]["headline"]["from"] == "context.headline"
+        )
+        assert (
+            "headline" in _compiled()["file_ops"]["steps"]["run_rewrite"]["publishes"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_read_files_reports_content_bytes(self):
+        from agent.actions.registry import action_read_files
+
+        fx = MockEffects(files={"big.py": "x" * 30000})
+        out = await action_read_files(
+            StepInput(
+                context={},
+                params={"target": "big.py"},
+                meta=FlowMeta(flow_name="rewrite", step_id="read_target"),
+                effects=fx,
+            )
+        )
+        assert out.result["content_bytes"] == 30000
+
+    @pytest.mark.asyncio
+    async def test_the_flag_action_writes_the_steering_headline(self):
+        from agent.actions.registry import action_flag_rewrite_too_large
+
+        out = await action_flag_rewrite_too_large(
+            StepInput(
+                context={"target_file": {"path": "engine.py", "content": "x" * 40000}},
+                params={},
+                meta=FlowMeta(flow_name="rewrite", step_id="too_large"),
+                effects=MockEffects(),
+            )
+        )
+        h = out.context_updates["headline"]
+        assert "engine.py" in h and "39KB" in h
+        assert "target_symbol" in h
