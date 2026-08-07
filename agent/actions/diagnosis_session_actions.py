@@ -1061,6 +1061,14 @@ async def _conclude_diagnosis(
             # just failed. Demote it to the default fix path rather than
             # publish an empty promise.
             if recommended_flow == "retest" and not test_guidance:
+                # Log the demote — forensically this must be
+                # distinguishable from "the model never emitted retest"
+                # (the hy3 Boss Nyx round had zero retest occurrences in
+                # the log and no way to tell which failure it was).
+                logger.warning(
+                    "Conclude: retest verdict DEMOTED — no test_guidance "
+                    "accompanied it"
+                )
                 recommended_flow = None
             # Symmetric guard: guidance riding a fix verdict would leak a
             # stale charter override onto the goal via the report walk.

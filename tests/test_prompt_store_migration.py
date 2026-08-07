@@ -38,15 +38,18 @@ MIGRATED = [
         979,
         "3e34525acf",
     ),
-    # Re-frozen 2026-08-06: gained the `retest` verdict + test_guidance field
-    # (the Stone Guard case — diagnosis vocabulary for "the code is right,
-    # the session never reached it").
+    # Re-frozen 2026-08-06 (twice): gained the `retest` verdict +
+    # test_guidance field (the Stone Guard case), then a top-of-prompt
+    # code-vs-test fork + the scripted-demo prohibition after hy3's Boss Nyx
+    # round showed zero retest uptake — the model instead kept extending a
+    # self-playing command script inside main.py (charter choreography
+    # accreting into the product).
     (
         "diagnose/conclude",
         "diagnosis_session_actions",
         "CONCLUDE_PROMPT",
-        7580,
-        "09c17bc07b",
+        8273,
+        "6760d08ea1",
     ),
     (
         "diagnose/systemic_scan",

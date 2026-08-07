@@ -2,6 +2,13 @@ id: diagnose/conclude
 content: |
   Based on the evidence gathered, produce the diagnosis.
 
+  First settle the fork: is the CODE wrong, or did the TEST never reach it?
+  If the traced code already implements the required behavior correctly and
+  the transcript shows the session never actually exercised it, the right
+  verdict is recommended_flow `retest` with concrete ``test_guidance`` steps
+  — NOT an edit that makes the program easier to test. If the code is wrong
+  or incomplete, diagnose the code as usual.
+
   Return a JSON object inside a fenced code block with these fields:
 
     target_file — the file the change targets. Set this even if the file doesn't exist yet; file_ops will route to the create flow automatically when the path isn't on disk. Must be a real file in this project or a real new-file path — never a placeholder or unknown, and never blank. If the fix spans several files, name the file holding the primary symbol here and put the rest in related_symbols.
@@ -34,7 +41,7 @@ content: |
     test_guidance — REQUIRED when recommended_flow is `retest`; omit otherwise. `retest` is a high-bar verdict: it asserts the code is CORRECT and the failure is in how the previous session tested it. Choose it ONLY when BOTH hold:
       1. The symbols you traced already implement the required behavior correctly — you can point at the exact code path that produces the expected outcome.
       2. The session transcript shows that path was never exercised — the triggering action was never performed, was performed too few times, or was performed in the wrong place (e.g. the goal needs a monster defeated, the code marks defeat correctly after enough strikes, and the transcript shows the tester struck twice then wandered off).
-    If ANY code or data change would genuinely improve the program — a missing command, missing feedback the tester needed to see progress, a wrong value, a crash — that is a `fix` or `enhancement`, NOT a retest. In particular, NEVER recommend changing the program to make it easier to test (lowering an enemy's health, shortening a route, skipping a requirement): the change stays in the program after the test passes, and a test that passes against modified behavior proves nothing about the real code. If the behavior is genuinely unreachable in a short session, that reachability is itself the bug — diagnose it.
+    If ANY code or data change would genuinely improve the program — a missing command, missing feedback the tester needed to see progress, a wrong value, a crash — that is a `fix` or `enhancement`, NOT a retest. In particular, NEVER recommend changing the program to make it easier to test (lowering an enemy's health, shortening a route, skipping a requirement, or adding/extending a scripted or demo sequence inside the program so it drives itself to the behavior): the change stays in the program after the test passes, and a test that passes against modified behavior proves nothing about the real code. A program that plays itself on launch is a product defect, not a test harness — the tester must reach the behavior by typing commands, guided by ``test_guidance``. If the behavior is genuinely unreachable in a short interactive session, that reachability is itself the bug — diagnose it.
     When retest applies, write ``test_guidance`` as short numbered steps the next tester can follow, using ONLY commands that exist in the program, with exact counts and locations computed from the code and data you traced — e.g. "1. go east  2. go east  3. go north  4. attack guard — repeat until it dies (25 HP at 10 damage = 3 attacks)  5. check status to confirm the defeat is recorded". For retest, still set target_file/target_symbol to the code you verified correct (nothing will be edited — this anchors the evidence), set kind to `fix`, and put your correctness argument in ``root_cause``.
 
   Shape reference — example values illustrate format and field shape only. They are NOT symbols in this project; produce real values for your diagnosis.
