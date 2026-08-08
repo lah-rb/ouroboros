@@ -4050,6 +4050,17 @@ def _functional_retest_directive(goal: Any, *, after: str) -> str:
     # directive verbatim, and charter_function's guidance rule tells the
     # author to carry these steps into TEST STEPS over the brevity caps.
     guidance = (getattr(goal, "test_guidance", "") or "").strip()
+    # SWEEP-REOPENED goals recheck WITHOUT guidance (2026-08-08). The quit
+    # runaway: the sweep reopens on a stale fingerprint check failing
+    # between sessions, and the guided recheck then faithfully RECREATES
+    # the fingerprint (take sword → room4 → quit), so the check passes,
+    # never gets vetoed, and never wears out — 23 retests of a goal whose
+    # behaviour never broke. A natural, guidance-free walk lets the stale
+    # check finally veto, wear out via reconcile, and re-derive under
+    # rule 8. Post-fix retests (not sweep-reopened) keep their guidance —
+    # deep routes stay taught where they are genuinely needed.
+    if getattr(goal, "regression_reopened", False):
+        guidance = ""
     guidance_block = (
         f"\n\nTEST GUIDANCE (from diagnosis of the previous session — "
         f"incorporate these steps into the test):\n{guidance}"

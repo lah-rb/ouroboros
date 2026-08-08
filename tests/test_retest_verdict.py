@@ -379,3 +379,17 @@ class TestTheFlowGraphCarriesTheVerdict:
         text = (ROOT / "prompts" / "interact" / "charter_function.yaml").read_text()
         assert "TEST GUIDANCE" in text
         assert "OVERRIDES the step-count cap" in text
+
+
+def test_sweep_reopened_goals_recheck_without_guidance():
+    """The quit runaway (2026-08-08): the sweep reopens on a stale
+    fingerprint check, and the guided recheck faithfully RECREATES the
+    fingerprint — so the check never gets vetoed and never wears out (23
+    retests of an unbroken behaviour). Sweep-reopened rechecks now run
+    guidance-free so staleness is adjudicated on a natural walk."""
+    g = _sweep_goal()
+    g.regression_reopened = True
+    directive = _functional_retest_directive(g, after="fix")
+    assert "TEST GUIDANCE" not in directive
+    g.regression_reopened = False
+    assert "TEST GUIDANCE" in _functional_retest_directive(g, after="fix")
