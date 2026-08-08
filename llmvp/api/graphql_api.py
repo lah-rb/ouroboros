@@ -123,6 +123,9 @@ class HealthStatus:
     # last one. Drives/observes the periodic rot-clearing context rebuild.
     context_refreshes: int = 0
     requests_since_refresh: int = 0
+    # Deferred proactive refreshes (busy at decision time) — a large value
+    # with zero refreshes is the pool-mode starvation signature.
+    refresh_deferred: int = 0
     # Rolling latency/throughput trend (pass 2). throughput_drift = recent
     # decode tps / warm baseline; well under 1.0 flags generation slowdown.
     trend_samples: int = 0
@@ -616,6 +619,7 @@ class Query:
             runaway_captures=status.get("runaway_captures", 0),
             context_refreshes=status.get("context_refreshes", 0),
             requests_since_refresh=status.get("requests_since_refresh", 0),
+            refresh_deferred=status.get("refresh_deferred", 0),
             kv_pool_tokens=status.get("kv_pool_tokens"),
             model_max_context=status.get("model_max_context"),
             decode_mode=status.get("decode_mode", ""),

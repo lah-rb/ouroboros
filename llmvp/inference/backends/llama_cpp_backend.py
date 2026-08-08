@@ -3644,10 +3644,46 @@ class LlamaCppBackend(BaseBackend):
         # a native task.cancel() still interrupts the heal coroutine, which
         # is recoverable BY DESIGN: _heal_instance leaves the flag set on
         # any failure, and the next release/acquire retries it.
+        proactive: Optional[str] = None
         try:
+            # SESSION-RELEASE PROACTIVE REFRESH (2026-08-07). The polling
+            # refresh loop starved on pool-mode continuous load: trigger (a)
+            # needs an idle 15s poll that pinned sessions never allow, and
+            # trigger (b)'s fire-while-busy drain is batched-only — so a
+            # 45-hour run logged ZERO refreshes while the volume-driven rot
+            # climbed to 22 degeneration events and killed the server. A
+            # release is the one moment the instance is guaranteed
+            # session-free, so past-due counters piggyback the existing
+            # heal path (context rebuild + persona re-warm, already
+            # cancellation-proof) right here.
+            if not getattr(inst, "_needs_context_refresh", False):
+                since = self._h_requests_since_refresh
+                elapsed = time.monotonic() - (self._last_refresh_monotonic or 0.0)
+                if since >= self._refresh_interval:
+                    proactive = (
+                        f"release-interval ({since} >= {self._refresh_interval})"
+                    )
+                elif since > 0 and elapsed >= self._refresh_seconds:
+                    proactive = (
+                        f"release-timecap ({int(elapsed)}s >= "
+                        f"{self._refresh_seconds}s)"
+                    )
+                if proactive:
+                    inst._needs_context_refresh = True
             if getattr(inst, "_needs_context_refresh", False):
                 with anyio.CancelScope(shield=True):
                     await self._heal_instance(inst)
+                if proactive and not getattr(inst, "_needs_context_refresh", False):
+                    # Heal succeeded (it clears the flag on success):
+                    # book the proactive refresh.
+                    self._h_context_refreshes += 1
+                    self._h_requests_since_refresh = 0
+                    self._last_refresh_monotonic = time.monotonic()
+                    log.info(
+                        "✅ Session-release context refresh #%d (%s)",
+                        self._h_context_refreshes,
+                        proactive,
+                    )
         except Exception as exc:  # noqa: BLE001 — return the instance regardless
             log.warning("⚠️ instance heal failed on release: %s", exc)
         finally:
@@ -4899,6 +4935,9 @@ class LlamaCppBackend(BaseBackend):
         info["final_channel_stops"] = self._h_final_channel_stops
         info["context_refreshes"] = self._h_context_refreshes
         info["requests_since_refresh"] = self._h_requests_since_refresh
+        # Starvation visibility (2026-08-07): a 45h run deferred every
+        # refresh invisibly — this makes the deferral count queryable.
+        info["refresh_deferred"] = self._h_refresh_deferred
         return info
 
     def strip_reasoning_replay(
