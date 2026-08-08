@@ -200,6 +200,11 @@ async def test_action_no_architecture_is_clean():
 
 
 def test_compiled_gate_wiring():
+    """EVICTION PIN (operator, 2026-08-08). The exemplar diff judged an
+    evolving artifact against a frozen day-one sketch — 15/27 hy3 gate goals
+    were its noise, and their fixes appeased the checker by mutating
+    world.json. The gate is exploratory/product-focused again; shape
+    conformance awaits the seam-handling redesign (OPEN_TASKS §23)."""
     import json
     from pathlib import Path
 
@@ -207,13 +212,14 @@ def test_compiled_gate_wiring():
         (Path(__file__).resolve().parent.parent / "flows" / "compiled.json").read_text()
     )
     steps = compiled["quality_gate"]["steps"]
+    assert "data_shape_check" not in steps
     assert steps["cross_file_check"]["resolver"]["rules"][0]["transition"] == (
-        "data_shape_check"
-    )
-    assert steps["data_shape_check"]["resolver"]["rules"][0]["transition"] == (
         "plan_checks"
     )
-    assert "data_shape_summary" in steps["summarize"]["prompt_template"]["context_keys"]
+    assert (
+        "data_shape_summary"
+        not in steps["summarize"]["prompt_template"]["context_keys"]
+    )
 
 
 def test_single_entry_exemplar_mapping_is_an_open_map():

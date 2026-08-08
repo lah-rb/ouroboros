@@ -1115,3 +1115,46 @@ Directions worth evaluating (none committed):
 - Accepting the thin floor: evaluator-primary with structural-only checks,
   and investing instead in evaluator reliability (the picky-personality
   fix class).
+
+## 23. The exemplar diff in quality_gate — evicted; the seam story needs a redesign (operator, 2026-08-08)
+
+**What existed:** `data_shape_check` ran `validate_data_shapes` inside
+quality_gate (since `dec2bde`, 2026-06-10): a deterministic path-by-path
+diff of each data file against `DataShapeContract.example` — a minimal
+literal instance authored ONCE by the design inference. Its structured
+issues merged directly into fix tasks with exact signatures (bypassing the
+prose layer, which had once paraphrased them into a 52-round noise loop).
+
+**What it attempted:** kill the dict-vs-list loader/data mismatch class at
+the source — real bugs in the era it shipped.
+
+**How it went wrong (hy3, 2026-08-07/08):** the exemplar is a frozen
+day-one sketch and the diff was symmetric, so two days of legitimate data
+evolution (defense_bonus, heals_for, is_weakness, is_light, is_moonstone,
+monsters' recoils_on_light/hidden, boss phase keys) produced 15 of the 27
+gate goals as pure noise across two harvest rounds. Compounding defects:
+
+- The one-element-per-list exemplar convention cannot express
+  heterogeneous typed lists — every item diffed against the WEAPON
+  exemplar, so "declared key absent" findings were FALSE for salves and
+  shields, even though the structure PROSE said "plus type-specific
+  fields".
+- The exemplar is architecture METADATA no fix flow can write (the
+  transient_files category error again), and finding text reads as an
+  indictment of the FILE — so fixes appeased the checker by mutating
+  world.json: `attack_bonus: 0` junk on every non-weapon item, a spurious
+  `is_weakness` on the lantern (which then spawned its own coverage
+  finding — the checker generating work for the checker).
+- Zero of the 27 gate goals added product richness (26 verify-only; the
+  one with fixes built checker-serving inspection plumbing whose engine
+  rewrite reopened ten goals).
+
+**Ruling:** evicted from the gate (not ported to structural — shape
+conformance is a SEAM concern and the seam machinery is itself due a
+holistic redesign; see also §5/§18/§19's seam-gate defects). The
+`validate_data_shapes` action and `_shape_diff` remain in the codebase,
+dormant. When the seam story is readdressed, the requirements this history
+teaches: exemplars must refresh from reality (observation-is-declaration),
+extra keys are advisory (richness ≠ defect), heterogeneous lists need
+per-variant semantics, and any contract a checker enforces must be
+WRITABLE by some repair path.

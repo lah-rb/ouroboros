@@ -1261,17 +1261,20 @@ async def action_apply_quality_gate_results(step_input: StepInput) -> StepOutput
     records them as notes, and returns pass/fail status. The director
     decides what to dispatch based on quality_results in context.
 
-    Deterministic shape-checker findings are merged in directly from
-    data_shape_results with exact signatures; LLM paraphrases of the
-    same findings are dropped (the prose layer mutates signatures,
-    defeating dedup and refutation-suppression).
+    The deterministic shape-checker merge is RETIRED (operator,
+    2026-08-08): the exemplar diff was evicted from the gate — its
+    findings judged an evolving artifact against a frozen day-one
+    sketch and produced appeasement edits, not quality. The context key
+    is no longer declared, so this read yields nothing by design;
+    _deterministic_shape_tasks remains for the dormant validator.
     """
     effects = step_input.effects
     raw = step_input.context.get("inference_response", "")
     validation_results = step_input.context.get("validation_results", [])
-    shape_tasks = _deterministic_shape_tasks(
-        step_input.context.get("data_shape_results")
-    )
+    # Retired merge: always empty now that the gate no longer runs the
+    # exemplar diff (the key is undeclared); kept as a variable so the
+    # downstream arithmetic reads unchanged.
+    shape_tasks: list[dict] = []
 
     # Parse the quality summary
     summary = _parse_quality_summary(str(raw))

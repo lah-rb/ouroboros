@@ -61,6 +61,10 @@ def _si(context, inputs=None, effects=None) -> StepInput:
 
 @pytest.mark.asyncio
 async def test_shape_findings_merge_with_exact_signature_and_paraphrase_drops():
+    pytest.skip(
+        "RETIRED (operator, 2026-08-08): the deterministic shape merge was "
+        "evicted from the gate with the exemplar diff — see OPEN_TASKS §23"
+    )
     out = await action_apply_quality_gate_results(
         _si(
             {
@@ -83,6 +87,10 @@ async def test_shape_findings_merge_with_exact_signature_and_paraphrase_drops():
 
 @pytest.mark.asyncio
 async def test_shape_findings_force_fail_even_on_llm_pass():
+    pytest.skip(
+        "RETIRED (operator, 2026-08-08): the deterministic shape merge was "
+        "evicted from the gate with the exemplar diff — see OPEN_TASKS §23"
+    )
     raw = '```json\n{"verdict": "pass", "summary": "clean", "blocking_issues": []}\n```'
     out = await action_apply_quality_gate_results(
         _si({"inference_response": raw, "data_shape_results": _SHAPE_RESULTS})

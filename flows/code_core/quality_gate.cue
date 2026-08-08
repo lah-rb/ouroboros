@@ -78,25 +78,19 @@ quality_gate: #FlowDefinition & {
 			params: root: "."
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "data_shape_check"}]
+				rules: [{condition: "true", transition: "plan_checks"}]
 			}
 		}
 
-		// Diff each declared data file against its exemplar contract
-		// (architecture.data_shapes[].example) — path-anchored violations
-		// like "key 'next_id' at npcs[0].dialogue not in declared example"
-		// instead of behavioral symptoms three layers downstream.
-		data_shape_check: #StepDefinition & {
-			action:      "validate_data_shapes"
-			description: "Validate data files against their exemplar contracts"
-			// mission → persist the decontaminated exemplar write-back
-			context: optional: ["architecture", "mission"]
-			resolver: {
-				type: "rule"
-				rules: [{condition: "true", transition: "plan_checks"}]
-			}
-			publishes: ["data_shape_results", "data_shape_summary"]
-		}
+		// data_shape_check EVICTED (operator, 2026-08-08). The exemplar diff
+		// (in the gate since dec2bde, 2026-06-10) judged an evolving artifact
+		// against a frozen day-one sketch: 15 of 27 gate goals on the hy3 run
+		// were exemplar noise, their "fixes" appeased the checker by mutating
+		// world.json (attack_bonus: 0 on every non-weapon item), and zero
+		// product value resulted. Shape conformance is a seam concern, not a
+		// release-quality concern — deliberately NOT ported to structural;
+		// the seam story gets readdressed whole (OPEN_TASKS §23). The
+		// validate_data_shapes action remains in the codebase, dormant.
 
 		plan_checks: #StepDefinition & {
 			action:      "inference"
@@ -453,14 +447,14 @@ quality_gate: #FlowDefinition & {
 			description: "Summarize all quality results into actionable findings"
 			context: optional: [
 				"validation_results", "project_manifest",
-				"cross_file_summary", "data_shape_summary", "terminal_output",
+				"cross_file_summary", "terminal_output",
 				"ux_session_assessment",
 			]
 			prompt_template: {
 				template: "quality_gate/summarize"
 				context_keys: [
 					"validation_summary", "project_file_list",
-					"cross_file_summary", "data_shape_summary", "terminal_output",
+					"cross_file_summary", "terminal_output",
 					"ux_session_assessment",
 					"architecture_summary",
 					"verified_behaviors_block",
@@ -509,11 +503,9 @@ quality_gate: #FlowDefinition & {
 			description: "Parse quality summary and determine pass/fail"
 			context: {
 				required: ["inference_response"]
-				// data_shape_results: deterministic checker findings merge
-				// directly into fix_tasks with exact signatures — the prose
-				// layer paraphrased them, mutating signatures and defeating
-				// dedup/suppression (52-round noise loop, live).
-				optional: ["validation_results", "project_manifest", "mission", "data_shape_results"]
+				// data_shape_results retired with the exemplar eviction
+				// (operator, 2026-08-08 — see the data_shape_check tombstone).
+				optional: ["validation_results", "project_manifest", "mission"]
 			}
 			resolver: {
 				type: "rule"
