@@ -384,11 +384,18 @@ visible; reconcile carries the prior value forward on omission; and a tripwire
 reports unaccounted program-generated files. Verified end to end on the hy3
 artifact.
 
-**Still open:** brownfield `ingest_workspace` and `top_phase: structural` never
-reach `project_ops`, so they rely on `extract_architecture`'s (now
-better-grounded) declaration and the tripwire alone. Pure observation —
-snapshot at session start, flush what appeared — remains the universal fix if
-that gap ever bites.
+**RESOLVED 2026-08-06/07 — the universal fix was built, then improved.** It
+bit (hy3: save.json undeclared for a full run), and the observation design
+shipped as written: pre-session snapshot + post-session diff
+(`action_snapshot_workspace` / `flush_transient_files`), so the transient set
+is observed on EVERY interact regardless of project_ops — the brownfield gap
+is closed. The operator then ruled deletion be DEFERRED (2026-08-07): session
+end records to `mission.observed_transient_files`; deletion happens at the
+next interact entry, on pause, and at completion, so artifacts stay
+inspectable between sessions. Postscript on the declaration path: its
+warning-driven repair abandoned after two dispatches because
+`architecture.transient_files` is mission metadata no fix flow can write —
+observation IS the declaration now.
 
 ### 11a. Vacuous verification, same run
 
@@ -443,6 +450,18 @@ of a cache-hygiene timer. Options: a real `max_generation_seconds`, or exempting
 an in-flight generation from the timed refresh, or leaving it and documenting
 it where generation budgets are set.
 
+**2026-08-08 update — the OPPOSITE failure found, and pool mode is now
+structurally exempt.** On `decode_mode: pool` the refresh NEVER fired at all:
+trigger (a) needs an idle poll pinned sessions never allow, and (b)'s
+fire-while-busy drain is batched-only — a 45h hy3 run logged ZERO refreshes,
+the deferral counter wasn't exposed, and the un-refreshed rot climbed to
+22+ degeneration events and killed the server twice. Fixed (`6141f1d`):
+past-due counters piggyback the heal-on-release path, so pool-mode refreshes
+fire only BETWEEN sessions — which also resolves this section's ceiling
+concern for pool mode by construction (a release-time refresh cannot retire
+an in-flight generation). The undeclared-ceiling question now applies ONLY
+to batched-drain configs. `refresh_deferred` is exposed in health.
+
 **Caveat on any past reading of `degen`:** the tier degeneration counter read
 the wrong log file and could never rise (fixed 2026-07-30, `5fbe939`). Every
 tier arm on disk — 15 across all sweeps — recorded `degen=0`, including one
@@ -462,6 +481,11 @@ signals that actually discriminated.
   both retried the same dispatch unchanged for hours. What exists today is
   one-shot escalation on a single goal (`models.py:262,344,904-906`), not a
   dispatch-level "same goal+flow failed N× in a row → backoff/escalate" guard.
+  **Sharper as of 2026-08-08:** the uncapped retest produced the same shape
+  (phase two: 33 honored retests; quit: 23 via the accommodation loop), and
+  the raw counters a backoff would key on now EXIST on the goal
+  (`retest_count`, `escalation_count`, `last_escalation_attempts`) — the
+  guard is a policy over data already collected.
 - Standing lint advisory: `add_symbol.generate_new_symbol` string-match
   condition (arguably a linter over-trigger — either exempt emptiness
   checks in flow_lint or convert the step). Distinct from the flow-contract errors fixed 2026-07-30.
