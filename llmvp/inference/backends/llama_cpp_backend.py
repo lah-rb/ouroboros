@@ -660,6 +660,14 @@ class LlamaCppBackend(BaseBackend):
         _base_ctx = int(n_ctx_override) if n_ctx_override else primary._n_ctx
         _lim = self._stream_ctx_limit()
         _seq_lim = self._seq_ctx_limit(ctx, params)
+        # CACHE the per-seq window on the instance (2026-08-09). n_ctx_seq is
+        # immutable for a built context, so the health register must read this
+        # int rather than re-probing the LIVE context: a status read that
+        # lands mid-rebuild dereferences a freed pointer and SIGSEGVs the
+        # whole server (three identical crash reports, top frame
+        # libllama!llama_n_ctx_seq, KERN_INVALID_ADDRESS 0xc). A try/except
+        # cannot catch a native segfault.
+        inst._n_ctx_seq = _seq_lim
         inst._n_ctx = min(c for c in (_base_ctx, _lim, _seq_lim) if c)
         inst._persona_n_ctx = int(n_ctx_override) if n_ctx_override else None
 
@@ -1266,6 +1274,9 @@ class LlamaCppBackend(BaseBackend):
         _seq_lim = self._seq_ctx_limit(inst._ctx, inst.context_params)
         _lim = self._stream_ctx_limit()
         _base = int(getattr(inst, "_persona_n_ctx", None) or inst.context_params.n_ctx)
+        # Re-cache for the health register — the rebuilt context may have a
+        # different seq geometry (see the build-site comment).
+        inst._n_ctx_seq = _seq_lim
         inst._n_ctx = min(c for c in (_base, _lim, _seq_lim) if c)
         # Reset per-instance mutable arrays + sampler (mirrors _create_shared_instance).
         inst.input_ids = np.ndarray((inst._n_ctx,), dtype=np.intc)
@@ -2944,6 +2955,7 @@ class LlamaCppBackend(BaseBackend):
             _p = self._primary_instance
             _seq_lim = self._seq_ctx_limit(_p._ctx, _p.context_params)
             _lim = self._stream_ctx_limit()
+            _p._n_ctx_seq = _seq_lim  # health register reads this, not the live ctx
             _p._n_ctx = min(c for c in (int(_p._n_ctx), _lim, _seq_lim) if c)
         except Exception:  # noqa: BLE001 — test doubles without a real ctx
             log.debug("primary per-seq clamp skipped", exc_info=True)
@@ -4915,11 +4927,21 @@ class LlamaCppBackend(BaseBackend):
         # The TRUE per-seq window (0 = undetermined). Under kv_unified:false a
         # fragmented context gives each seq n_ctx/n_seq_max cells; a consumer
         # sizing work against n_ctx alone repeats the hy3 sweep failure.
+        #
+        # READ THE CACHE, NEVER THE LIVE CONTEXT (2026-08-09). This line used
+        # to call _seq_ctx_limit(_p._ctx, ...) → llama_n_ctx_seq through
+        # ctypes. n_ctx_seq is immutable for a built context, so the probe
+        # bought nothing — and a health query landing mid-rebuild (refresh or
+        # latch heal, which free the context before recreating it)
+        # dereferenced the freed pointer and killed the SERVER: three
+        # identical crash reports on the hy3 run, all
+        # `libllama!llama_n_ctx_seq, KERN_INVALID_ADDRESS at 0xc`, each
+        # ending a multi-hour arm. The try/except below is powerless against
+        # a native SIGSEGV — it never caught one. Every build and rebuild
+        # site now caches _n_ctx_seq; this reads that int.
         try:
             _p = self._primary_instance
-            info["n_ctx_seq"] = self._seq_ctx_limit(
-                getattr(_p, "_ctx", None), getattr(_p, "context_params", None)
-            )
+            info["n_ctx_seq"] = int(getattr(_p, "_n_ctx_seq", 0) or 0)
         except Exception:  # noqa: BLE001
             info["n_ctx_seq"] = 0
         _eng = getattr(self, "_engine", None)
