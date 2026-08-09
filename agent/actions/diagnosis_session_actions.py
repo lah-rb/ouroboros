@@ -1682,25 +1682,35 @@ _PYTEST_AVAILABLE: bool | None = None
 
 
 async def _pytest_available(effects) -> bool:
-    """Is pytest runnable in the workspace? Cached per process — the answer
-    changes only if someone installs it mid-run, and the gate would otherwise
-    re-probe on every repair round."""
+    """Is pytest runnable in the workspace? Cache POSITIVE answers only.
+
+    A negative is a statement about the workspace RIGHT NOW, and workspaces
+    gain pytest mid-run — the agent's own setup.sh installs into its venv,
+    and the operator can provision it. Caching False froze the arm off for
+    the whole mission on the first gpt-oss-medium run (2026-08-09): the
+    agent had built a real venv (python resolves, no pytest), the first
+    probe failed, and no later install could ever re-enable authoring.
+    Re-probing costs one bounded subprocess per repair round — rare and
+    cheap against an arm that is the run's primary instrument.
+    """
     global _PYTEST_AVAILABLE
-    if _PYTEST_AVAILABLE is not None:
-        return _PYTEST_AVAILABLE
+    if _PYTEST_AVAILABLE:
+        return True
     try:
         res = await effects.run_command(
             ["python", "-m", "pytest", "--version"], timeout=20
         )
-        _PYTEST_AVAILABLE = int(getattr(res, "return_code", 1) or 0) == 0
+        available = int(getattr(res, "return_code", 1) or 0) == 0
     except Exception:  # noqa: BLE001 - an infra miss reads as unavailable
-        _PYTEST_AVAILABLE = False
-    if not _PYTEST_AVAILABLE:
-        logger.info(
-            "author-test gate: pytest is not runnable in this workspace — "
-            "the authoring arm stays off for this mission"
-        )
-    return _PYTEST_AVAILABLE
+        available = False
+    if available:
+        _PYTEST_AVAILABLE = True
+        return True
+    logger.info(
+        "author-test gate: pytest is not runnable in this workspace right "
+        "now — authoring skips this round (re-probed on the next)"
+    )
+    return False
 
 
 def _authored_test_slug(text: str) -> str:

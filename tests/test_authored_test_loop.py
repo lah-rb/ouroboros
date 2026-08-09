@@ -262,7 +262,7 @@ async def test_gate_declines_when_the_workspace_has_no_pytest():
 
 
 @pytest.mark.asyncio
-async def test_the_pytest_probe_is_paid_once_per_process():
+async def test_a_positive_pytest_probe_is_paid_once_per_process():
     m = _mission(_goal())
     fx = _gate_effects(m)
     for _ in range(3):
@@ -275,6 +275,24 @@ async def test_the_pytest_probe_is_paid_once_per_process():
         if " ".join(c.args["command"]) == PYTEST_PROBE
     ]
     assert len(probes) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_negative_probe_is_NOT_cached():
+    """FOUND LIVE on the first gpt-oss-medium run: the agent built a real
+    venv (python resolves, no pytest), the first probe failed, and the
+    cached False kept the arm off for the whole mission — even after pytest
+    became installable. A negative is about the workspace RIGHT NOW."""
+    m = _mission(_goal())
+    fx = _gate_effects(m, pytest_rc=1)
+    base = {"recommended_flow": "file_ops", "target_file": "engine.py"}
+    out1 = await action_gate_author_test(_si(fx, base))
+    assert out1.result["should_author"] is False
+
+    # pytest gets installed mid-run; the next gate pass must see it.
+    fx._commands[PYTEST_PROBE] = _cmd(0, "pytest 8.0.0")
+    out2 = await action_gate_author_test(_si(fx, base))
+    assert out2.result["should_author"] is True
 
 
 @pytest.mark.asyncio
