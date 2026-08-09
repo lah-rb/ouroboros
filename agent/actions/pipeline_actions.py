@@ -2172,7 +2172,14 @@ async def action_reconcile_acceptance(step_input: StepInput) -> StepOutput:
             mission.pending_warnings.append(
                 WarningRecord(
                     kind="authored_test_contradicted",
-                    subject=str(check.get("path") or k)[:120],
+                    # The acceptance-check dict has no `path` — only the
+                    # authored_test record does, so this read always fell back
+                    # to the raw pytest command and every quarantine warning
+                    # was subject-lined with 90 characters of invocation where
+                    # a filename belongs.
+                    subject=str(
+                        (getattr(goal, "authored_test", None) or {}).get("path") or k
+                    )[:120],
                     evidence=(
                         f"The authored regression test for "
                         f"'{goal.description[:70]}' has now failed while the "

@@ -851,6 +851,9 @@ async def test_an_authored_test_is_never_disarmed_only_quarantined():
     assert out.result["now_ok"] is True, "an advisory check may not hold the veto"
     warn = [w for w in m.pending_warnings if w.kind == "authored_test_contradicted"]
     assert warn, "the dispute must reach a reader through the warning channel"
+    # The subject must name the TEST, not its invocation — a reader scanning
+    # warnings wants a filename, not 90 characters of pytest command.
+    assert warn[0].subject == TEST_PATH
 
 
 @pytest.mark.asyncio
