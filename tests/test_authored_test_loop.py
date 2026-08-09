@@ -1034,3 +1034,30 @@ async def test_a_menu_shape_answer_twice_is_dropped():
 
     assert out.result["authored"] is False
     assert goal.authored_test_attempts == 1
+
+
+def test_the_parser_accepts_a_tagless_fence_and_a_bare_json_header():
+    """SECOND LIVE gpt-oss ATTEMPT: header as bare (unfenced) JSON, body in
+    a ``` fence with no language tag — a well-shaped test dropped as
+    'empty test body'. The parser must take what models actually emit."""
+    raw = (
+        '{\n  "path": "tests/test_heal.py",\n  "language": "python",\n'
+        '  "command": "python -m pytest -q --no-header tests/test_heal.py"\n}\n'
+        "```\n"
+        "import pytest\n\ndef test_heal():\n    assert False\n"
+        "```\n"
+    )
+    cand = _parse_candidate(raw)
+    assert cand["path"] == "tests/test_heal.py"
+    assert "def test_heal" in cand["content"]
+
+
+def test_the_parser_never_mistakes_the_json_header_for_the_test_body():
+    raw = (
+        "```json\n"
+        '{"path": "tests/test_x.py", "command": "python -m pytest tests/test_x.py"}\n'
+        "```\n"
+    )
+    cand = _parse_candidate(raw)
+    assert cand["path"] == "tests/test_x.py"
+    assert cand["content"] == ""

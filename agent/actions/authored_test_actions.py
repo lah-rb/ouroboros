@@ -107,8 +107,16 @@ def _parse_candidate(text: str) -> dict:
     obj = parsed if isinstance(parsed, dict) else {}
     content = str(obj.get("content", "") or "")
     if not content.strip():
-        blocks = re.findall(r"```(?:python|py)\s*\n(.*?)```", raw, re.DOTALL)
-        content = blocks[-1] if blocks else ""
+        # Accept ANY fence tag, including none. Second live gpt-oss attempt
+        # emitted the header as bare JSON and the body in a tagless ``` fence
+        # — a perfectly good test dropped as "empty test body" because this
+        # regex demanded ```python. Blocks that are just the JSON header
+        # (or other JSON) are filtered out rather than mistaken for a test.
+        blocks = re.findall(r"```[a-zA-Z]*\s*\n(.*?)```", raw, re.DOTALL)
+        code = [
+            b for b in blocks if b.strip() and not b.lstrip().startswith(("{", "["))
+        ]
+        content = code[-1] if code else ""
     return {
         "path": str(obj.get("path", "") or "").strip(),
         "language": str(obj.get("language", "") or "python").strip().lower(),
