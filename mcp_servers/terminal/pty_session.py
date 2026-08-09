@@ -80,8 +80,12 @@ CONTAINER_CPU_EPS_USEC = 150_000  # cpu-µs growth/window that counts as real co
 #   (~0.15 core·s over a 0.75s window ≫ idle-daemon noise of a few thousand µs).
 CONTAINER_BYTES_EPS = 65_536  # IO+net byte growth/window that counts as active transfer
 #   (64 KiB ≫ idle keepalive/log chatter; a real download moves MB/s).
-CONTAINER_SAMPLE_MIN_INTERVAL_S = 0.4  # throttle docker-exec probing (it costs ~50-150ms)
-CONTAINER_HARD_MAX_MS = 420_000  # absolute ceiling (~7min): an active container defers the
+CONTAINER_SAMPLE_MIN_INTERVAL_S = (
+    0.4  # throttle docker-exec probing (it costs ~50-150ms)
+)
+CONTAINER_HARD_MAX_MS = (
+    420_000  # absolute ceiling (~7min): an active container defers the
+)
 # backstop up to here. MUST stay below the agent's send_input RPC timeout
 # (_INTERACT_RPC_TIMEOUT_S in interactive_actions.py) or the RPC aborts the deferral.
 
@@ -209,7 +213,11 @@ def _container_activity(container_name: str) -> tuple[float, float] | None:
     try:
         out = subprocess.run(
             [
-                "docker", "exec", container_name, "sh", "-c",
+                "docker",
+                "exec",
+                container_name,
+                "sh",
+                "-c",
                 "cat /sys/fs/cgroup/cpu.stat /sys/fs/cgroup/io.stat /proc/net/dev "
                 "2>/dev/null",
             ],
@@ -413,6 +421,12 @@ class SessionInfo:
     bytes_received_total: int = 0
     _exited: bool = False
     _exit_code: int | None = None
+    # Sticky: an interactive child (a launched program, not the shell) has owned
+    # the terminal at some point in this session. Needed to tell "the program
+    # just exited" from "we are at a bare shell prompt and always were" — both
+    # read as is_interactive_child_running() == False, but only the first is a
+    # process exit. Set whenever liveness is observed True; never cleared.
+    _saw_interactive_child: bool = False
     # Thread-based read path. A per-session daemon thread does blocking
     # select()+os.read() on master_fd into _output_buffer. This replaces
     # asyncio.connect_read_pipe, which is built for pipes and intermittently
@@ -1131,7 +1145,9 @@ class PTYSessionManager:
                     )
                     now = loop.time()  # the probe took time; re-read the clock
                     if work is not None:
-                        container_samples.append((now, work[0], work[1]))  # t, cpu, bytes
+                        container_samples.append(
+                            (now, work[0], work[1])
+                        )  # t, cpu, bytes
                     last_container_sample_t = now
                 container_samples = [
                     c for c in container_samples if c[0] >= now - settle_s
@@ -1139,13 +1155,16 @@ class PTYSessionManager:
                 # Busy iff cpu OR bytes grew past its OWN threshold over a window
                 # spanning ≥ half the settle time. Separate thresholds: cpu-µs and
                 # byte counts have different units and idle baselines.
-                container_busy = len(container_samples) >= 2 and (
-                    container_samples[-1][0] - container_samples[0][0]
-                ) >= settle_s * 0.5 and (
-                    (container_samples[-1][1] - container_samples[0][1])
-                    >= CONTAINER_CPU_EPS_USEC
-                    or (container_samples[-1][2] - container_samples[0][2])
-                    >= CONTAINER_BYTES_EPS
+                container_busy = (
+                    len(container_samples) >= 2
+                    and (container_samples[-1][0] - container_samples[0][0])
+                    >= settle_s * 0.5
+                    and (
+                        (container_samples[-1][1] - container_samples[0][1])
+                        >= CONTAINER_CPU_EPS_USEC
+                        or (container_samples[-1][2] - container_samples[0][2])
+                        >= CONTAINER_BYTES_EPS
+                    )
                 )
                 if container_busy:
                     last_container_active_t = now
@@ -1195,9 +1214,13 @@ class PTYSessionManager:
             # silent --quiet download (invisible to the host-pgrp CPU probe) is
             # never aborted mid-flight. Bounded by an absolute ceiling so a genuine
             # hang (no output AND no container activity) still returns.
-            recent_byte = last_byte_time is not None and (now - last_byte_time) < backstop_grace_s
-            container_working = container_name and now < container_hard_deadline and (
-                (now - last_container_active_t) < backstop_grace_s or recent_byte
+            recent_byte = (
+                last_byte_time is not None and (now - last_byte_time) < backstop_grace_s
+            )
+            container_working = (
+                container_name
+                and now < container_hard_deadline
+                and ((now - last_container_active_t) < backstop_grace_s or recent_byte)
             )
             if now >= deadline and not container_working:
                 return {
@@ -1259,6 +1282,35 @@ class PTYSessionManager:
 
         if poll["settled"]:
             child_running = self.is_interactive_child_running(session.session_id)
+            if child_running:
+                session._saw_interactive_child = True
+            # EXIT-AT-SETTLE. The poll loop checks `_exited` BEFORE its settle
+            # branch, but a program that prints a farewell and quits goes idle
+            # first: the settle fires while asyncio's connection_lost is still
+            # in flight, so the exit is only observable on the NEXT call — and
+            # after `quit` there is no next call. Result (hy3, 2026-08-09):
+            # `process_exited` was true 0 times in 5,162 interactions, the
+            # ask_relaunch step it gates never fired once, and the whole
+            # save → quit → relaunch → load → verify arc was unreachable while
+            # the quality gate kept filing the resulting hole as a defect.
+            #
+            # A settle that ends with the interactive child GONE is that exit.
+            # Gated on _saw_interactive_child so a plain shell command (`ls`),
+            # which also reports no interactive child, still settles normally.
+            if session._saw_interactive_child and not child_running:
+                self._record_history(session, output)
+                return InteractionResult(
+                    output=output,
+                    status="process_exited",
+                    exit_code=session._exit_code,
+                    interactive_child_running=False,
+                    prompt_detected=False,
+                    total_bytes_received=poll["total_bytes"],
+                    peak_rate_bps=poll["peak_rate_bps"],
+                    idle_duration_s=poll["idle_duration_s"],
+                    settled_cleanly=True,
+                    screen_text=self._render_screen(session),
+                )
             prompt_found = _detect_prompt(output, session.expected_prompt)
             self._record_history(session, output)
             return InteractionResult(
@@ -1318,6 +1370,8 @@ class PTYSessionManager:
         child_running = not session._exited and self.is_interactive_child_running(
             session.session_id
         )
+        if child_running:
+            session._saw_interactive_child = True
         prompt_found = (
             _detect_prompt(output, session.expected_prompt) if output else False
         )

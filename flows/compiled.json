@@ -13335,7 +13335,7 @@
             "options": {
               "shell_command": "execute_interaction",
               "send_input": "execute_interaction",
-              "close": "close_session"
+              "close": "confirm_close"
             }
           },
           "config": {
@@ -13393,7 +13393,7 @@
           "rules": [
             {
               "condition": "result.session_done == true",
-              "transition": "close_session"
+              "transition": "confirm_close"
             },
             {
               "condition": "result.stuck_detected == true",
@@ -13401,7 +13401,7 @@
             },
             {
               "condition": "result.process_exited == true",
-              "transition": "ask_relaunch"
+              "transition": "confirm_close"
             },
             {
               "condition": "result.command_sent == true",
@@ -13421,9 +13421,43 @@
         "effects": [],
         "terminal": false
       },
-      "ask_relaunch": {
+      "confirm_close": {
+        "action": "confirm_close_gate",
+        "description": "Before closing: read child liveness, enforce the ask-cap",
+        "context": {
+          "required": [
+            "mcp_session_id"
+          ],
+          "optional": [
+            "session_history",
+            "close_confirmations"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.should_ask == true",
+              "transition": "ask_resume"
+            },
+            {
+              "condition": "true",
+              "transition": "close_session"
+            }
+          ]
+        },
+        "publishes": [
+          "child_running",
+          "close_confirmations"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "ask_resume": {
         "action": "inference",
-        "description": "Program exited \u2014 does the brief need another run?",
+        "description": "Is every item in the brief done, or is another run needed?",
         "context": {
           "required": [
             "mcp_session_id",
@@ -13431,7 +13465,9 @@
           ],
           "optional": [
             "inference_session_id",
-            "relaunch_count"
+            "relaunch_count",
+            "child_running",
+            "close_state_line"
           ]
         },
         "params": {},
@@ -13445,7 +13481,7 @@
             },
             {
               "type": "instruction",
-              "template": "run_in_terminal/ask_relaunch",
+              "template": "run_in_terminal/confirm_close",
               "required": false
             },
             {
@@ -13459,9 +13495,9 @@
           ],
           "response": {
             "options": {
-              "relaunch": {
-                "key": "relaunch",
-                "description": "Run the program again (same launch command) to complete remaining items in your brief \u2014 e.g. load a save you just made.",
+              "resume": {
+                "key": "resume",
+                "description": "Keep testing \u2014 there are items in your brief you have not covered yet. If the program has exited it will be run again from the start; files it wrote (like saves) are still on disk.",
                 "terminal": false
               },
               "conclude": {
@@ -13475,7 +13511,7 @@
             "default": "close_session",
             "no_answer": "close_session",
             "options": {
-              "relaunch": "do_relaunch",
+              "resume": "resume_session",
               "conclude": "close_session"
             }
           },
@@ -13508,6 +13544,34 @@
         "publishes": [
           "inference_response"
         ],
+        "effects": [],
+        "terminal": false
+      },
+      "resume_session": {
+        "action": "noop",
+        "description": "Resume testing: relaunch if the program exited, else keep driving it",
+        "context": {
+          "required": [],
+          "optional": [
+            "child_running"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "context.get('child_running')",
+              "transition": "plan_interaction"
+            },
+            {
+              "condition": "true",
+              "transition": "do_relaunch"
+            }
+          ]
+        },
+        "publishes": [],
         "effects": [],
         "terminal": false
       },

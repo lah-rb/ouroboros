@@ -553,6 +553,12 @@ async def action_send_interaction(step_input: StepInput) -> StepOutput:
         "input": text.strip(),
         "output": result.get("output", ""),
         "status": result.get("status", "error"),
+        # Whether a launched program (not the shell) still owns the terminal.
+        # Recorded per turn so the pre-close gate can tell "resume by driving
+        # the running program" from "resume by launching it again" without a
+        # second round trip — sending the launch command to a LIVE program
+        # would type it into the program's own stdin.
+        "child_running": bool(result.get("interactive_child", False)),
     }
     if result.get("exit_code") is not None:
         entry["exit_code"] = result["exit_code"]
@@ -985,8 +991,87 @@ async def action_end_inference_session(step_input: StepInput) -> StepOutput:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Program relaunch — multi-run test sessions
+# Pre-close confirmation + program relaunch — multi-run test sessions
 # ══════════════════════════════════════════════════════════════════════
+
+
+# How many times a session may be asked to confirm a close. Past this the
+# close is honoured unasked, so a model that ping-pongs close → resume →
+# close still terminates. Mirrors _MAX_RELAUNCHES below.
+_MAX_CLOSE_CONFIRMATIONS = 2
+
+
+def _last_child_running(session_history: list) -> bool:
+    """Was an interactive program still on the terminal at the last turn?
+
+    Read from the session's own history rather than probed live: the MCP
+    result already carries it (``interactive_child`` in the terminal
+    server's response), and re-probing from here would need another round
+    trip to answer a question we were just told the answer to.
+    """
+    for entry in reversed(session_history or []):
+        if not isinstance(entry, dict):
+            continue
+        if "child_running" in entry:
+            return bool(entry.get("child_running"))
+        status = str(entry.get("status", "") or "")
+        if status == "process_exited":
+            return False
+        if status:
+            # Any other completed turn without an explicit flag: fall back
+            # to "still running", the pre-existing assumption.
+            return True
+    return False
+
+
+async def action_confirm_close_gate(step_input: StepInput) -> StepOutput:
+    """Decide whether this close gets confirmed, and on what terms.
+
+    EVERY model-chosen close routes here (operator, 2026-08-09). The step
+    it fronts was previously reachable only via ``process_exited``, which
+    was true ZERO times in 5,162 interactions across the hy3 run — so the
+    save → quit → relaunch → load → verify arc it exists to enable had
+    never once been offered, and the quality gate kept filing the
+    resulting coverage hole as a defect no session could have closed.
+
+    Deterministic on purpose: liveness and the ask-cap are decided here so
+    the inference turn that follows only has to answer the one question
+    that needs a model — is the brief actually finished?
+
+    Context: session_history, close_confirmations.
+    Result: should_ask.  Publishes: child_running, close_confirmations,
+    close_state_line.
+    """
+    ctx = step_input.context
+    asked = int(ctx.get("close_confirmations", 0) or 0)
+    child_running = _last_child_running(list(ctx.get("session_history") or []))
+    state_line = (
+        "The program is still running and waiting for input."
+        if child_running
+        else "The program has exited."
+    )
+    updates = {
+        "child_running": child_running,
+        "close_confirmations": asked + 1,
+        "close_state_line": state_line,
+    }
+    if asked >= _MAX_CLOSE_CONFIRMATIONS:
+        return StepOutput(
+            result={"should_ask": False, "child_running": child_running},
+            observations=(
+                f"confirm_close: already asked {asked}x "
+                f"(cap {_MAX_CLOSE_CONFIRMATIONS}) — honouring the close"
+            ),
+            context_updates=updates,
+        )
+    return StepOutput(
+        result={"should_ask": True, "child_running": child_running},
+        observations=(
+            f"confirm_close: asking (#{asked + 1}), "
+            f"program {'running' if child_running else 'exited'}"
+        ),
+        context_updates=updates,
+    )
 
 
 _MAX_RELAUNCHES = 3

@@ -252,6 +252,7 @@ def build_action_registry() -> ActionRegistry:
         action_probe_eval_context,
         action_snapshot_workspace,
         action_relaunch_program,
+        action_confirm_close_gate,
         action_execute_commands_batch_mcp,
         action_end_inference_session,
     )
@@ -544,6 +545,9 @@ def build_action_registry() -> ActionRegistry:
     registry.register("snapshot_workspace", action_snapshot_workspace)
     registry.register("probe_eval_context", action_probe_eval_context)
     registry.register("relaunch_program", action_relaunch_program)
+    # Pre-close confirmation: every model-chosen session close is asked
+    # once whether the brief is actually finished, and offered a relaunch.
+    registry.register("confirm_close_gate", action_confirm_close_gate)
     registry.register("execute_commands_batch", action_execute_commands_batch_mcp)
     registry.register("end_inference_session", action_end_inference_session)
 

@@ -247,3 +247,59 @@ async def test_compute_gap_captured_via_cpu_idle(tmp_path):
         )
     finally:
         await mgr.close_session(sid)
+
+
+async def test_exit_is_reported_on_the_SAME_call_that_causes_it(tmp_path):
+    """THE REGRESSION THIS FILE EXISTED WITHOUT.
+
+    `_poll_settle` checks `_exited` BEFORE its settle branch, but a program
+    that prints a farewell and quits goes idle first: the settle fires while
+    the exit callback is still in flight, so the exit was only observable on
+    a SUBSEQUENT call — and after `quit` there is no subsequent call.
+
+    Measured on the hy3 run (2026-08-09): `process_exited` was true 0 times
+    in 5,162 interactions. The step it gates (the relaunch offer) never fired
+    once, so save -> quit -> relaunch -> load -> verify was unreachable for
+    the whole run, and the quality gate kept filing the resulting coverage
+    hole as a defect no session could have closed.
+    """
+    mgr = PTYSessionManager()
+    sid = await mgr.create_session(working_directory=str(tmp_path))
+    try:
+        # Launch an interactive child, so the session has one to lose.
+        await mgr.send_input(
+            sid,
+            "python3 -c \"input('> '); print('bye')\"\n",
+            settle_ms=400,
+            timeout_ms=8000,
+        )
+        assert mgr._sessions[
+            sid
+        ]._saw_interactive_child, (
+            "test precondition: the child must be seen alive before we quit it"
+        )
+
+        # The turn that ends it — output arrives, then the child exits.
+        result = await mgr.send_input(sid, "\n", settle_ms=400, timeout_ms=8000)
+
+        assert result.status == "process_exited", (
+            "the exit must be reported on THIS call; reporting it on the next "
+            f"one means it is never reported at all (got {result.status!r})"
+        )
+        assert result.interactive_child_running is False
+    finally:
+        await mgr.close_session(sid)
+
+
+async def test_a_plain_shell_command_still_settles(tmp_path):
+    """The exit check is gated on having SEEN an interactive child: at a bare
+    shell prompt `is_interactive_child_running` is also False, and calling
+    that a process exit would end every session after its first `ls`."""
+    mgr = PTYSessionManager()
+    sid = await mgr.create_session(working_directory=str(tmp_path))
+    try:
+        result = await mgr.send_input(sid, "echo still-here\n", timeout_ms=5000)
+        assert result.status != "process_exited"
+        assert "still-here" in result.output
+    finally:
+        await mgr.close_session(sid)
