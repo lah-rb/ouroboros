@@ -1055,7 +1055,17 @@ async def action_confirm_close_gate(step_input: StepInput) -> StepOutput:
         "close_confirmations": asked + 1,
         "close_state_line": state_line,
     }
+    # LOGGED, not just observed. Step observations do not reach the run log,
+    # and that blind spot is exactly how the predecessor of this step sat dead
+    # for 5,162 interactions without anyone noticing: nothing it did was
+    # visible, so "never fired" and "fired and declined" read identically.
+    # The decision rate is the first number to check on any run.
     if asked >= _MAX_CLOSE_CONFIRMATIONS:
+        logger.info(
+            "confirm_close: cap reached (%d/%d) — honouring the close",
+            asked,
+            _MAX_CLOSE_CONFIRMATIONS,
+        )
         return StepOutput(
             result={"should_ask": False, "child_running": child_running},
             observations=(
@@ -1064,6 +1074,11 @@ async def action_confirm_close_gate(step_input: StepInput) -> StepOutput:
             ),
             context_updates=updates,
         )
+    logger.info(
+        "confirm_close: asking (#%d), program %s",
+        asked + 1,
+        "running" if child_running else "exited",
+    )
     return StepOutput(
         result={"should_ask": True, "child_running": child_running},
         observations=(
