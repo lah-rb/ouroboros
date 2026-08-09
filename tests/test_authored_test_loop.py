@@ -47,6 +47,20 @@ from agent.persistence.models import (
 
 ROOT = Path(__file__).resolve().parents[1]
 
+PYTEST_PROBE = "python -m pytest --version"
+
+
+@pytest.fixture(autouse=True)
+def _reset_pytest_probe_cache():
+    """The gate caches the pytest-availability answer per process. Tests must
+    not inherit each other's answer."""
+    import agent.actions.diagnosis_session_actions as dsa
+
+    dsa._PYTEST_AVAILABLE = None
+    yield
+    dsa._PYTEST_AVAILABLE = None
+
+
 TEST_PATH = "tests/test_quit_saves.py"
 TEST_CMD = f"python -m pytest -q --no-header {TEST_PATH}"
 COMPILE_CMD = f"python -m py_compile {TEST_PATH}"
@@ -104,6 +118,12 @@ def _mission(goal: GoalRecord | None = None, **cfg) -> MissionState:
     return m
 
 
+def _gate_effects(mission, *, pytest_rc: int = 0) -> MockEffects:
+    return MockEffects(
+        commands={PYTEST_PROBE: _cmd(pytest_rc, "pytest 8.0.0")}, mission=mission
+    )
+
+
 def _si(effects, context=None, goal_id="g1") -> StepInput:
     return StepInput(
         context=dict(context or {}),
@@ -145,7 +165,7 @@ class _FS(MockEffects):
 @pytest.mark.asyncio
 async def test_gate_authors_on_a_plain_repair_round():
     m = _mission(_goal())
-    fx = MockEffects(mission=m)
+    fx = _gate_effects(m)
     out = await action_gate_author_test(
         _si(
             fx,
@@ -205,7 +225,7 @@ async def test_gate_authors_on_a_plain_repair_round():
 )
 async def test_gate_declines(why, goal_kw, ctx, cfg):
     m = _mission(_goal(**goal_kw), **cfg)
-    fx = MockEffects(mission=m)
+    fx = _gate_effects(m)
     base = {"recommended_flow": "file_ops", "target_file": "engine.py"}
     base.update(ctx)
     out = await action_gate_author_test(_si(fx, base))
@@ -217,13 +237,55 @@ async def test_gate_declines_a_warning_channel_diagnosis():
     """Warning-channel diagnoses dispatch with goal_id: "" — there is no
     acceptance rung to hang a test on."""
     m = _mission(_goal())
-    fx = MockEffects(mission=m)
+    fx = _gate_effects(m)
     out = await action_gate_author_test(
         _si(
             fx, {"recommended_flow": "file_ops", "target_file": "engine.py"}, goal_id=""
         )
     )
     assert out.result["should_author"] is False
+
+
+@pytest.mark.asyncio
+async def test_gate_declines_when_the_workspace_has_no_pytest():
+    """FOUND LIVE on hy3 (2026-08-09): the artifact's own venv had no pytest,
+    so every candidate would classify as BROKEN (control #1 reads pytest's
+    output) and the arm would burn two in-session inferences per goal to
+    guarantee nothing. We decline rather than install into a deliverable."""
+    m = _mission(_goal())
+    fx = _gate_effects(m, pytest_rc=1)
+    out = await action_gate_author_test(
+        _si(fx, {"recommended_flow": "file_ops", "target_file": "engine.py"})
+    )
+    assert out.result["should_author"] is False
+    assert "pytest" in out.observations
+
+
+@pytest.mark.asyncio
+async def test_the_pytest_probe_is_paid_once_per_process():
+    m = _mission(_goal())
+    fx = _gate_effects(m)
+    for _ in range(3):
+        await action_gate_author_test(
+            _si(fx, {"recommended_flow": "file_ops", "target_file": "engine.py"})
+        )
+    probes = [
+        c
+        for c in fx.calls_to("run_command")
+        if " ".join(c.args["command"]) == PYTEST_PROBE
+    ]
+    assert len(probes) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_cheap_checks_run_before_the_subprocess():
+    """A goal that is ineligible anyway must not pay for a probe."""
+    m = _mission(_goal(type="structural"))
+    fx = _gate_effects(m)
+    await action_gate_author_test(
+        _si(fx, {"recommended_flow": "file_ops", "target_file": "engine.py"})
+    )
+    assert not fx.calls_to("run_command")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -252,8 +314,64 @@ async def test_gate_declines_a_warning_channel_diagnosis():
     ],
 )
 def test_red_is_classified_not_assumed(rc, out, expected, why):
-    verdict, _nodes = _classify(rc, out, timed_out=False)
+    verdict, _nodes, _detail = _classify(rc, out, timed_out=False)
     assert verdict == expected, why
+
+
+SELF_INFLICTED_OUT = """FF                             [100%]
+=================================== FAILURES ===================================
+    def _fresh_engine():
+        world = load_world("world.json")
+>       engine = GameEngine(world=world)
+E       TypeError: GameEngine.__init__() got an unexpected keyword argument 'world'
+
+tests/test_quit_saves.py:14: TypeError
+FAILED tests/test_quit_saves.py::test_save_then_load - TypeError
+2 failed"""
+
+PRODUCT_SIDE_OUT = """F                              [100%]
+=================================== FAILURES ===================================
+>       return self._rooms[room_id]
+E       KeyError: 'hall'
+
+engine.py:88: KeyError
+FAILED tests/test_quit_saves.py::test_save_then_load - KeyError
+1 failed"""
+
+
+def test_a_test_that_mis_calls_the_code_is_broken_not_red():
+    """FOUND LIVE, first firing (2026-08-09). The arm authored a well-shaped
+    save/load round-trip test that went red on
+    `GameEngine.__init__() got an unexpected keyword argument 'world'` —
+    rc 1, two named FAILED nodes, clean collection. It passed control #1 as
+    originally written and would have stayed red after the fix, blocking the
+    goal until the quarantine wore it down three rounds later.
+
+    A negative control must fail on an ASSERTION, or fail in the PRODUCT."""
+    verdict, _nodes, detail = _classify(
+        1, SELF_INFLICTED_OUT, timed_out=False, test_path="tests/test_quit_saves.py"
+    )
+    assert verdict == "broken"
+    assert "TypeError" in detail
+
+
+def test_a_failure_raised_in_product_code_is_still_red():
+    """The fix CAN turn this one green — it is a real negative control."""
+    verdict, _nodes, _d = _classify(
+        1, PRODUCT_SIDE_OUT, timed_out=False, test_path="tests/test_quit_saves.py"
+    )
+    assert verdict == "red"
+
+
+def test_an_assertion_failure_in_the_test_is_red():
+    out = (
+        "FAILED tests/test_quit_saves.py::test_x - AssertionError\n"
+        "tests/test_quit_saves.py:40: AssertionError\n1 failed"
+    )
+    verdict, _nodes, _d = _classify(
+        1, out, timed_out=False, test_path="tests/test_quit_saves.py"
+    )
+    assert verdict == "red"
 
 
 def test_a_timeout_is_broken_not_red():
@@ -510,6 +628,75 @@ async def test_a_vacuous_candidate_gets_one_repair_turn_then_is_dropped():
     assert out.result["authored"] is False
     assert "vacuous" in out.result["reason"]
     assert fx.call_count("session_inference") == 2, "exactly one bounded repair turn"
+
+
+@pytest.mark.asyncio
+async def test_a_mis_calling_candidate_gets_one_repair_turn_and_can_recover():
+    """The live miss was a wrong constructor keyword — the traceback names it
+    and the true signature is already in the session's KV, so throwing the
+    whole session away over it is the expensive answer to a cheap mistake."""
+    goal = _goal()
+    m = _mission(goal)
+    fx = _probe_effects(
+        [
+            (1, SELF_INFLICTED_OUT),
+            (1, SELF_INFLICTED_OUT),
+            (1, RED_OUT),
+            (1, RED_OUT),
+        ],
+        m,
+    )
+    fx._inference_responses = [_candidate_response(), _candidate_response()]
+
+    out = await action_author_regression_test(
+        _si(
+            fx,
+            {
+                "diagnosis_session_id": "s1",
+                "author_test_brief": {"suggested_path": TEST_PATH},
+            },
+        )
+    )
+
+    assert out.result["authored"] is True, out.result["reason"]
+    assert fx.call_count("session_inference") == 2, "exactly one bounded repair turn"
+    # The FIX prompt was used, not the vacuous-test one (the mock records only
+    # the first 100 chars, which is enough to tell them apart).
+    second = fx.calls_to("session_inference")[1].args["prompt"]
+    assert second.startswith("Your test failed, but for the WRONG REASON")
+
+
+def test_the_repair_turn_carries_the_real_traceback():
+    """It is the only thing that can correct a wrong signature — a bare
+    "you got it wrong" turn would just re-guess."""
+    from agent.actions.authored_test_actions import _render_fix_prompt
+
+    text = _render_fix_prompt("TypeError raised inside the test", SELF_INFLICTED_OUT)
+    assert "unexpected keyword argument" in text
+    assert "GameEngine(world=world)" in text
+    assert "{failure_output}" not in text and "{failure_reason}" not in text
+
+
+@pytest.mark.asyncio
+async def test_a_candidate_that_mis_calls_twice_is_dropped():
+    goal = _goal()
+    m = _mission(goal)
+    fx = _probe_effects([(1, SELF_INFLICTED_OUT)] * 4, m)
+    fx._inference_responses = [_candidate_response(), _candidate_response()]
+
+    out = await action_author_regression_test(
+        _si(
+            fx,
+            {
+                "diagnosis_session_id": "s1",
+                "author_test_brief": {"suggested_path": TEST_PATH},
+            },
+        )
+    )
+
+    assert out.result["authored"] is False
+    assert "TypeError" in out.result["reason"]
+    assert TEST_PATH not in fx._files
 
 
 @pytest.mark.asyncio

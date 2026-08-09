@@ -20,10 +20,15 @@ diagnosis session, after conclude, before the fix dispatch. The candidate is
 kept only if four MECHANICAL controls pass — prompt rules alone are the lever
 that already failed (rule 8 only partially fixed fingerprints):
 
-  1. CLASSIFIED RED. An import error, a syntax error and a collection failure
-     all exit non-zero and all stay red AFTER the fix, producing a goal that
-     can never complete. Red means ``rc == 1`` AND named failing nodes AND a
-     clean collection (``_parse_pytest_output``). Anything else is BROKEN.
+  1. CLASSIFIED RED — and red FOR A REASON THE FIX CAN CURE. An import error,
+     a syntax error and a collection failure all exit non-zero and all stay
+     red AFTER the fix, producing a goal that can never complete. Red means
+     ``rc == 1`` AND named failing nodes AND a clean collection
+     (``_parse_pytest_output``) AND a failure that is either an assertion or
+     raised from PRODUCT code (``_self_inflicted``). That last clause was
+     added on the arm's very first live firing: a well-shaped save/load test
+     went red on ``unexpected keyword argument 'world'`` — the model had
+     invented the constructor signature. It satisfied every other condition.
   2. COLD WORKSPACE. Every known transient is flushed before the probe, so
      the red is measured from the same floor the acceptance rung will use
      later — not from whatever the last session left lying around.
@@ -64,6 +69,10 @@ AUTHOR_PROMPT = load_prompt_text("diagnose/author_test")
 # The one bounded repair turn, taken when the candidate passed against the
 # still-broken code (VACUOUS — it is testing something other than the defect).
 AUTHOR_REPAIR_PROMPT = load_prompt_text("diagnose/author_test_repair")
+# The other recoverable miss: the test failed inside its OWN body on a
+# non-assertion (it mis-calls the product's API). The real traceback names the
+# signature it got wrong, and the true one is already in the session's KV.
+AUTHOR_FIX_PROMPT = load_prompt_text("diagnose/author_test_fix")
 
 # Probe budget. _AUTHORED_MAX_SECONDS is the GATE (the regression sweep runs
 # these checks in parallel on every file-affecting cycle, so a slow test is a
@@ -142,24 +151,68 @@ def _safe_command(model_command: str, path: str) -> str:
     return cmd
 
 
-def _classify(return_code: int, output: str, timed_out: bool) -> tuple[str, list[str]]:
-    """RED / GREEN / BROKEN — control #1.
+# pytest's per-failure location line: ``path/to/file.py:14: TypeError``.
+_FAIL_LOCATION_RE = re.compile(r"(?m)^(\S+\.py):\d+: (\w+)$")
+# Failures that mean "the code is wrong" rather than "the test is wrong".
+# pytest.fail() reports as `Failed`; an expected-raise miss as `DID NOT RAISE`
+# folded into Failed. Everything else raised INSIDE the test file is the test
+# mis-calling the product.
+_ASSERTION_VERDICTS = {"AssertionError", "Failed"}
+
+
+def _self_inflicted(output: str, test_path: str) -> str:
+    """Name the exception when the test failed in its OWN body for a reason
+    that is not an assertion — i.e. the test mis-calls the code it is testing.
+
+    FOUND LIVE, first firing on hy3 (2026-08-09). The arm authored a genuinely
+    well-shaped save/load round-trip test and it went red — on
+    ``GameEngine.__init__() got an unexpected keyword argument 'world'``. The
+    model invented the constructor signature. rc 1, two named FAILED nodes,
+    clean collection: it passed control #1 exactly as written, and it would
+    have stayed red after the save/load fix landed, blocking the goal until
+    the quarantine wore it down three rounds later.
+
+    A negative control has to fail IN THE PRODUCT, or fail on an ASSERTION.
+    A TypeError/AttributeError/NameError raised at the call site in the test
+    file is neither — it is a broken test, and it is mechanically separable
+    from a real one by pytest's own location line.
+    """
+    for path, exc in _FAIL_LOCATION_RE.findall(output or ""):
+        if exc in _ASSERTION_VERDICTS:
+            continue
+        if path == test_path or path.startswith("tests/"):
+            return exc
+    return ""
+
+
+def _classify(
+    return_code: int, output: str, timed_out: bool, test_path: str = ""
+) -> tuple[str, list[str], str]:
+    """RED / GREEN / BROKEN — control #1. Returns (verdict, nodes, detail).
 
     The distinction that matters: a test that ERRORS is red today and red
-    forever, so arming it would immortalize the goal. Only a real assertion
-    failure — a clean collection, rc 1, named failing nodes — is a negative
-    control.
+    forever, so arming it would immortalize the goal. Only a failure the FIX
+    can turn green is a negative control — a clean collection, rc 1, named
+    failing nodes, AND a failure that is either an assertion or raised from
+    product code.
     """
     from agent.actions.pipeline_actions import _parse_pytest_output
 
     if timed_out:
-        return "broken", []
+        return "broken", [], "timed out"
     nodes, collect_ok = _parse_pytest_output(output or "")
     if return_code == 0:
-        return "green", nodes
+        return "green", nodes, ""
     if return_code == 1 and nodes and collect_ok:
-        return "red", nodes
-    return "broken", nodes
+        exc = _self_inflicted(output, test_path)
+        if exc:
+            return (
+                "broken",
+                nodes,
+                f"{exc} raised inside the test — it mis-calls the code",
+            )
+        return "red", nodes, ""
+    return "broken", nodes, "not a classifiable pytest failure"
 
 
 async def _snapshot(effects) -> set[str]:
@@ -174,23 +227,29 @@ async def _snapshot(effects) -> set[str]:
     }
 
 
-async def _run_once(effects, command: str) -> tuple[str, list[str], str, float]:
-    """Run the candidate exactly as the regression sweep later will."""
+async def _run_once(
+    effects, command: str, test_path: str = ""
+) -> tuple[str, list[str], str, float, str]:
+    """Run the candidate exactly as the regression sweep later will.
+
+    Returns (verdict, nodes, output, elapsed, detail).
+    """
     started = time.monotonic()
     try:
         res = await effects.run_command(
             ["/bin/sh", "-c", command], timeout=_AUTHORED_RUN_TIMEOUT
         )
     except Exception as exc:  # noqa: BLE001 - an infra miss is not a red test
-        return "broken", [], f"run failed: {exc}", time.monotonic() - started
+        return "broken", [], "", time.monotonic() - started, f"run failed: {exc}"
     elapsed = time.monotonic() - started
     out = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
-    verdict, nodes = _classify(
+    verdict, nodes, detail = _classify(
         int(getattr(res, "return_code", 1) or 0),
         out,
         bool(getattr(res, "timed_out", False)),
+        test_path,
     )
-    return verdict, nodes, out, elapsed
+    return verdict, nodes, out, elapsed, detail
 
 
 async def action_author_regression_test(step_input: StepInput) -> StepOutput:
@@ -325,15 +384,31 @@ async def _author(step_input, effects, session_id, brief, goal_id, _out) -> Step
         before = await _snapshot(effects)
 
         # Controls #1 + #3 — classified red, twice.
-        v1, nodes1, out1, t1 = await _run_once(effects, command)
-        v2, _nodes2, out2, t2 = await _run_once(effects, command)
+        v1, nodes1, out1, t1, d1 = await _run_once(effects, command, path)
+        v2, _nodes2, _out2, t2, _d2 = await _run_once(effects, command, path)
         after = await _snapshot(effects)
 
-        if v1 == "green" and v2 == "green" and turn == 1:
-            # VACUOUS — one bounded repair turn, then give up.
+        # ONE bounded repair turn, on either recoverable miss:
+        #   VACUOUS — passed against the broken code, so it tests the wrong
+        #             thing;
+        #   SELF-INFLICTED — failed inside its own body on a non-assertion,
+        #             so it mis-calls the product's API.
+        # The second is worth a turn precisely because the model can FIX it:
+        # the real traceback names the signature it got wrong, and the true
+        # signature is already in the session's KV from the trace. Throwing
+        # the whole session away over a keyword argument is the expensive
+        # answer to a cheap mistake.
+        if (
+            turn == 1
+            and v1 == v2
+            and v1 in ("green", "broken")
+            and (v1 == "green" or d1)
+        ):
             await _cleanup(written_path)
             written_path = ""
-            turn_prompt = AUTHOR_REPAIR_PROMPT
+            turn_prompt = (
+                AUTHOR_REPAIR_PROMPT if v1 == "green" else _render_fix_prompt(d1, out1)
+            )
             continue
         if v1 != v2:
             return await _drop(
@@ -348,7 +423,7 @@ async def _author(step_input, effects, session_id, brief, goal_id, _out) -> Step
             reason = (
                 "passed against the broken code (vacuous)"
                 if v1 == "green"
-                else f"not a classifiable failure: {_head(out1)}"
+                else f"not a usable red: {d1 or _head(out1)}"
             )
             return await _drop(effects, step_input, goal_id, written_path, reason, _out)
 
@@ -412,6 +487,21 @@ async def _author(step_input, effects, session_id, brief, goal_id, _out) -> Step
 
 def _head(text: str, limit: int = 240) -> str:
     return " ".join((text or "").split())[:limit]
+
+
+def _render_fix_prompt(reason: str, output: str) -> str:
+    """The bounded repair turn for a self-inflicted failure — carries the real
+    traceback, which is the only thing that can correct a wrong signature."""
+    return AUTHOR_FIX_PROMPT.replace("{failure_reason}", reason).replace(
+        "{failure_output}", _tail(output, 1800)
+    )
+
+
+def _tail(text: str, limit: int) -> str:
+    """Keep the END of pytest output — the failure block and the location line
+    live there; the header is noise."""
+    s = (text or "").strip()
+    return s if len(s) <= limit else "…\n" + s[-limit:]
 
 
 def _render_prompt(brief: dict) -> str:

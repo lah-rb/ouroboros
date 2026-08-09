@@ -1,0 +1,15 @@
+id: diagnose/author_test_fix
+content: |
+  Your test failed, but for the WRONG REASON: {failure_reason}.
+
+  That is your test mis-calling the code, not the defect you diagnosed. It would still fail after the fix lands, which would block this goal forever — so it cannot be kept as written.
+
+  Here is what actually happened when it ran:
+
+  {failure_output}
+
+  Fix the call, not the assertion. You traced the real symbols earlier in this session — their true signatures, constructor arguments and attribute names are in the code you already read above. Use those exactly as they are defined. Do not invent a constructor keyword, a method name or an attribute; if you are unsure how the object is built, construct it the way the program's own entry point does.
+
+  The test must still fail on the DEFECT once it is calling the code correctly.
+
+  Same rules, same output format: a fenced JSON header, then the complete test file in its own fenced block.

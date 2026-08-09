@@ -1581,6 +1581,11 @@ async def action_gate_author_test(step_input: StepInput) -> StepOutput:
     goal_id = str(step_input.inputs.get("goal_id", "") or "")
 
     def _skip(reason: str) -> StepOutput:
+        # Logged, not just observed: step observations do not reach the run
+        # log, so without this a declined gate is indistinguishable from an
+        # arm that never ran — and the eligibility rate is the first number
+        # on the live watchlist.
+        logger.info("author-test gate: skip (%s)", reason)
         return StepOutput(
             result={"should_author": False},
             observations=f"author-test gate: skip ({reason})",
@@ -1624,6 +1629,17 @@ async def action_gate_author_test(step_input: StepInput) -> StepOutput:
     if target_file.lower() in _JUNK_TARGET_TOKENS:
         return _skip(f"junk/empty target_file {target_file!r}")
 
+    # PYTEST PREFLIGHT — last, because it costs a subprocess and every cheap
+    # check above has already said go. Control #1 classifies red from pytest's
+    # output (rc 1 + named FAILED nodes + clean collection); with no pytest in
+    # the workspace EVERY candidate classifies as BROKEN and is dropped, so the
+    # arm would burn one or two in-session inferences per goal to guarantee
+    # nothing. Found live on hy3 (2026-08-09): the artifact's own venv had no
+    # pytest, which the plan never accounted for. We do NOT install it — that
+    # would be an unrequested write into a graded deliverable.
+    if not await _pytest_available(effects):
+        return _skip("no pytest in the workspace — red would be unclassifiable")
+
     # The transient set: declared patterns + everything the mission has
     # OBSERVED a session write at runtime. The test may not assume any of it.
     from agent.actions.interactive_actions import _transient_flush_plan
@@ -1646,6 +1662,12 @@ async def action_gate_author_test(step_input: StepInput) -> StepOutput:
         "transient_files": transients,
         "attempt": attempts + 1,
     }
+    logger.info(
+        "author-test gate: AUTHORING (attempt %d) for '%s' against %s",
+        attempts + 1,
+        goal.description[:50],
+        target_file,
+    )
     return StepOutput(
         result={"should_author": True},
         observations=(
@@ -1654,6 +1676,31 @@ async def action_gate_author_test(step_input: StepInput) -> StepOutput:
         ),
         context_updates={"author_test_brief": brief},
     )
+
+
+_PYTEST_AVAILABLE: bool | None = None
+
+
+async def _pytest_available(effects) -> bool:
+    """Is pytest runnable in the workspace? Cached per process — the answer
+    changes only if someone installs it mid-run, and the gate would otherwise
+    re-probe on every repair round."""
+    global _PYTEST_AVAILABLE
+    if _PYTEST_AVAILABLE is not None:
+        return _PYTEST_AVAILABLE
+    try:
+        res = await effects.run_command(
+            ["python", "-m", "pytest", "--version"], timeout=20
+        )
+        _PYTEST_AVAILABLE = int(getattr(res, "return_code", 1) or 0) == 0
+    except Exception:  # noqa: BLE001 - an infra miss reads as unavailable
+        _PYTEST_AVAILABLE = False
+    if not _PYTEST_AVAILABLE:
+        logger.info(
+            "author-test gate: pytest is not runnable in this workspace — "
+            "the authoring arm stays off for this mission"
+        )
+    return _PYTEST_AVAILABLE
 
 
 def _authored_test_slug(text: str) -> str:
