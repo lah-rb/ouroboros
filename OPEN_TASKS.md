@@ -1194,3 +1194,39 @@ teaches: exemplars must refresh from reality (observation-is-declaration),
 extra keys are advisory (richness ≠ defect), heterogeneous lists need
 per-variant semantics, and any contract a checker enforces must be
 WRITABLE by some repair path.
+
+## 24. Claims-vs-behaviour seams are invisible to every current verifier (2026-08-09)
+
+**The evidence.** An informal blind flight (hy3[g] vs the frozen Frontier
+anchor — run NOT recorded as a judgement per operator ruling; the run was a
+framework testbed with 30 live bounces) measured a 46/47 vs 47/47 checklist
+gap alongside a 9-of-10-axes play gap. The delta between those two numbers
+is a direct measurement of what our verification does not see. The decisive
+defects, none of which any phase flagged:
+
+- **The amulet seam.** `world.json` declares the boss weakness as an item
+  whose `type` no equipment slot accepts; both NPCs tell the player to get
+  it; the real gate is a different item. Functional testing exercised
+  `equip` and saw a clean refusal — a PASS. The seam is between what the
+  game SAYS and what the code ACCEPTS, and every probe we run tests the
+  code alone. The only probe that catches it: *follow the game's own advice
+  to win*. Nobody ever plays the game the way its NPCs describe.
+- **`flee` = victory.** A reward-shaped bug: the verifier watches flee
+  produce a victory screen and marks flee working. Needs a should-this-
+  have-succeeded judgement, which no deterministic check carries and the
+  evaluator is never prompted to make.
+- **The save round-trip** — the one decisive defect the gate DID file,
+  correctly and repeatedly, while it was structurally untestable (relaunch
+  unreachable until the close-notice arc landed in the run's final hours).
+
+**The lever, in order:** (1) the capability-checklist brief (§22's deferred
+companion) should include the artifact's own claims — NPC advice, help
+text, README assertions — as items to EXERCISE AS STATED, not merely as
+features to touch; (2) the relaunch arc (landed, validated) makes multi-run
+items testable at last; (3) `no_repro_policy: "strict"` should follow (1).
+
+Also from the same flight, cheap and mechanical: the artifact shipped a
+one-shot self-patch script, 413 lines of abandoned parallel implementation
+nothing imports, and invented `ruff.toml`/`pyproject.toml` keys. A
+dead-file/dead-config sweep at quality_gate (files no import reaches,
+config keys the tool would reject) is deterministic and needs no LLM.
