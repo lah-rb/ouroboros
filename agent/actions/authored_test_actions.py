@@ -73,6 +73,9 @@ AUTHOR_REPAIR_PROMPT = load_prompt_text("diagnose/author_test_repair")
 # non-assertion (it mis-calls the product's API). The real traceback names the
 # signature it got wrong, and the true one is already in the session's KV.
 AUTHOR_FIX_PROMPT = load_prompt_text("diagnose/author_test_fix")
+# Menu-shape answer at the authoring turn (the 779 confusion class inside the
+# diagnosis session): correct the output contract, keep the attempt.
+AUTHOR_MENU_CORRECTION_PROMPT = load_prompt_text("diagnose/author_test_menu_correction")
 
 # Probe budget. _AUTHORED_MAX_SECONDS is the GATE (the regression sweep runs
 # these checks in parallel on every file-affecting cycle, so a slow test is a
@@ -311,6 +314,26 @@ async def _author(step_input, effects, session_id, brief, goal_id, _out) -> Step
 
         cand = _parse_candidate(text)
         path, content = cand["path"], cand["content"]
+
+        # MENU-SHAPE ANSWER — the 779 confusion class, third sighting
+        # (2026-08-09, first gpt-oss-medium authoring attempt). The authoring
+        # turn arrives in a session whose every prior turn was menu JSON, and
+        # the model answered {"choice": "trace", ...} — the investigate
+        # menu's vocabulary. That is not a bad test, it is a missed contract,
+        # and it is exactly what the ONE bounded repair turn is for: correct
+        # the shape, keep the attempt.
+        if not path and not content and turn == 1:
+            from agent.llm_json import parse_llm_json
+
+            parsed = parse_llm_json(text)
+            if isinstance(parsed, dict) and "choice" in parsed:
+                logger.info(
+                    "author_test: menu-shape answer at the authoring turn — "
+                    "spending the repair turn on a format correction"
+                )
+                turn_prompt = AUTHOR_MENU_CORRECTION_PROMPT
+                continue
+
         perr = _path_error(path)
         if perr:
             return await _drop(effects, step_input, goal_id, "", perr, _out)

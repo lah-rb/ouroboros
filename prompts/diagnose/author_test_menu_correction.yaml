@@ -1,0 +1,10 @@
+id: diagnose/author_test_menu_correction
+content: |
+  That was a menu answer — `{"choice": ...}` — but this turn is not a menu. The investigation is over; there is nothing to trace and no options to pick from. This turn wants the regression test itself.
+
+  Emit exactly two fenced blocks and nothing else:
+
+  1. A fenced ```json block with the header: {"path": "tests/test_<name>.py", "language": "python", "command": "python -m pytest -q --no-header tests/test_<name>.py"}
+  2. A fenced ```python block containing the complete test file.
+
+  The test must FAIL against the code as it is right now (the defect you just diagnosed) and pass once the fix lands. All the rules from the previous message still apply.

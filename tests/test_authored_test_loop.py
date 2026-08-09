@@ -980,3 +980,57 @@ class TestThePromptCarriesTheLessons:
         ).read_text()
         assert "NEVER ASSERT ON A FILE THE PROGRAM WRITES AT RUNTIME" in text
         assert "saves/slot1.json" not in text, "the ✅ example taught the trap"
+
+
+@pytest.mark.asyncio
+async def test_a_menu_shape_answer_gets_the_format_correction_turn():
+    """THE 779 CLASS, THIRD SIGHTING (first gpt-oss-medium authoring turn):
+    the session's every prior turn was menu JSON, and the model answered the
+    authoring turn with {"choice": "trace", ...}. A missed contract, not a
+    bad test — the bounded repair turn corrects the shape and keeps the
+    attempt instead of burning it on 'no path'."""
+    goal = _goal()
+    m = _mission(goal)
+    fx = _probe_effects([(1, RED_OUT), (1, RED_OUT)], m)
+    fx._inference_responses = [
+        '{"choice": "trace", "symbol_ref": "game.py:GameEngine.examine"}',
+        _candidate_response(),
+    ]
+
+    out = await action_author_regression_test(
+        _si(
+            fx,
+            {
+                "diagnosis_session_id": "s1",
+                "author_test_brief": {"suggested_path": TEST_PATH},
+            },
+        )
+    )
+
+    assert out.result["authored"] is True, out.result["reason"]
+    second = fx.calls_to("session_inference")[1].args["prompt"]
+    assert second.startswith("That was a menu answer")
+
+
+@pytest.mark.asyncio
+async def test_a_menu_shape_answer_twice_is_dropped():
+    goal = _goal()
+    m = _mission(goal)
+    fx = _probe_effects([], m)
+    fx._inference_responses = [
+        '{"choice": "trace", "symbol_ref": "a.py:f"}',
+        '{"choice": "conclude"}',
+    ]
+
+    out = await action_author_regression_test(
+        _si(
+            fx,
+            {
+                "diagnosis_session_id": "s1",
+                "author_test_brief": {"suggested_path": TEST_PATH},
+            },
+        )
+    )
+
+    assert out.result["authored"] is False
+    assert goal.authored_test_attempts == 1

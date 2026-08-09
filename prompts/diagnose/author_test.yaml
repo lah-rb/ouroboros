@@ -37,7 +37,7 @@ content: |
   ❌ `assert os.path.exists("save.json")`
      — assumes a runtime file it never created; passes or fails on leftovers.
 
-  OUTPUT — a fenced JSON header, then the test file in its own fenced block:
+  OUTPUT — this turn is NOT a menu turn. There is no `choice` to make and no options to pick from; a `{"choice": ...}` answer here is discarded. Emit a fenced JSON header, then the test file in its own fenced block:
 
   ```json
   {"path": "{suggested_path}", "language": "python", "command": "python -m pytest -q --no-header {suggested_path}"}
