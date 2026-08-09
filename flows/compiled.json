@@ -9105,7 +9105,8 @@
             "mode",
             "call_graph_block",
             "already_rewritten",
-            "already_rewritten_block"
+            "already_rewritten_block",
+            "dropped_rewrites"
           ]
         },
         "params": {},
@@ -9190,7 +9191,8 @@
           "current_symbol",
           "rewrite_queue",
           "file_content_updated",
-          "already_rewritten"
+          "already_rewritten",
+          "dropped_rewrites"
         ],
         "effects": [],
         "terminal": false
@@ -9339,7 +9341,8 @@
             "unresolved_symbols",
             "data_files_changed",
             "data_edit_summary",
-            "change_spec"
+            "change_spec",
+            "dropped_rewrites"
           ]
         },
         "params": {},

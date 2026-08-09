@@ -151,7 +151,7 @@ patch: #FlowDefinition & {
 			description: "Model produces complete rewritten symbol body"
 			context: {
 				required: ["edit_session_id", "current_symbol"]
-				optional: ["rewrite_queue", "file_content", "file_content_updated", "file_path", "mode", "call_graph_block", "already_rewritten", "already_rewritten_block"]
+				optional: ["rewrite_queue", "file_content", "file_content_updated", "file_path", "mode", "call_graph_block", "already_rewritten", "already_rewritten_block", "dropped_rewrites"]
 			}
 			turn: #Turn & {
 				response_shape: "code"
@@ -228,7 +228,12 @@ patch: #FlowDefinition & {
 					{condition: "true", transition:                    "write_file"},
 				]
 			}
-			publishes: ["current_symbol", "rewrite_queue", "file_content_updated", "already_rewritten"]
+			// dropped_rewrites: symbols that RESOLVED but produced no usable
+			// body (empty response, inference error). Distinct from
+			// unresolved_symbols — those never existed in the AST; these were
+			// found, queued, and then silently lost. LOAD-BEARING: undeclared,
+			// _build_step_input filters it out and finalize can't warn on it.
+			publishes: ["current_symbol", "rewrite_queue", "file_content_updated", "already_rewritten", "dropped_rewrites"]
 		}
 
 		// Current file's queue drained — persist its accumulated
@@ -324,6 +329,9 @@ patch: #FlowDefinition & {
 					// warning's evidence so the diverted diagnosis sees WHAT
 					// was prescribed, not just which ref was dropped.
 					"change_spec",
+					// dropped_rewrites: resolved symbols whose rewrite produced
+					// nothing. Same silent-wire class as the two above.
+					"dropped_rewrites",
 				]
 			}
 			terminal: true

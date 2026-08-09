@@ -1123,16 +1123,26 @@ async def action_rewrite_symbol_turn(step_input: StepInput) -> StepOutput:
         )
         return r.text.strip() if r.text else ""
 
+    # Symbols that RESOLVED but produced no usable body. Distinct from
+    # unresolved_symbols (never in the AST): these were found, queued, and
+    # then lost — so without recording them the batch reports the same
+    # success whether it applied 5 of 5 or 1 of 5. Observed 2026-08-09: a
+    # dead inference session turned a 5-symbol patch into a 1-symbol patch
+    # and finalize still returned success.
+    dropped = list(step_input.context.get("dropped_rewrites", []) or [])
+
     try:
         response = await _do_inference(prompt)
     except Exception as e:
         logger.error("Rewrite turn failed for %s: %s", name, e)
+        dropped.append(f"{name} (inference error: {str(e)[:80]})")
         return StepOutput(
             result={"rewrite_success": False, "has_next": len(queue) > 0},
             observations=f"Rewrite failed for {name}: {e}",
             context_updates={
                 "current_symbol": queue.pop(0) if queue else None,
                 "rewrite_queue": queue,
+                "dropped_rewrites": dropped,
             },
         )
 
@@ -1142,6 +1152,7 @@ async def action_rewrite_symbol_turn(step_input: StepInput) -> StepOutput:
     if not new_body.strip():
         logger.warning("Empty rewrite response for %s", name)
         has_next = len(queue) > 0
+        dropped.append(f"{name} (empty response)")
         return StepOutput(
             result={"rewrite_success": False, "has_next": has_next},
             observations=f"Empty rewrite for {name}",
@@ -1150,6 +1161,7 @@ async def action_rewrite_symbol_turn(step_input: StepInput) -> StepOutput:
                 "current_symbol": queue.pop(0) if queue else None,
                 "rewrite_queue": queue,
                 "file_content_updated": file_content,
+                "dropped_rewrites": dropped,
             },
         )
 
@@ -1821,6 +1833,7 @@ async def action_finalize_edit_session(step_input: StepInput) -> StepOutput:
     files_changed = list(step_input.context.get("files_changed", []) or [])
     summary_parts = list(step_input.context.get("edit_summary_parts", []) or [])
     unresolved = list(step_input.context.get("unresolved_symbols", []) or [])
+    dropped = list(step_input.context.get("dropped_rewrites", []) or [])
 
     # Data hops ride ALIASED returns (data_files_changed / data_edit_summary)
     # because the data_patch sub-flow's own `files_changed` return would
@@ -1838,12 +1851,16 @@ async def action_finalize_edit_session(step_input: StepInput) -> StepOutput:
         edit_summary += f"; data: {data_summary}"
     if unresolved:
         edit_summary += f"; unresolved: {', '.join(unresolved)}"
+    if dropped:
+        edit_summary += f"; DROPPED (no body produced): {', '.join(dropped)}"
 
     logger.info(
-        "finalize_edit_session: files_changed=%s | session_id=%s | unresolved=%s",
+        "finalize_edit_session: files_changed=%s | session_id=%s | unresolved=%s"
+        " | dropped=%s",
         files_changed,
         session_id[:12] if session_id else "none",
         unresolved,
+        dropped,
     )
 
     # PARTIAL SUCCESS IS AN EVIDENCED FINDING, NOT A FOOTNOTE (operator,
@@ -1859,7 +1876,16 @@ async def action_finalize_edit_session(step_input: StepInput) -> StepOutput:
     # ONLY on an otherwise-successful batch: a failed patch already
     # re-enters the goal's own diagnose loop, and a warning on top would
     # double-drive the same defect.
-    if unresolved and files_changed and effects:
+    #
+    # DROPPED rewrites ride the SAME channel (2026-08-09). A symbol that
+    # resolved, got queued, and then produced no body is lost exactly as
+    # completely as one that never resolved — and it is harder to notice,
+    # because nothing in the summary changes. It happened live: a session
+    # the server reaped mid-generation turned a 5-symbol batch into a
+    # 1-symbol batch, and finalize returned success. The TTL bug behind
+    # that is fixed in llmvp; this is the part that makes the NEXT such
+    # loss visible instead of silent.
+    if (unresolved or dropped) and files_changed and effects:
         spec = str(step_input.context.get("change_spec") or "").strip()
         try:
             mission = await effects.load_mission()
@@ -1890,16 +1916,41 @@ async def action_finalize_edit_session(step_input: StepInput) -> StepOutput:
                         source_flow="patch",
                     )
                 )
+            for ref in dropped:
+                raised += bool(
+                    mission.raise_warning(
+                        kind="dropped_edit_target",
+                        subject=str(ref).split(" (")[0],
+                        evidence=(
+                            f"A patch batch changed {', '.join(files_changed)} "
+                            f"but `{ref}` produced NO rewritten body, so that "
+                            f"symbol was left exactly as it was while the step "
+                            f"reported success. The symbol resolved fine — the "
+                            f"rewrite turn itself returned nothing."
+                            + (
+                                f" The diagnosis's change_spec: {spec[:400]}"
+                                if spec
+                                else ""
+                            )
+                        ),
+                        prescribed_fix=(
+                            f"Re-apply the change to `{str(ref).split(' (')[0]}` "
+                            f"(the rest of the batch already landed)."
+                        ),
+                        source_flow="patch",
+                    )
+                )
             if raised:
                 try:
                     await effects.save_mission(mission)
                 except Exception:  # noqa: BLE001
                     logger.debug("finalize: could not persist warnings", exc_info=True)
                 logger.warning(
-                    "finalize_edit_session: %d unresolved edit target(s) queued "
-                    "as evidenced warnings: %s",
+                    "finalize_edit_session: %d incomplete edit target(s) queued "
+                    "as evidenced warnings | unresolved=%s | dropped=%s",
                     raised,
-                    ", ".join(str(u) for u in unresolved),
+                    ", ".join(str(u) for u in unresolved) or "-",
+                    ", ".join(str(d) for d in dropped) or "-",
                 )
 
     # End the inference session

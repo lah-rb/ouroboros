@@ -128,6 +128,16 @@ class SessionState:
     created_at: float = field(default_factory=time.monotonic)
     last_turn_at: float = field(default_factory=time.monotonic)
     turn_count: int = 0
+    # Turns currently generating. `last_turn_at` only advances when a turn
+    # COMPLETES, so a turn that runs longer than the TTL leaves the idle clock
+    # frozen at its start and the TTL monitor reaps the session out from under
+    # its own live generation. Observed 2026-08-09 on hy3: a 1056s symbol
+    # rewrite was expired at 600s with `turns=0` while still decoding; the
+    # generation then finished into a dead session and the four queued symbols
+    # after it all returned "Session not found" — a 5-symbol patch silently
+    # became a 1-symbol patch. The orphan reaper below already refuses to
+    # reclaim while GPU work is in flight; this is the same rule, per session.
+    in_flight: int = 0
     # Full-replay mode (model.session_full_replay): the exact dynamic
     # token sequence of every completed turn (turn segments + generated
     # tokens), re-prefilled on top of the pristine static snapshot each
@@ -281,6 +291,27 @@ class SessionManager:
         if guard is None:
             return contextlib.nullcontext()
         return guard()
+
+    @contextlib.asynccontextmanager
+    async def _turn_in_flight(self, session: "SessionState"):
+        """Mark a session as actively generating for the duration of a turn.
+
+        A LIVE GENERATION IS NOT IDLENESS. Without this the TTL monitor
+        measures idleness from `last_turn_at`, which only advances on turn
+        COMPLETION — so the first turn of a session is "idle" for its entire
+        duration and any turn longer than the TTL destroys its own session
+        mid-decode (see SessionState.in_flight for the incident).
+
+        Stamping `last_turn_at` on exit is what makes the window honest: the
+        idle clock starts when the turn ENDS, including when it ends by
+        raising, so a failed turn cannot leave a session immortal either.
+        """
+        session.in_flight += 1
+        try:
+            yield
+        finally:
+            session.in_flight -= 1
+            session.last_turn_at = time.monotonic()
 
     async def _resident_session_flow_fork(
         self, instance: Any, session: "SessionState", prompt: str
@@ -540,7 +571,10 @@ class SessionManager:
         # wrapper re-enters the guard; nested entries are counter-only)
         # so a JIT scaling operation can neither interleave with the
         # turn nor start mid-turn.
-        async with self._generation_guard():
+        #
+        # _turn_in_flight rides the same span so the TTL monitor cannot reap
+        # this session while the turn it is waiting on is still decoding.
+        async with self._generation_guard(), self._turn_in_flight(session):
             # Bound to the backend this manager serves, not the global —
             # correct by construction across model swaps (Phase 2a).
             config = self._backend.config
@@ -1273,6 +1307,13 @@ class SessionManager:
                 if session is None:
                     return
 
+                # A turn in flight is the opposite of idle. Skip and re-arm:
+                # the next sleep gives the turn another full TTL, and the
+                # in_flight exit stamps last_turn_at so the window that
+                # actually decides expiry starts when the turn ENDS.
+                if session.in_flight:
+                    continue
+
                 elapsed = time.monotonic() - session.last_turn_at
                 if elapsed >= ttl:
                     log.warning(
@@ -1323,6 +1364,11 @@ class SessionManager:
                     continue
                 now = time.monotonic()
                 for sid, session in list(self._sessions.items()):
+                    # Per-session belt to the backend-wide braces above: a
+                    # batched seat can decode for this session while
+                    # _active_generations reads 0 for another.
+                    if session.in_flight:
+                        continue
                     idle = now - session.last_turn_at
                     if idle > 2 * session.ttl:
                         log.warning(

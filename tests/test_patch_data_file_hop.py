@@ -274,3 +274,82 @@ class TestUnresolvedTargetsRaiseWarnings:
         assert (
             "change_spec" in opt
         ), "LOAD-BEARING: undeclared, the spec never reaches the warning"
+
+
+class TestDroppedRewritesAreAlsoRaised:
+    """A symbol that RESOLVED and then produced no body is lost exactly as
+    completely as one that never resolved — and it is harder to notice,
+    because nothing in the summary changes.
+
+    Live on hy3 (2026-08-09): the server's TTL monitor reaped an inference
+    session mid-generation, so the four symbols queued behind the running
+    turn each came back "Session not found" with an empty body. A 5-symbol
+    patch became a 1-symbol patch and finalize returned SUCCESS with
+    files_changed=['engine.py']. The TTL bug is fixed in llmvp; this is what
+    makes the next such loss visible instead of silent."""
+
+    _mission = staticmethod(TestUnresolvedTargetsRaiseWarnings._mission)
+    _finalize = TestUnresolvedTargetsRaiseWarnings._finalize
+
+    def test_a_dropped_symbol_raises_an_evidenced_warning(self):
+        m = self._mission()
+        self._finalize(
+            {
+                "files_changed": ["engine.py"],
+                "dropped_rewrites": ["CombatHandler (empty response)"],
+                "change_spec": "CombatHandler must save before exit",
+            },
+            m,
+        )
+        assert len(m.pending_warnings) == 1
+        w = m.pending_warnings[0]
+        assert w.kind == "dropped_edit_target"
+        assert w.subject == "CombatHandler", "the bare symbol, not the reason clause"
+        assert "reported success" in w.evidence
+        assert "save before exit" in w.evidence
+
+    def test_the_summary_says_what_was_dropped(self):
+        m = self._mission()
+        out = self._finalize(
+            {
+                "files_changed": ["engine.py"],
+                "edit_summary_parts": ["engine.py:save"],
+                "dropped_rewrites": ["Player (empty response)"],
+            },
+            m,
+        )
+        assert "DROPPED" in out.context_updates["edit_summary"]
+        assert "Player" in out.context_updates["edit_summary"]
+
+    def test_a_failed_batch_does_not_double_drive(self):
+        """Same rule as unresolved: no files changed -> the goal's own
+        diagnose loop already owns it."""
+        m = self._mission()
+        self._finalize(
+            {"files_changed": [], "dropped_rewrites": ["Player (empty response)"]}, m
+        )
+        assert m.pending_warnings == []
+
+    def test_the_whole_batch_is_reported_when_both_kinds_occur(self):
+        m = self._mission()
+        self._finalize(
+            {
+                "files_changed": ["engine.py"],
+                "unresolved_symbols": ["world.json:monsters"],
+                "dropped_rewrites": ["Player (empty response)"],
+            },
+            m,
+        )
+        kinds = sorted(w.kind for w in m.pending_warnings)
+        assert kinds == ["dropped_edit_target", "unresolved_edit_target"]
+
+    def test_the_flow_wires_dropped_rewrites_end_to_end(self):
+        """LOAD-BEARING both ways: rewrite_symbol must publish it AND read it
+        back to accumulate, and finalize must declare it or the list is
+        filtered out before the warning."""
+        compiled = json.loads((ROOT / "flows" / "compiled.json").read_text())
+        rewrite = compiled["patch"]["steps"]["rewrite_symbol"]
+        assert "dropped_rewrites" in rewrite["publishes"]
+        assert "dropped_rewrites" in rewrite["context"]["optional"]
+        finalize = compiled["patch"]["steps"]["finalize"]["context"]["optional"]
+        assert "dropped_rewrites" in finalize
