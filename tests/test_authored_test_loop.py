@@ -1061,3 +1061,88 @@ def test_the_parser_never_mistakes_the_json_header_for_the_test_body():
     cand = _parse_candidate(raw)
     assert cand["path"] == "tests/test_x.py"
     assert cand["content"] == ""
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The attempt ceiling — the door the contradiction quarantine leaves open
+# ══════════════════════════════════════════════════════════════════════
+
+
+def _armed_goal(attempts: int) -> GoalRecord:
+    from agent.persistence.models import FailedAttempt
+
+    return _goal(
+        authored_test={"path": TEST_PATH, "command": TEST_CMD},
+        acceptance_checks=[
+            {
+                "command": TEST_CMD,
+                "name": "authored regression test",
+                "required": True,
+                "source": "authored",
+            }
+        ],
+        failed_attempts=[
+            FailedAttempt(
+                target_file="game.py",
+                flow="file_ops",
+                reason="no effect",
+                diagnosis_summary="the fix did not satisfy the test",
+            )
+            for _ in range(attempts)
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unsatisfiable_test_is_demoted_on_effort_not_only_contradiction():
+    """FOUND LIVE (gpt-oss-medium, 2026-08-09): a well-scoped victory-screen
+    test whose scenario could not win the fight sat at 8 failed attempts and
+    3 escalations with acceptance_conflicts stuck at 2 — because the
+    behaviour ALSO failed, so goal_met was never true and reconcile (the
+    only path that increments conflicts) was never reached. That is the
+    51-retest immortalization returning through the door the contradiction
+    quarantine does not cover."""
+    from agent.actions.pipeline_actions import _AUTHORED_ATTEMPT_CEILING
+
+    goal = _armed_goal(_AUTHORED_ATTEMPT_CEILING)
+    m = _mission(goal)
+    fx = MockEffects(mission=m)
+
+    out = await action_gate_goal_acceptance(_si(fx))
+
+    assert goal.acceptance_checks[0]["required"] is False, "the goal stays blocked"
+    assert out.context_updates["goal_acceptance_checks"][0]["required"] is False
+    # Nothing deleted — the test stays readable and on the goal.
+    assert goal.authored_test["path"] == TEST_PATH
+    warn = [w for w in m.pending_warnings if w.kind == "authored_test_unsatisfied"]
+    assert warn, "the dispute must reach a reader"
+    assert "cannot reach the state it asserts" in warn[0].evidence
+
+
+@pytest.mark.asyncio
+async def test_the_ceiling_leaves_a_test_alone_while_the_fixer_has_a_fair_run():
+    from agent.actions.pipeline_actions import _AUTHORED_ATTEMPT_CEILING
+
+    goal = _armed_goal(_AUTHORED_ATTEMPT_CEILING - 1)
+    m = _mission(goal)
+    fx = MockEffects(mission=m)
+
+    await action_gate_goal_acceptance(_si(fx))
+
+    assert goal.acceptance_checks[0]["required"] is True
+    assert not [w for w in m.pending_warnings if w.kind == "authored_test_unsatisfied"]
+
+
+@pytest.mark.asyncio
+async def test_the_ceiling_does_not_fire_twice():
+    from agent.actions.pipeline_actions import _AUTHORED_ATTEMPT_CEILING
+
+    goal = _armed_goal(_AUTHORED_ATTEMPT_CEILING + 5)
+    m = _mission(goal)
+    fx = MockEffects(mission=m)
+
+    await action_gate_goal_acceptance(_si(fx))
+    await action_gate_goal_acceptance(_si(fx))
+
+    warn = [w for w in m.pending_warnings if w.kind == "authored_test_unsatisfied"]
+    assert len(warn) == 1, "a demoted check must not re-raise on every pass"

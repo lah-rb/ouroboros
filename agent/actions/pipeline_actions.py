@@ -1869,6 +1869,70 @@ async def action_gate_goal_acceptance(step_input: StepInput) -> StepOutput:
             },
         )
     checks = list(getattr(goal, "acceptance_checks", None) or [])
+    # ── ATTEMPT CEILING on an authored test ──────────────────────────
+    # The quarantine in action_reconcile_acceptance only fires when the
+    # evaluator returns goal_met=true WHILE the check fails. A test that is
+    # unsatisfiable AND sits on a goal whose behaviour also fails never
+    # reaches that step at all: goal_met=false ends the round, the conflict
+    # counter never moves, and the goal loops until the wall.
+    #
+    # Observed live (gpt-oss-medium, 2026-08-09): a well-scoped victory-screen
+    # test whose scenario could not win the fight (it never equipped the boss
+    # weakness) sat at 8 failed attempts and 3 escalations with conflicts
+    # stuck at 2, while four other goals waited at zero. That is the
+    # 51-retest immortalization returning through the door the quarantine
+    # does not cover.
+    #
+    # So bound it on EFFORT as well as contradiction: past the ceiling the
+    # authored check goes advisory and the dispute is raised, exactly as the
+    # quarantine would have. Nothing is deleted; the test stays readable.
+    if getattr(goal, "authored_test", None) and checks:
+        attempts = len(getattr(goal, "failed_attempts", None) or [])
+        armed = [
+            c
+            for c in checks
+            if c.get("source") == "authored" and c.get("required", True)
+        ]
+        if armed and attempts >= _AUTHORED_ATTEMPT_CEILING:
+            from agent.persistence.models import WarningRecord
+
+            for c in armed:
+                c["required"] = False
+            mission.pending_warnings.append(
+                WarningRecord(
+                    kind="authored_test_unsatisfied",
+                    subject=str(
+                        getattr(goal, "authored_test", {}).get("path") or goal.id
+                    )[:120],
+                    evidence=(
+                        f"The authored regression test for "
+                        f"'{goal.description[:70]}' has stayed RED across "
+                        f"{attempts} fix attempts. The behaviour never passed "
+                        f"either, so the contradiction quarantine could not "
+                        f"fire. Either the fix is genuinely out of reach, or "
+                        f"the test cannot reach the state it asserts (e.g. it "
+                        f"drives a scenario that cannot succeed)."
+                    ),
+                    prescribed_fix=(
+                        "Read the test and decide which: repair the code, or "
+                        "correct the test's scenario. It has been demoted to "
+                        "advisory so the goal is no longer blocked by it."
+                    ),
+                    source_flow="gate_goal_acceptance",
+                )
+            )
+            logger.warning(
+                "goal-acceptance: authored test DEMOTED after %d fix attempts "
+                "without passing ('%s') — goal was blocked, not contradicted",
+                attempts,
+                goal.description[:50],
+            )
+            if effects:
+                try:
+                    await effects.save_mission(mission)
+                except Exception:  # noqa: BLE001 - never break the rung
+                    logger.debug("goal-acceptance: save failed", exc_info=True)
+            checks = list(goal.acceptance_checks or [])
     # An AUTHORED test outranks derivation (v13): it was probed red against the
     # broken code, so deriving a replay check on top of it would only re-add the
     # brittle layer it replaced. Gated on authored_test rather than on
@@ -1988,6 +2052,13 @@ _ACCEPTANCE_DISARM_K = 2  # behavior-refutes-check disarm threshold (cf _SHAPE_R
 # disarm threshold because a check with a verified negative control deserves
 # more benefit of the doubt than one derived from a transcript.
 _AUTHORED_QUARANTINE_K = 3
+# Failed fix attempts after which an authored test that has NEVER passed goes
+# advisory regardless of what the evaluator said. The contradiction quarantine
+# above needs goal_met=true to fire; this covers the case where the behaviour
+# fails too, which is the only way an authored test can immortalize a goal.
+# Four gives the fixer a fair run (the stuck-goal escalation has fired twice
+# by then) without letting one goal eat a run's remaining wall.
+_AUTHORED_ATTEMPT_CEILING = 4
 
 
 async def action_apply_acceptance_verdict(step_input: StepInput) -> StepOutput:
