@@ -644,6 +644,7 @@ def build_action_registry() -> ActionRegistry:
         action_start_diagnosis_session,
         action_execute_symbol_trace,
         action_conclude_diagnosis,
+        action_gate_author_test,
         action_goal_search_gate,
         action_store_goal_search_findings,
         action_systemic_scan,
@@ -653,6 +654,15 @@ def build_action_registry() -> ActionRegistry:
     registry.register("execute_symbol_trace", action_execute_symbol_trace)
     registry.register("conclude_diagnosis", action_conclude_diagnosis)
     registry.register("systemic_scan", action_systemic_scan)
+
+    # ── Authored regression tests (v13): TDD at the point of repair ────
+    # The diagnosis session writes the goal's test while the code is still
+    # broken — the one moment a negative control exists — and keeps it only
+    # if it probes RED from a cold workspace, twice, leaving nothing behind.
+    from agent.actions.authored_test_actions import action_author_regression_test
+
+    registry.register("gate_author_test", action_gate_author_test)
+    registry.register("author_regression_test", action_author_regression_test)
     # Stuck-goal external search (ops port): fires exa once per looping goal,
     # stores the hits on the goal; the diagnose seed surfaces them.
     registry.register("goal_search_gate", action_goal_search_gate)

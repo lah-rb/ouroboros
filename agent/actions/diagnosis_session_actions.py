@@ -1534,6 +1534,135 @@ async def action_goal_search_gate(step_input: StepInput) -> StepOutput:
     )
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Author-test gate (v13) — the TDD arm's eligibility decision
+# ══════════════════════════════════════════════════════════════════════
+
+
+_AUTHORED_TEST_MAX_ATTEMPTS = 2
+
+
+async def action_gate_author_test(step_input: StepInput) -> StepOutput:
+    """Decide whether this diagnosis round can carry an authored regression test.
+
+    The arm is only worth running when a NEGATIVE CONTROL exists — a concrete
+    code defect, still unfixed, about to be repaired. Every condition below
+    exists because without it the authored test would be unfalsifiable, or
+    would land somewhere it can never run:
+
+      * ``authored_tests == "off"`` — the operator kill switch.
+      * repair profile — the grader supplies the failing test, and
+        ``repair_write_reason`` blocks a new test file anyway.
+      * no resolvable functional goal — warning-channel diagnoses dispatch
+        with ``goal_id: ""`` and have no acceptance rung to hang a test on.
+      * an authored test already exists — one per goal.
+      * ``authored_test_attempts >= 2`` — a model that cannot write a red
+        test twice will not on the third try, and each try costs an
+        inference on the repair path.
+      * ``recommended_flow`` not in {"", "file_ops"} — a retest or
+        project_ops verdict means NO CODE CHANGE is coming, so a red test
+        would stay red forever and immortalize the goal.
+      * junk / empty ``target_file`` — nothing concrete to write against.
+      * deterministic interaction_mode (v1 only) — the acceptance rung sits
+        on interact's exploratory arm, so a deterministic goal's authored
+        test would never run in-session (see the plan's Deferred section).
+
+    Publishes ``author_test_brief`` — including, load-bearing, the mission's
+    TRANSIENT SET: the literal files the test may not assume exist. That list
+    is the direct answer to the `test -f save.json` class.
+
+    Inputs: goal_id.  Result: should_author.
+    """
+    from agent.actions.mission_actions import _JUNK_TARGET_TOKENS
+    from agent.actions.pipeline_actions import is_repair_profile
+
+    effects = step_input.effects
+    ctx = step_input.context
+    goal_id = str(step_input.inputs.get("goal_id", "") or "")
+
+    def _skip(reason: str) -> StepOutput:
+        return StepOutput(
+            result={"should_author": False},
+            observations=f"author-test gate: skip ({reason})",
+        )
+
+    if effects is None:
+        return _skip("no effects")
+    try:
+        mission = await effects.load_mission()
+    except Exception:  # noqa: BLE001 - the gate never breaks the diagnosis
+        return _skip("mission unavailable")
+    if mission is None:
+        return _skip("no mission")
+
+    mode = str(getattr(getattr(mission, "config", None), "authored_tests", "auto"))
+    if mode == "off":
+        return _skip("authored_tests=off")
+    if is_repair_profile(mission):
+        return _skip("repair profile — the grader owns the failing test")
+
+    goal = next(
+        (g for g in getattr(mission, "goals", []) or [] if g.id == goal_id), None
+    )
+    if goal is None:
+        return _skip("no goal (warning-channel diagnosis)")
+    if getattr(goal, "type", "") != "functional":
+        return _skip(f"goal type {getattr(goal, 'type', '?')!r} — not functional")
+    if getattr(goal, "authored_test", None):
+        return _skip("goal already has an authored test")
+    attempts = int(getattr(goal, "authored_test_attempts", 0) or 0)
+    if attempts >= _AUTHORED_TEST_MAX_ATTEMPTS:
+        return _skip(f"{attempts} authoring attempts already spent")
+    if str(getattr(goal, "interaction_mode", "") or "") == "deterministic":
+        return _skip("deterministic goal — no in-session acceptance rung (v1)")
+
+    flow = str(ctx.get("recommended_flow", "") or "").strip().lower()
+    if flow not in ("", "file_ops"):
+        return _skip(f"recommended_flow={flow!r} — no code change, no negative control")
+
+    target_file = str(ctx.get("target_file", "") or "").strip()
+    if target_file.lower() in _JUNK_TARGET_TOKENS:
+        return _skip(f"junk/empty target_file {target_file!r}")
+
+    # The transient set: declared patterns + everything the mission has
+    # OBSERVED a session write at runtime. The test may not assume any of it.
+    from agent.actions.interactive_actions import _transient_flush_plan
+
+    try:
+        patterns, _protected, observed = _transient_flush_plan(mission)
+    except Exception:  # noqa: BLE001 - brief detail is best-effort
+        patterns, observed = [], []
+    transients = sorted({*patterns, *observed})
+
+    slug = _authored_test_slug(goal.description)
+    brief = {
+        "goal_description": goal.description.strip(),
+        "target_file": target_file,
+        "target_symbol": str(ctx.get("target_symbol", "") or "").strip(),
+        "change_spec": str(ctx.get("change_spec", "") or "").strip(),
+        "root_cause": str(ctx.get("root_cause", "") or "").strip(),
+        "suggested_path": f"tests/test_{slug}.py" if slug else "tests/test_goal.py",
+        "working_directory": str(ctx.get("working_directory", "") or "").strip(),
+        "transient_files": transients,
+        "attempt": attempts + 1,
+    }
+    return StepOutput(
+        result={"should_author": True},
+        observations=(
+            f"author-test gate: authoring (attempt {attempts + 1}) for "
+            f"'{goal.description[:50]}' against {target_file}"
+        ),
+        context_updates={"author_test_brief": brief},
+    )
+
+
+def _authored_test_slug(text: str) -> str:
+    """A filesystem-safe stem for the authored test, from the goal description."""
+    from agent.actions.mission_actions import _directive_slug
+
+    return _directive_slug(text).replace("-", "_").strip("_")[:48]
+
+
 async def action_store_goal_search_findings(step_input: StepInput) -> StepOutput:
     """Store the escalation summary on the GOAL so every later diagnose seed
     surfaces it. (Named for the web-search era it replaced; the field —

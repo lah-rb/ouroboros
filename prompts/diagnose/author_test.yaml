@@ -1,0 +1,46 @@
+id: diagnose/author_test
+content: |
+  One more thing before we close, and it is the most valuable minute of this session.
+
+  You have just diagnosed a real defect, and THE CODE IS STILL BROKEN. That is a window that will not come back: right now — and only right now — you can prove a test is worth keeping, by watching it FAIL for the right reason. Write the regression test for this goal.
+
+  What the test is for: this goal keeps having to be re-verified by hand. A test that pins the behaviour retires that loop. It stays in the project, so write it the way you would want to find it.
+
+  THE GOAL: {goal_description}
+
+  THE DEFECT YOU FOUND
+    File: {target_file}
+    Symbol: {target_symbol}
+    Root cause: {root_cause}
+    The fix that is about to be applied: {change_spec}
+
+  YOUR TEST MUST FAIL RIGHT NOW, AND PASS ONLY ONCE THAT FIX LANDS. It will be run against the broken code before it is accepted. If it passes now, it is testing something other than the defect and will be thrown away.
+
+  RULES — every one of these is a test we already had to throw away:
+
+  1. OWN EVERY PRECONDITION. Your test runs from a COLD WORKSPACE. These files do not exist when it starts: {transient_files}. They are created at runtime and deleted between sessions. So `assert os.path.exists("save.json")` is not a test — it is a coin flip. Driving the program until it saves, and THEN asserting on what it wrote, is a test. If your test needs state, your test must create that state.
+
+  2. PIN THE INVARIANT, NOT A SESSION FINGERPRINT. Assert the rule that must always hold ("saving then loading restores the player's inventory"), never the incidental state one run happened to reach ("current_room_id == 'room4' and inventory == ['sword']"). A fingerprint breaks every time the project legitimately changes.
+
+  3. EXERCISE THE REPAIRED PATH HONESTLY. Call the real symbol. No monkeypatching the thing under test, no `check=False`, no `|| true`, no swallowing exceptions, no network. A test that cannot fail is worse than no test, because it reads like proof.
+
+  4. NEVER RE-DERIVE THE PROGRAM'S WORK AND COMPARE IT TO ITSELF. Reimplementing the logic in the test and asserting the two agree proves only that you wrote the same code twice.
+
+  5. NEVER GREP THE SOURCE FOR THE FIX. Searching for a function name or a keyword in a file tests that an edit happened, not that the behaviour works.
+
+  6. IT MUST RUN, CLEAN AND FAST. One file, valid Python, imports that resolve, collectable by pytest. Clean up anything it creates. Under {max_seconds} seconds. A test that ERRORS (import error, syntax error, collection failure) is red before the fix AND red after it — that would block this goal forever, so it is rejected outright.
+
+  ✅ `engine = Engine(); engine.do("take sword"); engine.save(p); e2 = Engine(); e2.load(p); assert "sword" in e2.inventory`
+     — creates its own state, asserts the invariant, exercises the real path.
+  ❌ `assert os.path.exists("save.json")`
+     — assumes a runtime file it never created; passes or fails on leftovers.
+
+  OUTPUT — a fenced JSON header, then the test file in its own fenced block:
+
+  ```json
+  {"path": "{suggested_path}", "language": "python", "command": "python -m pytest -q --no-header {suggested_path}"}
+  ```
+
+  ```python
+  # the complete test file
+  ```

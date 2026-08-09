@@ -3183,7 +3183,7 @@
   },
   "diagnose_issue": {
     "flow": "diagnose_issue",
-    "version": 12,
+    "version": 13,
     "description": "Trace-and-conclude investigation. Opens a memoryful session,\nseeds it with goal + test result + transcript + project + prior\nattempts, then loops on a single compound menu (trace a symbol,\nor conclude). Each trace injects cross-file evidence into the\nsession's KV cache. Model decides when it has enough signal to\nconclude; otherwise the flow auto-concludes after 8 turns.",
     "context_tier": "flow_directive",
     "returns": {
@@ -3598,7 +3598,7 @@
           "rules": [
             {
               "condition": "true",
-              "transition": "end_session"
+              "transition": "author_test_gate"
             }
           ]
         },
@@ -3606,6 +3606,69 @@
           "related_symbols",
           "change_spec"
         ],
+        "effects": [],
+        "terminal": false
+      },
+      "author_test_gate": {
+        "action": "gate_author_test",
+        "description": "Is this a repair round that can carry an authored regression test?",
+        "context": {
+          "required": [],
+          "optional": [
+            "target_file",
+            "target_symbol",
+            "change_spec",
+            "root_cause",
+            "recommended_flow",
+            "diagnosis_kind",
+            "working_directory"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.should_author == true",
+              "transition": "author_test"
+            },
+            {
+              "condition": "true",
+              "transition": "end_session"
+            }
+          ]
+        },
+        "publishes": [
+          "author_test_brief"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "author_test": {
+        "action": "author_regression_test",
+        "description": "Author a regression test for this goal; keep it only if it probes RED from a cold workspace",
+        "context": {
+          "required": [
+            "diagnosis_session_id"
+          ],
+          "optional": [
+            "author_test_brief",
+            "working_directory"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "end_session"
+            }
+          ]
+        },
+        "publishes": [],
         "effects": [],
         "terminal": false
       },

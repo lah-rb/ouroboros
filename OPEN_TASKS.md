@@ -1116,6 +1116,42 @@ Directions worth evaluating (none committed):
   and investing instead in evaluator reliability (the picky-personality
   fix class).
 
+**ANSWERED IN PART (2026-08-09) — the TDD repair loop shipped.** The
+direction taken is none of the four above: author the test at the point of
+REPAIR, in the diagnosis session, because that is the only moment a
+NEGATIVE CONTROL exists (the code is still broken, so a test can be watched
+failing for the right reason). `flows/code_core/diagnose_issue.cue` gained
+`author_test_gate` → `author_test` after `systemic_scan`, with exactly one
+exit to `end_session` — the arm can never delay or block the fix.
+`agent/actions/authored_test_actions.py` keeps a candidate only if four
+MECHANICAL controls pass: classified red (rc 1 + named failing nodes +
+clean collection — an import error is red forever and would immortalize the
+goal), a cold-workspace flush before the probe, a double run whose second
+is deliberately warm (order-dependent tests drop out), and leftover/speed
+gates. On success the authored check is stored FIRST and every derived
+replay check is demoted to `required: False` — which is the direct
+mechanical cure for the reopen class, since `action_regression_sweep`
+filters on `required` in both directions. `authored_tests: "auto"|"on"|"off"`
+in MissionConfig is the kill switch.
+
+Constraints honoured / broken, honestly: language-agnosticism is BROKEN in
+v1 — red is classifiable only through pytest, so the arm authors Python or
+nothing. The evaluator stays primary (a green authored test cannot certify,
+only veto — `parse_evaluation` still requires `goal_met==true`). The
+model-writes-bad-tests risk is handled by the controls plus a quarantine:
+an authored test is never disarmed, but at 3 behavioural contradictions it
+is demoted to advisory and raises a `WarningRecord` — bounding that mistake
+at 3 rounds against the 51 the derived check cost.
+
+STILL OPEN: deterministic-mode goals are gated out (the acceptance rung
+sits only on interact's exploratory arm); certification by a green test;
+whether `derive_goal_acceptance` should be retired once authored coverage
+is broad; and non-Python artifacts. Live watchlist for the next long run —
+authored/eligible rate, the drop histogram (a `broken`-dominated histogram
+is the kill criterion), max retest_count against the 5-and-51 baseline, and
+finally: read a finished artifact's `tests/` and ask whether a human would
+keep them.
+
 ## 23. The exemplar diff in quality_gate — evicted; the seam story needs a redesign (operator, 2026-08-08)
 
 **What existed:** `data_shape_check` ran `validate_data_shapes` inside

@@ -1869,7 +1869,15 @@ async def action_gate_goal_acceptance(step_input: StepInput) -> StepOutput:
             },
         )
     checks = list(getattr(goal, "acceptance_checks", None) or [])
-    needs = not bool(getattr(goal, "acceptance_grounded", False))
+    # An AUTHORED test outranks derivation (v13): it was probed red against the
+    # broken code, so deriving a replay check on top of it would only re-add the
+    # brittle layer it replaced. Gated on authored_test rather than on
+    # acceptance_grounded because reconcile RESETS grounded on any disarm — an
+    # unrelated derived check wearing out would otherwise re-arm derivation on a
+    # goal that already has a real test.
+    needs = not bool(getattr(goal, "acceptance_grounded", False)) and not bool(
+        getattr(goal, "authored_test", None)
+    )
     return StepOutput(
         result={"has_checks": bool(checks), "needs_derive": needs},
         observations=(
@@ -1975,6 +1983,11 @@ async def action_store_goal_acceptance(step_input: StepInput) -> StepOutput:
 
 
 _ACCEPTANCE_DISARM_K = 2  # behavior-refutes-check disarm threshold (cf _SHAPE_REFUTE_K)
+# An AUTHORED test is never disarmed — at this many contradictions it is
+# demoted to advisory and the dispute is raised as a warning. Higher than the
+# disarm threshold because a check with a verified negative control deserves
+# more benefit of the doubt than one derived from a transcript.
+_AUTHORED_QUARANTINE_K = 3
 
 
 async def action_apply_acceptance_verdict(step_input: StepInput) -> StepOutput:
@@ -2050,12 +2063,69 @@ async def action_reconcile_acceptance(step_input: StepInput) -> StepOutput:
         return raw[-1] if isinstance(raw, (list, tuple)) and raw else str(raw)
 
     failed = [r for r in results if r.get("required", True) and not r.get("passed")]
+    # AUTHORED tests are exempt from disarm (v13). Disarm exists to wear out
+    # mis-grounded REPLAY checks — checks derived from a transcript, never
+    # verified against anything. An authored test was probed RED against the
+    # broken code and green after the fix, so it has a negative control the
+    # evaluator does not; deleting it because two LLM verdicts disagreed would
+    # silently destroy the only ground truth on the goal. Quarantine instead
+    # (below): demote to advisory and route the contradiction to a human/fixer.
+    by_command = {str(c.get("command", "")): c for c in (goal.acceptance_checks or [])}
+
+    def _is_authored(key: str) -> bool:
+        return by_command.get(key, {}).get("source") == "authored"
+
     disarmed: set[str] = set()
+    quarantined: set[str] = set()
+    advisory: set[str] = set()  # authored + already quarantined = no veto left
     for row in failed:
         k = _key(row)
         goal.acceptance_conflicts[k] = goal.acceptance_conflicts.get(k, 0) + 1
+        if _is_authored(k):
+            if by_command.get(k, {}).get("required", True) is False:
+                # Already quarantined on an earlier round. It is advisory now:
+                # no second warning, and it must not re-acquire the veto.
+                advisory.add(k)
+            elif goal.acceptance_conflicts[k] >= _AUTHORED_QUARANTINE_K:
+                quarantined.add(k)
+            continue
         if goal.acceptance_conflicts[k] >= _ACCEPTANCE_DISARM_K:
             disarmed.add(k)
+
+    if quarantined:
+        from agent.persistence.models import WarningRecord
+
+        for k in quarantined:
+            check = by_command.get(k, {})
+            check["required"] = False
+            mission.pending_warnings.append(
+                WarningRecord(
+                    kind="authored_test_contradicted",
+                    subject=str(check.get("path") or k)[:120],
+                    evidence=(
+                        f"The authored regression test for "
+                        f"'{goal.description[:70]}' has now failed while the "
+                        f"behavioural evaluator returned goal_met=true "
+                        f"{_AUTHORED_QUARANTINE_K} times. Command: {k[:200]}. "
+                        f"Either the test asserts something the code no longer "
+                        f"owes, or the behaviour is passing for the wrong "
+                        f"reason and the evaluator is being fooled."
+                    ),
+                    prescribed_fix=(
+                        "Read the test and decide which side is wrong: correct "
+                        "the code, or correct the test. It has been demoted to "
+                        "advisory (it no longer vetoes completion) and left in "
+                        "place so it can be read."
+                    ),
+                    source_flow="reconcile_acceptance",
+                )
+            )
+            logger.warning(
+                "reconcile: QUARANTINED authored test on '%s' after %d "
+                "behaviour contradictions",
+                goal.description[:50],
+                _AUTHORED_QUARANTINE_K,
+            )
 
     if disarmed:
         goal.acceptance_checks = [
@@ -2094,7 +2164,11 @@ async def action_reconcile_acceptance(step_input: StepInput) -> StepOutput:
         # assumption is replaced instead of leaving a guard hole.
         goal.acceptance_grounded = False
 
-    now_ok = not [r for r in failed if _key(r) not in disarmed]
+    # A quarantined authored test is advisory from here on, so it no longer
+    # holds the veto — otherwise the goal it was written to certify could never
+    # complete again.
+    resolved = disarmed | quarantined | advisory
+    now_ok = not [r for r in failed if _key(r) not in resolved]
     if effects:
         await effects.save_mission(mission)
     updates: dict = {"mission": mission, "now_ok": now_ok, "acceptance_ok": now_ok}
@@ -2107,16 +2181,28 @@ async def action_reconcile_acceptance(step_input: StepInput) -> StepOutput:
     # never evidence of a code defect.
     if not now_ok:
         updates["acceptance_vetoed"] = True
-    if disarmed:
+    # Re-derivation replaces a disarmed REPLAY check. A goal that already
+    # carries an authored test doesn't need one — it has the better guard.
+    if disarmed and not getattr(goal, "authored_test", None):
         updates["acceptance_needs_derive"] = True
     return StepOutput(
-        result={"now_ok": now_ok, "disarmed": len(disarmed)},
+        result={
+            "now_ok": now_ok,
+            "disarmed": len(disarmed),
+            "quarantined": len(quarantined),
+        },
         observations=(
             f"reconcile: {len(disarmed)} disarmed, {len(failed)} failing, "
             f"now_ok={now_ok}"
             + (
                 " — grounding reset, fresh check derives on this pass"
-                if disarmed
+                if disarmed and not getattr(goal, "authored_test", None)
+                else ""
+            )
+            + (
+                f" — {len(quarantined)} AUTHORED test(s) quarantined "
+                "(demoted to advisory, warning raised)"
+                if quarantined
                 else ""
             )
         ),

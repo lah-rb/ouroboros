@@ -1,0 +1,9 @@
+id: diagnose/author_test_repair
+content: |
+  That test PASSED against the CURRENTLY BROKEN code, so it is not testing the defect — it would never have caught this bug.
+
+  Look again at the root cause you wrote above, and at the exact behaviour that is wrong right now. Write a test that exercises THAT behaviour directly: it must FAIL today and pass only once the fix lands.
+
+  The most common reason a test passes early: it asserts something the code already does correctly (a type, an attribute existing, a function returning at all) instead of the specific thing that is broken.
+
+  Same rules, same output format: a fenced JSON header, then the test file in its own fenced block.

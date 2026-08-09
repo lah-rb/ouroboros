@@ -4334,6 +4334,20 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
 
 _REGRESSION_CONCURRENCY = 8
 _REGRESSION_CHECK_TIMEOUT = 30
+# A check may carry its own timeout (authored tests store one measured from
+# their probe runs). Capped so one pathological check can't stall a sweep that
+# runs on every file-affecting cycle.
+_REGRESSION_CHECK_TIMEOUT_CAP = 120
+
+
+def _check_timeout(check: dict) -> int:
+    try:
+        wanted = int(check.get("timeout") or 0)
+    except (TypeError, ValueError):
+        return _REGRESSION_CHECK_TIMEOUT
+    if wanted <= 0:
+        return _REGRESSION_CHECK_TIMEOUT
+    return min(max(wanted, _REGRESSION_CHECK_TIMEOUT), _REGRESSION_CHECK_TIMEOUT_CAP)
 
 
 async def action_regression_sweep(step_input: StepInput) -> StepOutput:
@@ -4428,7 +4442,7 @@ async def action_regression_sweep(step_input: StepInput) -> StepOutput:
             async with sem:
                 try:
                     res = await effects.run_command(
-                        ["/bin/sh", "-c", cmd], timeout=_REGRESSION_CHECK_TIMEOUT
+                        ["/bin/sh", "-c", cmd], timeout=_check_timeout(check)
                     )
                     passed = res.return_code == 0 and not getattr(
                         res, "timed_out", False

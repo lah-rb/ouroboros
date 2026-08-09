@@ -79,6 +79,14 @@ class MissionConfig(BaseModel):
     # gracefully when on but unreachable — the research step's failure
     # branch proceeds without a summary.
     web_research: bool = True
+    # TDD repair loop kill switch (2026-08-09). "auto" (default): on a repair
+    # round, the diagnose session authors a regression test for the goal and
+    # keeps it only if it probes RED against the still-broken code. "on" is
+    # reserved for forcing the arm past future eligibility narrowing; "off"
+    # disables authoring entirely and leaves the derived replay checks in
+    # sole charge. A feature that WRITES INTO THE DELIVERABLE needs a switch
+    # the operator can throw mid-run without a code change.
+    authored_tests: Literal["auto", "on", "off"] = "auto"
     # OPT-IN (Luke 2026-07-24): route the design phase's domain research
     # through the deep_research sweep (select panel → per-hit extract burst
     # → adversarial verify) instead of the one-shot research flow. The
@@ -400,6 +408,21 @@ class GoalRecord(BaseModel):
     # self-recoveries without resolution mean direction, not more tooling.
     escalation_count: int = 0
     last_escalation_attempts: int = 0
+    # TDD repair loop (2026-08-09). The acceptance checks above are derived
+    # AFTER a passing session from its transcript — session REPLAY, which
+    # cannot own its own preconditions: hy3 produced `test -f save.json`
+    # against a file our own pre-session flush deletes, and the quit goal
+    # reached retest_count 51 rechecking a behaviour that never broke. An
+    # authored test is written at the ONE moment a negative control exists —
+    # while the code is still broken — and is kept only if it was probed RED
+    # from a cold workspace, twice, leaving nothing behind.
+    # {path, command, language, red_rc, red_evidence, timeout}. Empty = no
+    # authored test (the derived checks stay in charge, pre-TDD behaviour).
+    authored_test: dict = Field(default_factory=dict)
+    # Authoring attempts spent on this goal (the gate stops at 2): a model
+    # that cannot write a red test twice will not on the third try, and each
+    # attempt costs an in-session inference on the repair path.
+    authored_test_attempts: int = 0
 
 
 class FailedAttempt(BaseModel):

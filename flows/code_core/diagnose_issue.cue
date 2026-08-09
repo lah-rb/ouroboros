@@ -4,7 +4,12 @@
 //
 //   investigate (menu_compound)
 //     ├─ trace <file:symbol>  → inject body + call sites → loop back
-//     └─ conclude  → conclude → systemic_scan → structured diagnosis
+//     └─ conclude  → conclude → systemic_scan → author_test → diagnosis
+//
+// v13 adds the author-test arm: on a repair round the still-open session
+// writes a regression test for the goal and keeps it ONLY if it probes red
+// against the still-broken code (the one moment a negative control exists).
+// It has a single exit to end_session — it can never block the fix.
 //
 // v12 adds systemic_scan: an optional one-turn pass after conclude that widens
 // the diagnosis by PATTERN (sibling symbols sharing the same defect class),
@@ -50,7 +55,7 @@ package ouroboros
 
 diagnose_issue: #FlowDefinition & {
 	flow:    "diagnose_issue"
-	version: 12
+	version: 13
 	description: """
 		Trace-and-conclude investigation. Opens a memoryful session,
 		seeds it with goal + test result + transcript + project + prior
@@ -467,9 +472,69 @@ diagnose_issue: #FlowDefinition & {
 			}
 			resolver: {
 				type: "rule"
-				rules: [{condition: "true", transition: "end_session"}]
+				rules: [{condition: "true", transition: "author_test_gate"}]
 			}
 			publishes: ["related_symbols", "change_spec"]
+		}
+
+		// ══════════════════════════════════════════════════════════
+		// Author test (v13, 2026-08-09) — TDD at the point of repair
+		// ══════════════════════════════════════════════════════════
+		//
+		// Per-goal acceptance checks are derived AFTER a passing session from
+		// its transcript alone: session REPLAY, which cannot own its own
+		// preconditions. The hy3 run produced `test -f save.json` — a file the
+		// pre-session transient flush deletes — and the quit goal reached
+		// retest_count 51, rechecking a behaviour that never broke.
+		//
+		// A real test owns its preconditions, and the only moment a NEGATIVE
+		// CONTROL exists is right here: the diagnosis is concluded and the code
+		// is still broken. So the author arm runs in the SAME session (the
+		// traced symbol bodies, call sites and root cause are already in the KV
+		// cache — free context the fix dispatch would otherwise have to re-earn)
+		// and the candidate is kept only if it probes RED, from a cold
+		// workspace, twice, leaving nothing behind.
+		//
+		// SAFETY INVARIANT — `author_test` has EXACTLY ONE outgoing transition,
+		// to `end_session`. No path through this arm can delay, redirect or
+		// block the fix dispatch; every internal failure is a pass-through.
+		// The graph test pins that single exit.
+
+		author_test_gate: #StepDefinition & {
+			action:      "gate_author_test"
+			description: "Is this a repair round that can carry an authored regression test?"
+			context: optional: [
+				"target_file", "target_symbol", "change_spec", "root_cause",
+				"recommended_flow", "diagnosis_kind", "working_directory",
+			]
+			resolver: {
+				type: "rule"
+				rules: [
+					{condition: "result.should_author == true", transition: "author_test"},
+					{condition: "true", transition: "end_session"},
+				]
+			}
+			publishes: ["author_test_brief"]
+		}
+
+		author_test: #StepDefinition & {
+			action:      "author_regression_test"
+			description: "Author a regression test for this goal; keep it only if it probes RED from a cold workspace"
+			context: {
+				required: ["diagnosis_session_id"]
+				optional: ["author_test_brief", "working_directory"]
+			}
+			resolver: {
+				type: "rule"
+				// ONE exit — see the invariant above. Never conditional.
+				rules: [{condition: "true", transition: "end_session"}]
+			}
+			// Deliberately publishes NOTHING. In particular not files_changed:
+			// the arm must not arm mission.regression_dirty (a test file is not
+			// a product edit) and must not perturb the diagnosis the dispatcher
+			// is about to act on. The authored test is persisted straight onto
+			// the goal.
+			publishes: []
 		}
 
 		// ══════════════════════════════════════════════════════════

@@ -141,9 +141,21 @@ sections:
          tester who satisfied the goal by another route? If not, generalize
          it or drop it.
          ✅ structure the goal requires of any pass:
-            {"command": "python -c \"import json,sys; d=json.load(open('save.json')); sys.exit(0 if 'current_room_id' in d and isinstance(d.get('inventory'), list) else 1)\"", "description": "the save records location and inventory"}
+            {"command": "python -c \"import json,sys; d=json.load(open('data/rooms.json')); sys.exit(0 if all('exits' in r for r in d.values()) else 1)\"", "description": "every room declares its exits"}
          ❌ this session's walk, not the goal's requirement:
-            {"command": "python -c \"import json,sys; d=json.load(open('save.json')); sys.exit(0 if d.get('current_room_id')=='room4' and d.get('inventory')==['sword'] else 1)\"", "description": "save matches the session"}
+            {"command": "python -c \"import json,sys; d=json.load(open('data/rooms.json')); sys.exit(0 if d['start']['exits']==['north'] else 1)\"", "description": "start room matches the session"}
+      9. NEVER ASSERT ON A FILE THE PROGRAM WRITES AT RUNTIME. Save files,
+         logs, exports, caches — anything a SESSION creates rather than the
+         project shipping — are TRANSIENT: they are deleted between test
+         sessions, so a check that assumes one exists fails forever, through
+         no fault of the code. This is not hypothetical: `test -f save.json`
+         reopened five goals per sweep wave and drove one goal to 51
+         pointless re-tests. If the behaviour you want to pin only shows up
+         in a runtime file, this is NOT shell-checkable from a cold start —
+         return no check for it and let the evaluator judge.
+         ❌ {"command": "test -f save.json", "description": "the save exists"}
+         ✅ (nothing — the save is transient; the evaluator judges the save/load
+            behaviour from the session)
 
       Most purely-behavioral goals (interactive flows, conversational
       output) have NO robust shell-checkable end-state — for those return
@@ -155,9 +167,9 @@ sections:
       Return a JSON object with a "checks" array. The example is from an
       UNRELATED goal — it shows the SHAPE only.
 
-      ✅ CORRECT (the goal requires a save file to be produced):
+      ✅ CORRECT (the goal requires the project to ship a room table):
       ```json
-      {"checks": [{"command": "test -s saves/slot1.json", "description": "the save file exists and is non-empty"}]}
+      {"checks": [{"command": "test -s data/rooms.json", "description": "the room table ships and is non-empty"}]}
       ```
 
       ❌ WRONG — re-derives the answer inside the check:
