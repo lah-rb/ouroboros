@@ -42,7 +42,8 @@ run_session: #FlowDefinition & {
 		commands_run:         {type: "int",    from: "context.command_count",         optional: true}
 		inference_session_id: {type: "string", from: "context.inference_session_id",  optional: true}
 		// The session's actual interactive launch command (captured by
-		// send_interaction; relaunch replays it). Callers that re-run the
+		// send_interaction; the pre-close notice names it as the relaunch
+		// line). Callers that re-run the
 		// program deterministically — the quality gate's finding probes —
 		// need this, NOT architecture.run_command, which may be the
 		// self-terminating startup-check variant (`printf "quit\n" | ...`).
@@ -123,11 +124,10 @@ run_session: #FlowDefinition & {
 						shell_command: "execute_interaction"
 						send_input:    "execute_interaction"
 						// NOT close_session: every MODEL-CHOSEN close is
-						// confirmed first (operator, 2026-08-09 — "that menu
-						// should appear after all session closures before
-						// allowing to proceed"). The tester routinely closes
-						// with its brief half-done; confirm_close asks, and
-						// offers the relaunch a multi-run arc needs.
+						// confirmed first (operator, 2026-08-09). The tester
+						// routinely closes with its brief half-done; the gate
+						// injects a brief-check notice into the NEXT plan turn
+						// and returns here — no second menu (the 779 lesson).
 						close: "confirm_close"
 					}
 					// Safety — assume shell_command-like intent if
@@ -174,7 +174,8 @@ run_session: #FlowDefinition & {
 				// the action falls back to re-parsing inference_response
 				// when these aren't available (tests, legacy paths).
 				// launch_command: read to avoid re-capturing after the
-				// first shell command (ask_relaunch replays it verbatim).
+				// first shell command; the pre-close notice names it as the
+				// relaunch line, and quality_gate's finding probes replay it.
 				// See action_send_interaction in interactive_actions.py.
 				optional: ["planned_action", "planned_action_arg", "launch_command"]
 			}
@@ -189,10 +190,11 @@ run_session: #FlowDefinition & {
 					{condition: "result.stuck_detected == true", transition: "close_session"},
 					// Program exited (e.g. the tester quit it). Don't force-
 					// close: charters can require state spanning program runs
-					// (save → relaunch → load → verify). Ask the model — via
-					// menu — whether another run is needed to complete its
-					// brief. Before this, the forced close made multi-run
-					// arcs structurally impossible and the gate reported the
+					// (save → relaunch → load → verify). The gate injects the
+					// brief-check notice and returns to the plan menu, where
+					// the model can relaunch with its own shell_command.
+					// Before this, the forced close made multi-run arcs
+					// structurally impossible and the gate reported the
 					// untested features as broken.
 					{condition: "result.process_exited == true", transition: "confirm_close"},
 					// Loop back to plan_interaction after a successful
@@ -219,145 +221,60 @@ run_session: #FlowDefinition & {
 			publishes: ["mcp_session_id", "session_history", "launch_command"]
 		}
 
-		// ── Pre-close confirmation (operator, 2026-08-09) ──────────
+		// ── Pre-close confirmation (operator, 2026-08-09; ONE-MENU rework
+		//     same day) ──────────────────────────────────────────────
 		//
-		// EVERY model-chosen close passes through here first. This was
-		// `ask_relaunch`, reachable only on `process_exited` — which, in
-		// 5,162 interactions across the hy3 run, was true ZERO times (a
-		// settle/exit race, fixed separately in pty_session). So the step
-		// that makes save → quit → relaunch → load → verify possible had
-		// never once fired, and the quality gate kept filing the resulting
-		// hole as a product defect no session could have closed.
+		// EVERY model-chosen close passes through here first. The original
+		// trigger (`process_exited` → ask_relaunch) was true ZERO times in
+		// 5,162 interactions across the hy3 run (a settle/exit race, fixed
+		// in pty_session), so the save → quit → relaunch → load → verify
+		// arc had never once been offered.
 		//
-		// Routing through the menu on every voluntary close makes the arc
-		// reachable whether or not exit detection wins its race — the
-		// robust half of the fix. The gate below is deterministic: it reads
-		// child liveness and enforces the ask-cap, so the model is only
-		// asked while asking can still change something.
+		// v1 of this gate asked through a SECOND menu (ask_resume:
+		// resume/conclude) — and reproduced the 779 menu-confusion class
+		// within an hour of first firing: 2 of 3 ask_resume turns came back
+		// in PLAN vocabulary ({"choice":"send_input", ...}), unparseable,
+		// vs 0 of 66 at plan_interaction. Two menu shapes in one session KV
+		// and the model reverts to the dominant one; worse, a plan-shape
+		// answer plainly means "keep testing" but fell to no_answer →
+		// close_session — asking to continue got the session shut down.
+		//
+		// v2 (this): NO second menu. The gate queues a NOTICE into the next
+		// plan_interaction turn via session_injections — "the session has
+		// NOT closed; program exited/running; check your brief; relaunch
+		// with shell_command `<launch_command>` if items remain; close
+		// again to confirm" — and loops back to the ONE menu the model
+		// never fumbles. Relaunch is the model's ordinary shell_command
+		// (the notice names the captured launch command), so the
+		// resume_session/do_relaunch machinery is gone. A later close is
+		// honoured without another notice (_MAX_CLOSE_NOTICES bounds the
+		// cycle; the close_session exit satisfies check_unguarded_cycles).
 
 		confirm_close: #StepDefinition & {
 			action:      "confirm_close_gate"
-			description: "Before closing: read child liveness, enforce the ask-cap"
+			description: "First close: inject the brief-check notice and return to the plan menu; later closes: honour"
 			context: {
 				required: ["mcp_session_id"]
-				optional: ["session_history", "close_confirmations"]
+				optional: [
+					"session_history", "close_confirmations",
+					// The injection target: the notice is queued onto this
+					// inference session so the NEXT plan turn carries it.
+					"inference_session_id",
+					// Named verbatim in the notice's relaunch line.
+					"launch_command",
+					// The model's own close reason (plan menu `close` arg) —
+					// echoed back so the notice engages its stated rationale.
+					"planned_action_arg",
+				]
 			}
 			resolver: {
 				type: "rule"
 				rules: [
-					{condition: "result.should_ask == true", transition: "ask_resume"},
+					{condition: "result.should_notice == true", transition: "plan_interaction"},
 					{condition: "true", transition: "close_session"},
 				]
 			}
-			publishes: ["child_running", "close_confirmations"]
-		}
-
-		ask_resume: #StepDefinition & {
-			action:      "inference"
-			description: "Is every item in the brief done, or is another run needed?"
-			context: {
-				required: ["mcp_session_id", "session_history"]
-				optional: ["inference_session_id", "relaunch_count", "child_running", "close_state_line"]
-			}
-			turn: #Turn & {
-				response_shape: "menu_compound"
-				sections: [
-					{type: "evidence", template:    "run_in_terminal/session_state"},
-					{type: "instruction", template: "run_in_terminal/confirm_close"},
-					{type: "options"},
-					{type: "envelope"},
-				]
-				response: {
-					options: {
-						resume: #MenuOption & {
-							key:         "resume"
-							description: "Keep testing — there are items in your brief you have not covered yet. If the program has exited it will be run again from the start; files it wrote (like saves) are still on disk."
-						}
-						conclude: #MenuOption & {
-							key:         "conclude"
-							description: "Every item in the brief is done (or another run cannot help) — end the session and move to assessment."
-						}
-					}
-					// No publish_selection. This menu routes purely through
-					// `transitions.options` below, and its options take no
-					// arg, so the usual reason to declare one — the runtime
-					// also emitting `<key>_arg` for the action to read
-					// (runtime.py:1475) — does not apply here. The five other
-					// menus in the tree DO consume their `_arg` and keep it.
-				}
-				transitions: {
-					options: {
-						// NOT do_relaunch directly: relaunch_program writes the
-						// launch command to stdin, so firing it while the
-						// program is still ALIVE types `python main.py` into
-						// the game. resume_session picks the right resumption.
-						resume:   "resume_session"
-						conclude: "close_session"
-					}
-					default:   "close_session"
-					no_answer: "close_session"
-				}
-				config: temperature: "t*0.3"
-				retries: 2
-			}
-			pre_compute: [
-				// format_last_turn MUST run before format_session_history: the
-				// latter's output_key collides with its own input key
-				// ("session_history"), clobbering the entry list with a rendered
-				// string mid-chain (loader.run_pre_compute propagates each output
-				// into context immediately). If it ran first, format_last_turn
-				// would read a string — last char ≠ dict → empty block, the
-				// long-dead ---LAST TURN--- channel. Order = correctness here.
-				{
-					formatter:  "format_last_turn"
-					output_key: "last_turn"
-					params: source: {$ref: "context.session_history"}
-				},
-				{
-					formatter:  "format_session_history"
-					output_key: "session_history"
-					params: source: {$ref: "context.session_history"}
-				},
-			]
-			publishes: ["inference_response"]
-		}
-
-		// How to resume depends on whether the program is still alive.
-		// A voluntary close leaves it RUNNING at its prompt — resuming
-		// means going straight back to the plan turn. A close after exit
-		// needs the program launched again first. Getting this backwards
-		// sends the launch command into the running program's stdin.
-		resume_session: #StepDefinition & {
-			action:      "noop"
-			description: "Resume testing: relaunch if the program exited, else keep driving it"
-			context: optional: ["child_running"]
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "context.get('child_running')", transition: "plan_interaction"},
-					{condition: "true", transition:                        "do_relaunch"},
-				]
-			}
-		}
-
-		// Deterministic replay of the session's own first launch command
-		// (captured by send_interaction). Capped in the action — a model
-		// that keeps relaunching still terminates.
-		do_relaunch: #StepDefinition & {
-			action:      "relaunch_program"
-			description: "Replay the session's launch command for another run"
-			context: {
-				required: ["mcp_connection_id", "mcp_session_id", "session_history"]
-				optional: ["launch_command", "relaunch_count"]
-			}
-			resolver: {
-				type: "rule"
-				rules: [
-					{condition: "result.relaunched == true", transition: "plan_interaction"},
-					{condition: "true", transition: "close_session"},
-				]
-			}
-			publishes: ["session_history", "relaunch_count"]
+			publishes: ["close_confirmations"]
 		}
 
 		// PTY closes but inference session stays alive for the caller

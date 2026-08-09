@@ -1,0 +1,25 @@
+id: run_in_terminal/close_notice
+content: |
+  [SESSION NOTICE — the session has NOT closed yet.]
+
+  You chose to close this session. {reason_line}
+
+  {state_line}
+
+  Before the close is accepted, check your brief against what you ACTUALLY
+  did — not what you intended. Go through it item by item and ask of each:
+  did I type the command, and did I see the result?
+
+  Two things are easy to miss:
+
+  - Items you never got to. A session that explored thoroughly in one
+    direction can still leave whole features untouched.
+  - Items that need a SECOND run. Verifying that saved state restores
+    correctly means quitting, starting the program again, and loading what
+    you saved. Files written earlier — saves, logs, exports — are still on
+    disk.
+
+  If anything remains, simply keep testing. {resume_line}
+
+  If every item in your brief has genuinely been exercised, or another run
+  cannot help, choose close again and the session will end.

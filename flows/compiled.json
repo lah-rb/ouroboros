@@ -13423,170 +13423,17 @@
       },
       "confirm_close": {
         "action": "confirm_close_gate",
-        "description": "Before closing: read child liveness, enforce the ask-cap",
+        "description": "First close: inject the brief-check notice and return to the plan menu; later closes: honour",
         "context": {
           "required": [
             "mcp_session_id"
           ],
           "optional": [
             "session_history",
-            "close_confirmations"
-          ]
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "result.should_ask == true",
-              "transition": "ask_resume"
-            },
-            {
-              "condition": "true",
-              "transition": "close_session"
-            }
-          ]
-        },
-        "publishes": [
-          "child_running",
-          "close_confirmations"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "ask_resume": {
-        "action": "inference",
-        "description": "Is every item in the brief done, or is another run needed?",
-        "context": {
-          "required": [
-            "mcp_session_id",
-            "session_history"
-          ],
-          "optional": [
+            "close_confirmations",
             "inference_session_id",
-            "relaunch_count",
-            "child_running",
-            "close_state_line"
-          ]
-        },
-        "params": {},
-        "turn": {
-          "response_shape": "menu_compound",
-          "sections": [
-            {
-              "type": "evidence",
-              "template": "run_in_terminal/session_state",
-              "required": false
-            },
-            {
-              "type": "instruction",
-              "template": "run_in_terminal/confirm_close",
-              "required": false
-            },
-            {
-              "type": "options",
-              "required": false
-            },
-            {
-              "type": "envelope",
-              "required": false
-            }
-          ],
-          "response": {
-            "options": {
-              "resume": {
-                "key": "resume",
-                "description": "Keep testing \u2014 there are items in your brief you have not covered yet. If the program has exited it will be run again from the start; files it wrote (like saves) are still on disk.",
-                "terminal": false
-              },
-              "conclude": {
-                "key": "conclude",
-                "description": "Every item in the brief is done (or another run cannot help) \u2014 end the session and move to assessment.",
-                "terminal": false
-              }
-            }
-          },
-          "transitions": {
-            "default": "close_session",
-            "no_answer": "close_session",
-            "options": {
-              "resume": "resume_session",
-              "conclude": "close_session"
-            }
-          },
-          "config": {
-            "temperature": "t*0.3"
-          },
-          "retries": 2
-        },
-        "pre_compute": [
-          {
-            "formatter": "format_last_turn",
-            "output_key": "last_turn",
-            "params": {
-              "source": {
-                "$ref": "context.session_history"
-              }
-            }
-          },
-          {
-            "formatter": "format_session_history",
-            "output_key": "session_history",
-            "params": {
-              "source": {
-                "$ref": "context.session_history"
-              }
-            }
-          }
-        ],
-        "config": {},
-        "publishes": [
-          "inference_response"
-        ],
-        "effects": [],
-        "terminal": false
-      },
-      "resume_session": {
-        "action": "noop",
-        "description": "Resume testing: relaunch if the program exited, else keep driving it",
-        "context": {
-          "required": [],
-          "optional": [
-            "child_running"
-          ]
-        },
-        "params": {},
-        "config": {},
-        "resolver": {
-          "type": "rule",
-          "rules": [
-            {
-              "condition": "context.get('child_running')",
-              "transition": "plan_interaction"
-            },
-            {
-              "condition": "true",
-              "transition": "do_relaunch"
-            }
-          ]
-        },
-        "publishes": [],
-        "effects": [],
-        "terminal": false
-      },
-      "do_relaunch": {
-        "action": "relaunch_program",
-        "description": "Replay the session's launch command for another run",
-        "context": {
-          "required": [
-            "mcp_connection_id",
-            "mcp_session_id",
-            "session_history"
-          ],
-          "optional": [
             "launch_command",
-            "relaunch_count"
+            "planned_action_arg"
           ]
         },
         "params": {},
@@ -13595,7 +13442,7 @@
           "type": "rule",
           "rules": [
             {
-              "condition": "result.relaunched == true",
+              "condition": "result.should_notice == true",
               "transition": "plan_interaction"
             },
             {
@@ -13605,8 +13452,7 @@
           ]
         },
         "publishes": [
-          "session_history",
-          "relaunch_count"
+          "close_confirmations"
         ],
         "effects": [],
         "terminal": false

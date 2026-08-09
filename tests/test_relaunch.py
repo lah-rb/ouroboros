@@ -1,24 +1,45 @@
-"""Multi-run test sessions: launch capture + deterministic relaunch.
+"""Multi-run test sessions: launch capture + the pre-close notice.
 
-Charters can require state that spans program runs (save → relaunch →
-load → verify). process_exited used to force-close the session, making
-those arcs structurally impossible — the gate then reported the untested
-features as broken. Now exit routes to a menu (ask_relaunch) whose
-`relaunch` branch replays the session's OWN first launch command,
-capped so a confused model still terminates.
+THE HISTORY THESE PIN, in order:
+
+1. Charters can require state that spans program runs (save → relaunch →
+   load → verify). ``process_exited`` used to force-close the session,
+   making those arcs structurally impossible — and the trigger itself was
+   DEAD: true 0 times in 5,162 interactions across the hy3 run (a
+   settle/exit race, fixed in pty_session and pinned there).
+
+2. The first fix (68e8035) confirmed every model-chosen close through a
+   SECOND menu (ask_resume: resume/conclude) — and reproduced the 779
+   menu-confusion class within an hour of first firing: 2 of 3 turns came
+   back in PLAN vocabulary ({"choice": "send_input", ...}), unparseable,
+   vs 0 of 66 at plan_interaction. Perversely, a plan-shape answer means
+   "keep testing" but fell through no_answer → close_session.
+
+3. Current design (operator ruling): ONE menu. The first close draws a
+   NOTICE — injected into the next plan_interaction turn via
+   session_injections, zero extra inference — and returns to the plan
+   menu, where the model relaunches with its ordinary shell_command (the
+   notice names the captured launch command verbatim). A later close is
+   honoured without comment.
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from agent.actions.interactive_actions import (
-    _MAX_RELAUNCHES,
-    action_relaunch_program,
+    _MAX_CLOSE_NOTICES,
+    _last_child_running,
+    action_confirm_close_gate,
     action_send_interaction,
 )
 from agent.effects.mock import MockEffects
 from agent.models import FlowMeta, StepInput
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _si(effects, context) -> StepInput:
@@ -28,6 +49,11 @@ def _si(effects, context) -> StepInput:
         meta=FlowMeta(flow_name="run_session", step_id="x"),
         effects=effects,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Launch capture — the notice and quality_gate's probes both consume it
+# ══════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
@@ -66,147 +92,26 @@ async def test_first_shell_command_captured_as_launch_command():
 
 
 @pytest.mark.asyncio
-async def test_relaunch_replays_launch_and_increments_count():
+async def test_send_interaction_records_liveness_per_turn():
+    """The gate reads this field; if the recorder stops writing it the gate
+    silently falls back to guessing from status."""
     effects = MockEffects()
-    out = await action_relaunch_program(
-        _si(
-            effects,
-            {
-                "mcp_connection_id": "c1",
-                "mcp_session_id": "s1",
-                "session_history": [{"turn": 0, "action": "shell_command"}],
-                "launch_command": "python main.py",
-                "relaunch_count": 1,
-            },
-        )
-    )
-    assert out.result["relaunched"] is True
-    assert out.context_updates["relaunch_count"] == 2
-    sent = [
-        c for c in effects.calls_to("mcp_call_tool") if c.args["tool"] == "send_input"
-    ]
-    assert sent and sent[0].args["text"] == "python main.py\n"
-    assert out.context_updates["session_history"][-1]["action"] == "relaunch"
-
-
-@pytest.mark.asyncio
-async def test_relaunch_cap_terminates():
-    effects = MockEffects()
-    out = await action_relaunch_program(
+    out = await action_send_interaction(
         _si(
             effects,
             {
                 "mcp_connection_id": "c1",
                 "mcp_session_id": "s1",
                 "session_history": [],
-                "launch_command": "python main.py",
-                "relaunch_count": _MAX_RELAUNCHES,
+                "planned_action": "send_input",
+                "planned_action_arg": "look\n",
             },
         )
     )
-    assert out.result["relaunched"] is False
-    assert effects.call_count("mcp_call_tool") == 0
-
-
-@pytest.mark.asyncio
-async def test_relaunch_without_captured_launch_closes():
-    effects = MockEffects()
-    out = await action_relaunch_program(
-        _si(
-            effects,
-            {
-                "mcp_connection_id": "c1",
-                "mcp_session_id": "s1",
-                "session_history": [],
-            },
-        )
-    )
-    assert out.result["relaunched"] is False
-    assert effects.call_count("mcp_call_tool") == 0
-
-
-# ══════════════════════════════════════════════════════════════════════
-# The pre-close gate — every model-chosen close is confirmed
-# ══════════════════════════════════════════════════════════════════════
-#
-# WHY THIS EXISTS. The tests above pin launch capture and the relaunch
-# cap — the machinery DOWNSTREAM of the trigger. Nothing pinned the
-# trigger itself, and it was dead: across the whole hy3 run (2026-08-09),
-# 5,162 execute_interaction resolutions produced `ask_relaunch` ZERO
-# times, because `process_exited` never became true (a settle/exit race,
-# fixed in pty_session). The save → quit → relaunch → load → verify arc
-# was unreachable for the entire run while the quality gate filed the
-# resulting hole as a product defect no session could have closed.
-#
-# So the fix is routed, not just detected: every model-chosen close now
-# passes the gate, whether or not exit detection wins its race.
-
-
-@pytest.mark.asyncio
-async def test_the_gate_asks_before_a_voluntary_close():
-    from agent.actions.interactive_actions import action_confirm_close_gate
-
-    out = await action_confirm_close_gate(
-        _si(
-            MockEffects(),
-            {
-                "mcp_session_id": "s1",
-                "session_history": [
-                    {"turn": 0, "status": "settled", "child_running": True}
-                ],
-            },
-        )
-    )
-    assert out.result["should_ask"] is True
-    assert out.context_updates["child_running"] is True
-    assert out.context_updates["close_confirmations"] == 1
-    assert "still running" in out.context_updates["close_state_line"]
-
-
-@pytest.mark.asyncio
-async def test_the_gate_reports_an_exited_program():
-    from agent.actions.interactive_actions import action_confirm_close_gate
-
-    out = await action_confirm_close_gate(
-        _si(
-            MockEffects(),
-            {
-                "mcp_session_id": "s1",
-                "session_history": [
-                    {"turn": 0, "status": "settled", "child_running": True},
-                    {"turn": 1, "status": "process_exited", "child_running": False},
-                ],
-            },
-        )
-    )
-    assert out.result["child_running"] is False
-    assert "has exited" in out.context_updates["close_state_line"]
-
-
-@pytest.mark.asyncio
-async def test_the_gate_stops_asking_at_the_cap():
-    """A model that ping-pongs close -> resume -> close must still finish."""
-    from agent.actions.interactive_actions import (
-        _MAX_CLOSE_CONFIRMATIONS,
-        action_confirm_close_gate,
-    )
-
-    out = await action_confirm_close_gate(
-        _si(
-            MockEffects(),
-            {
-                "mcp_session_id": "s1",
-                "session_history": [],
-                "close_confirmations": _MAX_CLOSE_CONFIRMATIONS,
-            },
-        )
-    )
-    assert out.result["should_ask"] is False
+    assert "child_running" in out.context_updates["session_history"][-1]
 
 
 def test_liveness_is_read_from_the_last_turn_that_recorded_it():
-    from agent.actions.interactive_actions import _last_child_running
-
     assert _last_child_running([{"status": "settled", "child_running": True}]) is True
     assert (
         _last_child_running(
@@ -224,63 +129,163 @@ def test_liveness_is_read_from_the_last_turn_that_recorded_it():
     assert _last_child_running([]) is False
 
 
+# ══════════════════════════════════════════════════════════════════════
+# The pre-close notice — first close nudges, later closes are honoured
+# ══════════════════════════════════════════════════════════════════════
+
+
+_EXITED_HISTORY = [
+    {"turn": 0, "status": "settled", "child_running": True},
+    {"turn": 1, "status": "process_exited", "child_running": False},
+]
+_RUNNING_HISTORY = [{"turn": 0, "status": "settled", "child_running": True}]
+
+
+def _gate_ctx(history, **kw):
+    ctx = {
+        "mcp_session_id": "s1",
+        "inference_session_id": "inf1",
+        "session_history": history,
+        "launch_command": "python main.py",
+    }
+    ctx.update(kw)
+    return ctx
+
+
 @pytest.mark.asyncio
-async def test_send_interaction_records_liveness_per_turn():
-    """The gate reads this field; if the recorder stops writing it the gate
-    silently falls back and can send a launch command into a live program."""
-    effects = MockEffects()
-    out = await action_send_interaction(
+async def test_first_close_queues_the_notice_and_returns_to_the_plan_menu():
+    out = await action_confirm_close_gate(
+        _si(MockEffects(), _gate_ctx(_EXITED_HISTORY, planned_action_arg="all done"))
+    )
+    assert out.result["should_notice"] is True
+    assert out.context_updates["close_confirmations"] == 1
+
+    injections = out.context_updates.get("session_injections") or []
+    assert len(injections) == 1
+    notice = injections[0]
+    # LEADS by contradicting the runtime's automatic
+    # "[Your previous selection of 'close' ... was accepted and executed.]"
+    assert "NOT closed" in notice
+    # Names the literal relaunch line — the model must not have to remember
+    # its own launch command at the exit boundary.
+    assert "python main.py" in notice
+    assert "shell_command" in notice
+    # Engages the model's own stated rationale rather than talking past it.
+    assert "all done" in notice
+    assert "EXITED" in notice
+
+
+@pytest.mark.asyncio
+async def test_the_notice_reads_differently_while_the_program_still_runs():
+    """Telling the model to relaunch a program that is ALIVE would have it
+    type `python main.py` into the game's own stdin."""
+    out = await action_confirm_close_gate(
+        _si(MockEffects(), _gate_ctx(_RUNNING_HISTORY))
+    )
+    notice = (out.context_updates.get("session_injections") or [""])[0]
+    assert "RUNNING" in notice
+    assert "send_input" in notice
+    assert "Start it again" not in notice
+
+
+@pytest.mark.asyncio
+async def test_a_later_close_is_honoured_without_another_notice():
+    """One nudge per session: close → notice → close cannot ping-pong."""
+    out = await action_confirm_close_gate(
         _si(
-            effects,
-            {
-                "mcp_connection_id": "c1",
-                "mcp_session_id": "s1",
-                "session_history": [],
-                "planned_action": "send_input",
-                "planned_action_arg": "look\n",
-            },
+            MockEffects(),
+            _gate_ctx(_EXITED_HISTORY, close_confirmations=_MAX_CLOSE_NOTICES),
         )
     )
-    assert "child_running" in out.context_updates["session_history"][-1]
+    assert out.result["should_notice"] is False
+    assert not (out.context_updates or {}).get("session_injections")
+
+
+@pytest.mark.asyncio
+async def test_the_queue_is_appended_to_not_replaced():
+    """Another producer's pending injection must survive the notice."""
+    out = await action_confirm_close_gate(
+        _si(
+            MockEffects(),
+            _gate_ctx(_EXITED_HISTORY, session_injections=["earlier message"]),
+        )
+    )
+    injections = out.context_updates.get("session_injections") or []
+    assert injections[0] == "earlier message"
+    assert len(injections) == 2
+
+
+def test_the_rendered_notice_has_no_unsubstituted_tokens():
+    """THE DEAD-PLACEHOLDER REGRESSION: v1's prompt used a bare
+    {close_state_line}, the interpolation regex only substitutes
+    {context.*} forms, and a live model read the literal placeholder for a
+    full run. The notice is rendered by the action, so every token must be
+    gone by the time it is queued."""
+    import re
+
+    from agent.actions.interactive_actions import _render_close_notice
+
+    for child_running in (True, False):
+        text = _render_close_notice(child_running, "python main.py", "why not")
+        leftover = re.findall(r"\{[a-z_]+\}", text)
+        assert not leftover, f"unsubstituted tokens reached the model: {leftover}"
+
+
+def test_the_notice_prompt_carries_the_multi_run_arc():
+    from agent.loader import load_prompt_text
+
+    text = load_prompt_text("run_in_terminal/close_notice")
+    assert "SECOND run" in text, "the save→relaunch→load arc must be named"
+    assert "NOT closed" in text
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Graph pins — the routing IS the fix
+# Graph pins — one menu shape per session is the invariant
 # ══════════════════════════════════════════════════════════════════════
 
 
-class TestEveryModelChosenCloseIsGated:
+class TestOneMenuPerSession:
     @staticmethod
     def _flow():
-        import json
-        from pathlib import Path
+        return json.loads((ROOT / "flows" / "compiled.json").read_text())["run_session"]
 
-        root = Path(__file__).resolve().parents[1]
-        return json.loads((root / "flows" / "compiled.json").read_text())["run_session"]
+    def test_the_second_menu_is_gone(self):
+        """The 779 lesson, learned twice now: two menu shapes in one session
+        KV and the model reverts to the dominant one. ask_resume ran 2/3
+        unparseable within an hour of first firing."""
+        steps = self._flow()["steps"]
+        for dead in ("ask_resume", "resume_session", "do_relaunch"):
+            assert dead not in steps, f"{dead} reintroduces the second menu"
+        menus = [
+            name
+            for name, s in steps.items()
+            if (s.get("turn") or {}).get("response_shape") == "menu_compound"
+        ]
+        assert menus == [
+            "plan_interaction"
+        ], f"run_session must have exactly ONE menu step, found {menus}"
 
-    def test_the_plan_menu_cannot_close_directly(self):
+    def test_a_voluntary_close_routes_through_the_gate(self):
         opts = self._flow()["steps"]["plan_interaction"]["turn"]["transitions"][
             "options"
         ]
-        assert opts["close"] == "confirm_close", (
-            "a voluntary close that bypasses the gate is the whole bug: the "
-            "tester quits with its brief half-done and is never asked"
-        )
+        assert opts["close"] == "confirm_close"
 
-    def test_session_done_is_gated_too(self):
-        rules = self._flow()["steps"]["execute_interaction"]["resolver"]["rules"]
-        done = [r for r in rules if "session_done" in r["condition"]]
-        assert done and done[0]["transition"] == "confirm_close"
+    def test_the_gate_loops_back_to_the_one_menu_or_closes(self):
+        rules = self._flow()["steps"]["confirm_close"]["resolver"]["rules"]
+        targets = [r["transition"] for r in rules]
+        assert targets == ["plan_interaction", "close_session"]
+        assert "should_notice" in rules[0]["condition"]
 
-    def test_process_exited_still_reaches_the_gate(self):
+    def test_session_done_and_process_exited_still_enter_the_gate(self):
         rules = self._flow()["steps"]["execute_interaction"]["resolver"]["rules"]
-        exited = [r for r in rules if "process_exited" in r["condition"]]
-        assert exited and exited[0]["transition"] == "confirm_close"
+        for cond in ("session_done", "process_exited"):
+            hit = [r for r in rules if cond in r["condition"]]
+            assert hit and hit[0]["transition"] == "confirm_close", cond
 
     def test_the_safeguards_still_close_immediately(self):
         """stuck_detected / no_answer fire when the model is ALREADY
-        malfunctioning — another menu turn spends budget to fail the same
-        way. Operator ruling, 2026-08-09."""
+        malfunctioning — a notice turn spends budget to fail the same way."""
         steps = self._flow()["steps"]
         rules = steps["execute_interaction"]["resolver"]["rules"]
         stuck = [r for r in rules if "stuck_detected" in r["condition"]]
@@ -288,27 +293,10 @@ class TestEveryModelChosenCloseIsGated:
         plan = steps["plan_interaction"]["turn"]["transitions"]
         assert plan["no_answer"] == "close_session"
 
-    def test_resume_routes_by_liveness_not_straight_to_relaunch(self):
-        """relaunch_program writes the launch command to stdin — firing it at
-        a LIVE program types `python main.py` into the game."""
-        steps = self._flow()["steps"]
-        assert (
-            steps["ask_resume"]["turn"]["transitions"]["options"]["resume"]
-            == "resume_session"
-        )
-        targets = {
-            r["transition"] for r in steps["resume_session"]["resolver"]["rules"]
-        }
-        assert targets == {"plan_interaction", "do_relaunch"}
+    def test_relaunch_program_is_fully_retired(self):
+        """Dead machinery left registered is how the next confusion starts."""
+        from agent.actions.registry import build_action_registry
 
-    def test_the_gate_can_bail_out_to_close(self):
-        rules = self._flow()["steps"]["confirm_close"]["resolver"]["rules"]
-        assert rules[-1]["condition"] == "true"
-        assert rules[-1]["transition"] == "close_session"
-
-    def test_the_confirm_prompt_loads_with_its_state_slot(self):
-        from agent.loader import load_prompt_text
-
-        text = load_prompt_text("run_in_terminal/confirm_close")
-        assert "{close_state_line}" in text
-        assert "SECOND run" in text, "the multi-run arc must be named explicitly"
+        assert not build_action_registry().has("relaunch_program")
+        compiled = json.loads((ROOT / "flows" / "compiled.json").read_text())
+        assert "relaunch_program" not in json.dumps(compiled)

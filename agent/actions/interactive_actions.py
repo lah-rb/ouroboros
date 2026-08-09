@@ -991,14 +991,18 @@ async def action_end_inference_session(step_input: StepInput) -> StepOutput:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Pre-close confirmation + program relaunch — multi-run test sessions
+# Pre-close confirmation — multi-run test sessions, one menu
 # ══════════════════════════════════════════════════════════════════════
 
 
-# How many times a session may be asked to confirm a close. Past this the
-# close is honoured unasked, so a model that ping-pongs close → resume →
-# close still terminates. Mirrors _MAX_RELAUNCHES below.
-_MAX_CLOSE_CONFIRMATIONS = 2
+# How many pre-close NOTICES a session gets. One: the first close draws the
+# brief-check notice and returns to the plan menu; any later close is
+# honoured without comment, so a close → notice → close ping-pong cannot
+# loop. (v1 asked through a second menu with a cap of 2 — see the notice
+# rationale on action_confirm_close_gate for why that design was replaced.)
+_MAX_CLOSE_NOTICES = 1
+
+CLOSE_NOTICE_PROMPT = load_prompt_text("run_in_terminal/close_notice")
 
 
 def _last_child_running(session_history: list) -> bool:
@@ -1024,163 +1028,111 @@ def _last_child_running(session_history: list) -> bool:
     return False
 
 
-async def action_confirm_close_gate(step_input: StepInput) -> StepOutput:
-    """Decide whether this close gets confirmed, and on what terms.
-
-    EVERY model-chosen close routes here (operator, 2026-08-09). The step
-    it fronts was previously reachable only via ``process_exited``, which
-    was true ZERO times in 5,162 interactions across the hy3 run — so the
-    save → quit → relaunch → load → verify arc it exists to enable had
-    never once been offered, and the quality gate kept filing the
-    resulting coverage hole as a defect no session could have closed.
-
-    Deterministic on purpose: liveness and the ask-cap are decided here so
-    the inference turn that follows only has to answer the one question
-    that needs a model — is the brief actually finished?
-
-    Context: session_history, close_confirmations.
-    Result: should_ask.  Publishes: child_running, close_confirmations,
-    close_state_line.
-    """
-    ctx = step_input.context
-    asked = int(ctx.get("close_confirmations", 0) or 0)
-    child_running = _last_child_running(list(ctx.get("session_history") or []))
-    state_line = (
-        "The program is still running and waiting for input."
-        if child_running
-        else "The program has exited."
+def _render_close_notice(
+    child_running: bool, launch_command: str, close_reason: str
+) -> str:
+    """Substitute the notice by literal token replacement (never str.format —
+    the prompt text is free prose and one brace would KeyError at runtime,
+    the same trap author_test's renderer documents)."""
+    if child_running:
+        state_line = "The program is still RUNNING and waiting for your input."
+        resume_line = "Continue driving it with send_input, exactly as you have been."
+    else:
+        state_line = "The program has EXITED."
+        resume_line = (
+            f"Start it again with shell_command: `{launch_command}`"
+            if launch_command
+            else "Start it again with the shell_command you launched it with."
+        )
+    reason = (close_reason or "").strip()
+    reason_line = (
+        f'Your stated reason for closing was: "{reason[:200]}"'
+        if reason
+        else "You gave no reason for closing."
     )
-    updates = {
-        "child_running": child_running,
-        "close_confirmations": asked + 1,
-        "close_state_line": state_line,
-    }
+    text = CLOSE_NOTICE_PROMPT
+    for token, value in {
+        "{state_line}": state_line,
+        "{resume_line}": resume_line,
+        "{reason_line}": reason_line,
+    }.items():
+        text = text.replace(token, value)
+    return text
+
+
+async def action_confirm_close_gate(step_input: StepInput) -> StepOutput:
+    """First close: inject the brief-check notice and loop back to the plan
+    menu. Any later close: honour it.
+
+    EVERY model-chosen close routes here (operator, 2026-08-09). The
+    original trigger (``process_exited``) was true ZERO times in 5,162
+    interactions across the hy3 run, so the save → quit → relaunch → load →
+    verify arc had never once been offered.
+
+    WHY A NOTICE AND NOT A MENU (the v1 → v2 change, same day): v1 asked
+    through a second menu (ask_resume: resume/conclude) and reproduced the
+    779 menu-confusion class within an hour of first firing — 2 of 3 turns
+    came back in PLAN vocabulary ({"choice": "send_input", ...}),
+    unparseable, vs 0 of 66 at plan_interaction; and the fallout was
+    perverse, because a plan-shape answer plainly means "keep testing" but
+    fell through no_answer → close_session. One menu shape per session is
+    the rule the 779 round already paid for. The notice rides
+    session_injections (zero extra inference) into the next plan turn, and
+    the model answers in the one vocabulary it never fumbles: shell_command
+    to relaunch, send_input to keep driving, close again to confirm.
+
+    WORDING HAZARD the notice text must carry: the runtime auto-injects
+    "[Your previous selection of 'close' ... was accepted and executed.]"
+    on every menu turn. The notice is queued behind it and must LEAD by
+    contradicting it — "The session has NOT closed yet."
+
+    Context: session_history, close_confirmations, inference_session_id,
+    launch_command, planned_action_arg.  Result: should_notice.
+    Publishes: close_confirmations.
+    """
+    from agent.session_injections import queue as queue_injection
+
+    ctx = step_input.context
+    noticed = int(ctx.get("close_confirmations", 0) or 0)
+    child_running = _last_child_running(list(ctx.get("session_history") or []))
+
     # LOGGED, not just observed. Step observations do not reach the run log,
-    # and that blind spot is exactly how the predecessor of this step sat dead
-    # for 5,162 interactions without anyone noticing: nothing it did was
-    # visible, so "never fired" and "fired and declined" read identically.
-    # The decision rate is the first number to check on any run.
-    if asked >= _MAX_CLOSE_CONFIRMATIONS:
+    # and that blind spot is exactly how the predecessor of this step sat
+    # dead for 5,162 interactions without anyone noticing: "never fired" and
+    # "fired and declined" read identically from outside. The decision rate
+    # is the first number to check on any run.
+    if noticed >= _MAX_CLOSE_NOTICES:
         logger.info(
-            "confirm_close: cap reached (%d/%d) — honouring the close",
-            asked,
-            _MAX_CLOSE_CONFIRMATIONS,
+            "confirm_close: notice already given (%d/%d) — honouring the close",
+            noticed,
+            _MAX_CLOSE_NOTICES,
         )
         return StepOutput(
-            result={"should_ask": False, "child_running": child_running},
+            result={"should_notice": False, "child_running": child_running},
             observations=(
-                f"confirm_close: already asked {asked}x "
-                f"(cap {_MAX_CLOSE_CONFIRMATIONS}) — honouring the close"
+                f"confirm_close: notice already given ({noticed}x) — closing"
             ),
-            context_updates=updates,
         )
+
+    notice = _render_close_notice(
+        child_running,
+        str(ctx.get("launch_command", "") or "").strip(),
+        str(ctx.get("planned_action_arg", "") or ""),
+    )
+    updates: dict = {"close_confirmations": noticed + 1}
+    queue_injection(updates, ctx, notice)
     logger.info(
-        "confirm_close: asking (#%d), program %s",
-        asked + 1,
+        "confirm_close: notice #%d queued, program %s — returning to the plan menu",
+        noticed + 1,
         "running" if child_running else "exited",
     )
     return StepOutput(
-        result={"should_ask": True, "child_running": child_running},
+        result={"should_notice": True, "child_running": child_running},
         observations=(
-            f"confirm_close: asking (#{asked + 1}), "
-            f"program {'running' if child_running else 'exited'}"
+            f"confirm_close: notice #{noticed + 1} queued "
+            f"(program {'running' if child_running else 'exited'})"
         ),
         context_updates=updates,
-    )
-
-
-_MAX_RELAUNCHES = 3
-
-
-async def action_relaunch_program(step_input: StepInput) -> StepOutput:
-    """Relaunch the program for another test run in the same session.
-
-    The tester's charter can require state that spans program runs —
-    verifying a save restores correctly means quitting, relaunching, and
-    loading. Before this, ``process_exited`` force-closed the session,
-    making such arcs structurally impossible (the gate then reported the
-    untested feature as broken). When the model answers the ask_relaunch
-    menu with ``relaunch``, this action deterministically replays the
-    session's OWN first launch command (captured by send_interaction) —
-    the model never free-drives the shell at the exit boundary.
-
-    Capped at ``_MAX_RELAUNCHES`` per session so a confused model that
-    keeps relaunching still terminates.
-
-    Result: relaunched (bool — false routes the flow to close_session)
-    Publishes: session_history, relaunch_count
-    """
-    effects = step_input.effects
-    conn_id = step_input.context.get("mcp_connection_id", "")
-    session_id = step_input.context.get("mcp_session_id", "")
-    session_history = list(step_input.context.get("session_history", []) or [])
-    launch_command = str(step_input.context.get("launch_command", "") or "").strip()
-    relaunch_count = int(step_input.context.get("relaunch_count", 0) or 0)
-
-    if not effects or not conn_id or not session_id or not launch_command:
-        return StepOutput(
-            result={"relaunched": False},
-            observations=(
-                "relaunch unavailable "
-                f"(launch_command={launch_command!r}) — closing session"
-            ),
-            context_updates={"session_history": session_history},
-        )
-    if relaunch_count >= _MAX_RELAUNCHES:
-        return StepOutput(
-            result={"relaunched": False},
-            observations=(
-                f"relaunch cap reached ({relaunch_count}/{_MAX_RELAUNCHES}) "
-                "— closing session"
-            ),
-            context_updates={"session_history": session_history},
-        )
-
-    text = launch_command + "\n"
-    try:
-        result = await effects.mcp_call_tool(
-            conn_id,
-            "send_input",
-            {
-                "session_id": session_id,
-                "text": text,
-                "await_response": True,
-                "settle_ms": 1000,
-                "timeout_ms": 30000,
-            },
-        )
-    except Exception as e:  # noqa: BLE001 - surfaced via result
-        logger.error("relaunch_program send failed: %s", e)
-        return StepOutput(
-            result={"relaunched": False},
-            observations=f"relaunch failed: {e}",
-            context_updates={"session_history": session_history},
-        )
-
-    session_history.append(
-        {
-            "turn": len(session_history),
-            "action": "relaunch",
-            "input": launch_command,
-            "output": result.get("output", ""),
-            "status": result.get("status", "error"),
-        }
-    )
-    logger.info(
-        "relaunch_program: run %d/%d via %r",
-        relaunch_count + 1,
-        _MAX_RELAUNCHES,
-        launch_command,
-    )
-    return StepOutput(
-        result={"relaunched": True},
-        observations=(
-            f"Relaunched ({relaunch_count + 1}/{_MAX_RELAUNCHES}): " f"{launch_command}"
-        ),
-        context_updates={
-            "session_history": session_history,
-            "relaunch_count": relaunch_count + 1,
-        },
     )
 
 
