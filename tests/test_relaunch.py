@@ -155,7 +155,14 @@ def _gate_ctx(history, **kw):
 @pytest.mark.asyncio
 async def test_first_close_queues_the_notice_and_returns_to_the_plan_menu():
     out = await action_confirm_close_gate(
-        _si(MockEffects(), _gate_ctx(_EXITED_HISTORY, planned_action_arg="all done"))
+        _si(
+            MockEffects(),
+            _gate_ctx(
+                _EXITED_HISTORY,
+                planned_action="close",
+                planned_action_arg="all done",
+            ),
+        )
     )
     assert out.result["should_notice"] is True
     assert out.context_updates["close_confirmations"] == 1
@@ -226,9 +233,12 @@ def test_the_rendered_notice_has_no_unsubstituted_tokens():
     from agent.actions.interactive_actions import _render_close_notice
 
     for child_running in (True, False):
-        text = _render_close_notice(child_running, "python main.py", "why not")
-        leftover = re.findall(r"\{[a-z_]+\}", text)
-        assert not leftover, f"unsubstituted tokens reached the model: {leftover}"
+        for voluntary in (True, False):
+            text = _render_close_notice(
+                child_running, "python main.py", "why not", voluntary
+            )
+            leftover = re.findall(r"\{[a-z_]+\}", text)
+            assert not leftover, f"unsubstituted tokens reached the model: {leftover}"
 
 
 def test_the_notice_prompt_carries_the_multi_run_arc():
@@ -300,3 +310,26 @@ class TestOneMenuPerSession:
         assert not build_action_registry().has("relaunch_program")
         compiled = json.loads((ROOT / "flows" / "compiled.json").read_text())
         assert "relaunch_program" not in json.dumps(compiled)
+
+
+@pytest.mark.asyncio
+async def test_a_stale_arg_is_never_echoed_as_a_close_reason():
+    """FOUND LIVE on the first exited-path firing: the session entered the
+    gate via process_exited right after a send_input, so planned_action_arg
+    still held the previous turn's text — and the notice told the model
+    'Your stated reason for closing was: "attack"'. Only the model's own
+    `close` carries a real reason."""
+    out = await action_confirm_close_gate(
+        _si(
+            MockEffects(),
+            _gate_ctx(
+                _EXITED_HISTORY,
+                planned_action="send_input",
+                planned_action_arg="attack\n",
+            ),
+        )
+    )
+    notice = (out.context_updates.get("session_injections") or [""])[0]
+    assert "attack" not in notice
+    assert "stated reason" not in notice
+    assert "The program run ended" in notice

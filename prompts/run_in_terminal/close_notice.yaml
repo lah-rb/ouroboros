@@ -2,7 +2,7 @@ id: run_in_terminal/close_notice
 content: |
   [SESSION NOTICE — the session has NOT closed yet.]
 
-  You chose to close this session. {reason_line}
+  {entry_line}
 
   {state_line}
 

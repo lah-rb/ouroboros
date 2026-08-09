@@ -264,7 +264,12 @@ run_session: #FlowDefinition & {
 					"launch_command",
 					// The model's own close reason (plan menu `close` arg) —
 					// echoed back so the notice engages its stated rationale.
-					"planned_action_arg",
+					// planned_action tells the entry paths apart: on
+					// session_done/process_exited the arg is STALE (the
+					// previous send_input's text — a live notice told a model
+					// its close reason was "attack"), so the gate only echoes
+					// it when planned_action == "close".
+					"planned_action", "planned_action_arg",
 				]
 			}
 			resolver: {

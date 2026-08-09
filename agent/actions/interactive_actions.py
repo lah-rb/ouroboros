@@ -1029,11 +1029,22 @@ def _last_child_running(session_history: list) -> bool:
 
 
 def _render_close_notice(
-    child_running: bool, launch_command: str, close_reason: str
+    child_running: bool,
+    launch_command: str,
+    close_reason: str,
+    voluntary: bool,
 ) -> str:
     """Substitute the notice by literal token replacement (never str.format —
     the prompt text is free prose and one brace would KeyError at runtime,
-    the same trap author_test's renderer documents)."""
+    the same trap author_test's renderer documents).
+
+    ``voluntary`` distinguishes the gate's two entry paths, and the wording
+    must too. On the model's own `close` the reason arg is its close reason;
+    on session_done/process_exited the accumulator's planned_action_arg is
+    STALE — the previous send_input's text. First live firing told a model
+    'Your stated reason for closing was: "attack"' because it had just typed
+    `attack`, the program ended, and the exit path inherited the arg.
+    """
     if child_running:
         state_line = "The program is still RUNNING and waiting for your input."
         resume_line = "Continue driving it with send_input, exactly as you have been."
@@ -1044,17 +1055,20 @@ def _render_close_notice(
             if launch_command
             else "Start it again with the shell_command you launched it with."
         )
-    reason = (close_reason or "").strip()
-    reason_line = (
-        f'Your stated reason for closing was: "{reason[:200]}"'
-        if reason
-        else "You gave no reason for closing."
-    )
+    if voluntary:
+        reason = (close_reason or "").strip()
+        entry_line = "You chose to close this session. " + (
+            f'Your stated reason was: "{reason[:200]}"'
+            if reason
+            else "You gave no reason."
+        )
+    else:
+        entry_line = "The program run ended, which would normally end this session too."
     text = CLOSE_NOTICE_PROMPT
     for token, value in {
         "{state_line}": state_line,
         "{resume_line}": resume_line,
-        "{reason_line}": reason_line,
+        "{entry_line}": entry_line,
     }.items():
         text = text.replace(token, value)
     return text
@@ -1114,10 +1128,15 @@ async def action_confirm_close_gate(step_input: StepInput) -> StepOutput:
             ),
         )
 
+    # planned_action tells the entry paths apart: "close" is the model's own
+    # choice (its arg is a real close reason); anything else means we arrived
+    # via session_done/process_exited and the arg is the PREVIOUS turn's input.
+    voluntary = str(ctx.get("planned_action", "") or "") == "close"
     notice = _render_close_notice(
         child_running,
         str(ctx.get("launch_command", "") or "").strip(),
-        str(ctx.get("planned_action_arg", "") or ""),
+        str(ctx.get("planned_action_arg", "") or "") if voluntary else "",
+        voluntary,
     )
     updates: dict = {"close_confirmations": noticed + 1}
     queue_injection(updates, ctx, notice)

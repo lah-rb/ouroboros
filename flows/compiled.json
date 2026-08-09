@@ -13433,6 +13433,7 @@
             "close_confirmations",
             "inference_session_id",
             "launch_command",
+            "planned_action",
             "planned_action_arg"
           ]
         },
