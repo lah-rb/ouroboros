@@ -316,8 +316,16 @@ def main() -> int:
     # A MODEL name is the opposite: it is the whole thing blinding removes.
     model_pat = re.compile("|".join(re.escape(t) for t in MODEL_TOKENS), re.I)
     leaks, advisory = [], []
-    for f, ln, s in scan(out / "artifact"):
-        (leaks if model_pat.search(s) else advisory).append((f, ln, s))
+    # stage.scan returns (path, line, matched, blocking) — the 4th field was
+    # added after this consumer and the stale 3-way unpack crashed the first
+    # packet build whose artifact had any hit at all. TRUST the blocking
+    # classification: _is_blocking's next-character rule exists precisely
+    # because `reap` inside "reapplied" (the v2.0 Frontier anchor's docstring)
+    # blocked all five 2026-08-05 face-offs, and re-testing the matched token
+    # text against MODEL_TOKENS here would re-promote that same false positive
+    # — the matched text IS the token, so the naive re-test always fires.
+    for f, ln, s, blocking in scan(out / "artifact"):
+        (leaks if blocking else advisory).append((f, ln, s))
     doc_pat = model_pat
     for doc in ("RUBRIC.md", "CHECKLIST.md", "INSTRUCTIONS.md"):
         text = (out / doc).read_text()
