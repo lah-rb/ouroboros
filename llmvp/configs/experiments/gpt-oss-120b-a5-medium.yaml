@@ -1,0 +1,209 @@
+# MEDIUM-RESTING VARIANT (operator, 2026-08-09): "start the gpt-oss run with
+# its default medium... I am fine with high, I just don't want to lose the CoT
+# detail that comes with low."
+#
+# The base config rests at LOW by the 2026-08-03 rule ("None routes LOW, never
+# medium"), which that ruling supersedes FOR THIS EXPERIMENT ONLY — the base
+# config keeps the low rule for every other gpt-oss use (swarm, the owed 2nd
+# judges). Cue-authored `reasoning: high` steps still go high; the adaptive
+# router stays dormant (unset OURO_ADAPTIVE_REASONING), so nothing routes to
+# low at all.
+#
+# WHY: this arm is the second data point on the TDD author arm. On hy3 both
+# authoring attempts produced tests that mis-called their own traced API, and
+# "the model writes tests badly" could not be separated from "the model
+# reasons badly at whatever budget it happened to get". A fixed, known level
+# makes the drop histogram mean something.
+# ── GREENFIELD TIER 2 (blind panel 2026-07-23; /tmp/blindpanel4/FINAL_ANALYSIS.md) ──
+# 4th of 8 (finalist): best engineering, persistence, and dialogue of the
+# final four; eliminated by a single arity seam (combat called load_world()
+# without its path arg → softlock on every combat action). The production
+# flagship's loss is one statically-catchable line, not a capability gap.
+app:
+  host: "0.0.0.0"
+  port: 8008
+  log_level: "info"
+  cors_origins: ["*"]
+  backend_timeout: 180
+  # OpenAI-compat REST shim (/v1/completions + /v1/chat/completions) — lets
+  # external chat agents (terminal-bench's Terminus) drive the model.
+  openai_shim: true
+
+graphql:
+  max_query_depth: 10
+  max_tokens: 131072
+  max_aliases: 50
+  introspection_enabled: true
+
+model:
+  name: "gpt-oss-120b-a5"
+  family: "harmony"
+  path: /Users/lah-rb/.lmstudio/models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf
+  n_ctx: 131072
+  probe_verified_weights_bytes: 65369017728
+  probe_verified_n_ctx: 131072
+  n_gpu_layers: -1   
+  seed: -1
+  verbose: false
+  flash_attn_type: auto   # REAL knob (old flash_attention: true was a silent no-op); auto = prior effective
+  n_batch: 2048           # REAL knob (old batch_size: 512 was a silent no-op; 2048 was the actual default)
+  # speculative: false (default) — A/B verdict 2026-06-29: n-gram draft was 23-33% SLOWER on
+  # Metal/MoE (verify + logits_all overhead > accepted-draft gain) and not cleanly lossless
+  # (truncated the rewrite output). Code is config-gated + dormant; revisit only with EAGLE-3.
+  # ── THINKING LEVERS (2026-08-03 routing redesign) ─────────────
+  # adaptive/router serving; None routes LOW (operator rule)
+  thinking_available: true
+  thinking: "per_request"
+  # low (2026-08-03): the per_request resting level — None routes LOW, never
+  # medium (operator rule). Also the backend's default-head level: medium and
+  # high get pinned reasoning heads; the resting head is the cheap one.
+  # medium (this variant): the resting level, so an unspecified step reasons
+  # at medium rather than low. medium == SEQ_STATIC for the head swap, so
+  # this is the cheapest of the three to serve as a resting head.
+  thinking_mode: medium
+  # gpt-oss-120b uses sliding-window attention (128-tok window on alternating
+  # layers). swa_full keeps the FULL KV for those layers so the ~1809-tok static
+  # prefix is consistent across save_state/load_state — without it, restoring a
+  # state whose SWA half only held a 128-tok tail is inconsistent at the window
+  # boundary (~pos 1809) and the next decode fails `llama_decode code -3`. This is
+  # the root cause of the corruption that disabled flow_kv_cache; swa_full fixes
+  # it. kv_unified bounds the extra SWA-KV cost on unified (Metal) memory.
+  swa_full: true
+  kv_unified: true
+  # OPT-IN per-flow static-prefix KV cache. Inert unless callers pass
+  # static_prefix + flow_cache_key. (The 2026-06-16 "re-enabled" note that
+  # lived here was retracted — that re-enable rode the M8 save_state blob
+  # and was reverted when it corrupted the 120B KV; stop citing it.)
+  # FLIPPED 2026-07-30: the batched flow band shipped (BUILD = range-copy
+  # off a completed stream's seat on the decode thread; HIT = whole-seq
+  # install via the control inbox). The 2026-06 revert hit the M8 blob
+  # implementation; this shares none of it. Under kv_unified the band
+  # adds 8 seq ids and divides nothing. Measured payout at realistic head
+  # sizes: 3.51s/call = 49% of prefill (glm pilot; gpt-oss prefill is
+  # faster so the absolute saving is smaller, the fraction similar).
+  flow_kv_cache: true
+  # HISTORICAL (the path described here was DELETED 2026-07-30, rap sheet in
+  # dev/caching/CORPUS.md; this comment is why the flag below is on, not a
+  # description of live code):
+  # gpt-oss ran the save_state/load_state session path, which corrupts the 120B
+  # KV at deep context. A 6h/80-task sweep crashed the server with `llama_decode
+  # code -1` (Invalid input batch at Pos 2174) inside session_turn, right after a
+  # 12-turn / 1020s interactive session (zork/maze class). session_full_replay
+  # re-prefills each turn from a pristine snapshot — no per-turn save/load/seq_rm
+  # state surgery — bypassing the corruption locus. Slightly slower per deep turn,
+  # but deterministic and crash-proof (the same mitigation qwen/step37 already use).
+  session_full_replay: true
+  # RESIDENT seq KV cache (ENABLED 2026-06-18). Supersedes BOTH failure modes above:
+  # the static prefix lives on a dedicated seq forked per request (no save_state, no
+  # corruption), and a memoryful session keeps its seq LIVE across turns (append-only,
+  # no full_replay re-prefill). Gated on memory_can_shift() — true here via swa_full;
+  # falls back to session_full_replay if ever false. Validated: A/B ~2x faster session
+  # turns (14.2s->7.4s mean); terminal-bench 3/8 (37.5%) -> 5/8 (62.5%), tying Terminus.
+  resident_seq_cache: true
+  # Per-request reasoning HEAD-SWAP: pin low/high system heads (medium=SEQ_STATIC)
+  # and fork the requested level onto the live seq at turn 0. Lets deep_search
+  # condense run at LOW reasoning without a restart. Gated on resident + harmony.
+  # Timed context auto-refresh WITH drain: the 30-min cap now lands under
+  # continuous load (admissions gate + 5-min finish window + force-clear;
+  # sessions expire cleanly, streams retire retriable). Fix for the
+  # 2026-07-16 stub-souring wedge (8.5h load, every refresh deferred_busy).
+  context_refresh_drain_s: 300
+  reasoning_head_swap: true
+
+prompt:
+  persona_file: "./knowledge/SOUL.md"
+
+generation:
+  max_tokens_default: 131072
+  temperature_default: 1.0
+  top_p: 1.0
+  top_k: 0
+  min_p: 0.00
+  presence_penalty: 0.0
+  repeat_penalty: 1.05
+  # Deep session turns are repetition attractors (degenerate generations
+  # observed at turn 5-6 with task-scaled temps ~0.2). Floor session
+  # sampling from the third turn onward; completions untouched.
+  session_temp_floor: 0.35
+  streaming_default: true
+
+knowledge:
+  tokens_bin: "./data/gpt-oss-120b-a5.tokens.bin"
+  token_limit: 32768
+
+resources:
+  cpu_threads: 15
+  max_concurrent_requests: 1
+  jit_concurrency_limit: null  
+
+tools:
+  enabled: false
+  max_iterations: 3
+
+logging:
+  enabled: true
+  directory: "./logs"
+
+# ── MEASURED CACHE BEHAVIOUR (doc-only; run cells_20260729-232251 (dev/caching/EXPERIMENT.md §Results)) ─
+probe_verified_cache:
+  run_id: cells_20260729-232251
+  A2:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1114, 19]
+    prefill_total_s: 22.4
+    needle_at_depth: True
+  B01:
+    strategy: full_replay
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [2567, 17394]
+    prefill_total_s: 207.7
+    needle_at_depth: True
+  B02:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1114, 19]
+    prefill_total_s: 26.4
+    needle_at_depth: True
+  B03:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1114, 19]
+    prefill_total_s: 26.5
+    needle_at_depth: True
+  B04:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1114, 19]
+    prefill_total_s: 26.3
+    needle_at_depth: True
+  B10:
+    strategy: full_replay
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [1465, 1724]
+    prefill_total_s: 22.2
+    needle_at_depth: True
+  B11:
+    strategy: resident
+    can_shift: True
+    n_ctx_seq: 131072
+    fresh_t2_last: [12, 21]
+    prefill_total_s: 2.7
+    needle_at_depth: True
+
+# ── TIER RECORD (doc-only; see DOC_ONLY_KEYS in core/config.py) ──────
+# Two halves, never merged: `judged` comes from a blind subagent that saw only a
+# stripped artifact; `observed` is the operator's run telemetry, which a judge
+# must never see (TIER_RUBRIC §7). Siblings, not one blob.
+#
+# ONE CONFIG = ONE SCORE (operator, 2026-07-31). A variant that changes a
+# scoreable property gets its own config via `extends:`.
+tier:
+  league: grinder  # LOAD-BEARING — agent/tier/runner.py:config_league
+  status: recorded  # history: llmvp/configs/archive/TIER_JUDGEMENTS.md
