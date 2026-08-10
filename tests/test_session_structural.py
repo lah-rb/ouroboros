@@ -21,6 +21,9 @@ from pathlib import Path
 import pytest
 
 from agent.actions.session_structural_actions import (
+    _payload_methods,
+    _roundtrip_keys,
+    _serializer_functions,
     _SESSION_REPAIR_ATTEMPTS,
     _binding_vocabulary,
     _data_registry_violations,
@@ -581,3 +584,108 @@ def test_the_manifest_key_is_declared_publishable():
     steps = _steps()
     assert "batch_manifest" in steps["next_file"]["publishes"]
     assert "batch_manifest" in steps["apply_results"]["context"]["optional"]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The third hop — to_dict / from_dict / asdict
+#
+# Fixtures below are the REAL shape lifted from a shipped artifact
+# (tier_20260810-140320, src/state.py), not a shape I imagined. The
+# two-hop check unit-tested green against invented dict-literal and
+# cross-module fixtures, then read ZERO keys off this one and reported
+# "0 violations" — a clean bill over a pair it had never parsed.
+# ══════════════════════════════════════════════════════════════════════
+
+_REAL_STATE = """
+import json
+from dataclasses import dataclass, asdict, field
+from pathlib import Path
+
+@dataclass
+class GameState:
+    current_room_id: str
+    player: dict
+    inventory: list = field(default_factory=list)
+    equipment: dict = field(default_factory=dict)
+    defeated_monsters: list = field(default_factory=list)
+    npc_dialogue_progress: dict = field(default_factory=dict)
+
+    @staticmethod
+    def from_dict(data: dict) -> "GameState":
+        return GameState(
+            current_room_id=data["current_room_id"],
+            player=data["player"],
+            inventory=data.get("inventory", []),
+            equipment=data.get("equipment", {}),
+            defeated_monsters=data.get("defeated_monsters", []),
+            npc_dialogue_progress=data.get("npc_dialogue_progress", {}),
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+def save_game(state: GameState, path: str) -> None:
+    with Path(path).open("w") as f:
+        json.dump(state.to_dict(), f, indent=2)
+
+def load_game(path: str) -> GameState:
+    with open(Path(path), "r") as f:
+        data = json.load(f)
+    return GameState.from_dict(data)
+"""
+
+_OTHER = "from state import save_game, load_game\n"
+
+
+def test_the_dataclass_round_trip_is_actually_parsed():
+    """The regression: keys must come back off BOTH sides. A zero from an
+    unparsed pair is the vacuous pass, not a clean artifact."""
+    srcs = {"state.py": _REAL_STATE, "game.py": _OTHER}
+    writers, readers = _serializer_functions(srcs)
+    prod, cons = _payload_methods(srcs)
+    assert writers == {"save_game"} and readers == {"load_game"}
+    # asdict(self) resolves to the dataclass's annotated fields.
+    assert prod["to_dict"] == {
+        "current_room_id",
+        "player",
+        "inventory",
+        "equipment",
+        "defeated_monsters",
+        "npc_dialogue_progress",
+    }
+    assert cons["from_dict"] == prod["to_dict"]
+    w, r = _roundtrip_keys(_REAL_STATE, writers, readers, prod, cons)
+    assert len(w) == 6 and w == r
+    assert _serialized_roundtrip_violations(srcs) == []
+
+
+def test_a_field_the_loader_forgot_is_flagged():
+    """asdict picks up a newly added field automatically; a hand-written
+    from_dict does not. That silent divergence IS the value-key seam."""
+    drifted = _REAL_STATE.replace(
+        "    npc_dialogue_progress: dict = field(default_factory=dict)",
+        "    npc_dialogue_progress: dict = field(default_factory=dict)\n"
+        "    quest_flags: dict = field(default_factory=dict)",
+    )
+    out = _serialized_roundtrip_violations({"state.py": drifted, "game.py": _OTHER})
+    assert len(out) == 1
+    assert "quest_flags" in out[0]
+    assert "never read back" in out[0]
+
+
+def test_an_unparseable_round_trip_reports_unverified_not_clean():
+    """A serializer pair whose keys cannot be recovered must NOT return the
+    same empty list a symmetric pair returns."""
+    opaque = """
+import json
+def save_game(state, path):
+    with open(path, "w") as f:
+        json.dump(state.serialize(), f)
+
+def load_game(path):
+    with open(path) as f:
+        return json.load(f)
+"""
+    out = _serialized_roundtrip_violations({"state.py": opaque, "game.py": _OTHER})
+    assert len(out) == 1
+    assert "UNVERIFIED" in out[0]

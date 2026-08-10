@@ -82,6 +82,109 @@ def _dict_keys(node: Any) -> set[str] | None:
     return keys
 
 
+def _payload_methods(
+    sources: dict[str, str],
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """(producer_keys, consumer_keys) keyed by METHOD NAME — the third hop.
+
+    THE SHAPE THE FIRST TWO HOPS COULD NOT SEE, and the one this model
+    actually writes. `_roundtrip_keys` follows a dict literal to a writer and
+    a reader's return into a subscript, but the idiomatic Python round trip
+    puts the keys in neither place:
+
+        json.dump(state.to_dict(), f)      # producer is a METHOD
+        return GameState.from_dict(data)   # consumer is a METHOD
+
+    Measured against a real artifact both sides came back EMPTY, so the check
+    reported "0 violations" over a save/load pair it had not read a single key
+    of. A zero from zero checkable items is the vacuous pass, not a clean bill.
+
+    A producer is a method returning a dict literal, or returning
+    `asdict(self)` / `dataclasses.asdict(self)` — in which case the keys are
+    the enclosing class's annotated fields. That case is worth its own hop:
+    `asdict` picks up a newly added field automatically and a hand-written
+    `from_dict` does not, which is precisely the value/key vocabulary seam.
+
+    A consumer is a method that reads string keys off its payload parameter —
+    the first parameter that is not self/cls.
+    """
+    import ast as stdlib_ast
+
+    producers: dict[str, set[str]] = {}
+    consumers: dict[str, set[str]] = {}
+
+    for src in sources.values():
+        try:
+            tree = stdlib_ast.parse(src)
+        except SyntaxError:
+            continue
+        for cls in stdlib_ast.walk(tree):
+            if not isinstance(cls, stdlib_ast.ClassDef):
+                continue
+            fields = {
+                n.target.id
+                for n in cls.body
+                if isinstance(n, stdlib_ast.AnnAssign)
+                and isinstance(n.target, stdlib_ast.Name)
+            }
+            for fn in cls.body:
+                if not isinstance(
+                    fn, (stdlib_ast.FunctionDef, stdlib_ast.AsyncFunctionDef)
+                ):
+                    continue
+
+                # ── producer ──────────────────────────────────────────
+                for n in stdlib_ast.walk(fn):
+                    if not isinstance(n, stdlib_ast.Return) or n.value is None:
+                        continue
+                    lit = _dict_keys(n.value)
+                    if lit:
+                        producers.setdefault(fn.name, set()).update(lit)
+                        continue
+                    # asdict(self) / dataclasses.asdict(self)
+                    v = n.value
+                    if isinstance(v, stdlib_ast.Call):
+                        f = v.func
+                        name = (
+                            f.id
+                            if isinstance(f, stdlib_ast.Name)
+                            else (f.attr if isinstance(f, stdlib_ast.Attribute) else "")
+                        )
+                        if name == "asdict" and fields:
+                            producers.setdefault(fn.name, set()).update(fields)
+
+                # ── consumer ──────────────────────────────────────────
+                args = [a.arg for a in fn.args.args if a.arg not in ("self", "cls")]
+                if not args:
+                    continue
+                payload = args[0]
+                keys: set[str] = set()
+                for n in stdlib_ast.walk(fn):
+                    if (
+                        isinstance(n, stdlib_ast.Subscript)
+                        and isinstance(n.value, stdlib_ast.Name)
+                        and n.value.id == payload
+                        and isinstance(n.slice, stdlib_ast.Constant)
+                        and isinstance(n.slice.value, str)
+                    ):
+                        keys.add(n.slice.value)
+                    if (
+                        isinstance(n, stdlib_ast.Call)
+                        and isinstance(n.func, stdlib_ast.Attribute)
+                        and n.func.attr == "get"
+                        and isinstance(n.func.value, stdlib_ast.Name)
+                        and n.func.value.id == payload
+                        and n.args
+                        and isinstance(n.args[0], stdlib_ast.Constant)
+                        and isinstance(n.args[0].value, str)
+                    ):
+                        keys.add(n.args[0].value)
+                if keys:
+                    consumers.setdefault(fn.name, set()).update(keys)
+
+    return producers, consumers
+
+
 def _serializer_functions(sources: dict[str, str]) -> tuple[set[str], set[str]]:
     """(writer_names, reader_names) — functions that json.dump / json.load.
 
@@ -119,7 +222,11 @@ def _serializer_functions(sources: dict[str, str]) -> tuple[set[str], set[str]]:
 
 
 def _roundtrip_keys(
-    src: str, writers: set[str], readers: set[str]
+    src: str,
+    writers: set[str],
+    readers: set[str],
+    producers: dict[str, set[str]] | None = None,
+    consumers: dict[str, set[str]] | None = None,
 ) -> tuple[set[str], set[str]]:
     """(written, read) payload keys in ONE module, following both hops.
 
@@ -130,6 +237,21 @@ def _roundtrip_keys(
     and calls json.dump on it.
     """
     import ast as stdlib_ast
+
+    producers = producers or {}
+    consumers = consumers or {}
+
+    def _produced(node: Any) -> set[str]:
+        """Keys of `x.to_dict()` / `to_dict()` used as a payload argument."""
+        if not isinstance(node, stdlib_ast.Call):
+            return set()
+        f = node.func
+        name = (
+            f.attr
+            if isinstance(f, stdlib_ast.Attribute)
+            else (f.id if isinstance(f, stdlib_ast.Name) else "")
+        )
+        return set(producers.get(name) or ())
 
     try:
         tree = stdlib_ast.parse(src)
@@ -144,6 +266,10 @@ def _roundtrip_keys(
             continue
         dict_vars: dict[str, set[str]] = {}
         payload_vars: set[str] = set()
+        # A function whose own body calls json.load: the payload it hands to a
+        # consumer method never passes through a reader-function variable, so
+        # the payload_vars path below cannot see it. load_game is exactly this.
+        direct_read = fn.name in readers
         direct_write = any(
             isinstance(n, stdlib_ast.Call)
             and isinstance(n.func, stdlib_ast.Attribute)
@@ -183,6 +309,32 @@ def _roundtrip_keys(
                     lit = _dict_keys(a)
                     if lit:
                         written |= lit
+                    else:
+                        written |= _produced(a)
+            # json.dump(state.to_dict(), f) — producer straight into the dump
+            if (
+                isinstance(n, stdlib_ast.Call)
+                and isinstance(n.func, stdlib_ast.Attribute)
+                and isinstance(n.func.value, stdlib_ast.Name)
+                and n.func.value.id == "json"
+                and n.func.attr in ("dump", "dumps")
+                and n.args
+            ):
+                written |= _produced(n.args[0])
+            # GameState.from_dict(data) — consumer method inside the reader
+            if isinstance(n, stdlib_ast.Call) and n.args:
+                f = n.func
+                cname = (
+                    f.attr
+                    if isinstance(f, stdlib_ast.Attribute)
+                    else (f.id if isinstance(f, stdlib_ast.Name) else "")
+                )
+                if cname in consumers:
+                    arg0 = n.args[0]
+                    if direct_read or (
+                        isinstance(arg0, stdlib_ast.Name) and arg0.id in payload_vars
+                    ):
+                        read |= consumers[cname]
             # payload["k"] / payload.get("k") — the consumer hop
             if isinstance(n, stdlib_ast.Subscript) and isinstance(
                 n.value, stdlib_ast.Name
@@ -230,6 +382,14 @@ def _serialized_roundtrip_violations(sources: dict[str, str]) -> list[str]:
     what defeats `_transfer_shape_violations`, so reproducing it would have
     shipped a check that passes its own motivating case.
 
+    IT MUST FOLLOW THREE. The two-hop version then reported "0 violations" on
+    a real artifact whose save/load pair it had read ZERO keys from, because
+    that pair used the idiomatic `json.dump(state.to_dict(), f)` /
+    `GameState.from_dict(json.load(f))` — keys in neither a literal nor a
+    subscript. See `_payload_methods`. A check whose clean verdict and whose
+    blind verdict are the same string is not a check, so the vacuous case is
+    now reported instead of silently passing.
+
     Reported one-way only (written-never-read). The reverse is a legitimate
     shape for optional keys with defaults.
     """
@@ -239,19 +399,36 @@ def _serialized_roundtrip_violations(sources: dict[str, str]) -> list[str]:
     writers, readers = _serializer_functions(py)
     if not writers or not readers:
         return []
+    producers, consumers = _payload_methods(py)
 
     written: set[str] = set()
     read: set[str] = set()
     writer_files: list[str] = []
     reader_files: list[str] = []
     for path, src in py.items():
-        w, r = _roundtrip_keys(src, writers, readers)
+        w, r = _roundtrip_keys(src, writers, readers, producers, consumers)
         if w:
             written |= w
             writer_files.append(path)
         if r:
             read |= r
             reader_files.append(path)
+
+    # THE VACUOUS PASS IS A REPORTABLE STATE. A serializer pair exists — the
+    # project saves and loads — yet no key was recoverable from either side,
+    # so this check has no opinion and must not be counted as a clean one.
+    # Returning [] here is what let a two-hop check certify an artifact it had
+    # read nothing of. Surfaced as a violation, an unparseable round trip gets
+    # looked at; surfaced as [], it reads as proof.
+    if not written and not read:
+        return [
+            "serialized round trip: this project saves and loads "
+            f"({', '.join(sorted(writers)[:3])} / {', '.join(sorted(readers)[:3])}) "
+            "but the payload keys could not be read from either side, so the "
+            "round trip is UNVERIFIED — not confirmed symmetric. Build the "
+            "payload where it is serialized, or through a to_dict/from_dict "
+            "pair, so the two halves can be compared."
+        ]
 
     orphaned = sorted(k for k in written - read if not k.startswith("_"))
     if not orphaned or not writer_files:
