@@ -188,23 +188,12 @@ def _ctx(step_input, key, default=""):
 
 
 # Declarative config formats: data, not code. A "module-level line" is
-# meaningless in all of them. Shell/Dockerfile are deliberately ABSENT —
-# a shebang, `source`, or `set -e` IS a frame line there, which is exactly
-# what the module-fix path was extended to handle.
-_DECLARATIVE_CONFIG_SUFFIXES = (
-    ".toml",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".ini",
-    ".cfg",
-    ".lock",
-    ".md",
-)
-
-
+# meaningless in all of them. The set lives in agent/languages.py with the
+# other per-extension tables, because two callers now need the same answer:
+# this floor (never frame-edit a manifest) and the quality sweep's routing
+# (never send a manifest edit to a flow that cannot edit files).
 def _is_declarative_config(path: str) -> bool:
-    return str(path or "").lower().endswith(_DECLARATIVE_CONFIG_SUFFIXES)
+    return languages.is_declarative_config(path)
 
 
 def _not_module_fix(observation: str) -> StepOutput:

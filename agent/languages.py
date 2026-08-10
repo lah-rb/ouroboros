@@ -263,6 +263,25 @@ DATA_EXTENSIONS: frozenset[str] = frozenset({"yaml", "yml", "json", "toml"})
 # STRICT SUBSET of DATA_EXTENSIONS — only YAML has a surgical patch backend.
 DATA_PATCH_EXTENSIONS: frozenset[str] = frozenset({"yaml", "yml"})
 
+# "Is this a declarative config rather than code?" (was
+# frame_actions._DECLARATIVE_CONFIG_SUFFIXES). A SUPERSET of DATA_EXTENSIONS:
+# the question here is not "is it structured data" but "does it have a module
+# frame" — the frame editor's whole vocabulary is "add a module-level line",
+# which in a manifest means appending a bare top-level key.
+#
+# Shell and Dockerfile are deliberately ABSENT: a shebang / `source` / `set -e`
+# line IS a module-level statement there, which is the frame editor's correct
+# use. Whoever adds an extension here must ask that question, not "is it
+# config-shaped".
+DECLARATIVE_CONFIG_EXTENSIONS: frozenset[str] = frozenset(
+    {"toml", "json", "yaml", "yml", "ini", "cfg", "lock", "md"}
+)
+
+# Suffix-less manifests. `Makefile` is NOT here — its lines are executable.
+_DECLARATIVE_CONFIG_NAMES: frozenset[str] = frozenset(
+    {"pipfile", "gemfile", "cargo.lock", "go.sum", "requirements.txt"}
+)
+
 
 # ── Indices (built once at import) ──
 _BY_EXT: dict[str, LanguageSpec] = {}
@@ -366,3 +385,20 @@ def is_data(ext: str) -> bool:
 def is_data_patch(ext: str) -> bool:
     """Surgically data-patchable (YAML only)? Replaces ``ext in _DATA_PATCH_EXTS``."""
     return _norm_ext(ext) in DATA_PATCH_EXTENSIONS
+
+
+def is_declarative_config(path: str) -> bool:
+    """Declarative config (no module frame)? Takes a PATH, not an extension.
+
+    Extensionless names count too: `Makefile` has a frame, `Pipfile` does not,
+    and neither carries a suffix to test — so the bare-name set is explicit.
+    """
+    p = str(path or "").strip().lower()
+    if not p:
+        return False
+    name = p.rsplit("/", 1)[-1]
+    if name in _DECLARATIVE_CONFIG_NAMES:
+        return True
+    return "." in name and _norm_ext(name.rsplit(".", 1)[-1]) in (
+        DECLARATIVE_CONFIG_EXTENSIONS
+    )

@@ -14,6 +14,7 @@ import re
 from collections import Counter
 from typing import Any
 
+from agent import languages
 from agent.models import StepInput, StepOutput
 from agent.actions.pipeline_actions import _cap_diagnostic
 from agent.actions.reporting_actions import (
@@ -4157,9 +4158,62 @@ def _fileops_dispatch_from_quality_diagnosis(
     if target_symbol.lower() in _JUNK_TARGET_TOKENS:
         target_symbol = ""
     summary_txt = str(_rget(report, "summary", "") or "") or "no details"
+    change_spec = str(_rget(report, "change_spec", "") or "")
+
+    # PROJECT_OPS CANNOT EDIT AN EXISTING FILE. Its only writer is write_files
+    # with protect_existing: true — CREATE what is missing, never REPLACE what
+    # is there ("targeted edits to existing configs belong to the
+    # diagnosis-driven flows", project_ops.cue) — and verify_env probes only
+    # the DECLARED dependencies, so a dependency that is missing FROM the
+    # declaration is invisible to the one check that could have caught it. It
+    # therefore reports success having changed nothing.
+    #
+    # Live, gpt-oss-medium 2026-08-10, "pytest imported but not declared":
+    #   08:46  diagnose -> project_ops    08:47  project_ops success, 0 files
+    #   08:48  diagnose -> project_ops    08:49  project_ops success, 0 files
+    #   08:50  diagnose -> file_ops (the MODEL gave up on project_ops)
+    #          -> module-frame editor spliced `pytest = "^7.4"` into a PEP 621
+    #             manifest and broke every `uv` invocation for the rest of the run.
+    # Six more no-op successes followed after the frame editor was floored.
+    #
+    # So: when the diagnosis names a declarative config, the fix is a FILE
+    # EDIT, and it goes to the flow that edits files. For a manifest file_ops
+    # routes check_module_fix (declines — not code) -> extract_symbols (no
+    # tree-sitter symbols, not data-patch-eligible) -> run_rewrite, the
+    # whole-file rewrite, which is the correct granularity for a 30-line
+    # manifest and is validated by the pyproject coherence floor. A .yaml takes
+    # the same route as far as extract_symbols and lands on the data walker.
+    #
+    # Checked BEFORE `recommended`, deliberately: a manifest is a manifest
+    # whichever flow the model named, and on the live run it named both within
+    # four minutes. diagnosis_kind/module_statement are NOT forwarded — they are
+    # the frame editor's vocabulary, they are what produced `pytest = "^7.4"`,
+    # and nothing downstream of a manifest edit should read them.
+    if target_file and languages.is_declarative_config(target_file):
+        return {
+            "goal_id": goal_id,
+            "goal_description": goal_description or "quality finding",
+            "goal_type": "quality",
+            "goal_files": [target_file],
+            "flow": "file_ops",
+            "target_file_path": target_file,
+            "flow_directive": (
+                f"Update the declarations in {target_file} to fix this quality "
+                "finding. Keep the file in the schema it is already written in — "
+                "do not convert it to another tool's format, and do not add keys "
+                "from one (Poetry, PDM, setuptools) to a manifest written in "
+                "another.\n"
+                f"Finding: {(goal_description or '')[:200]}\n"
+                f"Diagnosis: {summary_txt[:500]}"
+                + (f"\nRequired change: {change_spec[:300]}" if change_spec else "")
+            ),
+            "change_spec": change_spec,
+            "recent_reports": [],
+        }
+
     if recommended == "project_ops":
-        # Fix in place. No target_file: project_ops owns the manifest,
-        # tooling and environment, and a file target would only mislead the
+        # Genuinely environmental — install/tooling/detect, no file named.
+        # project_ops owns that, and a file target here would only mislead the
         # module-frame editor (the failure mode that reified "ensure the
         # environment provides python" as an assert in parser.py).
         return {
@@ -4189,7 +4243,7 @@ def _fileops_dispatch_from_quality_diagnosis(
         "target_file_path": target_file,
         "flow_directive": f"Fix the quality issue in {target_file}:\n{summary[:500]}",
         "target_symbol": target_symbol,
-        "change_spec": str(_rget(report, "change_spec", "") or ""),
+        "change_spec": change_spec,
         "diagnosis_kind": str(_rget(report, "diagnosis_kind", "") or ""),
         "module_statement": str(_rget(report, "module_statement", "") or ""),
         "related_symbols": list(_rget(report, "related_symbols", []) or []),
@@ -5032,6 +5086,51 @@ async def action_quality_sweep_next(step_input: StepInput) -> StepOutput:
 
     last = goal.reports[-1] if goal.reports else None
     last_flow = _rget(last, "flow", "") if last is not None else ""
+
+    # After project_ops. THIS BRANCH USED NOT TO EXIST, and its absence was the
+    # live-lock: a project_ops report matched neither case below, fell through
+    # to the "fresh goal" default at the bottom, and re-diagnosed. Nothing
+    # completed the goal, nothing recorded an attempt, and the gate never
+    # re-ran — so the reopen ceiling, the attempt ceiling and the harvester
+    # were all blind. Observed as diagnose -> project_ops -> diagnose -> …
+    # for 28 cycles, failed_attempts == [] throughout (gpt-oss-medium,
+    # 2026-08-10, "pytest imported but not declared").
+    #
+    # SUCCESS WITHOUT EFFECT IS NOT SUCCESS. project_ops reports success for
+    # verifying an environment, which is a different claim from fixing the
+    # finding it was dispatched against; with protect_existing it can quite
+    # legitimately write nothing at all. `files_affected` is the honest signal
+    # and it was empty on all six of those successes. An attempt is recorded
+    # either way — as file_ops does — and discarded with the goal if the fix held.
+    if last_flow == "project_ops":
+        from agent.persistence.models import FailedAttempt
+
+        touched = list(_rget(last, "files_affected", []) or [])
+        status = str(_rget(last, "status", "") or "")
+        goal.failed_attempts.append(
+            FailedAttempt(
+                target_file=_ENV_ATTEMPT_TARGET,
+                flow="project_ops",
+                reason=(
+                    "project_ops reported success but changed no files — it "
+                    "provisions the environment and cannot edit an existing "
+                    "manifest"
+                    if status == "success" and not touched
+                    else (str(_rget(last, "summary", "") or "no details"))[:500]
+                ),
+                diagnosis_summary=_prior_diagnosis_context(goal)[0],
+            )
+        )
+        goal.status = "complete"
+        if effects:
+            await effects.save_mission(mission)
+        return StepOutput(
+            result={"sweep_complete": False},
+            observations=(
+                f"Quality sweep: project_ops touched {len(touched)} file(s) for "
+                f"'{goal.description[:50]}' — attempt recorded, re-gating"
+            ),
+        )
 
     # After file_ops: the patch landed -> complete (no interact re-test for a
     # cosmetic/content fix). Re-evaluate via check_phase for the next goal.
