@@ -120,6 +120,19 @@ async def action_translate_data_ops_turn(step_input: StepInput) -> StepOutput:
         return _defer(f"translation inference failed ({type(e).__name__})")
 
     ops = _coerce_ops(parse_llm_json(text))
+    # THE ONLY RECORD OF WHAT THE WALKER PROPOSED. This turn calls
+    # effects.run_inference directly rather than going through the turn
+    # machinery, so it emits no `inference_call` trace event — `--trace-prompts`
+    # and `--trace-thinking` both come back empty for it. Live on 2026-08-10 the
+    # flow reported success over a byte-identical write and there was no way to
+    # ask what ops it had emitted. Until the turn is properly instrumented, this
+    # line is the answer to that question.
+    logger.info(
+        "data_patch %s: model proposed %d op(s): %s",
+        path,
+        len(ops),
+        "; ".join(f"{o.op} {o.path}" for o in ops[:8]) or "(none)",
+    )
     if not ops:
         return _defer("no valid data ops produced")
 
@@ -127,6 +140,19 @@ async def action_translate_data_ops_turn(step_input: StepInput) -> StepOutput:
     if not patched.ok:
         reasons = "; ".join(r for _op, r in patched.failed)[:160] or "ops did not apply"
         return _defer(reasons)
+
+    # APPLIED IS NOT CHANGED. Every op can succeed and still net to nothing —
+    # setting a key to the value it already holds, re-adding an entry that is
+    # already there. Live: the walker reported "1 surgical op" on a manifest and
+    # rewrote it byte-for-byte, file_ops called that a successful edit, and the
+    # quality sweep completed the goal on it. Defer to the rewrite instead: it
+    # is the stronger tool, and this is precisely the case where the surgical
+    # path has demonstrated it has nothing to offer.
+    if patched.text == content:
+        return _defer(
+            f"{len(patched.applied)} op(s) applied but the file is unchanged — "
+            f"the edit was a no-op"
+        )
 
     return StepOutput(
         result={"ops_ready": True},
@@ -158,6 +184,14 @@ async def action_apply_data_ops(step_input: StepInput) -> StepOutput:
         existing_content = (
             existing.content if getattr(existing, "exists", False) else None
         )
+        # Second guard on the same rule as translate_ops, at the point of
+        # WRITE: the dry-run ran against the content translate_ops was handed,
+        # and the file on disk is what actually matters. A write that changes
+        # nothing must not be reported as an edit — file_ops treats a data_patch
+        # success as a landed change and the quality sweep completes the goal on
+        # it, so a no-op here closes a goal that nothing has fixed.
+        if existing_content is not None and text == existing_content:
+            return _defer(f"{path} is already byte-identical — nothing to write")
         parse_err = scaffold_parse_error(path, text, existing_content)
         if parse_err:
             return _defer(f"patched {path} would not parse ({parse_err})")

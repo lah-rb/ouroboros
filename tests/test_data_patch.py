@@ -284,3 +284,58 @@ async def test_apply_no_text_defers_and_does_not_write():
     out = await action_apply_data_ops(si)
     assert out.result.get("status") == "full_rewrite_requested"
     assert eff.call_count("write_file") == 0  # additive: nothing written
+
+
+# ── a patch that changes nothing is not a patch ───────────────────────
+#
+# LIVE, 2026-08-10. The walker reported "1 surgical op" on a manifest and
+# rewrote it byte-for-byte; file_ops read that as a landed edit and the quality
+# sweep completed the goal on it. Every op APPLIED — setting a key to the value
+# it already held — and applied is not changed.
+
+
+@pytest.mark.asyncio
+async def test_ops_that_apply_but_change_nothing_defer_to_rewrite():
+    same = json.dumps(
+        {"ops": [{"op": "set", "path": "/rooms/0/id", "value": "entrance_hall"}]}
+    )
+    eff = MockEffects(inference_responses=[same])
+    out = await action_translate_data_ops_turn(
+        _si(eff, target_file_path="world.yaml", file_content=WORLD, change_spec="x")
+    )
+    assert out.result.get("status") == "full_rewrite_requested"
+    assert "no-op" in out.observations
+    assert "data_patched_text" not in out.context_updates
+
+
+@pytest.mark.asyncio
+async def test_the_write_refuses_byte_identical_content():
+    """Second guard, at the point of write: translate_ops dry-ran against the
+    content it was HANDED, and the file on disk is what actually matters."""
+    eff = MockEffects(files={"world.yaml": WORLD})
+    out = await action_apply_data_ops(
+        StepInput(
+            params={"target_file_path": "world.yaml"},
+            context={"data_patched_text": WORLD},
+            meta=FlowMeta(flow_name="data_patch", step_id="apply_ops"),
+            effects=eff,
+        )
+    )
+    assert out.result.get("status") == "full_rewrite_requested"
+    assert "byte-identical" in out.observations
+    assert eff.call_count("write_file") == 0
+
+
+@pytest.mark.asyncio
+async def test_a_real_change_still_writes():
+    eff = MockEffects(files={"world.yaml": WORLD})
+    out = await action_apply_data_ops(
+        StepInput(
+            params={"target_file_path": "world.yaml"},
+            context={"data_patched_text": WORLD + "extra: 1\n"},
+            meta=FlowMeta(flow_name="data_patch", step_id="apply_ops"),
+            effects=eff,
+        )
+    )
+    assert out.result.get("status") == "success"
+    assert eff.call_count("write_file") == 1
