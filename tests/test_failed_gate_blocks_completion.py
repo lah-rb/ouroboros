@@ -223,3 +223,40 @@ async def test_an_unfixable_finding_stops_reopening_and_raises_the_dispute():
     assert goal.status == "complete", "it must not be reopened again"
     warn = [w for w in m.pending_warnings if w.kind == "quality_gate_unfixable"]
     assert warn, "the finding must survive as a warning, not vanish"
+
+
+@pytest.mark.asyncio
+async def test_the_signature_ignores_the_drifting_remedy_text():
+    """LIVE REGRESSION (2026-08-10): the reason ends with the LLM's suggested
+    remedy, and that phrasing drifted between rounds — "fix: pip install
+    pytest" became "fix: uv add pytest". The signature moved with it, so a
+    SECOND goal was filed instead of the first reopening. Goals bred, by the
+    same prose-keying mechanism OPEN_TASKS §24 records for coverage
+    findings. Identity is the defect; the remedy is advice."""
+    m = _mission()
+    await action_harvest_quality_findings(
+        _si(
+            {
+                "mission": m,
+                "gate_failure_reason": (
+                    "undeclared dependencies — pytest is imported but not in "
+                    "the manifest; fix: pip install pytest"
+                ),
+            }
+        )
+    )
+    m.goals[0].status = "complete"
+    await action_harvest_quality_findings(
+        _si(
+            {
+                "mission": m,
+                "gate_failure_reason": (
+                    "undeclared dependencies — pytest is imported but not in "
+                    "the manifest; fix: uv add pytest"
+                ),
+            }
+        )
+    )
+    filed = [g for g in m.goals if g.description.startswith("Quality gate failed")]
+    assert len(filed) == 1, f"same defect, drifting remedy — bred {len(filed)} goals"
+    assert filed[0].status == "incomplete"

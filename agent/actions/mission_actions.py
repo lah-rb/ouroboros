@@ -4263,7 +4263,17 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
             )
             or "the gate terminated before it could produce findings"
         ).strip()
-        sig = "quality-gate-fail:" + _quality_finding_signature({"description": reason})
+        # SIGN ON THE STABLE HALF ONLY. The reason ends with the LLM's
+        # suggested remedy, and that phrasing drifts between rounds — live,
+        # "fix: pip install pytest" became "fix: uv add pytest", the signature
+        # moved, and a SECOND goal was filed instead of the first reopening.
+        # Goals bred, which is the very thing this signature exists to stop,
+        # and by the same prose-keying mechanism recorded in OPEN_TASKS §24
+        # for coverage findings. Everything from "; fix:" onward is advice,
+        # not identity.
+        sig = "quality-gate-fail:" + _quality_finding_signature(
+            {"description": reason.split("; fix:")[0].strip()}
+        )
         existing = next(
             (g for g in mission.goals if getattr(g, "finding_signature", "") == sig),
             None,
