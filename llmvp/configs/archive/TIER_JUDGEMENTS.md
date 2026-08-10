@@ -509,6 +509,86 @@ caught all six.
 
 ---
 
+# EPOCH v2.0 · FRONTIER FLIGHT — `gpt-oss-120b-a5-medium` — 2026-08-10
+
+One blind `claude-opus-5` judge, TIER_RUBRIC v2.1, contender seated **B** (the
+08-05 batch seated contenders A×3/B×2 and hy3 sat B; alternating is the
+position-bias check). Packet `/private/tmp/flight_gptoss_frontier_20260810`,
+opponent `anchors/v2.0/frontier-sonnet-20260803`. Identifier scan clean. Family-
+bias caveat stamped per METHODS §5.
+
+## Scorecard — OUT-OF-BAND, never moves the ladder
+
+| contender | Delivery | Character | axes taken off Sonnet 5 |
+|---|---|---|---|
+| **gpt-oss-120b-a5-medium** | 0–4 | **1–5** | **B5 ambition** |
+
+Completability **WON** (twice — the intended one-shot shard route and the long
+sword grind). Conformance **46/47**, sole unmet **#33** (no restart after
+defeat — absent from the tree, not merely unreachable). No panel split, no
+CLOSE flag. Room graph 8/8 reachable, no unplaced entity.
+
+## Why this is a datapoint and not a curiosity
+
+**B5 is the axis this lineage owns.** In the 08-02 Guardian flight hy3 beat the
+Guardian 4–0 / 5–1 and **the Guardian — a gpt-oss artifact — took only B5
+ambition** (LADDER.md:174). This run takes the same single axis against a
+*harder* opponent: the Frontier one-shot rather than the Guardian. Same axis,
+opponent raised. The judge called B5 "the closest axis on the card" and named
+what earned it: monsters that migrate through the room graph unprompted, a
+key-locked exit, an NPC barter, and the entire world authored as external data
+— reach ACROSS the system, where the Frontier's ambition is depth inside one
+combat routine.
+
+**Cost, corrected.** The 20h wall span is misleading: **5.07h ACTIVE across 14
+trace segments, 14.97h paused** — 50.9 cycles/h, a grinder rate. Prior frontier
+contenders flew on a 30-cycle contemplator budget; this is 258 cycles at
+grinder pace, which is the like-for-like caveat on any comparison to the 08-05
+table.
+
+## Decisive defect — the predicted seam class, again
+
+`handle_save` (game.py:415) serialises four world tables — `rooms`, `items`,
+`monsters`, `npcs`. `handle_load` (game.py:446) reads **none of them**. It
+restores the player onto a world rebuilt fresh from `world.yaml`, so loading
+resurrects killed monsters, respawns looted gear, and duplicates every item
+without limit. The save FILE is correct; the reader ignores it. The artifact's
+own shipped tests know — three are named `test_save_includes_world_data` and
+all three fail.
+
+Second seam, and the worst robustness result: `go up` — an ordinary player's
+typo — terminates the process. `parse_command` passes any post-`go` token into
+`Direction(...)`, which raises, under a blanket `except Exception: … break`
+(game.py:720). The same construct turns a corrupt save into a session kill.
+
+## Two UX findings the rubric's B7 rule caught
+
+`give` and `wait` are both absent from `help`. The judge only reached the
+Alchemist barter and the Cursed Specter's teleport by reading the parser —
+so a player working from the help screen can complete neither. Charged at full
+weight against the artifact per the "judge the player's experience, not yours"
+rule, and it is the clearest case that rule has produced.
+
+## Provenance caveat — READ BEFORE COMPARING
+
+This artifact was built across **ten framework builds landed mid-flight**
+(ded6716, 160e0b9, d94be65, d7a6301, eed5781, 6651755, b3d90d7, fad46ed and
+predecessors). It is an excellent debugging record and a **weak clean-capability
+datapoint**. Its terminal state was reached only after four operator-directed
+repair rounds on a manifest the framework had itself corrupted.
+
+## What the flight found that our own gates did not
+
+`pyproject.toml` declares `text-adventure = "main:main"`; `main.py` defines
+`run_game` and no `main`. The documented `pip install .` path cannot produce a
+working game. **Our manifest coherence checker passed this file as clean** — it
+validates PEP 621 structure and PEP 508 requirement contents and never checks
+that a `[project.scripts]` target resolves. Same class as the two defects fixed
+the same day: parsing is not the bar, shape is not the bar, and declaring is
+not the bar either — the target has to exist.
+
+---
+
 # ARCHIVED PER-MODEL RECORDS
 
 Everything below is the verbatim `tier:` block lifted from each config on
