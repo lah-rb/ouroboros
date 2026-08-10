@@ -260,3 +260,94 @@ async def test_the_signature_ignores_the_drifting_remedy_text():
     filed = [g for g in m.goals if g.description.startswith("Quality gate failed")]
     assert len(filed) == 1, f"same defect, drifting remedy — bred {len(filed)} goals"
     assert filed[0].status == "incomplete"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# A reopen starts a NEW round — the loop that was neither bounded nor stoppable
+# ══════════════════════════════════════════════════════════════════════
+#
+# Live, 2026-08-10, gpt-oss-medium: 14 gate failures and 12 reopens of ONE goal
+# inside a single mission_control cycle.
+#
+#   harvest (reopen) -> check_phase -> quality_sweep_next
+#     -> sees the goal's STALE last report (the previous file_ops success)
+#     -> completes it on the spot: no diagnosis, no edit, no work flow
+#   -> check_phase -> dispatch_quality_gate -> fails -> harvest (reopen) -> ...
+#
+# No work flow dispatched means no cycle boundary, which means load_state never
+# re-runs, which means the event queue is never re-read — so `mission pause` sat
+# unconsumed for six minutes and the run had to be SIGTERMed. And because the
+# sweep never recorded an attempt, `spent` stayed 0 and the reopen ceiling was
+# unreachable. Unbounded AND unstoppable, from one stale report.
+
+
+@pytest.mark.asyncio
+async def test_a_reopen_records_the_fruitless_round():
+    """The ceiling counts failed_attempts; nothing on this path incremented it."""
+    from agent.actions.mission_actions import _GATE_GOAL_REOPEN_CEILING
+
+    m = _mission()
+    ctx = {"mission": m, "gate_failure_reason": "manifest still not a declaration set"}
+    await action_harvest_quality_findings(_si(ctx))
+    goal = m.goals[0]
+    assert len(goal.failed_attempts) == 0  # first filing is not a reopen
+
+    # Each reopen banks one round; the ceiling is checked BEFORE the append, so
+    # it stops on the round after the budget is spent. Bounded either way —
+    # which is the whole point, since live this ran 12 times and never stopped.
+    rounds = 0
+    for _ in range(_GATE_GOAL_REOPEN_CEILING + 3):
+        goal.status = "complete"
+        await action_harvest_quality_findings(_si(ctx))
+        if goal.status == "complete":
+            break  # ceiling reached — no longer reopening
+        rounds += 1
+        assert len(goal.failed_attempts) == rounds
+
+    assert rounds == _GATE_GOAL_REOPEN_CEILING, "the ceiling must actually stop it"
+    assert m.pending_warnings, "past the ceiling it must raise the dispute"
+
+
+@pytest.mark.asyncio
+async def test_a_reopen_drops_the_reports_of_the_round_that_failed():
+    """The sweep dispatches on the LAST report. Leaving a file_ops success on a
+    reopened goal re-completes it instantly — the tight loop."""
+    from agent.persistence.models import DirectiveReport
+
+    m = _mission()
+    ctx = {"mission": m, "gate_failure_reason": "manifest still broken"}
+    await action_harvest_quality_findings(_si(ctx))
+    goal = m.goals[0]
+    goal.reports = [
+        DirectiveReport(flow="diagnose_issue", status="success", summary="had a look"),
+        DirectiveReport(flow="file_ops", status="success", summary="patched it"),
+    ]
+    goal.status = "complete"
+
+    await action_harvest_quality_findings(_si(ctx))
+
+    assert goal.status == "incomplete"
+    assert goal.reports == [], "a stale file_ops success re-completes the goal"
+    # the history survives where the next diagnosis will actually read it
+    assert goal.failed_attempts[-1].diagnosis_summary == "had a look"
+
+
+@pytest.mark.asyncio
+async def test_the_reopened_goal_dispatches_real_work_so_the_cycle_can_end():
+    """The consequence that matters: with reports cleared the sweep takes its
+    'fresh goal' branch and dispatches diagnose_issue. A work flow ends the
+    mission_control cycle, load_state re-runs, and a pending pause is read."""
+    from agent.actions.mission_actions import action_quality_sweep_next
+    from agent.persistence.models import DirectiveReport
+
+    m = _mission()
+    ctx = {"mission": m, "gate_failure_reason": "manifest still broken"}
+    await action_harvest_quality_findings(_si(ctx))
+    goal = m.goals[0]
+    goal.reports = [DirectiveReport(flow="file_ops", status="success", summary="x")]
+    goal.status = "complete"
+    await action_harvest_quality_findings(_si(ctx))
+
+    out = await action_quality_sweep_next(_si({"mission": m}))
+    assert out.result.get("needs_fix") is True
+    assert out.context_updates["dispatch_config"]["flow"] == "diagnose_issue"

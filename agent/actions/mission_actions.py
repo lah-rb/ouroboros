@@ -4376,6 +4376,49 @@ async def action_harvest_quality_findings(step_input: StepInput) -> StepOutput:
                     context_updates={"mission": mission},
                 )
             reopened = existing.status == "complete"
+            if reopened:
+                # A REOPEN STARTS A NEW ROUND. Two things follow, and without
+                # both the loop below is free and unbounded — live on
+                # 2026-08-10 it ran 14 gate failures and 12 reopens of one goal
+                # inside a SINGLE mission_control cycle. I had called it
+                # bounded. It was not, in either sense.
+                #
+                # 1. COUNT IT. `spent` above reads failed_attempts, and the
+                #    quality sweep's file_ops branch completes a goal on a
+                #    successful edit without recording one — so an edit that
+                #    lands cleanly and does not work leaves the counter at
+                #    zero forever and the ceiling is unreachable. The reopen
+                #    itself is the fruitless round, whatever happened in
+                #    between, so it is recorded here rather than in a sweep
+                #    branch that may not run.
+                #
+                # 2. DROP THE STALE REPORTS. They describe the round that just
+                #    failed. The sweep dispatches on the LAST report, so a
+                #    reopened goal whose last report is the previous
+                #    file_ops success is completed again on the spot —
+                #    no diagnosis, no edit, no work flow, and therefore NO
+                #    CYCLE BOUNDARY. That is what made the loop tight: with
+                #    no cycle boundary `load_state` never re-runs, the event
+                #    queue is never re-read, and an operator `mission pause`
+                #    sits unconsumed while the mission spins (it did, for six
+                #    minutes, and had to be SIGTERMed). Clearing them routes
+                #    the sweep to its "fresh goal" branch, which dispatches
+                #    diagnose_issue — real work, a real cycle, a drained queue.
+                #    The history is not lost: it moves to failed_attempts,
+                #    which is what the next diagnosis seed actually reads.
+                from agent.persistence.models import FailedAttempt
+
+                prior_diag, prior_headline = _prior_diagnosis_context(existing)
+                existing.failed_attempts.append(
+                    FailedAttempt(
+                        target_file=_ENV_ATTEMPT_TARGET,
+                        flow="quality_gate",
+                        reason=f"gate re-reported after a claimed fix: {reason[:400]}",
+                        diagnosis_summary=prior_diag,
+                        pre_headline=prior_headline,
+                    )
+                )
+                existing.reports = []
             existing.status = "incomplete"
         else:
             reopened = False
