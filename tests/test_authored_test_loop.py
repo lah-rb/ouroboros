@@ -1362,6 +1362,7 @@ def test_the_brief_carries_every_earned_rule():
         "printed names": "DRIVE IT WITH THE STRINGS THE PROGRAM PRINTS",
         "no chdir": "DO NOT CHANGE THE WORKING DIRECTORY",
         "post-fix world": "EVERY ASSERTION DESCRIBES THE WORLD AFTER THE FIX",
+        "comment is not a step": "A COMMENT IS NOT A STEP",
         "own preconditions": "OWN EVERY PRECONDITION",
         "invariant": "PIN THE INVARIANT",
         "real signature": "CALL THE CODE AS IT IS ACTUALLY WRITTEN",
@@ -1702,3 +1703,16 @@ async def test_an_already_equipped_workspace_installs_nothing():
     fx.installed = True
     assert await _pytest_available(fx) is True
     assert not any("install" in c for c in fx.cmds)
+
+
+def test_the_brief_covers_the_comment_versus_code_family():
+    """MEASURED, 2026-08-10: three of the run's authored-test failures were the
+    same shape — the comment narrates a step the code never performs. It is not
+    a harness bug (setup runs), not a wrong assertion (the assertion is right),
+    and no rule 1-9 covered it. The magnitude clause is folded in from the same
+    family: a test asserted one attack kills a 35 HP monster."""
+    from agent.actions.authored_test_actions import AUTHOR_PROMPT
+
+    assert "A COMMENT IS NOT A STEP" in AUTHOR_PROMPT
+    assert "did I actually write that call?" in AUTHOR_PROMPT
+    assert "QUANTITY" in AUTHOR_PROMPT  # read the real value, do not estimate

@@ -40,6 +40,12 @@ content: |
 
   8b. IF THE PROGRAM READS STDIN, YOUR TEST MUST SUPPLY IT. Under pytest, stdin is closed — any `input()` your test reaches raises `OSError: reading from stdin while output is captured`, and the test dies there having asserted nothing. This bites on SETUP, not on the thing you are testing: a test once advanced the program one step to reach the record it wanted to inspect, and that step opened a confirmation prompt. The line was written `# (handled internally)`. It was not. Either drive a path that cannot prompt, or feed it — `monkeypatch.setattr("builtins.input", lambda *a: "y")` — and prefer calling the handler you are actually testing over walking the program into it.
 
+  8c. A COMMENT IS NOT A STEP. Whatever your comment says the test does, the CODE must actually do — and this is the single most common way a WELL-SHAPED test fails. Three real examples, all from one run:
+      - `# Navigate to the record and check it out` … followed by navigation and no checkout call at all. The later assertion read an empty holdings list.
+      - `# (handled internally)` on a line that walked straight into a blocking prompt.
+      - `# the engine settles in one pass` — invented. One pass could not drain a 35-item queue, and the test asserted it empty.
+      Before you finish, read your own setup line by line and ask of each comment: "did I actually write that call?". If an assertion depends on a QUANTITY — a count, a threshold, how many passes — read the real value out of the data file or the code you traced. Do not estimate it, and do not assume a convenience the code does not offer you.
+
   9. EVERY ASSERTION DESCRIBES THE WORLD AFTER THE FIX. Never assert the value the defect currently produces — not even as a "precondition" establishing that the bug is present. That inverts the whole contract: the test passes NOW and fails once the fix lands, which is the exact opposite of what you are being asked for. A test once opened with `assert record.status == "unverified"` to show the bug, and the fix that finally marked it verified is what turned it red.
 
   ✅ `store = Store(); store.add("R-17"); store.save(p); s2 = Store(); s2.load(p); assert "R-17" in s2.records`

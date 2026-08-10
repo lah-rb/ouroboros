@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast as stdlib_ast
 import json
 import logging
+import re
 from typing import Any
 
 from agent import languages
@@ -1818,6 +1819,45 @@ def _recalculate_queue_offsets(
 # ── finalize_edit_session ─────────────────────────────────────────────
 
 
+def _spec_names_symbol(spec: str, ref: str) -> bool:
+    """Does the change_spec actually ask for THIS symbol to change?
+
+    `ref` arrives as "path.py:Class.method" or "path.py:function". Only the
+    symbol's own name is matched — never the file, never the class alone,
+    because a spec that says "in Game.handle_attack, ..." names the class of
+    a dozen bystanders and would re-admit every false warning this exists to
+    stop.
+
+    Conservative on purpose: an EMPTY spec is treated as naming everything
+    (caller-side guard), so a missing spec never silences a real loss. The
+    cost of a false negative here is a lost warning about a genuinely dropped
+    fix; the cost of a false positive is the 75% noise rate measured across
+    two artifacts. Erring toward warning is the right asymmetry — this only
+    filters when the spec is present AND clearly does not mention the symbol.
+    """
+    spec = (spec or "").strip()
+    if not spec or not ref:
+        return True
+
+    # CODE TARGETS ONLY. A data-file ref is a SECTION ("world.json:monsters"),
+    # and a spec routinely names the entity inside it rather than the section
+    # — "In world.json, set guardian health <= 10" never says "monsters",
+    # yet that is a real unapplied change. Every bystander measured was a
+    # Python method; nothing was measured about data sections, so they keep
+    # the old always-warn behaviour rather than inheriting a filter tuned on
+    # a different addressing scheme. Caught by an existing test.
+    head = str(ref).rsplit(":", 1)[0]
+    ext = head.rsplit(".", 1)[-1].lower() if "." in head else ""
+    if languages.is_data(ext):
+        return True
+
+    tail = str(ref).rsplit(":", 1)[-1].strip()
+    name = tail.rsplit(".", 1)[-1].strip()
+    if not name:
+        return True
+    return re.search(rf"\b{re.escape(name)}\b", spec) is not None
+
+
 async def action_finalize_edit_session(step_input: StepInput) -> StepOutput:
     """Close the edit session and assemble the batch's edit_summary.
 
@@ -1893,6 +1933,27 @@ async def action_finalize_edit_session(step_input: StepInput) -> StepOutput:
         if mission is not None:
             raised = 0
             for ref in unresolved:
+                # A SYMBOL THE SPEC NEVER ASKED TO CHANGE IS NOT A LOST FIX.
+                # Diagnoses routinely list a related symbol they only intend to
+                # CALL — `_recalc_player_stats` and `Game.handle_restart` were
+                # both named while the whole change sat inside handle_attack.
+                # The walk resolves nothing to do, and the warning then claims
+                # "that part of the diagnosed fix was NEVER APPLIED", which is
+                # simply false.
+                #
+                # Measured across two artifacts: 6 of 8 of these were
+                # bystanders. A channel that is 75% false trains its reader to
+                # ignore it — and this one is read by the warning sweep, which
+                # spent real cycles re-dispatching fixes for symbols nothing
+                # wanted changed.
+                if spec and not _spec_names_symbol(spec, str(ref)):
+                    logger.info(
+                        "finalize_edit_session: %s went unresolved but the "
+                        "change_spec never names it — a bystander, not a lost "
+                        "fix; no warning raised",
+                        ref,
+                    )
+                    continue
                 raised += bool(
                     mission.raise_warning(
                         kind="unresolved_edit_target",

@@ -347,3 +347,104 @@ async def test_rewrite_turn_records_file_qualified_key():
     out = await action_rewrite_symbol_turn(si)
     assert out.result["rewrite_success"] is True
     assert list(out.context_updates["already_rewritten"]) == ["parser.py:parse_command"]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# A symbol the spec never asked to change is not a lost fix
+# ══════════════════════════════════════════════════════════════════════
+#
+# MEASURED across two gpt-oss artifacts: 6 of 8 unresolved_edit_target
+# warnings were BYSTANDERS — a related symbol the diagnosis only intended to
+# CALL, while the whole change sat inside one other method. The warning then
+# claimed "that part of the diagnosed fix was NEVER APPLIED", which is false,
+# and the warning sweep spent real cycles re-dispatching fixes for symbols
+# nothing wanted changed. A channel that is 75% false trains its reader to
+# ignore it.
+#
+# Every case below is a verbatim shape from those two runs.
+
+
+def test_a_spec_that_names_the_symbol_still_warns():
+    """The two REAL instances — both create-shaped, both worth a warning."""
+    from agent.actions.ast_actions import _spec_names_symbol
+
+    assert _spec_names_symbol(
+        "Add 'exits' to parse_command. Implement a new Game.handle_exits "
+        "method that prints the current room's exits.",
+        "src/game.py:Game.handle_exits",
+    )
+    assert _spec_names_symbol(
+        "Extend parse_command to recognize damage. Add a handler method "
+        "GameEngine.handle_damage that subtracts the amount.",
+        "game.py:GameEngine.handle_damage",
+    )
+
+
+def test_a_bystander_symbol_is_silent():
+    """The six false ones. Each names a symbol the spec merely CALLS."""
+    from agent.actions.ast_actions import _spec_names_symbol
+
+    attack_spec = (
+        "In Game.handle_attack, after adding each loot_id to the inventory, "
+        "check the item's type via world_data['items'][loot_id].type."
+    )
+    assert not _spec_names_symbol(attack_spec, "src/game.py:_recalc_player_stats")
+    assert not _spec_names_symbol(
+        "In Game.handle_attack, replace the elif result.outcome == 'defeat' "
+        "block with code that prints a defeat screen.",
+        "src/game.py:Game.handle_restart",
+    )
+    parser_spec = "Extend parse_command to handle talk and give patterns."
+    assert not _spec_names_symbol(parser_spec, "game.py:GameEngine.handle_give")
+    assert not _spec_names_symbol(parser_spec, "game.py:GameEngine.handle_inventory")
+
+
+def test_the_class_name_alone_does_not_admit_a_bystander():
+    """'In Game.handle_attack, ...' names the CLASS of a dozen bystanders.
+    Matching on the class would re-admit every false warning this stops."""
+    from agent.actions.ast_actions import _spec_names_symbol
+
+    assert not _spec_names_symbol(
+        "In Game.handle_attack, set self.state.equipment['weapon'].",
+        "src/game.py:Game.some_other_method",
+    )
+
+
+def test_a_missing_spec_never_silences_a_real_loss():
+    """Conservative asymmetry: the cost of a false negative is a genuinely
+    dropped fix going unreported; the cost of a false positive is measured
+    noise. With no spec to read, warn."""
+    from agent.actions.ast_actions import _spec_names_symbol
+
+    assert _spec_names_symbol("", "x.py:Foo.bar")
+    assert _spec_names_symbol("   ", "x.py:Foo.bar")
+
+
+def test_a_bare_function_ref_matches_on_its_own_name():
+    from agent.actions.ast_actions import _spec_names_symbol
+
+    assert _spec_names_symbol(
+        "Rewrite load_world to return objects.", "world.py:load_world"
+    )
+    assert not _spec_names_symbol(
+        "Rewrite load_world to return objects.", "world.py:save_world"
+    )
+
+
+def test_a_data_section_ref_always_warns():
+    """CAUGHT BY AN EXISTING TEST, not by me. A data ref is a SECTION
+    ("world.json:monsters") and the spec routinely names the entity inside it
+    — "In world.json, set guardian health <= 10" never says "monsters", yet
+    that is a real unapplied change. Every bystander measured was a Python
+    method; the filter is bounded to what was actually measured."""
+    from agent.actions.ast_actions import _spec_names_symbol
+
+    assert _spec_names_symbol(
+        "In world.json, set guardian health <= 10", "world.json:monsters"
+    )
+    assert _spec_names_symbol("Add the north exit.", "data/world.yaml:rooms")
+    # ...while a code ref in the same shape is still filtered.
+    assert not _spec_names_symbol(
+        "In Game.handle_attack, set the equipment slot.",
+        "src/game.py:Game.handle_restart",
+    )
