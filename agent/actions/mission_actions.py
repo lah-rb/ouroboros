@@ -1828,7 +1828,12 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
     # the flag the sweep would re-dispatch the batch forever). After the
     # batch, this sweep resumes per-file: missing files → serial create,
     # gate-failed files → diagnose-first repair below.
-    if mode == "batch":
+    # SESSION mode shares this virgin gate verbatim — it writes the same
+    # `batch_structural` note through apply_batch_results, so it is one-shot
+    # by the identical mechanism. Only the dispatched flow and the directive
+    # differ; everything after the structural phase (missing → serial create,
+    # gate-failed → diagnose-first repair) is unchanged for both.
+    if mode in ("batch", "session"):
         structural_goals = [g for g in mission.goals if g.type == "structural"]
         batch_attempted = any(
             g.reports or getattr(g, "reports_archived", 0) for g in structural_goals
@@ -1840,25 +1845,58 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
             os.path.isfile(os.path.join(working_dir, f)) for f in sweep_files
         )
         if structural_goals and not batch_attempted and not any_file_exists:
+            # build_structure_session lives in flows/code_core/, so only that
+            # controller can reach it. The swarm controllers are byte-identical
+            # to mission_control by design (test_controller_delta_is_exactly_
+            # the_batch_target) and carry no dispatch_session_create — without
+            # this guard a swarm mission set to session mode would raise the
+            # flag, match no rule, and the sweep would spin with nothing
+            # dispatched. Degrade to that flow set's own structural entry.
+            flow_set = str(
+                getattr(getattr(mission, "config", None), "flow_set", "") or ""
+            )
+            session_mode = mode == "session" and flow_set == "code_core"
+            if mode == "session" and not session_mode:
+                logger.info(
+                    "Structural sweep: session mode is code_core-only — "
+                    "flow_set %r falls back to its own batch entry",
+                    flow_set,
+                )
             dispatch_config = {
                 "goal_id": "",
-                "goal_description": "Create all architecture files in one batch",
+                "goal_description": (
+                    "Create every architecture file, one per turn"
+                    if session_mode
+                    else "Create all architecture files in one batch"
+                ),
                 "goal_type": "structural",
                 "goal_files": list(sweep_files),
-                "flow": "build_structure",
+                "flow": (
+                    "build_structure_session" if session_mode else "build_structure"
+                ),
                 "target_file_path": "",
                 "flow_directive": (
-                    "Create every file in the architecture blueprint in one "
+                    "Create every file in the architecture blueprint, ONE FILE "
+                    "PER TURN in creation order, binding each to what the "
+                    "earlier files actually declared."
+                    if session_mode
+                    else "Create every file in the architecture blueprint in one "
                     "batch generation."
                 ),
                 "recent_reports": [],
             }
-            logger.info("Structural sweep: batch-creating %d files", len(sweep_files))
+            flag = "needs_session_create" if session_mode else "needs_batch_create"
+            logger.info(
+                "Structural sweep: %s-creating %d files",
+                mode,
+                len(sweep_files),
+            )
             return StepOutput(
-                result={"sweep_complete": False, "needs_batch_create": True},
+                result={"sweep_complete": False, flag: True},
                 observations=(
-                    f"Structural sweep: parallel mode — batch-creating all "
-                    f"{len(sweep_files)} files in one generation"
+                    f"Structural sweep: {mode} mode — creating all "
+                    f"{len(sweep_files)} files"
+                    + (" one per turn" if session_mode else " in one generation")
                 ),
                 context_updates={"dispatch_config": dispatch_config},
             )
@@ -1870,7 +1908,11 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
     # dispatch ONE create_content_batch burst (stateless completion per
     # file). One-shot via the "content_batch"-tagged note; any file the
     # burst fails falls back to the serial walk below unchanged.
-    if mode == "batch":
+    # SESSION shares every post-structural branch with batch. Gating these
+    # on batch alone would silently deny session the content fan-out and the
+    # diagnose-first repair routing, and the A/B would then be measuring two
+    # differences instead of one.
+    if mode in ("batch", "session"):
         content_attempted = any(
             "content_batch" in (getattr(n, "tags", None) or []) for n in mission.notes
         )
@@ -1926,7 +1968,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
     # first. Confidence-gated per goal (an unconfident triage books
     # nothing and the goal takes the interactive flow as today);
     # re-triage is prevented per goal id via the diagnose_batch notes.
-    if mode == "batch":
+    if mode in ("batch", "session"):
         from agent.actions.contract_swarm_actions import (
             _diagnose_batch_candidates,
         )
@@ -2132,7 +2174,7 @@ async def action_structural_sweep_next(step_input: StepInput) -> StepOutput:
         # quality sweep uses. The import fix-or-defer DECISION pass
         # stays on the shared file_ops path below (it's a judgment
         # call, not a defect investigation).
-        if mode == "batch" and goal.reports and block_reason != "import":
+        if mode in ("batch", "session") and goal.reports and block_reason != "import":
             last = goal.reports[-1]
             last_flow = getattr(last, "flow", "")
             # diagnose_batch books the same structured diagnosis contract

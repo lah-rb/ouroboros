@@ -102,18 +102,41 @@ def test_data_entity_registry_schema_loads_with_example():
     assert schema["x-example"]["files"]
 
 
+# structural_mode "session" (2026-08-10) dispatches build_structure_session,
+# which lives in flows/code_core/ and is therefore unreachable from a swarm
+# controller. The step is code_core-only BY CONSTRUCTION, and the sweep guards
+# it on flow_set so a swarm mission set to session mode falls back to that flow
+# set's own structural entry rather than raising a flag no rule matches.
+_CODE_CORE_ONLY_STEPS = {"dispatch_session_create"}
+
+
 def test_controller_delta_is_exactly_the_batch_target():
     c = _compiled()
     base = c["mission_control"]["steps"]
     swarm = c["mission_control_swarm"]["steps"]
-    assert set(base) == set(swarm)
-    for name in base:
+    assert set(base) - set(swarm) == _CODE_CORE_ONLY_STEPS
+    assert set(swarm) - set(base) == set(), "the swarm controller gained a step"
+    for name in set(base) & set(swarm):
         b, s = base[name], swarm[name]
         if name == "dispatch_batch_create":
             assert s["tail_call"]["flow"] == "build_contracts"
             assert b["tail_call"]["flow"] == "build_structure"
         elif name == "idle":
             continue  # _self differs by design (controller identity)
+        elif name == "structural_sweep_next":
+            # The ONE rule routing to the code_core-only session step cannot
+            # exist in a controller that has no such step. Asserted precisely
+            # rather than exempting the step: everything else about it must
+            # still match, so real drift here is still caught.
+            extra = [
+                r for r in b["resolver"]["rules"] if r not in s["resolver"]["rules"]
+            ]
+            assert [r["transition"] for r in extra] == [
+                "dispatch_session_create"
+            ], f"unexpected drift in {name!r}: {extra}"
+            assert {k: v for k, v in b.items() if k != "resolver"} == {
+                k: v for k, v in s.items() if k != "resolver"
+            }
         else:
             assert b == s, f"unexpected controller drift in step {name!r}"
 

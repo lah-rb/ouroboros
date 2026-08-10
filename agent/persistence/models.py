@@ -70,7 +70,12 @@ class MissionConfig(BaseModel):
     # Missions persisted before this field existed default to batch on next
     # load, which is inert for them — batch creation only dispatches when no
     # structural goal has run yet.
-    structural_mode: Literal["batch", "parallel", "serial"] = "batch"
+    # "session" (2026-08-10): one file per TURN inside a single inference
+    # session, checked between turns. Batch is one completion for every file,
+    # so the cross-file contract is read once at token 0 and nothing
+    # re-asserts it at file five — a contract with no checkpoint. Opt-in;
+    # batch stays the default and the control arm.
+    structural_mode: Literal["batch", "parallel", "serial", "session"] = "batch"
     # Whether flows may reach the web for proactive grounding (the
     # `research` sub-flow — EXA-backed). Default on: greenfield design and
     # workspace ingest research the domain to stay grounded. Set False to

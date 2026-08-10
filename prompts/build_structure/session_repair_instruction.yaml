@@ -1,0 +1,26 @@
+id: build_structure/session_repair_instruction
+content: |
+  A deterministic check just read the file you wrote, together with every file
+  written before it, and found the problems listed above. They are not
+  opinions — each one is a name, a key or an id that two files disagree about,
+  read straight off the code.
+
+  Rewrite the SAME file so those problems are gone.
+
+  - Fix the disagreement, do not rename around it. If your file calls
+    `fetch_record` and the earlier file declares `get_record`, change YOUR
+    call — the earlier file is already on disk and other files may already
+    bind to it.
+  - A `serialized round trip` finding means this file writes keys into a saved
+    payload that nothing ever reads back. Either read them where the payload
+    is loaded, or stop writing them. Both are honest; storing data no reader
+    consumes is not.
+  - An `entity registry` finding means an id that was promised is not in the
+    file as written, or a reference points at an id no file defines. Make the
+    ids real.
+  - Change nothing else. This is a repair, not a redraft — an unrelated
+    improvement here costs the check its meaning, because the next run cannot
+    tell which edit fixed what.
+
+  Output the complete file again, in ONE fenced block with the same
+  `# === FILE: <path> ===` marker. Whole file, not a diff and not a fragment.

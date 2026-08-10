@@ -132,6 +132,13 @@ FLOW_INPUTS = {
     "mission_control_integrated": {
         "mission_id": "test-mission-001",
     },
+    # Session structural mode (one file per turn, checked between turns)
+    "build_structure_session": {
+        "mission_id": "test-mission-001",
+        "goal_id": "",
+        "working_directory": "/tmp/smoke",
+        "flow_directive": "build everything",
+    },
     # Contract-swarm structural flow
     "build_contracts": {
         "mission_id": "test-mission-001",

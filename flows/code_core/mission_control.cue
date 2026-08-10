@@ -191,6 +191,7 @@ mission_control: #FlowDefinition & {
 					{condition: "result.needs_replan == true", transition: "dispatch_replan"},
 					{condition: "result.sweep_complete == true", transition: "check_phase"},
 					{condition: "result.needs_batch_create == true", transition: "dispatch_batch_create"},
+					{condition: "result.needs_session_create == true", transition: "dispatch_session_create"},
 					{condition: "result.needs_content_batch == true", transition: "dispatch_content_batch"},
 					{condition: "result.needs_diagnose_batch == true", transition: "dispatch_diagnose_batch"},
 					{condition: "result.needs_create == true", transition: "dispatch_structural_create"},
@@ -199,6 +200,25 @@ mission_control: #FlowDefinition & {
 				]
 			}
 			publishes: ["dispatch_config"]
+		}
+
+		// SESSION mode, virgin structural phase: one file per turn inside
+		// one session, checked between turns. Same dispatch shape as batch —
+		// last_goal_id stays empty because the flow books its own per-goal
+		// reports through the same apply_batch_results.
+		dispatch_session_create: #StepDefinition & {
+			action:      "noop"
+			description: "Create every architecture file one per turn, checked between"
+			context: required: ["dispatch_config", "mission"]
+			tail_call: {
+				flow: "build_structure_session"
+				input_map: {
+					mission_id:        {$ref: "input.mission_id"}
+					goal_id:           {$ref: "context.dispatch_config.goal_id", default: ""}
+					flow_directive:    {$ref: "context.dispatch_config.flow_directive"}
+					working_directory: {$ref: "context.mission.config.working_directory"}
+				}
+			}
 		}
 
 		// Parallel mode, virgin structural phase: build the whole project

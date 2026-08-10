@@ -1,0 +1,40 @@
+id: build_structure/session_file_instruction
+content: |
+  Write EXACTLY ONE file this turn: the one named above. Not the next one too,
+  not a sketch of the rest — one complete, finished file.
+
+  You have written the earlier files yourself and they are above you in this
+  conversation. They are on disk now. That makes them FACTS, not suggestions:
+
+  - Call the names they actually declare, spelled exactly as they are spelled.
+    A near-miss — `get_record` for `fetch_record`, `record_id` for `id` — is
+    the single most common way a project like this fails, and it fails
+    invisibly: both files are reasonable on their own and nothing catches the
+    disagreement until someone runs it.
+  - Use the ids the data files actually contain. If an earlier file defines
+    `north_wd`, that is the id. Do not coin `north_weekday` because it reads
+    better.
+  - Where the declared contract and an already-written file disagree: the
+    WRITTEN file wins for names and ids (it exists; the contract was written
+    before anything did), and the CONTRACT wins for signatures (a caller you
+    have not written yet must bind to the declared shape).
+
+  If this file SERIALIZES anything another file will read back — a save, an
+  export, a cache — write the reader's half to match key for key, or say in a
+  comment which file reads it. A payload whose reader ignores half of what the
+  writer stored is worse than no persistence at all: it restores a world that
+  looks right and is not.
+
+  Do not stub. Do not leave `pass`, `TODO`, or a body that raises
+  NotImplementedError. If you genuinely cannot finish something, write the
+  smallest thing that actually works and say what is missing in a comment.
+
+  Output the file in ONE fenced block whose first line is the marker:
+
+  ```
+  # === FILE: <the exact path named above> ===
+  ```
+
+  Use the comment character of the file's own language for that marker (`#`,
+  `//`, `--`), and tag the fence with the language. For markdown, use a
+  four-backtick fence so inner fences survive.

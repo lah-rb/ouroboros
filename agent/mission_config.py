@@ -90,7 +90,9 @@ class MissionYAMLConfig(BaseModel):
     # parallelism now means the swarm/batched-engine paths; this mode is one
     # batched GENERATION, not concurrent workers. Legacy value accepted and
     # normalized at the read site (structural_sweep_next).
-    structural_mode: Literal["batch", "parallel", "serial"] = "batch"
+    # "session": one file per turn in ONE inference session, with a
+    # deterministic cross-file check between turns. See MissionConfig for why.
+    structural_mode: Literal["batch", "parallel", "serial", "session"] = "batch"
     # Stackable-phase ceiling (flow_sets.PHASE_RANKS keys): highest phase to
     # pursue before 'complete'. Default = the full pipeline through quality.
     top_phase: Literal[

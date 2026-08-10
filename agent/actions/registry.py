@@ -377,6 +377,12 @@ def build_action_registry() -> ActionRegistry:
         action_run_batch_file_checks,
         action_slice_batch_files,
     )
+    from agent.actions.session_structural_actions import (
+        action_check_session_file,
+        action_open_structural_session,
+        action_session_next_file,
+        action_write_session_file,
+    )
 
     registry = ActionRegistry()
 
@@ -411,6 +417,11 @@ def build_action_registry() -> ActionRegistry:
     registry.register("slice_batch_files", action_slice_batch_files)
     registry.register("run_batch_file_checks", action_run_batch_file_checks)
     registry.register("apply_batch_results", action_apply_batch_results)
+    # structural_mode: "session" — one file per turn, checked between turns.
+    registry.register("open_structural_session", action_open_structural_session)
+    registry.register("session_next_file", action_session_next_file)
+    registry.register("write_session_file", action_write_session_file)
+    registry.register("check_session_file", action_check_session_file)
     # Extractor flow set (scraper v2 — PDF -> markdown+figures)
     registry.register("derive_extraction_goals", action_derive_extraction_goals)
     registry.register("derive_task_goal", action_derive_task_goal)

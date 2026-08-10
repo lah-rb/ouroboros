@@ -641,6 +641,486 @@
       "fallback": "reorganize"
     }
   },
+  "build_structure_session": {
+    "flow": "build_structure_session",
+    "version": 1,
+    "description": "Session structural creation. Opens one inference session seeded with\nthe architecture blueprint, writes each declared file in its own turn\nin creation order, checks every file against the contracts and against\nwhat the earlier files declared, repairs in-session on a violation,\nand chains into project_ops on success.",
+    "context_tier": "flow_directive",
+    "returns": {
+      "files_changed": {
+        "type": "list",
+        "from": "context.files_changed",
+        "optional": true
+      },
+      "directive_report": {
+        "type": "dict",
+        "from": "context.directive_report",
+        "optional": true
+      }
+    },
+    "projections": {},
+    "input": {
+      "required": [
+        "mission_id",
+        "goal_id",
+        "working_directory",
+        "flow_directive"
+      ],
+      "optional": []
+    },
+    "defaults": {
+      "config": {
+        "temperature": "t*0.6"
+      }
+    },
+    "steps": {
+      "load_state": {
+        "action": "load_mission_state",
+        "description": "Load mission state for architecture and goals",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "open_session"
+            }
+          ]
+        },
+        "publishes": [
+          "mission",
+          "events"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "open_session": {
+        "action": "open_structural_session",
+        "description": "Open the session the whole walk runs inside; seed the blueprint",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.session_started == true",
+              "transition": "next_file"
+            },
+            {
+              "condition": "true",
+              "transition": "report_failed"
+            }
+          ]
+        },
+        "publishes": [
+          "structural_session_id",
+          "inference_session_id",
+          "session_files_written",
+          "files_changed"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "next_file": {
+        "action": "session_next_file",
+        "description": "Pop the next file in creation order; assemble its binding vocabulary",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "pending_files",
+            "session_files_written",
+            "data_registry"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.has_next == true",
+              "transition": "generate_file"
+            },
+            {
+              "condition": "true",
+              "transition": "apply_results"
+            }
+          ]
+        },
+        "publishes": [
+          "pending_files",
+          "session_files_written",
+          "current_file",
+          "binding_vocabulary",
+          "session_repairs"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "generate_file": {
+        "action": "inference",
+        "description": "Write ONE file, bound to the contracts and to its written siblings",
+        "context": {
+          "required": [
+            "structural_session_id",
+            "current_file"
+          ],
+          "optional": [
+            "binding_vocabulary"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "code",
+          "response": {
+            "language": ""
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/code_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "ref": {
+                "$ref": "context.current_file"
+              },
+              "title": "File to write now",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.binding_vocabulary"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_structure/session_file_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "write_file",
+            "no_answer": "next_file"
+          },
+          "config": {
+            "temperature": "t*0.4"
+          },
+          "retries": 2
+        },
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "write_file": {
+        "action": "write_session_file",
+        "description": "Write this turn's file through the same guard batch uses",
+        "context": {
+          "required": [
+            "current_file",
+            "inference_response"
+          ],
+          "optional": [
+            "session_files_written",
+            "files_changed"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.write_success == true",
+              "transition": "check_file"
+            },
+            {
+              "condition": "true",
+              "transition": "next_file"
+            }
+          ]
+        },
+        "publishes": [
+          "files_changed",
+          "session_files_written"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "check_file": {
+        "action": "check_session_file",
+        "description": "Gate this file and the fileset it now belongs to",
+        "context": {
+          "required": [
+            "current_file",
+            "session_files_written"
+          ],
+          "optional": [
+            "mission",
+            "batch_check_results",
+            "session_repairs",
+            "data_registry"
+          ]
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.file_ok == true",
+              "transition": "next_file"
+            },
+            {
+              "condition": "result.repairs_left > 0 and meta.attempt <= 8",
+              "transition": "repair_file"
+            },
+            {
+              "condition": "true",
+              "transition": "next_file"
+            }
+          ]
+        },
+        "publishes": [
+          "batch_check_results",
+          "violations",
+          "session_repairs"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "repair_file": {
+        "action": "inference",
+        "description": "Rewrite the file to satisfy the violations, in-session",
+        "context": {
+          "required": [
+            "structural_session_id",
+            "current_file",
+            "violations"
+          ],
+          "optional": [
+            "binding_vocabulary"
+          ]
+        },
+        "params": {},
+        "turn": {
+          "response_shape": "code",
+          "response": {
+            "language": ""
+          },
+          "sections": [
+            {
+              "type": "role",
+              "template": "personas/code_author",
+              "required": false
+            },
+            {
+              "type": "problem",
+              "ref": {
+                "$ref": "context.violations"
+              },
+              "title": "What the check found",
+              "required": false
+            },
+            {
+              "type": "context_files",
+              "ref": {
+                "$ref": "context.binding_vocabulary"
+              },
+              "required": false
+            },
+            {
+              "type": "instruction",
+              "template": "build_structure/session_repair_instruction",
+              "required": false
+            },
+            {
+              "type": "envelope",
+              "required": false
+            }
+          ],
+          "transitions": {
+            "default": "write_file",
+            "no_answer": "next_file"
+          },
+          "config": {
+            "temperature": "t*0.3"
+          },
+          "retries": 1
+        },
+        "config": {},
+        "publishes": [
+          "inference_response"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "apply_results": {
+        "action": "apply_batch_results",
+        "description": "Book per-goal reports, complete passing goals, note the run",
+        "context": {
+          "required": [
+            "mission"
+          ],
+          "optional": [
+            "batch_check_results",
+            "session_files_written",
+            "batch_manifest"
+          ]
+        },
+        "params": {
+          "flow_label": "build_structure_session"
+        },
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "result.wrote_any == true",
+              "transition": "close_success"
+            },
+            {
+              "condition": "true",
+              "transition": "close_failed"
+            }
+          ]
+        },
+        "publishes": [
+          "directive_report",
+          "mission"
+        ],
+        "effects": [],
+        "terminal": false
+      },
+      "close_success": {
+        "action": "end_inference_session",
+        "description": "Release the structural session (success path)",
+        "context": {
+          "required": [
+            "inference_session_id"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "report_success"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "close_failed": {
+        "action": "end_inference_session",
+        "description": "Release the structural session (failure path)",
+        "context": {
+          "required": [
+            "inference_session_id"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "resolver": {
+          "type": "rule",
+          "rules": [
+            {
+              "condition": "true",
+              "transition": "report_failed"
+            }
+          ]
+        },
+        "publishes": [],
+        "effects": [],
+        "terminal": false
+      },
+      "report_success": {
+        "action": "noop",
+        "description": "Files written and booked \u2014 chain into environment setup",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "project_ops",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": "",
+            "working_directory": {
+              "$ref": "input.working_directory"
+            },
+            "flow_directive": "Install all required dependencies and verify the project environment is ready."
+          }
+        }
+      },
+      "report_failed": {
+        "action": "noop",
+        "description": "Session creation produced nothing \u2014 return to the director",
+        "context": {
+          "required": [],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "mission_control",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "last_goal_id": {
+              "$ref": "input.goal_id"
+            },
+            "last_status": "failed"
+          }
+        }
+      }
+    },
+    "entry": "load_state",
+    "overflow": {
+      "strategy": "split",
+      "fallback": "reorganize"
+    }
+  },
   "classify": {
     "flow": "classify",
     "version": 1,
@@ -7940,6 +8420,10 @@
               "transition": "dispatch_batch_create"
             },
             {
+              "condition": "result.needs_session_create == true",
+              "transition": "dispatch_session_create"
+            },
+            {
               "condition": "result.needs_content_batch == true",
               "transition": "dispatch_content_batch"
             },
@@ -7966,6 +8450,40 @@
         ],
         "effects": [],
         "terminal": false
+      },
+      "dispatch_session_create": {
+        "action": "noop",
+        "description": "Create every architecture file one per turn, checked between",
+        "context": {
+          "required": [
+            "dispatch_config",
+            "mission"
+          ],
+          "optional": []
+        },
+        "params": {},
+        "config": {},
+        "publishes": [],
+        "effects": [],
+        "terminal": false,
+        "tail_call": {
+          "flow": "build_structure_session",
+          "input_map": {
+            "mission_id": {
+              "$ref": "input.mission_id"
+            },
+            "goal_id": {
+              "$ref": "context.dispatch_config.goal_id",
+              "default": ""
+            },
+            "flow_directive": {
+              "$ref": "context.dispatch_config.flow_directive"
+            },
+            "working_directory": {
+              "$ref": "context.mission.config.working_directory"
+            }
+          }
+        }
       },
       "dispatch_batch_create": {
         "action": "noop",
